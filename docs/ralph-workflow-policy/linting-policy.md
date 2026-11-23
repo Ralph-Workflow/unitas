@@ -1,0 +1,248 @@
+<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-id: linting-policy.md -->
+<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
+project's policy. A remediation agent rewrites it with verified project
+facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
+project's established practice, and deletes this banner. Readiness stays
+blocked while this banner or any placeholder token remains. -->
+
+# Linting Policy
+
+## Purpose and scope
+
+This policy governs the selected linters, their exact commands, the
+source categories covered, the rule set, the strictness baseline, the
+formatting responsibilities, and the rules around inline suppressions and
+configuration overrides.
+
+## Default requirements
+
+A maintained first-party language includes interpreted or compiled production
+and test source owned by the project. Generated/vendored code, embedded
+snippets, and template/IDL/SQL/shell sources are classified explicitly in
+`first_party_languages` and `excluded_language_evidence` according to whether
+the project maintains and can lint them.
+
+* When a maintained first-party language supports a suitable maintained linter or
+  equivalent static quality tool, the project MUST select and run one.
+  Missing configuration, legacy findings, or team preference do not make
+  linting inapplicable.
+* Selection MUST consider active maintenance, compatibility, useful
+  diagnostics, configurability, and CI suitability. No product is
+  universally preferred by this policy.
+* Formatting MUST be enforced by a maintained formatter or by the linter
+  when it provides an equivalent deterministic formatting check. Competing
+  tools MUST NOT own the same formatting rules.
+* Per-language `RALPH-LANG:` declarations are required for every maintained
+  first-party code language, each followed by a `RALPH-COMMAND:` line or an
+  explicit `RALPH-INAPPLICABLE:` line.
+* Inline suppressions are forbidden. The underlying diagnostic is fixed in
+  code, or suppressed in the linter's per-file configuration, never inline.
+* The authoritative configuration MUST identify file-level disables and broad
+  exclusions with their reason; duplicating every entry in this policy is not
+  required.
+* The lint configuration starts by enabling every rule and disables only a
+  rule that fires on common safe use. It contains no per-file ignore of a
+  banned rule, no `extend-ignore` that re-enables a banned rule, and no inline
+  suppression marker.
+
+## Dead code — zero tolerance
+
+Dead code is prohibited. It is better to delete obsolete code and implement it
+again if demonstrated need returns than to retain unowned paths indefinitely.
+
+* Unused, unreachable, obsolete, superseded, commented-out, and speculative
+  code MUST be removed in the same change that makes it unnecessary.
+* “Might be needed later,” compatibility without a verified consumer, and
+  incomplete future plans are never exceptions; version control preserves
+  history.
+* Dead-code findings MUST be fixed at the source, never hidden with ignores,
+  exported-name tricks, fake references, coverage exclusions, or disabled rules.
+  A proven live path reached through reflection, a framework/plugin registry,
+  FFI callback, dynamic dispatch, conditional platform build, or external
+  consumer MAY use the narrowest tool-supported live-entry annotation. This is
+  not a dead-code exception: it requires observable consumer/entry-point
+  evidence, reason, owner, and review trigger; speculative consumers do not qualify.
+* Generated or vendored code is governed at its source boundary. A retained
+  first-party compatibility path requires a verified consumer, owner, removal
+  condition, and expiry/review date.
+* Every ecosystem-supported unused/dead-code check MUST run in the declared
+  lint or verification gate. When no suitable maintained automated check
+  exists, code review MUST still enforce deletion.
+
+## Guard inventory
+
+<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
+matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
+Then delete this comment. -->
+
+| Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
+|---|---|---|---|---|---|---|
+| No lint bypass | Lint owner | no inline lint suppression lands in the tree, and every `per-file-ignores` entry matches the documented per-file configuration | audit_lint_bypass returns zero findings | audit_lint_bypass returns zero findings | deterministic: PROJECT-FACT-UNRESOLVED | when the rule is restated as a kernel-level constraint |
+| Strictest lint configuration | Lint owner | the lint configuration enables every rule and carries no per-file ignore of a banned rule | the lint-configuration audit reports no disabled rule outside common safe use and no banned-rule bypass | the disabled-rule and banned-rule bypass findings reported by the audit | deterministic: PROJECT-FACT-UNRESOLVED | when the lint configuration bypasses become structurally impossible |
+| Public / wrapper syntax-proxy | Lint owner | making a method public or adding a wrapper solely to satisfy a rule is a violation, not a fix | no private method is renamed to public solely to satisfy a private-call ratchet; no wrapper exists only to make a structural rule pass | no private method is renamed to public solely to satisfy a private-call ratchet | deterministic: PROJECT-FACT-UNRESOLVED | when every private-call ratchet is removed from the policy |
+
+## Project facts to resolve
+
+The `RALPH-FACT:` lines below record verified project facts. Agents rely
+on them when enforcing this policy and MUST keep them current as the
+project evolves.
+
+<!-- REPLACE-ME: record one verified, machine-checkable value per fact
+below (commands, paths, names, versions — not adjectives or aspirations).
+If a fact cannot be resolved yet (project too young, tool not chosen, value
+not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
+<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
+agent resolves it when its trigger fires. Then
+delete this comment. -->
+
+RALPH-FACT: linter_per_language: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: rule_set_baseline: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: formatter_responsibility: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: excluded_paths: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: suppression_rationale_policy: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: ci_gate_integration: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: maintenance_evidence: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: first_party_languages: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: excluded_language_evidence: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: dead_code_detection_per_language: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: retained_compatibility_inventory: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: live_entry_point_annotation_inventory: PROJECT-FACT-UNRESOLVED
+
+For each language, `maintenance_evidence` records tool and version range,
+official maintenance source, compatibility and first-party coverage evidence,
+selection date, and recheck trigger. Recheck on major language/tool changes,
+incompatibility, abandonment, or a relevant security signal.
+
+## AI execution instructions
+
+This section is the linting-specific procedure only. The five generic
+rules (truthful evidence, fail-closed verification, bounded
+execution, no weakening of checks, explicit unverified-claim
+reporting), the precedence over domain policies, the
+selective-applicability rule, and the claim-scope rule are owned by
+the kernel starter (`execution-kernel.md`) and MUST be loaded from
+there — do not re-derive them here. A private method made public or
+a wrapper added solely to satisfy a structural proxy lint rule is a
+violation (see `clean-code-policy.md`, `testing-policy.md`), not a
+justified lint pass.
+
+To follow this policy, an agent making any change MUST:
+
+* DECLARE one `RALPH-LANG:` block per language with the exact linter
+  command.
+* PREFER existing tooling. Adding a new linter requires a documented
+  reason.
+* RUN every `RALPH-COMMAND:` gate declared under Verification before
+  claiming the change complies.
+* UPDATE this policy (facts, commands, requirements) in the same
+  workflow that changes the linter, rule set, formatter, or
+  suppression policy.
+
+An agent MUST NOT:
+
+* Add `per-file-ignores`, `extend-per-file-ignores`, or any other
+  global rule silencing without a per-file reason.
+* Add an inline suppression. Fix the underlying lint finding in code, or
+  suppress it in the linter's per-file configuration.
+* Lower the lint strictness level to obtain a passing result.
+* Retain verified dead code, suppress it, or add a fake use solely to make a
+  linter pass. A verified live-entry annotation follows the evidence contract above.
+
+## Verification
+
+Run every gate below before claiming a change complies with this policy.
+
+<!-- REPLACE-ME: per-language template. Keep one block per maintained first-party language
+with the real linter command (first token must be an approved gate tool;
+wrap others in `make`, `uv run`, or `npx`), add blocks for detected
+languages missing below, drop blocks for languages the project does not
+use, and record genuinely unlinted languages as inapplicable with a
+reason.
+You are FILLING OUT THIS FORM, not fixing the project: record the real
+command and confirm it EXISTS (you MAY run it once as a bounded probe to
+check that it resolves). Do NOT fix failing checks — type errors, failing
+tests, lint findings, audit failures — and do NOT run a suite to green; a
+failing or slow gate is the project's problem to address later, not a
+form-filling blocker. Run only the commands you declare here, and if you
+write a helper script to wire a gate, cover it with a unit test. Then
+delete this comment. -->
+
+RALPH-LANG: Python
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: TypeScript
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: Rust
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: Go
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+The expected successful result is a clean lint run (exit 0). Lint
+failures MUST be addressed at the source, not by adding suppressions.
+
+## Exceptions
+
+A maintained first-party language may use `RALPH-INAPPLICABLE:` only when
+documented research proves no suitable maintained linter/formatter exists or
+the surface is technically non-lintable. Preference, inconvenience, legacy
+findings, migration cost, and absent setup are invalid. The declaration MUST
+start with `exceptional case: no suitable maintained linter exists;` or
+`exceptional case: technically non-lintable first-party surface;` and include
+`evidence:`, `owner:`, `expiry:`, `warning:`, and `review trigger:`. The visible
+warning remains until the exception is removed.
+
+## Maintenance triggers
+
+This policy MUST be reviewed in the same workflow as any of:
+
+* A new language is added to the project.
+* The linter, version, or rule set changes.
+* A new lint dependency is added.
+* The suppression policy changes.
+* The dead-code detector, compatibility inventory, or generated-code boundary changes.
+
+## Research basis
+
+* publisher: Astral (ruff)
+  title: "ruff documentation: Rules"
+  http: https://docs.astral.sh/ruff/rules/
+  review date: 2026-07-11
+
+* publisher: ESLint Project
+  title: "Configuring ESLint"
+  http: https://eslint.org/docs/latest/use/configure/
+  review date: 2026-07-11
+
+* publisher: The Rust Project
+  title: "Clippy documentation"
+  http: https://doc.rust-lang.org/clippy/
+  review date: 2026-07-11
+
+* publisher: Google Engineering Practices
+  title: "The CL Author's Guide to Getting Through Code Review"
+  http: https://google.github.io/eng-practices/review/developer/
+  review date: 2026-07-11
+
+## Portfolio ownership
+
+Shared admission, composition, aggregate-budget, evidence, exception, and
+lifecycle rules are owned by `policy-portfolio.toml`; they are not repeated
+here. This file owns only its domain-specific observable outcomes, verified
+facts, commands, and review triggers. Amendments update the effective portfolio
+while its mandatory outcomes remain protected.
+
+## Living document contract
+
+This policy is a living document. Keep its domain-specific facts, commands,
+requirements, and review triggers aligned with verified project reality.
+Shared amendment admission and retention are governed once by
+`policy-portfolio.toml`; generic rule protection and non-weakening are
+governed by `execution-kernel.md §Kernel rules`.
+
+## Ralph markers
+
+* Policy id: `<!-- ralph-policy-id: linting-policy.md -->`
+* Schema version: `<!-- ralph-policy-schema: v6 -->`

@@ -1,0 +1,379 @@
+<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-id: security-policy.md -->
+<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
+project's policy. A remediation agent rewrites it with verified project
+facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
+project's established practice, and deletes this banner. Readiness stays
+blocked while this banner or any placeholder token remains. -->
+
+# Security Policy
+
+## Purpose and scope
+
+This policy governs how every AI agent working in this project protects
+the project against security defects: secret exposure, unsafe handling
+of untrusted input, unsafe API usage, and weakened security controls.
+It applies to every change that adds or modifies an input surface, a
+dependency, a subprocess or filesystem interaction, an authentication
+or authorization choice, or any handling of credentials.
+
+Security requirements differ radically by application type: a C library
+bans unsafe string functions, a web application defends against CSRF
+and injection, a CLI tool guards its subprocess and filesystem
+boundaries. This policy is therefore deliberately a FRAME: the "Default
+requirements" hold for every project, while the "Threat surfaces"
+section carries the project-specific rules and MUST grow and change as
+the project does. It does NOT govern physical security, corporate IT
+policy, or the security posture of third-party hosted services.
+
+## Default requirements
+
+These requirements hold regardless of application type:
+
+* Live or sensitive secrets MUST NEVER appear in source, committed
+  configuration, logs, errors, or commit messages. Credentials MUST use the
+  approved runtime mechanism, such as workload identity, an OS credential
+  store, environment injection, or a secret manager.
+* All input crossing a trust boundary (network payloads, CLI arguments,
+  file contents, environment variables, inter-process messages) MUST be
+  treated as untrusted and validated before use. Validation prefers
+  allowlists over denylists.
+* A security control (scanner gate, validation check, authentication
+  step, sandbox restriction) MUST NEVER be weakened, disabled, or
+  bypassed. The general rule that no red gate may be silenced by
+  weakening the gate lives in `execution-kernel.md` §Kernel rules;
+  this bullet names the security-specific surface where a bypass
+  would expose a real defect and makes the rule concrete for
+  scanner, validation, authentication, and sandbox lanes.
+* Security-relevant suppressions MUST be configuration-level: a scanner
+  finding waiver is an entry in the SAST tool's configuration, never an
+  inline comment in the source. A waiver carries the specific finding
+  identifier AND a documented reason. Blanket suppressions are forbidden.
+* Facts that cannot be verified from the repository MUST come from the
+  project owner and MUST NOT be guessed. When owner input is unavailable,
+  record the fact as pending owner confirmation, apply a separate fail-safe
+  operating assumption, and block only decisions whose safety depends on it.
+  Use the value form `pending owner confirmation; operating assumption: <safe
+  behavior>; blocks: <decisions or none>; review trigger: owner response` so
+  an assumption cannot be mistaken for a verified fact.
+* Supply-chain security (dependency CVE audits, lockfile
+  reproducibility, license checks) is governed by dependency-policy.md;
+  this policy governs the code the project itself writes.
+
+## Threat surfaces
+
+Security requirements beyond the defaults are surface-specific. This
+section enumerates the project's ACTIVE threat surfaces and the
+concrete rules each one carries. Surfaces are added, amended, and
+retired as the project evolves; an out-of-date surface list is a policy
+violation, reviewed under "Maintenance triggers" below.
+
+<!-- REPLACE-ME: evaluate every surface in the catalog below against the
+project's actual stack and code. Record the active surfaces in the fact
+line (each with concrete rules kept in this section), and record every
+inactive surface as inapplicable with the stack change that would
+re-open it. Keep the catalog itself: it is the checklist future agents
+re-run whenever the stack changes. Then delete this comment. -->
+
+RALPH-FACT: active_threat_surfaces: PROJECT-FACT-UNRESOLVED
+
+Each surface in the catalog below is evaluated against the project's
+actual stack and code whenever the stack changes: surfaces that apply
+are kept with project-specific rules; surfaces that do not apply are
+recorded as inapplicable with a reason, so a later stack change
+re-opens the question instead of silently missing it.
+
+* Memory-unsafe code (C, C++, unsafe Rust blocks): banned functions
+  (`strcpy`, `strcat`, `sprintf`, `gets`, unbounded `scanf`), mandatory
+  bounds-checked alternatives, sanitizer or analyzer gates (ASan/UBSan,
+  compiler hardening flags), rules for every `unsafe` block.
+* Web/HTTP surface (routes, APIs, templates): injection defenses
+  (parameterized queries, no string-built SQL), output encoding and
+  content security policy (XSS), request-forgery defenses (CSRF tokens,
+  SameSite cookies), authentication, session, and authorization rules,
+  transport security expectations.
+* Deserialization and parsing of external data: allowed formats and
+  parsers, bans on unsafe deserializers (`pickle` on untrusted data,
+  `yaml.load` without a safe loader, XML external-entity expansion).
+* Subprocess and shell execution: argument-vector invocation only,
+  never shell-string interpolation of untrusted input, explicit
+  executable paths where feasible.
+* Filesystem access: path-traversal defenses on externally influenced
+  paths, temp-file hygiene (no predictable names, correct permissions),
+  no world-writable artifacts.
+* Cryptography and randomness: approved libraries and primitives only,
+  no hand-rolled crypto, cryptographically secure randomness for any
+  security-relevant value (tokens, session ids, salts).
+* AI/agent execution surface (prompts, tool calls, generated commands):
+  treat model-generated commands and file paths as untrusted input,
+  confine writes to declared workspace roots, no interpolation of
+  untrusted text into shell commands.
+
+## Guard inventory
+
+<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
+matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
+Then delete this comment. -->
+
+| Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
+|---|---|---|---|---|---|---|
+| Authorization and tenant / scope boundaries | Security owner | every privileged action checks the caller's authorization and tenant / scope before execution | every privileged code path is covered by an authorization test; secret / scope change is logged with a real subject | every privileged code path is covered by an authorization test | deterministic: PROJECT-FACT-UNRESOLVED | when the project stops using a multi-tenant boundary |
+| Destructive-operation safety | Security owner | destructive operations (delete / drop / reset / force-push / revoke) carry a named owner and an explicit human confirmation in production paths | destructive operation requires a recorded subject, a recorded actor, and a recorded confirmation; reviewer can name the production gate | destructive operation requires a recorded subject, a recorded actor, and a recorded confirmation | deterministic: PROJECT-FACT-UNRESOLVED | when the project has no destructive operations |
+| Security-scanner coverage | Security owner | every claimed security check is a real credential / vulnerability scanner, not a check that does not run a scanner | the security profile's `evidence` field names a real scanner (semgrep, gitleaks, detect-secrets, gosec, bandit, etc.); the scanner is runnable and reproducible | the security profile's `evidence` field names a real scanner (semgrep, gitleaks, detect-secrets, gosec, bandit, etc.) | deterministic: PROJECT-FACT-UNRESOLVED | when the scanner is no longer available and is replaced by a real equivalent |
+| Threat surface inventory | Security owner | every project's threat surfaces are enumerated in the security policy's Threat surfaces section | Threat surfaces section names each surface; the surface list is reviewed on every policy bump | Threat surfaces section names each surface | deterministic: PROJECT-FACT-UNRESOLVED | when the project is single-purpose and the surfaces are constant |
+
+## Advisory rules
+
+Prompts are not controls. A prompt that asks an agent not to perform a
+destructive action is a request, not a boundary; only the tooling that
+runs the agent can block the action. Destructive operations in this
+project are therefore blocked by tooling, not by prompt prose:
+
+* workspace confinement — agent writes are normalized against the
+  declared workspace root before the side effect happens (the filesystem
+  surface rules above own the mechanism);
+* the scoped commit path — a commit stages the files the run produced, not
+  whatever else the working tree happens to contain;
+* the trunk-based branch rules in `AGENTS.md` — the agent does not open a
+  pull request or push to a branch it invented.
+
+This policy RECONCILES with those rules instead of restating them: it
+names them as the controls, adds no prompt-level ban that could be
+mistaken for a control, and defers to the rules that own them. Prompt
+prose about a destructive action stays advisory; the tooling that blocks
+the action is the control.
+
+* Rule: destructive operations are blocked by tooling, and prompt prose
+  about them is advisory. Evidence: advisory (anecdotal). Enforcement:
+  advisory: no gate measures prompt prose, and the tooling boundary is the
+  real control; review: when the workspace-confinement, scoped-commit, or
+  branch rules change.
+
+### Audit log of agent actions
+
+The runtime's audit sink buffers access records in memory and writes
+nothing to disk: `emit` appends to a bounded `collections.deque` whose
+default cap is 4096 records, so the oldest record is evicted FIFO;
+`drain_records` returns the buffered records and clears it; `flush`
+clears the buffer and returns nothing.
+
+Each buffered record carries the session id, a whole-second timestamp,
+the mapped capability (workspace read when the capability is absent or
+unmapped), the access outcome (approved, or denied with its reason), a
+description taken from the record metadata or a default naming the
+tool, the lowercased event type, and the correlation fields run id,
+generation, drain, and policy mode when at least one of them is set. It
+does NOT carry the tool arguments, the tool name as its own field, the
+path, the file contents, the diff, or the prompt text, and `duration_ms`
+and `result_status` keep their `None` defaults. A record that is
+flushed or evicted is gone: the adapter persists nothing.
+
+## Project facts to resolve
+
+The `RALPH-FACT:` lines below record verified project facts. Agents rely
+on them when enforcing this policy and MUST keep them current as the
+project evolves. Facts marked (owner-supplied) come from the project
+owner and MUST NOT be inferred from the repository alone.
+
+<!-- REPLACE-ME: record one verified, machine-checkable value per fact
+below (commands, paths, names, versions — not adjectives or aspirations).
+If a fact cannot be resolved yet (project too young, tool not chosen, value
+not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
+<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
+agent resolves it when its trigger fires. Then
+delete this comment. -->
+
+RALPH-FACT: data_sensitivity (owner-supplied): PROJECT-FACT-UNRESOLVED
+RALPH-FACT: deployment_exposure (owner-supplied): PROJECT-FACT-UNRESOLVED
+RALPH-FACT: secrets_management_mechanism: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: secret_scan_command: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: security_scanner_per_language: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: finding_waiver_convention: PROJECT-FACT-UNRESOLVED
+
+## AI execution instructions
+
+This section is the security-specific procedure only. The five
+generic rules (truthful evidence, fail-closed verification, bounded
+execution, no weakening of checks, explicit unverified-claim
+reporting), the precedence over domain policies, the
+selective-applicability rule, and the claim-scope rule are owned by
+the kernel starter (`execution-kernel.md`) and MUST be loaded from
+there — do not re-derive them here. The same five threat surfaces
+this section names (security, authorization and tenant/scope
+boundaries, destructive operations, process/resource ownership,
+schema/data integrity) carry matching `## Guard inventory` rows below;
+a row whose `Protected outcome` carries a broad phrase that does
+NOT also appear in `Detected condition` is rejected by the claim-scope
+predicate.
+
+To follow this policy, an agent making any change MUST:
+
+* CHECK every change that touches a declared threat surface against
+  that surface's rules before claiming the change complies, and say
+  which surfaces the change touched.
+* RECORD owner-supplied facts from the project owner's input; never guess
+  them. When unavailable, report the pending owner choice, use a separate
+  conservative operating assumption, and block safety-dependent work.
+* TREAT scanner findings by fixing the cause. A waiver requires the
+  finding identifier, a reason, an owner, and a review date under
+  Exceptions — never a bare suppression comment.
+* PREFER maintained ecosystem security and secret scanners that support the
+  project's language/version and produce actionable findings. Product names
+  in research or remediation guidance are non-normative examples, not
+  interchangeable requirements.
+* RUN every `RALPH-COMMAND:` gate declared under Verification before
+  claiming the change complies.
+* UPDATE this policy (surfaces, facts, commands, requirements) in the
+  same workflow that adds an input surface, a language, a subprocess or
+  filesystem interaction, an auth choice, or a deployment target.
+
+An agent MUST NOT:
+
+* Commit, log, or print a live or sensitive secret. Syntactically valid test
+  credentials or published test vectors MUST be unmistakably non-production,
+  isolated, non-reusable outside the test system, documented, and narrowly
+  suppressed when a secret scanner flags them.
+* Suppress or waive a scanner finding without an identifier, reason,
+  owner, and review date.
+* Weaken, disable, or bypass any security control to obtain a passing
+  result.
+* Present an owner-unconfirmed threat model, data-sensitivity level, or
+  exposure claim as verified, or substitute an optimistic assumption
+  for the fail-safe conservative one.
+* Interpolate untrusted input into shell commands, SQL strings, or
+  file paths on any declared surface.
+
+## Verification
+
+Run every gate below before claiming a change complies with this policy.
+
+Secret scanning applies to every project:
+
+<!-- REPLACE-ME: set the project's real secret-scan command (e.g. gitleaks
+or detect-secrets; the first token must be an approved gate tool — wrap
+anything else in `make`, `uv run`, or `npx`). Do not declare a hollow
+command. If no scanner is installed or chosen yet, defer with a
+RALPH-PENDING line naming the intended tool
+(`RALPH-PENDING: gitleaks (assumed <date>); review trigger: <trigger>`)
+rather than a hollow command — it reaches readiness and a later dev cycle
+wires it. Then delete this comment. -->
+
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+Per-language static security analysis follows this template (one block
+per project language, or an explicit inapplicability record with a
+reason):
+
+<!-- REPLACE-ME: per-language template. Keep one block per project language
+with the real scanner command (first token must be an approved gate tool;
+wrap others in `make`, `uv run`, or `npx`), add blocks for detected
+languages missing below, drop blocks for languages the project does not
+use, record genuinely unscannable languages as inapplicable with a
+reason, and defer a scanner that applies but is not installed yet with a
+RALPH-PENDING line (approved tool + `(assumed <date>)` + `review
+trigger:`). Then delete this comment. -->
+
+RALPH-LANG: Python
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: TypeScript
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: Rust
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+RALPH-LANG: Go
+RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+
+The expected successful result is exit 0 with no unwaived findings. On
+failure, report the finding identifier, the affected file, and the
+category (secret, injection, unsafe API, unsafe deserialization,
+subprocess, filesystem, crypto). Security scanners produce false
+positives by design: triage every finding and either fix it or waive it
+with a documented reason under Exceptions — never silence it to
+obtain green.
+
+## Exceptions
+
+A waived scanner finding or an accepted risk requires a documented
+reason, the finding identifier or risk description, the scope, the
+owner, and a review or removal date. An inapplicable threat surface
+requires a recorded reason that names the stack facts it depends on.
+Exceptions expire at the next policy review; an expired exception
+without an updated reason is treated as a violation.
+
+## Maintenance triggers
+
+Security posture decays faster than any other policy domain: new code
+adds surfaces, new dependencies add exposure, and a threat model goes
+stale silently. This policy MUST be reviewed in the same workflow as
+any of:
+
+* A new input surface is added (endpoint, CLI flag, file format,
+  message consumer, environment variable, tool call).
+* A new language, framework, or deployment target is introduced.
+* Authentication, authorization, or session handling changes.
+* A secret, key, or credential mechanism changes.
+* A security scanner, its ruleset, or the secret-scan tool changes.
+* A security incident, near miss, or newly disclosed vulnerability
+  class relevant to a declared surface occurs.
+* A stack change makes a previously inapplicable surface potentially
+  applicable (e.g. a first HTTP endpoint, a first C extension).
+
+## Research basis
+
+* publisher: OWASP Foundation
+  title: "OWASP Top Ten"
+  http: https://owasp.org/www-project-top-ten/
+  review date: 2026-07-12
+
+* publisher: OWASP Foundation
+  title: "OWASP Application Security Verification Standard (ASVS)"
+  http: https://owasp.org/www-project-application-security-verification-standard/
+  review date: 2026-07-12
+
+* publisher: OWASP Foundation
+  title: "OWASP Cheat Sheet Series"
+  http: https://cheatsheetseries.owasp.org/
+  review date: 2026-07-12
+
+* publisher: MITRE
+  title: "CWE Top 25 Most Dangerous Software Weaknesses"
+  http: https://cwe.mitre.org/top25/
+  review date: 2026-07-12
+
+* publisher: NIST
+  title: "Secure Software Development Framework (SSDF)"
+  http: https://csrc.nist.gov/projects/ssdf
+  review date: 2026-07-12
+
+* publisher: OpenSSF (Linux Foundation)
+  title: "Concise Guide for Developing More Secure Software"
+  http: https://best.openssf.org/Concise-Guide-for-Developing-More-Secure-Software
+  review date: 2026-07-12
+
+* publisher: MIT (Jerome H. Saltzer and Michael D. Schroeder)
+  title: "The Protection of Information in Computer Systems"
+  http: https://web.mit.edu/Saltzer/www/publications/protection/
+  review date: 2026-07-12
+
+## Portfolio ownership
+
+Shared admission, composition, aggregate-budget, evidence, exception, and
+lifecycle rules are owned by `policy-portfolio.toml`; they are not repeated
+here. This file owns only its domain-specific observable outcomes, verified
+facts, commands, and review triggers. Amendments update the effective portfolio
+while its mandatory outcomes remain protected.
+
+## Living document contract
+
+This policy is a living document. Keep its domain-specific facts, commands,
+requirements, and review triggers aligned with verified project reality.
+Shared amendment admission and retention are governed once by
+`policy-portfolio.toml`; generic rule protection and non-weakening are
+governed by `execution-kernel.md §Kernel rules`.
+
+## Ralph markers
+
+* Policy id: `<!-- ralph-policy-id: security-policy.md -->`
+* Schema version: `<!-- ralph-policy-schema: v6 -->`
