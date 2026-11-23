@@ -378,9 +378,9 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: test_command: make test
-RALPH-FACT: test_command_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed; no network access
+RALPH-FACT: test_command_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, plus the Rust toolchain (cargo and clippy); no network access
 RALPH-FACT: primary_test_framework: pytest
-RALPH-FACT: secondary_test_frameworks: none — the repository has exactly one test framework
+RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates; the Python tooling keeps pytest as the primary framework
 RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the pytest tmp_path; no state is shared between tests
 RALPH-FACT: io_mocking_approach: none — the gates read the working tree and never write outside it
 RALPH-FACT: suite_time_budget: 30 seconds for the whole suite
@@ -392,7 +392,7 @@ RALPH-FACT: suite_test_count_command: pytest --collect-only -q
 RALPH-FACT: assertion_quality_check: make banned-constructs
 RALPH-FACT: supported_platform_matrix: macOS on Apple Silicon — the only platform the suite is exercised on
 RALPH-FACT: external_dependency_test_approach: none — the suite runs offline against the working tree
-RALPH-FACT: clean_clone_setup_command: python3 -m pip install pytest ruff mypy detect-secrets
+RALPH-FACT: clean_clone_setup_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo and clippy) comes from rustup
 RALPH-FACT: flake_policy: a test that fails intermittently is fixed or deleted in the same change; no test is retried to obtain a green run
 RALPH-FACT: quarantine_mechanism_expiry_and_max_size: none — no test is skipped, deselected, or quarantined
 RALPH-FACT: suite_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers

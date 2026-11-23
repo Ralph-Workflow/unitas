@@ -84,14 +84,14 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: package_manager: none — pyproject.toml carries gate-tool configuration only and declares no dependency; the product has no package manager yet
-RALPH-FACT: lockfile_path: none — no dependency is declared, so no lockfile exists
-RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; the tooling carries no third-party dependency
-RALPH-FACT: security_audit_command: none — no dependency is declared, so no vulnerability audit applies to the current tree
+RALPH-FACT: package_manager: cargo for the Rust workspace, whose manifest is Cargo.toml at the repository root; pyproject.toml carries gate-tool configuration only and declares no dependency
+RALPH-FACT: lockfile_path: Cargo.lock at the repository root — the workspace declares no third-party dependency, so the lockfile pins the workspace crates only
+RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; neither the tooling nor the Rust crates carry a third-party dependency
+RALPH-FACT: security_audit_command: none — no third-party dependency is declared by the tooling or the Rust workspace, so no vulnerability audit applies to the current tree
 RALPH-FACT: type_info_policy: the tooling ships no type stubs; mypy resolves the standard library from the installed interpreter
-RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets
+RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo and clippy) comes from rustup
 RALPH-FACT: dependency_evaluation_record: docs/ralph-workflow-policy/dependency-policy.md
-RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only, so the repository has no transitive dependency
+RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only and the Rust crates declare no external dependency, so the repository has no transitive dependency
 
 ## AI execution instructions
 

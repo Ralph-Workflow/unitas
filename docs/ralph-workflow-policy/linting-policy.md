@@ -79,16 +79,16 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: linter_per_language: ruff for Python, cargo clippy for Rust (deferred), and dotnet format for C# (deferred)
+RALPH-FACT: linter_per_language: ruff for Python, cargo clippy for Rust, and dotnet format for C# (deferred)
 RALPH-FACT: rule_set_baseline: the B, C4, E, F, I, RUF, SIM, UP, and W rules selected in pyproject.toml
 RALPH-FACT: formatter_responsibility: ruff format owns Python formatting; no Rust or C# formatter is configured yet
-RALPH-FACT: excluded_paths: none — the lint gate covers every tracked Python file
+RALPH-FACT: excluded_paths: none — the lint gate covers every tracked Python and Rust file
 RALPH-FACT: suppression_rationale_policy: no suppression exists; a lint finding is fixed in the code
-RALPH-FACT: ci_gate_integration: make lint runs in the default gate through the Makefile verify target
+RALPH-FACT: ci_gate_integration: make lint runs ruff and cargo clippy in the default gate through the Makefile verify target
 RALPH-FACT: maintenance_evidence: the lint report the last make verify run printed
-RALPH-FACT: first_party_languages: Python for the repository tooling; Rust and C# for the product, both deferred
+RALPH-FACT: first_party_languages: Python for the repository tooling; Rust for the product crates; C# for the UnityEngine bridge, deferred
 RALPH-FACT: excluded_language_evidence: none — no language is excluded from the lint gate
-RALPH-FACT: dead_code_detection_per_language: ruff check reports unused imports and unused locals for Python; no Rust or C# surface exists yet
+RALPH-FACT: dead_code_detection_per_language: ruff check reports unused imports and unused locals for Python; cargo clippy reports dead code for Rust; no C# surface exists yet
 RALPH-FACT: retained_compatibility_inventory: none — the repository retains no compatibility layer
 RALPH-FACT: live_entry_point_annotation_inventory: none — the repository has no speculative entry point
 
@@ -140,7 +140,7 @@ RALPH-LANG: Python
 RALPH-COMMAND: make lint
 
 RALPH-LANG: Rust
-RALPH-PENDING: cargo clippy --workspace --all-targets (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed and clippy is installed
+RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
 RALPH-LANG: C#
 RALPH-PENDING: dotnet format --verify-no-changes (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed

@@ -46,7 +46,7 @@ The lines below are the verified project facts that agents rely on and keep
 current.
 
 RALPH-FACT: architecture_style: layered: the Rust core owns asset parsing and runtime state, the C# bridge owns the UnityEngine API emulation, and the repository tooling is a separate Python package
-RALPH-FACT: component_map: the planned crates are unitas-core, unitas-asset, unitas-runtime, unitas-render and unitas-build; the only implemented component today is the Python package under tools/
+RALPH-FACT: component_map: the crates unitas-core, unitas-asset, unitas-runtime, unitas-render and unitas-build are implemented in the Cargo workspace under crates/; the repository tooling is a separate Python package under tools/
 RALPH-FACT: dependency_direction: the tooling imports the standard library only; a crate depends on unitas-core and unitas-asset, never the reverse
 RALPH-FACT: forbidden_dependencies: the tooling must not import a third-party module, and a crate must not depend on a Unity assembly
 RALPH-FACT: state_ownership: a gate owns no state between runs; every gate reads the working tree and prints its findings
@@ -55,8 +55,8 @@ RALPH-FACT: durable_contracts: the policy corpus is the single source for the ga
 RALPH-FACT: decision_record_location: docs/ralph-workflow-policy/architecture-policy.md
 RALPH-FACT: quality_attribute_scenarios: a full gate run finishes inside the verification budget recorded in docs/ralph-workflow-policy/verification-policy.md
 RALPH-FACT: runtime_and_deployment_views: the gates run from a clean clone on the development host; no container, service, or deployment target exists yet
-RALPH-FACT: major_data_flows: a Make target runs python3 tools/verify.py, which reads the working tree and writes findings to standard output
-RALPH-FACT: known_risks_and_tradeoffs: the product crates, the Unity asset formats, and the C# bridge are specified but not implemented, so every product gate is a dated deferral
+RALPH-FACT: major_data_flows: a Make target runs python3 tools/verify.py, which reads the working tree and writes findings to standard output; the lint, typecheck and test targets also run cargo over the workspace
+RALPH-FACT: known_risks_and_tradeoffs: the Rust workspace is implemented and gated by the default gate; the C# UnityEngine bridge is still specified but not implemented, so its gates remain dated deferrals
 RALPH-FACT: conformance_method: make verify
 
 ## AI execution instructions

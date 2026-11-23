@@ -198,6 +198,7 @@ SECRET_SCAN_EXCLUDES = (
     r"^\.pytest_cache/",
     r"^\.ruff_cache/",
     r"^\.secrets\.baseline$",
+    r"(^|/)target/",
 )
 
 

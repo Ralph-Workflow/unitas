@@ -8,13 +8,16 @@ verify: policy-validate bypass-audit banned-constructs comment-audit deps secret
 
 test:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q
+	@python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
 	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
+	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
 typecheck:
 	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
+	@python3 tools/verify.py timed typecheck-rs $(VERIFY_BUDGET_SECONDS) cargo check --workspace --all-targets
 
 policy-validate:
 	@python3 tools/verify.py timed policy $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py policy

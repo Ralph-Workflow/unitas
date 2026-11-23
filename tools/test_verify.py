@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from tools import verify
@@ -75,6 +76,17 @@ def test_secret_delta_reports_new_findings() -> None:
     assert verify.secret_delta(baseline, scanned) == [
         "secret finding not in baseline: b.py Keyword Detector"
     ]
+
+
+def test_secret_scan_excludes_build_output_but_not_sources() -> None:
+    build_output = (
+        "target/CACHEDIR.TAG",
+        "crates/unitas-asset/target/debug/deps/libunitas_asset.rlib",
+    )
+    for path in build_output:
+        assert any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
+    source = "crates/unitas-core/src/scene_graph.rs"
+    assert not any(re.search(pattern, source) for pattern in verify.SECRET_SCAN_EXCLUDES)
 
 
 def _guard_table(enforcement: str) -> str:

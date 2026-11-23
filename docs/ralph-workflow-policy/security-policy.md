@@ -62,7 +62,7 @@ concrete rules each one carries. Surfaces are added, amended, and
 retired as the project evolves; an out-of-date surface list is a policy
 violation, reviewed under "Maintenance triggers" below.
 
-RALPH-FACT: active_threat_surfaces: subprocess and shell execution, filesystem access, and the AI/agent execution surface; the web, memory-unsafe, deserialization, and cryptography surfaces re-open when the product crates land
+RALPH-FACT: active_threat_surfaces: subprocess and shell execution, filesystem access, deserialization and parsing of Unity scene and prefab files, and the AI/agent execution surface; the web, memory-unsafe, and cryptography surfaces stay closed — the Rust crates reach no network and the ban gate forbids unsafe Rust
 
 Each surface in the catalog below is evaluated against the project's
 actual stack and code whenever the stack changes: surfaces that apply
@@ -162,8 +162,9 @@ RALPH-FACT: data_sensitivity (owner-supplied): pending owner confirmation; opera
 RALPH-FACT: deployment_exposure (owner-supplied): pending owner confirmation; operating assumption: the gates run on a developer workstation and publish nothing; blocks: none; review trigger: the project owner confirms the deployment exposure
 RALPH-FACT: secrets_management_mechanism: none — the repository stores no credential; the secret gate fails on any credential-shaped string absent from the committed baseline
 RALPH-FACT: secret_scan_command: make secret-scan
-RALPH-FACT: security_scanner_per_language: the ban gate for Python, clippy correctness and suspicion lints for Rust (deferred), and the .NET analyzer for C# (deferred)
-RALPH-FACT: finding_waiver_convention: none — no scanner finding is waived; the finding is fixed in the code
+RALPH-FACT: secret_scan_scope: the secret gate scans every file in the working tree except the agent scratch directories and any build output directory named target; committed sources, fixtures and configuration are in scope
+RALPH-FACT: security_scanner_per_language: the ban gate for Python, clippy correctness and suspicion lints for Rust, and the .NET analyzer for C# (deferred)
+RALPH-FACT: finding_waiver_convention: a scanner finding raised by a published test vector is recorded in .secrets.baseline and documented under Exceptions below; every other finding is fixed in the code
 
 ## AI execution instructions
 
@@ -234,7 +235,7 @@ RALPH-LANG: Python
 RALPH-COMMAND: make banned-constructs
 
 RALPH-LANG: Rust
-RALPH-PENDING: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed and clippy is installed
+RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
 RALPH-LANG: C#
 RALPH-PENDING: dotnet build --configuration Release -p:AnalysisMode=All (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
@@ -254,6 +255,15 @@ owner, and a review or removal date. An inapplicable threat surface
 requires a recorded reason that names the stack facts it depends on.
 Exceptions expire at the next policy review; an expired exception
 without an updated reason is treated as a violation.
+
+Waived scanner findings are recorded in `.secrets.baseline` and listed
+here. Each entry names the finding identifier, the scope, the reason, the
+owner and the review date; the secret value itself is never restated
+here.
+
+* identifier: Hex High Entropy String at `crates/unitas-asset/tests/fixtures/project/Camera.prefab.meta:2`, `crates/unitas-asset/tests/meta_tests.rs:6` and `crates/unitas-asset/tests/unity_yaml_tests.rs:266` (the hashed-secret digests are recorded in `.secrets.baseline`); scope: the Unity asset GUID test vector of the camera prefab fixture; reason: a Unity asset GUID is a public 32-character hexadecimal asset identifier and not a credential, and the value is a non-production fixture that is not reusable outside the test system; owner: security owner; review date: 2026-12-23.
+* identifier: Hex High Entropy String at `crates/unitas-asset/tests/fixtures/project/Material.mat.meta:2` and `crates/unitas-asset/tests/meta_tests.rs:7` (the hashed-secret digests are recorded in `.secrets.baseline`); scope: the Unity asset GUID test vector of the material fixture; reason: a Unity asset GUID is a public 32-character hexadecimal asset identifier and not a credential, and the value is a non-production fixture that is not reusable outside the test system; owner: security owner; review date: 2026-12-23.
+* identifier: Hex High Entropy String at `crates/unitas-asset/tests/fixtures/project/Textures/Wood.png.meta:2` and `crates/unitas-asset/tests/meta_tests.rs:8` (the hashed-secret digests are recorded in `.secrets.baseline`); scope: the Unity asset GUID test vector of the texture fixture; reason: a Unity asset GUID is a public 32-character hexadecimal asset identifier and not a credential, and the value is a non-production fixture that is not reusable outside the test system; owner: security owner; review date: 2026-12-23.
 
 ## Maintenance triggers
 

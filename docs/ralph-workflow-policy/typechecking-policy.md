@@ -132,15 +132,15 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: typechecker_per_language: mypy in strict mode for Python, cargo check for Rust (deferred), and the .NET compiler for C# (deferred)
+RALPH-FACT: typechecker_per_language: mypy in strict mode for Python, cargo check for Rust, and the .NET compiler for C# (deferred)
 RALPH-FACT: strictness_level: strict — mypy strict = true in pyproject.toml
-RALPH-FACT: excluded_paths: none — mypy checks the whole tools package
+RALPH-FACT: excluded_paths: none — mypy checks the whole tools package and cargo check covers every workspace crate
 RALPH-FACT: stubbed_dependencies: none — the tooling imports the standard library only
 RALPH-FACT: suppression_rationale_policy: no type suppression exists; a type error is fixed in the code
 RALPH-FACT: suppression_inventory_and_baseline: zero suppressions — the bypass audit reports every suppression marker it finds
 RALPH-FACT: ci_gate_integration: make typecheck runs in the default gate through the Makefile verify target
 RALPH-FACT: maintenance_evidence: the type check report the last make verify run printed
-RALPH-FACT: first_party_languages: Python for the repository tooling; Rust and C# for the product, both deferred
+RALPH-FACT: first_party_languages: Python for the repository tooling; Rust for the product crates; C# for the UnityEngine bridge, deferred
 RALPH-FACT: excluded_language_evidence: none — no language is excluded from the type check
 RALPH-FACT: type_modeling_conventions: every function is annotated, and a value crossing a module boundary carries a concrete type
 RALPH-FACT: sanctioned_dynamic_boundaries: none — the tooling performs no dynamic dispatch
@@ -201,7 +201,7 @@ RALPH-LANG: Python
 RALPH-COMMAND: make typecheck
 
 RALPH-LANG: Rust
-RALPH-PENDING: cargo check --workspace --all-targets (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed
+RALPH-COMMAND: cargo check --workspace --all-targets
 
 RALPH-LANG: C#
 RALPH-PENDING: dotnet build --configuration Release (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
