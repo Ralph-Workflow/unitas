@@ -34,6 +34,12 @@ namespace Unitas.Bridge
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate void DestroyCallback(ulong scriptHandle);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void CollisionCallback(ulong entityA, ulong entityB, uint phase);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void TriggerCallback(ulong entityA, ulong entityB, uint phase);
+
         static RuntimeInterop()
         {
             NativeLibrary.SetDllImportResolver(
@@ -72,7 +78,9 @@ namespace Unitas.Bridge
             UpdateCallback update,
             LateUpdateCallback lateUpdate,
             OnDisableCallback onDisable,
-            DestroyCallback destroy);
+            DestroyCallback destroy,
+            CollisionCallback collision,
+            TriggerCallback trigger);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_tick(ulong runtime, double deltaSeconds);

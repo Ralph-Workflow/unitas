@@ -4,6 +4,7 @@ members = [
     "crates/unitas-asset",
     "crates/unitas-build",
     "crates/unitas-core",
+    "crates/unitas-physics",
     "crates/unitas-render",
     "crates/unitas-runtime",
 ]

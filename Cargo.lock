@@ -18,6 +18,13 @@ name = "unitas-core"
 version = "0.1.0"
 
 [[package]]
+name = "unitas-physics"
+version = "0.1.0"
+dependencies = [
+ "unitas-core",
+]
+
+[[package]]
 name = "unitas-render"
 version = "0.1.0"
 dependencies = [
@@ -31,4 +38,5 @@ version = "0.1.0"
 dependencies = [
  "unitas-asset",
  "unitas-core",
+ "unitas-physics",
 ]

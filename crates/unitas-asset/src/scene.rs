@@ -9,7 +9,10 @@ use crate::unity_yaml::{self, Node, Stream, YamlError};
 
 const GAME_OBJECT_CLASS: u32 = 1;
 const TRANSFORM_CLASS: u32 = 4;
+const RIGIDBODY_CLASS: u32 = 54;
+const BOX_COLLIDER_CLASS: u32 = 65;
 const MONO_BEHAVIOUR_CLASS: u32 = 114;
+const SPHERE_COLLIDER_CLASS: u32 = 135;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
 
@@ -103,21 +106,52 @@ struct TransformRecord {
     children: Vec<i64>,
 }
 
+type GameObjectEntities = HashMap<i64, EntityId>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptBinding {
     pub entity: EntityId,
     pub guid: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RigidbodyComponent {
+    pub mass: f64,
+    pub use_gravity: bool,
+    pub is_trigger: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoxColliderComponent {
+    pub size: [f64; 3],
+    pub center: [f64; 3],
+    pub is_trigger: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SphereColliderComponent {
+    pub radius: f64,
+    pub center: [f64; 3],
+    pub is_trigger: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicsBinding {
+    pub entity: EntityId,
+    pub rigidbody: Option<RigidbodyComponent>,
+    pub box_collider: Option<BoxColliderComponent>,
+    pub sphere_collider: Option<SphereColliderComponent>,
+}
+
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
-    assemble(stream, None).map(|(graph, _)| graph)
+    assemble(stream, None).map(|(graph, _, _)| graph)
 }
 
 pub fn assemble_scene_with_guids(
     stream: &Stream,
     index: &GuidIndex,
 ) -> Result<SceneGraph, SceneError> {
-    assemble(stream, Some(index)).map(|(graph, _)| graph)
+    assemble(stream, Some(index)).map(|(graph, _, _)| graph)
 }
 
 pub fn assemble_scene_file(path: &Path) -> Result<SceneGraph, SceneError> {
@@ -133,26 +167,28 @@ pub fn assemble_scene_file_with_guids(
     assemble_scene_with_guids(&stream, index)
 }
 
-pub fn assemble_scene_with_scripts(
+pub fn assemble_scene_with_physics(
     stream: &Stream,
-) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
-    assemble(stream, None)
+) -> Result<(SceneGraph, Vec<ScriptBinding>, Vec<PhysicsBinding>), SceneError> {
+    let (graph, scripts, game_objects) = assemble(stream, None)?;
+    let physics = collect_physics(stream, &game_objects)?;
+    Ok((graph, scripts, physics))
 }
 
-pub fn assemble_scene_file_with_scripts(
+pub fn assemble_scene_file_with_physics(
     path: &Path,
-) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
+) -> Result<(SceneGraph, Vec<ScriptBinding>, Vec<PhysicsBinding>), SceneError> {
     let stream = unity_yaml::parse_file(path)?;
-    assemble_scene_with_scripts(&stream)
+    assemble_scene_with_physics(&stream)
 }
 
 fn assemble(
     stream: &Stream,
     index: Option<&GuidIndex>,
-) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
+) -> Result<(SceneGraph, Vec<ScriptBinding>, GameObjectEntities), SceneError> {
     check_external_references(stream, index)?;
     let mut graph = SceneGraph::new();
-    let mut game_objects: HashMap<i64, EntityId> = HashMap::new();
+    let mut game_objects: GameObjectEntities = HashMap::new();
     for document in &stream.documents {
         if document.class_id != GAME_OBJECT_CLASS || document.stripped {
             continue;
@@ -277,7 +313,115 @@ fn assemble(
         };
         scripts.push(ScriptBinding { entity, guid });
     }
-    Ok((graph, scripts))
+    Ok((graph, scripts, game_objects))
+}
+
+enum PhysicsComponent {
+    Rigidbody(RigidbodyComponent),
+    BoxCollider(BoxColliderComponent),
+    SphereCollider(SphereColliderComponent),
+}
+
+fn collect_physics(
+    stream: &Stream,
+    game_objects: &GameObjectEntities,
+) -> Result<Vec<PhysicsBinding>, SceneError> {
+    let mut bindings: Vec<PhysicsBinding> = Vec::new();
+    let mut positions: HashMap<EntityId, usize> = HashMap::new();
+    for document in &stream.documents {
+        if document.stripped {
+            continue;
+        }
+        let (body, component) = match document.class_id {
+            RIGIDBODY_CLASS => match document.root.get("Rigidbody") {
+                Some(body) => (body, PhysicsComponent::Rigidbody(rigidbody_component(body))),
+                None => continue,
+            },
+            BOX_COLLIDER_CLASS => match document.root.get("BoxCollider") {
+                Some(body) => (body, PhysicsComponent::BoxCollider(box_collider_component(body))),
+                None => continue,
+            },
+            SPHERE_COLLIDER_CLASS => match document.root.get("SphereCollider") {
+                Some(body) => (body, PhysicsComponent::SphereCollider(sphere_collider_component(body))),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
+            Some(file_id) => file_id,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id: ROOT_FILE_ID,
+                })
+            }
+        };
+        let entity = match game_objects.get(&game_object_file_id) {
+            Some(entity) => *entity,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id,
+                })
+            }
+        };
+        let position = match positions.get(&entity) {
+            Some(position) => *position,
+            None => {
+                bindings.push(PhysicsBinding {
+                    entity,
+                    rigidbody: None,
+                    box_collider: None,
+                    sphere_collider: None,
+                });
+                let position = bindings.len() - 1;
+                positions.insert(entity, position);
+                position
+            }
+        };
+        let binding = &mut bindings[position];
+        match component {
+            PhysicsComponent::Rigidbody(value) => binding.rigidbody = Some(value),
+            PhysicsComponent::BoxCollider(value) => binding.box_collider = Some(value),
+            PhysicsComponent::SphereCollider(value) => binding.sphere_collider = Some(value),
+        }
+    }
+    Ok(bindings)
+}
+
+fn rigidbody_component(body: &Node) -> RigidbodyComponent {
+    RigidbodyComponent {
+        mass: body.get("m_Mass").and_then(Node::as_f64).unwrap_or(1.0),
+        use_gravity: yaml_bool(body.get("m_UseGravity"), true),
+        is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+    }
+}
+
+fn box_collider_component(body: &Node) -> BoxColliderComponent {
+    BoxColliderComponent {
+        size: vector3_or(body.get("m_Size"), [1.0, 1.0, 1.0]),
+        center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
+        is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+    }
+}
+
+fn sphere_collider_component(body: &Node) -> SphereColliderComponent {
+    SphereColliderComponent {
+        radius: body.get("m_Radius").and_then(Node::as_f64).unwrap_or(0.5),
+        center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
+        is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+    }
+}
+
+fn yaml_bool(node: Option<&Node>, default: bool) -> bool {
+    match node.and_then(Node::as_f64) {
+        Some(value) => value != 0.0,
+        None => match node.and_then(Node::as_str) {
+            Some("true") => true,
+            Some("false") => false,
+            _ => default,
+        },
+    }
 }
 
 fn check_external_references(stream: &Stream, index: Option<&GuidIndex>) -> Result<(), SceneError> {
@@ -314,12 +458,12 @@ fn check_external_references(stream: &Stream, index: Option<&GuidIndex>) -> Resu
 fn apply_local_transform(graph: &mut SceneGraph, entity: EntityId, body: &Node) {
     if let Some(position) = body.get("m_LocalPosition").and_then(vector3) {
         if let Some(transform) = graph.transform_mut(entity) {
-            transform.translation = position;
+            transform.translation = position.map(|value| value as f32);
         }
     }
     if let Some(scale) = body.get("m_LocalScale").and_then(vector3) {
         if let Some(transform) = graph.transform_mut(entity) {
-            transform.scale = scale;
+            transform.scale = scale.map(|value| value as f32);
         }
     }
 }
@@ -382,9 +526,16 @@ fn child_ids(node: Option<&Node>) -> Result<Vec<i64>, SceneError> {
     Ok(ids)
 }
 
-fn vector3(node: &Node) -> Option<[f32; 3]> {
+fn vector3(node: &Node) -> Option<[f64; 3]> {
     let x = node.get("x").and_then(Node::as_f64)?;
     let y = node.get("y").and_then(Node::as_f64)?;
     let z = node.get("z").and_then(Node::as_f64)?;
-    Some([x as f32, y as f32, z as f32])
+    Some([x, y, z])
+}
+
+fn vector3_or(node: Option<&Node>, default: [f64; 3]) -> [f64; 3] {
+    match node.and_then(vector3) {
+        Some(vector) => vector,
+        None => default,
+    }
 }

@@ -207,7 +207,7 @@ RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
 RALPH-FACT: required_verification_profiles: none — every check runs in the default gate
-RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 10 seconds on 2026-11-23 with the Rust and .NET gates wired into the default gate
+RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 9 to 12 seconds on 2026-11-23 across repeated runs with the Rust and .NET gates and the Milestone 4 physics slice wired into the default gate
 RALPH-FACT: verification_time_enforcement_mechanism: the timed gate wrapper fails the run when a gate exceeds the budget the Makefile declares
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
 

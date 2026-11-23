@@ -3,7 +3,8 @@ use std::path::Path;
 
 use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
-    assemble_scene, assemble_scene_file, assemble_scene_file_with_guids, assemble_scene_with_guids,
+    assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
+    assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
     SceneError,
 };
 use unitas_asset::unity_yaml;
@@ -11,6 +12,8 @@ use unitas_core::{EntityId, SceneGraph};
 
 const SCENE_FIXTURE: &str = "tests/fixtures/scene.unity";
 const PREFAB_FIXTURE: &str = "tests/fixtures/prefab.prefab";
+const PHYSICS_FIXTURE: &str = "tests/fixtures/physics.unity";
+const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
 const PROJECT_DIR: &str = "tests/fixtures/project";
 
 const MISSING_GAME_OBJECT: &str = "%YAML 1.1
@@ -64,6 +67,15 @@ GameObject:
 Transform:
   m_GameObject: {fileID: nope}
   m_Father: {fileID: 0}
+";
+
+const PHYSICS_MISSING_GAME_OBJECT: &str = "%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Ball
+--- !u!54 &2
+Rigidbody:
+  m_GameObject: {fileID: 99}
 ";
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -224,6 +236,137 @@ fn prefab_source_reference_without_a_match_is_an_error() -> TestResult {
     let stream = unity_yaml::parse_file(Path::new(PREFAB_FIXTURE))?;
     let result = assemble_scene_with_guids(&stream, &index);
     assert!(matches!(result, Err(SceneError::UnresolvedExternalReference { .. })));
+    Ok(())
+}
+
+#[test]
+fn physics_components_bind_to_their_game_object_entity() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PHYSICS_FIXTURE))?;
+    let (graph, scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    let ball = entity_named(&graph, "Ball")?;
+    let crate_entity = entity_named(&graph, "Crate")?;
+    let defaults = entity_named(&graph, "Defaults")?;
+    assert!(scripts.is_empty());
+    assert_eq!(
+        bindings.iter().map(|binding| binding.entity).collect::<Vec<_>>(),
+        vec![ball, crate_entity, defaults]
+    );
+    let ball_binding = &bindings[0];
+    let rigidbody = ball_binding.rigidbody.as_ref().ok_or("Ball has no rigidbody")?;
+    assert_eq!(rigidbody.mass, 2.5);
+    assert!(!rigidbody.use_gravity);
+    let sphere = ball_binding.sphere_collider.as_ref().ok_or("Ball has no sphere collider")?;
+    assert_eq!(sphere.radius, 0.75);
+    assert_eq!(sphere.center, [0.0, 1.0, 0.0]);
+    assert!(ball_binding.box_collider.is_none());
+    let crate_binding = &bindings[1];
+    let box_collider = crate_binding.box_collider.as_ref().ok_or("Crate has no box collider")?;
+    assert_eq!(box_collider.size, [2.0, 3.0, 4.0]);
+    assert_eq!(box_collider.center, [0.5, 0.0, -0.5]);
+    assert!(crate_binding.rigidbody.is_none());
+    assert!(crate_binding.sphere_collider.is_none());
+    Ok(())
+}
+
+#[test]
+fn physics_defaults_apply_when_a_field_is_absent() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PHYSICS_FIXTURE))?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    let defaults = entity_named(&graph, "Defaults")?;
+    let binding = bindings
+        .iter()
+        .find(|binding| binding.entity == defaults)
+        .ok_or("no physics binding for Defaults")?;
+    let rigidbody = binding.rigidbody.as_ref().ok_or("Defaults has no rigidbody")?;
+    assert_eq!(rigidbody.mass, 1.0);
+    assert!(rigidbody.use_gravity);
+    assert!(!rigidbody.is_trigger);
+    let box_collider = binding.box_collider.as_ref().ok_or("Defaults has no box collider")?;
+    assert_eq!(box_collider.size, [1.0, 1.0, 1.0]);
+    assert_eq!(box_collider.center, [0.0, 0.0, 0.0]);
+    assert!(!box_collider.is_trigger);
+    let sphere = binding.sphere_collider.as_ref().ok_or("Defaults has no sphere collider")?;
+    assert_eq!(sphere.radius, 0.5);
+    assert_eq!(sphere.center, [0.0, 0.0, 0.0]);
+    assert!(!sphere.is_trigger);
+    Ok(())
+}
+
+#[test]
+fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
+    let (graph, _scripts, bindings) =
+        assemble_scene_file_with_physics(Path::new(PHYSICS_TRIGGER_FIXTURE))?;
+    let trigger_zone = entity_named(&graph, "TriggerZone")?;
+    let ball = entity_named(&graph, "Ball")?;
+    let trigger_rig = entity_named(&graph, "TriggerRig")?;
+
+    let zone_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == trigger_zone)
+        .ok_or("no physics binding for TriggerZone")?;
+    let zone_box = zone_binding
+        .box_collider
+        .as_ref()
+        .ok_or("TriggerZone has no box collider")?;
+    assert!(zone_box.is_trigger);
+
+    let ball_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == ball)
+        .ok_or("no physics binding for Ball")?;
+    let ball_rb = ball_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("Ball has no rigidbody")?;
+    let ball_sphere = ball_binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("Ball has no sphere collider")?;
+    assert!(!ball_rb.is_trigger);
+    assert!(!ball_sphere.is_trigger);
+
+    let rig_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == trigger_rig)
+        .ok_or("no physics binding for TriggerRig")?;
+    let rig_rb = rig_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("TriggerRig has no rigidbody")?;
+    let rig_sphere = rig_binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("TriggerRig has no sphere collider")?;
+    assert!(rig_rb.is_trigger);
+    assert!(rig_sphere.is_trigger);
+    Ok(())
+}
+
+#[test]
+fn physics_documents_do_not_change_the_plain_scene_assembly() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PHYSICS_FIXTURE))?;
+    let graph = assemble_scene(&stream)?;
+    assert_eq!(
+        entity_names(&graph),
+        vec![String::from("Ball"), String::from("Crate"), String::from("Defaults")]
+    );
+    Ok(())
+}
+
+#[test]
+fn physics_reference_to_an_unknown_game_object_is_an_error() -> TestResult {
+    let stream = unity_yaml::parse(PHYSICS_MISSING_GAME_OBJECT)?;
+    let result = assemble_scene_with_physics(&stream);
+    assert!(matches!(result, Err(SceneError::MissingGameObject { .. })));
+    Ok(())
+}
+
+#[test]
+fn physics_file_entry_point_assembles_the_fixture() -> TestResult {
+    let (graph, scripts, bindings) = assemble_scene_file_with_physics(Path::new(PHYSICS_FIXTURE))?;
+    assert!(scripts.is_empty());
+    assert_eq!(bindings.len(), 3);
+    assert_eq!(entity_names(&graph).len(), 3);
     Ok(())
 }
 

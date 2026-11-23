@@ -1,10 +1,12 @@
 use std::fmt;
 use std::io;
 use unitas_asset::scene::SceneError;
+use unitas_physics::PhysicsError;
 
 #[derive(Debug)]
 pub enum RuntimeError {
     Scene(SceneError),
+    Physics(PhysicsError),
     Io(io::Error),
     InvalidGuid(String),
     InvalidAddress,
@@ -18,6 +20,7 @@ impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuntimeError::Scene(err) => write!(formatter, "scene error: {err}"),
+            RuntimeError::Physics(err) => write!(formatter, "physics error: {err}"),
             RuntimeError::Io(err) => write!(formatter, "io error: {err}"),
             RuntimeError::InvalidGuid(guid) => write!(formatter, "invalid guid: {guid}"),
             RuntimeError::InvalidAddress => write!(formatter, "invalid buffer address or length"),
@@ -33,6 +36,7 @@ impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             RuntimeError::Scene(err) => Some(err),
+            RuntimeError::Physics(err) => Some(err),
             RuntimeError::Io(err) => Some(err),
             _ => None,
         }
@@ -42,6 +46,12 @@ impl std::error::Error for RuntimeError {
 impl From<SceneError> for RuntimeError {
     fn from(err: SceneError) -> Self {
         RuntimeError::Scene(err)
+    }
+}
+
+impl From<PhysicsError> for RuntimeError {
+    fn from(err: PhysicsError) -> Self {
+        RuntimeError::Physics(err)
     }
 }
 

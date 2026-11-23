@@ -11,7 +11,11 @@ namespace Unitas.Bridge.Tests
             TestVector3();
             TestGameObjectAndTransform();
             TestMonoBehaviourLifecycleOrder();
+            TestPhysicsComponentDefaults();
             TestEndToEndRustLifecycleOrder();
+            TestEndToEndRustCollisionOrder();
+            TestEndToEndRustTriggerOrder();
+            TestSceneReloadDropsPreviousSceneScripts();
 
             if (Check.FailureCount > 0)
             {
@@ -19,7 +23,7 @@ namespace Unitas.Bridge.Tests
                 return 1;
             }
 
-            Console.WriteLine("All checks passed.");
+            Console.WriteLine((object)"All checks passed.");
             return 0;
         }
 
@@ -107,14 +111,60 @@ namespace Unitas.Bridge.Tests
             Check.Equal("MonoBehaviour lifecycle order", expected, script.ObservedOrder);
         }
 
+        private static void TestPhysicsComponentDefaults()
+        {
+            GameObject go = new GameObject("PhysicsDefaults");
+
+            Rigidbody body = go.AddComponent<Rigidbody>();
+            Check.Equal("Rigidbody default mass", 1f, body.mass);
+            Check.Equal("Rigidbody default useGravity", true, body.useGravity);
+            Check.Equal("Rigidbody default velocity x", 0f, body.velocity.x);
+            Check.Equal("Rigidbody default velocity y", 0f, body.velocity.y);
+            Check.Equal("Rigidbody default velocity z", 0f, body.velocity.z);
+            body.mass = 2.5f;
+            body.useGravity = false;
+            Check.Equal("Rigidbody mass round trip", 2.5f, body.mass);
+            Check.Equal("Rigidbody useGravity round trip", false, body.useGravity);
+
+            BoxCollider box = go.AddComponent<BoxCollider>();
+            Check.That("BoxCollider is a Collider", box is Collider);
+            Check.Equal("BoxCollider default size x", 1f, box.size.x);
+            Check.Equal("BoxCollider default size y", 1f, box.size.y);
+            Check.Equal("BoxCollider default size z", 1f, box.size.z);
+            Check.Equal("BoxCollider default center x", 0f, box.center.x);
+            Check.Equal("BoxCollider default center y", 0f, box.center.y);
+            Check.Equal("BoxCollider default center z", 0f, box.center.z);
+            Check.Equal("BoxCollider default isTrigger", false, box.isTrigger);
+            box.isTrigger = true;
+            Check.Equal("BoxCollider isTrigger round trip", true, box.isTrigger);
+            box.size = new Vector3(2f, 3f, 4f);
+            Check.Equal("BoxCollider size round trip x", 2f, box.size.x);
+            Check.Equal("BoxCollider size round trip z", 4f, box.size.z);
+
+            SphereCollider sphere = go.AddComponent<SphereCollider>();
+            Check.That("SphereCollider is a Collider", sphere is Collider);
+            Check.Equal("SphereCollider default radius", 0.5f, sphere.radius);
+            Check.Equal("SphereCollider default center x", 0f, sphere.center.x);
+            Check.Equal("SphereCollider default center y", 0f, sphere.center.y);
+            Check.Equal("SphereCollider default center z", 0f, sphere.center.z);
+            Check.Equal("SphereCollider default isTrigger", false, sphere.isTrigger);
+            sphere.isTrigger = true;
+            Check.Equal("SphereCollider isTrigger round trip", true, sphere.isTrigger);
+            sphere.radius = 1.25f;
+            Check.Equal("SphereCollider radius round trip", 1.25f, sphere.radius);
+
+            Collision empty = new Collision(null);
+            Check.That("Collision without other party has null gameObject", empty.gameObject == null);
+            Collision filled = new Collision(go);
+            Check.That("Collision exposes the other party gameObject", ReferenceEquals(filled.gameObject, go));
+        }
+
         private static void TestEndToEndRustLifecycleOrder()
         {
             string? envScene = Environment.GetEnvironmentVariable("UNITAS_TEST_SCENE");
             string scenePath = !string.IsNullOrEmpty(envScene) && File.Exists(envScene)
                 ? Path.GetFullPath(envScene)
-                : (File.Exists("crates/unitas-runtime/tests/fixtures/scene_with_script.unity")
-                    ? Path.GetFullPath("crates/unitas-runtime/tests/fixtures/scene_with_script.unity")
-                    : Path.GetFullPath("../../../../../crates/unitas-runtime/tests/fixtures/scene_with_script.unity"));
+                : ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_with_script.unity");
 
             Check.That("Scene file exists", File.Exists(scenePath));
 
@@ -133,6 +183,159 @@ namespace Unitas.Bridge.Tests
             string expected = "Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate, OnDisable, OnDestroy";
             Check.Equal("End-to-end lifecycle order", expected, recordedScript.ObservedOrder);
             Console.WriteLine("Observed lifecycle order: " + recordedScript.ObservedOrder);
+        }
+
+        private static void TestEndToEndRustCollisionOrder()
+        {
+            string? envScene = Environment.GetEnvironmentVariable("UNITAS_TEST_SCENE");
+            string scenePath = !string.IsNullOrEmpty(envScene) && File.Exists(envScene)
+                ? Path.GetFullPath(envScene)
+                : ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_collision.unity");
+
+            Check.That("Collision scene file exists", File.Exists(scenePath));
+
+            ScriptRegistry.Clear();
+            CollisionRecorderScript recordedScript = new CollisionRecorderScript();
+            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+                for (int tick = 0; tick < 80; tick++)
+                {
+                    host.Tick(0.02);
+                }
+                host.Shutdown();
+            }
+
+            string observed = recordedScript.ObservedOrder;
+            Console.WriteLine("Observed collision order: " + observed);
+
+            string expected = "Enter";
+            for (int stay = 0; stay < 23; stay++)
+            {
+                expected += ", Stay";
+            }
+
+            expected += ", Exit";
+            Check.Equal("End-to-end collision order", expected, observed);
+
+            string[] events = observed.Split(", ");
+            Check.That("Collision order starts with Enter", events[0] == "Enter");
+            Check.That("Collision order ends with Exit", events[events.Length - 1] == "Exit");
+
+            bool sawStay = false;
+            bool onlyKnownEvents = true;
+            foreach (string name in events)
+            {
+                if (name == "Stay")
+                {
+                    sawStay = true;
+                }
+                else if (name != "Enter" && name != "Exit")
+                {
+                    onlyKnownEvents = false;
+                }
+            }
+
+            Check.That("Collision order contains a Stay", sawStay);
+            Check.That("Collision order holds only Enter, Stay and Exit", onlyKnownEvents);
+            Check.That("Collision gameObject is null when the other party is unregistered", recordedScript.OtherGameObjectAlwaysNull);
+        }
+
+        private static void TestEndToEndRustTriggerOrder()
+        {
+            string? envScene = Environment.GetEnvironmentVariable("UNITAS_TEST_SCENE");
+            string scenePath = !string.IsNullOrEmpty(envScene) && File.Exists(envScene)
+                ? Path.GetFullPath(envScene)
+                : ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_trigger.unity");
+
+            Check.That("Trigger scene file exists", File.Exists(scenePath));
+
+            ScriptRegistry.Clear();
+            TriggerRecorderScript recordedScript = new TriggerRecorderScript();
+            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+                for (int tick = 0; tick < 80; tick++)
+                {
+                    host.Tick(0.02);
+                }
+                host.Shutdown();
+            }
+
+            string observed = recordedScript.ObservedOrder;
+            Console.WriteLine("Observed trigger order: " + observed);
+
+            string expected = "Enter";
+            for (int stay = 0; stay < 23; stay++)
+            {
+                expected += ", Stay";
+            }
+
+            expected += ", Exit";
+            Check.Equal("End-to-end trigger order", expected, observed);
+
+            string[] events = observed.Split(", ");
+            Check.That("Trigger order starts with Enter", events[0] == "Enter");
+            Check.That("Trigger order ends with Exit", events[events.Length - 1] == "Exit");
+
+            bool sawStay = false;
+            bool onlyKnownEvents = true;
+            foreach (string name in events)
+            {
+                if (name == "Stay")
+                {
+                    sawStay = true;
+                }
+                else if (name != "Enter" && name != "Exit")
+                {
+                    onlyKnownEvents = false;
+                }
+            }
+
+            Check.That("Trigger order contains a Stay", sawStay);
+            Check.That("Trigger order holds only Enter, Stay and Exit", onlyKnownEvents);
+            Check.That("Trigger other collider is null when the other party is unregistered", recordedScript.OtherColliderAlwaysNull);
+        }
+
+        private static void TestSceneReloadDropsPreviousSceneScripts()
+        {
+            string scriptedScene = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_collision.unity");
+            string plainScene = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_collision_no_script.unity");
+
+            Check.That("Scripted collision scene file exists", File.Exists(scriptedScene));
+            Check.That("Plain collision scene file exists", File.Exists(plainScene));
+
+            ScriptRegistry.Clear();
+            CollisionRecorderScript recordedScript = new CollisionRecorderScript();
+            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scriptedScene);
+                host.Tick(0.02);
+                string afterFirstScene = recordedScript.ObservedOrder;
+                host.LoadScene(plainScene);
+                for (int tick = 0; tick < 80; tick++)
+                {
+                    host.Tick(0.02);
+                }
+                host.Shutdown();
+                Check.Equal(
+                    "Reloaded scene does not dispatch to the previous scene script",
+                    afterFirstScene,
+                    recordedScript.ObservedOrder);
+            }
+        }
+
+        private static string ResolveFixture(string relativePath)
+        {
+            return File.Exists(relativePath)
+                ? Path.GetFullPath(relativePath)
+                : Path.GetFullPath("../../../../../" + relativePath);
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::path::Path;
-use unitas_asset::scene::assemble_scene_file_with_scripts;
+use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
 use unitas_core::{EntityId, SceneGraph};
+use unitas_physics::{BodyDesc, Phase, Shape, World};
 
 use crate::error::RuntimeError;
 
@@ -15,6 +16,8 @@ pub struct Callbacks {
     pub late_update: extern "C" fn(u64, f64),
     pub on_disable: extern "C" fn(u64),
     pub destroy: extern "C" fn(u64),
+    pub collision: extern "C" fn(u64, u64, u32),
+    pub trigger: extern "C" fn(u64, u64, u32),
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,7 @@ pub struct ScriptInstance {
 pub struct Runtime {
     scene_graph: Option<SceneGraph>,
     scripts: Vec<ScriptInstance>,
+    world: World,
     callbacks: Option<Callbacks>,
     accumulator: f64,
     first_tick: bool,
@@ -43,6 +47,7 @@ impl Runtime {
         Ok(Self {
             scene_graph: None,
             scripts: Vec::new(),
+            world: World::new(),
             callbacks: None,
             accumulator: 0.0,
             first_tick: true,
@@ -51,8 +56,10 @@ impl Runtime {
     }
 
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
-        let (graph, bindings) = assemble_scene_file_with_scripts(path)?;
+        let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
+        let world = build_world(&graph, &physics)?;
         self.scene_graph = Some(graph);
+        self.world = world;
         self.scripts.clear();
         for binding in bindings {
             if binding.guid.len() != 32 {
@@ -120,6 +127,7 @@ impl Runtime {
         const FIXED_TIME_STEP: f64 = 0.02;
         const EPSILON: f64 = 1e-9;
         while self.accumulator >= FIXED_TIME_STEP - EPSILON {
+            self.world.step(FIXED_TIME_STEP)?;
             if let Some(callbacks) = self.callbacks {
                 for script in &self.scripts {
                     (callbacks.fixed_update)(script.script_handle, FIXED_TIME_STEP);
@@ -130,7 +138,15 @@ impl Runtime {
                 self.accumulator = 0.0;
             }
         }
+        let events = self.world.drain_events();
+        let trigger_events = self.world.drain_trigger_events();
         if let Some(callbacks) = self.callbacks {
+            for event in events {
+                (callbacks.collision)(event.a.as_u64(), event.b.as_u64(), phase_code(event.phase));
+            }
+            for event in trigger_events {
+                (callbacks.trigger)(event.a.as_u64(), event.b.as_u64(), phase_code(event.phase));
+            }
             for script in &self.scripts {
                 (callbacks.update)(script.script_handle, delta_seconds);
             }
@@ -175,5 +191,69 @@ impl Runtime {
 
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
+    }
+}
+
+fn build_world(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Result<World, RuntimeError> {
+    let mut world = World::new();
+    for binding in bindings {
+        let desc = match body_desc(graph, binding) {
+            Some(desc) => desc,
+            None => continue,
+        };
+        world.add_body(binding.entity, desc)?;
+    }
+    Ok(world)
+}
+
+fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {
+    let (shape, center, collider_trigger) = match (&binding.sphere_collider, &binding.box_collider)
+    {
+        (Some(sphere), _) => (
+            Shape::Sphere {
+                radius: sphere.radius,
+            },
+            sphere.center,
+            sphere.is_trigger,
+        ),
+        (None, Some(collider)) => (
+            Shape::Box {
+                half_extents: [
+                    collider.size[0] / 2.0,
+                    collider.size[1] / 2.0,
+                    collider.size[2] / 2.0,
+                ],
+            },
+            collider.center,
+            collider.is_trigger,
+        ),
+        (None, None) => return None,
+    };
+    let translation = graph
+        .transform(binding.entity)
+        .map_or([0.0f32; 3], |transform| transform.translation);
+    let (mass, use_gravity, rigidbody_trigger) = match &binding.rigidbody {
+        Some(rigidbody) => (rigidbody.mass, rigidbody.use_gravity, rigidbody.is_trigger),
+        None => (0.0, false, false),
+    };
+    Some(BodyDesc {
+        position: [
+            translation[0] as f64 + center[0],
+            translation[1] as f64 + center[1],
+            translation[2] as f64 + center[2],
+        ],
+        mass,
+        velocity: [0.0; 3],
+        use_gravity,
+        is_trigger: collider_trigger || rigidbody_trigger,
+        shape,
+    })
+}
+
+fn phase_code(phase: Phase) -> u32 {
+    match phase {
+        Phase::Enter => 0,
+        Phase::Stay => 1,
+        Phase::Exit => 2,
     }
 }

@@ -142,6 +142,8 @@ pub extern "C" fn unitas_runtime_set_callbacks(
     late_update: extern "C" fn(u64, f64),
     on_disable: extern "C" fn(u64),
     destroy: extern "C" fn(u64),
+    collision: extern "C" fn(u64, u64, u32),
+    trigger: extern "C" fn(u64, u64, u32),
 ) -> i32 {
     let reg = match registry() {
         Ok(r) => r,
@@ -165,6 +167,8 @@ pub extern "C" fn unitas_runtime_set_callbacks(
         late_update,
         on_disable,
         destroy,
+        collision,
+        trigger,
     });
     state.clear_error();
     0

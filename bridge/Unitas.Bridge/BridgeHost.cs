@@ -9,8 +9,13 @@ namespace Unitas.Bridge
 {
     public sealed class BridgeHost : IDisposable
     {
+        private const uint CollisionPhaseEnter = 0;
+        private const uint CollisionPhaseStay = 1;
+        private const uint CollisionPhaseExit = 2;
+
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
+        private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
         private ulong _nextScriptHandle = 1;
         private bool _isDisposed;
 
@@ -23,6 +28,8 @@ namespace Unitas.Bridge
         private readonly RuntimeInterop.LateUpdateCallback _lateUpdateCallback;
         private readonly RuntimeInterop.OnDisableCallback _onDisableCallback;
         private readonly RuntimeInterop.DestroyCallback _destroyCallback;
+        private readonly RuntimeInterop.CollisionCallback _collisionCallback;
+        private readonly RuntimeInterop.TriggerCallback _triggerCallback;
 
         public BridgeHost() : this(CreateRuntimeHandle())
         {
@@ -45,6 +52,8 @@ namespace Unitas.Bridge
             _lateUpdateCallback = OnLateUpdate;
             _onDisableCallback = OnOnDisable;
             _destroyCallback = OnDestroy;
+            _collisionCallback = OnCollision;
+            _triggerCallback = OnTrigger;
 
             int result = RuntimeInterop.unitas_runtime_set_callbacks(
                 _runtimeHandle,
@@ -56,7 +65,9 @@ namespace Unitas.Bridge
                 _updateCallback,
                 _lateUpdateCallback,
                 _onDisableCallback,
-                _destroyCallback);
+                _destroyCallback,
+                _collisionCallback,
+                _triggerCallback);
 
             if (result != 0)
             {
@@ -88,6 +99,8 @@ namespace Unitas.Bridge
             {
                 throw new ArgumentNullException(nameof(path));
             }
+            _scripts.Clear();
+            _entityScripts.Clear();
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(path);
             IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
             if (buffer == IntPtr.Zero)
@@ -128,6 +141,7 @@ namespace Unitas.Bridge
                 _isDisposed = true;
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
                 _scripts.Clear();
+                _entityScripts.Clear();
                 if (result != 0)
                 {
                     string? error = GetErrorMessage();
@@ -175,6 +189,7 @@ namespace Unitas.Bridge
             }
             ulong handle = _nextScriptHandle++;
             _scripts[handle] = script;
+            _entityScripts[entity] = handle;
             return handle;
         }
 
@@ -240,6 +255,83 @@ namespace Unitas.Bridge
             {
                 script.OnDestroy();
                 _scripts.Remove(scriptHandle);
+            }
+        }
+
+        private void OnCollision(ulong entityA, ulong entityB, uint phase)
+        {
+            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+            MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+
+            if (scriptA != null)
+            {
+                DispatchCollision(scriptA, new Collision(scriptB != null ? scriptB.gameObject : null), phase);
+            }
+
+            if (scriptB != null && !ReferenceEquals(scriptA, scriptB))
+            {
+                DispatchCollision(scriptB, new Collision(scriptA != null ? scriptA.gameObject : null), phase);
+            }
+        }
+
+        private void OnTrigger(ulong entityA, ulong entityB, uint phase)
+        {
+            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+            MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+
+            if (scriptA != null)
+            {
+                DispatchTrigger(scriptA, scriptB?.GetComponent<Collider>(), phase);
+            }
+
+            if (scriptB != null && !ReferenceEquals(scriptA, scriptB))
+            {
+                DispatchTrigger(scriptB, scriptA?.GetComponent<Collider>(), phase);
+            }
+        }
+
+        private MonoBehaviour? FindScriptByEntity(ulong entity)
+        {
+            if (_entityScripts.TryGetValue(entity, out ulong scriptHandle) && _scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            {
+                return script;
+            }
+            return null;
+        }
+
+        private static void DispatchCollision(MonoBehaviour script, Collision collision, uint phase)
+        {
+            switch (phase)
+            {
+                case CollisionPhaseEnter:
+                    script.OnCollisionEnter(collision);
+                    break;
+                case CollisionPhaseStay:
+                    script.OnCollisionStay(collision);
+                    break;
+                case CollisionPhaseExit:
+                    script.OnCollisionExit(collision);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private static void DispatchTrigger(MonoBehaviour script, Collider? other, uint phase)
+        {
+            switch (phase)
+            {
+                case CollisionPhaseEnter:
+                    script.OnTriggerEnter(other);
+                    break;
+                case CollisionPhaseStay:
+                    script.OnTriggerStay(other);
+                    break;
+                case CollisionPhaseExit:
+                    script.OnTriggerExit(other);
+                    break;
+                default:
+                    break;
             }
         }
     }

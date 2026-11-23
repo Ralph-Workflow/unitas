@@ -90,6 +90,9 @@ extern "C" fn lc_destroy(_handle: u64) {
     }
 }
 
+extern "C" fn lc_collision(_a: u64, _b: u64, _phase: u32) {}
+extern "C" fn lc_trigger(_a: u64, _b: u64, _phase: u32) {}
+
 #[test]
 fn runtime_lifecycle_order_over_two_ticks_and_shutdown() -> Result<(), Box<dyn Error>> {
     if let Ok(mut events) = LIFECYCLE_EVENTS.lock() {
@@ -107,6 +110,8 @@ fn runtime_lifecycle_order_over_two_ticks_and_shutdown() -> Result<(), Box<dyn E
         late_update: lc_late_update,
         on_disable: lc_on_disable,
         destroy: lc_destroy,
+        collision: lc_collision,
+        trigger: lc_trigger,
     });
     runtime.tick(0.02)?;
     runtime.tick(0.02)?;
@@ -146,6 +151,9 @@ extern "C" fn accum_fixed(_handle: u64, _step: f64) {
     }
 }
 
+extern "C" fn accum_collision(_a: u64, _b: u64, _phase: u32) {}
+extern "C" fn accum_trigger(_a: u64, _b: u64, _phase: u32) {}
+
 #[test]
 fn runtime_fixed_step_accumulator_accumulates_and_dispatches() -> Result<(), Box<dyn Error>> {
     if let Ok(mut count) = ACCUM_FIXED_COUNTS.lock() {
@@ -163,6 +171,8 @@ fn runtime_fixed_step_accumulator_accumulates_and_dispatches() -> Result<(), Box
         late_update: accum_noop_u64_f64,
         on_disable: accum_noop_u64,
         destroy: accum_noop_u64,
+        collision: accum_collision,
+        trigger: accum_trigger,
     });
     runtime.tick(0.02)?;
     let count0 = match ACCUM_FIXED_COUNTS.lock() {

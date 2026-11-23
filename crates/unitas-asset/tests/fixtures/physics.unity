@@ -1,0 +1,74 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Ball
+--- !u!4 &1001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!54 &1002
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1000}
+  m_Mass: 2.5
+  m_UseGravity: 0
+--- !u!135 &1003
+SphereCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1000}
+  m_Radius: 0.75
+  m_Center: {x: 0, y: 1, z: 0}
+--- !u!1 &2000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Crate
+--- !u!4 &2001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &2002
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000}
+  m_Size: {x: 2, y: 3, z: 4}
+  m_Center: {x: 0.5, y: 0, z: -0.5}
+--- !u!1 &3000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Defaults
+--- !u!4 &3001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!54 &3002
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
+--- !u!65 &3003
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
+--- !u!135 &3004
+SphereCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
