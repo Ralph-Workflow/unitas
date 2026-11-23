@@ -20,6 +20,10 @@ version = "0.1.0"
 [[package]]
 name = "unitas-render"
 version = "0.1.0"
+dependencies = [
+ "unitas-asset",
+ "unitas-core",
+]
 
 [[package]]
 name = "unitas-runtime"

@@ -2,3 +2,7 @@
 name = "unitas-render"
 version = "0.1.0"
 edition = "2021"
+
+[dev-dependencies]
+unitas-asset = { path = "../unitas-asset" }
+unitas-core = { path = "../unitas-core" }

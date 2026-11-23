@@ -8,6 +8,10 @@ autotests = false
 unitas-core = { path = "../unitas-core" }
 
 [[test]]
+name = "material_tests"
+path = "tests/material_tests.rs"
+
+[[test]]
 name = "meta_tests"
 path = "tests/meta_tests.rs"
 
