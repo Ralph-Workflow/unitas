@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: security-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Security Policy
 
 ## Purpose and scope
@@ -68,14 +62,7 @@ concrete rules each one carries. Surfaces are added, amended, and
 retired as the project evolves; an out-of-date surface list is a policy
 violation, reviewed under "Maintenance triggers" below.
 
-<!-- REPLACE-ME: evaluate every surface in the catalog below against the
-project's actual stack and code. Record the active surfaces in the fact
-line (each with concrete rules kept in this section), and record every
-inactive surface as inapplicable with the stack change that would
-re-open it. Keep the catalog itself: it is the checklist future agents
-re-run whenever the stack changes. Then delete this comment. -->
-
-RALPH-FACT: active_threat_surfaces: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: active_threat_surfaces: subprocess and shell execution, filesystem access, and the AI/agent execution surface; the web, memory-unsafe, deserialization, and cryptography surfaces re-open when the product crates land
 
 Each surface in the catalog below is evaluated against the project's
 actual stack and code whenever the stack changes: surfaces that apply
@@ -111,16 +98,12 @@ re-opens the question instead of silently missing it.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Authorization and tenant / scope boundaries | Security owner | every privileged action checks the caller's authorization and tenant / scope before execution | every privileged code path is covered by an authorization test; secret / scope change is logged with a real subject | every privileged code path is covered by an authorization test | deterministic: PROJECT-FACT-UNRESOLVED | when the project stops using a multi-tenant boundary |
-| Destructive-operation safety | Security owner | destructive operations (delete / drop / reset / force-push / revoke) carry a named owner and an explicit human confirmation in production paths | destructive operation requires a recorded subject, a recorded actor, and a recorded confirmation; reviewer can name the production gate | destructive operation requires a recorded subject, a recorded actor, and a recorded confirmation | deterministic: PROJECT-FACT-UNRESOLVED | when the project has no destructive operations |
-| Security-scanner coverage | Security owner | every claimed security check is a real credential / vulnerability scanner, not a check that does not run a scanner | the security profile's `evidence` field names a real scanner (semgrep, gitleaks, detect-secrets, gosec, bandit, etc.); the scanner is runnable and reproducible | the security profile's `evidence` field names a real scanner (semgrep, gitleaks, detect-secrets, gosec, bandit, etc.) | deterministic: PROJECT-FACT-UNRESOLVED | when the scanner is no longer available and is replaced by a real equivalent |
-| Threat surface inventory | Security owner | every project's threat surfaces are enumerated in the security policy's Threat surfaces section | Threat surfaces section names each surface; the surface list is reviewed on every policy bump | Threat surfaces section names each surface | deterministic: PROJECT-FACT-UNRESOLVED | when the project is single-purpose and the surfaces are constant |
+| Authorization and tenant / scope boundaries | Security owner | every privileged action checks the caller's authorization and tenant or scope before execution | the threat-surface section names the authorization surfaces the project actually has | the threat-surface section names the authorization surfaces | advisory: the project has no privileged action yet; review: when the first privileged action is added | when the project stops using a multi-tenant boundary |
+| Destructive-operation safety | Security owner | a destructive operation carries a named owner and an explicit human confirmation | the gate runner reports the destructive operation it refuses to perform without a confirmation | the gate runner reports the destructive operation it refuses | advisory: the gate runner performs no destructive operation; review: when a gate gains a destructive action | when the project has no destructive operations |
+| Security-scanner coverage | Security owner | every claimed security check runs a real credential or vulnerability scanner | the secret gate runs detect-secrets against the working tree and compares the findings with the committed baseline | the secret gate runs detect-secrets against the working tree | deterministic: make secret-scan | when the scanner is no longer available and is replaced by a real equivalent |
+| Threat surface inventory | Security owner | the threat surfaces section names every surface the project exposes and the condition that reopens each inactive one | the policy gate reports the resolved threat-surface fact and no unresolved placeholder | the policy gate reports the resolved threat-surface fact | deterministic: make policy-validate | when the project is single-purpose and the surfaces are constant |
 
 ## Advisory rules
 
@@ -175,20 +158,12 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves. Facts marked (owner-supplied) come from the project
 owner and MUST NOT be inferred from the repository alone.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: data_sensitivity (owner-supplied): PROJECT-FACT-UNRESOLVED
-RALPH-FACT: deployment_exposure (owner-supplied): PROJECT-FACT-UNRESOLVED
-RALPH-FACT: secrets_management_mechanism: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: secret_scan_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: security_scanner_per_language: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: finding_waiver_convention: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: data_sensitivity (owner-supplied): pending owner confirmation; operating assumption: the repository holds no personal or regulated data; blocks: none; review trigger: the project owner confirms the data classification
+RALPH-FACT: deployment_exposure (owner-supplied): pending owner confirmation; operating assumption: the gates run on a developer workstation and publish nothing; blocks: none; review trigger: the project owner confirms the deployment exposure
+RALPH-FACT: secrets_management_mechanism: none — the repository stores no credential; the secret gate fails on any credential-shaped string absent from the committed baseline
+RALPH-FACT: secret_scan_command: make secret-scan
+RALPH-FACT: security_scanner_per_language: the ban gate for Python, clippy correctness and suspicion lints for Rust (deferred), and the .NET analyzer for C# (deferred)
+RALPH-FACT: finding_waiver_convention: none — no scanner finding is waived; the finding is fixed in the code
 
 ## AI execution instructions
 
@@ -249,42 +224,20 @@ Run every gate below before claiming a change complies with this policy.
 
 Secret scanning applies to every project:
 
-<!-- REPLACE-ME: set the project's real secret-scan command (e.g. gitleaks
-or detect-secrets; the first token must be an approved gate tool — wrap
-anything else in `make`, `uv run`, or `npx`). Do not declare a hollow
-command. If no scanner is installed or chosen yet, defer with a
-RALPH-PENDING line naming the intended tool
-(`RALPH-PENDING: gitleaks (assumed <date>); review trigger: <trigger>`)
-rather than a hollow command — it reaches readiness and a later dev cycle
-wires it. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make secret-scan
 
 Per-language static security analysis follows this template (one block
 per project language, or an explicit inapplicability record with a
 reason):
 
-<!-- REPLACE-ME: per-language template. Keep one block per project language
-with the real scanner command (first token must be an approved gate tool;
-wrap others in `make`, `uv run`, or `npx`), add blocks for detected
-languages missing below, drop blocks for languages the project does not
-use, record genuinely unscannable languages as inapplicable with a
-reason, and defer a scanner that applies but is not installed yet with a
-RALPH-PENDING line (approved tool + `(assumed <date>)` + `review
-trigger:`). Then delete this comment. -->
-
 RALPH-LANG: Python
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
-RALPH-LANG: TypeScript
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make banned-constructs
 
 RALPH-LANG: Rust
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-PENDING: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed and clippy is installed
 
-RALPH-LANG: Go
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
+RALPH-LANG: C#
+RALPH-PENDING: dotnet build --configuration Release -p:AnalysisMode=All (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
 The expected successful result is exit 0 with no unwaived findings. On
 failure, report the finding identifier, the affected file, and the
 category (secret, injection, unsafe API, unsafe deserialization,

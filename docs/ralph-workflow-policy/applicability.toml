@@ -1,0 +1,11 @@
+[domains]
+design-system = "inactive; reason: the repository holds a policy corpus and its gates, with no graphical surface, as recorded on 2026-11-23; review trigger: a graphical or editor surface lands"
+ux = "inactive; reason: the repository exposes no user flow and no application framework, as recorded on 2026-11-23; review trigger: an application surface lands"
+performance = "inactive; reason: the repository declares no benchmark, no performance budget, and no performance dependency, as recorded on 2026-11-23; review trigger: a benchmark or a performance budget lands"
+memory-usage = "inactive; reason: the repository declares no memory budget and no soak test, as recorded on 2026-11-23; review trigger: a memory budget or a soak test lands"
+accessibility = "inactive; reason: the repository exposes no graphical surface to make accessible, as recorded on 2026-11-23; review trigger: a graphical or editor surface lands"
+api-compatibility = "inactive; reason: the repository publishes no API schema and no public API, as recorded on 2026-11-23; review trigger: the first published API schema lands"
+data-storage = "inactive; reason: the repository owns no database and no migration, as recorded on 2026-11-23; review trigger: a database or a migration lands"
+reliability-observability = "inactive; reason: the repository has no deployment surface and no operations document, as recorded on 2026-11-23; review trigger: a deployment or an operations surface lands"
+privacy = "inactive; reason: the repository holds no personal or regulated data and the data classification is still pending owner confirmation, as recorded on 2026-11-23; review trigger: the project owner confirms personal or regulated data"
+release-deployment = "inactive; reason: the repository publishes no release workflow and no packaging metadata, as recorded on 2026-11-23; review trigger: the first release workflow lands"

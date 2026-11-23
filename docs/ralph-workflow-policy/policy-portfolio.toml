@@ -27,6 +27,16 @@ id = "human"
 owner = "reviewer"
 trigger = "judgment-dependent material change"
 
+[[lanes]]
+id = "operational"
+owner = "project maintainers"
+trigger = "a check that needs a long-running or scheduled environment"
+
+[[lanes]]
+id = "one-off"
+owner = "reviewer"
+trigger = "a single recorded evidence artifact that cannot be reproduced on demand"
+
 [[controls]]
 id = "policy-structure"
 protected_outcome = "Project policy remains deterministic, bounded, and internally consistent"
@@ -35,14 +45,14 @@ layer = "deterministic preflight"
 owner = "project maintainers"
 trigger = "every change"
 lane = "default"
-marginal_cost_seconds = 0.1
-cost_basis = "estimate"
-evidence = "validator finding list and composed portfolio record"
-detects = "validator finding list and composed portfolio record"
+marginal_cost_seconds = 0.23
+cost_basis = "measured"
+evidence = "the policy gate report naming every corpus finding it observed"
+detects = "the corpus findings the policy gate reported: unresolved placeholders, duplicated facts, unapproved commands, unresolved enforcers, and cited paths that do not resolve"
 retirement_trigger = "when the deterministic preflight is replaced by a published equivalent"
 lifecycle = "review on every portfolio schema change; replace only with equivalent deterministic coverage"
 disposition = "KEEP"
-enforcement = "deterministic: PROJECT-FACT-UNRESOLVED"
+enforcement = "deterministic: make policy-validate"
 
 [[controls]]
 id = "public-behavior"
@@ -52,14 +62,14 @@ layer = "black-box scenario"
 owner = "project maintainers"
 trigger = "material behavior change"
 lane = "default"
-marginal_cost_seconds = 0.5
-cost_basis = "estimate"
-evidence = "preserved public-surface artifact with immutable subject, run, validated oracle, and independent verdict"
-detects = "preserved public-surface artifact with immutable subject, run, validated oracle, and independent verdict"
+marginal_cost_seconds = 4.3
+cost_basis = "measured"
+evidence = "the gate report naming the command that ran, the findings it printed, and the exit status"
+detects = "the gate report that names the command that ran and the findings it printed"
 retirement_trigger = "when every behavior claim is provable at a cheaper deterministic layer"
 lifecycle = "review when the public contract or cheapest sufficient proof layer changes"
 disposition = "KEEP"
-enforcement = "deterministic: PROJECT-FACT-UNRESOLVED"
+enforcement = "deterministic: make verify"
 
 [[controls]]
 id = "type-system-escape-hatch-ban"
@@ -69,14 +79,14 @@ layer = "lint and typecheck gate"
 owner = "clean-code owner"
 trigger = "every maintained-language source change"
 lane = "default"
-marginal_cost_seconds = 0.0
-cost_basis = "estimate"
-evidence = "none"
+marginal_cost_seconds = 0.24
+cost_basis = "measured"
+evidence = "the ban-catalog report naming every banned construct the gate found"
 detects = "per-language ban catalog findings"
 retirement_trigger = "when every cataloged construct becomes structurally impossible"
 lifecycle = "review when a maintained language, checker, linter, or ban catalog changes"
 disposition = "KEEP"
-enforcement = "deterministic: PROJECT-FACT-UNRESOLVED"
+enforcement = "deterministic: make banned-constructs"
 
 [[controls]]
 id = "strictest-lint-configuration"
@@ -86,14 +96,14 @@ layer = "lint configuration audit"
 owner = "lint owner"
 trigger = "every lint configuration or maintained-language source change"
 lane = "default"
-marginal_cost_seconds = 0.0
-cost_basis = "estimate"
-evidence = "none"
+marginal_cost_seconds = 0.22
+cost_basis = "measured"
+evidence = "the bypass audit report naming the configuration bypasses it found"
 detects = "disabled-rule and banned-rule bypass findings"
 retirement_trigger = "when lint configuration bypasses become structurally impossible"
 lifecycle = "review when the linter, rule set, configuration, or suppression syntax changes"
 disposition = "KEEP"
-enforcement = "deterministic: PROJECT-FACT-UNRESOLVED"
+enforcement = "deterministic: make bypass-audit"
 
 [local_tightening]
 controls = []

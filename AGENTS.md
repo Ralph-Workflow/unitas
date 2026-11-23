@@ -1,35 +1,47 @@
+# AGENTS.md
+
+This repository holds the unitas project-policy corpus and the verification
+tooling that enforces it.
+
+## Before you start
+
+Read `docs/ralph-workflow-policy/execution-kernel.md`, then the policy files the
+changed surface triggers. The corpus names its own triggers; load nothing else.
+
+## Verification
+
+`make verify` is the authoritative entry point. It runs the policy self-check, the
+bypass audit, the ban-catalog gate, the comment audit, the dependency gate, the
+secret scan, the lint gate, the type check, and the test suite, and it fails when
+the run exceeds the budget the Makefile declares.
+
+Run the declared `RALPH-COMMAND:` gates and report the real exit status. A gate
+that cannot run is a red gate.
+
+## Product status
+
+The Rust crates and the C# UnityEngine bridge are specified but not implemented.
+Their gates are dated deferrals in the corpus; resolve a deferral when its review
+trigger fires.
+
 <!-- ralph-workflow-policy:begin v3 -->
-This project participates in Ralph Workflow's project-policy-readiness
-preflight. Before ordinary planning or development begins, the canonical
-quality-policy files under `docs/ralph-workflow-policy/` must exist, be customized for
-this project's languages, frameworks, and commands, and pass the
-deterministic validator. All agent roles MUST load policies in this order:
-execution-kernel.md first, then their role slice, then any triggered domain
-policy before changing the project. Use the effective bounded policy
-portfolio: load its invariant kernel, selected profiles, local tightening,
-and valid exceptions instead of applying every conditional domain.
+Quality policies live under `docs/ralph-workflow-policy/`. Every agent role loads
+them in this order: execution-kernel.md first, then its role slice, then any domain
+policy the changed surface triggers. Load only the effective bounded portfolio: the
+kernel, the selected profiles, the local tightening, and the valid exceptions.
 
-The remediation agent MUST, in order:
+The authoritative verification entry point is the gate the corpus declares; run
+every declared `RALPH-COMMAND:` gate and report the real exit status. A check that
+cannot run is a red gate.
 
-1. Inspect the project's actual languages, frameworks, package managers,
-   and existing docs; create and maintain the canonical policy files under
-   `docs/ralph-workflow-policy/`, replacing every starter placeholder with verified
-   project evidence.
-2. Migrate existing policy-like content into the matching canonical file,
-   leaving a `ralph-workflow-policy:migrated ->` marker at the old
-   location so the validator can clear the RWP-MIGRATE-UNRECONCILED
-   finding.
-3. Configure executable gates for testing, type checking, linting,
-   dependency, and verification; document each gate as a RALPH-COMMAND
-   line (or RALPH-INAPPLICABLE with reason).
-4. Update CLAUDE.md (if present) to point Claude-compatible agents at
-   this AGENTS.md, then run every declared verification gate and report
-   the outcome.
+Search nearest coverage before adding a control; record REMOVE, MERGE, REPLACE, or
+KEEP; use the cheapest sufficient layer and keep the default-gate budget neutral.
+Give non-default work an owner, trigger, lane, evidence, and review condition.
+Telemetry, provenance, private-state inspection, and agent narration are not
+correctness proof.
 
-Dead code is prohibited; remove it — rewriting later is better than
-retaining it. The remediation agent MUST NOT mark any policy complete
-while any RALPH-FACT placeholder token, RALPH-COMMAND without a real
-value, or unresolved RALPH-LANG coverage remains. The readiness preflight
-is byte-exact deterministic; near-miss prose, extra whitespace, or case
-changes do not satisfy any requirement.
+Resolve every `RALPH-PENDING:` line whose review trigger is met; leaving a
+resolvable item is a violation. Dead code is prohibited; remove it — rewriting
+later is better than retaining it. These are living documents: keep the facts
+current without amending policy intent.
 <!-- ralph-workflow-policy:end -->

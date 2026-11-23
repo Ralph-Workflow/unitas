@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: dependency-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Dependency Policy
 
 ## Purpose and scope
@@ -44,14 +38,10 @@ lockfile.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Pinned dependencies | Dependency owner | a newly added dependency is confirmed to exist in the registry and names a resolvable source and a publisher, carries no install script, and is locked with an artifact hash | the change diff adds a package that cannot be confirmed in the registry, lacks a resolvable source or a publisher, adds an install script, adds a lockfile entry without an artifact hash, or adds a package with no lockfile entry | the new dependency finding the dependency-integrity gate reports | deterministic: PROJECT-FACT-UNRESOLVED | when the project ships only a single transitive closure (e.g. a vendored static binary) |
-| License compatibility | Dependency owner | every dependency is compatible with the project's declared license set | license audit returns zero incompatible findings | license audit returns zero incompatible findings | deterministic: PROJECT-FACT-UNRESOLVED | when the project ships no third-party code |
+| Pinned dependencies | Dependency owner | the tracked sources import the standard library only, and a manifest and its lockfile land together | the dependency gate reports zero third-party imports and zero manifest and lockfile pairs that disagree | the dependency gate reports zero third-party imports | deterministic: make deps | when the first third-party dependency lands and the gate grows a registry and lockfile check |
+| License compatibility | Dependency owner | the repository ships no third-party dependency whose licence needs review | the dependency gate reports zero third-party imports, so no licence review is outstanding | the dependency gate reports zero third-party imports | deterministic: make deps | when the first third-party dependency lands |
 
 ## Advisory rules
 
@@ -94,22 +84,14 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: package_manager: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: lockfile_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: license_allowlist: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: security_audit_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: type_info_policy: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: ci_install_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: dependency_evaluation_record: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: transitive_dependency_policy: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: package_manager: none — pyproject.toml carries gate-tool configuration only and declares no dependency; the product has no package manager yet
+RALPH-FACT: lockfile_path: none — no dependency is declared, so no lockfile exists
+RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; the tooling carries no third-party dependency
+RALPH-FACT: security_audit_command: none — no dependency is declared, so no vulnerability audit applies to the current tree
+RALPH-FACT: type_info_policy: the tooling ships no type stubs; mypy resolves the standard library from the installed interpreter
+RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets
+RALPH-FACT: dependency_evaluation_record: docs/ralph-workflow-policy/dependency-policy.md
+RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only, so the repository has no transitive dependency
 
 ## AI execution instructions
 
@@ -144,30 +126,12 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: set the project's real gate command. The first token must
-be an approved gate tool (wrap anything else in `make`, `uv run`, or
-`npx`). If the project has no such gate yet, create the smallest real one
-(a make target running the actual check) rather than declaring a hollow
-command; a gate that applies but is not wired yet (for example the tool is
-not installed on a new project) is recorded as a RALPH-PENDING deferral —
-`RALPH-PENDING: <approved-tool> (assumed <date>); review trigger: <trigger>`
-— which reaches readiness and is resolved by a later dev cycle when its
-trigger fires; only a gate that truly cannot EVER exist is recorded as
-inapplicable with a reason and the condition that would create it.
-You are FILLING OUT THIS FORM, not fixing the project: record the real
-command and confirm it EXISTS (you MAY run it once as a bounded probe to
-check that it resolves). Do NOT fix failing checks — type errors, failing
-tests, lint findings, audit failures — and do NOT run a suite to green; a
-failing or slow gate is the project's problem to address later, not a
-form-filling blocker. Run only the commands you declare here, and if you
-write a helper script to wire a gate, cover it with a unit test. Then
-delete this comment. -->
+RALPH-COMMAND: make deps
 
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
-The expected successful result is a clean dependency install + a clean
-security audit (exit 0). On failure, report the affected package and
-the failure category.
+The expected successful result is exit 0 from the dependency gate: the tracked
+sources import only the standard library, and a manifest and its lockfile
+land together. On failure, report the affected file, line, and the
+failure category.
 
 ## Exceptions
 

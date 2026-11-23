@@ -1,18 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: gate-script-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file ships COMPLETE. Unlike every other
-policy starter, its requirements are NORMATIVE STANDARD TEXT, not a template
-to rewrite: a remediation agent READS this file and OBEYS it when writing gate
-scripts. Resolve ONLY the three facts under "Project facts to resolve" and the
-one line under "Verification", then delete this banner. Rewording or
-condensing the requirement sections is permitted when the meaning and the
-failure-sensitivity of every requirement are preserved. The protected
-properties are meaning (every MUST, every failure mode, every cited
-incident) and failure sensitivity (a reworded rule that a real failure
-no longer catches is a regression). The current text is the authoritative
-form; if a reworded form differs in meaning, the reworded form loses and
-the current text is restored. -->
-
 # Gate Script Policy
 
 ## Purpose and scope
@@ -146,15 +133,11 @@ artifact or adds a Windows CI job.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Bounded gate execution | Gate-script owner | every gate script exits inside a runner-enforced timeout | gate script uses an approved tool first-token; the recipe wraps the command in a runner-enforced timeout | gate script uses an approved tool first-token | deterministic: PROJECT-FACT-UNRESOLVED | when the gate is no longer long-running |
-| No phantom dependencies | Gate-script owner | every gate script runs from a clean clone using only documented setup and secret mechanism | no gate script hard-codes a developer-local path; no gate script requires a hand-provisioned credential | no gate script hard-codes a developer-local path | deterministic: PROJECT-FACT-UNRESOLVED | when the gate is retired |
-| Meaning-preserving rewording | Gate-script owner | the gate-script policy protects meaning and failure sensitivity, not wording volume | the banner permits meaning-preserving rewording; the prohibited-actions list also permits meaning-preserving rewording; no other starter freezes gate-script prose | the banner permits meaning-preserving rewording | deterministic: PROJECT-FACT-UNRESOLVED | when the prohibited-actions list is retired by the kernel |
+| Bounded gate execution | Gate-script owner | every gate runs inside the budget the Makefile declares and fails when it exceeds it | each gate target prints its elapsed time and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the gate reports a duration by another mechanism |
+| No phantom dependencies | Gate-script owner | a declared gate depends only on tools the repository installs | the dependency gate reports zero third-party imports in the tracked sources | the dependency gate reports zero third-party imports | deterministic: make deps | when a dependency manifest lists every gate tool |
+| Meaning-preserving rewording | Gate-script owner | a gate change preserves the findings the gate reports | the gate tests assert the finding text for each failure mode | the gate tests assert the finding text for each failure mode | deterministic: make test | when the gate reports a machine-readable finding identifier |
 
 ## Project facts to resolve
 
@@ -162,17 +145,9 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely on
 them when enforcing this policy and MUST keep them current as the project
 evolves.
 
-<!-- REPLACE-ME: resolve these three facts from real evidence and delete this
-comment. supported_platforms comes from the CI matrix, .gitattributes, or
-packaging metadata — never from assumption. shell_dialect is the dialect the
-project's existing gate scripts are actually written in (bash, sh, pwsh,
-python, none). script_directory is where they live. If the project has no gate
-scripts at all, record `none` for the dialect and directory — do NOT invent
-them. -->
-
-RALPH-FACT: supported_platforms: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: shell_dialect: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: script_directory: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: supported_platforms: macOS on Apple Silicon — the only platform the gates are exercised on
+RALPH-FACT: shell_dialect: none — the repository holds no shell script; the gate entry point is the Makefile
+RALPH-FACT: script_directory: tools/
 
 ## AI execution instructions
 
@@ -230,20 +205,10 @@ An agent MUST NOT:
 
 ## Verification
 
-<!-- REPLACE-ME: set the project's real gate-script lint command. The first
-token must be an approved gate tool (wrap anything else in `make`, `uv run`,
-or `npx`). `shellcheck` is the standard choice for POSIX shell; use the
-dialect's equivalent when the project's scripts are not shell. If the project
-genuinely has NO gate scripts, replace the line below with a
-`RALPH-INAPPLICABLE:` declaration naming that fact and the condition that
-would create one. You are FILLING OUT THIS FORM, not fixing the project:
-record the real command and confirm it EXISTS (you MAY run it once as a
-bounded probe). Do NOT fix the findings it reports. Then delete this comment. -->
+RALPH-COMMAND: make verify
 
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
-The expected successful result is exit 0 from the script linter. On failure,
-report the offending script, line, and rule.
+The expected successful result is exit 0 from the gate entry point. On failure,
+report the offending gate, line, and rule.
 
 ## Exceptions
 

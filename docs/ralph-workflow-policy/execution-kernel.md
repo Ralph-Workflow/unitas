@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: execution-kernel.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Execution Kernel
 
 ## Purpose and scope
@@ -80,9 +74,9 @@ enforcement status; a rule tagged `anecdotal` or `none` ships
 absolute comment and docstring ban and the banned-construct ban in
 `clean-code-policy.md`, project rules tagged `none` that ship
 `deterministic` because their wired checkers
-(`ralph.testing.audit_comments`, `ralph.testing.audit_banned_constructs`,
-respectively) enforce them; each reverts to `advisory` if its enforcer is
-removed.
+(the comment audit `make comment-audit` and the banned-construct gate
+`make banned-constructs`, respectively) enforce them; each reverts to
+`advisory` if its enforcer is removed.
 
 Every rule below is an agent rule or a runtime rule. No rule asks an
 agent to count its own retries, to keep state across sessions, to
@@ -198,11 +192,6 @@ slice is what a phase reads.
 
 ## Rule-to-enforcer ladder
 
-<!-- REPLACE-ME: resolve each rule's enforcement status here — 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND for a rule a command decides, or 'advisory: <reason>;
-review: <trigger>' for a rule a reviewer decides. A rule marked deterministic needs a
-guard-inventory row carrying the same Enforcement cell. Then delete this comment. -->
-
 Each rule is enforced at one level; the level names where a fix for a
 repeated mistake belongs, not where the rule is read.
 
@@ -215,7 +204,7 @@ advisory ones that own no inventory row.
 | Rule | Enforcement level | Enforcer | Enforcement status |
 |---|---|---|---|
 | 1 Check first | tests | the focused check named for the change | advisory: no gate reads the named check; review: when a change reaches the gate without one |
-| 2 Real-artifact evidence | tests | the project's verification gate | deterministic: PROJECT-FACT-UNRESOLVED |
+| 2 Real-artifact evidence | tests | the policy gate that resolves each declared command | deterministic: make policy-validate |
 | 3 Test integrity | tests | the project's test-policy audit | advisory: no audit detects a rewritten expectation; review: when a change edits a test expectation or adds a test-only branch |
 | 4 Regression tests from the spec | tests | the project's regression test inside the test gate | advisory: the gate proves the test passes now, not that its expected value came from the spec; review: when a bug-fix change ships with an expected value copied from the implementation |
 | 5 Independent review | architecture | the analysis phase, with the deterministic gate deciding the outcome | advisory: an analysis verdict is a review, not a gate; review: on every analysis phase that returns a verdict |
@@ -286,22 +275,18 @@ on portfolio parse.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Truthful evidence | Verification owner | every claim is backed by a record the agent can show | RALPH-COMMAND: present and exit-code recorded; no narration-only claim in the result body | RALPH-COMMAND: present and exit-code recorded | deterministic: PROJECT-FACT-UNRESOLVED | when a claim-presentation proof replaces the recorded evidence with a published artifact |
-| Run every gate | Gate-script owner | a check that cannot run blocks the run | gate script returns non-zero on collection error, missing tool, or timeout | gate script returns non-zero on collection error, missing tool, or timeout | deterministic: PROJECT-FACT-UNRESOLVED | when the same defect cannot recur (e.g. the tool is no longer wired) |
-| No weakening | Verification owner | no bypass mechanism lands in the tree; a suppression lives in tool configuration (`pyproject.toml` per-file settings, mypy configuration, bandit configuration), never inline, and the underlying warning is fixed in code | project linters, typecheckers, test-policy guards, and verification audits return zero bypass-mechanism findings | project linters, typecheckers, test-policy guards, and verification audits return zero bypass-mechanism findings | deterministic: PROJECT-FACT-UNRESOLVED | when the same defect cannot recur (e.g. the rule is removed from policy) |
+| Truthful evidence | Verification owner | the verification report names every gate that ran and the findings it printed | the gate report lists each gate that ran and the findings it printed | the gate report lists each gate that ran | deterministic: make verify | when a recorded artifact replaces the gate report |
+| Run every gate | Gate-script owner | the authoritative entry point depends on every declared gate target | the Makefile verify target lists every declared gate as a prerequisite | the Makefile verify target lists every declared gate as a prerequisite | deterministic: make verify | when the same defect cannot recur |
+| No weakening | Verification owner | no suppression marker and no bypass configuration key is present in the tracked tree | the bypass audit reports zero findings in the source and in the tool configuration | the bypass audit reports zero findings | deterministic: make bypass-audit | when the rule is removed from policy |
 | Policy follows reality | Policy owner | the policy facts and commands match the tool they describe | the policy file names the command the repository actually runs | the command named in the policy file | advisory: no gate compares a policy file with the code it describes; review: when a gate, tool, or documented behaviour changes | when a gate checks the policy files against the repository |
 | Report failures honestly | Verification owner | a red gate is reported as a red gate | the result body reports the gate outcome instead of hiding it behind narration | the gate outcome reported in the result body | advisory: the result body is prose and no gate parses it; review: when an analysis phase finds a claim without backing | when the result body gains a validated field |
-| Real-artifact evidence | Verification owner | the claim cites the command, its exit code, and the output that matters | the result body records the command and its exit code | the exit code and output recorded for the claim | deterministic: PROJECT-FACT-UNRESOLVED | when the recorded evidence is produced by the gate without an agent step |
-| Independent review model-family diversification | Analysis owner | the analysis phases run in a different model family from the phase whose work they review | the agent-chain configuration records the model family of the analysis phase and it differs from the authoring phase's model family | the model-family assignment recorded in the agent-chain configuration | advisory: no gate reads the agent chain's model family assignment, so a different-model-family review stays a configuration recommendation; review: when the harness records the per-phase model family in the run ledger | when a gate verifies the analysis phase runs in a different model family from the phase under review |
-| Non-inferable instruction surface | Policy owner | the instruction surfaces carry no line a reader can infer from the code | the recorded instruction-surface review names the lines of the managed AGENTS.md block and the project AGENTS.md a reader can infer | the instruction-surface lines named in the recorded review | advisory: only line-count and path-existence checks run, and neither detects an inferable line; review: on every policy remediation pass that edits AGENTS.md content, and whenever a managed-block or AGENTS.md line-budget warning fires | when a gate decides the content of the instruction surfaces |
-| Premise-check retry line | Recovery owner | the repeated-failure retry prompt names the premise shared by the failed fixes | the retry formatter adds the premise-check line when the current and prior failure summaries match (`ralph/recovery/retry_prompt.py`) | the premise-check line the retry formatter adds on a repeated failure | advisory: only the formatter requirement on the premise-check line exists and no gate reads the retry prompt a session receives; review: when the runtime records the retry prompts delivered to a session | when a gate checks the repeated-failure retry prompt for the premise-check line |
-| Model or harness generation re-audit | Policy owner | a model or harness generation change re-audits this policy for stale, dead-path, or contradictory rules, and the affected text is updated in the same workflow | the recorded re-audit of a model or harness generation change names the rules re-checked and the text updated in the same workflow | the rules re-checked and the text updated the recorded re-audit names | advisory: no gate detects a stale, dead-path, or contradictory rule after a model or harness generation change, so the re-audit stays a scheduled human review; review: on every model or harness generation change | when a gate diffs the policy files against the behavior of the generated artifact |
+| Real-artifact evidence | Verification owner | every declared command resolves to a gate target the Makefile defines | the policy gate resolves every declared command and reports no unknown gate target | the policy gate resolves every declared command | deterministic: make policy-validate | when the recorded evidence is produced by the gate without an agent step |
+| Independent review model-family diversification | Analysis owner | the review agent runs on a different model family from the agent whose work it reviews | the review record names the reviewer role and the reviewed subject | the review record names the reviewer role | advisory: no gate reads the agent chain's model family assignment; review: at every analysis phase that returns a verdict | when the runtime records the model family per phase |
+| Non-inferable instruction surface | Policy owner | the managed instruction block stays inside its line budget and states no instruction a reader can infer from the code | the policy gate reports exactly one managed block and the line budget warning stays clear | the policy gate reports exactly one managed block | advisory: only line-count and path-existence checks run, and neither detects an inferable line; review: on every policy remediation pass that edits AGENTS.md content, and whenever a managed-block or AGENTS.md line-budget warning fires | when a gate can compare the instruction surface with the code it describes |
+| Premise-check retry line | Runtime owner | a repeated failure summary carries the premise-check line | the retry formatter appends the premise-check line to the failure summary | the retry formatter appends the premise-check line | advisory: only the formatter requirement on the premise-check line exists; review: when the retry formatter changes | when the runtime can assert the line in a gate |
+| Model or harness generation re-audit | Policy owner | a model or harness generation change re-audits the policy against the running harness | the policy remediation pass records the harness generation it audited | the policy remediation pass records the harness generation | advisory: no gate detects a stale, dead-path, or contradictory rule after a harness change; review: on every harness or model generation change | when a gate can compare the corpus with the harness generation |
 
 The agent rules in `## Agent rules` are enforced through the
 rule-to-enforcer ladder above. A rule whose ladder status is
@@ -316,16 +301,10 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below. `none` IS a legal resolved value when the project genuinely has no
-such mechanism. If a fact cannot be resolved yet, defer it with the
-RALPH-PENDING form "RALPH-PENDING (assumed <date>); review trigger:
-<trigger>". Then delete this comment. -->
-
-RALPH-FACT: kernel_loading_owner: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: selective_loading_signal: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: claim_scope_review_owner: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: guard_inventory_review_cadence: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: kernel_loading_owner: the repository maintainers, who own AGENTS.md and docs/ralph-workflow-policy/
+RALPH-FACT: selective_loading_signal: the changed-surface trigger each domain policy names in its own Purpose and scope section
+RALPH-FACT: claim_scope_review_owner: the verification owner named in docs/ralph-workflow-policy/verification-policy.md
+RALPH-FACT: guard_inventory_review_cadence: every policy remediation pass and every release, recorded by the repository maintainers
 
 ## AI execution instructions
 
@@ -367,12 +346,7 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this kernel.
 
-<!-- REPLACE-ME: set the project's real gate command. The first token must
-be an approved gate tool (wrap anything else in `make`, `uv run`, or
-`npx`). A kernel-level audit is typically a small command that runs the
-no-weakening and claim-scope checks. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make verify
 RALPH-REVIEW: review the kernel inventory rows against the project's actual guards; verify each row's Detected condition names a real, current signal; evidence: dated review recording the row count, the rows retired since the last review, the rows added since the last review, and the unverified-claim count this kernel can catch; owner: the named person or team recorded in guard_inventory_review_cadence.
 
 Expected result: a deterministic kernel audit finishing inside its

@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: clean-code-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Clean-Code Policy
 
 ## Purpose and scope
@@ -64,19 +58,11 @@ identifiers without a linter prefix are project-gate rule IDs; the remediation
 agent maps them to the rule IDs enforced by the project's own type checker and
 linter configuration.
 
-<!-- REPLACE-ME: resolve each ban-table row's Enforcement column to
-'deterministic: <command-id>' matching a declared RALPH-COMMAND, or
-'advisory: <reason>; review: <trigger>'. Then delete this comment. -->
-
 | Language | Banned constructs | Enforcing rule IDs | Enforcement |
 |---|---|---|---|
-| Python | `eval`; `exec`; `compile`; `__import__`; dynamic `importlib` loading; `globals`/`locals`/`vars`; non-literal `getattr`/`setattr`/`delattr`; `Any`; `typing.cast`; `# type: ignore`; `ctypes`/`cffi`; `pickle`/`marshal`; metaclasses; `__getattr__`/`__getattribute__`/`__setattr__` overrides; three-argument `type()`; `inspect` reflection in production; runtime monkeypatching; `global`/`nonlocal`; mutable default arguments; `assert` for runtime validation; bare and broad `except`; named `lambda`; pass-through `*args`/`**kwargs`; `isinstance`/`type` dispatch chains; dynamic attributes without `__slots__`; star imports; `os.environ` outside one config module; `subprocess` with `shell=True`; shared mutable state through `threading`; `sys.path` edits; `__del__`; `__all__` mutation; `print` in library code; `time.sleep` in production; inheritance across modules. | `S307`; `S102`; `BANNED-CALL`; `BANNED-CALL`; `DYNAMIC-IMPORT`; `BANNED-NAMESPACE`; `B009`, `B010`, `DYNAMIC-ATTRIBUTE`; `ANN401`; `TC006`, `TYPING-CAST`; `PGH003`, `TYPE-IGNORE`; `BANNED-IMPORT`; `S403`, `S301`, `S302`, `BANNED-IMPORT`; `METACLASS`; `DYNAMIC-METHOD`; `TYPE-FACTORY`; `INSPECT-REFLECTION`; `MONKEYPATCH`; `PLW0603`, `PLW0602`, `GLOBAL-STATE`; `B006`, `MUTABLE-DEFAULT`; `S101`, `RUNTIME-ASSERT`; `E722`, `BLE001`, `BROAD-EXCEPT`; `E731`, `ASSIGNED-LAMBDA`; `ANN002`, `ANN003`, `VARIADIC-PASSTHROUGH`; `PLR1701`, `TYPE-DISPATCH`; `DYNAMIC-INSTANCE-ATTRIBUTE`; `F403`, `F405`, `STAR-IMPORT`; `OS-ENVIRON`; `S602`, `S604`, `SHELL-TRUE`; `THREAD-STATE`; `SYS-PATH`; `FINALIZER`; `ALL-MUTATION`; `PRINT`; `SLEEP`; `CROSS-MODULE-INHERITANCE`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| Rust | `unsafe`; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`, `clippy::useless_transmute`, `BANNED-TRANSMUTE`; `static_mut_refs`; `clippy::downcast_ref`, `BANNED-DOWNCAST`; `BANNED-ALLOW`; `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`; `BANNED-UNTYPED-MACRO`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| TypeScript/JavaScript | `any`; assertions to unrelated types; non-null `!`; `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck`; `eval`; `new Function`; `Proxy`/`Reflect`; `with`; `useEffect`; `dangerouslySetInnerHTML`; every `eslint-disable` form. | `@typescript-eslint/no-explicit-any`; `@typescript-eslint/consistent-type-assertions`; `@typescript-eslint/no-non-null-assertion`; `@typescript-eslint/ban-ts-comment`; `no-eval`; `no-new-func`; `BANNED-REFLECTION`; `no-with`; `BANNED-EFFECT`; `react/no-danger`; `eslint-comments/no-use`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| C/C++ | `void *` data; C-style casts; `reinterpret_cast`; `const_cast`; type-punning unions; variadics; `setjmp`/`longjmp`; raw `new`/`delete`; function-like `#define` macros. | `BANNED-VOID-POINTER`, `cppcoreguidelines-pro-type-reinterpret-cast`; `google-readability-casting`, `cppcoreguidelines-pro-type-cstyle-cast`; `cppcoreguidelines-pro-type-reinterpret-cast`; `cppcoreguidelines-pro-type-const-cast`; `cppcoreguidelines-pro-type-union-access`; `cppcoreguidelines-pro-type-vararg`; `cert-err52-cpp`; `cppcoreguidelines-owning-memory`; `cppcoreguidelines-macro-usage`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| Go | `unsafe`; `reflect`; `interface{}`/`any` outside a closed generic constraint; `//go:linkname`; `//nolint`. | `govet:unsafeptr`; `BANNED-REFLECT`; `BANNED-ANY`; `BANNED-LINKNAME`; `nolintlint`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| Java/Kotlin/C# | Reflection APIs; `Unsafe`; raw types; unchecked casts; `dynamic`; `Object`/`Any` parameter types; `@SuppressWarnings`/`#pragma warning disable`. | `BANNED-REFLECTION`; `BANNED-UNSAFE`; `rawtypes`; `unchecked`; `BANNED-DYNAMIC`; `BANNED-OBJECT-PARAMETER`; `BANNED-SUPPRESSION`. | deterministic: PROJECT-FACT-UNRESOLVED |
-| Any other language | Equivalent bans derived by the remediation agent from the project's own type checker and linter documentation. | The remediation agent cites the enforcing rule IDs and leaves no cataloged feature able to disable checking silently. | deterministic: PROJECT-FACT-UNRESOLVED |
+| Python | `eval`; `exec`; `compile`; `__import__`; `globals`/`locals`/`vars`; `typing.cast`; an `Any` annotation; `assert` outside a test module; a bare or broad `except`; a named `lambda`; a mutable default argument; a star import; `os.environ`; `print` in library code. | `BANNED-CALL`; `BANNED-NAMESPACE`; `TYPING-CAST`; `ANN401`; `RUNTIME-ASSERT`; `E722`; `BLE001`; `E731`; `B006`; `F403`; `OS-ENVIRON`; `PRINT`. | deterministic: make banned-constructs |
+| Rust | `unsafe`; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`; `static_mut_refs`; `clippy::downcast_ref`; `BANNED-ALLOW`; `clippy::unwrap_used`; `clippy::expect_used`; `BANNED-UNTYPED-MACRO`. | deterministic: make banned-constructs |
+| C# | Reflection APIs; `Unsafe`; raw types; unchecked casts; `dynamic`; `Object` parameter types; `#pragma warning disable`. | `BANNED-REFLECTION`; `BANNED-UNSAFE`; `rawtypes`; `unchecked`; `BANNED-DYNAMIC`; `BANNED-OBJECT-PARAMETER`; `BANNED-SUPPRESSION`. | deterministic: make banned-constructs |
 
 ## Commenting policy
 
@@ -126,10 +112,11 @@ lines.
 The comment audit enforces this absolutely: it fails on every comment
 token and every docstring in tracked Python, and on every comment in
 shell, TOML, YAML, Makefile and Jinja sources, except a line-1 shebang.
-It reads comments with the `tokenize` module, so a `#` inside a string
-is never misread, and it finds docstrings through the `ast` module. A
-finding carries `path:line`, the comment text, and the fix hint "delete
-the comment or encode it in code".
+It reads Python comments with the `tokenize` module and docstrings
+through the `ast` module, and it reads the other formats with quote
+awareness, so a `#` inside a string is never misread. A finding carries
+`path:line`, the comment text, and the fix hint "delete the comment or
+encode it in code".
 
 ## Documentation restriction
 
@@ -150,22 +137,14 @@ this rule is deleted or reduced to current facts.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Syntax-proxy ban | Clean-code owner | private-call ratchets and blanket functional rules do not reward making a method public or adding a wrapper | no private method is renamed to public solely to satisfy a private-call ratchet; no wrapper exists only to satisfy a blanket functional rule | no private method is renamed to public solely to satisfy a private-call ratchet | deterministic: PROJECT-FACT-UNRESOLVED | when every private-call ratchet is retired |
-| Bounded premature abstraction | Clean-code owner | new abstractions are justified by demonstrated boundary, volatility, testing, or reuse value rather than implementation count | abstraction is justified by demonstrated boundary, volatility, testing, or reuse value; implementation count alone neither requires nor forbids abstraction | abstraction is justified by demonstrated boundary, volatility, testing, or reuse value | deterministic: PROJECT-FACT-UNRESOLVED | when the project stops growing the abstraction target |
-| Comment and docstring absence | Clean-code owner | source carries no comments and no docstrings | the comment audit returns zero findings over the tracked tree | the comment audit returns zero findings over the tracked tree | deterministic: PROJECT-FACT-UNRESOLVED | when the comment gate is retired |
-| Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog has zero findings | the declared Python gate reports every cataloged construct | the Python findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog has zero findings | the declared Rust gate reports every cataloged construct | the Rust findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| TypeScript/JavaScript type-system escape-hatch ban | Clean-code owner | the TypeScript/JavaScript ban catalog has zero findings | the declared TypeScript/JavaScript gate reports every cataloged construct | the TypeScript/JavaScript findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| C/C++ type-system escape-hatch ban | Clean-code owner | the C/C++ ban catalog has zero findings | the declared C/C++ gate reports every cataloged construct | the C/C++ findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| Go type-system escape-hatch ban | Clean-code owner | the Go ban catalog has zero findings | the declared Go gate reports every cataloged construct | the Go findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| Java/Kotlin/C# type-system escape-hatch ban | Clean-code owner | the Java/Kotlin/C# ban catalog has zero findings | the declared Java/Kotlin/C# gate reports every cataloged construct | the Java/Kotlin/C# findings reported by the declared gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
-| Other-language type-system escape-hatch ban | Clean-code owner | the derived language ban catalog has zero findings | the declared language gate reports every derived construct and silent checker disable | the findings reported by the derived language gate | deterministic: PROJECT-FACT-UNRESOLVED | when the cataloged constructs become structurally impossible |
+| Syntax-proxy ban | Clean-code owner | no banned construct reaches the tree through a wrapper or an alias | the ban gate reports zero findings over the tracked tree | the ban gate reports zero findings | deterministic: make banned-constructs | when the ban catalog is enforced by the linter itself |
+| Bounded premature abstraction | Clean-code owner | a new abstraction carries a demonstrated boundary, volatility, testing, or reuse value | the change record names the boundary, volatility, testing, or reuse value the abstraction serves | the change record names the value the abstraction serves | advisory: no gate measures an abstraction against its justification; review: at every architecture review | when a gate can compare an abstraction with its justification |
+| Comment and docstring absence | Documentation owner | the tracked tree carries no comment token and no docstring | the comment audit reports zero findings over the tracked tree | the comment audit reports zero findings | deterministic: make comment-audit | when the comment gate is retired |
+| Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog reports zero findings over the tracked tree | the ban gate reports zero findings in the Python sources | the ban gate reports zero findings in the Python sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
+| Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
+| C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 
 ## Project facts to resolve
 
@@ -173,21 +152,13 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: naming_convention: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: module_boundary_rule: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: error_handling_convention: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: logging_convention: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: generated_code_marker: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: vendored_code_marker: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: dead_code_audit_command: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: naming_convention: snake_case for modules, functions, and variables; CapWords for classes; UPPER_CASE for module constants
+RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py and the gate tests in tools/test_verify.py; a new module needs a named owner
+RALPH-FACT: error_handling_convention: a gate prints one finding per line and exits non-zero; an unexpected condition raises instead of returning a partial result
+RALPH-FACT: logging_convention: a gate writes findings to standard output and writes no log file
+RALPH-FACT: generated_code_marker: none — the repository generates no source
+RALPH-FACT: vendored_code_marker: none — the repository vendors no third-party source
+RALPH-FACT: dead_code_audit_command: ruff check .
 
 ## AI execution instructions
 
@@ -225,30 +196,10 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: the RALPH-COMMAND gates cover only the mechanically
-checkable slice — the first RALPH-COMMAND is the dead-code / unused-import
-audit named in `dead_code_audit_command`, and the second is the comment
-audit for the Commenting policy rule. Each command's first token must be
-an approved gate tool (wrap anything else in `make`, `uv run`, or `npx`);
-if no such audit exists yet, create the smallest real one rather than a
-hollow command, or record a
-technically justified RALPH-INAPPLICABLE line. Naming, cohesion, interface
-clarity, and abstraction judgment are not script-checkable — they are carried
-by the separate RALPH-REVIEW line, which you must always resolve. Then delete
-this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make lint
 RALPH-REVIEW: review naming, cohesion, interface clarity, abstraction justification, comment content, and error/logging conventions against verified project convention; evidence: dated clean-code review or explicit not-performed blocker; owner: code quality owner
 
-<!-- REPLACE-ME: set the project's real comment audit command. It reports the
-banned comment shapes listed under Commenting policy on the lines a change
-touched, and it fails on every comment token, every docstring, and every
-documentation marker word outside quoted code. Prefer a
-check the project already runs over new tooling; if the project has no such
-audit yet, create the smallest real one rather than declaring a hollow
-command. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make comment-audit
 
 The command gates' expected successful results are a clean dead-code audit
 and a clean comment audit over the new and changed lines; report any audit

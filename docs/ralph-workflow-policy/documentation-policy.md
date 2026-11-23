@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: documentation-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Documentation Policy
 
 ## Purpose and scope
@@ -54,14 +48,10 @@ of documentation belongs.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Single source of truth | Documentation owner | every policy statement lives in exactly one canonical file | no parallel policy rulebook outside the canonical directory; the migrated marker points from old location to new | no parallel policy rulebook outside the canonical directory | deterministic: PROJECT-FACT-UNRESOLVED | when the canonical directory is removed (the kernel absorbs the contract) |
-| Comment and docstring absence | Documentation owner | source carries no comments and no docstrings | the comment audit returns zero findings over the tracked tree | the comment audit returns zero findings over the tracked tree | deterministic: PROJECT-FACT-UNRESOLVED | when the comment gate is retired |
+| Single source of truth | Documentation owner | every policy statement lives in exactly one canonical file | the policy gate reports one canonical policy directory, one managed block, and no cited path that does not resolve | the policy gate reports one canonical policy directory and no cited path that does not resolve | deterministic: make policy-validate | when the canonical directory is removed (the kernel absorbs the contract) |
+| Comment and docstring absence | Documentation owner | the tracked tree carries no comment token and no docstring | the comment audit reports zero findings over the tracked tree | the comment audit reports zero findings | deterministic: make comment-audit | when the comment gate is retired |
 
 ## Project facts to resolve
 
@@ -69,22 +59,14 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: user_docs_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: operator_docs_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: contributor_docs_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: api_reference_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: architecture_docs_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: release_notes_path: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: docstring_convention: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: example_verification_command: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: user_docs_path: none — the repository has no user-facing product yet
+RALPH-FACT: operator_docs_path: none — the repository has no operator-facing surface yet
+RALPH-FACT: contributor_docs_path: AGENTS.md
+RALPH-FACT: api_reference_path: none — the repository exposes no public API yet
+RALPH-FACT: architecture_docs_path: docs/ralph-workflow-policy/architecture-policy.md
+RALPH-FACT: release_notes_path: none — the repository has not released a version
+RALPH-FACT: docstring_convention: docstrings are banned; the comment audit reports every docstring it finds
+RALPH-FACT: example_verification_command: make policy-validate
 
 ## AI execution instructions
 
@@ -126,23 +108,13 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: the RALPH-COMMAND gate covers only the mechanically
-checkable slice — executing safe example commands and link/syntax
-validation. Its first token must be an approved gate tool (wrap anything else
-in `make`, `uv run`, or `npx`); if no such check exists yet, create the
-smallest real one rather than a hollow command, or record a technically
-justified RALPH-INAPPLICABLE line. Whether documentation is accurate,
-non-fabricated, and free of obvious-code restatement is not script-checkable
-— it is carried by the separate RALPH-REVIEW line, which you must always
-resolve. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make policy-validate
 RALPH-REVIEW: review documentation for accuracy against current behavior, absence of fabricated or unsupported claims, and reconciliation of authoritative locations; evidence: dated documentation review or explicit not-performed blocker; owner: documentation owner
 
-Command-gate success means every safe runnable example passes; every
-non-runnable example has declared syntax/static validation or dated review
-evidence, with its prerequisites, limitations, and reason for not executing
-documented. The review gate certifies accuracy and non-fabrication.
+Command-gate success means the policy gate reports no finding: every cited
+path resolves, every fact is resolved exactly once, and every declared
+command resolves to a gate target. The review gate certifies accuracy and
+non-fabrication.
 
 ## Exceptions
 

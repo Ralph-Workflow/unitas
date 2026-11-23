@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: agent-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Agent Policy
 
 ## Purpose and scope
@@ -47,14 +41,10 @@ the truthfulness obligations, and the documentation update obligations.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Selective loading | Agent owner | agents load the kernel plus only the policies triggered by the changed surfaces | agents read the kernel first; agents do not load conditional starters whose trigger has not fired | agents read the kernel first | deterministic: PROJECT-FACT-UNRESOLVED | when every domain becomes a kernel-level concern |
-| Three-state reporting | Agent owner | AGENTS.md, status bar, CLI, and remediation prompts report every readiness dimension | each surface carries wording for structure_complete, implementation_verified, outcome_evidence_reviewed | each surface carries wording for structure_complete, implementation_verified, outcome_evidence_reviewed | deterministic: PROJECT-FACT-UNRESOLVED | when the kernel absorbs the three dimensions |
+| Selective loading | Agent owner | agents load the kernel plus only the policies triggered by the changed surfaces | the policy corpus records the trigger each domain policy applies to | the policy corpus records the trigger each domain policy applies to | deterministic: make policy-validate | when every domain becomes a kernel-level concern |
+| Three-state reporting | Agent owner | AGENTS.md, the status bar, the CLI, and the remediation prompts report every readiness dimension | each surface carries wording for structure_complete, implementation_verified, and outcome_evidence_reviewed | each surface carries wording for the three readiness dimensions | advisory: no gate parses the runtime surfaces; review: when the runtime changes a readiness dimension | when the kernel absorbs the three dimensions |
 
 ## Project facts to resolve
 
@@ -62,20 +52,12 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: supported_agents: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: agent_dispatch_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: agent_review_process: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: failure_reporting_contract: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: documentation_update_obligation: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: policy_applicability_index: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: supported_agents: the roles listed in the role table of docs/ralph-workflow-policy/execution-kernel.md; every role loads the kernel before its role slice
+RALPH-FACT: agent_dispatch_command: make verify
+RALPH-FACT: agent_review_process: the guard-inventory review recorded in docs/ralph-workflow-policy/execution-kernel.md, owned by the repository maintainers
+RALPH-FACT: failure_reporting_contract: a failing gate is reported with its command, its exit status, and the finding text the gate printed
+RALPH-FACT: documentation_update_obligation: a change that moves a gate command updates docs/ralph-workflow-policy/verification-policy.md in the same workflow
+RALPH-FACT: policy_applicability_index: docs/ralph-workflow-policy/
 
 ## AI execution instructions
 
@@ -106,19 +88,7 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: set the project's real gate command. The first token must
-be an approved gate tool (wrap anything else in `make`, `uv run`, or
-`npx`). If the project has no such gate yet, create the smallest real one
-(a make target running the actual check) rather than declaring a hollow
-command; a gate that applies but is not wired yet (for example the tool is
-not installed on a new project) is recorded as a RALPH-PENDING deferral —
-`RALPH-PENDING: <approved-tool> (assumed <date>); review trigger: <trigger>`
-— which reaches readiness and is resolved by a later dev cycle when its
-trigger fires; only a gate that truly cannot EVER exist is recorded as
-inapplicable with a reason and the condition that would create it. Then
-delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make verify
 
 The expected successful result is exit 0 from the authoritative
 verification gate.

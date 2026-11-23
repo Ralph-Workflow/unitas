@@ -1,8 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: architecture-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: starter template; replace verified facts and
-commands, then delete this banner. -->
-
 # Architecture Policy
 
 ## Purpose and scope
@@ -38,36 +35,29 @@ architecture without imposing a named pattern or directory layout.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Process and resource ownership | Architecture owner | process / resource ownership is explicit: every long-lived process, file lock, socket, and signal handler is owned by a named module that closes it on every code path | code review requires every long-lived resource to be owned and closed; resource-lifecycle checks return zero findings | code review requires every long-lived resource to be owned and closed | deterministic: PROJECT-FACT-UNRESOLVED | when the project has no long-lived resources |
-| Conditional durable contracts | Architecture owner | durable contracts (registries, classifiers, name lists) are required only when the system that consumes them actually exists in the project | every required registry / classifier has a named consumer; no required registry / classifier is in place solely because a starter said so | every required registry / classifier has a named consumer | deterministic: PROJECT-FACT-UNRESOLVED | when the consumer system is removed |
+| Process and resource ownership | Architecture owner | a long-lived process, file lock, socket, or signal handler is owned by a named module that closes it on every code path | the code review records the owner of every long-lived resource | the code review records the owner of every long-lived resource | advisory: no gate observes runtime resource lifetimes yet; review: when the first long-lived resource is added | when a resource-lifecycle check can observe every long-lived resource |
+| Conditional durable contracts | Architecture owner | a durable contract is required only when the system that consumes it exists in the project | every required registry or classifier has a named consumer, and the corpus names no contract without one | every required registry or classifier has a named consumer | deterministic: make policy-validate | when the consumer system is removed |
 
 ## Project facts to resolve
 
 The lines below are the verified project facts that agents rely on and keep
 current.
 
-<!-- REPLACE-ME: record verified paths and rules; for an unsettled fact record
-the current choice and its review trigger, then delete this comment. -->
-
-RALPH-FACT: architecture_style: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: component_map: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: dependency_direction: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: forbidden_dependencies: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: state_ownership: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: external_io_boundaries: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: durable_contracts: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: decision_record_location: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: quality_attribute_scenarios: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: runtime_and_deployment_views: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: major_data_flows: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: known_risks_and_tradeoffs: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: conformance_method: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: architecture_style: layered: the Rust core owns asset parsing and runtime state, the C# bridge owns the UnityEngine API emulation, and the repository tooling is a separate Python package
+RALPH-FACT: component_map: the planned crates are unitas-core, unitas-asset, unitas-runtime, unitas-render and unitas-build; the only implemented component today is the Python package under tools/
+RALPH-FACT: dependency_direction: the tooling imports the standard library only; a crate depends on unitas-core and unitas-asset, never the reverse
+RALPH-FACT: forbidden_dependencies: the tooling must not import a third-party module, and a crate must not depend on a Unity assembly
+RALPH-FACT: state_ownership: a gate owns no state between runs; every gate reads the working tree and prints its findings
+RALPH-FACT: external_io_boundaries: the gate runner reads the working tree and spawns detect-secrets with an argument vector; it writes nothing outside the repository
+RALPH-FACT: durable_contracts: the policy corpus is the single source for the gate commands, and the Makefile is the single source for the gate targets
+RALPH-FACT: decision_record_location: docs/ralph-workflow-policy/architecture-policy.md
+RALPH-FACT: quality_attribute_scenarios: a full gate run finishes inside the verification budget recorded in docs/ralph-workflow-policy/verification-policy.md
+RALPH-FACT: runtime_and_deployment_views: the gates run from a clean clone on the development host; no container, service, or deployment target exists yet
+RALPH-FACT: major_data_flows: a Make target runs python3 tools/verify.py, which reads the working tree and writes findings to standard output
+RALPH-FACT: known_risks_and_tradeoffs: the product crates, the Unity asset formats, and the C# bridge are specified but not implemented, so every product gate is a dated deferral
+RALPH-FACT: conformance_method: make verify
 
 ## AI execution instructions
 
@@ -90,15 +80,11 @@ architectural change is fit.
 
 ## Verification
 
-<!-- REPLACE-ME: declare an executable architecture/import/contract command
-when available; otherwise use a technically justified RALPH-INAPPLICABLE line.
-Always resolve the separate RALPH-REVIEW. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make deps
 RALPH-REVIEW: evaluate quality scenarios, views, boundaries, risks, and tradeoffs; evidence: dated architecture review or explicit blocker; owner: architecture owner
 
-Success means no forbidden dependency, cycle, boundary violation, or unreviewed
-contract break.
+Success means the dependency gate reports no forbidden import and no
+unreviewed contract break.
 
 ## Exceptions
 

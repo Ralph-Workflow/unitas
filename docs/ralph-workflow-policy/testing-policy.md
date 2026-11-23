@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: testing-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Testing Policy
 
 ## Purpose and scope
@@ -368,18 +362,14 @@ reinstated to raise a count or percentage.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Cheapest-layer regression | Test owner | every bug fix to behavior carries a regression test that fails on the bug and passes on the fix | test name encodes the regression; test fails on the bug commit; test passes on the fix commit | test name encodes the regression | deterministic: PROJECT-FACT-UNRESOLVED | when a higher-layer test that pins the same observable contract covers the regression |
-| Real-boundary set | Test owner | browser / database / network-adapter / packaging / subprocess risks are covered at the real boundary | named profile covers each real-boundary risk; per-risk journey present in the profile manifest | named profile covers each real-boundary risk | deterministic: PROJECT-FACT-UNRESOLVED | when a deterministic, cheaper test covers the same risk class |
-| Deterministic seam | Test owner | tests run deterministic clock / network / DNS / filesystem / process seams without evasion | test injects the seam; no test depends on ambient clock, network, or filesystem properties | test injects the seam | deterministic: PROJECT-FACT-UNRESOLVED | when the seam is no longer needed (the production code is pure) |
-| Browser budget, not cardinality | Test owner | the default-lane browser time budget is a measured value plus a distinct-risk inventory | RALPH-FACT browser_budget_seconds declared; new browser journey either fits the budget or carries a distinct-risk justification | RALPH-FACT browser_budget_seconds declared | deterministic: PROJECT-FACT-UNRESOLVED | when the project stops using a browser at all |
-| Narrowest observable boundary | Test owner | tests assert at the narrowest useful boundary; exposing a private method or adding a wrapper solely to satisfy a test is a violation | no test imports a private symbol solely to invoke it; no wrapper function exists only to make a test possible | no test imports a private symbol solely to invoke it | deterministic: PROJECT-FACT-UNRESOLVED | when the rule is restated as a kernel-level constraint |
-| `suite-budget-ratchet` Suite budget ratchet | Test owner | the default suite time budget shrinks freely; growth is rejected absent a reviewed change | the recorded suite_time_budget is at or below its prior recorded value; growth is absent a reviewed change | the current suite_time_budget value per project | deterministic: PROJECT-FACT-UNRESOLVED | when the ratchet is retired by the kernel |
+| Cheapest-layer regression | Testing owner | a regression test runs inside the default suite and fails on the pre-fix revision | the suite report lists the test that reproduces the defect and the suite exit status | the suite report lists the test that reproduces the defect | deterministic: make test | when a regression test moves to a named profile |
+| Real-boundary set | Testing owner | each test drives a gate through its public command interface | the suite report shows the gate command each test exercises | the suite report shows the gate command each test exercises | deterministic: make test | when the tests drive the gates through an internal interface instead |
+| Deterministic seam | Testing owner | the suite produces the same result on every run | the suite exits 0 on a repeated run with no network access | the suite exits 0 on a repeated run | deterministic: make test | when a test needs an external service |
+| Browser budget, not cardinality | Testing owner | no browser journey is counted because the repository has no browser surface | the suite report shows no browser test and the policy records no browser budget | the suite report shows no browser test | advisory: no browser surface exists to measure; review: when a browser surface is added | when a browser surface exists |
+| Narrowest observable boundary | Testing owner | each test asserts on the observable result of one gate | the test names the gate it exercises and the finding it expects | the test names the gate it exercises | advisory: a reviewer decides whether a boundary is the narrowest useful one; review: at every test review | when a test-quality gate can judge the boundary |
+| `suite-budget-ratchet` Suite budget ratchet | Testing owner | the suite budget does not grow without a reviewed change | the suite report records the suite duration against the recorded budget | the suite report records the suite duration | deterministic: make test | when the suite duration is measured and recorded by the gate |
 
 ## Project facts to resolve
 
@@ -387,43 +377,27 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-`none` IS a legal resolved value when the project genuinely has no such
-mechanism: write it plainly with the reason, for example
-`parallel_execution_mechanism: none — suite runs serially`. Do NOT invent a
-deferral for something that will never arrive.
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires.
-The whole-file placeholder scan rejects unresolved-work markers anywhere in
-the file, including inside ordinary prose: the all-caps four-letter "to do"
-marker, the "to be determined" abbreviation, the "fix me" marker, and a
-double opening brace. Do not write any of them, even to describe them.
-Then delete this comment. -->
-
-RALPH-FACT: test_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: test_command_prerequisites: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: primary_test_framework: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: secondary_test_frameworks: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: test_isolation_strategy: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: io_mocking_approach: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suite_time_budget: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: per_test_timeout: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: timeout_enforcement_mechanism: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: parallel_execution_mechanism: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: slow_test_report_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suite_test_count_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: assertion_quality_check: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: supported_platform_matrix: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: external_dependency_test_approach: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: clean_clone_setup_command: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: flake_policy: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: quarantine_mechanism_expiry_and_max_size: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suite_review_cadence_and_owner: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: regression_test_convention: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: browser_budget_seconds: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: test_command: make test
+RALPH-FACT: test_command_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed; no network access
+RALPH-FACT: primary_test_framework: pytest
+RALPH-FACT: secondary_test_frameworks: none — the repository has exactly one test framework
+RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the pytest tmp_path; no state is shared between tests
+RALPH-FACT: io_mocking_approach: none — the gates read the working tree and never write outside it
+RALPH-FACT: suite_time_budget: 30 seconds for the whole suite
+RALPH-FACT: per_test_timeout: none — no per-test timeout is configured; the suite budget bounds the run
+RALPH-FACT: timeout_enforcement_mechanism: none — no timeout plugin is installed, so the suite budget review catches a slow suite
+RALPH-FACT: parallel_execution_mechanism: none — the suite runs serially
+RALPH-FACT: slow_test_report_command: pytest -q --durations=10
+RALPH-FACT: suite_test_count_command: pytest --collect-only -q
+RALPH-FACT: assertion_quality_check: make banned-constructs
+RALPH-FACT: supported_platform_matrix: macOS on Apple Silicon — the only platform the suite is exercised on
+RALPH-FACT: external_dependency_test_approach: none — the suite runs offline against the working tree
+RALPH-FACT: clean_clone_setup_command: python3 -m pip install pytest ruff mypy detect-secrets
+RALPH-FACT: flake_policy: a test that fails intermittently is fixed or deleted in the same change; no test is retried to obtain a green run
+RALPH-FACT: quarantine_mechanism_expiry_and_max_size: none — no test is skipped, deselected, or quarantined
+RALPH-FACT: suite_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
+RALPH-FACT: regression_test_convention: a bug fix adds a test that fails on the pre-fix revision and names the specification its expected value came from
+RALPH-FACT: browser_budget_seconds: none — the repository has no browser surface
 
 Three prerequisite facts exist and are NOT interchangeable:
 `clean_clone_setup_command` is the one-time bootstrap taking a fresh clone
@@ -503,24 +477,7 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: set the project's real gate command. The first token must
-be an approved gate tool (wrap anything else in `make`, `uv run`, or
-`npx`). If the project has no such gate yet, create the smallest real one
-(a make target running the actual check) rather than declaring a hollow
-command; a gate that applies but is not wired yet is recorded as a
-RALPH-PENDING deferral — `RALPH-PENDING: <approved-tool> (assumed <date>);
-review trigger: <trigger>` — which reaches readiness and is resolved by a
-later dev cycle when its trigger fires; only a gate that truly cannot EVER
-exist is recorded as inapplicable with a reason and the condition that
-would create it. The gate MUST enforce the suite time limit recorded above,
-via the runner's timeout rather than a manual stopwatch.
-Record the real gate command and confirm it EXISTS and enforces a timeout
-(you MAY run it once as a bounded probe, capped at ~10s, to check that it
-resolves). Do NOT fix failing tests or run the suite to green — a failing or
-slow suite is the project's problem to address later. Run only the commands
-you declare here. Then delete this comment. -->
-
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make test
 RALPH-REVIEW: review the suite for tests that catch no distinct failure, tests that cannot fail, criteria misrouted into automation instead of human review, order-coupled tests, expired fixtures, and quarantined tests past expiry; evidence: dated suite review recording the test count, the distinct-failure count this suite can catch, tests admitted, tests flagged as uncertain duplicates under rule 16, tests retired with the green run that authorized each removal, rule conflicts recorded since the last review, and quarantine status; owner: the named person or team recorded in the suite_review_cadence_and_owner fact
 
 Expected result: a deterministic suite finishing inside its enforced
@@ -645,6 +602,6 @@ Criterion 8 verdict authority: a capture-backed criterion 8 verdict is agent-pro
 
 Appearance assertions may protect implementation details and accessibility behaviour, but they must not be submitted as visual design proof. Tests and development results must identify the capture set and the visual verdict that supports a UI plan item.
 
-RALPH-FACT: visual_verdict_artifact: design_verdict
-RALPH-FACT: visual_capture_handle: ralph://media/{artifact_id}
-RALPH-FACT: design_capture_command: <declared capture command from the design-system policy>
+RALPH-FACT: visual_verdict_artifact: none — the repository has no visual surface
+RALPH-FACT: visual_capture_handle: none — the repository has no visual surface
+RALPH-FACT: design_capture_command: none — the repository has no design surface

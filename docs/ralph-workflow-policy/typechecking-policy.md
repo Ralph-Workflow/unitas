@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: typechecking-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Type-Checking Policy
 
 ## Purpose and scope
@@ -124,17 +118,13 @@ the project maintains and can statically check them.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Unknown at untrusted boundaries | Type owner | TypeScript `unknown` is allowed at untrusted boundaries with immediate narrowing | static type check accepts `unknown`; linter permits `unknown`; reviewer can name the boundary type and the narrowing call | static type check accepts `unknown` | deterministic: PROJECT-FACT-UNRESOLVED | when the type system gains first-class refinement types |
-| Typed tests | Type owner | tests are fully typed within the declared checker scope | static type check over the test files returns zero errors | static type check over the test files returns zero errors | deterministic: PROJECT-FACT-UNRESOLVED | when the test framework is removed from the project |
-| No typecheck bypass | Type owner | no global silencer (`ignore_missing_imports`, `follow_imports = silent`, `disallow_untyped_defs = false`, blanket per-file-ignores) lands in the tree; the no-bypass rule bans the bypass mechanisms, and an inline suppression is not an available form | audit_typecheck_bypass returns zero global-silencer findings | audit_typecheck_bypass returns zero global-silencer findings | deterministic: PROJECT-FACT-UNRESOLVED | when the rule is restated as a kernel-level constraint |
-| `sanctioned-dynamic-boundaries` Sanctioned dynamic boundary set | Type owner | the set of sanctioned dynamic boundaries is ratcheted; new entries require a documented justification | `sanctioned_dynamic_boundaries` list length is at or below the recorded baseline; new entries are absent absent a documented justification | the current `sanctioned_dynamic_boundaries` list length per project | deterministic: PROJECT-FACT-UNRESOLVED | when the ratcheted set is retired by the kernel |
-| `suppression-count-baseline` Suppression count baseline | Type owner | the suppression count is ratcheted; new suppressions require a documented exception | the project's recorded suppression count holds or shrinks | the current suppression count per project | deterministic: PROJECT-FACT-UNRESOLVED | when the suppression ratchet is retired by the kernel |
+| Unknown at untrusted boundaries | Typecheck owner | no value crosses a trust boundary as an unchecked dynamic type | the type check reports zero errors with the strict settings enabled | the type check reports zero errors | deterministic: make typecheck | when the type checker can express the boundary |
+| Typed tests | Typecheck owner | every test helper carries an explicit annotation | the type check covers the test module and reports zero errors | the type check covers the test module | deterministic: make typecheck | when the tests leave the type check |
+| No typecheck bypass | Typecheck owner | no inline type suppression and no disabled error code is present in the tracked tree | the bypass audit reports zero findings in the source and in the tool configuration | the bypass audit reports zero findings | deterministic: make bypass-audit | when the type checker reports its own suppressions |
+| `sanctioned-dynamic-boundaries` Sanctioned dynamic boundary | Typecheck owner | each sanctioned dynamic boundary is named and counted | the policy records each sanctioned boundary and the type check reports zero errors | the policy records each sanctioned boundary | deterministic: make typecheck | when no dynamic boundary remains |
+| `suppression-count-baseline` Suppression count baseline | Typecheck owner | the number of type suppressions does not grow | the bypass audit reports zero suppression markers | the bypass audit reports zero suppression markers | deterministic: make bypass-audit | when the type checker reports its own suppressions |
 
 ## Project facts to resolve
 
@@ -142,26 +132,18 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: typechecker_per_language: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: strictness_level: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: excluded_paths: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: stubbed_dependencies: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suppression_rationale_policy: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suppression_inventory_and_baseline: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: ci_gate_integration: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: maintenance_evidence: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: first_party_languages: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: excluded_language_evidence: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: type_modeling_conventions: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: sanctioned_dynamic_boundaries: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: typechecker_per_language: mypy in strict mode for Python, cargo check for Rust (deferred), and the .NET compiler for C# (deferred)
+RALPH-FACT: strictness_level: strict — mypy strict = true in pyproject.toml
+RALPH-FACT: excluded_paths: none — mypy checks the whole tools package
+RALPH-FACT: stubbed_dependencies: none — the tooling imports the standard library only
+RALPH-FACT: suppression_rationale_policy: no type suppression exists; a type error is fixed in the code
+RALPH-FACT: suppression_inventory_and_baseline: zero suppressions — the bypass audit reports every suppression marker it finds
+RALPH-FACT: ci_gate_integration: make typecheck runs in the default gate through the Makefile verify target
+RALPH-FACT: maintenance_evidence: the type check report the last make verify run printed
+RALPH-FACT: first_party_languages: Python for the repository tooling; Rust and C# for the product, both deferred
+RALPH-FACT: excluded_language_evidence: none — no language is excluded from the type check
+RALPH-FACT: type_modeling_conventions: every function is annotated, and a value crossing a module boundary carries a concrete type
+RALPH-FACT: sanctioned_dynamic_boundaries: none — the tooling performs no dynamic dispatch
 
 For each language, `maintenance_evidence` records tool and version range,
 official maintenance source, compatibility and first-party coverage evidence,
@@ -215,33 +197,14 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: per-language template. Keep one block per maintained first-party language
-with the real checker command (first token must be an approved gate tool;
-wrap others in `make`, `uv run`, or `npx`), add blocks for detected
-languages missing below, drop blocks for languages the project does not
-use, and record genuinely unchecked languages as inapplicable with a
-reason.
-You are FILLING OUT THIS FORM, not fixing the project: record the real
-command and confirm it EXISTS (you MAY run it once as a bounded probe to
-check that it resolves). Do NOT fix failing checks — type errors, failing
-tests, lint findings, audit failures — and do NOT run a suite to green; a
-failing or slow gate is the project's problem to address later, not a
-form-filling blocker. Run only the commands you declare here, and if you
-write a helper script to wire a gate, cover it with a unit test. Then
-delete this comment. -->
-
 RALPH-LANG: Python
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
-RALPH-LANG: TypeScript
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make typecheck
 
 RALPH-LANG: Rust
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-PENDING: cargo check --workspace --all-targets (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed
 
-RALPH-LANG: Go
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
+RALPH-LANG: C#
+RALPH-PENDING: dotnet build --configuration Release (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
 The expected successful result is a clean type check (exit 0) on the
 current code base. Never mask type errors with silencers.
 

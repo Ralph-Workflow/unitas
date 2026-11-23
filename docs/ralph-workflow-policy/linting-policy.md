@@ -1,11 +1,5 @@
 <!-- ralph-policy-schema: v6 -->
 <!-- ralph-policy-id: linting-policy.md -->
-<!-- RALPH-STARTER-TEMPLATE: this file is a starter template, not yet this
-project's policy. A remediation agent rewrites it with verified project
-facts (every RALPH-FACT and RALPH-COMMAND below), adapts the defaults to the
-project's established practice, and deletes this banner. Readiness stays
-blocked while this banner or any placeholder token remains. -->
-
 # Linting Policy
 
 ## Purpose and scope
@@ -72,15 +66,12 @@ again if demonstrated need returns than to retain unowned paths indefinitely.
 
 ## Guard inventory
 
-<!-- REPLACE-ME: resolve each row's Enforcement column to 'deterministic: <command-id>'
-matching a declared RALPH-COMMAND or 'advisory: <reason>; review: <trigger>'.
-Then delete this comment. -->
-
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| No lint bypass | Lint owner | no inline lint suppression lands in the tree, and every `per-file-ignores` entry matches the documented per-file configuration | audit_lint_bypass returns zero findings | audit_lint_bypass returns zero findings | deterministic: PROJECT-FACT-UNRESOLVED | when the rule is restated as a kernel-level constraint |
-| Strictest lint configuration | Lint owner | the lint configuration enables every rule and carries no per-file ignore of a banned rule | the lint-configuration audit reports no disabled rule outside common safe use and no banned-rule bypass | the disabled-rule and banned-rule bypass findings reported by the audit | deterministic: PROJECT-FACT-UNRESOLVED | when the lint configuration bypasses become structurally impossible |
-| Public / wrapper syntax-proxy | Lint owner | making a method public or adding a wrapper solely to satisfy a rule is a violation, not a fix | no private method is renamed to public solely to satisfy a private-call ratchet; no wrapper exists only to make a structural rule pass | no private method is renamed to public solely to satisfy a private-call ratchet | deterministic: PROJECT-FACT-UNRESOLVED | when every private-call ratchet is removed from the policy |
+| No lint bypass | Lint owner | no inline lint suppression and no per-file ignore is present in the tracked tree | the bypass audit reports zero findings in the source and in the tool configuration | the bypass audit reports zero findings | deterministic: make bypass-audit | when the linter reports its own suppressions |
+| Strictest lint configuration | Lint owner | the lint configuration selects the project rule set and disables no rule | the bypass audit reports that the lint configuration selects a rule set and carries no ignore key | the bypass audit reports that the lint configuration selects a rule set | deterministic: make bypass-audit | when the linter can prove the configuration is the strictest available |
+| Lint run coverage | Lint owner | the lint run checks every tracked source file | the lint gate exits 0 over the tracked tree | the lint gate exits 0 | deterministic: make lint | when the lint run reports the files it checked |
+| Public / wrapper syntax-proxy | Lint owner | no banned construct reaches the tree through a wrapper | the ban gate reports zero findings over the tracked tree | the ban gate reports zero findings | deterministic: make banned-constructs | when the ban catalog is enforced by the linter itself |
 
 ## Project facts to resolve
 
@@ -88,26 +79,18 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-<!-- REPLACE-ME: record one verified, machine-checkable value per fact
-below (commands, paths, names, versions — not adjectives or aspirations).
-If a fact cannot be resolved yet (project too young, tool not chosen, value
-not knowable), defer it with the RALPH-PENDING form "RALPH-PENDING (assumed
-<date>); review trigger: <trigger>" — it reaches readiness and a dev-cycle
-agent resolves it when its trigger fires. Then
-delete this comment. -->
-
-RALPH-FACT: linter_per_language: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: rule_set_baseline: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: formatter_responsibility: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: excluded_paths: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: suppression_rationale_policy: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: ci_gate_integration: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: maintenance_evidence: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: first_party_languages: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: excluded_language_evidence: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: dead_code_detection_per_language: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: retained_compatibility_inventory: PROJECT-FACT-UNRESOLVED
-RALPH-FACT: live_entry_point_annotation_inventory: PROJECT-FACT-UNRESOLVED
+RALPH-FACT: linter_per_language: ruff for Python, cargo clippy for Rust (deferred), and dotnet format for C# (deferred)
+RALPH-FACT: rule_set_baseline: the B, C4, E, F, I, RUF, SIM, UP, and W rules selected in pyproject.toml
+RALPH-FACT: formatter_responsibility: ruff format owns Python formatting; no Rust or C# formatter is configured yet
+RALPH-FACT: excluded_paths: none — the lint gate covers every tracked Python file
+RALPH-FACT: suppression_rationale_policy: no suppression exists; a lint finding is fixed in the code
+RALPH-FACT: ci_gate_integration: make lint runs in the default gate through the Makefile verify target
+RALPH-FACT: maintenance_evidence: the lint report the last make verify run printed
+RALPH-FACT: first_party_languages: Python for the repository tooling; Rust and C# for the product, both deferred
+RALPH-FACT: excluded_language_evidence: none — no language is excluded from the lint gate
+RALPH-FACT: dead_code_detection_per_language: ruff check reports unused imports and unused locals for Python; no Rust or C# surface exists yet
+RALPH-FACT: retained_compatibility_inventory: none — the repository retains no compatibility layer
+RALPH-FACT: live_entry_point_annotation_inventory: none — the repository has no speculative entry point
 
 For each language, `maintenance_evidence` records tool and version range,
 official maintenance source, compatibility and first-party coverage evidence,
@@ -153,33 +136,14 @@ An agent MUST NOT:
 
 Run every gate below before claiming a change complies with this policy.
 
-<!-- REPLACE-ME: per-language template. Keep one block per maintained first-party language
-with the real linter command (first token must be an approved gate tool;
-wrap others in `make`, `uv run`, or `npx`), add blocks for detected
-languages missing below, drop blocks for languages the project does not
-use, and record genuinely unlinted languages as inapplicable with a
-reason.
-You are FILLING OUT THIS FORM, not fixing the project: record the real
-command and confirm it EXISTS (you MAY run it once as a bounded probe to
-check that it resolves). Do NOT fix failing checks — type errors, failing
-tests, lint findings, audit failures — and do NOT run a suite to green; a
-failing or slow gate is the project's problem to address later, not a
-form-filling blocker. Run only the commands you declare here, and if you
-write a helper script to wire a gate, cover it with a unit test. Then
-delete this comment. -->
-
 RALPH-LANG: Python
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
-RALPH-LANG: TypeScript
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-COMMAND: make lint
 
 RALPH-LANG: Rust
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
+RALPH-PENDING: cargo clippy --workspace --all-targets (assumed 2026-11-23); review trigger: the unitas Rust workspace manifest is committed and clippy is installed
 
-RALPH-LANG: Go
-RALPH-COMMAND: PROJECT-FACT-UNRESOLVED
-
+RALPH-LANG: C#
+RALPH-PENDING: dotnet format --verify-no-changes (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
 The expected successful result is a clean lint run (exit 0). Lint
 failures MUST be addressed at the source, not by adding suppressions.
 
