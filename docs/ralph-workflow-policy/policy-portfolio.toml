@@ -82,11 +82,28 @@ lane = "default"
 marginal_cost_seconds = 0.24
 cost_basis = "measured"
 evidence = "the ban-catalog report naming every banned construct the gate found"
-detects = "per-language ban catalog findings"
+detects = "per-language ban catalog findings including rawtypes, unchecked, and BANNED-OBJECT-PARAMETER in C#, and widened SECRET_SCAN_EXCLUDES scope skipping checkpoint.json, bin, and obj"
 retirement_trigger = "when every cataloged construct becomes structurally impossible"
-lifecycle = "review when a maintained language, checker, linter, or ban catalog changes"
-disposition = "KEEP"
+lifecycle = "review when a maintained language, checker, linter, or ban catalog changes; merges C# rawtypes, unchecked, BANNED-OBJECT-PARAMETER ban detectors and widened SECRET_SCAN_EXCLUDES scope into this tooling control"
+disposition = "MERGE"
 enforcement = "deterministic: make banned-constructs"
+
+[[controls]]
+id = "dotnet-default-lane"
+protected_outcome = "The C# UnityEngine bridge complies with build, format, and test contracts in the default lane"
+fault_sensitivity = "Detects C# compilation errors, formatting divergences, analyzer warnings, and UnityEngine lifecycle deviations"
+layer = "default gate"
+owner = "bridge owner"
+trigger = "every change"
+lane = "default"
+marginal_cost_seconds = 3.8
+cost_basis = "measured"
+evidence = "the verify report recording clean dotnet-build, dotnet-format, and dotnet-test gate results within budget"
+detects = "C# compilation errors, analyzer diagnostics, unformatted C# source files, and UnityEngine lifecycle test failures"
+retirement_trigger = "when the C# bridge is replaced by an alternate language implementation"
+lifecycle = "review on every .NET SDK bump or bridge architecture change; disposition: KEEP as a parallel lane"
+disposition = "KEEP"
+enforcement = "deterministic: make verify"
 
 [[controls]]
 id = "strictest-lint-configuration"

@@ -33,7 +33,9 @@ SOURCE_SUFFIXES = (
     ".ts",
     ".tsx",
 )
-SKIP_DIR_NAMES = frozenset({"__pycache__", "build", "dist", "node_modules", "target", "venv"})
+SKIP_DIR_NAMES = frozenset(
+    {"__pycache__", "bin", "build", "dist", "node_modules", "obj", "target", "venv"}
+)
 APPLICABILITY_PATH = POLICY_DIR / "applicability.toml"
 CONDITIONAL_DOMAINS = (
     "accessibility",
@@ -186,6 +188,14 @@ BANNED_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
         ("unsafe block", re.compile(r"\bunsafe\b")),
         ("pragma warning disable", re.compile(r"#\s*pragma\s+warning\s+disable")),
         ("reflection API", re.compile(r"\bSystem\.Reflection\b|\bGetType\(\)")),
+        (
+            "raw generic type",
+            re.compile(
+                r"(?m)\b(?:List|Dictionary|IEnumerable|IList|ICollection|ISet|HashSet|Queue|Stack|ObservableCollection)\b(?!\s*<)"
+            ),
+        ),
+        ("unchecked", re.compile(r"(?m)\bunchecked\b")),
+        ("object parameter", re.compile(r"(?m)\(\s*(?:System\.)?object\s+\w+")),
     ),
 }
 MAKE_TARGET_RE = re.compile(r"(?m)^([A-Za-z0-9_.-]+):(?!=)")
@@ -199,6 +209,9 @@ SECRET_SCAN_EXCLUDES = (
     r"^\.ruff_cache/",
     r"^\.secrets\.baseline$",
     r"(^|/)target/",
+    r"^checkpoint\.json$",
+    r"(^|/)bin/",
+    r"(^|/)obj/",
 )
 
 
@@ -463,15 +476,15 @@ def check_policy() -> list[str]:
     return findings
 
 
-def iter_source_files() -> Iterator[Path]:
-    for root, dirnames, filenames in os.walk(REPO_ROOT):
+def iter_source_files(root: Path = REPO_ROOT) -> Iterator[Path]:
+    for walk_root, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             name
             for name in sorted(dirnames)
             if not name.startswith(".") and name not in SKIP_DIR_NAMES
         ]
         for filename in sorted(filenames):
-            path = Path(root) / filename
+            path = Path(walk_root) / filename
             if path.suffix in SOURCE_SUFFIXES:
                 yield path
 
@@ -606,9 +619,23 @@ def banned_findings(display: str, tree: ast.Module) -> list[str]:
     return findings
 
 
-def check_banned() -> list[str]:
+def banned_source_findings(path: Path) -> list[str]:
+    relative = display_path(path)
+    patterns = BANNED_SOURCE_PATTERNS.get(path.suffix, ())
+    if not patterns:
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
     findings: list[str] = []
-    for path in iter_source_files():
+    for label, pattern in patterns:
+        for match in pattern.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(f"{relative}:{line}: {label}")
+    return findings
+
+
+def check_banned(root: Path = REPO_ROOT) -> list[str]:
+    findings: list[str] = []
+    for path in iter_source_files(root):
         relative = display_path(path)
         if path.suffix == ".py":
             if path.name.startswith("test_"):
@@ -616,14 +643,7 @@ def check_banned() -> list[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             findings.extend(banned_findings(str(relative), tree))
             continue
-        patterns = BANNED_SOURCE_PATTERNS.get(path.suffix, ())
-        if not patterns:
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for label, pattern in patterns:
-            for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                findings.append(f"{relative}:{line}: {label}")
+        findings.extend(banned_source_findings(path))
     return findings
 
 

@@ -196,8 +196,8 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: authoritative_verify_command: make verify
-RALPH-FACT: gate_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, plus the Rust toolchain (cargo and clippy)
-RALPH-FACT: gate_order: policy-validate, bypass-audit, banned-constructs, comment-audit, deps, secret-scan, lint, typecheck, then test — the order the Makefile verify target declares
+RALPH-FACT: gate_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo and clippy), and the .NET 8.0 SDK
+RALPH-FACT: gate_order: policy-validate, bypass-audit, banned-constructs, comment-audit, deps, secret-scan, lint, typecheck, test, dotnet-build, dotnet-format, then dotnet-test — the order the Makefile verify target declares
 RALPH-FACT: fast_path_command: make lint
 RALPH-FACT: fast_path_selection_mechanism: none — the full gate finishes inside the fast-path cap, so the full gate is the fast path
 RALPH-FACT: gate_parallelism_mechanism: none — the gates run serially
@@ -207,7 +207,7 @@ RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
 RALPH-FACT: required_verification_profiles: none — every check runs in the default gate
-RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 7 seconds on 2026-11-23 with the Rust gates wired into the default gate
+RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 10 seconds on 2026-11-23 with the Rust and .NET gates wired into the default gate
 RALPH-FACT: verification_time_enforcement_mechanism: the timed gate wrapper fails the run when a gate exceeds the budget the Makefile declares
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
 

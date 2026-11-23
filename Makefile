@@ -1,9 +1,12 @@
-.PHONY: verify test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps
+export PATH := $(HOME)/.dotnet:$(PATH)
+export DOTNET_ROOT := $(HOME)/.dotnet
+
+.PHONY: verify test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
 
-verify: policy-validate bypass-audit banned-constructs comment-audit deps secret-scan lint typecheck test
+verify: policy-validate bypass-audit banned-constructs comment-audit deps secret-scan lint typecheck test dotnet-build dotnet-format dotnet-test
 	@now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s budget"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
 
 test:
@@ -36,3 +39,13 @@ secret-scan:
 
 deps:
 	@python3 tools/verify.py timed deps $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py deps
+
+dotnet-build:
+	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All
+
+dotnet-format:
+	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) dotnet format bridge/Unitas.sln --verify-no-changes --no-restore
+
+dotnet-test:
+	@cargo build -p unitas-runtime
+	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests

@@ -78,6 +78,8 @@ bin/*
 !bin/.gitkeep
 obj/*
 !obj/.gitkeep
+bridge/**/bin/
+bridge/**/obj/
 *.user
 *.suo
 *.userosscache

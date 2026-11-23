@@ -1,0 +1,52 @@
+use std::fmt;
+use std::io;
+use unitas_asset::scene::SceneError;
+
+#[derive(Debug)]
+pub enum RuntimeError {
+    Scene(SceneError),
+    Io(io::Error),
+    InvalidGuid(String),
+    InvalidAddress,
+    InvalidUtf8,
+    NotFound,
+    AlreadyShutdown,
+    Poisoned,
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RuntimeError::Scene(err) => write!(formatter, "scene error: {err}"),
+            RuntimeError::Io(err) => write!(formatter, "io error: {err}"),
+            RuntimeError::InvalidGuid(guid) => write!(formatter, "invalid guid: {guid}"),
+            RuntimeError::InvalidAddress => write!(formatter, "invalid buffer address or length"),
+            RuntimeError::InvalidUtf8 => write!(formatter, "invalid utf-8 path"),
+            RuntimeError::NotFound => write!(formatter, "runtime handle not found"),
+            RuntimeError::AlreadyShutdown => write!(formatter, "runtime is already shut down"),
+            RuntimeError::Poisoned => write!(formatter, "runtime mutex poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RuntimeError::Scene(err) => Some(err),
+            RuntimeError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<SceneError> for RuntimeError {
+    fn from(err: SceneError) -> Self {
+        RuntimeError::Scene(err)
+    }
+}
+
+impl From<io::Error> for RuntimeError {
+    fn from(err: io::Error) -> Self {
+        RuntimeError::Io(err)
+    }
+}

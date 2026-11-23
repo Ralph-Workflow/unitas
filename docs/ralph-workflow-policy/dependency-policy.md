@@ -84,14 +84,14 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: package_manager: cargo for the Rust workspace, whose manifest is Cargo.toml at the repository root; pyproject.toml carries gate-tool configuration only and declares no dependency
-RALPH-FACT: lockfile_path: Cargo.lock at the repository root — the workspace declares no third-party dependency, so the lockfile pins the workspace crates only
-RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; neither the tooling nor the Rust crates carry a third-party dependency
-RALPH-FACT: security_audit_command: none — no third-party dependency is declared by the tooling or the Rust workspace, so no vulnerability audit applies to the current tree
+RALPH-FACT: package_manager: cargo for the Rust workspace, whose manifest is Cargo.toml at the repository root; dotnet for the C# bridge solution (bridge/Unitas.sln); pyproject.toml carries gate-tool configuration only and declares no dependency
+RALPH-FACT: lockfile_path: Cargo.lock at the repository root — the workspace declares no third-party dependency and the C# bridge uses no NuGet packages, so the lockfile pins the workspace crates only
+RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; neither the tooling, the Rust crates, nor the C# bridge carry a third-party dependency
+RALPH-FACT: security_audit_command: none — no third-party dependency is declared by the tooling, the Rust workspace, or the C# bridge, so no vulnerability audit applies to the current tree
 RALPH-FACT: type_info_policy: the tooling ships no type stubs; mypy resolves the standard library from the installed interpreter
-RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo and clippy) comes from rustup
+RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo and clippy) comes from rustup; the .NET 8.0 SDK is provisioned via dotnet-install.sh
 RALPH-FACT: dependency_evaluation_record: docs/ralph-workflow-policy/dependency-policy.md
-RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only and the Rust crates declare no external dependency, so the repository has no transitive dependency
+RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only, the Rust crates declare no external dependency, and the C# bridge adds no NuGet package and no third-party Rust crate (dependency-free), so the repository has no transitive dependency
 
 ## AI execution instructions
 

@@ -9,6 +9,7 @@ use crate::unity_yaml::{self, Node, Stream, YamlError};
 
 const GAME_OBJECT_CLASS: u32 = 1;
 const TRANSFORM_CLASS: u32 = 4;
+const MONO_BEHAVIOUR_CLASS: u32 = 114;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
 
@@ -102,15 +103,21 @@ struct TransformRecord {
     children: Vec<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptBinding {
+    pub entity: EntityId,
+    pub guid: String,
+}
+
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
-    assemble(stream, None)
+    assemble(stream, None).map(|(graph, _)| graph)
 }
 
 pub fn assemble_scene_with_guids(
     stream: &Stream,
     index: &GuidIndex,
 ) -> Result<SceneGraph, SceneError> {
-    assemble(stream, Some(index))
+    assemble(stream, Some(index)).map(|(graph, _)| graph)
 }
 
 pub fn assemble_scene_file(path: &Path) -> Result<SceneGraph, SceneError> {
@@ -126,7 +133,23 @@ pub fn assemble_scene_file_with_guids(
     assemble_scene_with_guids(&stream, index)
 }
 
-fn assemble(stream: &Stream, index: Option<&GuidIndex>) -> Result<SceneGraph, SceneError> {
+pub fn assemble_scene_with_scripts(
+    stream: &Stream,
+) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
+    assemble(stream, None)
+}
+
+pub fn assemble_scene_file_with_scripts(
+    path: &Path,
+) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
+    let stream = unity_yaml::parse_file(path)?;
+    assemble_scene_with_scripts(&stream)
+}
+
+fn assemble(
+    stream: &Stream,
+    index: Option<&GuidIndex>,
+) -> Result<(SceneGraph, Vec<ScriptBinding>), SceneError> {
     check_external_references(stream, index)?;
     let mut graph = SceneGraph::new();
     let mut game_objects: HashMap<i64, EntityId> = HashMap::new();
@@ -217,7 +240,44 @@ fn assemble(stream: &Stream, index: Option<&GuidIndex>) -> Result<SceneGraph, Sc
             .collect();
         order_children(&mut graph, record.entity, &ordered);
     }
-    Ok(graph)
+    let mut scripts: Vec<ScriptBinding> = Vec::new();
+    for document in &stream.documents {
+        if document.class_id != MONO_BEHAVIOUR_CLASS || document.stripped {
+            continue;
+        }
+        let body = match document.root.get("MonoBehaviour") {
+            Some(body) => body,
+            None => continue,
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
+            Some(file_id) => file_id,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id: ROOT_FILE_ID,
+                })
+            }
+        };
+        let entity = match game_objects.get(&game_object_file_id) {
+            Some(entity) => *entity,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id,
+                })
+            }
+        };
+        let script_node = match body.get("m_Script") {
+            Some(node) => node,
+            None => continue,
+        };
+        let guid = match script_node.get("guid").and_then(Node::as_str) {
+            Some(guid) => guid.to_string(),
+            None => continue,
+        };
+        scripts.push(ScriptBinding { entity, guid });
+    }
+    Ok((graph, scripts))
 }
 
 fn check_external_references(stream: &Stream, index: Option<&GuidIndex>) -> Result<(), SceneError> {

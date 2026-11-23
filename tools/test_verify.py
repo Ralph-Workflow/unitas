@@ -63,6 +63,72 @@ def test_banned_construct_is_detected() -> None:
     assert any("banned call eval" in finding for finding in findings)
 
 
+def test_banned_raw_generic_type_is_detected(tmp_path: Path) -> None:
+    source = tmp_path / "sample.cs"
+    source.write_text("class C { List items; }\n", encoding="utf-8")
+    findings = verify.banned_source_findings(source)
+    assert any("raw generic type" in finding for finding in findings)
+    source.write_text("class C { List<string> items; }\n", encoding="utf-8")
+    assert verify.banned_source_findings(source) == []
+
+
+def test_banned_unchecked_is_detected(tmp_path: Path) -> None:
+    source = tmp_path / "sample.cs"
+    source.write_text("class C { int x = unchecked(1); }\n", encoding="utf-8")
+    findings = verify.banned_source_findings(source)
+    assert any("unchecked" in finding for finding in findings)
+    source.write_text("class C { int x = checked(1); }\n", encoding="utf-8")
+    assert verify.banned_source_findings(source) == []
+
+
+def test_banned_object_parameter_is_detected(tmp_path: Path) -> None:
+    source = tmp_path / "sample.cs"
+    source.write_text("class C { void Log(object item) {} }\n", encoding="utf-8")
+    findings = verify.banned_source_findings(source)
+    assert any("object parameter" in finding for finding in findings)
+    source.write_text("class C { void Log(System.object item) {} }\n", encoding="utf-8")
+    findings = verify.banned_source_findings(source)
+    assert any("object parameter" in finding for finding in findings)
+
+
+def test_banned_object_parameter_allows_unity_engine_object(tmp_path: Path) -> None:
+    source = tmp_path / "sample.cs"
+    source.write_text(
+        "namespace UnityEngine\n"
+        "{\n"
+        "    public class Object\n"
+        "    {\n"
+        "        public string name { get; set; }\n"
+        "        public void SetParent(Transform parent) {}\n"
+        "    }\n"
+        "    public class Component : Object\n"
+        "    {\n"
+        "        public void Compare(UnityEngine.Object other) {}\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    assert verify.banned_source_findings(source) == []
+
+
+def test_banned_source_skips_obj_and_bin_directories(tmp_path: Path) -> None:
+    assert {"bin", "obj"}.issubset(verify.SKIP_DIR_NAMES)
+    bridge_dir = tmp_path / "bridge" / "UnityEngine"
+    obj_dir = bridge_dir / "obj"
+    bin_dir = bridge_dir / "bin"
+    bridge_dir.mkdir(parents=True)
+    obj_dir.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    content = "class C { int x = unchecked(1); }\n"
+    (bridge_dir / "Valid.cs").write_text(content, encoding="utf-8")
+    (obj_dir / "Generated.cs").write_text(content, encoding="utf-8")
+    (bin_dir / "Compiled.cs").write_text(content, encoding="utf-8")
+    findings = verify.check_banned(root=tmp_path)
+    assert any("Valid.cs" in finding for finding in findings)
+    assert not any("Generated.cs" in finding for finding in findings)
+    assert not any("Compiled.cs" in finding for finding in findings)
+
+
 def test_dependency_gate_allows_stdlib_only() -> None:
     assert verify.check_dependencies() == []
 
@@ -82,11 +148,21 @@ def test_secret_scan_excludes_build_output_but_not_sources() -> None:
     build_output = (
         "target/CACHEDIR.TAG",
         "crates/unitas-asset/target/debug/deps/libunitas_asset.rlib",
+        "checkpoint.json",
+        "bin/Debug/app.dll",
+        "obj/Debug/app.dll",
+        "bridge/UnityEngine/bin/Release/netstandard2.1/UnityEngine.dll",
+        "bridge/UnityEngine/obj/Release/netstandard2.1/project.assets.json",
     )
     for path in build_output:
         assert any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
-    source = "crates/unitas-core/src/scene_graph.rs"
-    assert not any(re.search(pattern, source) for pattern in verify.SECRET_SCAN_EXCLUDES)
+    sources = (
+        "crates/unitas-core/src/scene_graph.rs",
+        "bridge/UnityEngine/GameObject.cs",
+        "tools/verify.py",
+    )
+    for path in sources:
+        assert not any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
 
 
 def _guard_table(enforcement: str) -> str:

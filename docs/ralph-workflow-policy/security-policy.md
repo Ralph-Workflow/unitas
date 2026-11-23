@@ -162,8 +162,8 @@ RALPH-FACT: data_sensitivity (owner-supplied): pending owner confirmation; opera
 RALPH-FACT: deployment_exposure (owner-supplied): pending owner confirmation; operating assumption: the gates run on a developer workstation and publish nothing; blocks: none; review trigger: the project owner confirms the deployment exposure
 RALPH-FACT: secrets_management_mechanism: none — the repository stores no credential; the secret gate fails on any credential-shaped string absent from the committed baseline
 RALPH-FACT: secret_scan_command: make secret-scan
-RALPH-FACT: secret_scan_scope: the secret gate scans every file in the working tree except the agent scratch directories and any build output directory named target; committed sources, fixtures and configuration are in scope
-RALPH-FACT: security_scanner_per_language: the ban gate for Python, clippy correctness and suspicion lints for Rust, and the .NET analyzer for C# (deferred)
+RALPH-FACT: secret_scan_scope: the secret gate scans every file in the working tree except the agent scratch directories, checkpoint.json, and any build output directory named target, bin, or obj; the ban gate and bypass audit also skip bin and obj; committed sources, fixtures and configuration are in scope
+RALPH-FACT: security_scanner_per_language: the ban gate for Python, clippy correctness and suspicion lints for Rust, and the .NET analyzer for C#
 RALPH-FACT: finding_waiver_convention: a scanner finding raised by a published test vector is recorded in .secrets.baseline and documented under Exceptions below; every other finding is fixed in the code
 
 ## AI execution instructions
@@ -238,7 +238,7 @@ RALPH-LANG: Rust
 RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
 RALPH-LANG: C#
-RALPH-PENDING: dotnet build --configuration Release -p:AnalysisMode=All (assumed 2026-11-23); review trigger: the UnityEngine solution is committed and the .NET SDK is installed
+RALPH-COMMAND: make dotnet-build
 The expected successful result is exit 0 with no unwaived findings. On
 failure, report the finding identifier, the affected file, and the
 category (secret, injection, unsafe API, unsafe deserialization,
