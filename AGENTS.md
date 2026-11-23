@@ -20,9 +20,10 @@ that cannot run is a red gate.
 
 ## Product status
 
-The Rust crates and the C# UnityEngine bridge are specified but not implemented.
-Their gates are dated deferrals in the corpus; resolve a deferral when its review
-trigger fires.
+The Rust workspace and Milestone 1 asset-import/scene-graph foundation are
+implemented. The C# UnityEngine bridge is specified but not implemented;
+its gates are dated deferrals in the corpus; resolve a deferral when its
+review trigger fires.
 
 <!-- ralph-workflow-policy:begin v3 -->
 Quality policies live under `docs/ralph-workflow-policy/`. Every agent role loads
