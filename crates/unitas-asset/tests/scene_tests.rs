@@ -8,8 +8,9 @@ use unitas_asset::scene::{
     assemble_scene_file_bundle, assemble_scene_file_bundle_with_guids,
     assemble_scene_file_with_guids, assemble_scene_file_with_physics, assemble_scene_with_guids,
     assemble_scene_with_physics, AssembledScene, AudioBinding, AudioSourceComponent,
-    CapsuleColliderComponent, CharacterControllerComponent, MaterialValues, SceneError,
-    AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS,
+    CameraComponent, CapsuleColliderComponent, CharacterControllerComponent, LightComponent,
+    MaterialValues, MeshRendererComponent, RenderBinding, SceneError, AUDIO_CLIP_CLASS,
+    AUDIO_SOURCE_CLASS, CAMERA_CLASS, LIGHT_CLASS, MESH_FILTER_CLASS, MESH_RENDERER_CLASS,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -21,6 +22,12 @@ const PHYSICS_CAPSULE_FIXTURE: &str = "tests/fixtures/physics_capsule.unity";
 const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
 const PHYSICS_KINEMATIC_FIXTURE: &str = "tests/fixtures/physics_kinematic.unity";
 const PHYSICS_LAYER_FIXTURE: &str = "tests/fixtures/physics_layer.unity";
+const RENDER_FIXTURE: &str = "tests/fixtures/render.unity";
+const RENDER_UNSUPPORTED_FIXTURE: &str = "tests/fixtures/render_unsupported.unity";
+const RENDER_MATERIAL_FIXTURE: &str = "tests/fixtures/render_material.unity";
+const BUILTIN_MESH_GUID: &str = "0000000000000000e000000000000000";
+const BUILTIN_MATERIAL_GUID: &str = "0000000000000000f000000000000000";
+const PROJECT_MATERIAL_GUID: &str = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
 const PROJECT_DIR: &str = "tests/fixtures/project";
 const PREFAB_SCENE_FIXTURE: &str =
     "tests/fixtures/prefab_project/Assets/Scenes/PrefabScene.unity";
@@ -1486,5 +1493,192 @@ fn audio_source_missing_game_object_is_an_error_and_in_memory_bundle_reports_uni
     assert_eq!(curve_assembled.audio_bindings.len(), 1);
     assert_eq!(curve_assembled.audio_bindings[0].1.spatial_blend, 0.8);
 
+    Ok(())
+}
+
+#[test]
+fn render_fixture_parses_camera_values() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
+    let camera = assembled.render.cameras.first().ok_or("missing camera component")?;
+    let name = assembled
+        .graph
+        .entity(camera.entity)
+        .map(|entity| entity.name.clone())
+        .ok_or("missing camera entity")?;
+    assert_eq!(name, "MainCamera");
+    assert!(!camera.orthographic);
+    assert!((camera.field_of_view as f64 - 60.0).abs() < 1e-6);
+    assert!((camera.near_clip_plane as f64 - 0.3).abs() < 1e-6);
+    assert!((camera.far_clip_plane as f64 - 1000.0).abs() < 1e-3);
+    assert!((camera.orthographic_size as f64 - 5.0).abs() < 1e-6);
+    assert!((camera.background_color[0] as f64 - 0.19215687).abs() < 1e-6);
+    assert!((camera.background_color[1] as f64 - 0.3019608).abs() < 1e-6);
+    assert!((camera.background_color[2] as f64 - 0.4745098).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn render_fixture_parses_directional_light() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
+    let light = assembled.render.lights.first().ok_or("missing light component")?;
+    let name = assembled
+        .graph
+        .entity(light.entity)
+        .map(|entity| entity.name.clone())
+        .ok_or("missing light entity")?;
+    assert_eq!(name, "KeyLight");
+    assert!(light.directional);
+    assert!((light.intensity as f64 - 1.0).abs() < 1e-6);
+    assert!((light.color[0] as f64 - 1.0).abs() < 1e-6);
+    assert!((light.color[1] as f64 - 0.95686275).abs() < 1e-6);
+    assert!((light.color[2] as f64 - 0.8392157).abs() < 1e-6);
+    assert_eq!(light.unsupported_diagnostic, None);
+    Ok(())
+}
+
+#[test]
+fn render_fixture_parses_mesh_renderer() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
+    let renderer = assembled
+        .render
+        .renderers
+        .first()
+        .ok_or("missing renderer component")?;
+    let name = assembled
+        .graph
+        .entity(renderer.entity)
+        .map(|entity| entity.name.clone())
+        .ok_or("missing renderer entity")?;
+    assert_eq!(name, "Cube");
+    assert_eq!(renderer.mesh_guid.as_deref(), Some(BUILTIN_MESH_GUID));
+    assert_eq!(renderer.material_guid.as_deref(), Some(BUILTIN_MATERIAL_GUID));
+    assert_eq!(renderer.mesh_path, None);
+    assert_eq!(renderer.material_path, None);
+    assert_eq!(renderer.mesh_diagnostic, None);
+    assert_eq!(renderer.material_diagnostic, None);
+    assert!(renderer.enabled);
+    assert!((renderer.material_color[0] as f64 - 0.5).abs() < 1e-6);
+    assert!((renderer.material_color[1] as f64 - 0.5).abs() < 1e-6);
+    assert!((renderer.material_color[2] as f64 - 0.5).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn unsupported_lights_produce_diagnostics() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_UNSUPPORTED_FIXTURE))?;
+    assert_eq!(assembled.render.lights.len(), 2);
+    let point = &assembled.render.lights[0];
+    let spot = &assembled.render.lights[1];
+    assert!(!point.directional);
+    assert!(!spot.directional);
+    let point_message = point
+        .unsupported_diagnostic
+        .as_deref()
+        .ok_or("missing point light diagnostic")?;
+    assert!(point_message.contains("point light on entity 0"), "{point_message}");
+    let spot_message = spot
+        .unsupported_diagnostic
+        .as_deref()
+        .ok_or("missing spot light diagnostic")?;
+    assert!(spot_message.contains("spot light on entity 1"), "{spot_message}");
+    assert!(assembled
+        .diagnostics
+        .iter()
+        .any(|(_, message)| message.contains("point light on entity 0")));
+    assert!(assembled
+        .diagnostics
+        .iter()
+        .any(|(_, message)| message.contains("spot light on entity 1")));
+    assert_eq!(assembled.diagnostics.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn renderer_without_mesh_filter_produces_diagnostic() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_UNSUPPORTED_FIXTURE))?;
+    let renderer = assembled
+        .render
+        .renderers
+        .first()
+        .ok_or("missing renderer component")?;
+    let name = assembled
+        .graph
+        .entity(renderer.entity)
+        .map(|entity| entity.name.clone())
+        .ok_or("missing renderer entity")?;
+    assert_eq!(name, "Meshless");
+    let diagnostic = renderer
+        .mesh_diagnostic
+        .as_deref()
+        .ok_or("missing mesh diagnostic")?;
+    assert!(diagnostic.contains("no MeshFilter"), "{diagnostic}");
+    assert_eq!(renderer.mesh_guid, None);
+    assert_eq!(renderer.mesh_path, None);
+    assert!(assembled
+        .diagnostics
+        .iter()
+        .any(|(_, message)| message.contains("no MeshFilter")));
+    Ok(())
+}
+
+#[test]
+fn scene_without_render_components_yields_empty_binding() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(SCENE_FIXTURE))?;
+    assert!(assembled.render.cameras.is_empty());
+    assert!(assembled.render.renderers.is_empty());
+    assert!(assembled.render.lights.is_empty());
+    assert!(assembled.diagnostics.is_empty());
+    Ok(())
+}
+
+#[test]
+fn render_binding_exposes_camera_renderer_and_light_components() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
+    let binding: &RenderBinding = &assembled.render;
+    let camera: &CameraComponent = binding.cameras.first().ok_or("missing camera")?;
+    let renderer: &MeshRendererComponent =
+        binding.renderers.first().ok_or("missing renderer")?;
+    let light: &LightComponent = binding.lights.first().ok_or("missing light")?;
+    assert_eq!(binding.cameras.len(), 1);
+    assert_eq!(binding.renderers.len(), 1);
+    assert_eq!(binding.lights.len(), 1);
+    assert_ne!(camera.entity, renderer.entity);
+    assert_ne!(renderer.entity, light.entity);
+    Ok(())
+}
+
+#[test]
+fn render_fixture_uses_the_expected_unity_class_ids() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(RENDER_FIXTURE))?;
+    let classes: Vec<u32> = stream
+        .documents
+        .iter()
+        .map(|document| document.class_id)
+        .collect();
+    assert!(classes.contains(&CAMERA_CLASS));
+    assert!(classes.contains(&MESH_RENDERER_CLASS));
+    assert!(classes.contains(&MESH_FILTER_CLASS));
+    assert!(classes.contains(&LIGHT_CLASS));
+    Ok(())
+}
+
+#[test]
+fn renderer_material_color_comes_from_the_project_material() -> TestResult {
+    let assembled = assemble_scene_file_bundle(Path::new(RENDER_MATERIAL_FIXTURE))?;
+    let renderer = assembled
+        .render
+        .renderers
+        .first()
+        .ok_or("missing renderer component")?;
+    assert_eq!(renderer.material_guid.as_deref(), Some(PROJECT_MATERIAL_GUID));
+    assert!(!renderer.enabled);
+    let path = renderer
+        .material_path
+        .as_deref()
+        .ok_or("missing material path")?;
+    assert!(path.ends_with("Material.mat"));
+    assert!((renderer.material_color[0] as f64 - 1.0).abs() < 1e-6);
+    assert!((renderer.material_color[1] as f64 - 0.5).abs() < 1e-6);
+    assert!((renderer.material_color[2] as f64 - 0.25).abs() < 1e-6);
     Ok(())
 }

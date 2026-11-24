@@ -47,6 +47,32 @@ impl fmt::Display for RuntimeError {
     }
 }
 
+#[derive(Debug)]
+pub enum RenderError {
+    UnknownHandle,
+    InvalidArgument(String),
+}
+
+impl RenderError {
+    pub fn class(&self) -> i32 {
+        match self {
+            RenderError::UnknownHandle => -1,
+            RenderError::InvalidArgument(_) => -2,
+        }
+    }
+}
+
+impl fmt::Display for RenderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RenderError::UnknownHandle => write!(formatter, "-1 unknown handle"),
+            RenderError::InvalidArgument(message) => {
+                write!(formatter, "-2 invalid argument: {message}")
+            }
+        }
+    }
+}
+
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {

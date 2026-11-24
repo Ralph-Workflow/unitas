@@ -4,7 +4,34 @@ use unitas_render::camera::{look_at, Camera};
 use unitas_render::image::Image;
 use unitas_render::math::{Mat4, Vec3, Vec4};
 use unitas_render::mesh::{cube, uv_sphere, Mesh};
-use unitas_render::raster::{render, render_with_view};
+use unitas_render::raster::{
+    render, render_scene, render_with_view, DirectionalLight, MeshInstance,
+};
+
+fn shaded_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn scaled_translated_model(scale: f32, translation: Vec3) -> Mat4 {
+    Mat4::from_cols_array([
+        scale,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        scale,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        scale,
+        0.0,
+        translation.x,
+        translation.y,
+        translation.z,
+        1.0,
+    ])
+}
 
 #[test]
 fn vec3_operations_and_operators() {
@@ -227,12 +254,198 @@ fn bmp_writer_emits_valid_uncompressed_24bit_bmp_with_padded_row_stride() {
     let top_row = &bytes[66..78];
     assert_eq!(top_row, &[0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0]);
 
-    let tmp_path: PathBuf = std::env::temp_dir().join(format!(
-        "unitas_render_test_{}.bmp",
-        std::process::id()
-    ));
+    let tmp_path: PathBuf =
+        std::env::temp_dir().join(format!("unitas_render_test_{}.bmp", std::process::id()));
     assert!(img.write_bmp(&tmp_path).is_ok());
     let disk_bytes = std::fs::read(&tmp_path).unwrap_or_default();
     let _ = std::fs::remove_file(&tmp_path);
     assert_eq!(disk_bytes, bytes);
+}
+
+#[test]
+fn perspective_camera_renders_cube_center_and_background() {
+    let mesh = cube(1.0);
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let model = scaled_translated_model(2.0, Vec3::new(0.0, 0.0, -1.0));
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model,
+        color: [0.8, 0.4, 0.2],
+    }];
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [0.9, 0.8, 0.7],
+        intensity: 0.5,
+    };
+
+    let image = render_scene(&instances, &camera, view, &light, [0.2, 0.4, 0.6], 64, 64);
+
+    let front_face_normal = model
+        .mul_vec4(Vec4::from_direction(Vec3::new(0.0, 0.0, -1.0)))
+        .truncate()
+        .normalize();
+    let lambert = front_face_normal.dot(light.direction.normalize()).max(0.0);
+    assert!((lambert - 1.0).abs() < 1e-6);
+
+    let t = 0.5_f32;
+    let expected_center = [
+        shaded_byte(0.8 * ((1.0 - t) + 0.9 * lambert * t)),
+        shaded_byte(0.4 * ((1.0 - t) + 0.8 * lambert * t)),
+        shaded_byte(0.2 * ((1.0 - t) + 0.7 * lambert * t)),
+    ];
+    assert_eq!(expected_center, [194, 92, 43]);
+    assert_eq!(image.get_pixel(32, 32), expected_center);
+    assert_eq!(image.get_pixel(0, 0), [51, 102, 153]);
+}
+
+#[test]
+fn orthographic_camera_renders_cube_center_and_background() {
+    let mesh = cube(1.0);
+    let camera = Camera::orthographic(4.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let model = scaled_translated_model(2.0, Vec3::new(0.0, 0.0, -1.0));
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model,
+        color: [0.5, 0.5, 0.5],
+    }];
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 1.0,
+    };
+
+    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.25, 0.5], 64, 64);
+
+    let lambert = 1.0_f32;
+    let t = 1.0_f32;
+    let expected_center = [
+        shaded_byte(0.5 * ((1.0 - t) + 1.0 * lambert * t)),
+        shaded_byte(0.5 * ((1.0 - t) + 1.0 * lambert * t)),
+        shaded_byte(0.5 * ((1.0 - t) + 1.0 * lambert * t)),
+    ];
+    assert_eq!(expected_center, [128, 128, 128]);
+    assert_eq!(image.get_pixel(32, 32), expected_center);
+    assert_eq!(image.get_pixel(0, 0), [0, 64, 128]);
+}
+
+#[test]
+fn zero_intensity_light_renders_material_color() {
+    let mesh = cube(1.0);
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let model = scaled_translated_model(2.0, Vec3::new(0.0, 0.0, -1.0));
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model,
+        color: [1.0, 0.5, 0.25],
+    }];
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [0.9, 0.8, 0.7],
+        intensity: 0.0,
+    };
+
+    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 64, 64);
+
+    let t = 0.0_f32;
+    let expected_center = [
+        shaded_byte(1.0 * ((1.0 - t) + 0.9 * 1.0 * t)),
+        shaded_byte(0.5 * ((1.0 - t) + 0.8 * 1.0 * t)),
+        shaded_byte(0.25 * ((1.0 - t) + 0.7 * 1.0 * t)),
+    ];
+    assert_eq!(expected_center, [255, 128, 64]);
+    assert_eq!(image.get_pixel(32, 32), expected_center);
+}
+
+#[test]
+fn zero_sized_image_is_empty() {
+    let mesh = cube(1.0);
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model: Mat4::identity(),
+        color: [1.0, 1.0, 1.0],
+    }];
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 1.0,
+    };
+
+    let zero_width = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 0, 8);
+    assert_eq!(zero_width.width, 0);
+    assert_eq!(zero_width.height, 8);
+    assert!(zero_width.pixels.is_empty());
+
+    let zero_height = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 8, 0);
+    assert_eq!(zero_height.width, 8);
+    assert_eq!(zero_height.height, 0);
+    assert!(zero_height.pixels.is_empty());
+
+    let zero_both = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 0, 0);
+    assert_eq!(zero_both.width, 0);
+    assert_eq!(zero_both.height, 0);
+    assert!(zero_both.pixels.is_empty());
+}
+
+#[test]
+fn nearer_instance_occludes_farther_instance() {
+    let mesh = cube(1.0);
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let far_model = scaled_translated_model(2.0, Vec3::new(0.0, 0.0, 0.0));
+    let near_model = scaled_translated_model(2.0, Vec3::new(0.0, 0.0, -1.0));
+    let far_instance = MeshInstance {
+        mesh: &mesh,
+        model: far_model,
+        color: [0.0, 0.0, 1.0],
+    };
+    let near_instance = MeshInstance {
+        mesh: &mesh,
+        model: near_model,
+        color: [1.0, 0.0, 0.0],
+    };
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 0.0,
+    };
+
+    let far_only = render_scene(
+        std::slice::from_ref(&far_instance),
+        &camera,
+        view,
+        &light,
+        [0.0, 0.0, 0.0],
+        64,
+        64,
+    );
+    assert_eq!(far_only.get_pixel(32, 32), [0, 0, 255]);
+
+    let instances = [far_instance, near_instance];
+    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 64, 64);
+    assert_eq!(image.get_pixel(32, 32), [255, 0, 0]);
 }

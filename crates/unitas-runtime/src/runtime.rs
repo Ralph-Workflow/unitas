@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use unitas_animation::SampledBinding;
 use unitas_asset::scene::{
     assemble_scene_file_bundle, AudioSourceComponent, CharacterControllerComponent, PhysicsBinding,
-    ScriptBinding,
+    RenderBinding, ScriptBinding,
 };
 use unitas_asset::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
@@ -16,9 +16,10 @@ use unitas_core::{
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
 };
+use unitas_render::{look_at, render_scene, Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3};
 
 use crate::animation::{apply_transform_property, AnimationRuntimeDiagnostic, AnimationWorld};
-use crate::error::RuntimeError;
+use crate::error::{RenderError, RuntimeError};
 use crate::input::{default_axis_configs, AxisConfig, InputState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +120,87 @@ pub struct ScriptInstance {
     pub start_called: bool,
 }
 
+pub const DEFAULT_MATERIAL_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderCameraParams {
+    pub orthographic: bool,
+    pub orthographic_size: f32,
+    pub field_of_view: f32,
+    pub near_clip_plane: f32,
+    pub far_clip_plane: f32,
+    pub background_color: [f32; 3],
+}
+
+impl Default for RenderCameraParams {
+    fn default() -> Self {
+        Self {
+            orthographic: false,
+            orthographic_size: 5.0,
+            field_of_view: 60.0,
+            near_clip_plane: 0.3,
+            far_clip_plane: 1000.0,
+            background_color: [0.0; 3],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderMaterial {
+    pub color: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderCamera {
+    pub entity: Option<EntityId>,
+    pub params: RenderCameraParams,
+    pub viewport: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderRenderer {
+    pub entity: Option<EntityId>,
+    pub mesh: Option<u64>,
+    pub material: Option<u64>,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderLight {
+    pub entity: Option<EntityId>,
+    pub direction: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CameraBasis {
+    eye: Vec3,
+    right: Vec3,
+    up: Vec3,
+    forward: Vec3,
+    view: Mat4,
+}
+
+#[derive(Debug, Default)]
+pub struct RenderWorld {
+    meshes: HashMap<u64, Mesh>,
+    materials: HashMap<u64, RenderMaterial>,
+    cameras: HashMap<u64, RenderCamera>,
+    renderers: HashMap<u64, RenderRenderer>,
+    lights: HashMap<u64, RenderLight>,
+    camera_defaults: HashMap<EntityId, RenderCameraParams>,
+    light_defaults: HashMap<EntityId, RenderLight>,
+    next_handle: u64,
+}
+
+impl RenderWorld {
+    fn allocate(&mut self) -> u64 {
+        self.next_handle = self.next_handle.saturating_add(1);
+        self.next_handle
+    }
+}
+
 pub struct Runtime {
     scenes: Vec<LoadedScene>,
     active_scene: Option<usize>,
@@ -136,6 +218,7 @@ pub struct Runtime {
     audio: AudioWorld,
     animation: AnimationWorld,
     input: InputState,
+    render: RenderWorld,
     project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
@@ -164,6 +247,7 @@ impl Runtime {
             audio: AudioWorld::new(),
             animation: AnimationWorld::new(),
             input: InputState::with_default_axes(),
+            render: RenderWorld::default(),
             project_identity: ProjectIdentity::default(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
@@ -201,6 +285,7 @@ impl Runtime {
         let bindings = assembled.scripts;
         let physics = assembled.physics;
         let audio_bindings = assembled.audio_bindings;
+        let render_binding = assembled.render;
         let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
@@ -240,6 +325,7 @@ impl Runtime {
                 .insert(*entity, controller_from_component(Some(*entity), config));
         }
         let mut diagnostics = collect_material_diagnostics(&physics, entity_base);
+        diagnostics.extend(self.populate_render_world(&render_binding, entity_base, &graph));
         let mut audio_sources = Vec::with_capacity(audio_bindings.len());
         for (entity, comp) in audio_bindings {
             let shifted = EntityId::new(entity_base + entity.as_u64());
@@ -327,6 +413,7 @@ impl Runtime {
             None => return Err(RuntimeError::SceneNotFound(name.to_string())),
         };
         let scene = self.scenes.remove(index);
+        self.remove_scene_render_handles(&scene);
         self.teardown_scene(&scene, &mut hook);
         for body in &scene.bodies {
             self.world.remove_body(*body);
@@ -1851,5 +1938,524 @@ fn resolve_child_path_in_graph(
         None
     } else {
         Some(current)
+    }
+}
+
+fn toward_light_direction(rotation: [f32; 4], travel: [f32; 3]) -> [f32; 3] {
+    let rotated = rotate_vector(rotation, travel);
+    [-rotated[0], -rotated[1], -rotated[2]]
+}
+
+fn model_matrix(transform: &Transform) -> Mat4 {
+    let rotation = transform.rotation;
+    let (x, y, z, w) = (rotation[0], rotation[1], rotation[2], rotation[3]);
+    let (sx, sy, sz) = (transform.scale[0], transform.scale[1], transform.scale[2]);
+    let mut values = [0.0f32; 16];
+    values[0] = (1.0 - 2.0 * (y * y + z * z)) * sx;
+    values[1] = (2.0 * (x * y + w * z)) * sx;
+    values[2] = (2.0 * (x * z - w * y)) * sx;
+    values[4] = (2.0 * (x * y - w * z)) * sy;
+    values[5] = (1.0 - 2.0 * (x * x + z * z)) * sy;
+    values[6] = (2.0 * (y * z + w * x)) * sy;
+    values[8] = (2.0 * (x * z + w * y)) * sz;
+    values[9] = (2.0 * (y * z - w * x)) * sz;
+    values[10] = (1.0 - 2.0 * (x * x + y * y)) * sz;
+    values[12] = transform.translation[0];
+    values[13] = transform.translation[1];
+    values[14] = transform.translation[2];
+    values[15] = 1.0;
+    Mat4::from_cols_array(values)
+}
+
+fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
+    let near = params.near_clip_plane.max(0.001);
+    let far = params.far_clip_plane.max(near + 0.001);
+    if params.orthographic {
+        Camera::orthographic(params.orthographic_size.max(0.001), aspect, near, far)
+    } else {
+        Camera::perspective(params.field_of_view.max(1.0), aspect, near, far)
+    }
+}
+
+impl Runtime {
+    pub(crate) fn create_render_mesh(
+        &mut self,
+        positions: Vec<Vec3>,
+        normals: Vec<Vec3>,
+        indices: Vec<u32>,
+    ) -> u64 {
+        let handle = self.render.allocate();
+        self.render
+            .meshes
+            .insert(handle, Mesh { positions, normals, indices });
+        handle
+    }
+
+    pub(crate) fn destroy_render_mesh(&mut self, handle: u64) -> bool {
+        self.render.meshes.remove(&handle).is_some()
+    }
+
+    pub(crate) fn create_render_material(&mut self) -> u64 {
+        let handle = self.render.allocate();
+        self.render.materials.insert(
+            handle,
+            RenderMaterial {
+                color: DEFAULT_MATERIAL_COLOR,
+            },
+        );
+        handle
+    }
+
+    pub(crate) fn set_render_material_color(&mut self, handle: u64, color: [f32; 4]) -> bool {
+        match self.render.materials.get_mut(&handle) {
+            Some(material) => {
+                material.color = color;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn create_render_camera(&mut self, entity: Option<EntityId>) -> u64 {
+        let handle = self.render.allocate();
+        let params = entity
+            .and_then(|entity| self.render.camera_defaults.get(&entity).copied())
+            .unwrap_or_default();
+        self.render.cameras.insert(
+            handle,
+            RenderCamera {
+                entity,
+                params,
+                viewport: None,
+            },
+        );
+        handle
+    }
+
+    pub(crate) fn update_render_camera(&mut self, handle: u64, params: RenderCameraParams) -> bool {
+        match self.render.cameras.get_mut(&handle) {
+            Some(camera) => {
+                camera.params = params;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn create_render_renderer(
+        &mut self,
+        entity: Option<EntityId>,
+        mesh: Option<u64>,
+        material: Option<u64>,
+    ) -> u64 {
+        let handle = self.render.allocate();
+        self.render.renderers.insert(
+            handle,
+            RenderRenderer {
+                entity,
+                mesh,
+                material,
+                enabled: true,
+            },
+        );
+        handle
+    }
+
+    pub(crate) fn set_render_renderer_enabled(&mut self, handle: u64, enabled: bool) -> bool {
+        match self.render.renderers.get_mut(&handle) {
+            Some(renderer) => {
+                renderer.enabled = enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn create_render_light(&mut self, entity: Option<EntityId>) -> u64 {
+        let handle = self.render.allocate();
+        let mut light = entity
+            .and_then(|entity| self.render.light_defaults.get(&entity).copied())
+            .unwrap_or(RenderLight {
+                entity,
+                direction: [0.0, 1.0, 0.0],
+                color: [1.0, 1.0, 1.0],
+                intensity: 1.0,
+            });
+        light.entity = entity;
+        self.render.lights.insert(handle, light);
+        handle
+    }
+
+    pub(crate) fn update_render_light(
+        &mut self,
+        handle: u64,
+        direction: [f32; 3],
+        color: [f32; 3],
+        intensity: f32,
+    ) -> bool {
+        match self.render.lights.get_mut(&handle) {
+            Some(light) => {
+                light.direction = direction;
+                light.color = color;
+                light.intensity = intensity;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn entity_transform(&self, entity: EntityId) -> Option<Transform> {
+        for scene in &self.scenes {
+            if let Some(transform) = scene.graph.world_transform(entity) {
+                return Some(transform);
+            }
+        }
+        None
+    }
+
+    fn populate_render_world(
+        &mut self,
+        binding: &RenderBinding,
+        entity_base: u64,
+        graph: &SceneGraph,
+    ) -> Vec<(EntityId, String)> {
+        let mut diagnostics = Vec::new();
+        for camera in &binding.cameras {
+            let entity = EntityId::new(entity_base + camera.entity.as_u64());
+            let params = RenderCameraParams {
+                orthographic: camera.orthographic,
+                orthographic_size: camera.orthographic_size,
+                field_of_view: camera.field_of_view,
+                near_clip_plane: camera.near_clip_plane,
+                far_clip_plane: camera.far_clip_plane,
+                background_color: camera.background_color,
+            };
+            self.render.camera_defaults.insert(entity, params);
+            let handle = self.create_render_camera(Some(entity));
+            self.update_render_camera(handle, params);
+        }
+        for renderer in &binding.renderers {
+            let entity = EntityId::new(entity_base + renderer.entity.as_u64());
+            let material = self.create_render_material();
+            self.set_render_material_color(
+                material,
+                [
+                    renderer.material_color[0],
+                    renderer.material_color[1],
+                    renderer.material_color[2],
+                    1.0,
+                ],
+            );
+            let handle = self.create_render_renderer(Some(entity), None, Some(material));
+            self.set_render_renderer_enabled(handle, renderer.enabled);
+            if let Some(diagnostic) = &renderer.mesh_diagnostic {
+                diagnostics.push((entity, diagnostic.clone()));
+            } else if let Some(guid) = &renderer.mesh_guid {
+                diagnostics.push((
+                    entity,
+                    format!(
+                        "MeshRenderer on entity {} references mesh guid {} that could not be imported",
+                        entity.as_u64(),
+                        guid
+                    ),
+                ));
+            }
+            if let Some(diagnostic) = &renderer.material_diagnostic {
+                diagnostics.push((entity, diagnostic.clone()));
+            } else if let Some(guid) = &renderer.material_guid {
+                diagnostics.push((
+                    entity,
+                    format!(
+                        "MeshRenderer on entity {} references material guid {} that could not be imported",
+                        entity.as_u64(),
+                        guid
+                    ),
+                ));
+            }
+        }
+        for light in &binding.lights {
+            let entity = EntityId::new(entity_base + light.entity.as_u64());
+            if !light.directional {
+                if let Some(diagnostic) = &light.unsupported_diagnostic {
+                    diagnostics.push((entity, diagnostic.clone()));
+                }
+                continue;
+            }
+            let rotation = graph
+                .world_transform(entity)
+                .map(|transform| transform.rotation)
+                .unwrap_or(IDENTITY_ROTATION);
+            let direction = toward_light_direction(rotation, light.direction);
+            self.render.light_defaults.insert(
+                entity,
+                RenderLight {
+                    entity: Some(entity),
+                    direction,
+                    color: light.color,
+                    intensity: light.intensity,
+                },
+            );
+            let handle = self.create_render_light(Some(entity));
+            self.update_render_light(handle, direction, light.color, light.intensity);
+        }
+        diagnostics
+    }
+
+    fn remove_scene_render_handles(&mut self, scene: &LoadedScene) {
+        let base = scene.entity_base;
+        let count = scene.entity_count;
+        let in_scene = |entity: Option<EntityId>| match entity {
+            Some(entity) => {
+                let value = entity.as_u64();
+                value >= base && value < base + count
+            }
+            None => false,
+        };
+        self.render
+            .cameras
+            .retain(|_, camera| !in_scene(camera.entity));
+        self.render
+            .renderers
+            .retain(|_, renderer| !in_scene(renderer.entity));
+        self.render
+            .lights
+            .retain(|_, light| !in_scene(light.entity));
+        self.render
+            .camera_defaults
+            .retain(|entity, _| !in_scene(Some(*entity)));
+        self.render
+            .light_defaults
+            .retain(|entity, _| !in_scene(Some(*entity)));
+    }
+
+    fn camera_basis(&self, entity: Option<EntityId>) -> Option<CameraBasis> {
+        let entity = entity?;
+        let transform = self.entity_transform(entity)?;
+        let eye = Vec3::new(
+            transform.translation[0],
+            transform.translation[1],
+            transform.translation[2],
+        );
+        let rotated = rotate_vector(transform.rotation, [0.0, 0.0, 1.0]);
+        let mut forward = Vec3::new(rotated[0], rotated[1], rotated[2]);
+        if forward.length_squared() < 1e-8 {
+            forward = Vec3::new(0.0, 0.0, 1.0);
+        }
+        let forward = forward.normalize();
+        let mut up = Vec3::new(0.0, 1.0, 0.0);
+        if up.cross(forward).length_squared() < 1e-8 {
+            up = Vec3::new(0.0, 0.0, 1.0);
+        }
+        let view = look_at(eye, eye + forward, up);
+        let right = Vec3::new(view.get(0, 0), view.get(1, 0), view.get(2, 0));
+        let up_axis = Vec3::new(view.get(0, 1), view.get(1, 1), view.get(2, 1));
+        Some(CameraBasis {
+            eye,
+            right,
+            up: up_axis,
+            forward,
+            view,
+        })
+    }
+
+    fn directional_light(&self) -> DirectionalLight {
+        let mut selected: Option<(u64, RenderLight)> = None;
+        for (handle, light) in &self.render.lights {
+            let replace = match selected {
+                Some((best, _)) => *handle > best,
+                None => true,
+            };
+            if replace {
+                selected = Some((*handle, *light));
+            }
+        }
+        match selected {
+            Some((_, light)) => DirectionalLight {
+                direction: Vec3::new(light.direction[0], light.direction[1], light.direction[2]),
+                color: light.color,
+                intensity: light.intensity,
+            },
+            None => DirectionalLight {
+                direction: Vec3::new(0.0, 1.0, 0.0),
+                color: [1.0, 1.0, 1.0],
+                intensity: 1.0,
+            },
+        }
+    }
+
+    fn render_instances(&self) -> Vec<MeshInstance<'_>> {
+        let mut instances = Vec::new();
+        for renderer in self.render.renderers.values() {
+            if !renderer.enabled {
+                continue;
+            }
+            let entity = match renderer.entity {
+                Some(entity) => entity,
+                None => continue,
+            };
+            let mesh_handle = match renderer.mesh {
+                Some(handle) => handle,
+                None => continue,
+            };
+            let mesh = match self.render.meshes.get(&mesh_handle) {
+                Some(mesh) => mesh,
+                None => continue,
+            };
+            let transform = match self.entity_transform(entity) {
+                Some(transform) => transform,
+                None => continue,
+            };
+            let color = match renderer
+                .material
+                .and_then(|handle| self.render.materials.get(&handle))
+            {
+                Some(material) => [material.color[0], material.color[1], material.color[2]],
+                None => [
+                    DEFAULT_MATERIAL_COLOR[0],
+                    DEFAULT_MATERIAL_COLOR[1],
+                    DEFAULT_MATERIAL_COLOR[2],
+                ],
+            };
+            instances.push(MeshInstance {
+                mesh,
+                model: model_matrix(&transform),
+                color,
+            });
+        }
+        instances
+    }
+
+    pub(crate) fn render_frame(
+        &mut self,
+        camera: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::InvalidArgument(
+                "frame size must be greater than zero".to_string(),
+            ));
+        }
+        let state = match self.render.cameras.get(&camera) {
+            Some(state) => *state,
+            None => return Err(RenderError::UnknownHandle),
+        };
+        let basis = match self.camera_basis(state.entity) {
+            Some(basis) => basis,
+            None => {
+                return Err(RenderError::InvalidArgument(
+                    "camera entity is not in a loaded scene".to_string(),
+                ))
+            }
+        };
+        let projection = projection_for(&state.params, width as f32 / height as f32);
+        let light = self.directional_light();
+        let instances = self.render_instances();
+        let image = render_scene(
+            &instances,
+            &projection,
+            basis.view,
+            &light,
+            state.params.background_color,
+            width,
+            height,
+        );
+        let bytes = image.to_bmp_bytes();
+        if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
+            camera_state.viewport = Some((width, height));
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn camera_world_to_screen_point(
+        &self,
+        camera: u64,
+        point: [f32; 3],
+    ) -> Result<[f32; 3], RenderError> {
+        let state = match self.render.cameras.get(&camera) {
+            Some(state) => *state,
+            None => return Err(RenderError::UnknownHandle),
+        };
+        let (width, height) = match state.viewport {
+            Some(viewport) => viewport,
+            None => {
+                return Err(RenderError::InvalidArgument(
+                    "camera has no rendered frame".to_string(),
+                ))
+            }
+        };
+        let basis = match self.camera_basis(state.entity) {
+            Some(basis) => basis,
+            None => {
+                return Err(RenderError::InvalidArgument(
+                    "camera entity is not in a loaded scene".to_string(),
+                ))
+            }
+        };
+        let projection = projection_for(&state.params, width as f32 / height as f32);
+        let clip = projection.projection_matrix() * basis.view;
+        let world = Vec3::new(point[0], point[1], point[2]);
+        let clip = clip.transform_point(world);
+        if clip.w <= 1e-6 {
+            return Err(RenderError::InvalidArgument(
+                "point is behind the camera".to_string(),
+            ));
+        }
+        let x_pixel = (clip.x / clip.w + 1.0) * 0.5 * width as f32;
+        let y_pixel = (clip.y / clip.w + 1.0) * 0.5 * height as f32;
+        let distance = (world - basis.eye).dot(basis.forward);
+        Ok([x_pixel, y_pixel, distance])
+    }
+
+    pub(crate) fn camera_screen_point_to_ray(
+        &self,
+        camera: u64,
+        point: [f32; 3],
+    ) -> Result<[f32; 6], RenderError> {
+        let state = match self.render.cameras.get(&camera) {
+            Some(state) => *state,
+            None => return Err(RenderError::UnknownHandle),
+        };
+        let (width, height) = match state.viewport {
+            Some(viewport) => viewport,
+            None => {
+                return Err(RenderError::InvalidArgument(
+                    "camera has no rendered frame".to_string(),
+                ))
+            }
+        };
+        let basis = match self.camera_basis(state.entity) {
+            Some(basis) => basis,
+            None => {
+                return Err(RenderError::InvalidArgument(
+                    "camera entity is not in a loaded scene".to_string(),
+                ))
+            }
+        };
+        let aspect = width as f32 / height as f32;
+        let ndc_x = point[0] / (0.5 * width as f32) - 1.0;
+        let ndc_y = point[1] / (0.5 * height as f32) - 1.0;
+        let near = state.params.near_clip_plane.max(0.001);
+        let (view_x, view_y) = if state.params.orthographic {
+            (
+                ndc_x * state.params.orthographic_size * aspect,
+                ndc_y * state.params.orthographic_size,
+            )
+        } else {
+            let half = (state.params.field_of_view.to_radians() * 0.5).tan();
+            (
+                ndc_x * near * half * aspect,
+                ndc_y * near * half,
+            )
+        };
+        let direction = (basis.right * view_x + basis.up * view_y + basis.forward * near).normalize();
+        Ok([
+            basis.eye.x,
+            basis.eye.y,
+            basis.eye.z,
+            direction.x,
+            direction.y,
+            direction.z,
+        ])
     }
 }

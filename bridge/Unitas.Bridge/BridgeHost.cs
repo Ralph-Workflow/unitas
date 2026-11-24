@@ -28,6 +28,7 @@ namespace Unitas.Bridge
         private readonly LoadedSceneFileProvider _defaultSceneProvider;
         private readonly NativeSceneBackend _defaultSceneBackend;
         private readonly RuntimeAnimationProvider _animationProvider;
+        private readonly RuntimeRenderProvider _renderProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
         private int _nextSceneHandle = 1;
@@ -71,6 +72,7 @@ namespace Unitas.Bridge
             _defaultSceneProvider = new LoadedSceneFileProvider();
             _defaultSceneBackend = new NativeSceneBackend(runtimeHandle);
             _animationProvider = new RuntimeAnimationProvider(runtimeHandle);
+            _renderProvider = new RuntimeRenderProvider(runtimeHandle);
             _sceneProvider = _defaultSceneProvider;
             _sceneBackend = _defaultSceneBackend;
 
@@ -117,6 +119,12 @@ namespace Unitas.Bridge
             Application.Host = this;
             AudioSource.Provider = this;
             Animator.Provider = _animationProvider;
+            Camera.Provider = _renderProvider;
+            Mesh.Provider = _renderProvider;
+            Material.Provider = _renderProvider;
+            MeshFilter.Provider = _renderProvider;
+            MeshRenderer.Provider = _renderProvider;
+            Light.Provider = _renderProvider;
         }
 
         public ulong Handle => _runtimeHandle;

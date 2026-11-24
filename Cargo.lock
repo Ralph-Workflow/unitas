@@ -55,4 +55,5 @@ dependencies = [
  "unitas-audio",
  "unitas-core",
  "unitas-physics",
+ "unitas-render",
 ]

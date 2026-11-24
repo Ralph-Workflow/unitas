@@ -10,6 +10,10 @@ use crate::unity_yaml::{self, Node, Stream, YamlError};
 
 pub const AUDIO_SOURCE_CLASS: u32 = 82;
 pub const AUDIO_CLIP_CLASS: u32 = 83;
+pub const CAMERA_CLASS: u32 = 20;
+pub const MESH_RENDERER_CLASS: u32 = 23;
+pub const MESH_FILTER_CLASS: u32 = 33;
+pub const LIGHT_CLASS: u32 = 108;
 pub type AssetGuid = String;
 
 const GAME_OBJECT_CLASS: u32 = 1;
@@ -46,6 +50,17 @@ const DEFAULT_AUDIO_SPATIAL_BLEND: f32 = 0.0;
 const DEFAULT_AUDIO_MIN_DISTANCE: f32 = 1.0;
 const DEFAULT_AUDIO_MAX_DISTANCE: f32 = 500.0;
 const DEFAULT_AUDIO_MUTE: bool = false;
+const DEFAULT_CAMERA_FIELD_OF_VIEW: f32 = 60.0;
+const DEFAULT_CAMERA_NEAR_CLIP_PLANE: f32 = 0.3;
+const DEFAULT_CAMERA_FAR_CLIP_PLANE: f32 = 1000.0;
+const DEFAULT_CAMERA_ORTHOGRAPHIC_SIZE: f32 = 5.0;
+const DEFAULT_CAMERA_BACKGROUND_COLOR: [f32; 3] = [0.19215687, 0.3019608, 0.4745098];
+const DEFAULT_RENDERER_ENABLED: bool = true;
+const DEFAULT_MATERIAL_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
+const DEFAULT_LIGHT_INTENSITY: f32 = 1.0;
+const DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+const DEFAULT_LIGHT_DIRECTION: [f32; 3] = [0.0, -1.0, 0.0];
+const DIRECTIONAL_LIGHT_TYPE: i64 = 1;
 const CHARACTER_CONTROLLER_SCRIPT_NAME: &str = "CharacterController";
 const CHARACTER_CONTROLLER_FIELD_KEYS: [&str; 4] = [
     "m_SlopeLimit",
@@ -293,12 +308,54 @@ impl Default for AudioSourceComponent {
 
 pub type AudioBinding = (EntityId, AudioSourceComponent);
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraComponent {
+    pub entity: EntityId,
+    pub orthographic: bool,
+    pub orthographic_size: f32,
+    pub field_of_view: f32,
+    pub near_clip_plane: f32,
+    pub far_clip_plane: f32,
+    pub background_color: [f32; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshRendererComponent {
+    pub entity: EntityId,
+    pub mesh_guid: Option<AssetGuid>,
+    pub mesh_path: Option<PathBuf>,
+    pub mesh_diagnostic: Option<String>,
+    pub material_guid: Option<AssetGuid>,
+    pub material_path: Option<PathBuf>,
+    pub material_diagnostic: Option<String>,
+    pub material_color: [f32; 3],
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LightComponent {
+    pub entity: EntityId,
+    pub directional: bool,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub direction: [f32; 3],
+    pub unsupported_diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RenderBinding {
+    pub cameras: Vec<CameraComponent>,
+    pub renderers: Vec<MeshRendererComponent>,
+    pub lights: Vec<LightComponent>,
+}
+
 #[derive(Debug)]
 pub struct AssembledScene {
     pub graph: SceneGraph,
     pub scripts: Vec<ScriptBinding>,
     pub physics: Vec<PhysicsBinding>,
     pub audio_bindings: Vec<AudioBinding>,
+    pub render: RenderBinding,
     pub diagnostics: Vec<(EntityId, String)>,
 }
 
@@ -309,6 +366,7 @@ struct DocumentSet {
     scripts: Vec<ScriptBinding>,
     physics: Vec<PhysicsBinding>,
     audio_bindings: Vec<AudioBinding>,
+    render: RenderBinding,
 }
 
 struct PrefabContext<'a> {
@@ -410,12 +468,13 @@ fn assemble_stream(
     let mut graph = SceneGraph::new();
     let mut context = PrefabContext { index, stack: Vec::new() };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
-    let diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings);
+    let diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
     Ok(AssembledScene {
         graph,
         scripts: set.scripts,
         physics: set.physics,
         audio_bindings: set.audio_bindings,
+        render: set.render,
         diagnostics,
     })
 }
@@ -423,7 +482,9 @@ fn assemble_stream(
 fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<AssembledScene, SceneError> {
     let stream = unity_yaml::parse_file(path)?;
     let expand = has_prefab_instances(&stream);
-    let resolve_guids = expand || has_material_references(&stream) || has_audio_references(&stream);
+    let resolve_guids =
+        expand || has_material_references(&stream) || has_audio_references(&stream)
+            || has_render_references(&stream);
     let discovered = match index {
         Some(_) => None,
         None => {
@@ -507,6 +568,27 @@ fn has_audio_references(stream: &Stream) -> bool {
     })
 }
 
+fn has_render_references(stream: &Stream) -> bool {
+    stream.documents.iter().any(|document| {
+        if document.stripped {
+            return false;
+        }
+        match document.class_id {
+            MESH_FILTER_CLASS => document
+                .root
+                .get("MeshFilter")
+                .and_then(|node| node.get("m_Mesh"))
+                .is_some(),
+            MESH_RENDERER_CLASS => document
+                .root
+                .get("MeshRenderer")
+                .and_then(|node| node.get("m_Materials"))
+                .is_some(),
+            _ => false,
+        }
+    })
+}
+
 fn assemble_documents(
     stream: &Stream,
     graph: &mut SceneGraph,
@@ -520,6 +602,7 @@ fn assemble_documents(
         scripts: Vec::new(),
         physics: Vec::new(),
         audio_bindings: Vec::new(),
+        render: RenderBinding::default(),
     };
     let instance_roots = prefab_instance_roots(stream);
     for document in &stream.documents {
@@ -662,6 +745,7 @@ fn assemble_documents(
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings =
         collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.render = collect_render(stream, &set.game_objects, &instance_roots, context.index)?;
     if expand {
         for document in &stream.documents {
             if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
@@ -734,6 +818,9 @@ fn expand_instance(
     set.scripts.extend(prefab_set.scripts);
     set.physics.extend(prefab_set.physics);
     set.audio_bindings.extend(prefab_set.audio_bindings);
+    set.render.cameras.extend(prefab_set.render.cameras);
+    set.render.renderers.extend(prefab_set.render.renderers);
+    set.render.lights.extend(prefab_set.render.lights);
     Ok(())
 }
 
@@ -1328,9 +1415,277 @@ fn resolve_audio_clip(
     (Some(guid), Some(path), None)
 }
 
+fn collect_render(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+    index: Option<&GuidIndex>,
+) -> Result<RenderBinding, SceneError> {
+    let mut binding = RenderBinding::default();
+    let mut mesh_filters: HashMap<EntityId, &Node> = HashMap::new();
+    let mut components: Vec<(u32, EntityId, &Node)> = Vec::new();
+    for document in &stream.documents {
+        if document.stripped {
+            continue;
+        }
+        let body = match document.class_id {
+            CAMERA_CLASS => document.root.get("Camera"),
+            MESH_FILTER_CLASS => document.root.get("MeshFilter"),
+            MESH_RENDERER_CLASS => document.root.get("MeshRenderer"),
+            LIGHT_CLASS => document.root.get("Light"),
+            _ => None,
+        };
+        let body = match body {
+            Some(body) => body,
+            None => continue,
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
+            Some(file_id) => file_id,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id: ROOT_FILE_ID,
+                })
+            }
+        };
+        let record = match game_objects.get(&game_object_file_id) {
+            Some(record) => record,
+            None => {
+                if instance_roots.contains(&game_object_file_id) {
+                    continue;
+                }
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id,
+                });
+            }
+        };
+        if document.class_id == MESH_FILTER_CLASS {
+            mesh_filters.insert(record.entity, body);
+            continue;
+        }
+        components.push((document.class_id, record.entity, body));
+    }
+    for (class_id, entity, body) in components {
+        match class_id {
+            CAMERA_CLASS => binding.cameras.push(camera_component(entity, body)),
+            MESH_RENDERER_CLASS => {
+                let mesh_filter = mesh_filters.get(&entity).copied();
+                binding
+                    .renderers
+                    .push(mesh_renderer_component(entity, body, mesh_filter, index));
+            }
+            LIGHT_CLASS => binding.lights.push(light_component(entity, body)),
+            _ => continue,
+        }
+    }
+    Ok(binding)
+}
+
+fn camera_component(entity: EntityId, body: &Node) -> CameraComponent {
+    CameraComponent {
+        entity,
+        orthographic: yaml_bool(body.get("orthographic"), false),
+        orthographic_size: yaml_f32(
+            body.get("orthographic size"),
+            DEFAULT_CAMERA_ORTHOGRAPHIC_SIZE,
+            |value| value > 0.0,
+        ),
+        field_of_view: yaml_f32(
+            body.get("field of view"),
+            DEFAULT_CAMERA_FIELD_OF_VIEW,
+            |value| value > 0.0,
+        ),
+        near_clip_plane: yaml_f32(
+            body.get("near clip plane"),
+            DEFAULT_CAMERA_NEAR_CLIP_PLANE,
+            |value| value >= 0.0,
+        ),
+        far_clip_plane: yaml_f32(
+            body.get("far clip plane"),
+            DEFAULT_CAMERA_FAR_CLIP_PLANE,
+            |value| value > 0.0,
+        ),
+        background_color: color3_or(body.get("m_BackGroundColor"), DEFAULT_CAMERA_BACKGROUND_COLOR),
+    }
+}
+
+fn mesh_renderer_component(
+    entity: EntityId,
+    body: &Node,
+    mesh_filter: Option<&Node>,
+    index: Option<&GuidIndex>,
+) -> MeshRendererComponent {
+    let (mesh_guid, mesh_path, mesh_diagnostic) = match mesh_filter {
+        Some(filter) => resolve_mesh_reference(entity, filter, index),
+        None => (
+            None,
+            None,
+            Some(format!(
+                "MeshRenderer on entity {} has no MeshFilter to resolve the mesh reference",
+                entity.as_u64()
+            )),
+        ),
+    };
+    let (material_guid, material_path, material_diagnostic) =
+        resolve_material_reference(entity, body, index);
+    let material_color = match (&material_path, index) {
+        (Some(path), Some(index)) => resolve_material_color(path, index),
+        _ => DEFAULT_MATERIAL_COLOR,
+    };
+    MeshRendererComponent {
+        entity,
+        mesh_guid,
+        mesh_path,
+        mesh_diagnostic,
+        material_guid,
+        material_path,
+        material_diagnostic,
+        material_color,
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_RENDERER_ENABLED),
+    }
+}
+
+fn resolve_mesh_reference(
+    entity: EntityId,
+    filter: &Node,
+    index: Option<&GuidIndex>,
+) -> (Option<AssetGuid>, Option<PathBuf>, Option<String>) {
+    let mesh_node = match filter.get("m_Mesh") {
+        Some(node) => node,
+        None => {
+            return (
+                None,
+                None,
+                Some(format!(
+                    "MeshFilter on entity {} has no m_Mesh reference",
+                    entity.as_u64()
+                )),
+            )
+        }
+    };
+    let guid = mesh_node
+        .get("guid")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let guid = match guid {
+        Some(guid) => guid.to_string(),
+        None => {
+            return (
+                None,
+                None,
+                Some(format!(
+                    "MeshFilter on entity {} references m_Mesh without a guid",
+                    entity.as_u64()
+                )),
+            )
+        }
+    };
+    let path = index.and_then(|guids| guids.get(&guid)).map(Path::to_path_buf);
+    (Some(guid), path, None)
+}
+
+fn resolve_material_reference(
+    entity: EntityId,
+    body: &Node,
+    index: Option<&GuidIndex>,
+) -> (Option<AssetGuid>, Option<PathBuf>, Option<String>) {
+    let entry = body
+        .get("m_Materials")
+        .and_then(Node::as_sequence)
+        .and_then(|items| items.first());
+    let entry = match entry {
+        Some(entry) => entry,
+        None => return (None, None, None),
+    };
+    let file_id = entry.get("fileID").and_then(Node::as_i64);
+    let guid = entry
+        .get("guid")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let guid = match guid {
+        Some(guid) => guid.to_string(),
+        None => {
+            if file_id == Some(0) {
+                return (None, None, None);
+            }
+            return (
+                None,
+                None,
+                Some(format!(
+                    "MeshRenderer on entity {} references material fileID {} without a guid",
+                    entity.as_u64(),
+                    file_id.unwrap_or(0)
+                )),
+            );
+        }
+    };
+    let path = index.and_then(|guids| guids.get(&guid)).map(Path::to_path_buf);
+    (Some(guid), path, None)
+}
+
+fn resolve_material_color(path: &Path, index: &GuidIndex) -> [f32; 3] {
+    match crate::material::parse_material_with_guids(path, index) {
+        Ok(material) => [material.color[0], material.color[1], material.color[2]],
+        Err(_) => DEFAULT_MATERIAL_COLOR,
+    }
+}
+
+fn light_component(entity: EntityId, body: &Node) -> LightComponent {
+    let light_type = body.get("m_Type").and_then(Node::as_i64).unwrap_or(0);
+    let directional = light_type == DIRECTIONAL_LIGHT_TYPE;
+    let unsupported_diagnostic = if directional {
+        None
+    } else {
+        Some(format!(
+            "{} light on entity {} is not supported by the renderer",
+            light_type_name(light_type),
+            entity.as_u64()
+        ))
+    };
+    LightComponent {
+        entity,
+        directional,
+        color: color3_or(body.get("m_Color"), DEFAULT_LIGHT_COLOR),
+        intensity: yaml_f32(body.get("m_Intensity"), DEFAULT_LIGHT_INTENSITY, |value| {
+            value.is_finite()
+        }),
+        direction: DEFAULT_LIGHT_DIRECTION,
+        unsupported_diagnostic,
+    }
+}
+
+fn light_type_name(light_type: i64) -> &'static str {
+    match light_type {
+        0 => "spot",
+        1 => "directional",
+        2 => "point",
+        3 => "area",
+        4 => "disc",
+        _ => "unknown",
+    }
+}
+
+fn color3_or(node: Option<&Node>, default: [f32; 3]) -> [f32; 3] {
+    let node = match node {
+        Some(node) => node,
+        None => return default,
+    };
+    let red = node.get("r").and_then(Node::as_f64);
+    let green = node.get("g").and_then(Node::as_f64);
+    let blue = node.get("b").and_then(Node::as_f64);
+    match (red, green, blue) {
+        (Some(red), Some(green), Some(blue)) => [red as f32, green as f32, blue as f32],
+        _ => default,
+    }
+}
+
 fn collect_scene_diagnostics(
     physics: &[PhysicsBinding],
     audio_bindings: &[AudioBinding],
+    render: &RenderBinding,
 ) -> Vec<(EntityId, String)> {
     let mut diagnostics = Vec::new();
     for binding in physics {
@@ -1356,6 +1711,19 @@ fn collect_scene_diagnostics(
     for (entity, audio) in audio_bindings {
         if let Some(diag) = &audio.clip_diagnostic {
             diagnostics.push((*entity, diag.clone()));
+        }
+    }
+    for renderer in &render.renderers {
+        if let Some(diag) = &renderer.mesh_diagnostic {
+            diagnostics.push((renderer.entity, diag.clone()));
+        }
+        if let Some(diag) = &renderer.material_diagnostic {
+            diagnostics.push((renderer.entity, diag.clone()));
+        }
+    }
+    for light in &render.lights {
+        if let Some(diag) = &light.unsupported_diagnostic {
+            diagnostics.push((light.entity, diag.clone()));
         }
     }
     diagnostics

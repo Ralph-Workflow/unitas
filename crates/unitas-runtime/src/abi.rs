@@ -7,13 +7,16 @@ use std::sync::{Mutex, OnceLock};
 use unitas_animation::decode_controller_binary;
 use unitas_audio::AudioClip;
 use unitas_core::EntityId;
+use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
 pub use crate::runtime::CharacterMoveRequest;
-use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, Runtime};
+use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, RenderCameraParams, Runtime};
 
 const QUERY_RECORD_SIZE: usize = 64;
 const ANIMATOR_STATE_INFO_SIZE: usize = 80;
+const CAMERA_BLOB_SIZE: usize = 32;
+const CAMERA_BLOB_FLOATS: usize = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,6 +72,7 @@ pub struct RuntimeState {
     pub runtime: Runtime,
     pub path_buffer: Vec<u8>,
     pub query_buffer: Vec<u8>,
+    pub render_buffer: Vec<u8>,
     pub query_records: Vec<QueryRecord>,
     pub last_error: Option<Vec<u8>>,
 }
@@ -79,6 +83,7 @@ impl RuntimeState {
             runtime,
             path_buffer: Vec::new(),
             query_buffer: Vec::new(),
+            render_buffer: Vec::new(),
             query_records: Vec::new(),
             last_error: None,
         }
@@ -2459,6 +2464,17 @@ pub fn test_read_error_message(handle: u64) -> Result<String, RuntimeError> {
     }
 }
 
+pub fn test_read_render_buffer(handle: u64, data: &mut [u8]) -> Result<(), RuntimeError> {
+    match with_runtime_state_err(handle, |state| {
+        let length = data.len().min(state.render_buffer.len());
+        data[..length].copy_from_slice(&state.render_buffer[..length]);
+        Ok(())
+    }) {
+        Ok(res) => res,
+        Err(err) => Err(err),
+    }
+}
+
 pub fn test_read_query_buffer(handle: u64, data: &mut [u8]) -> Result<(), RuntimeError> {
     if !data.len().is_multiple_of(QUERY_RECORD_SIZE) {
         return Err(RuntimeError::InvalidAddress);
@@ -2486,6 +2502,7 @@ where
         let mut temp_state = RuntimeState::new(active_runtime);
         std::mem::swap(&mut temp_state.path_buffer, &mut state.path_buffer);
         std::mem::swap(&mut temp_state.query_buffer, &mut state.query_buffer);
+        std::mem::swap(&mut temp_state.render_buffer, &mut state.render_buffer);
         std::mem::swap(&mut temp_state.query_records, &mut state.query_records);
         std::mem::swap(&mut temp_state.last_error, &mut state.last_error);
 
@@ -2499,6 +2516,7 @@ where
         if let Some((_, mut returned_state)) = popped {
             std::mem::swap(&mut returned_state.path_buffer, &mut state.path_buffer);
             std::mem::swap(&mut returned_state.query_buffer, &mut state.query_buffer);
+            std::mem::swap(&mut returned_state.render_buffer, &mut state.render_buffer);
             std::mem::swap(&mut returned_state.query_records, &mut state.query_records);
             std::mem::swap(&mut returned_state.last_error, &mut state.last_error);
             *runtime = returned_state.runtime;
@@ -2698,5 +2716,437 @@ fn write_query_records(state: &mut RuntimeState) {
             let start = offset + slot * 8;
             state.query_buffer[start..start + 8].copy_from_slice(field);
         }
+    }
+}
+
+fn buffer_offset(base: usize, length: usize, address: usize, size: usize) -> Option<usize> {
+    let end = base.checked_add(length)?;
+    let target_end = address.checked_add(size)?;
+    if address < base || target_end > end {
+        return None;
+    }
+    Some(address - base)
+}
+
+fn path_buffer_offset(state: &RuntimeState, address: usize, size: usize) -> Option<usize> {
+    buffer_offset(
+        state.path_buffer.as_ptr() as usize,
+        state.path_buffer.len(),
+        address,
+        size,
+    )
+}
+
+fn read_f32_le(bytes: &[u8], offset: usize) -> f32 {
+    let mut raw = [0u8; 4];
+    raw.copy_from_slice(&bytes[offset..offset + 4]);
+    f32::from_le_bytes(raw)
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut raw = [0u8; 4];
+    raw.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(raw)
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u64 {
+    if capacity == 0 {
+        return 0;
+    }
+    let Ok(size) = usize::try_from(capacity) else {
+        return 0;
+    };
+    with_runtime_state(handle, |state| {
+        if state.render_buffer.len() < size {
+            state.render_buffer.resize(size, 0);
+        }
+        state.render_buffer.as_ptr() as usize as u64
+    })
+    .unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_mesh_create(
+    handle: u64,
+    positions: *const f32,
+    position_count: u32,
+    normals: *const f32,
+    normal_count: u32,
+    indices: *const u32,
+    index_count: u32,
+) -> u64 {
+    if !position_count.is_multiple_of(3)
+        || !normal_count.is_multiple_of(3)
+        || !index_count.is_multiple_of(3)
+        || position_count != normal_count
+    {
+        return with_runtime_state(handle, |state| {
+            state.set_error(
+                "-2 invalid argument: mesh vertex, normal and index counts do not match",
+            );
+            0u64
+        })
+        .unwrap_or_default();
+    }
+    with_runtime_state(handle, |state| {
+        let position_bytes = position_count as usize * 4;
+        let normal_bytes = normal_count as usize * 4;
+        let index_bytes = index_count as usize * 4;
+        let Some(position_offset) =
+            path_buffer_offset(state, positions as usize, position_bytes)
+        else {
+            state.set_error("-2 invalid argument: mesh position buffer is out of range");
+            return 0u64;
+        };
+        let Some(normal_offset) = path_buffer_offset(state, normals as usize, normal_bytes) else {
+            state.set_error("-2 invalid argument: mesh normal buffer is out of range");
+            return 0u64;
+        };
+        let Some(index_offset) = path_buffer_offset(state, indices as usize, index_bytes) else {
+            state.set_error("-2 invalid argument: mesh index buffer is out of range");
+            return 0u64;
+        };
+        let mut position_values = Vec::with_capacity(position_count as usize / 3);
+        for index in 0..position_count as usize / 3 {
+            let start = position_offset + index * 12;
+            position_values.push(Vec3::new(
+                read_f32_le(&state.path_buffer, start),
+                read_f32_le(&state.path_buffer, start + 4),
+                read_f32_le(&state.path_buffer, start + 8),
+            ));
+        }
+        let mut normal_values = Vec::with_capacity(normal_count as usize / 3);
+        for index in 0..normal_count as usize / 3 {
+            let start = normal_offset + index * 12;
+            normal_values.push(Vec3::new(
+                read_f32_le(&state.path_buffer, start),
+                read_f32_le(&state.path_buffer, start + 4),
+                read_f32_le(&state.path_buffer, start + 8),
+            ));
+        }
+        let mut index_values = Vec::with_capacity(index_count as usize);
+        for index in 0..index_count as usize {
+            index_values.push(read_u32_le(&state.path_buffer, index_offset + index * 4));
+        }
+        state
+            .runtime
+            .create_render_mesh(position_values, normal_values, index_values)
+    })
+    .unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_mesh_destroy(handle: u64, mesh: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state.runtime.destroy_render_mesh(mesh) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: mesh handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_material_create(handle: u64) -> u64 {
+    with_runtime_state(handle, |state| state.runtime.create_render_material()).unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_material_set_color(
+    handle: u64,
+    material: u64,
+    red: f32,
+    green: f32,
+    blue: f32,
+    alpha: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_material_color(material, [red, green, blue, alpha])
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: material handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_camera_create(handle: u64, entity: u64) -> u64 {
+    with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("-2 invalid argument: camera entity id is zero");
+            return 0u64;
+        }
+        state.runtime.create_render_camera(Some(EntityId::new(entity)))
+    })
+    .unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_camera_update(
+    handle: u64,
+    camera: u64,
+    blob: *const f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if blob.is_null() {
+            state.set_error("-2 invalid argument: camera blob pointer is null");
+            return -2;
+        }
+        let base = state.path_buffer.as_ptr() as usize;
+        let address = blob as usize;
+        if address < base {
+            state.set_error("-2 invalid argument: camera blob buffer address mismatch");
+            return -2;
+        }
+        let offset = address - base;
+        if offset > state.path_buffer.len() {
+            state.set_error("-2 invalid argument: camera blob buffer address mismatch");
+            return -2;
+        }
+        if state.path_buffer.len() - offset < CAMERA_BLOB_SIZE {
+            state.set_error("-2 invalid argument: camera blob is shorter than 32 bytes");
+            return -2;
+        }
+        let mut values = [0.0f32; CAMERA_BLOB_FLOATS];
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = read_f32_le(&state.path_buffer, offset + index * 4);
+        }
+        let params = RenderCameraParams {
+            orthographic: values[0] > 0.0,
+            orthographic_size: values[0],
+            field_of_view: values[1],
+            near_clip_plane: values[2],
+            far_clip_plane: values[3],
+            background_color: [values[4], values[5], values[6]],
+        };
+        if state.runtime.update_render_camera(camera, params) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: camera handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_renderer_create(
+    handle: u64,
+    entity: u64,
+    mesh: u64,
+    material: u64,
+) -> u64 {
+    with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("-2 invalid argument: renderer entity id is zero");
+            return 0u64;
+        }
+        if mesh == 0 {
+            state.set_error("-2 invalid argument: renderer mesh handle is zero");
+            return 0u64;
+        }
+        if material == 0 {
+            state.set_error("-2 invalid argument: renderer material handle is zero");
+            return 0u64;
+        }
+        state.runtime.create_render_renderer(
+            Some(EntityId::new(entity)),
+            Some(mesh),
+            Some(material),
+        )
+    })
+    .unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_renderer_set_enabled(
+    handle: u64,
+    renderer: u64,
+    enabled: u8,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_renderer_enabled(renderer, enabled != 0)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: renderer handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_light_create(handle: u64, entity: u64) -> u64 {
+    with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("-2 invalid argument: light entity id is zero");
+            return 0u64;
+        }
+        state.runtime.create_render_light(Some(EntityId::new(entity)))
+    })
+    .unwrap_or_default()
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_light_update(
+    handle: u64,
+    light: u64,
+    direction_x: f32,
+    direction_y: f32,
+    direction_z: f32,
+    color_red: f32,
+    color_green: f32,
+    color_blue: f32,
+    intensity: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state.runtime.update_render_light(
+            light,
+            [direction_x, direction_y, direction_z],
+            [color_red, color_green, color_blue],
+            intensity,
+        ) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_frame(
+    handle: u64,
+    camera: u64,
+    width: u32,
+    height: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match state.runtime.render_frame(camera, width, height) {
+            Ok(bytes) => {
+                let count = bytes.len();
+                state.render_buffer = bytes;
+                state.clear_error();
+                match i32::try_from(count) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        state.set_error(
+                            "-2 invalid argument: frame size exceeds the supported range",
+                        );
+                        -2
+                    }
+                }
+            }
+            Err(error) => {
+                state.set_error(&error.to_string());
+                error.class()
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_camera_world_to_screen_point(
+    handle: u64,
+    camera: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+    out: *mut f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out.is_null() {
+            state.set_error("-2 invalid argument: output pointer is null");
+            return -2;
+        }
+        let Some(offset) = path_buffer_offset(state, out as usize, 12) else {
+            state.set_error("-2 invalid argument: output buffer is out of range");
+            return -2;
+        };
+        match state.runtime.camera_world_to_screen_point(camera, [x, y, z]) {
+            Ok(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    let start = offset + index * 4;
+                    state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                state.clear_error();
+                0
+            }
+            Err(error) => {
+                state.set_error(&error.to_string());
+                error.class()
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_render_camera_screen_point_to_ray(
+    handle: u64,
+    camera: u64,
+    x: f32,
+    y: f32,
+    _z: f32,
+    out: *mut f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out.is_null() {
+            state.set_error("-2 invalid argument: output pointer is null");
+            return -2;
+        }
+        let Some(offset) = path_buffer_offset(state, out as usize, 24) else {
+            state.set_error("-2 invalid argument: output buffer is out of range");
+            return -2;
+        };
+        match state.runtime.camera_screen_point_to_ray(camera, [x, y, 0.0]) {
+            Ok(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    let start = offset + index * 4;
+                    state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                state.clear_error();
+                0
+            }
+            Err(error) => {
+                state.set_error(&error.to_string());
+                error.class()
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
     }
 }
