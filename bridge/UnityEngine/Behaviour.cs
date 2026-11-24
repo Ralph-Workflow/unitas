@@ -4,6 +4,6 @@ namespace UnityEngine
     {
         public bool enabled { get; set; } = true;
 
-        public bool isActiveAndEnabled => enabled && gameObject != null && gameObject.activeSelf;
+        public bool isActiveAndEnabled => enabled && gameObject != null && gameObject.activeInHierarchy;
     }
 }

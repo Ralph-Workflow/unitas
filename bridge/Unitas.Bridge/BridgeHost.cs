@@ -356,25 +356,25 @@ namespace Unitas.Bridge
 
         private void OnOnEnable(ulong scriptHandle)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.OnEnable);
+                InvokeWithOrigin(script!, script!.OnEnable);
             }
         }
 
         private void OnStart(ulong scriptHandle)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.Start);
+                InvokeWithOrigin(script!, script!.Start);
             }
         }
 
         private void OnFixedUpdate(ulong scriptHandle, double fixedDeltaSeconds)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.FixedUpdate);
+                InvokeWithOrigin(script!, script!.FixedUpdate);
             }
             _fixedUpdateCallsInStep++;
             if (_scripts.Count > 0 && _fixedUpdateCallsInStep >= _scripts.Count)
@@ -386,17 +386,17 @@ namespace Unitas.Bridge
 
         private void OnUpdate(ulong scriptHandle, double deltaSeconds)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.Update);
+                InvokeWithOrigin(script!, script!.Update);
             }
         }
 
         private void OnLateUpdate(ulong scriptHandle, double deltaSeconds)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.LateUpdate);
+                InvokeWithOrigin(script!, script!.LateUpdate);
             }
             _lateUpdateCallsInTick++;
             if (_scripts.Count > 0 && _lateUpdateCallsInTick >= _scripts.Count)
@@ -408,20 +408,29 @@ namespace Unitas.Bridge
 
         private void OnOnDisable(ulong scriptHandle)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
-                InvokeWithOrigin(script, script.OnDisable);
+                InvokeWithOrigin(script!, script!.OnDisable);
             }
         }
 
         private void OnDestroy(ulong scriptHandle)
         {
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
+            if (!_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                InvokeWithOrigin(script, script.OnDestroy);
-                OwnerDestroyedSafely(script);
-                _scripts.Remove(scriptHandle);
+                return;
             }
+
+            if (script == null)
+            {
+                OwnerDestroyedSafely(script!);
+                _scripts.Remove(scriptHandle);
+                return;
+            }
+
+            InvokeWithOrigin(script, script.OnDestroy);
+            OwnerDestroyedSafely(script);
+            _scripts.Remove(scriptHandle);
         }
 
         private void OnCollision(ulong entityA, ulong entityB, uint phase)
@@ -429,14 +438,14 @@ namespace Unitas.Bridge
             MonoBehaviour? scriptA = FindScriptByEntity(entityA);
             MonoBehaviour? scriptB = FindScriptByEntity(entityB);
 
-            if (scriptA != null)
+            if (IsEligible(scriptA))
             {
-                DispatchCollision(scriptA, new Collision(scriptB != null ? scriptB.gameObject : null), phase);
+                DispatchCollision(scriptA!, new Collision(scriptB != null ? scriptB.gameObject : null), phase);
             }
 
-            if (scriptB != null && !ReferenceEquals(scriptA, scriptB))
+            if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
             {
-                DispatchCollision(scriptB, new Collision(scriptA != null ? scriptA.gameObject : null), phase);
+                DispatchCollision(scriptB!, new Collision(scriptA != null ? scriptA.gameObject : null), phase);
             }
         }
 
@@ -445,14 +454,14 @@ namespace Unitas.Bridge
             MonoBehaviour? scriptA = FindScriptByEntity(entityA);
             MonoBehaviour? scriptB = FindScriptByEntity(entityB);
 
-            if (scriptA != null)
+            if (IsEligible(scriptA))
             {
-                DispatchTrigger(scriptA, scriptB?.GetComponent<Collider>(), phase);
+                DispatchTrigger(scriptA!, scriptB?.GetComponent<Collider>(), phase);
             }
 
-            if (scriptB != null && !ReferenceEquals(scriptA, scriptB))
+            if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
             {
-                DispatchTrigger(scriptB, scriptA?.GetComponent<Collider>(), phase);
+                DispatchTrigger(scriptB!, scriptA?.GetComponent<Collider>(), phase);
             }
         }
 
@@ -501,6 +510,16 @@ namespace Unitas.Bridge
             }
         }
 
+        private static bool IsEligible(MonoBehaviour? script)
+        {
+            if (script == null || !script.isActiveAndEnabled)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
         private static void InvokeWithOrigin(MonoBehaviour script, Action callback)
         {
             UnityEngine.Object? previousOrigin = LogRecorder.CurrentOrigin;
@@ -508,6 +527,10 @@ namespace Unitas.Bridge
             try
             {
                 callback();
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex, script);
             }
             finally
             {

@@ -49,7 +49,7 @@ namespace UnityEngine
 
         public static Coroutine Start(MonoBehaviour owner, IEnumerator routine)
         {
-            if (owner == null)
+            if (owner is null)
             {
                 throw new ArgumentNullException(nameof(owner));
             }
@@ -61,6 +61,12 @@ namespace UnityEngine
 
             Coroutine handle = new Coroutine();
             if (owner.gameObject != null && !owner.gameObject.activeSelf)
+            {
+                handle.IsCompleted = true;
+                return handle;
+            }
+
+            if (IsDestroyedOwner(owner))
             {
                 handle.IsCompleted = true;
                 return handle;
@@ -91,7 +97,7 @@ namespace UnityEngine
 
         public static void StopAll(MonoBehaviour owner)
         {
-            if (owner == null)
+            if (owner is null)
             {
                 throw new ArgumentNullException(nameof(owner));
             }
@@ -111,7 +117,7 @@ namespace UnityEngine
 
         public static void OwnerDeactivated(MonoBehaviour owner)
         {
-            if (owner == null)
+            if (owner is null)
             {
                 throw new ArgumentNullException(nameof(owner));
             }
@@ -121,7 +127,7 @@ namespace UnityEngine
 
         public static void OwnerDestroyed(MonoBehaviour owner)
         {
-            if (owner == null)
+            if (owner is null)
             {
                 throw new ArgumentNullException(nameof(owner));
             }
@@ -248,6 +254,11 @@ namespace UnityEngine
                     }
                 }
             }
+        }
+
+        private static bool IsDestroyedOwner(MonoBehaviour owner)
+        {
+            return owner is not null && owner == null;
         }
 
         private static bool IsOwnerActive(MonoBehaviour owner)

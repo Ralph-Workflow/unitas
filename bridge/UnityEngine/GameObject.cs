@@ -10,6 +10,8 @@ namespace UnityEngine
 
         public bool activeSelf { get; set; }
 
+        internal IReadOnlyList<Component> Components => _components;
+
         public GameObject() : this("New Game Object")
         {
         }
@@ -24,17 +26,71 @@ namespace UnityEngine
             _components.Add(t);
         }
 
+        public bool activeInHierarchy
+        {
+            get
+            {
+                if (!activeSelf)
+                {
+                    return false;
+                }
+
+                Transform? ancestor = transform.parent;
+                while (ancestor != null)
+                {
+                    GameObject owner = ancestor.gameObject;
+                    if (owner != null && !owner.activeSelf)
+                    {
+                        return false;
+                    }
+
+                    ancestor = ancestor.parent;
+                }
+
+                return true;
+            }
+        }
+
         public void SetActive(bool value)
         {
+            if (value == activeSelf)
+            {
+                return;
+            }
+
+            bool wasEffective = activeInHierarchy;
             activeSelf = value;
+            bool isEffective = activeInHierarchy;
+
             if (!value)
             {
-                for (int i = 0; i < _components.Count; i++)
+                StopCoroutinesInSubtree();
+            }
+
+            if (wasEffective == isEffective)
+            {
+                return;
+            }
+
+            List<MonoBehaviour> disabling = new List<MonoBehaviour>();
+            List<MonoBehaviour> enabling = new List<MonoBehaviour>();
+            CollectActivationChanges(this, wasEffective, isEffective, disabling, enabling);
+
+            for (int i = 0; i < disabling.Count; i++)
+            {
+                MonoBehaviour behaviour = disabling[i];
+                if (behaviour.enabled)
                 {
-                    if (_components[i] is MonoBehaviour behaviour)
-                    {
-                        CoroutineScheduler.OwnerDeactivated(behaviour);
-                    }
+                    behaviour.OnDisable();
+                }
+            }
+
+            for (int i = 0; i < enabling.Count; i++)
+            {
+                MonoBehaviour behaviour = enabling[i];
+                if (behaviour.enabled)
+                {
+                    behaviour.OnEnable();
                 }
             }
         }
@@ -62,6 +118,67 @@ namespace UnityEngine
                 }
             }
             return null;
+        }
+
+        private void CollectActivationChanges(
+            GameObject node,
+            bool wasEffective,
+            bool isEffective,
+            List<MonoBehaviour> disabling,
+            List<MonoBehaviour> enabling)
+        {
+            for (int i = 0; i < node._components.Count; i++)
+            {
+                if (node._components[i] is MonoBehaviour behaviour)
+                {
+                    if (wasEffective)
+                    {
+                        disabling.Add(behaviour);
+                    }
+                    else if (isEffective)
+                    {
+                        enabling.Add(behaviour);
+                    }
+                }
+            }
+
+            for (int i = 0; i < node.transform.childCount; i++)
+            {
+                GameObject child = node.transform.GetChild(i).gameObject;
+                if (child == null)
+                {
+                    continue;
+                }
+
+                CollectActivationChanges(
+                    child,
+                    wasEffective && child.activeSelf,
+                    isEffective && child.activeSelf,
+                    disabling,
+                    enabling);
+            }
+        }
+
+        private void StopCoroutinesInSubtree()
+        {
+            for (int i = 0; i < _components.Count; i++)
+            {
+                if (_components[i] is MonoBehaviour behaviour)
+                {
+                    CoroutineScheduler.OwnerDeactivated(behaviour);
+                }
+            }
+
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                GameObject child = transform.GetChild(i).gameObject;
+                if (child == null)
+                {
+                    continue;
+                }
+
+                child.StopCoroutinesInSubtree();
+            }
         }
     }
 }

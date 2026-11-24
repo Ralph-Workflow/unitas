@@ -1,0 +1,74 @@
+using UnityEngine;
+
+namespace Unitas.Bridge.Tests
+{
+    public sealed class LifetimeProbeScript : MonoBehaviour
+    {
+        private readonly System.Collections.Generic.List<string> _events = new System.Collections.Generic.List<string>();
+
+        public string ObservedOrder => string.Join(", ", _events);
+
+        public override void OnDisable()
+        {
+            _events.Add("OnDisable");
+        }
+
+        public override void OnDestroy()
+        {
+            _events.Add("OnDestroy");
+        }
+    }
+
+    public static class LifetimeTests
+    {
+        public static void Run()
+        {
+            GameObject live = new GameObject("Live");
+            Check.That("live object is not null", live != null);
+            Check.That("live object is truthy", (bool)live);
+            Check.That("live object is not equal to null", !(live == null));
+            Check.That("live object equals itself", live.Equals(live));
+            Check.That("live object does not equal null", !live.Equals(null));
+            Check.That("two live objects are different", !new GameObject("Other").Equals(live));
+
+            Object? realNull = null;
+            Check.That("null equals null", realNull == null);
+            Check.That("null differs from a live object", realNull != live);
+
+            GameObject doomed = new GameObject("Doomed");
+            Object.Destroy(doomed);
+            Check.That("destroyed object equals null", doomed == null);
+            Check.That("destroyed object does not differ from null", !(doomed != null));
+            Check.That("destroyed object is falsy", !(bool)doomed);
+            Check.That("destroyed object equals null through Equals", doomed.Equals(null));
+            Check.Equal("destroyed object stringifies as null", "null", doomed.ToString());
+
+            bool threw = false;
+            try
+            {
+                string inaccessible = doomed.name;
+            }
+            catch (MissingReferenceException)
+            {
+                threw = true;
+            }
+
+            Check.That("destroyed object throws MissingReferenceException on name access", threw);
+
+            LifetimeProbeScript probe = new LifetimeProbeScript();
+            Object.Destroy(probe);
+            Check.That("destroyed script equals null", probe == null);
+            Check.That("destroyed script is falsy", !(bool)probe);
+            Check.Equal("destroyed script fires OnDisable then OnDestroy", "OnDisable, OnDestroy", probe.ObservedOrder);
+            Object.Destroy(probe);
+            Check.Equal("double destroy is a no-op", "OnDisable, OnDestroy", probe.ObservedOrder);
+
+            GameObject owner = new GameObject("Owner");
+            LifetimeProbeScript owned = owner.AddComponent<LifetimeProbeScript>();
+            Object.Destroy(owner);
+            Check.That("destroyed owner equals null", owner == null);
+            Check.Equal("destroyed owner fires component OnDisable then OnDestroy", "OnDisable, OnDestroy", owned.ObservedOrder);
+            Check.That("destroyed component equals null", owned == null);
+        }
+    }
+}

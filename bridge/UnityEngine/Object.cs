@@ -1,21 +1,170 @@
+using System;
 using System.Threading;
 
 namespace UnityEngine
 {
-    public class Object
+    public class MissingReferenceException : Exception
+    {
+        public MissingReferenceException(string message) : base(message)
+        {
+        }
+    }
+
+    public partial class Object
     {
         private static int s_nextInstanceId = 1;
-        private readonly int _instanceId = Interlocked.Increment(ref s_nextInstanceId);
+        private int _instanceId = Interlocked.Increment(ref s_nextInstanceId);
         private string _name = string.Empty;
+        private bool _destroyed;
+        private bool _destroying;
 
         public virtual string name
         {
-            get => _name;
-            set => _name = value;
+            get
+            {
+                ThrowIfDestroyed();
+                return _name;
+            }
+            set
+            {
+                ThrowIfDestroyed();
+                _name = value;
+            }
         }
 
         public int GetInstanceID() => _instanceId;
 
-        public override string ToString() => name;
+        public override string ToString() => _destroyed ? "null" : _name;
+
+        public override bool Equals(object? other) => this == (other as Object);
+
+        public override int GetHashCode() => _destroyed ? 0 : _instanceId;
+
+        internal bool IsDestroyed => _destroyed;
+
+        internal void AssignNewInstanceId()
+        {
+            _instanceId = Interlocked.Increment(ref s_nextInstanceId);
+        }
+
+        internal Component ShallowClone() => (Component)MemberwiseClone();
+
+        public static bool operator ==(Object? left, Object? right)
+        {
+            if (left is null && right is null)
+            {
+                return true;
+            }
+
+            if (left is null)
+            {
+                return right!._destroyed;
+            }
+
+            if (right is null)
+            {
+                return left!._destroyed;
+            }
+
+            if (left._destroyed && right._destroyed)
+            {
+                return true;
+            }
+
+            if (left._destroyed || right._destroyed)
+            {
+                return false;
+            }
+
+            return ReferenceEquals(left, right);
+        }
+
+        public static bool operator !=(Object? left, Object? right) => !(left == right);
+
+        public static implicit operator bool(Object? value) => value is not null && !value._destroyed;
+
+        public static void Destroy(Object obj)
+        {
+            if (obj is null || obj._destroyed)
+            {
+                return;
+            }
+
+            obj._destroying = true;
+            try
+            {
+                if (obj is Component component)
+                {
+                    bool notifyDisable = IsEffectivelyEnabled(component);
+                    obj._destroyed = true;
+                    DestroyComponent(component, notifyDisable);
+                }
+                else if (obj is GameObject gameObject)
+                {
+                    int count = gameObject.Components.Count;
+                    bool[] notify = new bool[count];
+                    for (int i = 0; i < count; i++)
+                    {
+                        notify[i] = IsEffectivelyEnabled(gameObject.Components[i]);
+                    }
+
+                    obj._destroyed = true;
+                    for (int i = 0; i < count; i++)
+                    {
+                        DestroyComponent(gameObject.Components[i], notify[i]);
+                    }
+                }
+                else
+                {
+                    obj._destroyed = true;
+                }
+            }
+            finally
+            {
+                obj._destroying = false;
+            }
+        }
+
+        private static bool IsEffectivelyEnabled(Component component)
+        {
+            if (component is MonoBehaviour behaviour)
+            {
+                return behaviour.enabled && behaviour.isActiveAndEnabled;
+            }
+
+            return false;
+        }
+
+        private static void DestroyComponent(Component component, bool notifyDisable)
+        {
+            component._destroyed = true;
+            if (!(component is MonoBehaviour behaviour))
+            {
+                return;
+            }
+
+            try
+            {
+                CoroutineScheduler.OwnerDestroyed(behaviour);
+                if (notifyDisable)
+                {
+                    behaviour.OnDisable();
+                }
+
+                behaviour.OnDestroy();
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex, component);
+            }
+        }
+
+        private void ThrowIfDestroyed()
+        {
+            if (_destroyed && !_destroying)
+            {
+                throw new MissingReferenceException("The object has been destroyed and can no longer be accessed.");
+            }
+        }
     }
 }

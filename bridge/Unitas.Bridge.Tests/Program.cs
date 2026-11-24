@@ -22,6 +22,10 @@ namespace Unitas.Bridge.Tests
             QuerySurfaceTests.Run();
             IntegrationTests.Run();
             CoroutineTests.Run();
+            LifetimeTests.Run();
+            CloneTests.Run();
+            ActivationTests.Run();
+            ExceptionContainmentTests.Run();
 
             if (Check.FailureCount > 0)
             {
