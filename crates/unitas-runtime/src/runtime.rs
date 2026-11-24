@@ -49,6 +49,7 @@ pub struct Runtime {
     world: World,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
+    time_scale: f64,
     accumulator: f64,
     first_tick: bool,
     is_shutdown: bool,
@@ -62,6 +63,7 @@ impl Runtime {
             world: World::new(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
+            time_scale: 1.0,
             accumulator: 0.0,
             first_tick: true,
             is_shutdown: false,
@@ -138,7 +140,8 @@ impl Runtime {
             }
             return Ok(());
         }
-        self.accumulator += delta_seconds;
+        let scaled_delta = delta_seconds * self.time_scale;
+        self.accumulator += scaled_delta;
         let fixed_step = self.fixed_timestep;
         const EPSILON: f64 = 1e-9;
         while self.accumulator >= fixed_step - EPSILON {
@@ -163,10 +166,10 @@ impl Runtime {
                 (callbacks.trigger)(event.a.as_u64(), event.b.as_u64(), phase_code(event.phase));
             }
             for script in &self.scripts {
-                (callbacks.update)(script.script_handle, delta_seconds);
+                (callbacks.update)(script.script_handle, scaled_delta);
             }
             for script in &self.scripts {
-                (callbacks.late_update)(script.script_handle, delta_seconds);
+                (callbacks.late_update)(script.script_handle, scaled_delta);
             }
         }
         Ok(())
@@ -308,6 +311,18 @@ impl Runtime {
 
     pub fn fixed_timestep(&self) -> f64 {
         self.fixed_timestep
+    }
+
+    pub fn time_scale(&self) -> f64 {
+        self.time_scale
+    }
+
+    pub fn set_time_scale(&mut self, time_scale: f64) {
+        self.time_scale = time_scale;
+    }
+
+    pub fn body_position(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.world.position(entity)
     }
 
     pub fn body_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {

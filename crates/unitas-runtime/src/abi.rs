@@ -274,6 +274,26 @@ pub extern "C" fn unitas_runtime_fixed_timestep(handle: u64) -> f64 {
     state.runtime.fixed_timestep()
 }
 
+#[no_mangle]
+pub extern "C" fn unitas_runtime_set_time_scale(handle: u64, time_scale: f64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.set_time_scale(time_scale);
+        state.clear_error();
+    }) {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.time_scale()
+    })
+    .unwrap_or(0.0)
+}
+
 pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeError> {
     let reg = registry()?;
     let mut map = match reg.lock() {

@@ -17,6 +17,17 @@ const PHYSICS_FIXTURE: &str = "tests/fixtures/physics.unity";
 const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
 const PHYSICS_LAYER_FIXTURE: &str = "tests/fixtures/physics_layer.unity";
 const PROJECT_DIR: &str = "tests/fixtures/project";
+const PREFAB_SCENE_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Scenes/PrefabScene.unity";
+const PREFAB_CYCLE_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Scenes/CycleScene.unity";
+const PREFAB_UNKNOWN_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Scenes/UnknownScene.unity";
+const PREFAB_UNITY_SCENE_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Scenes/UnityPrefabScene.unity";
+const PREFAB_NO_SOURCE_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Scenes/NoSourceScene.unity";
+const PREFAB_SCRIPT_GUID: &str = "11111111111111111111111111110004";
 
 const NEGATIVE_LAYER: &str = "%YAML 1.1
 --- !u!1 &1
@@ -498,6 +509,118 @@ fn scene_file_entry_points_assemble_the_fixtures() -> TestResult {
     assert_eq!(entity_names(&graph).len(), 4);
     let index = GuidIndex::build(Path::new(PROJECT_DIR))?;
     let graph = assemble_scene_file_with_guids(Path::new(PREFAB_FIXTURE), &index)?;
-    assert_eq!(entity_names(&graph), vec![String::from("Cube")]);
+    assert_eq!(
+        entity_names(&graph),
+        vec![String::from("Cube"), String::from("Camera")]
+    );
+    Ok(())
+}
+
+#[test]
+fn prefab_instance_is_expanded_into_the_scene_graph() -> TestResult {
+    let graph = assemble_scene_file(Path::new(PREFAB_SCENE_FIXTURE))?;
+    assert_eq!(
+        entity_names(&graph),
+        vec![
+            String::from("Stage"),
+            String::from("GuardTower"),
+            String::from("Barrel"),
+            String::from("BigCannon"),
+        ]
+    );
+    let stage = entity_named(&graph, "Stage")?;
+    let guard = entity_named(&graph, "GuardTower")?;
+    let barrel = entity_named(&graph, "Barrel")?;
+    let cannon = entity_named(&graph, "BigCannon")?;
+    assert_eq!(graph.parent(guard), Some(stage));
+    assert_eq!(graph.parent(barrel), Some(guard));
+    assert_eq!(graph.parent(cannon), Some(barrel));
+    assert_eq!(graph.children(stage), &[guard][..]);
+    assert_eq!(graph.children(guard), &[barrel][..]);
+    assert_eq!(graph.roots(), vec![stage]);
+    Ok(())
+}
+
+#[test]
+fn prefab_instance_applies_name_and_transform_modifications() -> TestResult {
+    let graph = assemble_scene_file(Path::new(PREFAB_SCENE_FIXTURE))?;
+    let guard = entity_named(&graph, "GuardTower")?;
+    let transform = graph.transform(guard).ok_or("prefab root has no transform")?;
+    assert_eq!(transform.translation, [5.0, 2.0, 0.0]);
+    assert_eq!(transform.scale, [1.0, 1.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn prefab_instance_merges_script_and_physics_records() -> TestResult {
+    let (graph, scripts, bindings) =
+        assemble_scene_file_with_physics(Path::new(PREFAB_SCENE_FIXTURE))?;
+    let guard = entity_named(&graph, "GuardTower")?;
+    let barrel = entity_named(&graph, "Barrel")?;
+    assert_eq!(scripts.len(), 1);
+    assert_eq!(scripts[0].entity, guard);
+    assert_eq!(scripts[0].guid, PREFAB_SCRIPT_GUID);
+    let guard_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == guard)
+        .ok_or("no physics binding for GuardTower")?;
+    let rigidbody = guard_binding.rigidbody.as_ref().ok_or("GuardTower has no rigidbody")?;
+    assert_eq!(rigidbody.mass, 3.5);
+    assert!(!rigidbody.use_gravity);
+    let barrel_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == barrel)
+        .ok_or("no physics binding for Barrel")?;
+    let collider = barrel_binding.box_collider.as_ref().ok_or("Barrel has no box collider")?;
+    assert_eq!(collider.size, [1.0, 2.0, 3.0]);
+    assert_eq!(collider.center, [0.0, 0.5, 0.0]);
+    Ok(())
+}
+
+#[test]
+fn cyclic_prefab_reference_is_an_error() -> TestResult {
+    let result = assemble_scene_file(Path::new(PREFAB_CYCLE_FIXTURE));
+    assert!(matches!(result, Err(SceneError::CyclicPrefabReference { .. })));
+    Ok(())
+}
+
+#[test]
+fn prefab_instance_with_an_unknown_source_is_an_error() -> TestResult {
+    let result = assemble_scene_file(Path::new(PREFAB_UNKNOWN_FIXTURE));
+    assert!(matches!(result, Err(SceneError::UnresolvedExternalReference { .. })));
+    Ok(())
+}
+
+#[test]
+fn in_memory_assembly_does_not_expand_prefab_instances() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PREFAB_SCENE_FIXTURE))?;
+    let graph = assemble_scene(&stream)?;
+    assert_eq!(entity_names(&graph), vec![String::from("Stage")]);
+    Ok(())
+}
+
+#[test]
+fn unity_prefab_instance_root_is_assembled_once() -> TestResult {
+    let graph = assemble_scene_file(Path::new(PREFAB_UNITY_SCENE_FIXTURE))?;
+    assert_eq!(
+        entity_names(&graph),
+        vec![
+            String::from("Stage"),
+            String::from("GuardTower"),
+            String::from("Barrel"),
+            String::from("BigCannon"),
+        ]
+    );
+    let stage = entity_named(&graph, "Stage")?;
+    let guard = entity_named(&graph, "GuardTower")?;
+    assert_eq!(graph.parent(guard), Some(stage));
+    assert_eq!(graph.roots(), vec![stage]);
+    Ok(())
+}
+
+#[test]
+fn prefab_instance_without_a_source_is_an_error() -> TestResult {
+    let result = assemble_scene_file(Path::new(PREFAB_NO_SOURCE_FIXTURE));
+    assert!(matches!(result, Err(SceneError::MissingPrefabSource { .. })));
     Ok(())
 }

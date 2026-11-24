@@ -3,6 +3,7 @@ extern crate self as unitas_asset;
 
 pub mod material;
 pub mod meta;
+pub mod prefab;
 pub mod project_settings;
 pub mod scene;
 pub mod unity_yaml;

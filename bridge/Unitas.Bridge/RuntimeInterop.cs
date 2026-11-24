@@ -58,10 +58,69 @@ namespace Unitas.Bridge
                     }
                     return IntPtr.Zero;
                 });
+            UnityEngine.Time.TimeScaleHost = TimeScaleHostImpl;
         }
 
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern ulong unitas_runtime_new();
+        private sealed class TimeScaleHost : UnityEngine.ITimeScaleHost
+        {
+            private ulong _liveRuntime;
+            private double _appliedScale = 1.0;
+
+            public void Attach(ulong runtime)
+            {
+                _liveRuntime = runtime;
+            }
+
+            public void Detach(ulong runtime)
+            {
+                if (_liveRuntime == runtime)
+                {
+                    _liveRuntime = 0;
+                }
+            }
+
+            public void ApplyTimeScale(float timeScale)
+            {
+                _appliedScale = timeScale;
+                if (_liveRuntime == 0)
+                {
+                    return;
+                }
+                if (unitas_runtime_set_time_scale(_liveRuntime, timeScale) != 0)
+                {
+                    _liveRuntime = 0;
+                }
+            }
+
+            public bool TryGetTimeScale(out float timeScale)
+            {
+                timeScale = 0f;
+                if (_liveRuntime == 0)
+                {
+                    return false;
+                }
+                double nativeScale = unitas_runtime_time_scale(_liveRuntime);
+                if (nativeScale != _appliedScale)
+                {
+                    return false;
+                }
+                timeScale = (float)nativeScale;
+                return true;
+            }
+        }
+
+        private static readonly TimeScaleHost TimeScaleHostImpl = new TimeScaleHost();
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_new")]
+        private static extern ulong unitas_runtime_new_native();
+
+        public static ulong unitas_runtime_new()
+        {
+            ulong handle = unitas_runtime_new_native();
+            TimeScaleHostImpl.Attach(handle);
+            UnityEngine.Time.PushTimeScaleToHost();
+            return handle;
+        }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_path_buffer(ulong runtime, ulong capacity);
@@ -84,8 +143,18 @@ namespace Unitas.Bridge
             CollisionCallback collision,
             TriggerCallback trigger);
 
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int unitas_runtime_tick(ulong runtime, double deltaSeconds);
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_tick")]
+        private static extern int unitas_runtime_tick_native(ulong runtime, double deltaSeconds);
+
+        public static int unitas_runtime_tick(ulong runtime, double scaledDeltaSeconds)
+        {
+            double nativeScale = unitas_runtime_time_scale(runtime);
+            double appliedScale = UnityEngine.Time.timeScale;
+            double realDeltaSeconds = nativeScale == appliedScale && appliedScale != 0.0
+                ? scaledDeltaSeconds / appliedScale
+                : scaledDeltaSeconds;
+            return unitas_runtime_tick_native(runtime, realDeltaSeconds);
+        }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_raycast(
@@ -156,14 +225,27 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_query_buffer(ulong runtime, uint capacity);
 
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int unitas_runtime_destroy(ulong runtime);
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_destroy")]
+        private static extern int unitas_runtime_destroy_native(ulong runtime);
+
+        public static int unitas_runtime_destroy(ulong runtime)
+        {
+            int result = unitas_runtime_destroy_native(runtime);
+            TimeScaleHostImpl.Detach(runtime);
+            return result;
+        }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_error_message(ulong runtime);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern double unitas_runtime_fixed_timestep(ulong runtime);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_time_scale(ulong runtime, double timeScale);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double unitas_runtime_time_scale(ulong runtime);
 
         public static QueryHit[] ReadQueryHits(IntPtr buffer, int count)
         {

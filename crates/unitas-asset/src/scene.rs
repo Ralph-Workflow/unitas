@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
 use unitas_core::{CoreError, EntityId, SceneGraph};
 
-use crate::meta::GuidIndex;
+use crate::meta::{GuidIndex, MetaError};
+use crate::prefab;
 use crate::unity_yaml::{self, Node, Stream, YamlError};
 
 const GAME_OBJECT_CLASS: u32 = 1;
@@ -41,6 +42,18 @@ pub enum SceneError {
         guid: String,
         file_id: i64,
     },
+    CyclicPrefabReference {
+        guid: String,
+    },
+    MissingPrefabSource {
+        file_id: i64,
+    },
+    PrefabWithoutRoot {
+        guid: String,
+    },
+    Meta {
+        error: MetaError,
+    },
     Yaml {
         error: YamlError,
     },
@@ -72,6 +85,16 @@ impl fmt::Display for SceneError {
                 formatter,
                 "external reference {file_id} with guid {guid} is not in the guid index"
             ),
+            SceneError::CyclicPrefabReference { guid } => {
+                write!(formatter, "prefab with guid {guid} refers to itself")
+            }
+            SceneError::MissingPrefabSource { file_id } => {
+                write!(formatter, "prefab instance {file_id} has no source prefab reference")
+            }
+            SceneError::PrefabWithoutRoot { guid } => {
+                write!(formatter, "prefab with guid {guid} has no root transform")
+            }
+            SceneError::Meta { error } => write!(formatter, "{error}"),
             SceneError::Yaml { error } => write!(formatter, "{error}"),
             SceneError::Core { error } => write!(formatter, "{error}"),
         }
@@ -83,6 +106,7 @@ impl std::error::Error for SceneError {
         match self {
             SceneError::Yaml { error } => Some(error),
             SceneError::Core { error } => Some(error),
+            SceneError::Meta { error } => Some(error),
             _ => None,
         }
     }
@@ -100,6 +124,12 @@ impl From<CoreError> for SceneError {
     }
 }
 
+impl From<MetaError> for SceneError {
+    fn from(error: MetaError) -> Self {
+        SceneError::Meta { error }
+    }
+}
+
 struct TransformRecord {
     file_id: i64,
     entity: EntityId,
@@ -109,9 +139,9 @@ struct TransformRecord {
 
 type GameObjectRecords = HashMap<i64, GameObjectRecord>;
 
-struct GameObjectRecord {
-    entity: EntityId,
-    layer: u32,
+pub(crate) struct GameObjectRecord {
+    pub(crate) entity: EntityId,
+    pub(crate) layer: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,54 +180,147 @@ pub struct PhysicsBinding {
     pub layer: u32,
 }
 
+struct DocumentSet {
+    game_objects: GameObjectRecords,
+    transforms: HashMap<i64, EntityId>,
+    root: Option<EntityId>,
+    scripts: Vec<ScriptBinding>,
+    physics: Vec<PhysicsBinding>,
+}
+
+struct PrefabContext<'a> {
+    index: Option<&'a GuidIndex>,
+    stack: Vec<String>,
+}
+
+struct Assembly {
+    graph: SceneGraph,
+    scripts: Vec<ScriptBinding>,
+    physics: Vec<PhysicsBinding>,
+}
+
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
-    assemble(stream, None).map(|(graph, _, _)| graph)
+    Ok(assemble_stream(stream, None, false)?.graph)
 }
 
 pub fn assemble_scene_with_guids(
     stream: &Stream,
     index: &GuidIndex,
 ) -> Result<SceneGraph, SceneError> {
-    assemble(stream, Some(index)).map(|(graph, _, _)| graph)
+    Ok(assemble_stream(stream, Some(index), false)?.graph)
 }
 
 pub fn assemble_scene_file(path: &Path) -> Result<SceneGraph, SceneError> {
-    let stream = unity_yaml::parse_file(path)?;
-    assemble_scene(&stream)
+    Ok(assemble_file(path, None)?.graph)
 }
 
 pub fn assemble_scene_file_with_guids(
     path: &Path,
     index: &GuidIndex,
 ) -> Result<SceneGraph, SceneError> {
-    let stream = unity_yaml::parse_file(path)?;
-    assemble_scene_with_guids(&stream, index)
+    Ok(assemble_file(path, Some(index))?.graph)
 }
 
 pub fn assemble_scene_with_physics(
     stream: &Stream,
 ) -> Result<(SceneGraph, Vec<ScriptBinding>, Vec<PhysicsBinding>), SceneError> {
-    let (graph, scripts, game_objects) = assemble(stream, None)?;
-    let physics = collect_physics(stream, &game_objects)?;
-    Ok((graph, scripts, physics))
+    let assembly = assemble_stream(stream, None, false)?;
+    Ok((assembly.graph, assembly.scripts, assembly.physics))
 }
 
 pub fn assemble_scene_file_with_physics(
     path: &Path,
 ) -> Result<(SceneGraph, Vec<ScriptBinding>, Vec<PhysicsBinding>), SceneError> {
-    let stream = unity_yaml::parse_file(path)?;
-    assemble_scene_with_physics(&stream)
+    let assembly = assemble_file(path, None)?;
+    Ok((assembly.graph, assembly.scripts, assembly.physics))
 }
 
-fn assemble(
+fn assemble_stream(
     stream: &Stream,
     index: Option<&GuidIndex>,
-) -> Result<(SceneGraph, Vec<ScriptBinding>, GameObjectRecords), SceneError> {
-    check_external_references(stream, index)?;
+    expand: bool,
+) -> Result<Assembly, SceneError> {
+    if !expand {
+        check_external_references(stream, index)?;
+    }
     let mut graph = SceneGraph::new();
-    let mut game_objects: GameObjectRecords = HashMap::new();
+    let mut context = PrefabContext { index, stack: Vec::new() };
+    let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
+    Ok(Assembly { graph, scripts: set.scripts, physics: set.physics })
+}
+
+fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<Assembly, SceneError> {
+    let stream = unity_yaml::parse_file(path)?;
+    let expand = has_prefab_instances(&stream);
+    let discovered = match index {
+        Some(_) => None,
+        None => {
+            if expand {
+                prefab::guid_index(path)?
+            } else {
+                None
+            }
+        }
+    };
+    let index = match index {
+        Some(index) => Some(index),
+        None => discovered.as_ref(),
+    };
+    assemble_stream(&stream, index, expand)
+}
+
+fn prefab_instance_roots(stream: &Stream) -> HashSet<i64> {
+    let instance_file_ids: HashSet<i64> = stream
+        .documents
+        .iter()
+        .filter(|document| document.class_id == PREFAB_INSTANCE_CLASS && !document.stripped)
+        .map(|document| document.file_id)
+        .collect();
+    let mut roots = HashSet::new();
     for document in &stream.documents {
         if document.class_id != GAME_OBJECT_CLASS || document.stripped {
+            continue;
+        }
+        let file_id = document
+            .root
+            .get("GameObject")
+            .and_then(|body| body.get("m_PrefabInstance"))
+            .and_then(|node| node.get("fileID"))
+            .and_then(Node::as_i64)
+            .unwrap_or(ROOT_FILE_ID);
+        if instance_file_ids.contains(&file_id) {
+            roots.insert(document.file_id);
+        }
+    }
+    roots
+}
+
+fn has_prefab_instances(stream: &Stream) -> bool {
+    stream
+        .documents
+        .iter()
+        .any(|document| document.class_id == PREFAB_INSTANCE_CLASS && !document.stripped)
+}
+
+fn assemble_documents(
+    stream: &Stream,
+    graph: &mut SceneGraph,
+    context: &mut PrefabContext,
+    expand: bool,
+) -> Result<DocumentSet, SceneError> {
+    let mut set = DocumentSet {
+        game_objects: HashMap::new(),
+        transforms: HashMap::new(),
+        root: None,
+        scripts: Vec::new(),
+        physics: Vec::new(),
+    };
+    let instance_roots = prefab_instance_roots(stream);
+    for document in &stream.documents {
+        if document.class_id != GAME_OBJECT_CLASS || document.stripped {
+            continue;
+        }
+        if instance_roots.contains(&document.file_id) {
             continue;
         }
         let body = document.root.get("GameObject");
@@ -210,9 +333,8 @@ fn assemble(
         };
         let entity = graph.add_entity(name);
         let layer = yaml_u32(body.and_then(|body| body.get("m_Layer")), 0);
-        game_objects.insert(document.file_id, GameObjectRecord { entity, layer });
+        set.game_objects.insert(document.file_id, GameObjectRecord { entity, layer });
     }
-    let mut transforms: HashMap<i64, EntityId> = HashMap::new();
     let mut owners: HashMap<i64, i64> = HashMap::new();
     let mut records: Vec<TransformRecord> = Vec::new();
     for document in &stream.documents {
@@ -232,7 +354,10 @@ fn assemble(
                 })
             }
         };
-        let entity = match game_objects.get(&game_object_file_id) {
+        if instance_roots.contains(&game_object_file_id) {
+            continue;
+        }
+        let entity = match set.game_objects.get(&game_object_file_id) {
             Some(record) => record.entity,
             None => {
                 return Err(SceneError::MissingGameObject {
@@ -250,13 +375,13 @@ fn assemble(
             _ => None,
         };
         let children = child_ids(body.get("m_Children"))?;
-        apply_local_transform(&mut graph, entity, body);
-        transforms.insert(document.file_id, entity);
+        apply_local_transform(graph, entity, body);
+        set.transforms.insert(document.file_id, entity);
         records.push(TransformRecord { file_id: document.file_id, entity, father, children });
     }
     for record in &records {
         if let Some(father_file_id) = record.father {
-            let parent = match transforms.get(&father_file_id) {
+            let parent = match set.transforms.get(&father_file_id) {
                 Some(parent) => *parent,
                 None => {
                     return Err(SceneError::MissingFather {
@@ -268,7 +393,7 @@ fn assemble(
             graph.attach(record.entity, parent)?;
         }
         for child_file_id in &record.children {
-            if !transforms.contains_key(child_file_id) {
+            if !set.transforms.contains_key(child_file_id) {
                 return Err(SceneError::MissingChild {
                     transform_file_id: record.file_id,
                     child_file_id: *child_file_id,
@@ -280,11 +405,14 @@ fn assemble(
         let ordered: Vec<EntityId> = record
             .children
             .iter()
-            .filter_map(|file_id| transforms.get(file_id).copied())
+            .filter_map(|file_id| set.transforms.get(file_id).copied())
             .collect();
-        order_children(&mut graph, record.entity, &ordered);
+        order_children(graph, record.entity, &ordered);
     }
-    let mut scripts: Vec<ScriptBinding> = Vec::new();
+    set.root = records
+        .iter()
+        .find(|record| record.father.is_none())
+        .map(|record| record.entity);
     for document in &stream.documents {
         if document.class_id != MONO_BEHAVIOUR_CLASS || document.stripped {
             continue;
@@ -302,9 +430,12 @@ fn assemble(
                 })
             }
         };
-        let entity = match game_objects.get(&game_object_file_id) {
+        let entity = match set.game_objects.get(&game_object_file_id) {
             Some(record) => record.entity,
             None => {
+                if instance_roots.contains(&game_object_file_id) {
+                    continue;
+                }
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
                     game_object_file_id,
@@ -319,9 +450,81 @@ fn assemble(
             Some(guid) => guid.to_string(),
             None => continue,
         };
-        scripts.push(ScriptBinding { entity, guid });
+        set.scripts.push(ScriptBinding { entity, guid });
     }
-    Ok((graph, scripts, game_objects))
+    set.physics = collect_physics(stream, &set.game_objects, &instance_roots)?;
+    if expand {
+        for document in &stream.documents {
+            if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
+                continue;
+            }
+            let body = match document.root.get("PrefabInstance") {
+                Some(body) => body,
+                None => continue,
+            };
+            let instance = match prefab::parse_instance(body) {
+                Some(instance) => instance,
+                None => {
+                    return Err(SceneError::MissingPrefabSource { file_id: document.file_id })
+                }
+            };
+            expand_instance(&instance, document.file_id, &mut set, graph, context)?;
+        }
+    }
+    Ok(set)
+}
+
+fn expand_instance(
+    instance: &prefab::PrefabInstance,
+    file_id: i64,
+    set: &mut DocumentSet,
+    graph: &mut SceneGraph,
+    context: &mut PrefabContext,
+) -> Result<(), SceneError> {
+    let path = match context.index.and_then(|index| index.get(&instance.source.guid)) {
+        Some(path) => path.to_path_buf(),
+        None => {
+            return Err(SceneError::UnresolvedExternalReference {
+                guid: instance.source.guid.clone(),
+                file_id: instance.source.file_id,
+            })
+        }
+    };
+    if context.stack.contains(&instance.source.guid) {
+        return Err(SceneError::CyclicPrefabReference { guid: instance.source.guid.clone() });
+    }
+    let stream = unity_yaml::parse_file(&path)?;
+    context.stack.push(instance.source.guid.clone());
+    let assembled = assemble_documents(&stream, graph, context, true);
+    context.stack.pop();
+    let prefab_set = assembled?;
+    let root = match prefab_set.root {
+        Some(root) => root,
+        None => {
+            return Err(SceneError::PrefabWithoutRoot { guid: instance.source.guid.clone() })
+        }
+    };
+    prefab::apply_modifications(
+        instance,
+        &prefab_set.game_objects,
+        &prefab_set.transforms,
+        graph,
+    );
+    if instance.transform_parent != ROOT_FILE_ID {
+        let parent = match set.transforms.get(&instance.transform_parent) {
+            Some(parent) => *parent,
+            None => {
+                return Err(SceneError::MissingFather {
+                    transform_file_id: file_id,
+                    father_file_id: instance.transform_parent,
+                })
+            }
+        };
+        graph.attach(root, parent)?;
+    }
+    set.scripts.extend(prefab_set.scripts);
+    set.physics.extend(prefab_set.physics);
+    Ok(())
 }
 
 enum PhysicsComponent {
@@ -333,6 +536,7 @@ enum PhysicsComponent {
 fn collect_physics(
     stream: &Stream,
     game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
 ) -> Result<Vec<PhysicsBinding>, SceneError> {
     let mut bindings: Vec<PhysicsBinding> = Vec::new();
     let mut positions: HashMap<EntityId, usize> = HashMap::new();
@@ -367,6 +571,9 @@ fn collect_physics(
         let record = match game_objects.get(&game_object_file_id) {
             Some(record) => record,
             None => {
+                if instance_roots.contains(&game_object_file_id) {
+                    continue;
+                }
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
                     game_object_file_id,

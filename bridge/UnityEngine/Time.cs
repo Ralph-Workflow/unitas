@@ -1,5 +1,12 @@
 namespace UnityEngine
 {
+    public interface ITimeScaleHost
+    {
+        void ApplyTimeScale(float timeScale);
+
+        bool TryGetTimeScale(out float timeScale);
+    }
+
     public static class Time
     {
         private const float DefaultFixedStep = 0.02f;
@@ -20,10 +27,28 @@ namespace UnityEngine
 
         public static float unscaledDeltaTime => _unscaledDeltaTime;
 
+        public static ITimeScaleHost? TimeScaleHost { get; set; }
+
         public static float timeScale
         {
-            get => _timeScale;
-            set => _timeScale = value;
+            get
+            {
+                if (TimeScaleHost != null && TimeScaleHost.TryGetTimeScale(out float scale))
+                {
+                    return scale;
+                }
+                return _timeScale;
+            }
+            set
+            {
+                _timeScale = value;
+                TimeScaleHost?.ApplyTimeScale(value);
+            }
+        }
+
+        public static void PushTimeScaleToHost()
+        {
+            TimeScaleHost?.ApplyTimeScale(_timeScale);
         }
 
         public static float time => _time;

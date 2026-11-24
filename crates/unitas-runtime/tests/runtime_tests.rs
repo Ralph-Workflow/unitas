@@ -7,7 +7,8 @@ use unitas_runtime::{
     unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_fixed_timestep,
     unitas_runtime_linecast, unitas_runtime_load_scene, unitas_runtime_new,
     unitas_runtime_overlap_sphere, unitas_runtime_path_buffer, unitas_runtime_query_buffer,
-    unitas_runtime_raycast, unitas_runtime_sphere_cast, Callbacks, Runtime,
+    unitas_runtime_raycast, unitas_runtime_set_time_scale, unitas_runtime_sphere_cast,
+    unitas_runtime_time_scale, Callbacks, Runtime,
 };
 
 const FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
@@ -792,5 +793,161 @@ fn runtime_abi_fixed_timestep_returns_configured_value_and_sets_error_on_invalid
     assert_eq!(invalid_step, 0.0);
     let err_ptr = unitas_runtime_error_message(u64::MAX);
     assert_ne!(err_ptr, 0);
+    Ok(())
+}
+
+static TIMESCALE_FIXED_STEPS: Mutex<usize> = Mutex::new(0);
+static TIMESCALE_UPDATE_DELTAS: Mutex<Vec<f64>> = Mutex::new(Vec::new());
+static TIMESCALE_RUN_LOCK: Mutex<()> = Mutex::new(());
+
+extern "C" fn timescale_create(_entity: u64, _guid_hi: u64, _guid_lo: u64) -> u64 {
+    1
+}
+
+extern "C" fn timescale_noop_u64(_handle: u64) {}
+
+extern "C" fn timescale_noop_f64(_handle: u64, _delta: f64) {}
+
+extern "C" fn timescale_fixed(_handle: u64, _step: f64) {
+    if let Ok(mut steps) = TIMESCALE_FIXED_STEPS.lock() {
+        *steps += 1;
+    }
+}
+
+extern "C" fn timescale_update(_handle: u64, delta: f64) {
+    if let Ok(mut deltas) = TIMESCALE_UPDATE_DELTAS.lock() {
+        deltas.push(delta);
+    }
+}
+
+extern "C" fn timescale_collision(_a: u64, _b: u64, _phase: u32) {}
+
+extern "C" fn timescale_trigger(_a: u64, _b: u64, _phase: u32) {}
+
+struct TimeScaleRun {
+    fixed_steps: usize,
+    fall_distance: f64,
+    update_deltas: Vec<f64>,
+}
+
+fn run_time_scale_scene(time_scale: f64, ticks: usize) -> Result<TimeScaleRun, Box<dyn Error>> {
+    let _run_guard = match TIMESCALE_RUN_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Err(String::from("mutex poisoned").into()),
+    };
+    if let Ok(mut steps) = TIMESCALE_FIXED_STEPS.lock() {
+        *steps = 0;
+    }
+    if let Ok(mut deltas) = TIMESCALE_UPDATE_DELTAS.lock() {
+        deltas.clear();
+    }
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(SETTINGS_FIXTURE_PATH))?;
+    runtime.set_time_scale(time_scale);
+    runtime.set_callbacks(Callbacks {
+        create_script: timescale_create,
+        awake: timescale_noop_u64,
+        on_enable: timescale_noop_u64,
+        start: timescale_noop_u64,
+        fixed_update: timescale_fixed,
+        update: timescale_update,
+        late_update: timescale_noop_f64,
+        on_disable: timescale_noop_u64,
+        destroy: timescale_noop_u64,
+        collision: timescale_collision,
+        trigger: timescale_trigger,
+    });
+    let ball_id = entity_id_for(&runtime, "Ball")?;
+    let graph = match runtime.scene_graph() {
+        Some(g) => g,
+        None => return Err(String::from("no scene graph found").into()),
+    };
+    let ball_entity = match graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| id.as_u64() == ball_id)
+    {
+        Some(id) => id,
+        None => return Err(String::from("ball entity not found").into()),
+    };
+    let start_y = match runtime.body_position(ball_entity) {
+        Some(position) => position[1],
+        None => return Err(String::from("ball body position not found").into()),
+    };
+    for _ in 0..ticks {
+        runtime.tick(0.02)?;
+    }
+    let end_y = match runtime.body_position(ball_entity) {
+        Some(position) => position[1],
+        None => return Err(String::from("ball body position not found").into()),
+    };
+    let fixed_steps = match TIMESCALE_FIXED_STEPS.lock() {
+        Ok(steps) => *steps,
+        Err(_) => return Err(String::from("mutex poisoned").into()),
+    };
+    let update_deltas = match TIMESCALE_UPDATE_DELTAS.lock() {
+        Ok(deltas) => deltas.clone(),
+        Err(_) => return Err(String::from("mutex poisoned").into()),
+    };
+    Ok(TimeScaleRun {
+        fixed_steps,
+        fall_distance: start_y - end_y,
+        update_deltas,
+    })
+}
+
+#[test]
+fn runtime_time_scale_defaults_to_one_and_is_settable() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    assert_eq!(runtime.time_scale(), 1.0);
+    runtime.set_time_scale(0.5);
+    assert_eq!(runtime.time_scale(), 0.5);
+    runtime.set_time_scale(0.0);
+    assert_eq!(runtime.time_scale(), 0.0);
+    runtime.set_time_scale(-1.0);
+    assert_eq!(runtime.time_scale(), -1.0);
+    Ok(())
+}
+
+#[test]
+fn runtime_time_scale_halves_the_simulated_time_of_a_falling_body() -> Result<(), Box<dyn Error>> {
+    let full = run_time_scale_scene(1.0, 51)?;
+    let half = run_time_scale_scene(0.5, 51)?;
+    let full_half_ticks = run_time_scale_scene(1.0, 26)?;
+
+    assert_eq!(full.fixed_steps, 30);
+    assert_eq!(half.fixed_steps, 15);
+    assert_eq!(full_half_ticks.fixed_steps, 15);
+    assert_eq!(full.update_deltas.len(), 50);
+    assert_eq!(half.update_deltas.len(), 50);
+    assert_eq!(full.update_deltas[0], 0.02);
+    assert_eq!(half.update_deltas[0], 0.01);
+    assert!((half.fall_distance - full_half_ticks.fall_distance).abs() < 1e-12);
+    assert!(half.fall_distance < full.fall_distance);
+    assert!(full.fall_distance > 1.0);
+    Ok(())
+}
+
+#[test]
+fn runtime_zero_time_scale_freezes_the_world_while_update_still_runs(
+) -> Result<(), Box<dyn Error>> {
+    let frozen = run_time_scale_scene(0.0, 51)?;
+    assert_eq!(frozen.fixed_steps, 0);
+    assert_eq!(frozen.fall_distance, 0.0);
+    assert_eq!(frozen.update_deltas.len(), 50);
+    assert_eq!(frozen.update_deltas[0], 0.0);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_time_scale_round_trips_and_rejects_invalid_handles() -> Result<(), Box<dyn Error>> {
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    assert_eq!(unitas_runtime_time_scale(handle), 1.0);
+    assert_eq!(unitas_runtime_set_time_scale(handle, 0.5), 0);
+    assert_eq!(unitas_runtime_time_scale(handle), 0.5);
+    assert_eq!(unitas_runtime_set_time_scale(u64::MAX, 0.5), -1);
+    assert_eq!(unitas_runtime_time_scale(u64::MAX), 0.0);
+    assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())
 }
