@@ -1,4 +1,15 @@
+use std::f32::consts::FRAC_1_SQRT_2;
+
+use unitas_core::transform::{
+    compose_world, multiply_rotation, normalize_rotation, rotate_vector, IDENTITY_ROTATION,
+};
 use unitas_core::{CoreError, Entity, EntityId, SceneGraph, SceneGraphError, Transform};
+
+const TOLERANCE: f32 = 1e-6;
+const QUARTER_TURN_Z: [f32; 4] = [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2];
+const HALF_TURN_X: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+const HALF_TURN_Y: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
+const HALF_TURN_Z: [f32; 4] = [0.0, 0.0, 1.0, 0.0];
 
 fn id_unknown_to(graph: &SceneGraph) -> EntityId {
     let mut spare = SceneGraph::new();
@@ -181,7 +192,7 @@ fn transform_holds_local_placement_data() -> Result<(), CoreError> {
     };
 
     assert_eq!(stored.translation, [1.0, 2.0, 3.0]);
-    assert_eq!(stored.rotation, [0.0; 3]);
+    assert_eq!(stored.rotation, [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(stored.scale, [1.0; 3]);
     assert_eq!(stored.parent(), None);
     assert!(stored.children().is_empty());
@@ -284,6 +295,318 @@ fn entity_id_conversions_and_display() -> Result<(), CoreError> {
     let transform = Transform::new();
     assert_eq!(transform, Transform::default());
     Ok(())
+}
+
+fn set_transform(
+    graph: &mut SceneGraph,
+    id: EntityId,
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    scale: [f32; 3],
+) -> Result<(), CoreError> {
+    let transform = match graph.transform_mut(id) {
+        Some(transform) => transform,
+        None => return Err(CoreError::UnknownEntity(id)),
+    };
+    transform.translation = translation;
+    transform.rotation = rotation;
+    transform.scale = scale;
+    Ok(())
+}
+
+fn world_of(graph: &SceneGraph, id: EntityId) -> Result<Transform, CoreError> {
+    match graph.world_transform(id) {
+        Some(world) => Ok(world),
+        None => Err(CoreError::UnknownEntity(id)),
+    }
+}
+
+fn assert_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - expected).abs() <= TOLERANCE,
+            "component {index}: {actual} is not within {TOLERANCE} of {expected}"
+        );
+    }
+}
+
+#[test]
+fn world_transform_of_a_root_equals_its_local_transform() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let root = graph.add_entity("root");
+    set_transform(
+        &mut graph,
+        root,
+        [1.0, 2.0, 3.0],
+        QUARTER_TURN_Z,
+        [2.0, 3.0, 4.0],
+    )?;
+
+    let local = match graph.transform(root) {
+        Some(transform) => transform.clone(),
+        None => return Err(CoreError::UnknownEntity(root)),
+    };
+
+    assert_eq!(graph.world_transform(root), Some(local));
+    Ok(())
+}
+
+#[test]
+fn child_world_translation_follows_the_parent_rotation_and_scale() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let parent = graph.add_entity("parent");
+    let child = graph.add_entity("child");
+    graph.attach(child, parent)?;
+    set_transform(
+        &mut graph,
+        parent,
+        [10.0, 20.0, 30.0],
+        QUARTER_TURN_Z,
+        [2.0, 3.0, 4.0],
+    )?;
+    set_transform(
+        &mut graph,
+        child,
+        [1.0, 1.0, 1.0],
+        IDENTITY_ROTATION,
+        [1.0, 1.0, 1.0],
+    )?;
+
+    let world = world_of(&graph, child)?;
+
+    assert_close(&world.translation, &[7.0, 22.0, 34.0]);
+    assert_eq!(world.rotation, QUARTER_TURN_Z);
+    assert_eq!(world.scale, [2.0, 3.0, 4.0]);
+    assert_eq!(world.parent, None);
+    assert!(world.children.is_empty());
+    Ok(())
+}
+
+#[test]
+fn child_under_a_quarter_turn_parent_lands_at_the_rotated_offset() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let parent = graph.add_entity("parent");
+    let child = graph.add_entity("child");
+    graph.attach(child, parent)?;
+    set_transform(
+        &mut graph,
+        parent,
+        [1.0, 2.0, 0.0],
+        QUARTER_TURN_Z,
+        [1.0, 1.0, 1.0],
+    )?;
+    set_transform(
+        &mut graph,
+        child,
+        [1.0, 0.0, 0.0],
+        IDENTITY_ROTATION,
+        [1.0, 1.0, 1.0],
+    )?;
+
+    let parent_world = world_of(&graph, parent)?;
+    let child_world = world_of(&graph, child)?;
+
+    assert_close(&child_world.translation, &[1.0, 3.0, 0.0]);
+    assert_eq!(parent_world.rotation, QUARTER_TURN_Z);
+    assert_eq!(child_world.rotation, parent_world.rotation);
+    assert_eq!(child_world.scale, [1.0, 1.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn world_transform_composes_through_the_whole_chain() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let parent = graph.add_entity("parent");
+    let child = graph.add_entity("child");
+    let grandchild = graph.add_entity("grandchild");
+    graph.attach(child, parent)?;
+    graph.attach(grandchild, child)?;
+    set_transform(
+        &mut graph,
+        parent,
+        [1.0, 2.0, 0.0],
+        HALF_TURN_Z,
+        [1.0, 1.0, 1.0],
+    )?;
+    set_transform(
+        &mut graph,
+        child,
+        [1.0, 0.0, 0.0],
+        HALF_TURN_X,
+        [1.0, 1.0, 1.0],
+    )?;
+    set_transform(
+        &mut graph,
+        grandchild,
+        [1.0, 0.0, 0.0],
+        IDENTITY_ROTATION,
+        [1.0, 1.0, 1.0],
+    )?;
+
+    let child_world = world_of(&graph, child)?;
+    let grandchild_world = world_of(&graph, grandchild)?;
+
+    assert_eq!(child_world.translation, [0.0, 2.0, 0.0]);
+    assert_eq!(child_world.rotation, HALF_TURN_Y);
+    assert_eq!(grandchild_world.translation, [-1.0, 2.0, 0.0]);
+    assert_eq!(grandchild_world.rotation, HALF_TURN_Y);
+    assert_eq!(grandchild_world.scale, [1.0, 1.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn child_under_a_non_uniformly_scaled_parent_uses_the_parent_scale() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let parent = graph.add_entity("parent");
+    let child = graph.add_entity("child");
+    graph.attach(child, parent)?;
+    set_transform(
+        &mut graph,
+        parent,
+        [1.0, 1.0, 1.0],
+        IDENTITY_ROTATION,
+        [2.0, 3.0, 4.0],
+    )?;
+    set_transform(
+        &mut graph,
+        child,
+        [1.0, 1.0, 1.0],
+        IDENTITY_ROTATION,
+        [2.0, 2.0, 2.0],
+    )?;
+
+    let world = world_of(&graph, child)?;
+
+    assert_eq!(world.translation, [3.0, 4.0, 5.0]);
+    assert_eq!(world.scale, [4.0, 6.0, 8.0]);
+    Ok(())
+}
+
+#[test]
+fn a_degenerate_rotation_falls_back_to_the_identity_rotation() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let parent = graph.add_entity("parent");
+    let child = graph.add_entity("child");
+    graph.attach(child, parent)?;
+    set_transform(
+        &mut graph,
+        parent,
+        [1.0, 0.0, 0.0],
+        IDENTITY_ROTATION,
+        [1.0, 1.0, 1.0],
+    )?;
+    set_transform(
+        &mut graph,
+        child,
+        [0.0, 2.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+    )?;
+
+    let child_world = world_of(&graph, child)?;
+    assert_eq!(child_world.rotation, IDENTITY_ROTATION);
+    assert_eq!(child_world.translation, [1.0, 2.0, 0.0]);
+
+    let root = graph.add_entity("root");
+    set_transform(
+        &mut graph,
+        root,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+    )?;
+    assert_eq!(world_of(&graph, root)?.rotation, IDENTITY_ROTATION);
+    Ok(())
+}
+
+#[test]
+fn a_non_unit_rotation_is_normalized_before_it_rotates() -> Result<(), CoreError> {
+    let mut graph = SceneGraph::new();
+    let entity = graph.add_entity("entity");
+    set_transform(
+        &mut graph,
+        entity,
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+    )?;
+
+    let world = match graph.world_transform(entity) {
+        Some(world) => world,
+        None => return Err(CoreError::UnknownEntity(entity)),
+    };
+
+    assert_close(
+        &world.rotation,
+        &[0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2],
+    );
+    assert_close(
+        &rotate_vector([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0]),
+        &[0.0, 1.0, 0.0],
+    );
+    Ok(())
+}
+
+#[test]
+fn world_transform_of_an_unknown_entity_is_none() -> Result<(), CoreError> {
+    let graph = SceneGraph::new();
+    let unknown = id_unknown_to(&graph);
+
+    assert!(graph.world_transform(unknown).is_none());
+    Ok(())
+}
+
+#[test]
+fn rotation_helpers_follow_the_quaternion_contract() {
+    assert_eq!(normalize_rotation([0.0, 0.0, 0.0, 0.0]), IDENTITY_ROTATION);
+    assert_eq!(
+        normalize_rotation([0.0, 0.0, 0.0, 3.0]),
+        [0.0, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        multiply_rotation(IDENTITY_ROTATION, QUARTER_TURN_Z),
+        QUARTER_TURN_Z
+    );
+    assert_eq!(multiply_rotation(HALF_TURN_Z, HALF_TURN_X), HALF_TURN_Y);
+    assert_eq!(
+        rotate_vector(IDENTITY_ROTATION, [1.0, 2.0, 3.0]),
+        [1.0, 2.0, 3.0]
+    );
+    assert_eq!(
+        rotate_vector(HALF_TURN_Z, [1.0, 0.0, 0.0]),
+        [-1.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        rotate_vector([0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        [1.0, 0.0, 0.0]
+    );
+}
+
+#[test]
+fn compose_world_uses_the_unity_trs_order() {
+    let parent = Transform {
+        translation: [1.0, 2.0, 0.0],
+        rotation: QUARTER_TURN_Z,
+        scale: [1.0, 1.0, 1.0],
+        parent: None,
+        children: Vec::new(),
+    };
+    let local = Transform {
+        translation: [1.0, 0.0, 0.0],
+        rotation: IDENTITY_ROTATION,
+        scale: [1.0, 1.0, 1.0],
+        parent: None,
+        children: Vec::new(),
+    };
+
+    let world = compose_world(&parent, &local);
+
+    assert_close(&world.translation, &[1.0, 3.0, 0.0]);
+    assert_eq!(world.rotation, QUARTER_TURN_Z);
+    assert_eq!(world.scale, [1.0, 1.0, 1.0]);
+    assert_eq!(world.parent, None);
+    assert!(world.children.is_empty());
 }
 
 #[test]

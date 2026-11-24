@@ -15,6 +15,7 @@ const MONO_BEHAVIOUR_CLASS: u32 = 114;
 const SPHERE_COLLIDER_CLASS: u32 = 135;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
+const UNIT_QUATERNION_TOLERANCE: f64 = 1e-3;
 
 #[derive(Debug)]
 pub enum SceneError {
@@ -479,6 +480,11 @@ fn apply_local_transform(graph: &mut SceneGraph, entity: EntityId, body: &Node) 
             transform.translation = position.map(|value| value as f32);
         }
     }
+    if let Some(rotation) = body.get("m_LocalRotation").and_then(quaternion4) {
+        if let Some(transform) = graph.transform_mut(entity) {
+            transform.rotation = rotation.map(|value| value as f32);
+        }
+    }
     if let Some(scale) = body.get("m_LocalScale").and_then(vector3) {
         if let Some(transform) = graph.transform_mut(entity) {
             transform.scale = scale.map(|value| value as f32);
@@ -556,4 +562,19 @@ fn vector3_or(node: Option<&Node>, default: [f64; 3]) -> [f64; 3] {
         Some(vector) => vector,
         None => default,
     }
+}
+
+fn quaternion4(node: &Node) -> Option<[f64; 4]> {
+    let x = node.get("x").and_then(Node::as_f64)?;
+    let y = node.get("y").and_then(Node::as_f64)?;
+    let z = node.get("z").and_then(Node::as_f64)?;
+    let w = node.get("w").and_then(Node::as_f64)?;
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() || !w.is_finite() {
+        return None;
+    }
+    let length = (x * x + y * y + z * z + w * w).sqrt();
+    if !length.is_finite() || (length - 1.0).abs() > UNIT_QUATERNION_TOLERANCE {
+        return None;
+    }
+    Some([x, y, z, w])
 }

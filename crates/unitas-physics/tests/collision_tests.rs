@@ -1,9 +1,25 @@
 use unitas_core::EntityId;
 use unitas_physics::{BodyDesc, CollisionEvent, Phase, PhysicsError, Shape, TriggerEvent, World};
 
+const ROTATED_45_DEGREES_ABOUT_Z: [f64; 4] = [0.0, 0.0, 0.38268343, 0.92387953];
+
+fn oriented_box(position: [f64; 3], rotation: [f64; 4], half_extents: [f64; 3]) -> BodyDesc {
+    BodyDesc {
+        position,
+        rotation,
+        mass: 0.0,
+        velocity: [0.0; 3],
+        use_gravity: false,
+        is_trigger: false,
+        shape: Shape::Box { half_extents },
+        layer: 0,
+    }
+}
+
 fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,
         velocity,
         use_gravity: false,
@@ -16,6 +32,7 @@ fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
 fn box_body(position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 0.0,
         velocity: [0.0; 3],
         use_gravity: false,
@@ -100,6 +117,7 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
         ball,
         BodyDesc {
             position: [0.0, 1.6, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,
             velocity: [0.0; 3],
             use_gravity: true,
@@ -327,5 +345,52 @@ fn draining_trigger_events_empties_the_trigger_queue() -> Result<(), PhysicsErro
     );
     assert!(world.drain_trigger_events().is_empty());
     assert!(world.drain_events().is_empty());
+    Ok(())
+}
+
+#[test]
+fn rotated_boxes_do_not_overlap_where_the_axis_aligned_test_would() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let rotated = EntityId::new(1);
+    let corner = EntityId::new(2);
+    world.add_body(
+        rotated,
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0]),
+    )?;
+    world.add_body(
+        corner,
+        oriented_box([1.05, 1.05, 0.0], [0.0, 0.0, 0.0, 1.0], [0.3, 0.3, 0.3]),
+    )?;
+
+    world.step(0.1)?;
+
+    assert!(world.drain_events().is_empty());
+    Ok(())
+}
+
+#[test]
+fn rotated_boxes_overlap_when_they_really_do() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let rotated = EntityId::new(1);
+    let corner = EntityId::new(2);
+    world.add_body(
+        rotated,
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0]),
+    )?;
+    world.add_body(
+        corner,
+        oriented_box([1.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.3, 0.3, 0.3]),
+    )?;
+
+    world.step(0.1)?;
+
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: rotated,
+            b: corner,
+            phase: Phase::Enter
+        }]
+    );
     Ok(())
 }

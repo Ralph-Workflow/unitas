@@ -6,6 +6,7 @@ const GRAVITY: f64 = 9.81;
 fn sphere(position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,
         velocity: [0.0; 3],
         use_gravity: false,
@@ -50,6 +51,7 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
         entity,
         BodyDesc {
             position: [1.0, 2.0, 3.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
             velocity: [4.0, 5.0, 6.0],
             use_gravity: true,

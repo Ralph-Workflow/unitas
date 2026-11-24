@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::entity::{Entity, EntityId};
 use crate::error::CoreError;
-use crate::transform::Transform;
+use crate::transform::{compose_world, usable_rotation, Transform};
 
 #[derive(Debug)]
 struct Node {
@@ -97,6 +97,38 @@ impl SceneGraph {
     pub fn transform_mut(&mut self, id: impl Borrow<EntityId>) -> Option<&mut Transform> {
         let index = self.index.get(id.borrow())?;
         Some(&mut self.nodes[*index].transform)
+    }
+
+    pub fn world_transform(&self, id: impl Borrow<EntityId>) -> Option<Transform> {
+        let mut chain: Vec<usize> = Vec::new();
+        let mut current = *id.borrow();
+        loop {
+            let index = *self.index.get(&current)?;
+            chain.push(index);
+            match self.nodes[index].transform.parent {
+                Some(parent) => current = parent,
+                None => break,
+            }
+            if chain.len() > self.nodes.len() {
+                return None;
+            }
+        }
+
+        let mut world: Option<Transform> = None;
+        for index in chain.into_iter().rev() {
+            let local = &self.nodes[index].transform;
+            world = Some(match world {
+                None => Transform {
+                    translation: local.translation,
+                    rotation: usable_rotation(local.rotation),
+                    scale: local.scale,
+                    parent: None,
+                    children: Vec::new(),
+                },
+                Some(parent_world) => compose_world(&parent_world, local),
+            });
+        }
+        world
     }
 
     pub fn parent(&self, id: impl Borrow<EntityId>) -> Option<EntityId> {

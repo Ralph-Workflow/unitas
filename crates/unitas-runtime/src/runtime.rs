@@ -3,7 +3,7 @@ use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
 use unitas_asset::{
     parse_dynamics_manager, parse_time_manager, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
-use unitas_core::{EntityId, SceneGraph};
+use unitas_core::{rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
 use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
 
 use crate::error::RuntimeError;
@@ -403,18 +403,31 @@ fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {
         ),
         (None, None) => return None,
     };
-    let translation = graph
-        .transform(binding.entity)
-        .map_or([0.0f32; 3], |transform| transform.translation);
+    let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
+        Some(world) => (world.translation, world.rotation, world.scale),
+        None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
+    };
+    let scaled_center = [
+        center[0] as f32 * scale[0],
+        center[1] as f32 * scale[1],
+        center[2] as f32 * scale[2],
+    ];
+    let offset = rotate_vector(rotation, scaled_center);
     let (mass, use_gravity, rigidbody_trigger) = match &binding.rigidbody {
         Some(rigidbody) => (rigidbody.mass, rigidbody.use_gravity, rigidbody.is_trigger),
         None => (0.0, false, false),
     };
     Some(BodyDesc {
         position: [
-            translation[0] as f64 + center[0],
-            translation[1] as f64 + center[1],
-            translation[2] as f64 + center[2],
+            translation[0] as f64 + offset[0] as f64,
+            translation[1] as f64 + offset[1] as f64,
+            translation[2] as f64 + offset[2] as f64,
+        ],
+        rotation: [
+            rotation[0] as f64,
+            rotation[1] as f64,
+            rotation[2] as f64,
+            rotation[3] as f64,
         ],
         mass,
         velocity: [0.0; 3],

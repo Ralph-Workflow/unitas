@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use unitas_core::EntityId;
 
-use crate::body::{BodyDesc, Shape};
+use crate::body::{BodyDesc, Shape, IDENTITY_ROTATION};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::query::{cast_against, normalize, CastShape, QueryHit};
@@ -19,6 +19,7 @@ struct Body {
     use_gravity: bool,
     is_trigger: bool,
     position: [f64; 3],
+    rotation: [f64; 4],
     velocity: [f64; 3],
     layer: u32,
 }
@@ -75,6 +76,7 @@ impl World {
             use_gravity: desc.use_gravity,
             is_trigger: desc.is_trigger,
             position: desc.position,
+            rotation: desc.rotation,
             velocity: desc.velocity,
             layer: desc.layer,
         });
@@ -237,7 +239,15 @@ impl World {
             .iter()
             .filter(|body| body.layer & layer_mask != 0)
             .filter(|body| !body.is_trigger || include_triggers)
-            .filter(|body| probe.overlaps(center, &body.shape, body.position))
+            .filter(|body| {
+                probe.overlaps(
+                    center,
+                    IDENTITY_ROTATION,
+                    &body.shape,
+                    body.position,
+                    body.rotation,
+                )
+            })
             .map(|body| body.entity)
             .collect()
     }
@@ -265,9 +275,14 @@ impl World {
             if body.is_trigger && !include_triggers {
                 continue;
             }
-            let Some(hit) =
-                cast_against(origin, direction, body.position, &body.shape, cast_shape)
-            else {
+            let Some(hit) = cast_against(
+                origin,
+                direction,
+                body.position,
+                body.rotation,
+                &body.shape,
+                cast_shape
+            ) else {
                 continue;
             };
             if hit.distance > max_distance {
@@ -310,10 +325,13 @@ impl World {
         let mut trigger_pairs = BTreeSet::new();
         for (index, first) in self.bodies.iter().enumerate() {
             for second in self.bodies.iter().skip(index + 1) {
-                if first
-                    .shape
-                    .overlaps(first.position, &second.shape, second.position)
-                {
+                if first.shape.overlaps(
+                    first.position,
+                    first.rotation,
+                    &second.shape,
+                    second.position,
+                    second.rotation,
+                ) {
                     let pair = if first.entity < second.entity {
                         (first.entity, second.entity)
                     } else {

@@ -4,9 +4,12 @@ use unitas_physics::{BodyDesc, CollisionEvent, Phase, PhysicsError, QueryHit, Sh
 const LAYER_ONE: u32 = 1;
 const LAYER_TWO: u32 = 2;
 
+const ROTATED_45_DEGREES_ABOUT_Z: [f64; 4] = [0.0, 0.0, 0.38268343, 0.92387953];
+
 fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,
         velocity: [0.0; 3],
         use_gravity: false,
@@ -19,6 +22,7 @@ fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
 fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 0.0,
         velocity: [0.0; 3],
         use_gravity: false,
@@ -31,11 +35,30 @@ fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc 
 fn trigger_sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
     BodyDesc {
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 0.0,
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: true,
         shape: Shape::Sphere { radius },
+        layer,
+    }
+}
+
+fn oriented_box(
+    position: [f64; 3],
+    rotation: [f64; 4],
+    half_extents: [f64; 3],
+    layer: u32,
+) -> BodyDesc {
+    BodyDesc {
+        position,
+        rotation,
+        mass: 0.0,
+        velocity: [0.0; 3],
+        use_gravity: false,
+        is_trigger: false,
+        shape: Shape::Box { half_extents },
         layer,
     }
 }
@@ -963,5 +986,164 @@ fn layers_do_not_filter_collision_events() -> Result<(), PhysicsError> {
             phase: Phase::Enter
         }]
     );
+    Ok(())
+}
+
+#[test]
+fn ray_misses_a_rotated_box_where_the_axis_aligned_test_would_hit() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    world.add_body(
+        EntityId::new(1),
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.raycast([1.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+
+    assert!(hits.is_empty());
+    Ok(())
+}
+
+#[test]
+fn ray_still_hits_a_rotated_box_through_its_flat_face() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.raycast([0.0, 0.0, -5.0], [0.0, 0.0, 1.0], 100.0, LAYER_ONE);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].entity, entity);
+    assert!((hits[0].distance - 4.0).abs() < 1e-4);
+    assert!(hits[0].point[0].abs() < 1e-4);
+    assert!(hits[0].point[1].abs() < 1e-4);
+    assert!((hits[0].point[2] + 1.0).abs() < 1e-4);
+    assert!(hits[0].normal[0].abs() < 1e-4);
+    assert!(hits[0].normal[1].abs() < 1e-4);
+    assert!((hits[0].normal[2] + 1.0).abs() < 1e-4);
+    Ok(())
+}
+
+#[test]
+fn ray_hits_a_rotated_box_side_face_with_a_rotated_normal() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.raycast([-5.0, 0.5, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].entity, entity);
+    assert!((hits[0].distance - 4.0857864).abs() < 1e-4);
+    let diagonal = 1.0 / 2.0f64.sqrt();
+    assert!((hits[0].normal[0] + diagonal).abs() < 1e-4);
+    assert!((hits[0].normal[1] - diagonal).abs() < 1e-4);
+    assert!(hits[0].normal[2].abs() < 1e-4);
+    Ok(())
+}
+
+#[test]
+fn linecast_against_a_rotated_box_respects_orientation() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    world.add_body(
+        EntityId::new(1),
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.linecast([1.0, 1.0, 0.0], [5.0, 1.0, 0.0], LAYER_ONE, false);
+
+    assert!(hits.is_empty());
+    Ok(())
+}
+
+#[test]
+fn sphere_cast_against_a_rotated_box_respects_orientation() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    world.add_body(
+        EntityId::new(1),
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.sphere_cast([1.0, 1.0, 0.0], 0.2, [1.0, 0.0, 0.0], 100.0, LAYER_ONE, false);
+
+    assert!(hits.is_empty());
+    Ok(())
+}
+
+#[test]
+fn overlap_sphere_against_a_rotated_box_respects_orientation() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    world.add_body(
+        EntityId::new(1),
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.overlap_sphere([1.0, 1.0, 0.0], 0.1, LAYER_ONE);
+
+    assert!(hits.is_empty());
+    Ok(())
+}
+
+#[test]
+fn sphere_overlap_against_a_rotated_box_is_rotation_invariant() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.overlap_sphere([0.0, 0.0, 0.0], 0.5, LAYER_ONE);
+
+    assert_eq!(hits, vec![entity]);
+    Ok(())
+}
+
+#[test]
+fn degenerate_rotation_falls_back_to_identity() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        oriented_box([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
+    )?;
+
+    let hits = world.raycast([0.0, 0.0, -5.0], [0.0, 0.0, 1.0], 100.0, LAYER_ONE);
+
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [0.0, 0.0, -1.0],
+            normal: [0.0, 0.0, -1.0],
+            distance: 4.0
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn sphere_overlap_against_a_rotated_non_cubic_box_uses_the_inverse_rotation(
+) -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [2.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
+    )?;
+
+    let hits = world.overlap_sphere([2.0, 1.0, 0.0], 0.2, LAYER_ONE);
+
+    assert_eq!(hits, vec![entity]);
     Ok(())
 }

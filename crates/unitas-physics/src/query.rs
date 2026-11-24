@@ -1,6 +1,8 @@
 use unitas_core::EntityId;
 
-use crate::body::{closest_point, Shape};
+use crate::body::{
+    add, closest_point, inverse_rotation, rotate_vector, subtract, Shape,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QueryHit {
@@ -41,6 +43,7 @@ pub(crate) fn cast_against(
     origin: [f64; 3],
     direction: [f64; 3],
     position: [f64; 3],
+    rotation: [f64; 4],
     shape: &Shape,
     cast: CastShape,
 ) -> Option<CastHit> {
@@ -49,7 +52,7 @@ pub(crate) fn cast_against(
             cast_against_sphere(origin, direction, position, *radius, cast)
         }
         Shape::Box { half_extents } => {
-            cast_against_box(origin, direction, position, *half_extents, cast)
+            cast_against_box(origin, direction, position, rotation, *half_extents, cast)
         }
     }
 }
@@ -113,16 +116,21 @@ pub(crate) fn cast_against_box(
     origin: [f64; 3],
     direction: [f64; 3],
     center: [f64; 3],
+    rotation: [f64; 4],
     half_extents: [f64; 3],
     cast: CastShape,
 ) -> Option<CastHit> {
+    let inverse = inverse_rotation(rotation);
+    let local_origin = rotate_vector(inverse, subtract(origin, center));
+    let local_direction = normalize(rotate_vector(inverse, direction))?;
     match cast {
         CastShape::Point => {
-            let (distance, normal) = ray_box_hit(origin, direction, center, half_extents)?;
+            let (distance, local_normal) =
+                ray_box_hit(local_origin, local_direction, [0.0; 3], half_extents)?;
             Some(CastHit {
                 distance,
                 point: travel(origin, direction, distance),
-                normal,
+                normal: rotate_vector(rotation, local_normal),
             })
         }
         CastShape::Sphere { radius } => {
@@ -131,15 +139,22 @@ pub(crate) fn cast_against_box(
                 half_extents[1] + radius,
                 half_extents[2] + radius,
             ];
-            let (distance, normal) = ray_box_hit(origin, direction, center, expanded)?;
+            let (distance, local_normal) =
+                ray_box_hit(local_origin, local_direction, [0.0; 3], expanded)?;
             Some(CastHit {
                 distance,
-                point: closest_point(
+                point: add(
                     center,
-                    half_extents,
-                    travel(origin, direction, distance),
+                    rotate_vector(
+                        rotation,
+                        closest_point(
+                            [0.0; 3],
+                            half_extents,
+                            travel(local_origin, local_direction, distance),
+                        ),
+                    ),
                 ),
-                normal,
+                normal: rotate_vector(rotation, local_normal),
             })
         }
         CastShape::Box {
@@ -150,15 +165,22 @@ pub(crate) fn cast_against_box(
                 half_extents[1] + cast_half_extents[1],
                 half_extents[2] + cast_half_extents[2],
             ];
-            let (distance, normal) = ray_box_hit(origin, direction, center, expanded)?;
+            let (distance, local_normal) =
+                ray_box_hit(local_origin, local_direction, [0.0; 3], expanded)?;
             Some(CastHit {
                 distance,
-                point: closest_point(
+                point: add(
                     center,
-                    half_extents,
-                    travel(origin, direction, distance),
+                    rotate_vector(
+                        rotation,
+                        closest_point(
+                            [0.0; 3],
+                            half_extents,
+                            travel(local_origin, local_direction, distance),
+                        ),
+                    ),
                 ),
-                normal,
+                normal: rotate_vector(rotation, local_normal),
             })
         }
     }

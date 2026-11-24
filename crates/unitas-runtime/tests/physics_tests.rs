@@ -7,8 +7,12 @@ use unitas_runtime::{Callbacks, Runtime};
 const PHYSICS_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_collision.unity";
 const TRIGGER_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_trigger.unity";
 const SCRIPT_FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
+const ROTATED_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_rotated_nested.unity";
 const BALL_NAME: &str = "Ball";
 const CRATE_NAME: &str = "Crate";
+const BLOCKER_NAME: &str = "Blocker";
+const LAYER_ZERO_MASK: u32 = 1;
+const QUERY_TOLERANCE: f64 = 1e-6;
 const PHASE_ENTER: u32 = 0;
 const PHASE_STAY: u32 = 1;
 const PHASE_EXIT: u32 = 2;
@@ -135,6 +139,105 @@ fn phase_sequence(events: &[(u64, u64, u32)]) -> String {
         .iter()
         .map(|(_, _, phase)| char::from_digit(*phase, 10).unwrap_or('?'))
         .collect()
+}
+
+fn rotated_runtime() -> Result<Runtime, Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(ROTATED_FIXTURE_PATH))?;
+    Ok(runtime)
+}
+
+fn assert_close(actual: f64, expected: f64, label: &str) {
+    assert!(
+        (actual - expected).abs() <= QUERY_TOLERANCE,
+        "{label}: expected {expected}, got {actual}"
+    );
+}
+
+fn assert_vector_close(actual: [f64; 3], expected: [f64; 3], label: &str) {
+    for index in 0..3 {
+        assert!(
+            (actual[index] - expected[index]).abs() <= QUERY_TOLERANCE,
+            "{label} component {index}: expected {expected:?}, got {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn runtime_raycast_hits_rotated_crate_from_above() -> Result<(), Box<dyn Error>> {
+    let runtime = rotated_runtime()?;
+    let crate_handle = entity_handle(&runtime, CRATE_NAME)?;
+    let hits = runtime.raycast(
+        [0.0, 10.0, 0.0],
+        [0.0, -1.0, 0.0],
+        20.0,
+        LAYER_ZERO_MASK,
+        false,
+    );
+    assert_eq!(hits.len(), 1, "expected a single hit, got {hits:?}");
+    let hit = &hits[0];
+    assert_eq!(hit.entity, crate_handle);
+    assert_close(hit.distance, 7.0, "crate top distance");
+    assert_vector_close(hit.point, [0.0, 3.0, 0.0], "crate top point");
+    assert_vector_close(hit.normal, [0.0, 1.0, 0.0], "crate top normal");
+    Ok(())
+}
+
+#[test]
+fn runtime_raycast_hits_rotated_crate_from_the_side() -> Result<(), Box<dyn Error>> {
+    let runtime = rotated_runtime()?;
+    let crate_handle = entity_handle(&runtime, CRATE_NAME)?;
+    let hits = runtime.raycast(
+        [-5.0, 2.0, 0.0],
+        [1.0, 0.0, 0.0],
+        20.0,
+        LAYER_ZERO_MASK,
+        false,
+    );
+    assert_eq!(hits.len(), 1, "expected a single hit, got {hits:?}");
+    let hit = &hits[0];
+    assert_eq!(hit.entity, crate_handle);
+    assert_close(hit.distance, 4.5, "crate side distance");
+    assert_vector_close(hit.point, [-0.5, 2.0, 0.0], "crate side point");
+    assert_vector_close(hit.normal, [-1.0, 0.0, 0.0], "crate side normal");
+    Ok(())
+}
+
+#[test]
+fn runtime_raycast_hits_blocker_below_the_rotated_crate() -> Result<(), Box<dyn Error>> {
+    let runtime = rotated_runtime()?;
+    let blocker_handle = entity_handle(&runtime, BLOCKER_NAME)?;
+    let hits = runtime.raycast(
+        [-5.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        20.0,
+        LAYER_ZERO_MASK,
+        false,
+    );
+    assert_eq!(hits.len(), 1, "expected a single hit, got {hits:?}");
+    let hit = &hits[0];
+    assert_eq!(hit.entity, blocker_handle);
+    assert_close(hit.distance, 6.5, "blocker distance");
+    assert_vector_close(hit.point, [1.5, 0.0, 0.0], "blocker point");
+    assert_vector_close(hit.normal, [-1.0, 0.0, 0.0], "blocker normal");
+    Ok(())
+}
+
+#[test]
+fn runtime_overlap_sphere_finds_the_rotated_crate_only() -> Result<(), Box<dyn Error>> {
+    let runtime = rotated_runtime()?;
+    let crate_handle = entity_handle(&runtime, CRATE_NAME)?;
+    let blocker_handle = entity_handle(&runtime, BLOCKER_NAME)?;
+    let overlaps = runtime.overlap_sphere([0.0, 2.0, 0.0], 0.1, LAYER_ZERO_MASK, false);
+    assert!(
+        overlaps.iter().any(|record| record.entity == crate_handle),
+        "the crate centre must overlap, got {overlaps:?}"
+    );
+    assert!(
+        !overlaps.iter().any(|record| record.entity == blocker_handle),
+        "the blocker must not overlap, got {overlaps:?}"
+    );
+    Ok(())
 }
 
 #[test]

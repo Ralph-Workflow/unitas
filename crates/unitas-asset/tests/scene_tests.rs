@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::f32::consts::FRAC_1_SQRT_2;
 use std::path::Path;
 
 use unitas_asset::meta::GuidIndex;
@@ -91,6 +92,24 @@ Rigidbody:
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+fn scene_with_local_rotation(rotation: Option<&str>) -> String {
+    let rotation_line = match rotation {
+        Some(rotation) => format!("  m_LocalRotation: {rotation}\n"),
+        None => String::new(),
+    };
+    format!(
+        "%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Rotated
+--- !u!4 &2
+Transform:
+  m_GameObject: {{fileID: 1}}
+{rotation_line}  m_Father: {{fileID: 0}}
+"
+    )
+}
+
 fn entity_named(graph: &SceneGraph, name: &str) -> Result<EntityId, Box<dyn Error>> {
     for id in graph.breadth_first_order() {
         if let Some(entity) = graph.entity(id) {
@@ -167,8 +186,65 @@ fn scene_rotation_stays_at_the_default_value() -> TestResult {
     let graph = assemble_scene(&stream)?;
     for id in graph.breadth_first_order() {
         let transform = graph.transform(id).ok_or("entity has no transform")?;
-        assert_eq!(transform.rotation, [0.0, 0.0, 0.0]);
+        assert_eq!(transform.rotation, [0.0, 0.0, 0.0, 1.0]);
     }
+    Ok(())
+}
+
+#[test]
+fn scene_local_rotation_is_applied() -> TestResult {
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some(
+        "{x: 0, y: 0, z: 0.70710678, w: 0.70710678}",
+    )))?;
+    let graph = assemble_scene(&stream)?;
+    let rotated = entity_named(&graph, "Rotated")?;
+    let transform = graph.transform(rotated).ok_or("entity has no transform")?;
+    assert_eq!(
+        transform.rotation,
+        [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]
+    );
+    Ok(())
+}
+
+#[test]
+fn scene_unnormalized_local_rotation_stays_at_the_identity() -> TestResult {
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some(
+        "{x: 0.5, y: -0.5, z: 0.25, w: 0.707}",
+    )))?;
+    let graph = assemble_scene(&stream)?;
+    let rotated = entity_named(&graph, "Rotated")?;
+    let transform = graph.transform(rotated).ok_or("entity has no transform")?;
+    assert_eq!(transform.rotation, [0.0, 0.0, 0.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn scene_missing_local_rotation_stays_at_the_identity() -> TestResult {
+    let stream = unity_yaml::parse(&scene_with_local_rotation(None))?;
+    let graph = assemble_scene(&stream)?;
+    let rotated = entity_named(&graph, "Rotated")?;
+    let transform = graph.transform(rotated).ok_or("entity has no transform")?;
+    assert_eq!(transform.rotation, [0.0, 0.0, 0.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn scene_malformed_local_rotation_stays_at_the_identity() -> TestResult {
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some("{x: 0.5, y: -0.5, z: 0.25}")))?;
+    let graph = assemble_scene(&stream)?;
+    let rotated = entity_named(&graph, "Rotated")?;
+    let transform = graph.transform(rotated).ok_or("entity has no transform")?;
+    assert_eq!(transform.rotation, [0.0, 0.0, 0.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn scene_non_finite_local_rotation_stays_at_the_identity() -> TestResult {
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some("{x: inf, y: 0, z: 0, w: 1}")))?;
+    let graph = assemble_scene(&stream)?;
+    let rotated = entity_named(&graph, "Rotated")?;
+    let transform = graph.transform(rotated).ok_or("entity has no transform")?;
+    assert_eq!(transform.rotation, [0.0, 0.0, 0.0, 1.0]);
     Ok(())
 }
 
