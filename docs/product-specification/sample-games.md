@@ -163,5 +163,6 @@ and an unmodified upstream compatibility benchmark remain explicitly distinct.
   evidence.
 * Visual appeal never substitutes for behavioral coverage, and broad feature
   count never substitutes for a complete playable loop.
-* The samples jointly exercise all feature families declared ready for general
-  use, while focused benchmarks cover boundary and failure behavior.
+* For each release, every generally available feature family in that release's
+  feature catalog maps to at least one named sample scenario on a declared
+  supported target; focused benchmarks cover boundary and failure behavior.

@@ -12,6 +12,24 @@ capability. Stock Unity 2022.3 LTS defines the baseline. URP, Timeline,
 Cinemachine, and other package behavior is covered only for explicitly
 supported package families, versions, and features.
 
+## Graphics API and target capability
+
+The product does not require a particular graphics API or API version for
+rendering. Direct3D, OpenGL, Vulkan, and Metal are possible implementation
+choices, not interchangeable promises of Unity compatibility. In particular,
+Linux and macOS support does not imply that Direct3D runs on those systems.
+ShaderLab and HLSL support describes accepted project content, not the API used
+to draw it.
+
+For each supported build target and current host, developers can inspect the
+selected graphics API and version, the device and driver where available, and
+which declared rendering features are supported or limited. If no usable
+graphics device or API is available, startup or build fails with an actionable
+reason; it does not silently claim a working renderer. A change of graphics API
+must not silently change the specified visible behavior of a supported scene.
+Target-specific visual differences or unsupported shader features are reported
+as limitations under the compatibility contract.
+
 ## Cameras
 
 A Camera renders selected scene content to a game display or render target.
@@ -151,9 +169,11 @@ Bindings identify their object path, component, and property. Missing,
 ambiguous, incompatible, and inactive bindings are distinct. Preview changes do
 not silently become saved scene values.
 
-Animation events occur at compatible times and preserve ordering when multiple
-events share a frame. Loop boundaries, reverse or scaled playback where
-supported, and zero-duration clips have defined outcomes.
+Animation events occur at compatible times. Events from the same clip that
+share a frame preserve their declared order; ordering across clips or animators
+is guaranteed only where the compatible API contract defines it. Loop
+boundaries, reverse or scaled playback where supported, and zero-duration clips
+have defined outcomes.
 
 ## Animator controllers
 
@@ -226,3 +246,6 @@ aspect, quality, camera, scene state, and relevant color interpretation.
 6. Failed or unsupported shaders cannot appear as successful compatibility.
 7. Visual comparison captures identify all conditions needed for meaningful
    evaluation.
+8. On each declared target, a developer can identify the effective graphics API
+   and diagnose missing device capabilities without assuming Direct3D on Linux
+   or macOS.

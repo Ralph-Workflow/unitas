@@ -37,8 +37,10 @@ An empty result is distinguishable from an unavailable or failed query.
 
 An agent can perform the supported equivalents of object, component, asset,
 scene, prefab, settings, and build-configuration edits. A request validates all
-targets and reports which changes were accepted, rejected, conflicted, or not
-attempted.
+targets before changing any of them; validation failure leaves the request
+unchanged. Operations that permit partial application declare that behavior
+before execution and report which changes were accepted, rejected, conflicted,
+or not attempted, with affected identities and resulting revisions.
 
 Related edits can be grouped into one visible undo operation. A change that
 would discard unsupported serialized meaning, affect additional objects, or

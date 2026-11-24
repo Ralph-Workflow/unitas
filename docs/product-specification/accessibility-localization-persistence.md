@@ -117,9 +117,12 @@ As a developer, I can distinguish:
 * local data from cloud or externally synchronized data;
 * a user cancellation from an I/O or permission failure.
 
-A save operation does not report success until durable state is available under
-the platform's declared contract. An interrupted or out-of-space save does not
-replace a valid prior save with an apparently successful corrupt one.
+For each target, the declared storage contract identifies when a save is
+committed and whether the prior valid save survives interruption, quota
+exhaustion, and process termination. A save operation does not report success
+until durable state is available under that contract. An interrupted or
+out-of-space save does not replace a valid prior save with an apparently
+successful corrupt one.
 
 ## Save evolution and migration
 

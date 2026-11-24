@@ -81,7 +81,9 @@ Supported project edits preserve Unity-readable identities and content where
 the corresponding Unity format can express the result. Unknown data that can
 be retained without misrepresentation remains intact. If an edit would require
 discarding or rewriting unsupported meaning, the user sees the scope and
-chooses whether to continue.
+chooses whether to continue. If saving an unrelated edit cannot retain unknown
+data, that save is blocked until the user explicitly chooses to discard the
+identified data.
 
 Opening and saving an unchanged asset does not create unexplained semantic
 changes. Differences in non-semantic formatting are never presented as proof of
@@ -98,8 +100,9 @@ different API result, or ignored setting while reporting full support.
 
 ## Acceptance Stories
 
-* A project owner can determine every unsupported feature before relying on a
-  release build.
+* Before relying on a release build, a project owner can identify every
+  recognized, assessed unsupported behavior in the selected project and target;
+  unknown or unassessed behavior remains explicit.
 * A missing asset reference remains missing and identifies its original
   identity rather than resolving to a similarly named asset.
 * A partially supported shader reports the omitted pass and visible effect.

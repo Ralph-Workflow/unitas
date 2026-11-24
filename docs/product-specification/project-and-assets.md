@@ -22,8 +22,9 @@ families and versions.
   references, settings, and openable content I saw previously.
 * As a developer moving between Unity and unitas, I can see external changes and
   choose how to reconcile them with unsaved editor work.
-* As a developer evaluating compatibility, I can identify every item that is
-  supported, partially supported, unsupported, missing, ambiguous, or invalid.
+* As a developer evaluating compatibility, I can identify each assessed item's
+  compatibility state and separately see missing, ambiguous, or invalid content
+  as diagnostics.
 
 ### Required behavior
 
@@ -45,9 +46,10 @@ change. Conflicts identify both versions and the affected asset or setting.
 
 * A directory that is not a recognizable project explains which required
   project signals are absent.
-* A project created by an unsupported Unity version remains unopened or opens
-  with an explicit compatibility boundary; it is never silently treated as a
-  fully supported version.
+* A project created by an unsupported Unity version opens for read-only
+  inspection when its content can be classified safely; otherwise opening is
+  refused with the version boundary explained. It is never silently treated as
+  a fully supported version.
 * A partially readable project remains inspectable while unreadable items retain
   specific errors.
 * Case-only renames, Unicode names, long paths, read-only files, broken symbolic

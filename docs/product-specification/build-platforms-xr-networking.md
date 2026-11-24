@@ -37,8 +37,9 @@ Every result records:
 * unsupported or platform-limited project behavior.
 
 Cancellation leaves no artifact presented as a successful player. Repeated
-builds from identical project state and choices have no unexplained behavioral
-or content differences.
+builds with the same project state, build choices, toolchain, dependency
+versions, and target environment have no unexplained behavioral or content
+differences. Changes in external content used by a build are recorded.
 
 ## Target families
 

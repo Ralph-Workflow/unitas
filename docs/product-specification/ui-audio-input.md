@@ -41,7 +41,8 @@ automation can interact through the same declared control behavior.
 Events include pointer enter and exit, press, release, click, drag, drop,
 scroll, selection, deselection, navigation, submit, cancel, and value changes.
 An event identifies its target and propagation behavior. A control cannot report
-a successful activation when another visible element blocked its input.
+a successful activation when effective pointer hit-testing routes that input
+to another element; visibility alone does not imply input blocking.
 
 ## Focus and navigation
 

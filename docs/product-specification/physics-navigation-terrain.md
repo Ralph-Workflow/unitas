@@ -40,8 +40,9 @@ relative motion, and supported contacts. Events reflect layers, ignored pairs,
 activation, destruction, shape changes, teleportation, and scene unloading.
 
 No event is reported for a pair excluded by its effective collision rules.
-Destroying or disabling an object during a callback leaves the remaining event
-sequence defined and inspectable.
+Destroying or disabling an object during a callback leaves subsequent event
+eligibility and recipients defined and inspectable; callback ordering is
+guaranteed only where the compatible API contract defines it.
 
 ## Spatial queries
 
@@ -53,8 +54,8 @@ normal, distance, and relevant sub-shape information.
 Queries define behavior for zero-length direction, starts inside a collider,
 ties, disabled or inactive content, backfaces where relevant, non-uniform scale,
 and invalid inputs. Multi-result APIs expose qualifying results within their
-declared capacity; capacity-limited forms report the returned count. Result and
-event ordering is guaranteed only when the compatible API contract defines it.
+declared capacity; capacity-limited forms report the returned count. Query result ordering is guaranteed only when the compatible API contract
+defines it.
 
 ## Joints and constraints
 

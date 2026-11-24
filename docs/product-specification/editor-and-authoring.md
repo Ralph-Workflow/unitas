@@ -112,8 +112,9 @@ displays are selectable when the project uses them.
 ## Play mode
 
 Entering play mode starts a runtime session from the approved project state. If
-unsaved content is relevant, the editor identifies it and the chosen session
-source. Play, pause, and frame-step states are unambiguous.
+unsaved content is relevant, the editor identifies whether the session uses
+saved content or current unsaved editor content. It does not silently mix the
+two. Play, pause, and frame-step states are unambiguous.
 
 Pausing freezes normal gameplay progression while inspection remains available.
 Frame step advances exactly one eligible rendered frame and its associated
