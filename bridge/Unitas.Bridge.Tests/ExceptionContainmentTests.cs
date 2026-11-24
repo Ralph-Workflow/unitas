@@ -135,6 +135,38 @@ namespace Unitas.Bridge.Tests
         }
     }
 
+    public sealed class DisabledSelfScript : MonoBehaviour
+    {
+        public int AwakeCount;
+
+        public int EnableCount;
+
+        public int StartCount;
+
+        public int UpdateCount;
+
+        public override void Awake()
+        {
+            AwakeCount++;
+            enabled = false;
+        }
+
+        public override void OnEnable()
+        {
+            EnableCount++;
+        }
+
+        public override void Start()
+        {
+            StartCount++;
+        }
+
+        public override void Update()
+        {
+            UpdateCount++;
+        }
+    }
+
     public static class ExceptionContainmentTests
     {
         private const int TickCount = 3;
@@ -153,12 +185,14 @@ namespace Unitas.Bridge.Tests
             ThrowingAwakeScript awakeThrowing = new ThrowingAwakeScript();
             InactiveSelfScript inactive = new InactiveSelfScript();
             SelfDestroyingScript destroyed = new SelfDestroyingScript();
+            DisabledSelfScript disabled = new DisabledSelfScript();
 
             ScriptRegistry.Register("33333333333333333333333333333333", () => throwing);
             ScriptRegistry.Register("44444444444444444444444444444444", () => sibling);
             ScriptRegistry.Register("55555555555555555555555555555555", () => awakeThrowing);
             ScriptRegistry.Register("66666666666666666666666666666666", () => inactive);
             ScriptRegistry.Register("77777777777777777777777777777777", () => destroyed);
+            ScriptRegistry.Register("88888888888888888888888888888888", () => disabled);
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -217,6 +251,10 @@ namespace Unitas.Bridge.Tests
             Check.Equal("the destroyed script receives no Start", 0, destroyed.StartCount);
             Check.Equal("the destroyed script receives no Update", 0, destroyed.UpdateCount);
             Check.Equal("the destroyed script receives OnDestroy exactly once", 1, destroyed.DestroyCount);
+            Check.Equal("the disabled script receives Awake", 1, disabled.AwakeCount);
+            Check.Equal("the disabled script receives no OnEnable", 0, disabled.EnableCount);
+            Check.Equal("the disabled script receives no Start", 0, disabled.StartCount);
+            Check.Equal("the disabled script receives no Update", 0, disabled.UpdateCount);
         }
 
         private static string ResolveFixture(string relativePath)

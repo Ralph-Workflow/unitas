@@ -55,6 +55,18 @@ namespace Unitas.Bridge.Tests
             Check.That("destroyed object is falsy", !(bool)doomed);
             Check.That("destroyed object equals null through Equals", doomed.Equals(null));
             Check.Equal("destroyed object stringifies as null", "null", doomed.ToString());
+            Check.That("live object does not equal destroyed object", !(live == doomed));
+            Check.That("destroyed object does not equal live object", !(doomed == live));
+            Check.That("live object differs from destroyed object", live != doomed);
+            Check.That("destroyed object differs from live object", doomed != live);
+            Check.That("live object does not equal destroyed object through Equals", !live.Equals(doomed));
+            Check.That("destroyed object does not equal live object through Equals", !doomed.Equals(live));
+
+            GameObject secondDoomed = new GameObject("SecondDoomed");
+            Object.Destroy(secondDoomed);
+            Check.That("two destroyed objects compare equal", doomed == secondDoomed);
+            Check.That("two destroyed objects do not differ", !(doomed != secondDoomed));
+            Check.That("two destroyed objects compare equal through Equals", doomed.Equals(secondDoomed));
 
             bool threw = false;
             try
