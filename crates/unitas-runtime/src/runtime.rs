@@ -1,5 +1,8 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
+use unitas_asset::{
+    parse_dynamics_manager, parse_time_manager, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
+};
 use unitas_core::{EntityId, SceneGraph};
 use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
 
@@ -45,6 +48,7 @@ pub struct Runtime {
     scripts: Vec<ScriptInstance>,
     world: World,
     callbacks: Option<Callbacks>,
+    fixed_timestep: f64,
     accumulator: f64,
     first_tick: bool,
     is_shutdown: bool,
@@ -57,6 +61,7 @@ impl Runtime {
             scripts: Vec::new(),
             world: World::new(),
             callbacks: None,
+            fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             accumulator: 0.0,
             first_tick: true,
             is_shutdown: false,
@@ -65,9 +70,11 @@ impl Runtime {
 
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
         let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
-        let world = build_world(&graph, &physics)?;
+        let (fixed_timestep, gravity) = discover_project_settings(path);
+        let world = build_world(&graph, &physics, gravity)?;
         self.scene_graph = Some(graph);
         self.world = world;
+        self.fixed_timestep = fixed_timestep;
         self.scripts.clear();
         for binding in bindings {
             if binding.guid.len() != 32 {
@@ -132,16 +139,16 @@ impl Runtime {
             return Ok(());
         }
         self.accumulator += delta_seconds;
-        const FIXED_TIME_STEP: f64 = 0.02;
+        let fixed_step = self.fixed_timestep;
         const EPSILON: f64 = 1e-9;
-        while self.accumulator >= FIXED_TIME_STEP - EPSILON {
-            self.world.step(FIXED_TIME_STEP)?;
+        while self.accumulator >= fixed_step - EPSILON {
+            self.world.step(fixed_step)?;
             if let Some(callbacks) = self.callbacks {
                 for script in &self.scripts {
-                    (callbacks.fixed_update)(script.script_handle, FIXED_TIME_STEP);
+                    (callbacks.fixed_update)(script.script_handle, fixed_step);
                 }
             }
-            self.accumulator -= FIXED_TIME_STEP;
+            self.accumulator -= fixed_step;
             if self.accumulator < 0.0 {
                 self.accumulator = 0.0;
             }
@@ -299,6 +306,14 @@ impl Runtime {
         self.accumulator
     }
 
+    pub fn fixed_timestep(&self) -> f64 {
+        self.fixed_timestep
+    }
+
+    pub fn body_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.world.velocity(entity)
+    }
+
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
     }
@@ -323,8 +338,38 @@ impl Runtime {
     }
 }
 
-fn build_world(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Result<World, RuntimeError> {
-    let mut world = World::new();
+fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3]) {
+    let Some(settings_dir) = find_project_settings_dir(scene_path) else {
+        return (DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY);
+    };
+    let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
+        Ok(Some(settings)) => settings.fixed_timestep,
+        Ok(None) | Err(_) => DEFAULT_FIXED_TIMESTEP,
+    };
+    let gravity = match parse_dynamics_manager(&settings_dir.join("DynamicsManager.asset")) {
+        Ok(Some(settings)) => settings.gravity,
+        Ok(None) | Err(_) => DEFAULT_GRAVITY,
+    };
+    (fixed_timestep, gravity)
+}
+
+fn find_project_settings_dir(scene_path: &Path) -> Option<PathBuf> {
+    let parent = scene_path.parent()?;
+    for ancestor in parent.ancestors() {
+        let candidate = ancestor.join("ProjectSettings");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn build_world(
+    graph: &SceneGraph,
+    bindings: &[PhysicsBinding],
+    gravity: [f64; 3],
+) -> Result<World, RuntimeError> {
+    let mut world = World::with_gravity(gravity);
     for binding in bindings {
         let desc = match body_desc(graph, binding) {
             Some(desc) => desc,

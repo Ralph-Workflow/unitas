@@ -120,6 +120,11 @@ namespace Unitas.Bridge
                 }
                 throw new InvalidOperationException("Failed to load scene (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
+            double fixedTimestep = RuntimeInterop.unitas_runtime_fixed_timestep(_runtimeHandle);
+            if (fixedTimestep > 0.0)
+            {
+                Time.SetFixedDeltaTime((float)fixedTimestep);
+            }
         }
 
         public void Tick(double deltaSeconds)

@@ -4,10 +4,10 @@ use std::sync::Mutex;
 
 use unitas_runtime::{
     test_read_query_buffer, test_write_path_buffer, unitas_runtime_box_cast,
-    unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_linecast,
-    unitas_runtime_load_scene, unitas_runtime_new, unitas_runtime_overlap_sphere,
-    unitas_runtime_path_buffer, unitas_runtime_query_buffer, unitas_runtime_raycast,
-    unitas_runtime_sphere_cast, Callbacks, Runtime,
+    unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_fixed_timestep,
+    unitas_runtime_linecast, unitas_runtime_load_scene, unitas_runtime_new,
+    unitas_runtime_overlap_sphere, unitas_runtime_path_buffer, unitas_runtime_query_buffer,
+    unitas_runtime_raycast, unitas_runtime_sphere_cast, Callbacks, Runtime,
 };
 
 const FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
@@ -638,5 +638,159 @@ fn runtime_query_api_exposes_linecast_sphere_cast_and_box_cast() -> Result<(), B
     assert_eq!(overlap[0].distance, 0.0);
     assert_eq!(overlap[0].point, [0.0, 0.0, 0.0]);
     assert_eq!(overlap[0].normal, [0.0, 0.0, 0.0]);
+    Ok(())
+}
+
+const SETTINGS_FIXTURE_PATH: &str =
+    "tests/fixtures/project_with_settings/Assets/Scenes/SettingsScene.unity";
+
+static SETTINGS_FIXED_STEPS: Mutex<Vec<f64>> = Mutex::new(Vec::new());
+
+extern "C" fn settings_fixed_update(_handle: u64, step: f64) {
+    if let Ok(mut steps) = SETTINGS_FIXED_STEPS.lock() {
+        steps.push(step);
+    }
+}
+
+#[test]
+fn runtime_load_scene_applies_project_settings_timestep_and_gravity() -> Result<(), Box<dyn Error>> {
+    if let Ok(mut steps) = SETTINGS_FIXED_STEPS.lock() {
+        steps.clear();
+    }
+    let mut runtime = Runtime::new()?;
+    assert_eq!(runtime.fixed_timestep(), 0.02);
+
+    runtime.load_scene(Path::new(SETTINGS_FIXTURE_PATH))?;
+    let expected_dt = 0.03333333333333333;
+    assert_eq!(runtime.fixed_timestep(), expected_dt);
+
+    runtime.set_callbacks(Callbacks {
+        create_script: accum_create,
+        awake: accum_noop_u64,
+        on_enable: accum_noop_u64,
+        start: accum_noop_u64,
+        fixed_update: settings_fixed_update,
+        update: accum_noop_u64_f64,
+        late_update: accum_noop_u64_f64,
+        on_disable: accum_noop_u64,
+        destroy: accum_noop_u64,
+        collision: accum_collision,
+        trigger: accum_trigger,
+    });
+
+    runtime.tick(0.0)?;
+    runtime.tick(0.04)?;
+
+    let steps = match SETTINGS_FIXED_STEPS.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => return Err(String::from("poisoned").into()),
+    };
+    assert_eq!(steps, vec![expected_dt]);
+
+    let ball_id = entity_id_for(&runtime, "Ball")?;
+    let graph = match runtime.scene_graph() {
+        Some(g) => g,
+        None => return Err(String::from("no scene graph").into()),
+    };
+    let ball_entity = match graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| id.as_u64() == ball_id)
+    {
+        Some(id) => id,
+        None => return Err(String::from("ball entity not found").into()),
+    };
+
+    let velocity = match runtime.body_velocity(ball_entity) {
+        Some(v) => v,
+        None => return Err(String::from("ball body velocity not found").into()),
+    };
+    assert_eq!(velocity[0], 0.0);
+    assert!((velocity[1] - (-2.0 * expected_dt)).abs() < 1e-12);
+    assert_eq!(velocity[2], 0.0);
+
+    let overlap = runtime.overlap_sphere([0.0, 10.0, 0.0], 2.0, u32::MAX, false);
+    assert_eq!(overlap.len(), 1);
+    assert!((overlap[0].point[1] - (10.0 + (-2.0 * expected_dt) * expected_dt)).abs() < 1e-12);
+    Ok(())
+}
+
+#[test]
+fn runtime_load_scene_without_or_with_malformed_project_settings_uses_defaults(
+) -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(TRIGGER_FIXTURE_PATH))?;
+    assert_eq!(runtime.fixed_timestep(), 0.02);
+    runtime.tick(0.0)?;
+    runtime.tick(0.02)?;
+
+    let ball_id = entity_id_for(&runtime, "Ball")?;
+    let graph = match runtime.scene_graph() {
+        Some(g) => g,
+        None => return Err(String::from("no scene graph").into()),
+    };
+    let ball_entity = match graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| id.as_u64() == ball_id)
+    {
+        Some(id) => id,
+        None => return Err(String::from("ball entity not found").into()),
+    };
+    let default_velocity = match runtime.body_velocity(ball_entity) {
+        Some(v) => v,
+        None => return Err(String::from("ball body velocity not found").into()),
+    };
+    assert!((default_velocity[1] - (-9.81 * 0.02)).abs() < 1e-12);
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "unitas_runtime_malformed_settings_{}",
+        std::process::id()
+    ));
+    let settings_dir = temp_root.join("ProjectSettings");
+    let scenes_dir = temp_root.join("Assets").join("Scenes");
+    std::fs::create_dir_all(&settings_dir)?;
+    std::fs::create_dir_all(&scenes_dir)?;
+    std::fs::write(
+        settings_dir.join("TimeManager.asset"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!5 &1\nTimeManager:\n  m_FixedTimestep: {unclosed\n",
+    )?;
+    std::fs::write(
+        settings_dir.join("DynamicsManager.asset"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_Gravity: {unclosed\n",
+    )?;
+    let temp_scene = scenes_dir.join("Scene.unity");
+    std::fs::copy(Path::new(SETTINGS_FIXTURE_PATH), &temp_scene)?;
+
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_root);
+    load_res?;
+
+    assert_eq!(runtime.fixed_timestep(), 0.02);
+    runtime.tick(0.0)?;
+    runtime.tick(0.02)?;
+    let malformed_velocity = match runtime.body_velocity(ball_entity) {
+        Some(v) => v,
+        None => return Err(String::from("ball body velocity not found").into()),
+    };
+    assert!((malformed_velocity[1] - (-9.81 * 0.02)).abs() < 1e-12);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_fixed_timestep_returns_configured_value_and_sets_error_on_invalid_handle(
+) -> Result<(), Box<dyn Error>> {
+    let handle = runtime_handle_for(SETTINGS_FIXTURE_PATH)?;
+    let step = unitas_runtime_fixed_timestep(handle);
+    assert_eq!(step, 0.03333333333333333);
+    assert_eq!(unitas_runtime_error_message(handle), 0);
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+
+    let invalid_step = unitas_runtime_fixed_timestep(u64::MAX);
+    assert_eq!(invalid_step, 0.0);
+    let err_ptr = unitas_runtime_error_message(u64::MAX);
+    assert_ne!(err_ptr, 0);
     Ok(())
 }

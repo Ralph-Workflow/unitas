@@ -40,6 +40,8 @@ impl RuntimeState {
 
 static REGISTRY: OnceLock<Mutex<HashMap<u64, RuntimeState>>> = OnceLock::new();
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+static INVALID_HANDLE_ERROR_TARGET: AtomicU64 = AtomicU64::new(0);
+const INVALID_HANDLE_MESSAGE: &[u8] = b"runtime handle not found\0";
 
 fn registry() -> Result<&'static Mutex<HashMap<u64, RuntimeState>>, RuntimeError> {
     Ok(REGISTRY.get_or_init(|| Mutex::new(HashMap::new())))
@@ -238,12 +240,38 @@ pub extern "C" fn unitas_runtime_error_message(handle: u64) -> u64 {
     };
     let state = match map.get(&handle) {
         Some(s) => s,
-        None => return 0,
+        None => {
+            if handle != 0 && INVALID_HANDLE_ERROR_TARGET.load(Ordering::Relaxed) == handle {
+                return INVALID_HANDLE_MESSAGE.as_ptr() as usize as u64;
+            }
+            return 0;
+        }
     };
     match state.last_error.as_ref() {
         Some(bytes) => bytes.as_ptr() as usize as u64,
         None => 0,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_fixed_timestep(handle: u64) -> f64 {
+    let reg = match registry() {
+        Ok(r) => r,
+        Err(_) => return 0.0,
+    };
+    let mut map = match reg.lock() {
+        Ok(guard) => guard,
+        Err(_) => return 0.0,
+    };
+    let state = match map.get_mut(&handle) {
+        Some(s) => s,
+        None => {
+            INVALID_HANDLE_ERROR_TARGET.store(handle, Ordering::Relaxed);
+            return 0.0;
+        }
+    };
+    state.clear_error();
+    state.runtime.fixed_timestep()
 }
 
 pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeError> {

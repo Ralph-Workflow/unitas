@@ -37,6 +37,44 @@ namespace Unitas.Bridge.Tests
         {
             ScriptedUpdateLogsStructuredEntryAndSphereCastHits();
             TimeScaleReachesTheNativeFixedStep();
+            FixedDeltaTimeFollowsProjectSettingsOnLoadScene();
+        }
+
+        private static void FixedDeltaTimeFollowsProjectSettingsOnLoadScene()
+        {
+            string settingsScene = ResolveFixture("crates/unitas-runtime/tests/fixtures/project_with_settings/Assets/Scenes/SettingsScene.unity");
+            string plainScene = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_with_script.unity");
+            Check.That("Settings scene file exists", File.Exists(settingsScene));
+            Check.That("Plain scene file exists", File.Exists(plainScene));
+
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                ScriptRegistry.Clear();
+                LoggingScript? settingsScript = null;
+                ScriptRegistry.Register(0UL, 1UL, () => settingsScript = new LoggingScript());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(settingsScene);
+                    float expectedFixed = (float)0.03333333333333333;
+                    Check.Equal("fixedDeltaTime reflects TimeManager after LoadScene", expectedFixed, Time.fixedDeltaTime);
+                    Check.Equal("fixedUnscaledDeltaTime reflects TimeManager after LoadScene", expectedFixed, Time.fixedUnscaledDeltaTime);
+
+                    host.Tick(0.0);
+                    host.Tick(0.04);
+                    Check.Equal("Tick(0.04) runs 1 FixedUpdate at 0.0333s timestep", 1, settingsScript == null ? -1 : settingsScript.FixedUpdateCount);
+
+                    host.LoadScene(plainScene);
+                    Check.Equal("fixedDeltaTime resets to 0.02 without ProjectSettings", 0.02f, Time.fixedDeltaTime);
+                    Check.Equal("fixedUnscaledDeltaTime resets to 0.02 without ProjectSettings", 0.02f, Time.fixedUnscaledDeltaTime);
+                }
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
+            }
         }
 
         private static void TimeScaleReachesTheNativeFixedStep()

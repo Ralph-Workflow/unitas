@@ -162,6 +162,9 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_error_message(ulong runtime);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double unitas_runtime_fixed_timestep(ulong runtime);
+
         public static QueryHit[] ReadQueryHits(IntPtr buffer, int count)
         {
             if (count <= 0)

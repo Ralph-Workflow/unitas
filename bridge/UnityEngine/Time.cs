@@ -2,9 +2,10 @@ namespace UnityEngine
 {
     public static class Time
     {
-        private const float FixedStep = 0.02f;
+        private const float DefaultFixedStep = 0.02f;
         private const float SmoothAlpha = 0.1f;
 
+        private static float _fixedDeltaTime = DefaultFixedStep;
         private static float _deltaTime;
         private static float _unscaledDeltaTime;
         private static float _timeScale = 1f;
@@ -29,15 +30,27 @@ namespace UnityEngine
 
         public static float unscaledTime => _unscaledTime;
 
-        public static float fixedDeltaTime => FixedStep;
+        public static float fixedDeltaTime => _fixedDeltaTime;
 
-        public static float fixedUnscaledDeltaTime => FixedStep;
+        public static float fixedUnscaledDeltaTime => _fixedDeltaTime;
 
         public static int frameCount => _frameCount;
 
         public static float realtimeSinceStartup => _realtimeSinceStartup;
 
         public static float smoothDeltaTime => _smoothDeltaTime;
+
+        public static void SetFixedDeltaTime(float value)
+        {
+            if (value > 0f && float.IsFinite(value))
+            {
+                _fixedDeltaTime = value;
+            }
+            else
+            {
+                _fixedDeltaTime = DefaultFixedStep;
+            }
+        }
 
         public static void Advance(double deltaSeconds)
         {

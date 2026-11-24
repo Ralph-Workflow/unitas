@@ -147,3 +147,80 @@ fn invalid_delta_times_are_rejected() -> Result<(), PhysicsError> {
     ));
     Ok(())
 }
+
+#[test]
+fn custom_gravity_accelerates_dynamic_body_along_configured_vector() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, -1.62, 0.0]);
+    assert_eq!(world.gravity(), [0.0, -1.62, 0.0]);
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([0.0, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(1.0)?;
+
+    assert_eq!(world.velocity(entity), Some([0.0, -1.62, 0.0]));
+    assert_eq!(world.position(entity), Some([0.0, -1.62, 0.0]));
+    Ok(())
+}
+
+#[test]
+fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() -> Result<(), PhysicsError> {
+    let mut custom_world = World::with_gravity([1.5, -2.0, 0.5]);
+    let gravity_body = EntityId::new(1);
+    let floating_body = EntityId::new(2);
+    let static_body = EntityId::new(3);
+    custom_world.add_body(
+        gravity_body,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([0.0, 0.0, 0.0])
+        },
+    )?;
+    custom_world.add_body(
+        floating_body,
+        BodyDesc {
+            use_gravity: false,
+            velocity: [1.0, 1.0, 1.0],
+            ..sphere([0.0, 0.0, 0.0])
+        },
+    )?;
+    custom_world.add_body(
+        static_body,
+        BodyDesc {
+            mass: 0.0,
+            use_gravity: true,
+            ..sphere([5.0, 5.0, 5.0])
+        },
+    )?;
+
+    custom_world.step(2.0)?;
+
+    assert_eq!(custom_world.velocity(gravity_body), Some([3.0, -4.0, 1.0]));
+    assert_eq!(custom_world.position(gravity_body), Some([6.0, -8.0, 2.0]));
+    assert_eq!(custom_world.velocity(floating_body), Some([1.0, 1.0, 1.0]));
+    assert_eq!(custom_world.position(floating_body), Some([2.0, 2.0, 2.0]));
+    assert_eq!(custom_world.velocity(static_body), Some([0.0, 0.0, 0.0]));
+    assert_eq!(custom_world.position(static_body), Some([5.0, 5.0, 5.0]));
+
+    let mut zero_world = World::with_gravity([0.0, 0.0, 0.0]);
+    let zero_entity = EntityId::new(4);
+    zero_world.add_body(
+        zero_entity,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([1.0, 2.0, 3.0])
+        },
+    )?;
+
+    zero_world.step(1.0)?;
+
+    assert_eq!(zero_world.velocity(zero_entity), Some([0.0, 0.0, 0.0]));
+    assert_eq!(zero_world.position(zero_entity), Some([1.0, 2.0, 3.0]));
+    assert_eq!(World::default().gravity(), [0.0, -9.81, 0.0]);
+    Ok(())
+}

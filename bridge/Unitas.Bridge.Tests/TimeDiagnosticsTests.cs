@@ -20,6 +20,29 @@ namespace Unitas.Bridge.Tests
             LogClearEmptiesTheRecorder();
             AmbientOriginIsCapturedOnTheEntry();
             LogExceptionRecordsSeverityMessageAndStack();
+            SetFixedDeltaTimeRejectsInvalidValues();
+        }
+
+        private static void SetFixedDeltaTimeRejectsInvalidValues()
+        {
+            Time.SetFixedDeltaTime(0.05f);
+            Check.Equal("SetFixedDeltaTime accepts positive finite value", 0.05f, Time.fixedDeltaTime);
+            Check.Equal("fixedUnscaledDeltaTime matches SetFixedDeltaTime", 0.05f, Time.fixedUnscaledDeltaTime);
+
+            Time.SetFixedDeltaTime(0f);
+            Check.Equal("SetFixedDeltaTime resets to 0.02 on zero", 0.02f, Time.fixedDeltaTime);
+
+            Time.SetFixedDeltaTime(0.05f);
+            Time.SetFixedDeltaTime(-0.01f);
+            Check.Equal("SetFixedDeltaTime resets to 0.02 on negative", 0.02f, Time.fixedDeltaTime);
+
+            Time.SetFixedDeltaTime(0.05f);
+            Time.SetFixedDeltaTime(float.NaN);
+            Check.Equal("SetFixedDeltaTime resets to 0.02 on NaN", 0.02f, Time.fixedDeltaTime);
+
+            Time.SetFixedDeltaTime(0.05f);
+            Time.SetFixedDeltaTime(float.PositiveInfinity);
+            Check.Equal("SetFixedDeltaTime resets to 0.02 on PositiveInfinity", 0.02f, Time.fixedDeltaTime);
         }
 
         private static void LogExceptionRecordsSeverityMessageAndStack()

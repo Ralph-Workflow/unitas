@@ -7,7 +7,7 @@ use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::query::{cast_against, normalize, CastShape, QueryHit};
 
-const GRAVITY: f64 = 9.81;
+const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
 
@@ -23,8 +23,8 @@ struct Body {
     layer: u32,
 }
 
-#[derive(Default)]
 pub struct World {
+    gravity: [f64; 3],
     bodies: Vec<Body>,
     indices: HashMap<EntityId, usize>,
     overlapping: BTreeSet<(EntityId, EntityId)>,
@@ -33,9 +33,31 @@ pub struct World {
     trigger_events: Vec<TriggerEvent>,
 }
 
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl World {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_gravity(DEFAULT_GRAVITY)
+    }
+
+    pub fn with_gravity(gravity: [f64; 3]) -> Self {
+        Self {
+            gravity,
+            bodies: Vec::new(),
+            indices: HashMap::new(),
+            overlapping: BTreeSet::new(),
+            overlapping_triggers: BTreeSet::new(),
+            events: Vec::new(),
+            trigger_events: Vec::new(),
+        }
+    }
+
+    pub fn gravity(&self) -> [f64; 3] {
+        self.gravity
     }
 
     pub fn add_body(&mut self, entity: EntityId, desc: BodyDesc) -> Result<(), PhysicsError> {
@@ -273,7 +295,9 @@ impl World {
                 continue;
             }
             if body.use_gravity {
-                body.velocity[1] -= GRAVITY * delta_seconds;
+                body.velocity[0] += self.gravity[0] * delta_seconds;
+                body.velocity[1] += self.gravity[1] * delta_seconds;
+                body.velocity[2] += self.gravity[2] * delta_seconds;
             }
             body.position[0] += body.velocity[0] * delta_seconds;
             body.position[1] += body.velocity[1] * delta_seconds;
