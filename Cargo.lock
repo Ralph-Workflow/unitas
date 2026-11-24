@@ -26,6 +26,10 @@ dependencies = [
 [[package]]
 name = "unitas-build"
 version = "0.1.0"
+dependencies = [
+ "unitas-asset",
+ "unitas-runtime",
+]
 
 [[package]]
 name = "unitas-core"

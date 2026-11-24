@@ -2,3 +2,7 @@
 name = "unitas-build"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+unitas-asset = { path = "../unitas-asset" }
+unitas-runtime = { path = "../unitas-runtime" }
