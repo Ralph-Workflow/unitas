@@ -1,0 +1,11 @@
+{
+  "name": "failing-checkpoint",
+  "scene": "bridge/Unitas.Bridge.Tests/Fixtures/playtest/Assets/Scenes/playtest_scene.unity",
+  "steps": [
+    { "load_scene": { "path": "bridge/Unitas.Bridge.Tests/Fixtures/playtest/Assets/Scenes/playtest_scene.unity", "mode": "single" } },
+    { "tick": { "frames": 30, "delta_seconds": 0.02 } }
+  ],
+  "checkpoints": [
+    { "id": "moved", "after_step": 2, "kind": "transform_position", "object": "Ball", "expected": [9.0, 9.0, 9.0], "tolerance": 0.05 }
+  ]
+}

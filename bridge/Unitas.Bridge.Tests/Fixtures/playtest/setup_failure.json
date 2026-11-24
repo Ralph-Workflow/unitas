@@ -1,0 +1,10 @@
+{
+  "name": "setup-failure",
+  "scene": "bridge/Unitas.Bridge.Tests/Fixtures/playtest/does_not_exist.unity",
+  "steps": [
+    { "tick": { "frames": 1, "delta_seconds": 0.02 } }
+  ],
+  "checkpoints": [
+    { "id": "frame", "after_step": 1, "kind": "frame_count", "expected": 1 }
+  ]
+}

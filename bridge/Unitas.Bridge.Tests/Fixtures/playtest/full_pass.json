@@ -1,0 +1,19 @@
+{
+  "name": "full-pass",
+  "scene": "bridge/Unitas.Bridge.Tests/Fixtures/playtest/Assets/Scenes/playtest_scene.unity",
+  "steps": [
+    { "load_scene": { "path": "bridge/Unitas.Bridge.Tests/Fixtures/playtest/Assets/Scenes/playtest_scene.unity", "mode": "single" } },
+    { "tick": { "frames": 30, "delta_seconds": 0.02 } },
+    { "inject_key": { "key": "Space", "pressed": true } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "inject_pointer": { "x": 100.0, "y": 200.0 } },
+    { "inject_scroll": { "x": 0.0, "y": 1.0 } },
+    { "set_time_scale": { "value": 1.0 } }
+  ],
+  "checkpoints": [
+    { "id": "moved", "after_step": 2, "kind": "transform_position", "object": "Ball", "expected": [1.0, 0.5, 0.0], "tolerance": 0.05 },
+    { "id": "logged", "after_step": 2, "kind": "log", "severity": "log", "contains": "started" },
+    { "id": "frame", "after_step": 2, "kind": "frame_count", "expected": 31 },
+    { "id": "shot", "after_step": 2, "kind": "render_capture", "camera": "Main Camera", "width": 64, "height": 64, "expected_non_background_pixels": 4096 }
+  ]
+}
