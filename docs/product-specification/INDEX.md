@@ -16,11 +16,11 @@ states, edge cases, failures, and acceptance stories. They do not prescribe
 architecture, source-code organization, dependencies, algorithms, toolchains,
 delivery phases, or implementation tasks.
 
-[`PROMPT.md`](../../PROMPT.md) defines the product-wide vision and boundaries.
-The documents below expand that contract. When a summary in `PROMPT.md` is less
-specific than a linked feature specification, the detailed specification
-controls for that feature. A detailed specification cannot expand the declared
-product boundaries without a corresponding update to `PROMPT.md`.
+This index defines the product-wide vision and boundaries. The documents below
+expand that contract. When a summary in this index is less specific than a
+linked feature specification, the detailed specification controls for that
+feature. A detailed specification cannot expand the declared product boundaries
+without a corresponding update to this index.
 
 ## How to Read the Specification
 
@@ -59,8 +59,8 @@ type exists, a script compiles, or a scene opens.
 
 ## Coverage Rules
 
-Every product feature named in `PROMPT.md` appears in at least one row above.
-Every detailed document links its acceptance outcomes to the feature catalog.
+Every declared product feature appears in at least one row above. Every detailed
+document links its acceptance outcomes to the feature catalog.
 A feature that spans documents has one owning specification and cross-references
 from related documents rather than competing definitions.
 
@@ -91,7 +91,7 @@ matching names exist.
 ## Cross-Cutting Acceptance
 
 The specification corpus is complete when a reader can begin with this index,
-locate every feature promised by `PROMPT.md`, determine its observable behavior
-and limitations, identify its failure states, and find at least one acceptance
-story or benchmark that can demonstrate the claim without relying on private
+locate every declared feature, determine its observable behavior and
+limitations, identify its failure states, and find at least one acceptance story
+or benchmark that can demonstrate the claim without relying on private
 implementation knowledge.
