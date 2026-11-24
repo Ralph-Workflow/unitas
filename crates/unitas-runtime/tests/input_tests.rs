@@ -206,6 +206,28 @@ fn input_key_axis_ramps_with_sensitivity_decays_with_gravity_and_respects_snap_i
 }
 
 #[test]
+fn input_default_axis_configs_match_unity_project_settings_defaults() {
+    let axes = default_axis_configs();
+    let horizontal = axes.iter().find(|axis| axis.name == "Horizontal");
+    let vertical = axes.iter().find(|axis| axis.name == "Vertical");
+    assert!(
+        horizontal.is_some(),
+        "the fallback axis set must contain Horizontal"
+    );
+    assert!(vertical.is_some(), "the fallback axis set must contain Vertical");
+    assert_eq!(
+        horizontal.map(|axis| axis.snap),
+        Some(true),
+        "Unity's default Horizontal axis snaps"
+    );
+    assert_eq!(
+        vertical.map(|axis| axis.snap),
+        Some(false),
+        "Unity's default Vertical axis does not snap"
+    );
+}
+
+#[test]
 fn input_mouse_delta_axes_multiple_same_name_entries_and_reset_clear_all_state() {
     let mut input = InputState::with_default_axes();
     assert!(!default_axis_configs().is_empty());
@@ -338,12 +360,21 @@ fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reloa
         Some(STATE_DOWN | STATE_PRESSED)
     );
 
+    runtime.input_key_event(32, true);
     runtime.load_scene(Path::new("tests/fixtures/scene_with_script.unity"))?;
     let _ = std::fs::remove_dir_all(&temp_root);
 
     assert_eq!(runtime.input_key_state(119), 0);
     assert_eq!(runtime.input_axis("CustomThrust"), None);
     assert_eq!(runtime.input_axis("Horizontal"), Some(0.0));
+    assert_eq!(runtime.input_key_state(32), 0);
+    runtime.tick(0.1)?;
+    runtime.tick(0.1)?;
+    assert_eq!(
+        runtime.input_key_state(32),
+        0,
+        "a key press queued before a scene load must never reach a frame boundary"
+    );
     Ok(())
 }
 

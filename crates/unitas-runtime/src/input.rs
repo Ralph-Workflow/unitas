@@ -153,7 +153,7 @@ pub fn default_axis_configs() -> Vec<AxisConfig> {
             gravity: 3.0,
             dead: 0.001,
             sensitivity: 3.0,
-            snap: true,
+            snap: false,
             invert: false,
             axis_type: 0,
             axis: 0,

@@ -15,6 +15,7 @@ namespace Unitas.Bridge.Tests
             TestAxisRampSnapGravityInversionAndProjectSettingsDiscovery();
             TestSceneReloadResetsInputState();
             TestUnknownAxisAndButtonLogErrors();
+            TestInjectedEventsApplyFromTheNextFrameOnly();
         }
 
         private static void TestInertDefaultsWithoutProvider()
@@ -364,6 +365,68 @@ namespace Unitas.Bridge.Tests
                 Check.That(
                     "Third error mentions NonExistentButton",
                     errors.Count >= 3 && errors[2].Message.Contains("NonExistentButton", StringComparison.Ordinal));
+            }
+        }
+
+        private static void TestInjectedEventsApplyFromTheNextFrameOnly()
+        {
+            string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_with_script.unity");
+            Check.That("Queued input test scene exists", File.Exists(scenePath));
+
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                ScriptRegistry.Clear();
+                InputRecorderScript recorder = new InputRecorderScript { WatchedKey = KeyCode.Space, WatchedMouseButton = 0 };
+                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(scenePath);
+                    host.Tick(0.02);
+
+                    host.InjectKey(KeyCode.Space, true);
+                    host.InjectMouseButton(0, true);
+                    host.InjectPointerPosition(30.0, 40.0);
+                    host.InjectScroll(0.0, 1.5);
+
+                    Check.Equal("Queued key is not observable before the next tick", false, Input.GetKey(KeyCode.Space));
+                    Check.Equal("Queued key down is not observable before the next tick", false, Input.GetKeyDown(KeyCode.Space));
+                    Check.Equal("Queued mouse button is not observable before the next tick", false, Input.GetMouseButton(0));
+                    Check.Equal("Queued mouse button down is not observable before the next tick", false, Input.GetMouseButtonDown(0));
+                    Check.Equal("Queued pointer x is not observable before the next tick", 0f, Input.mousePosition.x);
+                    Check.Equal("Queued pointer y is not observable before the next tick", 0f, Input.mousePosition.y);
+                    Check.Equal("Queued scroll is not observable before the next tick", 0f, Input.mouseScrollDelta.y);
+
+                    host.Tick(0.02);
+
+                    Check.Equal("Injected key down is observable on the next frame", true, Input.GetKeyDown(KeyCode.Space));
+                    Check.Equal("Injected key is held on the next frame", true, Input.GetKey(KeyCode.Space));
+                    Check.Equal("Injected mouse button down is observable on the next frame", true, Input.GetMouseButtonDown(0));
+                    Check.Equal("Injected mouse button is held on the next frame", true, Input.GetMouseButton(0));
+                    Check.Equal("Injected pointer x is observable on the next frame", 30f, Input.mousePosition.x);
+                    Check.Equal("Injected pointer y is observable on the next frame", 40f, Input.mousePosition.y);
+                    Check.Equal("Injected scroll is observable on the next frame", 1.5f, Input.mouseScrollDelta.y);
+
+                    host.Tick(0.02);
+
+                    Check.Equal("Key down transition lasts exactly one frame", false, Input.GetKeyDown(KeyCode.Space));
+                    Check.Equal("Key stays held after the transition frame", true, Input.GetKey(KeyCode.Space));
+                    Check.Equal("Mouse button down transition lasts exactly one frame", false, Input.GetMouseButtonDown(0));
+
+                    host.InjectKey(KeyCode.RightArrow, true);
+                    host.LoadScene(scenePath);
+                    host.Tick(0.02);
+                    host.Tick(0.02);
+
+                    Check.Equal("Scene reload discards the queued key down", false, Input.GetKeyDown(KeyCode.RightArrow));
+                    Check.Equal("Scene reload discards the queued key hold", false, Input.GetKey(KeyCode.RightArrow));
+                }
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
             }
         }
 
