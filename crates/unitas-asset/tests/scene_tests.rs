@@ -6,7 +6,7 @@ use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
     assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
     assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    CapsuleColliderComponent, MaterialValues, SceneError,
+    CapsuleColliderComponent, CharacterControllerComponent, MaterialValues, SceneError,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -101,6 +101,113 @@ GameObject:
 --- !u!54 &2
 Rigidbody:
   m_GameObject: {fileID: 99}
+";
+
+const CHARACTER_CONTROLLER_SCENE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Player
+  m_Layer: 0
+--- !u!4 &2
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Father: {fileID: 0}
+--- !u!136 &3
+CapsuleCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1}
+  m_Radius: 0.4
+  m_Height: 1.6
+  m_Direction: 1
+  m_Center: {x: 0, y: 0.8, z: 0}
+--- !u!143 &4
+CharacterController:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1}
+  m_Enabled: 0
+  m_Height: 1.8
+  m_Radius: 0.35
+  m_SlopeLimit: 50
+  m_StepOffset: 0.4
+  m_SkinWidth: 0.05
+  m_MinMoveDistance: 0.1
+  m_Center: {x: 0, y: 0.9, z: 0}
+--- !u!1 &5
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: DefaultCharacter
+--- !u!4 &6
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 5}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Father: {fileID: 0}
+--- !u!143 &7
+CharacterController:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 5}
+--- !u!1 &10
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: BuiltInCharacter
+--- !u!4 &11
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 10}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Father: {fileID: 0}
+--- !u!114 &12
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 10}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name:
+  m_EditorClassIdentifier:
+  m_Radius: notanumber
+  m_Height: -2
+  m_SlopeLimit: 120
+  m_StepOffset: -1
+  m_SkinWidth: nan
+  m_MinMoveDistance: -3
+  m_Center: {x: bad, y: 0, z: 0}
+--- !u!1 &15
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: MonoCharacter
+--- !u!4 &16
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 15}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Father: {fileID: 0}
+--- !u!114 &17
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 15}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name:
+  m_EditorClassIdentifier: UnityEngine::CharacterController
+  m_Radius: 0.45
+  m_Height: 1.9
+  m_SlopeLimit: 40
+  m_StepOffset: 0.25
+  m_SkinWidth: 0.06
+  m_MinMoveDistance: 0.01
+  m_Center: {x: 0.1, y: 0.95, z: -0.1}
 ";
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -1052,5 +1159,97 @@ fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_d
     assert!(bad_dir_diag.contains("CapsuleCollider"));
     assert!(bad_dir_diag.contains("BadDirectionCapsule"));
 
+    Ok(())
+}
+
+#[test]
+fn character_controller_parses_from_scene_with_explicit_and_default_values() -> TestResult {
+    let stream = unity_yaml::parse(CHARACTER_CONTROLLER_SCENE)?;
+    let (graph, scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    assert!(scripts.is_empty());
+    let player = entity_named(&graph, "Player")?;
+    let default_character = entity_named(&graph, "DefaultCharacter")?;
+
+    let player_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == player)
+        .ok_or("no physics binding for Player")?;
+    let capsule = player_binding
+        .capsule_collider
+        .as_ref()
+        .ok_or("Player has no capsule collider")?;
+    assert_eq!(capsule.radius, 0.4);
+    let controller: &CharacterControllerComponent = player_binding
+        .character_controller
+        .as_ref()
+        .ok_or("Player has no character controller")?;
+    assert!(!controller.enabled);
+    assert_eq!(controller.radius, 0.35);
+    assert_eq!(controller.height, 1.8);
+    assert_eq!(controller.center, [0.0, 0.9, 0.0]);
+    assert_eq!(controller.slope_limit, 50.0);
+    assert_eq!(controller.step_offset, 0.4);
+    assert_eq!(controller.skin_width, 0.05);
+    assert_eq!(controller.min_move_distance, 0.1);
+
+    let default_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == default_character)
+        .ok_or("no physics binding for DefaultCharacter")?;
+    let default_controller = default_binding
+        .character_controller
+        .as_ref()
+        .ok_or("DefaultCharacter has no character controller")?;
+    assert!(default_controller.enabled);
+    assert_eq!(default_controller.radius, 0.5);
+    assert_eq!(default_controller.height, 2.0);
+    assert_eq!(default_controller.center, [0.0, 0.0, 0.0]);
+    assert_eq!(default_controller.slope_limit, 45.0);
+    assert_eq!(default_controller.step_offset, 0.3);
+    assert_eq!(default_controller.skin_width, 0.08);
+    assert_eq!(default_controller.min_move_distance, 0.0);
+
+    let mono_character = entity_named(&graph, "MonoCharacter")?;
+    let mono_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == mono_character)
+        .ok_or("no physics binding for MonoCharacter")?;
+    let mono_controller = mono_binding
+        .character_controller
+        .as_ref()
+        .ok_or("MonoCharacter has no character controller")?;
+    assert!(mono_controller.enabled);
+    assert_eq!(mono_controller.radius, 0.45);
+    assert_eq!(mono_controller.height, 1.9);
+    assert_eq!(mono_controller.center, [0.1, 0.95, -0.1]);
+    assert_eq!(mono_controller.slope_limit, 40.0);
+    assert_eq!(mono_controller.step_offset, 0.25);
+    assert_eq!(mono_controller.skin_width, 0.06);
+    assert_eq!(mono_controller.min_move_distance, 0.01);
+
+    Ok(())
+}
+
+#[test]
+fn character_controller_invalid_values_fall_back_to_defaults() -> TestResult {
+    let stream = unity_yaml::parse(CHARACTER_CONTROLLER_SCENE)?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    let built_in = entity_named(&graph, "BuiltInCharacter")?;
+    let binding = bindings
+        .iter()
+        .find(|binding| binding.entity == built_in)
+        .ok_or("no physics binding for BuiltInCharacter")?;
+    let controller = binding
+        .character_controller
+        .as_ref()
+        .ok_or("BuiltInCharacter has no character controller")?;
+    assert!(controller.enabled);
+    assert_eq!(controller.radius, 0.5);
+    assert_eq!(controller.height, 2.0);
+    assert_eq!(controller.center, [0.0, 0.0, 0.0]);
+    assert_eq!(controller.slope_limit, 45.0);
+    assert_eq!(controller.step_offset, 0.3);
+    assert_eq!(controller.skin_width, 0.08);
+    assert_eq!(controller.min_move_distance, 0.0);
     Ok(())
 }

@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider, ISceneHost, IApplicationHost
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, ICharacterControllerProvider, IInputProvider, ISceneHost, IApplicationHost
     {
         private const uint CollisionPhaseEnter = 0;
         private const uint CollisionPhaseStay = 1;
@@ -109,6 +109,7 @@ namespace Unitas.Bridge
             }
 
             Physics.Provider = this;
+            CharacterController.Provider = this;
             Input.Provider = this;
             SceneManager.Host = this;
             Application.Host = this;
@@ -527,6 +528,10 @@ namespace Unitas.Bridge
                 {
                     Physics.Provider = null;
                 }
+                if (ReferenceEquals(CharacterController.Provider, this))
+                {
+                    CharacterController.Provider = null;
+                }
                 if (ReferenceEquals(Input.Provider, this))
                 {
                     Input.Provider = null;
@@ -829,6 +834,102 @@ namespace Unitas.Bridge
         public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
         {
             return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_velocity, velocity);
+        }
+
+        public bool TryMove(CharacterMoveInput input, out CharacterMoveOutput output)
+        {
+            output = default;
+            if (_isDisposed)
+            {
+                return false;
+            }
+            RuntimeInterop.AbiCharacterMoveInput abiInput = new RuntimeInterop.AbiCharacterMoveInput
+            {
+                EntityId = input.Entity,
+                PositionX = input.Position.x,
+                PositionY = input.Position.y,
+                PositionZ = input.Position.z,
+                MotionX = input.Motion.x,
+                MotionY = input.Motion.y,
+                MotionZ = input.Motion.z,
+                Radius = input.Radius,
+                Height = input.Height,
+                CenterX = input.Center.x,
+                CenterY = input.Center.y,
+                CenterZ = input.Center.z,
+                SlopeLimitDeg = input.SlopeLimit,
+                StepOffset = input.StepOffset,
+                SkinWidth = input.SkinWidth,
+                MinMoveDistance = input.MinMoveDistance,
+                DeltaSeconds = input.DeltaSeconds,
+                LayerMask = input.LayerMask,
+                Enabled = input.Enabled ? (byte)1 : (byte)0,
+            };
+            if (RuntimeInterop.unitas_runtime_character_move(_runtimeHandle, ref abiInput, out RuntimeInterop.AbiCharacterMoveOutput abiOutput) != 0)
+            {
+                return false;
+            }
+            output = new CharacterMoveOutput(
+                new Vector3((float)abiOutput.PositionX, (float)abiOutput.PositionY, (float)abiOutput.PositionZ),
+                abiOutput.GroundEntityId,
+                (CollisionFlags)abiOutput.CollisionFlags,
+                abiOutput.IsGrounded != 0);
+            return true;
+        }
+
+        public bool TryTeleport(ulong entity, Vector3 position)
+        {
+            if (_isDisposed)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 24);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[24];
+            BitConverter.GetBytes((double)position.x).CopyTo(bytes, 0);
+            BitConverter.GetBytes((double)position.y).CopyTo(bytes, 8);
+            BitConverter.GetBytes((double)position.z).CopyTo(bytes, 16);
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+            return RuntimeInterop.unitas_runtime_character_teleport(_runtimeHandle, entity, buffer) == 0;
+        }
+
+        public bool TryGetConfig(ulong entity, out CharacterControllerConfig config)
+        {
+            config = default;
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 76);
+            if (buffer == IntPtr.Zero || RuntimeInterop.unitas_runtime_character_controller_config(_runtimeHandle, entity, buffer) != 0)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[76];
+            Marshal.Copy(buffer, bytes, 0, bytes.Length);
+            float radius = (float)BitConverter.ToDouble(bytes, 0);
+            float height = (float)BitConverter.ToDouble(bytes, 8);
+            float centerX = (float)BitConverter.ToDouble(bytes, 16);
+            float centerY = (float)BitConverter.ToDouble(bytes, 24);
+            float centerZ = (float)BitConverter.ToDouble(bytes, 32);
+            float slopeLimit = (float)BitConverter.ToDouble(bytes, 40);
+            float stepOffset = (float)BitConverter.ToDouble(bytes, 48);
+            float skinWidth = (float)BitConverter.ToDouble(bytes, 56);
+            float minMoveDistance = (float)BitConverter.ToDouble(bytes, 64);
+            bool enabled = bytes[72] != 0;
+            config = new CharacterControllerConfig(
+                radius,
+                height,
+                new Vector3(centerX, centerY, centerZ),
+                slopeLimit,
+                stepOffset,
+                skinWidth,
+                minMoveDistance,
+                enabled);
+            return true;
         }
 
         private bool TryReadBodyVector(ulong entity, Func<ulong, ulong, IntPtr, int> query, out Vector3 value)
@@ -1144,6 +1245,18 @@ namespace Unitas.Bridge
                     body.mass = metadata.Mass;
                     body.useGravity = metadata.UseGravity;
                     body.isKinematic = metadata.IsKinematic;
+                }
+                if (TryGetConfig(entity, out CharacterControllerConfig ccConfig))
+                {
+                    CharacterController controller = owner.GetComponent<CharacterController>() ?? owner.AddComponent<CharacterController>();
+                    controller.radius = ccConfig.Radius;
+                    controller.height = ccConfig.Height;
+                    controller.center = ccConfig.Center;
+                    controller.slopeLimit = ccConfig.SlopeLimit;
+                    controller.stepOffset = ccConfig.StepOffset;
+                    controller.skinWidth = ccConfig.SkinWidth;
+                    controller.minMoveDistance = ccConfig.MinMoveDistance;
+                    controller.enabled = ccConfig.Enabled;
                 }
                 SyncSimulatedTransform(owner);
             }

@@ -11,7 +11,10 @@ use unitas_runtime::{
     unitas_runtime_scene_count, unitas_runtime_scene_name, unitas_runtime_set_active_scene,
     unitas_runtime_set_body_position, unitas_runtime_set_body_velocity,
     unitas_runtime_set_callbacks, unitas_runtime_set_time_scale, unitas_runtime_tick,
-    unitas_runtime_time_scale, unitas_runtime_unload_scene, Runtime,
+    unitas_runtime_time_scale, unitas_runtime_unload_scene, AbiCharacterMoveInput,
+    AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
+    unitas_runtime_character_controller_config, unitas_runtime_character_move,
+    unitas_runtime_character_teleport,
 };
 
 const SCENE_A: &str = "tests/fixtures/scene_with_script.unity";
@@ -534,6 +537,183 @@ fn abi_set_body_velocity_and_position_update_simulation_and_reject_invalid_write
         -4
     );
     assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+fn default_abi_character_input(
+    entity_id: u64,
+    position: [f64; 3],
+    motion: [f64; 3],
+) -> AbiCharacterMoveInput {
+    AbiCharacterMoveInput {
+        entity_id,
+        position,
+        motion,
+        radius: 0.5,
+        height: 2.0,
+        center: [0.0, 0.0, 0.0],
+        slope_limit_deg: 45.0,
+        step_offset: 0.3,
+        skin_width: 0.08,
+        min_move_distance: 0.001,
+        delta_seconds: 0.02,
+        layer_mask: u32::MAX,
+        enabled: 1,
+        reserved: [0; 3],
+    }
+}
+
+fn write_character_scene(temp_dir: &Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    std::fs::create_dir_all(temp_dir)?;
+    let path = temp_dir.join("character_abi_scene.unity");
+    let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: -0.5, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Size: {x: 20, y: 1, z: 20}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: Wall\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 2, y: 1, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!65 &202\nBoxCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 4, z: 4}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &300\nGameObject:\n  m_Name: Player\n  m_Layer: 2\n--- !u!4 &301\nTransform:\n  m_GameObject: {fileID: 300}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 1.5, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!65 &302\nBoxCollider:\n  m_GameObject: {fileID: 300}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 2, z: 1}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!143 &303\nCharacterController:\n  m_GameObject: {fileID: 300}\n  m_Enabled: 1\n  m_Radius: 0.4\n  m_Height: 1.8\n  m_Center: {x: 0, y: 0.1, z: 0}\n  m_SlopeLimit: 50\n  m_StepOffset: 0.25\n  m_SkinWidth: 0.05\n  m_MinMoveDistance: 0.002\n";
+    std::fs::write(&path, yaml)?;
+    Ok(path)
+}
+
+#[test]
+fn abi_character_move_resolves_ground_and_wall_collisions_and_excludes_self_collider(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_abi_character_move_{}",
+        std::process::id()
+    ));
+    let scene_path = write_character_scene(&temp_dir)?;
+    let scene_str = match scene_path.to_str() {
+        Some(s) => s.to_string(),
+        None => return Err(String::from("non-utf8 temp path").into()),
+    };
+
+    let handle = new_handle()?;
+    let load_code = load_scene_mode(handle, &scene_str, 0)?;
+    let floor_id = entity_id_for(&scene_str, "Floor")?;
+    let player_id = entity_id_for(&scene_str, "Player")?;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert_eq!(load_code, 0);
+
+    let mut cfg_bytes = [0u8; 64];
+    let cfg_buf = unitas_runtime_path_buffer(handle, 64);
+    assert_ne!(cfg_buf, 0);
+    assert_eq!(
+        unitas_runtime_character_controller_config(handle, player_id, cfg_buf),
+        0
+    );
+    test_read_path_buffer(handle, &mut cfg_bytes)?;
+    let cfg_radius = f64::from_le_bytes(cfg_bytes[0..8].try_into()?);
+    let cfg_height = f64::from_le_bytes(cfg_bytes[8..16].try_into()?);
+    let cfg_cy = f64::from_le_bytes(cfg_bytes[24..32].try_into()?);
+    let cfg_slope = f64::from_le_bytes(cfg_bytes[40..48].try_into()?);
+    let cfg_step = f64::from_le_bytes(cfg_bytes[48..56].try_into()?);
+    let cfg_skin = f64::from_le_bytes(cfg_bytes[56..64].try_into()?);
+    assert!((cfg_radius - 0.4).abs() < 1e-6);
+    assert!((cfg_height - 1.8).abs() < 1e-6);
+    assert!((cfg_cy - 0.1).abs() < 1e-6);
+    assert!((cfg_slope - 50.0).abs() < 1e-6);
+    assert!((cfg_step - 0.25).abs() < 1e-6);
+    assert!((cfg_skin - 0.05).abs() < 1e-6);
+
+    let down_input = default_abi_character_input(player_id, [0.0, 1.5, 0.0], [0.0, -1.0, 0.0]);
+    let mut down_output = AbiCharacterMoveOutput::default();
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&down_input), Some(&mut down_output)),
+        0
+    );
+    assert_eq!(down_output.is_grounded, 1);
+    assert_ne!(down_output.collision_flags & 4, 0);
+    assert_eq!(down_output.ground_entity_id, floor_id);
+    assert!((down_output.position[1] - 1.08).abs() < 1e-4);
+
+    let wall_input =
+        default_abi_character_input(player_id, down_output.position, [3.0, -0.1, 0.0]);
+    let mut wall_output = AbiCharacterMoveOutput::default();
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&wall_input), Some(&mut wall_output)),
+        0
+    );
+    assert_eq!(wall_output.is_grounded, 1);
+    assert_ne!(wall_output.collision_flags & 1, 0);
+    assert_ne!(wall_output.collision_flags & 4, 0);
+    assert!((wall_output.position[0] - 0.92).abs() < 1e-4);
+
+    let teleport_pos = write_vec3_to_path_buffer(handle, [0.0, 5.0, 0.0])?;
+    assert_eq!(
+        unitas_runtime_character_teleport(handle, player_id, teleport_pos),
+        0
+    );
+    let hover_input = default_abi_character_input(player_id, [0.0, 5.0, 0.0], [0.5, 0.0, 0.0]);
+    let mut hover_output = AbiCharacterMoveOutput::default();
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&hover_input), Some(&mut hover_output)),
+        0
+    );
+    assert_eq!(hover_output.is_grounded, 0);
+    assert_eq!(hover_output.collision_flags, 0);
+    assert_eq!(hover_output.ground_entity_id, 0);
+    assert!((hover_output.position[0] - 0.5).abs() < 1e-6);
+    assert!((hover_output.position[1] - 5.0).abs() < 1e-6);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn abi_character_move_validates_handles_pointers_and_parameters() -> Result<(), Box<dyn Error>> {
+    let handle = new_handle()?;
+    let valid_input = default_abi_character_input(0, [0.0, 2.0, 0.0], [1.0, 0.0, 0.0]);
+    let mut output = AbiCharacterMoveOutput::default();
+
+    assert_eq!(
+        unitas_runtime_character_move(u64::MAX, Some(&valid_input), Some(&mut output)),
+        -1
+    );
+    assert_eq!(
+        unitas_runtime_character_move(handle, None, Some(&mut output)),
+        -2
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&valid_input), None),
+        -2
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    let mut invalid_input = valid_input;
+    invalid_input.radius = -1.0;
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&invalid_input), Some(&mut output)),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    let mut disabled_input = valid_input;
+    disabled_input.enabled = 0;
+    assert_eq!(
+        unitas_runtime_character_move(handle, Some(&disabled_input), Some(&mut output)),
+        0
+    );
+    assert_eq!(output.position, [0.0, 2.0, 0.0]);
+    assert_eq!(output.is_grounded, 0);
+    assert_eq!(output.collision_flags, 0);
+
+    let mut runtime = Runtime::new()?;
+    let move_res = runtime.character_move(CharacterMoveRequest {
+        entity: None,
+        position: [0.0, 2.0, 0.0],
+        motion: [1.0, 0.0, 0.0],
+        radius: 0.5,
+        height: 2.0,
+        center: [0.0, 0.0, 0.0],
+        slope_limit_deg: 45.0,
+        step_offset: 0.3,
+        skin_width: 0.08,
+        min_move_distance: 0.001,
+        layer_mask: u32::MAX,
+        enabled: true,
+        delta_seconds: 0.0,
+    })?;
+    assert_eq!(move_res.position, [1.0, 2.0, 0.0]);
 
     assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())

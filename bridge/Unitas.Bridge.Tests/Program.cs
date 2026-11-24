@@ -35,6 +35,8 @@ namespace Unitas.Bridge.Tests
             ObjectDiscoveryTests.Run();
             GameObjectDiscoveryTests.Run();
             LoggingTests.Run();
+            TestCharacterControllerDefaultsAndNullProvider();
+            TestEndToEndCharacterControllerMoveAndSceneLoad();
 
             if (Check.FailureCount > 0)
             {
@@ -437,6 +439,478 @@ namespace Unitas.Bridge.Tests
                 host.Shutdown();
             }
         }
+
+        private static void TestCharacterControllerDefaultsAndNullProvider()
+        {
+            ICharacterControllerProvider? savedProvider = CharacterController.Provider;
+            CharacterController.Provider = null;
+            try
+            {
+                Check.Equal("CollisionFlags.None value", 0, (int)CollisionFlags.None);
+                Check.Equal("CollisionFlags.Sides value", 1, (int)CollisionFlags.Sides);
+                Check.Equal("CollisionFlags.Above value", 2, (int)CollisionFlags.Above);
+                Check.Equal("CollisionFlags.Below value", 4, (int)CollisionFlags.Below);
+                Check.Equal("CollisionFlags.CollidedSides alias", (int)CollisionFlags.Sides, (int)CollisionFlags.CollidedSides);
+                Check.Equal("CollisionFlags.CollidedAbove alias", (int)CollisionFlags.Above, (int)CollisionFlags.CollidedAbove);
+                Check.Equal("CollisionFlags.CollidedBelow alias", (int)CollisionFlags.Below, (int)CollisionFlags.CollidedBelow);
+
+                GameObject go = new GameObject("CharacterDefaults");
+                CharacterController cc = go.AddComponent<CharacterController>();
+                Check.That("CharacterController is a Collider", cc is Collider);
+                Check.That("GetComponent<CharacterController> resolves controller", ReferenceEquals(go.GetComponent<CharacterController>(), cc));
+                Check.That("GetComponent<Collider> resolves CharacterController", ReferenceEquals(go.GetComponent<Collider>(), cc));
+                Check.Equal("CharacterController default enabled", true, cc.enabled);
+                Check.Equal("CharacterController default radius", 0.5f, cc.radius);
+                Check.Equal("CharacterController default height", 2.0f, cc.height);
+                Check.Equal("CharacterController default center x", 0f, cc.center.x);
+                Check.Equal("CharacterController default center y", 0f, cc.center.y);
+                Check.Equal("CharacterController default center z", 0f, cc.center.z);
+                Check.Equal("CharacterController default slopeLimit", 45.0f, cc.slopeLimit);
+                Check.Equal("CharacterController default stepOffset", 0.3f, cc.stepOffset);
+                Check.Equal("CharacterController default skinWidth", 0.08f, cc.skinWidth);
+                Check.Equal("CharacterController default minMoveDistance", 0.001f, cc.minMoveDistance);
+                Check.Equal("CharacterController default isGrounded", false, cc.isGrounded);
+                Check.That("CharacterController default collisionFlags is None", cc.collisionFlags == CollisionFlags.None);
+                Check.That("CharacterController default velocity is zero", cc.velocity == Vector3.zero);
+
+                cc.radius = 0.4f;
+                cc.height = 1.8f;
+                cc.center = new Vector3(0.1f, 0.2f, -0.1f);
+                cc.slopeLimit = 50f;
+                cc.stepOffset = 0.25f;
+                cc.skinWidth = 0.05f;
+                cc.minMoveDistance = 0.002f;
+                Check.Equal("CharacterController radius round trip", 0.4f, cc.radius);
+                Check.Equal("CharacterController height round trip", 1.8f, cc.height);
+                Check.Equal("CharacterController center y round trip", 0.2f, cc.center.y);
+                Check.Equal("CharacterController slopeLimit round trip", 50f, cc.slopeLimit);
+                Check.Equal("CharacterController stepOffset round trip", 0.25f, cc.stepOffset);
+                Check.Equal("CharacterController skinWidth round trip", 0.05f, cc.skinWidth);
+                Check.Equal("CharacterController minMoveDistance round trip", 0.002f, cc.minMoveDistance);
+
+                go.transform.position = new Vector3(1f, 2f, 3f);
+                CollisionFlags nullProviderFlags = cc.Move(new Vector3(5f, -1f, 2f));
+                Check.That("Move with null provider returns CollisionFlags.None", nullProviderFlags == CollisionFlags.None);
+                Check.Equal("Move with null provider keeps isGrounded false", false, cc.isGrounded);
+                Check.That("Move with null provider keeps collisionFlags None", cc.collisionFlags == CollisionFlags.None);
+                Check.That("Move with null provider leaves transform position unchanged", go.transform.position == new Vector3(1f, 2f, 3f));
+
+                bool simpleMoved = cc.SimpleMove(new Vector3(3f, 0f, 0f));
+                Check.Equal("SimpleMove with null provider returns false", false, simpleMoved);
+            }
+            finally
+            {
+                CharacterController.Provider = savedProvider;
+            }
+        }
+
+        private static void TestEndToEndCharacterControllerMoveAndSceneLoad()
+        {
+            string tempDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_bridge_cc_e2e_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string scenePath = Path.Combine(tempDir, "character_e2e.unity");
+            File.WriteAllText(scenePath, CharacterControllerE2eSceneYaml);
+
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                ScriptRegistry.Clear();
+                CharacterProbeScript? playerScript = null;
+                PlatformVelocityScript? platformScript = null;
+                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => playerScript = new CharacterProbeScript());
+                ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => platformScript = new PlatformVelocityScript());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    Check.That("BridgeHost wires CharacterController.Provider", ReferenceEquals(CharacterController.Provider, host));
+                    host.LoadScene(scenePath);
+                    host.Tick(0.0);
+
+                    Check.That("Player script created on scene load", playerScript != null);
+                    Check.That("Platform script created on scene load", platformScript != null);
+
+                    CharacterController? cc = playerScript!.GetComponent<CharacterController>();
+                    Check.That("CharacterController attached from YAML scene load", cc != null);
+                    Check.Equal("Scene-loaded CharacterController radius", 0.4f, cc!.radius);
+                    Check.Equal("Scene-loaded CharacterController height", 1.8f, cc.height);
+                    Check.Equal("Scene-loaded CharacterController center y", 0.1f, cc.center.y);
+                    Check.Equal("Scene-loaded CharacterController slopeLimit", 45f, cc.slopeLimit);
+                    Check.Equal("Scene-loaded CharacterController stepOffset", 0.3f, cc.stepOffset);
+                    Check.Equal("Scene-loaded CharacterController skinWidth", 0.05f, cc.skinWidth);
+                    Check.Equal("Scene-loaded CharacterController minMoveDistance", 0.002f, cc.minMoveDistance);
+                    Check.Equal("Scene-loaded CharacterController enabled", true, cc.enabled);
+
+                    cc.radius = 0.5f;
+                    cc.height = 2.0f;
+                    cc.center = Vector3.zero;
+                    cc.slopeLimit = 45f;
+                    cc.stepOffset = 0.3f;
+                    cc.skinWidth = 0.08f;
+                    cc.minMoveDistance = 0.001f;
+
+                    playerScript.transform.position = new Vector3(0f, 1.2f, 0f);
+                    CollisionFlags landFlags = cc.Move(new Vector3(0f, -0.5f, 0f));
+                    Check.That("Landing on ground reports CollisionFlags.Below", (landFlags & CollisionFlags.Below) != 0);
+                    Check.Equal("Landing on ground sets isGrounded true", true, cc.isGrounded);
+                    Check.That("Landing on ground sets collisionFlags property", cc.collisionFlags == landFlags);
+                    Check.That("Landing on ground stops above floor", Math.Abs(playerScript.transform.position.y - 1.08f) < 0.05f);
+                    Check.That("Move updates velocity", cc.velocity.y < -1f);
+
+                    Vector3 groundedStart = playerScript.transform.position;
+                    CollisionFlags firstMulti = cc.Move(new Vector3(0.4f, -0.05f, 0f));
+                    CollisionFlags secondMulti = cc.Move(new Vector3(0.6f, -0.05f, 0.25f));
+                    Check.That("First move in same frame stays grounded", (firstMulti & CollisionFlags.Below) != 0 && cc.isGrounded);
+                    Check.That("Second move in same frame composes position x", Math.Abs(playerScript.transform.position.x - (groundedStart.x + 1.0f)) < 0.02f);
+                    Check.That("Second move in same frame composes position z", Math.Abs(playerScript.transform.position.z - 0.25f) < 0.02f);
+                    Check.That("Second move in same frame stays grounded", (secondMulti & CollisionFlags.Below) != 0 && cc.isGrounded);
+
+                    playerScript.transform.position = new Vector3(-8.5f, 1.08f, 0f);
+                    CollisionFlags wallFlags = cc.Move(new Vector3(-2.0f, -0.05f, 1.25f));
+                    Check.That("Hitting wall reports CollisionFlags.Sides", (wallFlags & CollisionFlags.Sides) != 0);
+                    Check.That("Hitting wall while grounded also reports Below", (wallFlags & CollisionFlags.Below) != 0);
+                    Check.That("Wall blocks x motion past boundary", playerScript.transform.position.x >= -9.08f - 0.02f);
+                    Check.That("Wall slide preserves z motion", Math.Abs(playerScript.transform.position.z - 1.25f) < 0.02f);
+
+                    playerScript.transform.position = new Vector3(0f, 1.2f, -5f);
+                    CollisionFlags ceilFlags = cc.Move(new Vector3(0f, 1.0f, 0f));
+                    Check.That("Hitting ceiling reports CollisionFlags.Above", (ceilFlags & CollisionFlags.Above) != 0);
+                    Check.Equal("Hitting ceiling leaves isGrounded false", false, cc.isGrounded);
+                    Check.That("Ceiling clamps upward y position", playerScript.transform.position.y <= 1.42f + 0.02f);
+
+                    playerScript.transform.position = new Vector3(0f, 1.08f, 0f);
+                    for (int step = 0; step < 10; step++)
+                    {
+                        cc.Move(new Vector3(0.25f, -0.1f, 0f));
+                    }
+                    Check.That("Character climbs step within stepOffset (x > 1.5)", playerScript.transform.position.x > 1.5f);
+                    Check.That("Character climbs step within stepOffset (y >= 1.2)", playerScript.transform.position.y >= 1.2f);
+                    Check.Equal("Character remains grounded on climbed step", true, cc.isGrounded);
+
+                    playerScript.transform.position = new Vector3(0.4f, 1.08f, 4f);
+                    CollisionFlags tallStepFlags = cc.Move(new Vector3(1.0f, -0.1f, 0f));
+                    Check.That("Tall step (> stepOffset) reports CollisionFlags.Sides", (tallStepFlags & CollisionFlags.Sides) != 0);
+                    Check.That("Tall step blocks forward x motion", playerScript.transform.position.x <= 0.58f + 0.02f);
+                    Check.That("Tall step does not raise character y", playerScript.transform.position.y < 1.2f);
+
+                    playerScript.transform.position = new Vector3(0f, 1.08f, 8f);
+                    for (int step = 0; step < 15; step++)
+                    {
+                        cc.Move(new Vector3(0.25f, -0.1f, 0f));
+                    }
+                    Check.That("Character climbs walkable slope (x > 2.0)", playerScript.transform.position.x > 2.0f);
+                    Check.That("Character climbs walkable slope (y > 1.3)", playerScript.transform.position.y > 1.3f);
+                    Check.Equal("Character stays grounded on walkable slope", true, cc.isGrounded);
+
+                    cc.stepOffset = 0.2f;
+                    playerScript.transform.position = new Vector3(0f, 1.08f, 12f);
+                    for (int step = 0; step < 15; step++)
+                    {
+                        cc.Move(new Vector3(0.25f, -0.1f, 0f));
+                    }
+                    Check.That("Excessive slope (> slopeLimit) blocks climb (y < 1.35)", playerScript.transform.position.y < 1.35f);
+                    Check.That("Excessive slope reports CollisionFlags.Sides", (cc.collisionFlags & CollisionFlags.Sides) != 0);
+                    cc.stepOffset = 0.3f;
+
+                    playerScript.transform.position = new Vector3(0.3f, 1.08f, -8f);
+                    CollisionFlags standLowFlags = cc.Move(new Vector3(1.5f, -0.05f, 0f));
+                    Check.That("Standing character blocked by low obstacle reports Sides", (standLowFlags & CollisionFlags.Sides) != 0);
+                    Check.That("Standing character stopped before low obstacle", playerScript.transform.position.x <= 0.58f + 0.02f);
+
+                    playerScript.transform.position = new Vector3(0.3f, 1.08f, -8f);
+                    cc.height = 1.0f;
+                    cc.center = new Vector3(0f, -0.5f, 0f);
+                    CollisionFlags crouchFlags = cc.Move(new Vector3(1.5f, -0.05f, 0f));
+                    Check.That("Crouched character passes under low obstacle without Sides", (crouchFlags & CollisionFlags.Sides) == 0);
+                    Check.That("Crouched character reaches x = 1.8 under low obstacle", Math.Abs(playerScript.transform.position.x - 1.8f) < 0.02f);
+                    cc.height = 2.0f;
+                    cc.center = Vector3.zero;
+
+                    playerScript.transform.position = new Vector3(1.2f, 1.0f, -12f);
+                    CollisionFlags depenFlags = cc.Move(Vector3.zero);
+                    Check.That("Overlapping start depenetrates character outward (x >= 1.5)", playerScript.transform.position.x >= 1.5f - 0.01f);
+                    Check.That("Overlapping start depenetration sets CollisionFlags.Sides", (depenFlags & CollisionFlags.Sides) != 0);
+
+                    Rigidbody? platformBody = platformScript!.GetComponent<Rigidbody>();
+                    Check.That("Moving platform has Rigidbody", platformBody != null);
+                    Physics.Provider!.TrySetBodyVelocity(platformScript.gameObject.NativeEntityId, new Vector3(4f, 0f, -2f));
+                    playerScript.transform.position = new Vector3(0f, 1.2f, 16f);
+                    CollisionFlags platLand = cc.Move(new Vector3(0f, -0.3f, 0f));
+                    Check.That("Landing on moving platform sets Below", (platLand & CollisionFlags.Below) != 0);
+                    Check.Equal("Landing on moving platform sets isGrounded", true, cc.isGrounded);
+                    Vector3 onPlatformPos = playerScript.transform.position;
+                    CollisionFlags platCarry = cc.Move(new Vector3(0f, -0.05f, 0f));
+                    Check.That("Moving platform carry keeps character grounded", (platCarry & CollisionFlags.Below) != 0 && cc.isGrounded);
+                    Check.That("Moving platform carries character along +x", Math.Abs(playerScript.transform.position.x - (onPlatformPos.x + 0.08f)) < 0.01f);
+                    Check.That("Moving platform carries character along -z", Math.Abs(playerScript.transform.position.z - (onPlatformPos.z - 0.04f)) < 0.01f);
+
+                    playerScript.transform.position = new Vector3(0f, 6.0f, 16f);
+                    Check.Equal("Direct transform.position teleport resets isGrounded to false", false, cc.isGrounded);
+                    Check.That("Direct transform.position teleport resets collisionFlags to None", cc.collisionFlags == CollisionFlags.None);
+                    CollisionFlags postTeleportFlags = cc.Move(new Vector3(0.5f, 0f, 0f));
+                    Check.That("Move in air after teleport does not inherit platform velocity", Math.Abs(playerScript.transform.position.x - 0.5f) < 0.01f);
+                    Check.That("Move in air after teleport keeps z unchanged", Math.Abs(playerScript.transform.position.z - 16f) < 0.01f);
+                    Check.Equal("Move in air after teleport stays ungrounded", false, cc.isGrounded);
+                    Check.That("Move in air after teleport has CollisionFlags.None", postTeleportFlags == CollisionFlags.None);
+
+                    Vector3 beforeDisablePos = playerScript.transform.position;
+                    cc.enabled = false;
+                    CollisionFlags disabledFlags = cc.Move(new Vector3(3f, -3f, 1f));
+                    Check.That("Move when enabled = false returns CollisionFlags.None", disabledFlags == CollisionFlags.None);
+                    Check.Equal("Move when enabled = false sets isGrounded false", false, cc.isGrounded);
+                    Check.That("Move when enabled = false keeps position unchanged", playerScript.transform.position == beforeDisablePos);
+                    cc.enabled = true;
+                }
+                Check.That("Disposing BridgeHost clears CharacterController.Provider", CharacterController.Provider == null);
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        private sealed class CharacterProbeScript : MonoBehaviour
+        {
+        }
+
+        private sealed class PlatformVelocityScript : MonoBehaviour
+        {
+        }
+
+        private const string CharacterControllerE2eSceneYaml = @"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: Floor
+  m_Layer: 0
+--- !u!4 &101
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: -0.5, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &102
+BoxCollider:
+  m_GameObject: {fileID: 100}
+  m_IsTrigger: 0
+  m_Size: {x: 20, y: 1, z: 28}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &200
+GameObject:
+  m_Name: BackWall
+  m_Layer: 0
+--- !u!4 &201
+Transform:
+  m_GameObject: {fileID: 200}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -10, y: 2, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &202
+BoxCollider:
+  m_GameObject: {fileID: 200}
+  m_IsTrigger: 0
+  m_Size: {x: 1, y: 4, z: 10}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &300
+GameObject:
+  m_Name: Ceiling
+  m_Layer: 0
+--- !u!4 &301
+Transform:
+  m_GameObject: {fileID: 300}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 3, z: -5}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &302
+BoxCollider:
+  m_GameObject: {fileID: 300}
+  m_IsTrigger: 0
+  m_Size: {x: 6, y: 1, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &400
+GameObject:
+  m_Name: SmallStep
+  m_Layer: 0
+--- !u!4 &401
+Transform:
+  m_GameObject: {fileID: 400}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 2, y: 0.1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &402
+BoxCollider:
+  m_GameObject: {fileID: 400}
+  m_IsTrigger: 0
+  m_Size: {x: 2, y: 0.2, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &500
+GameObject:
+  m_Name: TallStep
+  m_Layer: 0
+--- !u!4 &501
+Transform:
+  m_GameObject: {fileID: 500}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 2, y: 0.25, z: 4}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &502
+BoxCollider:
+  m_GameObject: {fileID: 500}
+  m_IsTrigger: 0
+  m_Size: {x: 2, y: 0.5, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &600
+GameObject:
+  m_Name: WalkableSlope
+  m_Layer: 0
+--- !u!4 &601
+Transform:
+  m_GameObject: {fileID: 600}
+  m_LocalRotation: {x: 0, y: 0, z: 0.2164396, w: 0.976296}
+  m_LocalPosition: {x: 3, y: 0.5, z: 8}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &602
+BoxCollider:
+  m_GameObject: {fileID: 600}
+  m_IsTrigger: 0
+  m_Size: {x: 6, y: 1, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &700
+GameObject:
+  m_Name: SteepSlope
+  m_Layer: 0
+--- !u!4 &701
+Transform:
+  m_GameObject: {fileID: 700}
+  m_LocalRotation: {x: 0, y: 0, z: 0.5, w: 0.8660254}
+  m_LocalPosition: {x: 2.5, y: 1.5, z: 12}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &702
+BoxCollider:
+  m_GameObject: {fileID: 700}
+  m_IsTrigger: 0
+  m_Size: {x: 6, y: 1, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &800
+GameObject:
+  m_Name: LowBeam
+  m_Layer: 0
+--- !u!4 &801
+Transform:
+  m_GameObject: {fileID: 800}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 2, y: 1.9, z: -8}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &802
+BoxCollider:
+  m_GameObject: {fileID: 800}
+  m_IsTrigger: 0
+  m_Size: {x: 2, y: 1, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &900
+GameObject:
+  m_Name: OverlapBlock
+  m_Layer: 0
+--- !u!4 &901
+Transform:
+  m_GameObject: {fileID: 900}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: -12}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &902
+BoxCollider:
+  m_GameObject: {fileID: 900}
+  m_IsTrigger: 0
+  m_Size: {x: 2, y: 2, z: 2}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &1000
+GameObject:
+  m_Name: MovingPlatform
+  m_Layer: 0
+--- !u!4 &1001
+Transform:
+  m_GameObject: {fileID: 1000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: -0.5, z: 16}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!54 &1002
+Rigidbody:
+  m_GameObject: {fileID: 1000}
+  m_Mass: 1
+  m_UseGravity: 0
+  m_IsKinematic: 1
+--- !u!65 &1003
+BoxCollider:
+  m_GameObject: {fileID: 1000}
+  m_IsTrigger: 0
+  m_Size: {x: 10, y: 1, z: 6}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &1004
+MonoBehaviour:
+  m_GameObject: {fileID: 1000}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 22222222333344445555666677778888, type: 3}
+--- !u!1 &1100
+GameObject:
+  m_Name: Player
+  m_Layer: 2
+--- !u!4 &1101
+Transform:
+  m_GameObject: {fileID: 1100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1.5, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!65 &1102
+BoxCollider:
+  m_GameObject: {fileID: 1100}
+  m_IsTrigger: 0
+  m_Size: {x: 1, y: 2, z: 1}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!143 &1103
+CharacterController:
+  m_GameObject: {fileID: 1100}
+  m_Enabled: 1
+  m_Radius: 0.4
+  m_Height: 1.8
+  m_Center: {x: 0, y: 0.1, z: 0}
+  m_SlopeLimit: 45
+  m_StepOffset: 0.3
+  m_SkinWidth: 0.05
+  m_MinMoveDistance: 0.002
+--- !u!114 &1104
+MonoBehaviour:
+  m_GameObject: {fileID: 1100}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 11112222333344445555666677778888, type: 3}
+";
 
         private static string ResolveFixture(string relativePath)
         {

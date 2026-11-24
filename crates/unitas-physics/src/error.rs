@@ -5,6 +5,7 @@ pub enum PhysicsError {
     DuplicateEntity(EntityId),
     InvalidBody(EntityId),
     InvalidDeltaTime(f64),
+    InvalidCharacterController,
 }
 
 impl std::fmt::Display for PhysicsError {
@@ -20,6 +21,9 @@ impl std::fmt::Display for PhysicsError {
                 formatter,
                 "delta seconds {delta_seconds} is not a finite non-negative number"
             ),
+            Self::InvalidCharacterController => {
+                write!(formatter, "invalid character controller configuration")
+            }
         }
     }
 }

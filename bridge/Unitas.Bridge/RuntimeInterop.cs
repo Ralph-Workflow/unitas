@@ -259,6 +259,65 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_set_body_velocity(ulong runtime, ulong entity, IntPtr inBuffer);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCharacterMoveInput
+        {
+            public ulong EntityId;
+            public double PositionX;
+            public double PositionY;
+            public double PositionZ;
+            public double MotionX;
+            public double MotionY;
+            public double MotionZ;
+            public double Radius;
+            public double Height;
+            public double CenterX;
+            public double CenterY;
+            public double CenterZ;
+            public double SlopeLimitDeg;
+            public double StepOffset;
+            public double SkinWidth;
+            public double MinMoveDistance;
+            public double DeltaSeconds;
+            public uint LayerMask;
+            public byte Enabled;
+            public byte Reserved0;
+            public byte Reserved1;
+            public byte Reserved2;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCharacterMoveOutput
+        {
+            public double PositionX;
+            public double PositionY;
+            public double PositionZ;
+            public ulong GroundEntityId;
+            public uint CollisionFlags;
+            public byte IsGrounded;
+            public byte Reserved0;
+            public byte Reserved1;
+            public byte Reserved2;
+        }
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_character_move(
+            ulong runtime,
+            ref AbiCharacterMoveInput input,
+            out AbiCharacterMoveOutput output);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_character_teleport(
+            ulong runtime,
+            ulong entity,
+            IntPtr inBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_character_controller_config(
+            ulong runtime,
+            ulong entity,
+            IntPtr outBuffer);
+
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_input_key_event(ulong runtime, uint key, uint pressed);
 

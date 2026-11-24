@@ -16,6 +16,7 @@ const MONO_BEHAVIOUR_CLASS: u32 = 114;
 const PHYSIC_MATERIAL_CLASS: u32 = 134;
 const SPHERE_COLLIDER_CLASS: u32 = 135;
 const CAPSULE_COLLIDER_CLASS: u32 = 136;
+const CHARACTER_CONTROLLER_CLASS: u32 = 143;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
 const UNIT_QUATERNION_TOLERANCE: f64 = 1e-3;
@@ -24,6 +25,20 @@ const DEFAULT_PHYSIC_MATERIAL_RESTITUTION: f64 = 0.0;
 const DEFAULT_CAPSULE_RADIUS: f64 = 0.5;
 const DEFAULT_CAPSULE_HEIGHT: f64 = 2.0;
 const DEFAULT_CAPSULE_DIRECTION: u32 = 1;
+const DEFAULT_CHARACTER_CONTROLLER_ENABLED: bool = true;
+const DEFAULT_CHARACTER_CONTROLLER_RADIUS: f64 = 0.5;
+const DEFAULT_CHARACTER_CONTROLLER_HEIGHT: f64 = 2.0;
+const DEFAULT_CHARACTER_CONTROLLER_SLOPE_LIMIT: f64 = 45.0;
+const DEFAULT_CHARACTER_CONTROLLER_STEP_OFFSET: f64 = 0.3;
+const DEFAULT_CHARACTER_CONTROLLER_SKIN_WIDTH: f64 = 0.08;
+const DEFAULT_CHARACTER_CONTROLLER_MIN_MOVE_DISTANCE: f64 = 0.0;
+const CHARACTER_CONTROLLER_SCRIPT_NAME: &str = "CharacterController";
+const CHARACTER_CONTROLLER_FIELD_KEYS: [&str; 4] = [
+    "m_SlopeLimit",
+    "m_StepOffset",
+    "m_SkinWidth",
+    "m_MinMoveDistance",
+];
 
 #[derive(Debug)]
 pub enum SceneError {
@@ -203,12 +218,25 @@ pub struct CapsuleColliderComponent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CharacterControllerComponent {
+    pub enabled: bool,
+    pub radius: f64,
+    pub height: f64,
+    pub center: [f64; 3],
+    pub slope_limit: f64,
+    pub step_offset: f64,
+    pub skin_width: f64,
+    pub min_move_distance: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicsBinding {
     pub entity: EntityId,
     pub rigidbody: Option<RigidbodyComponent>,
     pub box_collider: Option<BoxColliderComponent>,
     pub sphere_collider: Option<SphereColliderComponent>,
     pub capsule_collider: Option<CapsuleColliderComponent>,
+    pub character_controller: Option<CharacterControllerComponent>,
     pub layer: u32,
 }
 
@@ -472,8 +500,8 @@ fn assemble_documents(
             continue;
         }
         let body = match document.root.get("MonoBehaviour") {
-            Some(body) => body,
-            None => continue,
+            Some(body) if !is_character_controller(body) => body,
+            _ => continue,
         };
         let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
             Some(file_id) => file_id,
@@ -586,6 +614,7 @@ enum PhysicsComponent {
     BoxCollider(BoxColliderComponent),
     SphereCollider(SphereColliderComponent),
     CapsuleCollider(CapsuleColliderComponent),
+    CharacterController(CharacterControllerComponent),
 }
 
 fn collect_physics(
@@ -616,6 +645,14 @@ fn collect_physics(
             CAPSULE_COLLIDER_CLASS => match document.root.get("CapsuleCollider") {
                 Some(body) => body,
                 None => continue,
+            },
+            CHARACTER_CONTROLLER_CLASS => match document.root.get("CharacterController") {
+                Some(body) => body,
+                None => continue,
+            },
+            MONO_BEHAVIOUR_CLASS => match document.root.get("MonoBehaviour") {
+                Some(body) if is_character_controller(body) => body,
+                _ => continue,
             },
             _ => continue,
         };
@@ -653,6 +690,9 @@ fn collect_physics(
             CAPSULE_COLLIDER_CLASS => PhysicsComponent::CapsuleCollider(
                 capsule_collider_component(body, &record.name, index),
             ),
+            CHARACTER_CONTROLLER_CLASS | MONO_BEHAVIOUR_CLASS => {
+                PhysicsComponent::CharacterController(character_controller_component(body))
+            }
             _ => continue,
         };
         let entity = record.entity;
@@ -666,6 +706,7 @@ fn collect_physics(
                     box_collider: None,
                     sphere_collider: None,
                     capsule_collider: None,
+                    character_controller: None,
                     layer,
                 });
                 let position = bindings.len() - 1;
@@ -679,6 +720,9 @@ fn collect_physics(
             PhysicsComponent::BoxCollider(value) => binding.box_collider = Some(value),
             PhysicsComponent::SphereCollider(value) => binding.sphere_collider = Some(value),
             PhysicsComponent::CapsuleCollider(value) => binding.capsule_collider = Some(value),
+            PhysicsComponent::CharacterController(value) => {
+                binding.character_controller = Some(value)
+            }
         }
     }
     Ok(bindings)
@@ -816,6 +860,60 @@ fn capsule_collider_component(
     }
 }
 
+fn is_character_controller(body: &Node) -> bool {
+    match script_name(body) {
+        Some(name) => name == CHARACTER_CONTROLLER_SCRIPT_NAME,
+        None => CHARACTER_CONTROLLER_FIELD_KEYS
+            .iter()
+            .all(|key| body.get(key).is_some()),
+    }
+}
+
+fn script_name(body: &Node) -> Option<&str> {
+    body.get("m_EditorClassIdentifier")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.rsplit("::").next().unwrap_or(value))
+}
+
+fn character_controller_component(body: &Node) -> CharacterControllerComponent {
+    CharacterControllerComponent {
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_CHARACTER_CONTROLLER_ENABLED),
+        radius: yaml_f64(
+            body.get("m_Radius"),
+            DEFAULT_CHARACTER_CONTROLLER_RADIUS,
+            |value| value > 0.0,
+        ),
+        height: yaml_f64(
+            body.get("m_Height"),
+            DEFAULT_CHARACTER_CONTROLLER_HEIGHT,
+            |value| value > 0.0,
+        ),
+        center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
+        slope_limit: yaml_f64(
+            body.get("m_SlopeLimit"),
+            DEFAULT_CHARACTER_CONTROLLER_SLOPE_LIMIT,
+            |value| (0.0..=90.0).contains(&value),
+        ),
+        step_offset: yaml_f64(
+            body.get("m_StepOffset"),
+            DEFAULT_CHARACTER_CONTROLLER_STEP_OFFSET,
+            |value| value >= 0.0,
+        ),
+        skin_width: yaml_f64(
+            body.get("m_SkinWidth"),
+            DEFAULT_CHARACTER_CONTROLLER_SKIN_WIDTH,
+            |value| value >= 0.0,
+        ),
+        min_move_distance: yaml_f64(
+            body.get("m_MinMoveDistance"),
+            DEFAULT_CHARACTER_CONTROLLER_MIN_MOVE_DISTANCE,
+            |value| value >= 0.0,
+        ),
+    }
+}
+
 fn resolve_collider_material(
     body: &Node,
     collider_kind: &str,
@@ -934,6 +1032,13 @@ fn yaml_bool(node: Option<&Node>, default: bool) -> bool {
             Some("false") => false,
             _ => default,
         },
+    }
+}
+
+fn yaml_f64(node: Option<&Node>, default: f64, valid: impl Fn(f64) -> bool) -> f64 {
+    match node.and_then(Node::as_f64) {
+        Some(value) if value.is_finite() && valid(value) => value,
+        _ => default,
     }
 }
 

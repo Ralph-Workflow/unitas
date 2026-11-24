@@ -13,7 +13,11 @@ namespace UnityEngine
         public Vector3 localPosition
         {
             get => _localPosition;
-            set => _localPosition = value;
+            set
+            {
+                _localPosition = value;
+                NotifyCharacterControllerTeleported();
+            }
         }
 
         public Vector3 position
@@ -37,6 +41,7 @@ namespace UnityEngine
                     _localPosition = value;
                 }
                 PushKinematicPositionToNative();
+                NotifyCharacterControllerTeleported();
             }
         }
 
@@ -106,6 +111,20 @@ namespace UnityEngine
             if (provider != null)
             {
                 provider.TrySetBodyPosition(owner.NativeEntityId, position);
+            }
+        }
+
+        private void NotifyCharacterControllerTeleported()
+        {
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed)
+            {
+                return;
+            }
+            CharacterController? controller = owner.GetComponent<CharacterController>();
+            if (controller != null && !controller.IsUpdatingTransformFromMove)
+            {
+                controller.OnTransformTeleported(position);
             }
         }
     }

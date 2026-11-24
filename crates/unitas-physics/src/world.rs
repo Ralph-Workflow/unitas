@@ -162,6 +162,23 @@ impl World {
             .map(|index| self.bodies[*index].velocity)
     }
 
+    pub fn effective_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.indices.get(&entity).map(|index| {
+            let body = &self.bodies[*index];
+            match body.role {
+                BodyRole::Dynamic => body.velocity,
+                BodyRole::Kinematic => {
+                    if body.sweep_velocity != [0.0; 3] {
+                        body.sweep_velocity
+                    } else {
+                        body.velocity
+                    }
+                }
+                BodyRole::Static => [0.0; 3],
+            }
+        })
+    }
+
     pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
         self.indices
             .get(&entity)

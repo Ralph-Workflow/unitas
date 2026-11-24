@@ -7,9 +7,60 @@ use std::sync::{Mutex, OnceLock};
 use unitas_core::EntityId;
 
 use crate::error::RuntimeError;
+pub use crate::runtime::CharacterMoveRequest;
 use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, Runtime};
 
 const QUERY_RECORD_SIZE: usize = 64;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AbiCharacterMoveInput {
+    pub entity_id: u64,
+    pub position: [f64; 3],
+    pub motion: [f64; 3],
+    pub radius: f64,
+    pub height: f64,
+    pub center: [f64; 3],
+    pub slope_limit_deg: f64,
+    pub step_offset: f64,
+    pub skin_width: f64,
+    pub min_move_distance: f64,
+    pub delta_seconds: f64,
+    pub layer_mask: u32,
+    pub enabled: u8,
+    pub reserved: [u8; 3],
+}
+
+impl Default for AbiCharacterMoveInput {
+    fn default() -> Self {
+        Self {
+            entity_id: 0,
+            position: [0.0; 3],
+            motion: [0.0; 3],
+            radius: 0.5,
+            height: 2.0,
+            center: [0.0; 3],
+            slope_limit_deg: 45.0,
+            step_offset: 0.3,
+            skin_width: 0.08,
+            min_move_distance: 0.001,
+            delta_seconds: 0.0,
+            layer_mask: u32::MAX,
+            enabled: 1,
+            reserved: [0; 3],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AbiCharacterMoveOutput {
+    pub position: [f64; 3],
+    pub ground_entity_id: u64,
+    pub collision_flags: u32,
+    pub is_grounded: u8,
+    pub reserved: [u8; 3],
+}
 
 pub struct RuntimeState {
     pub runtime: Runtime,
@@ -1035,6 +1086,133 @@ pub extern "C" fn unitas_runtime_overlap_sphere(
         store_query_records(state, records)
     }) {
         Ok(count) => count,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_character_move(
+    handle: u64,
+    input: Option<&AbiCharacterMoveInput>,
+    output: Option<&mut AbiCharacterMoveOutput>,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let (Some(input), Some(output)) = (input, output) else {
+            state.set_error("null character move buffer pointer");
+            return -2;
+        };
+        let entity = if input.entity_id == 0 {
+            None
+        } else {
+            Some(EntityId::new(input.entity_id))
+        };
+        let request = CharacterMoveRequest {
+            entity,
+            position: input.position,
+            motion: input.motion,
+            radius: input.radius,
+            height: input.height,
+            center: input.center,
+            slope_limit_deg: input.slope_limit_deg,
+            step_offset: input.step_offset,
+            skin_width: input.skin_width,
+            min_move_distance: input.min_move_distance,
+            layer_mask: input.layer_mask,
+            enabled: input.enabled != 0,
+            delta_seconds: input.delta_seconds,
+        };
+        match state.runtime.character_move(request) {
+            Ok(result) => {
+                output.position = result.position;
+                output.ground_entity_id = result.ground_entity.map_or(0, |id| id.as_u64());
+                output.collision_flags = result.collision_flags.bits();
+                output.is_grounded = u8::from(result.is_grounded);
+                output.reserved = [0; 3];
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_character_teleport(
+    handle: u64,
+    entity: u64,
+    in_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(position) = read_vec3_from_path_buffer(state, in_buffer) else {
+            state.set_error("buffer address mismatch");
+            return -2;
+        };
+        let entity_opt = if entity == 0 {
+            None
+        } else {
+            Some(EntityId::new(entity))
+        };
+        match state.runtime.character_teleport(entity_opt, position) {
+            Ok(_) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_character_controller_config(
+    handle: u64,
+    entity: u64,
+    out_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out_buffer == 0
+            || out_buffer != state.path_buffer.as_ptr() as usize as u64
+            || state.path_buffer.len() < 64
+        {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        let Some(config) = state
+            .runtime
+            .character_controller_config(EntityId::new(entity))
+            .cloned()
+        else {
+            state.set_error("character controller not found");
+            return -4;
+        };
+        state.path_buffer[0..8].copy_from_slice(&config.radius.to_le_bytes());
+        state.path_buffer[8..16].copy_from_slice(&config.height.to_le_bytes());
+        state.path_buffer[16..24].copy_from_slice(&config.center[0].to_le_bytes());
+        state.path_buffer[24..32].copy_from_slice(&config.center[1].to_le_bytes());
+        state.path_buffer[32..40].copy_from_slice(&config.center[2].to_le_bytes());
+        state.path_buffer[40..48].copy_from_slice(&config.slope_limit.to_le_bytes());
+        state.path_buffer[48..56].copy_from_slice(&config.step_offset.to_le_bytes());
+        state.path_buffer[56..64].copy_from_slice(&config.skin_width.to_le_bytes());
+        if state.path_buffer.len() >= 76 {
+            state.path_buffer[64..72].copy_from_slice(&config.min_move_distance.to_le_bytes());
+            state.path_buffer[72] = u8::from(config.enabled);
+            state.path_buffer[73..76].fill(0);
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
         Err(code) => code,
     }
 }

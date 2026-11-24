@@ -1,11 +1,16 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding, ScriptBinding};
+use unitas_asset::scene::{
+    assemble_scene_file_with_physics, CharacterControllerComponent, PhysicsBinding, ScriptBinding,
+};
 use unitas_asset::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
     InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 use unitas_core::{normalize_rotation, rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
-use unitas_physics::{BodyDesc, BodyRole, Phase, QueryHit, Shape, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
+};
 
 use crate::error::RuntimeError;
 use crate::input::{default_axis_configs, AxisConfig, InputState};
@@ -22,6 +27,7 @@ pub struct LoadedScene {
     scripts: Vec<ScriptInstance>,
     bodies: Vec<EntityId>,
     body_offsets: Vec<(EntityId, [f32; 3])>,
+    character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
     diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
@@ -34,6 +40,10 @@ impl LoadedScene {
 
     pub fn bodies(&self) -> &[EntityId] {
         &self.bodies
+    }
+
+    pub fn character_controllers(&self) -> &[(EntityId, CharacterControllerComponent)] {
+        &self.character_controllers
     }
 
     pub fn diagnostics(&self) -> &[(EntityId, String)] {
@@ -64,6 +74,23 @@ pub struct QueryRecord {
     pub normal: [f64; 3],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CharacterMoveRequest {
+    pub entity: Option<EntityId>,
+    pub position: [f64; 3],
+    pub motion: [f64; 3],
+    pub radius: f64,
+    pub height: f64,
+    pub center: [f64; 3],
+    pub slope_limit_deg: f64,
+    pub step_offset: f64,
+    pub skin_width: f64,
+    pub min_move_distance: f64,
+    pub layer_mask: u32,
+    pub enabled: bool,
+    pub delta_seconds: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScriptInstance {
     pub entity: EntityId,
@@ -81,6 +108,9 @@ pub struct Runtime {
     active_scene: Option<usize>,
     persistent: Vec<ScriptInstance>,
     persistent_entities: Vec<EntityId>,
+    persistent_character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
+    character_states: HashMap<EntityId, CharacterController>,
+    default_character_state: CharacterController,
     script_view: Vec<ScriptInstance>,
     world: World,
     input: InputState,
@@ -100,6 +130,9 @@ impl Runtime {
             active_scene: None,
             persistent: Vec::new(),
             persistent_entities: Vec::new(),
+            persistent_character_controllers: Vec::new(),
+            character_states: HashMap::new(),
+            default_character_state: CharacterController::default(),
             script_view: Vec::new(),
             world: World::new(),
             input: InputState::with_default_axes(),
@@ -169,6 +202,11 @@ impl Runtime {
             .iter()
             .map(|(entity, _, offset)| (EntityId::new(entity_base + entity.as_u64()), *offset))
             .collect::<Vec<_>>();
+        let character_controllers = collect_character_controllers(&physics, entity_base);
+        for (entity, config) in &character_controllers {
+            self.character_states
+                .insert(*entity, controller_from_component(Some(*entity), config));
+        }
         let diagnostics = collect_material_diagnostics(&physics, entity_base);
         for (body, desc) in bodies.iter().zip(descs.iter()) {
             self.world.add_body(*body, desc.1)?;
@@ -180,6 +218,7 @@ impl Runtime {
             scripts,
             bodies,
             body_offsets,
+            character_controllers,
             diagnostics,
             entity_base,
             entity_count,
@@ -214,6 +253,11 @@ impl Runtime {
         self.teardown_scene(&scene, &mut hook);
         for body in &scene.bodies {
             self.world.remove_body(*body);
+        }
+        for (entity, _) in &scene.character_controllers {
+            if !self.persistent_entities.contains(entity) {
+                self.character_states.remove(entity);
+            }
         }
         match self.active_scene {
             Some(active) if active == index => {
@@ -286,6 +330,20 @@ impl Runtime {
                 break;
             }
         }
+        for index in 0..self.scenes.len() {
+            let controller_index = self.scenes[index]
+                .character_controllers
+                .iter()
+                .position(|(id, _)| *id == entity);
+            if let Some(controller_index) = controller_index {
+                let entry = self.scenes[index]
+                    .character_controllers
+                    .remove(controller_index);
+                self.persistent_character_controllers.push(entry);
+                found = true;
+                break;
+            }
+        }
         if !found {
             return Err(RuntimeError::EntityNotFound(entity));
         }
@@ -340,6 +398,11 @@ impl Runtime {
         for scene in &scenes {
             for body in &scene.bodies {
                 self.world.remove_body(*body);
+            }
+            for (entity, _) in &scene.character_controllers {
+                if !self.persistent_entities.contains(entity) {
+                    self.character_states.remove(entity);
+                }
             }
         }
     }
@@ -780,6 +843,120 @@ impl Runtime {
         self.world.body_role(entity)
     }
 
+    pub fn character_controller_config(
+        &self,
+        entity: EntityId,
+    ) -> Option<&CharacterControllerComponent> {
+        for scene in &self.scenes {
+            if let Some((_, config)) = scene
+                .character_controllers
+                .iter()
+                .find(|(id, _)| *id == entity)
+            {
+                return Some(config);
+            }
+        }
+        self.persistent_character_controllers
+            .iter()
+            .find(|(id, _)| *id == entity)
+            .map(|(_, config)| config)
+    }
+
+    pub fn character_move(
+        &mut self,
+        request: CharacterMoveRequest,
+    ) -> Result<MoveResult, RuntimeError> {
+        let delta_seconds = if request.delta_seconds > 0.0 {
+            request.delta_seconds
+        } else {
+            self.fixed_timestep
+        };
+        let mut controller = match request.entity {
+            Some(entity) => self.character_states.get(&entity).copied().unwrap_or_default(),
+            None => self.default_character_state,
+        };
+        controller.radius = request.radius;
+        controller.height = request.height;
+        controller.center = request.center;
+        controller.slope_limit_deg = request.slope_limit_deg;
+        controller.step_offset = request.step_offset;
+        controller.skin_width = request.skin_width;
+        controller.min_move_distance = if request.min_move_distance > 0.0 {
+            request.min_move_distance
+        } else if request.min_move_distance == 0.0 {
+            0.001
+        } else {
+            request.min_move_distance
+        };
+        controller.layer_mask = request.layer_mask;
+        controller.enabled = request.enabled;
+        controller.excluded_entity = request.entity;
+
+        let result = controller.move_character_with_dt(
+            &self.world,
+            request.position,
+            request.motion,
+            delta_seconds,
+        )?;
+        match request.entity {
+            Some(entity) => {
+                self.character_states.insert(entity, controller);
+                self.write_back_entity_transform(entity, result.position);
+            }
+            None => {
+                self.default_character_state = controller;
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn character_teleport(
+        &mut self,
+        entity: Option<EntityId>,
+        position: [f64; 3],
+    ) -> Result<[f64; 3], RuntimeError> {
+        let mut controller = match entity {
+            Some(id) => self.character_states.get(&id).copied().unwrap_or_default(),
+            None => self.default_character_state,
+        };
+        let target = controller.teleport(position)?;
+        match entity {
+            Some(id) => {
+                self.character_states.insert(id, controller);
+                self.write_back_entity_transform(id, target);
+            }
+            None => {
+                self.default_character_state = controller;
+            }
+        }
+        Ok(target)
+    }
+
+    fn write_back_entity_transform(&mut self, entity: EntityId, world_pos: [f64; 3]) {
+        for scene in &mut self.scenes {
+            if scene.graph.entity(entity).is_none() {
+                continue;
+            }
+            let world_translation = [
+                world_pos[0] as f32,
+                world_pos[1] as f32,
+                world_pos[2] as f32,
+            ];
+            let local_translation = match scene
+                .graph
+                .parent(entity)
+                .and_then(|parent| scene.graph.world_transform(parent))
+            {
+                Some(parent_world) => world_to_local_translation(&parent_world, world_translation),
+                None => world_translation,
+            };
+            if let Some(transform) = scene.graph.transform_mut(entity) {
+                transform.translation = local_translation;
+            }
+            return;
+        }
+    }
+
     fn sync_kinematic_transforms(&mut self) {
         for scene in &self.scenes {
             for (entity, offset) in &scene.body_offsets {
@@ -1078,6 +1255,46 @@ fn scene_name_from_path(path: &Path) -> String {
         Some(stem) => stem.to_string(),
         None => String::from("scene"),
     }
+}
+
+fn collect_character_controllers(
+    bindings: &[PhysicsBinding],
+    entity_base: u64,
+) -> Vec<(EntityId, CharacterControllerComponent)> {
+    let mut controllers = Vec::new();
+    for binding in bindings {
+        if let Some(controller) = &binding.character_controller {
+            let entity = EntityId::new(entity_base + binding.entity.as_u64());
+            controllers.push((entity, controller.clone()));
+        }
+    }
+    controllers
+}
+
+fn controller_from_component(
+    entity: Option<EntityId>,
+    component: &CharacterControllerComponent,
+) -> CharacterController {
+    let mut controller = CharacterController::default();
+    controller.radius = component.radius;
+    controller.height = component.height;
+    controller.center = component.center;
+    controller.slope_limit_deg = component.slope_limit;
+    controller.step_offset = component.step_offset;
+    controller.skin_width = component.skin_width;
+    controller.min_move_distance = if component.min_move_distance > 0.0 {
+        component.min_move_distance
+    } else {
+        0.001
+    };
+    controller.layer_mask = u32::MAX;
+    controller.enabled = component.enabled;
+    controller.excluded_entity = entity;
+    if controller.validate().is_err() {
+        controller = CharacterController::default();
+        controller.excluded_entity = entity;
+    }
+    controller
 }
 
 fn collect_material_diagnostics(
