@@ -143,6 +143,8 @@ namespace UnityEngine
                 return;
             }
 
+            Object? previousOrigin = LogRecorder.CurrentOrigin;
+            LogRecorder.CurrentOrigin = component;
             try
             {
                 CoroutineScheduler.OwnerDestroyed(behaviour);
@@ -156,6 +158,10 @@ namespace UnityEngine
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
                 Debug.LogException(ex, component);
+            }
+            finally
+            {
+                LogRecorder.CurrentOrigin = previousOrigin;
             }
         }
 

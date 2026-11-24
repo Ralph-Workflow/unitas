@@ -19,6 +19,19 @@ namespace Unitas.Bridge.Tests
         }
     }
 
+    public sealed class DestroyOriginProbeScript : MonoBehaviour
+    {
+        public override void OnDisable()
+        {
+            UnityEngine.Debug.Log("destroy origin probe disable");
+        }
+
+        public override void OnDestroy()
+        {
+            UnityEngine.Debug.Log("destroy origin probe destroy");
+        }
+    }
+
     public static class LifetimeTests
     {
         public static void Run()
@@ -69,6 +82,27 @@ namespace Unitas.Bridge.Tests
             Check.That("destroyed owner equals null", owner == null);
             Check.Equal("destroyed owner fires component OnDisable then OnDestroy", "OnDisable, OnDestroy", owned.ObservedOrder);
             Check.That("destroyed component equals null", owned == null);
+
+            DestroyOriginIsRecorded();
+        }
+
+        private static void DestroyOriginIsRecorded()
+        {
+            LogRecorder.Clear();
+            GameObject sentinel = new GameObject("DestroyOriginSentinel");
+            LogRecorder.CurrentOrigin = sentinel;
+            DestroyOriginProbeScript probe = new DestroyOriginProbeScript();
+            Object.Destroy(probe);
+            Check.That("destroy restores the previous log origin", ReferenceEquals(LogRecorder.CurrentOrigin, sentinel));
+            LogRecorder.CurrentOrigin = null;
+
+            System.Collections.Generic.IReadOnlyList<LogEntry> entries = LogRecorder.Search("destroy origin probe");
+            Check.Equal("destroy probe recorded two entries", 2, entries.Count);
+            Check.That(
+                "destroy callbacks log with the destroyed script as origin",
+                entries.Count == 2
+                && ReferenceEquals(entries[0].Origin, probe)
+                && ReferenceEquals(entries[1].Origin, probe));
         }
     }
 }
