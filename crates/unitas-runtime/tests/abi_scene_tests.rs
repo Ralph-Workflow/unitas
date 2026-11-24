@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use unitas_runtime::{
     test_is_persistent_entity, test_read_path_buffer, test_write_path_buffer,
-    unitas_runtime_active_scene_index, unitas_runtime_destroy, unitas_runtime_dont_destroy_on_load,
-    unitas_runtime_error_message, unitas_runtime_load_scene_mode, unitas_runtime_new,
-    unitas_runtime_path_buffer, unitas_runtime_scene_count, unitas_runtime_scene_name,
-    unitas_runtime_set_active_scene, unitas_runtime_set_callbacks, unitas_runtime_set_time_scale,
-    unitas_runtime_tick, unitas_runtime_time_scale, unitas_runtime_unload_scene, Runtime,
+    unitas_runtime_active_scene_index, unitas_runtime_company_name, unitas_runtime_destroy,
+    unitas_runtime_dont_destroy_on_load, unitas_runtime_error_message,
+    unitas_runtime_load_scene_mode, unitas_runtime_new, unitas_runtime_path_buffer,
+    unitas_runtime_product_name, unitas_runtime_project_version, unitas_runtime_scene_count,
+    unitas_runtime_scene_name, unitas_runtime_set_active_scene, unitas_runtime_set_callbacks,
+    unitas_runtime_set_time_scale, unitas_runtime_tick, unitas_runtime_time_scale,
+    unitas_runtime_unload_scene, Runtime,
 };
 
 const SCENE_A: &str = "tests/fixtures/scene_with_script.unity";
@@ -288,6 +290,87 @@ fn abi_scene_teardown_callbacks_can_call_back_into_the_runtime() -> Result<(), B
     assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
     assert_eq!(NESTED_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(unitas_runtime_time_scale(handle), 0.5);
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+const SETTINGS_SCENE: &str =
+    "tests/fixtures/project_with_settings/Assets/Scenes/SettingsScene.unity";
+
+fn read_nul_terminated_from_path_buffer(handle: u64, length: i32) -> Result<String, Box<dyn Error>> {
+    let byte_len = usize::try_from(length)?;
+    let mut bytes = vec![0u8; byte_len + 1];
+    test_read_path_buffer(handle, &mut bytes)?;
+    if bytes[byte_len] != 0 {
+        return Err(String::from("missing NUL terminator in path buffer").into());
+    }
+    Ok(std::str::from_utf8(&bytes[..byte_len])?.to_string())
+}
+
+#[test]
+fn abi_project_identity_externs_write_loaded_identity_into_path_buffer(
+) -> Result<(), Box<dyn Error>> {
+    let handle = new_handle()?;
+    assert!(unitas_runtime_company_name(handle) < 0);
+    assert!(unitas_runtime_product_name(handle) < 0);
+    assert!(unitas_runtime_project_version(handle) < 0);
+
+    assert_eq!(load_scene_mode(handle, SETTINGS_SCENE, 0)?, 0);
+
+    let company_len = unitas_runtime_company_name(handle);
+    assert_eq!(company_len, 6);
+    assert_eq!(
+        read_nul_terminated_from_path_buffer(handle, company_len)?,
+        "Unitas"
+    );
+
+    let product_len = unitas_runtime_product_name(handle);
+    assert_eq!(product_len, 15);
+    assert_eq!(
+        read_nul_terminated_from_path_buffer(handle, product_len)?,
+        "SettingsFixture"
+    );
+
+    let version_len = unitas_runtime_project_version(handle);
+    assert_eq!(version_len, 5);
+    assert_eq!(
+        read_nul_terminated_from_path_buffer(handle, version_len)?,
+        "1.2.3"
+    );
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn abi_project_identity_externs_return_negative_when_settings_missing_or_handle_invalid(
+) -> Result<(), Box<dyn Error>> {
+    assert!(unitas_runtime_company_name(u64::MAX) < 0);
+    assert!(unitas_runtime_product_name(u64::MAX) < 0);
+    assert!(unitas_runtime_project_version(u64::MAX) < 0);
+
+    let handle = new_handle()?;
+    assert_eq!(load_scene_mode(handle, SETTINGS_SCENE, 0)?, 0);
+    assert_eq!(unitas_runtime_company_name(handle), 6);
+
+    assert_eq!(load_scene_mode(handle, SCENE_A, 0)?, 0);
+    assert!(unitas_runtime_company_name(handle) < 0);
+    assert!(unitas_runtime_product_name(handle) < 0);
+    assert!(unitas_runtime_project_version(handle) < 0);
+
+    let mut runtime = Runtime::new()?;
+    assert_eq!(runtime.company_name(), None);
+    assert_eq!(runtime.product_name(), None);
+    assert_eq!(runtime.project_version(), None);
+    runtime.load_scene(Path::new(SETTINGS_SCENE))?;
+    assert_eq!(runtime.company_name(), Some("Unitas"));
+    assert_eq!(runtime.product_name(), Some("SettingsFixture"));
+    assert_eq!(runtime.project_version(), Some("1.2.3"));
+    assert_eq!(
+        runtime.project_identity().company_name.as_deref(),
+        Some("Unitas")
+    );
+
     assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())
 }

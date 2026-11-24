@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
@@ -8,7 +9,7 @@ using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider, ISceneHost
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider, ISceneHost, IApplicationHost
     {
         private const uint CollisionPhaseEnter = 0;
         private const uint CollisionPhaseStay = 1;
@@ -31,6 +32,14 @@ namespace Unitas.Bridge
         private int _fixedUpdateCallsInStep;
         private int _lateUpdateCallsInTick;
         private bool _isDisposed;
+        private bool _isQuitting;
+        private bool _isFocused = true;
+        private bool _isPaused;
+        private ApplicationBuildKind _buildKind = ApplicationBuildKind.Editor;
+        private string _dataPath = string.Empty;
+        private string _companyName = string.Empty;
+        private string _productName = string.Empty;
+        private string _projectVersion = string.Empty;
 
         private readonly RuntimeInterop.CreateScriptCallback _createScriptCallback;
         private readonly RuntimeInterop.AwakeCallback _awakeCallback;
@@ -100,20 +109,64 @@ namespace Unitas.Bridge
             Physics.Provider = this;
             Input.Provider = this;
             SceneManager.Host = this;
+            Application.Host = this;
         }
 
         public ulong Handle => _runtimeHandle;
 
         public int ScriptCount => _scripts.Count;
 
-        /// <summary>Resolves scene names and build indices to loadable paths; replaceable for tests.</summary>
+        public bool IsPlaying => !_isDisposed;
+
+        public bool IsFocused => !_isDisposed && _isFocused;
+
+        public bool IsPaused => !_isDisposed && _isPaused;
+
+        public ApplicationBuildKind BuildKind
+        {
+            get => _buildKind;
+            set => _buildKind = value;
+        }
+
+        public string DataPath => string.IsNullOrEmpty(_dataPath)
+            ? Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Assets"))
+            : _dataPath;
+
+        public string StreamingAssetsPath => Path.Combine(DataPath, "StreamingAssets");
+
+        public string CompanyName => _companyName;
+
+        public string ProductName => _productName;
+
+        public string Version => _projectVersion;
+
+        public void EndSession()
+        {
+            Shutdown();
+        }
+
+        public void SetFocus(bool hasFocus)
+        {
+            ThrowIfDisposed();
+            _isFocused = hasFocus;
+            Application.RaiseFocusChanged(hasFocus);
+            DispatchApplicationCallback(script => script.OnApplicationFocus(hasFocus));
+        }
+
+        public void SetPaused(bool isPaused)
+        {
+            ThrowIfDisposed();
+            _isPaused = isPaused;
+            Application.RaisePauseChanged(isPaused);
+            DispatchApplicationCallback(script => script.OnApplicationPause(isPaused));
+        }
+
         public ISceneProvider Provider
         {
             get => _sceneProvider;
             set => _sceneProvider = value ?? throw new ArgumentNullException(nameof(value));
         }
 
-        /// <summary>Performs the native scene calls; replaceable for tests.</summary>
         public ISceneBackend Backend
         {
             get => _sceneBackend;
@@ -129,14 +182,9 @@ namespace Unitas.Bridge
             return null;
         }
 
-        /// <summary>
-        /// Loads a scene directly in <see cref="LoadSceneMode.Single"/> mode against the native runtime,
-        /// bypassing <see cref="Backend"/> and throwing <see cref="InvalidOperationException"/> on failure.
-        /// Retained for direct host callers; <see cref="SceneManager"/> routes through
-        /// <see cref="LoadScene(string, LoadSceneMode)"/>.
-        /// </summary>
         public void LoadScene(string path)
         {
+            ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(path);
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(path);
             IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
@@ -161,20 +209,16 @@ namespace Unitas.Bridge
                 Time.SetFixedDeltaTime((float)fixedTimestep);
             }
 
-            // The native load tore the replaced scene down inside the call above, so the managed
-            // scripts of that scene have already received their teardown callbacks.
             DropReplacedScripts();
             _defaultSceneProvider.SetSceneRoot(path);
+            UpdateProjectMetadata(path);
             RegisterLoadedScene(path, LoadSceneMode.Single);
             SceneManager.RaiseSceneLoaded(FindLoadedScene(path), LoadSceneMode.Single);
         }
 
-        /// <summary>
-        /// Loads a scene through the scene backend. The native load runs inside this call; the
-        /// <c>sceneLoaded</c> event is raised after that call returned.
-        /// </summary>
         public Scene LoadScene(string path, LoadSceneMode mode)
         {
+            ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(path);
 
             try
@@ -190,28 +234,22 @@ namespace Unitas.Bridge
                 throw new SceneManagementException("Failed to load scene '" + path + "': " + ex.Message, ex);
             }
 
-            // The native load tore the replaced scene down inside the call above, so the managed
-            // scripts of that scene have already received their teardown callbacks.
             if (mode == LoadSceneMode.Single)
             {
                 DropReplacedScripts();
             }
 
-            // The default provider resolves scene names against the directory of the loaded scene,
-            // so it has to learn the scene root on every load entry point.
             _defaultSceneProvider.SetSceneRoot(path);
+            UpdateProjectMetadata(path);
             RegisterLoadedScene(path, mode);
             Scene loaded = FindLoadedScene(path);
             SceneManager.RaiseSceneLoaded(loaded, mode);
             return loaded;
         }
 
-        /// <summary>
-        /// Unloads a scene through the scene backend. Native teardown callbacks run inside the call, so the
-        /// <c>sceneUnloaded</c> event is raised after that call returned.
-        /// </summary>
         public void UnloadScene(string name)
         {
+            ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(name);
             Scene scene = GetSceneByName(name);
             try
@@ -284,7 +322,6 @@ namespace Unitas.Bridge
 
         public Scene GetActiveScene()
         {
-            // Native and managed scene ordering agree because every load and unload flows through the host.
             int index = Backend.ActiveSceneIndex;
             if (index < 0 || index >= _loadedScenes.Count)
             {
@@ -333,10 +370,6 @@ namespace Unitas.Bridge
             }
         }
 
-        /// <summary>
-        /// Drops the scripts of the replaced scene. Persistent scripts and their coroutines keep running;
-        /// the dropped scripts have already received their teardown callbacks during the native load.
-        /// </summary>
         private void DropReplacedScripts()
         {
             _fixedUpdateCallsInStep = 0;
@@ -452,6 +485,7 @@ namespace Unitas.Bridge
 
         public void Tick(double deltaSeconds)
         {
+            ThrowIfDisposed();
             _fixedUpdateCallsInStep = 0;
             _lateUpdateCallsInTick = 0;
             Time.Advance(deltaSeconds);
@@ -471,8 +505,11 @@ namespace Unitas.Bridge
 
         public void Shutdown()
         {
-            if (!_isDisposed)
+            if (!_isDisposed && !_isQuitting)
             {
+                _isQuitting = true;
+                Application.RaiseQuitting();
+                DispatchApplicationCallback(script => script.OnApplicationQuit());
                 _isDisposed = true;
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
                 _fixedUpdateCallsInStep = 0;
@@ -492,6 +529,10 @@ namespace Unitas.Bridge
                 {
                     SceneManager.Host = null;
                 }
+                if (ReferenceEquals(Application.Host, this))
+                {
+                    Application.Host = null;
+                }
                 if (result != 0)
                 {
                     string? error = GetErrorMessage();
@@ -502,6 +543,146 @@ namespace Unitas.Bridge
                     throw new InvalidOperationException("Failed to destroy native runtime (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
                 }
             }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            ObjectDisposedException.ThrowIf(_isDisposed, this);
+        }
+
+        private void DispatchApplicationCallback(Action<MonoBehaviour> action)
+        {
+            if (_scripts.Count == 0)
+            {
+                return;
+            }
+
+            List<ulong> handles = new List<ulong>(_scripts.Keys);
+            handles.Sort();
+            for (int index = 0; index < handles.Count; index++)
+            {
+                if (_scripts.TryGetValue(handles[index], out MonoBehaviour? script) && IsEligible(script))
+                {
+                    MonoBehaviour target = script!;
+                    InvokeWithOrigin(target, () => action(target));
+                }
+            }
+        }
+
+        private void UpdateProjectMetadata(string scenePath)
+        {
+            string? projectRoot = ResolveProjectRoot(scenePath, out string resolvedDataPath);
+            _dataPath = resolvedDataPath;
+
+            if (!TryReadNativeIdentity(RuntimeInterop.unitas_runtime_company_name, out string company))
+            {
+                company = string.Empty;
+            }
+
+            if (!TryReadNativeIdentity(RuntimeInterop.unitas_runtime_product_name, out string product))
+            {
+                product = string.Empty;
+            }
+
+            if (!TryReadNativeIdentity(RuntimeInterop.unitas_runtime_project_version, out string version))
+            {
+                version = string.Empty;
+            }
+
+            if (string.IsNullOrEmpty(product))
+            {
+                if (!string.IsNullOrEmpty(projectRoot))
+                {
+                    string folderName = Path.GetFileName(projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    product = string.IsNullOrEmpty(folderName) ? "UnitasProduct" : folderName;
+                }
+                else
+                {
+                    product = "UnitasProduct";
+                }
+            }
+
+            _companyName = string.IsNullOrEmpty(company) ? "DefaultCompany" : company;
+            _productName = product;
+            _projectVersion = string.IsNullOrEmpty(version) ? "0.1" : version;
+        }
+
+        private bool TryReadNativeIdentity(Func<ulong, int> nativeQuery, out string value)
+        {
+            value = string.Empty;
+            int byteLength;
+            try
+            {
+                byteLength = nativeQuery(_runtimeHandle);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+            catch (DllNotFoundException)
+            {
+                return false;
+            }
+
+            if (byteLength <= 0)
+            {
+                return false;
+            }
+
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)byteLength);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            string? decoded = Marshal.PtrToStringUTF8(buffer, byteLength);
+            if (string.IsNullOrEmpty(decoded))
+            {
+                return false;
+            }
+
+            value = decoded;
+            return true;
+        }
+
+        private static string? ResolveProjectRoot(string scenePath, out string dataPath)
+        {
+            string fullScenePath = File.Exists(scenePath)
+                ? Path.GetFullPath(scenePath)
+                : Path.Combine(Directory.GetCurrentDirectory(), scenePath);
+            string? current = Path.GetDirectoryName(fullScenePath);
+            string? assetsDirectory = null;
+
+            while (!string.IsNullOrEmpty(current))
+            {
+                string dirName = Path.GetFileName(current);
+                if (string.Equals(dirName, "Assets", StringComparison.OrdinalIgnoreCase))
+                {
+                    assetsDirectory = current;
+                }
+
+                string settingsCandidate = Path.Combine(current, "ProjectSettings");
+                if (Directory.Exists(settingsCandidate))
+                {
+                    string candidateAssets = Path.Combine(current, "Assets");
+                    dataPath = Directory.Exists(candidateAssets) ? candidateAssets : current;
+                    return current;
+                }
+
+                current = Path.GetDirectoryName(current);
+            }
+
+            if (!string.IsNullOrEmpty(assetsDirectory))
+            {
+                dataPath = assetsDirectory;
+                return Path.GetDirectoryName(assetsDirectory);
+            }
+
+            string? sceneDir = Path.GetDirectoryName(fullScenePath);
+            dataPath = string.IsNullOrEmpty(sceneDir)
+                ? Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Assets"))
+                : sceneDir;
+            return null;
         }
 
         public void Dispose()

@@ -196,23 +196,85 @@ pub extern "C" fn unitas_runtime_scene_name(handle: u64, index: u32) -> i32 {
                 return -4;
             }
         };
-        let bytes = name.as_bytes();
-        let needed = bytes.len() + 1;
-        if state.path_buffer.len() < needed {
-            state.path_buffer.resize(needed, 0);
-        }
-        state.path_buffer[..bytes.len()].copy_from_slice(bytes);
-        state.path_buffer[bytes.len()] = 0;
-        match i32::try_from(bytes.len()) {
-            Ok(length) => length,
-            Err(_) => {
-                state.set_error("scene name exceeds supported length");
-                -4
-            }
-        }
+        write_string_to_path_buffer(state, &name, "scene name exceeds supported length")
     }) {
         Ok(code) => code,
         Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_company_name(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let name = match state.runtime.company_name() {
+            Some(name) => name.to_string(),
+            None => {
+                state.set_error("company name not available");
+                return -4;
+            }
+        };
+        write_string_to_path_buffer(state, &name, "company name exceeds supported length")
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_product_name(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let name = match state.runtime.product_name() {
+            Some(name) => name.to_string(),
+            None => {
+                state.set_error("product name not available");
+                return -4;
+            }
+        };
+        write_string_to_path_buffer(state, &name, "product name exceeds supported length")
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_project_version(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let version = match state.runtime.project_version() {
+            Some(version) => version.to_string(),
+            None => {
+                state.set_error("project version not available");
+                return -4;
+            }
+        };
+        write_string_to_path_buffer(state, &version, "project version exceeds supported length")
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+fn write_string_to_path_buffer(
+    state: &mut RuntimeState,
+    value: &str,
+    overflow_error: &str,
+) -> i32 {
+    let bytes = value.as_bytes();
+    let needed = bytes.len() + 1;
+    if state.path_buffer.len() < needed {
+        state.path_buffer.resize(needed, 0);
+    }
+    state.path_buffer[..bytes.len()].copy_from_slice(bytes);
+    state.path_buffer[bytes.len()] = 0;
+    match i32::try_from(bytes.len()) {
+        Ok(length) => {
+            state.clear_error();
+            length
+        }
+        Err(_) => {
+            state.set_error(overflow_error);
+            -4
+        }
     }
 }
 

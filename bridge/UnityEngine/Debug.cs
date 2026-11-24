@@ -4,6 +4,8 @@ namespace UnityEngine
 {
     public static class Debug
     {
+        public static bool isDebugBuild => Application.isDevelopmentBuild;
+
         public static void Log(string message)
         {
             Record(LogSeverity.Info, message);

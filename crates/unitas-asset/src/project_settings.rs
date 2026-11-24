@@ -38,6 +38,13 @@ pub struct InputManagerSettings {
     pub skipped_axes: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectIdentity {
+    pub company_name: Option<String>,
+    pub product_name: Option<String>,
+    pub bundle_version: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectSettingsError {
     MissingDocument(&'static str),
@@ -199,6 +206,41 @@ pub fn parse_input_manager_stream(
     }
 
     Ok(InputManagerSettings { axes, skipped_axes })
+}
+
+pub fn parse_player_settings(
+    path: &Path,
+) -> Result<Option<ProjectIdentity>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_player_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_player_settings_stream(
+    stream: &Stream,
+) -> Result<ProjectIdentity, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("PlayerSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("PlayerSettings"))?;
+
+    Ok(ProjectIdentity {
+        company_name: parse_optional_non_empty_string(body, "companyName"),
+        product_name: parse_optional_non_empty_string(body, "productName"),
+        bundle_version: parse_optional_non_empty_string(body, "bundleVersion"),
+    })
+}
+
+fn parse_optional_non_empty_string(node: &Node, key: &str) -> Option<String> {
+    node.get(key)
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_optional_string(node: &Node, key: &str) -> String {

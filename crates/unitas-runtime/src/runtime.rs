@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding, ScriptBinding};
 use unitas_asset::{
-    parse_dynamics_manager, parse_input_manager, parse_time_manager, InputAxis,
-    DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
+    parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
+    InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 use unitas_core::{rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
 use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
@@ -80,6 +80,7 @@ pub struct Runtime {
     script_view: Vec<ScriptInstance>,
     world: World,
     input: InputState,
+    project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
     time_scale: f64,
@@ -98,6 +99,7 @@ impl Runtime {
             script_view: Vec::new(),
             world: World::new(),
             input: InputState::with_default_axes(),
+            project_identity: ProjectIdentity::default(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             time_scale: 1.0,
@@ -134,18 +136,18 @@ impl Runtime {
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
         let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
-        let (fixed_timestep, gravity, axes) = discover_project_settings(path);
+        let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
         validate_bodies(&descs)?;
         match mode {
             LoadSceneMode::Single => {
                 self.unload_all_scenes(&mut hook);
-                self.apply_project_settings(fixed_timestep, gravity, axes);
+                self.apply_project_settings(fixed_timestep, gravity, axes, identity);
             }
             LoadSceneMode::Additive => {
                 if self.scenes.is_empty() {
-                    self.apply_project_settings(fixed_timestep, gravity, axes);
+                    self.apply_project_settings(fixed_timestep, gravity, axes, identity);
                 }
             }
         }
@@ -289,11 +291,34 @@ impl Runtime {
         self.persistent_entities.contains(&entity)
     }
 
-    fn apply_project_settings(&mut self, fixed_timestep: f64, gravity: [f64; 3], axes: Vec<AxisConfig>) {
+    fn apply_project_settings(
+        &mut self,
+        fixed_timestep: f64,
+        gravity: [f64; 3],
+        axes: Vec<AxisConfig>,
+        identity: ProjectIdentity,
+    ) {
         self.world.set_gravity(gravity);
         self.fixed_timestep = fixed_timestep;
         self.input.set_axes(axes);
         self.input.reset();
+        self.project_identity = identity;
+    }
+
+    pub fn project_identity(&self) -> &ProjectIdentity {
+        &self.project_identity
+    }
+
+    pub fn company_name(&self) -> Option<&str> {
+        self.project_identity.company_name.as_deref()
+    }
+
+    pub fn product_name(&self) -> Option<&str> {
+        self.project_identity.product_name.as_deref()
+    }
+
+    pub fn project_version(&self) -> Option<&str> {
+        self.project_identity.bundle_version.as_deref()
     }
 
     fn unload_all_scenes<H>(&mut self, hook: &mut H)
@@ -776,12 +801,15 @@ impl Runtime {
     }
 }
 
-fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3], Vec<AxisConfig>) {
+fn discover_project_settings(
+    scene_path: &Path,
+) -> (f64, [f64; 3], Vec<AxisConfig>, ProjectIdentity) {
     let Some(settings_dir) = find_project_settings_dir(scene_path) else {
         return (
             DEFAULT_FIXED_TIMESTEP,
             DEFAULT_GRAVITY,
             default_axis_configs(),
+            ProjectIdentity::default(),
         );
     };
     let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
@@ -796,7 +824,11 @@ fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3], Vec<AxisConfi
         Ok(Some(settings)) => map_input_axes(settings.axes),
         Ok(None) | Err(_) => default_axis_configs(),
     };
-    (fixed_timestep, gravity, axes)
+    let identity = match parse_player_settings(&settings_dir.join("ProjectSettings.asset")) {
+        Ok(Some(settings)) => settings,
+        Ok(None) | Err(_) => ProjectIdentity::default(),
+    };
+    (fixed_timestep, gravity, axes, identity)
 }
 
 fn map_input_axes(axes: Vec<InputAxis>) -> Vec<AxisConfig> {

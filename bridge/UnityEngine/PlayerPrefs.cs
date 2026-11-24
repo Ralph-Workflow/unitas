@@ -1,0 +1,548 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+
+namespace UnityEngine
+{
+    public sealed class PlayerPrefsException : Exception
+    {
+        public PlayerPrefsException()
+        {
+        }
+
+        public PlayerPrefsException(string message) : base(message)
+        {
+        }
+
+        public PlayerPrefsException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    public static class PlayerPrefs
+    {
+        private const string HeaderLine = "UNITAS_PLAYERPREFS_V1";
+        private const char TypeInt = 'I';
+        private const char TypeFloat = 'F';
+        private const char TypeString = 'S';
+
+        private static readonly Dictionary<string, PrefEntry> Cache = new Dictionary<string, PrefEntry>(StringComparer.Ordinal);
+        private static bool _isLoaded;
+        private static string? _loadedFilePath;
+        private static string? _storageDirectoryOverride;
+        private static Func<string>? _persistentDataPathResolver;
+
+        internal static string? StorageDirectoryOverride
+        {
+            get => _storageDirectoryOverride;
+            set
+            {
+                if (!string.Equals(_storageDirectoryOverride, value, StringComparison.Ordinal))
+                {
+                    _storageDirectoryOverride = value;
+                    _isLoaded = false;
+                }
+            }
+        }
+
+        internal static Func<string>? PersistentDataPathResolver
+        {
+            get => _persistentDataPathResolver;
+            set
+            {
+                _persistentDataPathResolver = value;
+                _isLoaded = false;
+            }
+        }
+
+        internal static string StorageFilePath => Path.Combine(ResolveStorageDirectory(), "PlayerPrefs.ini");
+
+        internal static void Reload()
+        {
+            _isLoaded = false;
+            EnsureLoaded();
+        }
+
+        public static int GetInt(string key)
+        {
+            return GetInt(key, 0);
+        }
+
+        public static int GetInt(string key, int defaultValue)
+        {
+            if (key == null)
+            {
+                return defaultValue;
+            }
+
+            EnsureLoaded();
+            if (Cache.TryGetValue(key, out PrefEntry entry) && entry.Kind == TypeInt)
+            {
+                return entry.IntValue;
+            }
+
+            return defaultValue;
+        }
+
+        public static void SetInt(string key, int value)
+        {
+            if (key == null)
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
+            EnsureLoaded();
+            Cache[key] = PrefEntry.FromInt(value);
+        }
+
+        public static float GetFloat(string key)
+        {
+            return GetFloat(key, 0.0f);
+        }
+
+        public static float GetFloat(string key, float defaultValue)
+        {
+            if (key == null)
+            {
+                return defaultValue;
+            }
+
+            EnsureLoaded();
+            if (Cache.TryGetValue(key, out PrefEntry entry) && entry.Kind == TypeFloat)
+            {
+                return entry.FloatValue;
+            }
+
+            return defaultValue;
+        }
+
+        public static void SetFloat(string key, float value)
+        {
+            if (key == null)
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
+            EnsureLoaded();
+            Cache[key] = PrefEntry.FromFloat(value);
+        }
+
+        public static string GetString(string key)
+        {
+            return GetString(key, string.Empty);
+        }
+
+        public static string GetString(string key, string defaultValue)
+        {
+            if (key == null)
+            {
+                return defaultValue;
+            }
+
+            EnsureLoaded();
+            if (Cache.TryGetValue(key, out PrefEntry entry) && entry.Kind == TypeString)
+            {
+                return entry.StringValue;
+            }
+
+            return defaultValue;
+        }
+
+        public static void SetString(string key, string value)
+        {
+            if (key == null)
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
+            EnsureLoaded();
+            Cache[key] = PrefEntry.FromString(value ?? string.Empty);
+        }
+
+        public static bool HasKey(string key)
+        {
+            if (key == null)
+            {
+                return false;
+            }
+
+            EnsureLoaded();
+            return Cache.ContainsKey(key);
+        }
+
+        public static void DeleteKey(string key)
+        {
+            if (key == null)
+            {
+                return;
+            }
+
+            EnsureLoaded();
+            Cache.Remove(key);
+        }
+
+        public static void DeleteAll()
+        {
+            EnsureLoaded();
+            Cache.Clear();
+        }
+
+        public static void Save()
+        {
+            EnsureLoaded();
+            string targetPath = StorageFilePath;
+            string directory = Path.GetDirectoryName(targetPath) ?? ResolveStorageDirectory();
+            string tempPath = Path.Combine(directory, "PlayerPrefs.ini.tmp." + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string serialized = SerializeCache();
+                File.WriteAllText(tempPath, serialized, new UTF8Encoding(false));
+                if (File.Exists(targetPath))
+                {
+                    File.Delete(targetPath);
+                }
+
+                File.Move(tempPath, targetPath);
+                _loadedFilePath = targetPath;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
+            {
+                throw new PlayerPrefsException("Could not save PlayerPrefs to '" + targetPath + "': " + ex.Message, ex);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        private static string ResolveStorageDirectory()
+        {
+            if (!string.IsNullOrEmpty(_storageDirectoryOverride))
+            {
+                return Path.GetFullPath(_storageDirectoryOverride);
+            }
+
+            Func<string>? resolver = _persistentDataPathResolver;
+            if (resolver != null)
+            {
+                string resolved = resolver();
+                if (!string.IsNullOrEmpty(resolved))
+                {
+                    return Path.GetFullPath(resolved);
+                }
+            }
+
+            string persistentPath = Application.persistentDataPath;
+            if (!string.IsNullOrEmpty(persistentPath))
+            {
+                return Path.GetFullPath(persistentPath);
+            }
+
+            string baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrEmpty(baseFolder))
+            {
+                baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            }
+
+            if (string.IsNullOrEmpty(baseFolder))
+            {
+                baseFolder = Path.GetTempPath();
+            }
+
+            return Path.GetFullPath(Path.Combine(baseFolder, "unitas", "DefaultCompany-UnitasProduct"));
+        }
+
+        private static void EnsureLoaded()
+        {
+            string currentPath = StorageFilePath;
+            if (_isLoaded && string.Equals(_loadedFilePath, currentPath, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Cache.Clear();
+            _loadedFilePath = currentPath;
+            _isLoaded = true;
+
+            if (!File.Exists(currentPath))
+            {
+                return;
+            }
+
+            string content;
+            try
+            {
+                content = File.ReadAllText(currentPath, Encoding.UTF8);
+            }
+            catch (IOException ex)
+            {
+                Debug.LogWarning("PlayerPrefs failed to read '" + currentPath + "': " + ex.Message);
+                return;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.LogWarning("PlayerPrefs failed to read '" + currentPath + "': " + ex.Message);
+                return;
+            }
+
+            if (!TryDeserialize(content, out Dictionary<string, PrefEntry> parsed, out string reason))
+            {
+                Debug.LogWarning("PlayerPrefs corrupt file '" + currentPath + "': " + reason);
+                return;
+            }
+
+            foreach (KeyValuePair<string, PrefEntry> pair in parsed)
+            {
+                Cache[pair.Key] = pair.Value;
+            }
+        }
+
+        private static string SerializeCache()
+        {
+            List<string> keys = new List<string>(Cache.Keys);
+            keys.Sort(StringComparer.Ordinal);
+
+            StringBuilder builder = new StringBuilder();
+            builder.Append(HeaderLine).Append('\n');
+            foreach (string key in keys)
+            {
+                PrefEntry entry = Cache[key];
+                builder.Append(EscapeField(key)).Append('|').Append(entry.Kind).Append('|');
+                if (entry.Kind == TypeInt)
+                {
+                    builder.Append(entry.IntValue.ToString(CultureInfo.InvariantCulture));
+                }
+                else if (entry.Kind == TypeFloat)
+                {
+                    builder.Append(entry.FloatValue.ToString("R", CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    builder.Append(EscapeField(entry.StringValue));
+                }
+
+                builder.Append('\n');
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool TryDeserialize(string content, out Dictionary<string, PrefEntry> entries, out string reason)
+        {
+            entries = new Dictionary<string, PrefEntry>(StringComparer.Ordinal);
+            reason = string.Empty;
+
+            string normalized = content.Replace("\r\n", "\n");
+            string[] lines = normalized.Split('\n');
+            if (lines.Length == 0 || !string.Equals(lines[0], HeaderLine, StringComparison.Ordinal))
+            {
+                reason = "missing or invalid header";
+                return false;
+            }
+
+            for (int i = 1; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (line.Length == 0)
+                {
+                    if (i == lines.Length - 1)
+                    {
+                        continue;
+                    }
+
+                    reason = "unexpected blank record at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    return false;
+                }
+
+                int firstSep = line.IndexOf('|');
+                int secondSep = firstSep >= 0 ? line.IndexOf('|', firstSep + 1) : -1;
+                if (firstSep < 0 || secondSep < 0 || line.IndexOf('|', secondSep + 1) >= 0)
+                {
+                    reason = "malformed record delimiter at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    return false;
+                }
+
+                string rawKey = line.Substring(0, firstSep);
+                string rawType = line.Substring(firstSep + 1, secondSep - firstSep - 1);
+                string rawValue = line.Substring(secondSep + 1);
+
+                if (rawType.Length != 1)
+                {
+                    reason = "invalid type tag at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    return false;
+                }
+
+                if (!TryUnescapeField(rawKey, out string key))
+                {
+                    reason = "invalid key escape at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    return false;
+                }
+
+                char kind = rawType[0];
+                if (kind == TypeInt)
+                {
+                    if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out int intVal))
+                    {
+                        reason = "invalid integer value at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                        return false;
+                    }
+
+                    entries[key] = PrefEntry.FromInt(intVal);
+                }
+                else if (kind == TypeFloat)
+                {
+                    if (!float.TryParse(rawValue, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out float floatVal) || !float.IsFinite(floatVal))
+                    {
+                        reason = "invalid float value at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                        return false;
+                    }
+
+                    entries[key] = PrefEntry.FromFloat(floatVal);
+                }
+                else if (kind == TypeString)
+                {
+                    if (!TryUnescapeField(rawValue, out string strVal))
+                    {
+                        reason = "invalid string escape at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                        return false;
+                    }
+
+                    entries[key] = PrefEntry.FromString(strVal);
+                }
+                else
+                {
+                    reason = "unknown type tag at line " + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static string EscapeField(string input)
+        {
+            StringBuilder builder = new StringBuilder(input.Length);
+            for (int i = 0; i < input.Length; i++)
+            {
+                char ch = input[i];
+                if (ch == '\\')
+                {
+                    builder.Append("\\\\");
+                }
+                else if (ch == '\n')
+                {
+                    builder.Append("\\n");
+                }
+                else if (ch == '\r')
+                {
+                    builder.Append("\\r");
+                }
+                else if (ch == '|')
+                {
+                    builder.Append("\\p");
+                }
+                else
+                {
+                    builder.Append(ch);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool TryUnescapeField(string input, out string output)
+        {
+            StringBuilder builder = new StringBuilder(input.Length);
+            for (int i = 0; i < input.Length; i++)
+            {
+                char ch = input[i];
+                if (ch != '\\')
+                {
+                    builder.Append(ch);
+                    continue;
+                }
+
+                if (i + 1 >= input.Length)
+                {
+                    output = string.Empty;
+                    return false;
+                }
+
+                char next = input[++i];
+                if (next == '\\')
+                {
+                    builder.Append('\\');
+                }
+                else if (next == 'n')
+                {
+                    builder.Append('\n');
+                }
+                else if (next == 'r')
+                {
+                    builder.Append('\r');
+                }
+                else if (next == 'p')
+                {
+                    builder.Append('|');
+                }
+                else
+                {
+                    output = string.Empty;
+                    return false;
+                }
+            }
+
+            output = builder.ToString();
+            return true;
+        }
+
+        private readonly struct PrefEntry
+        {
+            public PrefEntry(char kind, int intValue, float floatValue, string stringValue)
+            {
+                Kind = kind;
+                IntValue = intValue;
+                FloatValue = floatValue;
+                StringValue = stringValue;
+            }
+
+            public char Kind { get; }
+
+            public int IntValue { get; }
+
+            public float FloatValue { get; }
+
+            public string StringValue { get; }
+
+            public static PrefEntry FromInt(int value)
+            {
+                return new PrefEntry(TypeInt, value, 0f, string.Empty);
+            }
+
+            public static PrefEntry FromFloat(float value)
+            {
+                return new PrefEntry(TypeFloat, 0, value, string.Empty);
+            }
+
+            public static PrefEntry FromString(string value)
+            {
+                return new PrefEntry(TypeString, 0, 0f, value);
+            }
+        }
+    }
+}

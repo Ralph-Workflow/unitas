@@ -79,5 +79,17 @@ namespace UnityEngine
         public virtual void OnTriggerExit(Collider? other)
         {
         }
+
+        public virtual void OnApplicationFocus(bool hasFocus)
+        {
+        }
+
+        public virtual void OnApplicationPause(bool pauseStatus)
+        {
+        }
+
+        public virtual void OnApplicationQuit()
+        {
+        }
     }
 }

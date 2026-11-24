@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use unitas_asset::{
     parse_dynamics_manager, parse_dynamics_manager_stream, parse_input_manager,
-    parse_input_manager_stream, parse_time_manager, parse_time_manager_stream, unity_yaml,
-    DynamicsSettings, InputAxis, InputManagerSettings, ProjectSettingsError, TimeSettings,
+    parse_input_manager_stream, parse_player_settings, parse_player_settings_stream,
+    parse_time_manager, parse_time_manager_stream, unity_yaml, DynamicsSettings, InputAxis,
+    InputManagerSettings, ProjectIdentity, ProjectSettingsError, TimeSettings,
     DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 
@@ -254,6 +255,61 @@ fn input_manager_handles_missing_file_and_m_type_aliases_and_rejects_missing_doc
             }],
             skipped_axes: 1,
         })
+    );
+    Ok(())
+}
+
+#[test]
+fn parses_player_settings_from_prefab_fixture_and_inline_streams() -> TestResult {
+    let prefab_settings = fixtures_dir()
+        .join("prefab_project")
+        .join("ProjectSettings")
+        .join("ProjectSettings.asset");
+    let parsed = parse_player_settings(&prefab_settings)?;
+    assert_eq!(
+        parsed,
+        Some(ProjectIdentity {
+            company_name: Some(String::from("Unitas")),
+            product_name: Some(String::from("PrefabFixture")),
+            bundle_version: None,
+        })
+    );
+
+    let full_stream = unity_yaml::parse(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  companyName: UnitasCorp\n  productName: UnitasGame\n  bundleVersion: 1.2.3\n",
+    )?;
+    assert_eq!(
+        parse_player_settings_stream(&full_stream),
+        Ok(ProjectIdentity {
+            company_name: Some(String::from("UnitasCorp")),
+            product_name: Some(String::from("UnitasGame")),
+            bundle_version: Some(String::from("1.2.3")),
+        })
+    );
+
+    let blank_fields = unity_yaml::parse(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  companyName:\n  productName: \"\"\n  bundleVersion: 0.5.0\n",
+    )?;
+    assert_eq!(
+        parse_player_settings_stream(&blank_fields),
+        Ok(ProjectIdentity {
+            company_name: None,
+            product_name: None,
+            bundle_version: Some(String::from("0.5.0")),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn player_settings_handles_missing_file_and_missing_document() -> TestResult {
+    let missing = settings_dir().join("MissingProjectSettings.asset");
+    assert_eq!(parse_player_settings(&missing), Ok(None));
+
+    let empty = unity_yaml::parse("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n")?;
+    assert_eq!(
+        parse_player_settings_stream(&empty),
+        Err(ProjectSettingsError::MissingDocument("PlayerSettings"))
     );
     Ok(())
 }
