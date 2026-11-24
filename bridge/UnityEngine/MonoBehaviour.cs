@@ -2,6 +2,13 @@ namespace UnityEngine
 {
     public class MonoBehaviour : Component
     {
+        public MonoBehaviour()
+        {
+            GameObject owner = new GameObject("Scripted Game Object");
+            owner.AttachComponent(this);
+            owner.AddComponent<SphereCollider>();
+        }
+
         public virtual void Awake()
         {
         }

@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider
     {
         private const uint CollisionPhaseEnter = 0;
         private const uint CollisionPhaseStay = 1;
@@ -78,6 +78,8 @@ namespace Unitas.Bridge
                 }
                 throw new InvalidOperationException("Failed to set callbacks on native runtime (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
+
+            Physics.Provider = this;
         }
 
         public ulong Handle => _runtimeHandle;
@@ -142,6 +144,10 @@ namespace Unitas.Bridge
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
                 _scripts.Clear();
                 _entityScripts.Clear();
+                if (ReferenceEquals(Physics.Provider, this))
+                {
+                    Physics.Provider = null;
+                }
                 if (result != 0)
                 {
                     string? error = GetErrorMessage();
@@ -168,6 +174,76 @@ namespace Unitas.Bridge
                 return null;
             }
             return Marshal.PtrToStringUTF8(errorPtr);
+        }
+
+        public Collider? GetCollider(ulong entity)
+        {
+            MonoBehaviour? script = FindScriptByEntity(entity);
+            return script?.GetComponent<Collider>();
+        }
+
+        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, out RaycastHit hit)
+        {
+            hit = default;
+            int count = RuntimeInterop.unitas_runtime_raycast(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                origin.z,
+                direction.x,
+                direction.y,
+                direction.z,
+                maxDistance,
+                (uint)layerMask);
+            if (count <= 0)
+            {
+                return false;
+            }
+            QueryHit[] hits = ReadQueryHits(count);
+            if (hits.Length == 0)
+            {
+                return false;
+            }
+            QueryHit nearest = hits[0];
+            Collider? collider = GetCollider(nearest.Entity);
+            hit.collider = collider!;
+            hit.point = new Vector3((float)nearest.X, (float)nearest.Y, (float)nearest.Z);
+            hit.distance = (float)nearest.Distance;
+            return true;
+        }
+
+        public Collider[] OverlapSphere(Vector3 position, float radius, int layerMask)
+        {
+            int count = RuntimeInterop.unitas_runtime_overlap_sphere(
+                _runtimeHandle,
+                position.x,
+                position.y,
+                position.z,
+                radius,
+                (uint)layerMask);
+            if (count <= 0)
+            {
+                return Array.Empty<Collider>();
+            }
+            QueryHit[] hits = ReadQueryHits(count);
+            Collider[] colliders = new Collider[hits.Length];
+            for (int index = 0; index < hits.Length; index++)
+            {
+                colliders[index] = GetCollider(hits[index].Entity)!;
+            }
+            return colliders;
+        }
+
+        private QueryHit[] ReadQueryHits(int count)
+        {
+            IntPtr buffer = RuntimeInterop.unitas_runtime_query_buffer(
+                _runtimeHandle,
+                (uint)(count * RuntimeInterop.QueryRecordSize));
+            if (buffer == IntPtr.Zero)
+            {
+                return Array.Empty<QueryHit>();
+            }
+            return RuntimeInterop.ReadQueryHits(buffer, count);
         }
 
         private static ulong CreateRuntimeHandle()

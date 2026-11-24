@@ -106,7 +106,12 @@ struct TransformRecord {
     children: Vec<i64>,
 }
 
-type GameObjectEntities = HashMap<i64, EntityId>;
+type GameObjectRecords = HashMap<i64, GameObjectRecord>;
+
+struct GameObjectRecord {
+    entity: EntityId,
+    layer: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptBinding {
@@ -141,6 +146,7 @@ pub struct PhysicsBinding {
     pub rigidbody: Option<RigidbodyComponent>,
     pub box_collider: Option<BoxColliderComponent>,
     pub sphere_collider: Option<SphereColliderComponent>,
+    pub layer: u32,
 }
 
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
@@ -185,24 +191,25 @@ pub fn assemble_scene_file_with_physics(
 fn assemble(
     stream: &Stream,
     index: Option<&GuidIndex>,
-) -> Result<(SceneGraph, Vec<ScriptBinding>, GameObjectEntities), SceneError> {
+) -> Result<(SceneGraph, Vec<ScriptBinding>, GameObjectRecords), SceneError> {
     check_external_references(stream, index)?;
     let mut graph = SceneGraph::new();
-    let mut game_objects: GameObjectEntities = HashMap::new();
+    let mut game_objects: GameObjectRecords = HashMap::new();
     for document in &stream.documents {
         if document.class_id != GAME_OBJECT_CLASS || document.stripped {
             continue;
         }
-        let name = match document
-            .root
-            .get("GameObject")
+        let body = document.root.get("GameObject");
+        let name = match body
             .and_then(|body| body.get("m_Name"))
             .and_then(Node::as_str)
         {
             Some(name) => name.to_string(),
             None => String::from("GameObject"),
         };
-        game_objects.insert(document.file_id, graph.add_entity(name));
+        let entity = graph.add_entity(name);
+        let layer = yaml_u32(body.and_then(|body| body.get("m_Layer")), 0);
+        game_objects.insert(document.file_id, GameObjectRecord { entity, layer });
     }
     let mut transforms: HashMap<i64, EntityId> = HashMap::new();
     let mut owners: HashMap<i64, i64> = HashMap::new();
@@ -225,7 +232,7 @@ fn assemble(
             }
         };
         let entity = match game_objects.get(&game_object_file_id) {
-            Some(entity) => *entity,
+            Some(record) => record.entity,
             None => {
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
@@ -295,7 +302,7 @@ fn assemble(
             }
         };
         let entity = match game_objects.get(&game_object_file_id) {
-            Some(entity) => *entity,
+            Some(record) => record.entity,
             None => {
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
@@ -324,7 +331,7 @@ enum PhysicsComponent {
 
 fn collect_physics(
     stream: &Stream,
-    game_objects: &GameObjectEntities,
+    game_objects: &GameObjectRecords,
 ) -> Result<Vec<PhysicsBinding>, SceneError> {
     let mut bindings: Vec<PhysicsBinding> = Vec::new();
     let mut positions: HashMap<EntityId, usize> = HashMap::new();
@@ -356,8 +363,8 @@ fn collect_physics(
                 })
             }
         };
-        let entity = match game_objects.get(&game_object_file_id) {
-            Some(entity) => *entity,
+        let record = match game_objects.get(&game_object_file_id) {
+            Some(record) => record,
             None => {
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
@@ -365,6 +372,8 @@ fn collect_physics(
                 })
             }
         };
+        let entity = record.entity;
+        let layer = record.layer;
         let position = match positions.get(&entity) {
             Some(position) => *position,
             None => {
@@ -373,6 +382,7 @@ fn collect_physics(
                     rigidbody: None,
                     box_collider: None,
                     sphere_collider: None,
+                    layer,
                 });
                 let position = bindings.len() - 1;
                 positions.insert(entity, position);
@@ -410,6 +420,14 @@ fn sphere_collider_component(body: &Node) -> SphereColliderComponent {
         radius: body.get("m_Radius").and_then(Node::as_f64).unwrap_or(0.5),
         center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+    }
+}
+
+fn yaml_u32(node: Option<&Node>, default: u32) -> u32 {
+    match node.and_then(Node::as_i64) {
+        Some(value) if value < 0 => 0,
+        Some(value) => u32::try_from(value).unwrap_or(default),
+        None => default,
     }
 }
 

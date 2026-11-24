@@ -53,6 +53,7 @@ pub struct BodyDesc {
     pub use_gravity: bool,
     pub is_trigger: bool,
     pub shape: Shape,
+    pub layer: u32,
 }
 
 impl BodyDesc {

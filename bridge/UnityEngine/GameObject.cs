@@ -32,9 +32,14 @@ namespace UnityEngine
         public T AddComponent<T>() where T : Component, new()
         {
             T component = new T();
+            AttachComponent(component);
+            return component;
+        }
+
+        internal void AttachComponent(Component component)
+        {
             component.gameObject = this;
             _components.Add(component);
-            return component;
         }
 
         public T? GetComponent<T>() where T : Component

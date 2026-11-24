@@ -11,6 +11,7 @@ fn sphere(position: [f64; 3]) -> BodyDesc {
         use_gravity: false,
         is_trigger: false,
         shape: Shape::Sphere { radius: 0.5 },
+        layer: 0,
     }
 }
 
@@ -56,6 +57,7 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
             shape: Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
             },
+            layer: 0,
         },
     )?;
 
@@ -134,10 +136,7 @@ fn invalid_delta_times_are_rejected() -> Result<(), PhysicsError> {
     let mut world = World::new();
     world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0]))?;
 
-    assert_eq!(
-        world.step(-0.1),
-        Err(PhysicsError::InvalidDeltaTime(-0.1))
-    );
+    assert_eq!(world.step(-0.1), Err(PhysicsError::InvalidDeltaTime(-0.1)));
     assert!(matches!(
         world.step(f64::NAN),
         Err(PhysicsError::InvalidDeltaTime(_))

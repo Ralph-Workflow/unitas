@@ -16,6 +16,8 @@ namespace Unitas.Bridge.Tests
             TestEndToEndRustCollisionOrder();
             TestEndToEndRustTriggerOrder();
             TestSceneReloadDropsPreviousSceneScripts();
+            TestLayerMaskConversions();
+            TestEndToEndRustPhysicsQuery();
 
             if (Check.FailureCount > 0)
             {
@@ -328,6 +330,65 @@ namespace Unitas.Bridge.Tests
                     "Reloaded scene does not dispatch to the previous scene script",
                     afterFirstScene,
                     recordedScript.ObservedOrder);
+            }
+        }
+
+        private static void TestLayerMaskConversions()
+        {
+            LayerMask mask = 32;
+            int raw = mask;
+            Check.Equal("LayerMask converts to int", 32, raw);
+
+            LayerMask fromInt = 5;
+            Check.Equal("LayerMask converts from int", 5, fromInt.value);
+
+            LayerMask mutable = 0;
+            mutable.value = 32;
+            Check.Equal("LayerMask value round trip", 32, mutable.value);
+            Check.Equal("LayerMask implicit conversion to int", 32, (int)mutable);
+        }
+
+        private static void TestEndToEndRustPhysicsQuery()
+        {
+            string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_query.unity");
+
+            Check.That("Physics query scene file exists", File.Exists(scenePath));
+
+            ScriptRegistry.Clear();
+            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
+            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+                for (int tick = 0; tick < 10; tick++)
+                {
+                    host.Tick(0.02);
+                }
+
+                bool found = Physics.Raycast(new Vector3(0f, -5f, 0f), new Vector3(0f, 1f, 0f), out RaycastHit hit, 100f, 1 << 5);
+                Check.That("Raycast hits the layer 5 collider", found);
+                Check.That("Raycast hit collider is not null", hit.collider != null);
+                Check.Equal("Raycast hit distance", 4.5f, hit.distance);
+                Check.Equal("Raycast hit point x", 0f, hit.point.x);
+                Check.Equal("Raycast hit point y", -0.5f, hit.point.y);
+                Check.Equal("Raycast hit point z", 0f, hit.point.z);
+
+                bool excluded = Physics.Raycast(new Vector3(0f, -5f, 0f), new Vector3(0f, 1f, 0f), out RaycastHit excludedHit, 100f, ~(1 << 5));
+                Check.That("Raycast misses a collider on an excluded layer", !excluded);
+                Check.That("Raycast miss leaves the hit empty", excludedHit.collider == null);
+
+                Collider[] all = Physics.OverlapSphere(new Vector3(0f, 0f, 0f), 2.5f, ~0);
+                Check.Equal("OverlapSphere returns every overlapping collider", 2, all.Length);
+                Check.That(
+                    "OverlapSphere colliders are not null",
+                    all.Length == 2 && all[0] != null && all[1] != null);
+
+                Collider[] layered = Physics.OverlapSphere(new Vector3(0f, 0f, 0f), 2.5f, 1 << 5);
+                Check.Equal("OverlapSphere returns only the layer 5 collider", 1, layered.Length);
+                Check.That("OverlapSphere layered collider is not null", layered.Length == 1 && layered[0] != null);
+
+                host.Shutdown();
             }
         }
 

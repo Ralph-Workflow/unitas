@@ -9,6 +9,7 @@ fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
         use_gravity: false,
         is_trigger: false,
         shape: Shape::Sphere { radius: 0.5 },
+        layer: 0,
     }
 }
 
@@ -22,6 +23,7 @@ fn box_body(position: [f64; 3]) -> BodyDesc {
         shape: Shape::Box {
             half_extents: [1.0, 1.0, 1.0],
         },
+        layer: 0,
     }
 }
 
@@ -103,6 +105,7 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
             use_gravity: true,
             is_trigger: false,
             shape: Shape::Sphere { radius: 0.5 },
+            layer: 0,
         },
     )?;
 

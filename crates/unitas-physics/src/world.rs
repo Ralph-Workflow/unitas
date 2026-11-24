@@ -5,6 +5,7 @@ use unitas_core::EntityId;
 use crate::body::{BodyDesc, Shape};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
+use crate::query::{normalized_direction, ray_box_distance, ray_sphere_distance, RaycastHit};
 
 const GRAVITY: f64 = 9.81;
 
@@ -19,6 +20,7 @@ struct Body {
     is_trigger: bool,
     position: [f64; 3],
     velocity: [f64; 3],
+    layer: u32,
 }
 
 #[derive(Default)]
@@ -52,6 +54,7 @@ impl World {
             is_trigger: desc.is_trigger,
             position: desc.position,
             velocity: desc.velocity,
+            layer: desc.layer,
         });
         self.indices.insert(entity, index);
         Ok(())
@@ -94,6 +97,62 @@ impl World {
         self.bodies.len()
     }
 
+    pub fn raycast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+    ) -> Vec<RaycastHit> {
+        if max_distance <= 0.0 || max_distance.is_nan() {
+            return Vec::new();
+        }
+        let Some(direction) = normalized_direction(direction) else {
+            return Vec::new();
+        };
+        let mut hits = Vec::new();
+        for body in &self.bodies {
+            if body.layer & layer_mask == 0 {
+                continue;
+            }
+            let distance = match body.shape {
+                Shape::Sphere { radius } => {
+                    ray_sphere_distance(origin, direction, body.position, radius)
+                }
+                Shape::Box { half_extents } => {
+                    ray_box_distance(origin, direction, body.position, half_extents)
+                }
+            };
+            let Some(distance) = distance else {
+                continue;
+            };
+            if distance > max_distance {
+                continue;
+            }
+            hits.push(RaycastHit {
+                entity: body.entity,
+                distance,
+                point: [
+                    origin[0] + direction[0] * distance,
+                    origin[1] + direction[1] * distance,
+                    origin[2] + direction[2] * distance,
+                ],
+            });
+        }
+        hits.sort_by(|first, second| first.distance.total_cmp(&second.distance));
+        hits
+    }
+
+    pub fn overlap_sphere(&self, center: [f64; 3], radius: f64, layer_mask: u32) -> Vec<EntityId> {
+        let probe = Shape::Sphere { radius };
+        self.bodies
+            .iter()
+            .filter(|body| body.layer & layer_mask != 0)
+            .filter(|body| probe.overlaps(center, &body.shape, body.position))
+            .map(|body| body.entity)
+            .collect()
+    }
+
     fn integrate(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
             if body.mass <= 0.0 {
@@ -113,7 +172,10 @@ impl World {
         let mut trigger_pairs = BTreeSet::new();
         for (index, first) in self.bodies.iter().enumerate() {
             for second in self.bodies.iter().skip(index + 1) {
-                if first.shape.overlaps(first.position, &second.shape, second.position) {
+                if first
+                    .shape
+                    .overlaps(first.position, &second.shape, second.position)
+                {
                     let pair = if first.entity < second.entity {
                         (first.entity, second.entity)
                     } else {

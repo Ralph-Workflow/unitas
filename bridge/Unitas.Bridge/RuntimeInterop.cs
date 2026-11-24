@@ -7,6 +7,8 @@ namespace Unitas.Bridge
     {
         public const string LibraryName = "unitas_runtime";
 
+        public const int QueryRecordSize = 40;
+
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate ulong CreateScriptCallback(ulong entity, ulong guidHi, ulong guidLo);
 
@@ -86,9 +88,66 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_tick(ulong runtime, double deltaSeconds);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_raycast(
+            ulong runtime,
+            double originX,
+            double originY,
+            double originZ,
+            double directionX,
+            double directionY,
+            double directionZ,
+            double maxDistance,
+            uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_overlap_sphere(
+            ulong runtime,
+            double centerX,
+            double centerY,
+            double centerZ,
+            double radius,
+            uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr unitas_runtime_query_buffer(ulong runtime, uint capacity);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_destroy(ulong runtime);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_error_message(ulong runtime);
+
+        public static QueryHit[] ReadQueryHits(IntPtr buffer, int count)
+        {
+            if (count <= 0)
+            {
+                return Array.Empty<QueryHit>();
+            }
+            byte[] bytes = new byte[count * QueryRecordSize];
+            Marshal.Copy(buffer, bytes, 0, bytes.Length);
+            QueryHit[] hits = new QueryHit[count];
+            for (int index = 0; index < count; index++)
+            {
+                int offset = index * QueryRecordSize;
+                hits[index] = new QueryHit
+                {
+                    Entity = BitConverter.ToUInt64(bytes, offset),
+                    Distance = BitConverter.ToDouble(bytes, offset + 8),
+                    X = BitConverter.ToDouble(bytes, offset + 16),
+                    Y = BitConverter.ToDouble(bytes, offset + 24),
+                    Z = BitConverter.ToDouble(bytes, offset + 32),
+                };
+            }
+            return hits;
+        }
+    }
+
+    public struct QueryHit
+    {
+        public ulong Entity;
+        public double Distance;
+        public double X;
+        public double Y;
+        public double Z;
     }
 }

@@ -14,7 +14,18 @@ const SCENE_FIXTURE: &str = "tests/fixtures/scene.unity";
 const PREFAB_FIXTURE: &str = "tests/fixtures/prefab.prefab";
 const PHYSICS_FIXTURE: &str = "tests/fixtures/physics.unity";
 const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
+const PHYSICS_LAYER_FIXTURE: &str = "tests/fixtures/physics_layer.unity";
 const PROJECT_DIR: &str = "tests/fixtures/project";
+
+const NEGATIVE_LAYER: &str = "%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Negative
+  m_Layer: -3
+--- !u!54 &2
+Rigidbody:
+  m_GameObject: {fileID: 1}
+";
 
 const MISSING_GAME_OBJECT: &str = "%YAML 1.1
 --- !u!4 &10
@@ -339,6 +350,41 @@ fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
         .ok_or("TriggerRig has no sphere collider")?;
     assert!(rig_rb.is_trigger);
     assert!(rig_sphere.is_trigger);
+    Ok(())
+}
+
+#[test]
+fn physics_layer_parses_from_the_game_object() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PHYSICS_LAYER_FIXTURE))?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    let layered = entity_named(&graph, "Layered")?;
+    let binding = bindings
+        .iter()
+        .find(|binding| binding.entity == layered)
+        .ok_or("no physics binding for Layered")?;
+    assert_eq!(binding.layer, 5);
+    Ok(())
+}
+
+#[test]
+fn physics_layer_defaults_to_zero_when_absent() -> TestResult {
+    let stream = unity_yaml::parse_file(Path::new(PHYSICS_LAYER_FIXTURE))?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    let unlayered = entity_named(&graph, "Unlayered")?;
+    let binding = bindings
+        .iter()
+        .find(|binding| binding.entity == unlayered)
+        .ok_or("no physics binding for Unlayered")?;
+    assert_eq!(binding.layer, 0);
+    Ok(())
+}
+
+#[test]
+fn physics_negative_layer_falls_back_to_zero() -> TestResult {
+    let stream = unity_yaml::parse(NEGATIVE_LAYER)?;
+    let (_graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].layer, 0);
     Ok(())
 }
 
