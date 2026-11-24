@@ -21,6 +21,7 @@ namespace Unitas.Bridge.Tests
             TimeDiagnosticsTests.Run();
             QuerySurfaceTests.Run();
             IntegrationTests.Run();
+            CoroutineTests.Run();
 
             if (Check.FailureCount > 0)
             {

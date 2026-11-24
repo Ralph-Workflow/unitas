@@ -1,12 +1,27 @@
 namespace UnityEngine
 {
-    public class MonoBehaviour : Component
+    public class MonoBehaviour : Behaviour
     {
         public MonoBehaviour()
         {
             GameObject owner = new GameObject("Scripted Game Object");
             owner.AttachComponent(this);
             owner.AddComponent<SphereCollider>();
+        }
+
+        public Coroutine StartCoroutine(System.Collections.IEnumerator routine)
+        {
+            return CoroutineScheduler.Start(this, routine);
+        }
+
+        public void StopCoroutine(Coroutine coroutine)
+        {
+            CoroutineScheduler.Stop(coroutine);
+        }
+
+        public void StopAllCoroutines()
+        {
+            CoroutineScheduler.StopAll(this);
         }
 
         public virtual void Awake()

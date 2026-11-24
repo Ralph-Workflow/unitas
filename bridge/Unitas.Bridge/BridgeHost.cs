@@ -17,6 +17,8 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
         private ulong _nextScriptHandle = 1;
+        private int _fixedUpdateCallsInStep;
+        private int _lateUpdateCallsInTick;
         private bool _isDisposed;
 
         private readonly RuntimeInterop.CreateScriptCallback _createScriptCallback;
@@ -97,10 +99,10 @@ namespace Unitas.Bridge
 
         public void LoadScene(string path)
         {
-            if (path == null)
-            {
-                throw new ArgumentNullException(nameof(path));
-            }
+            ArgumentNullException.ThrowIfNull(path);
+            StopAllSafely();
+            _fixedUpdateCallsInStep = 0;
+            _lateUpdateCallsInTick = 0;
             _scripts.Clear();
             _entityScripts.Clear();
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(path);
@@ -129,6 +131,8 @@ namespace Unitas.Bridge
 
         public void Tick(double deltaSeconds)
         {
+            _fixedUpdateCallsInStep = 0;
+            _lateUpdateCallsInTick = 0;
             Time.Advance(deltaSeconds);
             int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, deltaSeconds * Time.timeScale);
             if (result != 0)
@@ -148,8 +152,11 @@ namespace Unitas.Bridge
             {
                 _isDisposed = true;
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
+                _fixedUpdateCallsInStep = 0;
+                _lateUpdateCallsInTick = 0;
                 _scripts.Clear();
                 _entityScripts.Clear();
+                StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
                 {
                     Physics.Provider = null;
@@ -369,6 +376,12 @@ namespace Unitas.Bridge
             {
                 InvokeWithOrigin(script, script.FixedUpdate);
             }
+            _fixedUpdateCallsInStep++;
+            if (_scripts.Count > 0 && _fixedUpdateCallsInStep >= _scripts.Count)
+            {
+                _fixedUpdateCallsInStep = 0;
+                PumpFixedSafely();
+            }
         }
 
         private void OnUpdate(ulong scriptHandle, double deltaSeconds)
@@ -385,6 +398,12 @@ namespace Unitas.Bridge
             {
                 InvokeWithOrigin(script, script.LateUpdate);
             }
+            _lateUpdateCallsInTick++;
+            if (_scripts.Count > 0 && _lateUpdateCallsInTick >= _scripts.Count)
+            {
+                _lateUpdateCallsInTick = 0;
+                PumpFrameSafely();
+            }
         }
 
         private void OnOnDisable(ulong scriptHandle)
@@ -400,6 +419,7 @@ namespace Unitas.Bridge
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
                 InvokeWithOrigin(script, script.OnDestroy);
+                OwnerDestroyedSafely(script);
                 _scripts.Remove(scriptHandle);
             }
         }
@@ -492,6 +512,54 @@ namespace Unitas.Bridge
             finally
             {
                 LogRecorder.CurrentOrigin = previousOrigin;
+            }
+        }
+
+        private static void PumpFixedSafely()
+        {
+            try
+            {
+                CoroutineScheduler.PumpFixed();
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static void PumpFrameSafely()
+        {
+            try
+            {
+                CoroutineScheduler.PumpFrame();
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static void OwnerDestroyedSafely(MonoBehaviour script)
+        {
+            try
+            {
+                CoroutineScheduler.OwnerDestroyed(script);
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex, script);
+            }
+        }
+
+        private static void StopAllSafely()
+        {
+            try
+            {
+                CoroutineScheduler.StopAll();
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex);
             }
         }
     }

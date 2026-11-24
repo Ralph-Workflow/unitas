@@ -27,6 +27,16 @@ namespace UnityEngine
         public void SetActive(bool value)
         {
             activeSelf = value;
+            if (!value)
+            {
+                for (int i = 0; i < _components.Count; i++)
+                {
+                    if (_components[i] is MonoBehaviour behaviour)
+                    {
+                        CoroutineScheduler.OwnerDeactivated(behaviour);
+                    }
+                }
+            }
         }
 
         public T AddComponent<T>() where T : Component, new()
