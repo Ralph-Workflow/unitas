@@ -69,10 +69,10 @@ fn cubic_hermite_with_nonzero_tangents_respects_dt_scaling() {
 #[test]
 fn clamped_auto_tangents_prevent_overshoot_at_extrema_and_smooth_monotone() {
     let curve = AnimationCurve::clamped_auto(vec![
-        Keyframe::clamped_auto(0.0, 0.0),
-        Keyframe::clamped_auto(1.0, 2.0),
-        Keyframe::clamped_auto(2.0, 4.0),
-        Keyframe::clamped_auto(3.0, 1.0),
+        Keyframe::new(0.0, 0.0, 0.0, 0.0),
+        Keyframe::new(1.0, 2.0, 0.0, 0.0),
+        Keyframe::new(2.0, 4.0, 0.0, 0.0),
+        Keyframe::new(3.0, 1.0, 0.0, 0.0),
     ]);
     let keys = curve.keyframes();
     assert_eq!(keys[2].in_tangent, 0.0);
@@ -100,9 +100,29 @@ fn mixed_interpolation_modes_across_segments_use_segment_left_mode() {
         Keyframe::linear(1.0, 5.0),
         Keyframe::new(2.0, 9.0, 0.0, 0.0),
     ]);
-    assert_eq!(curve.keys()[0].mode, InterpolationMode::Stepped);
+    assert_eq!(curve.keyframes()[0].mode, InterpolationMode::Stepped);
     assert_eq!(curve.evaluate(0.5), 1.0);
     assert!((curve.evaluate(1.5) - 7.0).abs() < 1e-5);
+}
+
+#[test]
+fn keyframe_new_defaults_to_hermite_mode_while_with_mode_uses_the_requested_mode() {
+    let default = Keyframe::new(0.25, 1.5, 2.0, 3.0);
+    assert_eq!(default.mode, InterpolationMode::Hermite);
+    assert_eq!(default.time, 0.25);
+    assert_eq!(default.value, 1.5);
+    assert_eq!(default.in_tangent, 2.0);
+    assert_eq!(default.out_tangent, 3.0);
+
+    let stepped = Keyframe::with_mode(0.25, 1.5, 2.0, 3.0, InterpolationMode::Stepped);
+    assert_eq!(stepped.mode, InterpolationMode::Stepped);
+    assert_ne!(stepped.mode, default.mode);
+
+    let linear = Keyframe::with_mode(0.25, 1.5, 2.0, 3.0, InterpolationMode::Linear);
+    assert_eq!(linear.mode, InterpolationMode::Linear);
+
+    let hermite = Keyframe::with_mode(0.25, 1.5, 2.0, 3.0, InterpolationMode::Hermite);
+    assert_eq!(hermite.mode, InterpolationMode::Hermite);
 }
 
 #[test]
@@ -174,11 +194,11 @@ fn clamped_auto_handles_empty_and_single_keyframe_curves() {
     assert_eq!(empty.len(), 0);
     assert_eq!(empty.max_time(), 0.0);
 
-    let single = AnimationCurve::clamped_auto(vec![Keyframe::clamped_auto(1.5, 9.0)]);
+    let single = AnimationCurve::clamped_auto(vec![Keyframe::new(1.5, 9.0, 0.0, 0.0)]);
     assert_eq!(single.len(), 1);
     assert_eq!(single.max_time(), 1.5);
-    assert_eq!(single.keys()[0].in_tangent, 0.0);
-    assert_eq!(single.keys()[0].out_tangent, 0.0);
+    assert_eq!(single.keyframes()[0].in_tangent, 0.0);
+    assert_eq!(single.keyframes()[0].out_tangent, 0.0);
     assert_eq!(single.evaluate(0.0), 9.0);
 }
 

@@ -211,6 +211,40 @@ fn multi_loop_step_fires_events_for_every_crossed_cycle() {
 }
 
 #[test]
+fn loop_event_firing_is_capped_at_64_cycles_per_sample() {
+    let clip = AnimationClip::new(
+        "Capped",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        Vec::new(),
+        vec![AnimationEvent::new(0.5, "Halfway")],
+    );
+
+    let sample = clip.sample(0.0, 200.0);
+    assert_eq!(sample.fired_events.len(), 65);
+}
+
+#[test]
+fn ping_pong_event_firing_is_capped_at_64_cycles_per_sample() {
+    let clip = AnimationClip::new(
+        "PingPongCapped",
+        1.0,
+        60.0,
+        WrapMode::PingPong,
+        Vec::new(),
+        vec![AnimationEvent::new(0.5, "Halfway")],
+    );
+
+    let sample = clip.sample(0.0, 200.0);
+    assert_eq!(sample.fired_events.len(), 65);
+    assert!(sample
+        .fired_events
+        .iter()
+        .all(|event| event.function_name == "Halfway"));
+}
+
+#[test]
 fn whole_property_and_per_channel_bindings_coexist_and_carry_parsed_targets() {
     let clip = AnimationClip::new(
         "MixedBindings",

@@ -79,8 +79,6 @@ impl SceneGraph {
         id
     }
 
-    /// Shifts every entity id in the graph by `base` so that graphs loaded from different scenes
-    /// can live in one runtime without colliding entity ids.
     pub fn shift_entity_ids(&mut self, base: u64) {
         let mut shifted = HashMap::with_capacity(self.index.len());
         for (position, node) in self.nodes.iter_mut().enumerate() {

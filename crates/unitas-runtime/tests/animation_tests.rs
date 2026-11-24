@@ -1,10 +1,12 @@
 use std::error::Error;
+use std::path::Path;
 
 use unitas_animation::{
     decode_controller_binary, encode_controller_binary, AnimationClip, AnimatorController,
     AnimatorState, ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve, Keyframe,
     ParameterDef, StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
 };
+use unitas_core::EntityId;
 use unitas_runtime::{
     test_read_error_message, test_read_path_buffer, test_write_path_buffer,
     unitas_runtime_animator_attach, unitas_runtime_animator_controller_create,
@@ -16,7 +18,7 @@ use unitas_runtime::{
     unitas_runtime_animator_set_speed, unitas_runtime_animator_set_trigger,
     unitas_runtime_animator_state_info, unitas_runtime_animator_state_name, unitas_runtime_destroy,
     unitas_runtime_error_message, unitas_runtime_new, unitas_runtime_path_buffer,
-    unitas_runtime_set_time_scale, unitas_runtime_tick,
+    unitas_runtime_set_time_scale, unitas_runtime_tick, AnimationRuntimeDiagnostic, Runtime,
 };
 
 const STATE_INFO_SIZE: usize = 80;
@@ -202,7 +204,6 @@ fn animator_abi_controller_attach_and_state_progress() -> Result<(), Box<dyn Err
     assert_eq!(info.fired_event_count, 0);
     assert_eq!(info.diagnostic_count, 0);
 
-    // The runtime's first tick only initializes the frame, so prime it before measuring.
     tick(handle, 0.0)?;
     tick(handle, 1.0)?;
     let info = state_info(handle, entity)?;
@@ -269,8 +270,6 @@ fn animator_abi_parameters_drive_state_transitions() -> Result<(), Box<dyn Error
     assert_eq!(state_info(handle, entity)?.state_index, 1);
     assert_eq!(state_name(handle, entity)?, "Run");
 
-    // The path buffer is one scratch buffer: the name is written again right
-    // before the call that consumes it.
     let name = write_bytes(handle, b"speed")?;
     let out = buffer_address(handle, 4)?;
     assert_eq!(
@@ -356,11 +355,9 @@ fn animator_abi_trigger_fires_once_until_reset() -> Result<(), Box<dyn Error>> {
     assert_eq!(state_info(handle, entity)?.state_index, 1);
     assert_eq!(state_name(handle, entity)?, "Jump");
 
-    // The trigger was consumed by the transition, so no second transition happens.
     tick(handle, 0.1)?;
     assert_eq!(state_info(handle, entity)?.state_index, 1);
 
-    // A second trigger is required for the next transition.
     let name = write_bytes(handle, b"go")?;
     assert_eq!(
         unitas_runtime_animator_set_trigger(handle, entity, name, 2),
@@ -370,7 +367,6 @@ fn animator_abi_trigger_fires_once_until_reset() -> Result<(), Box<dyn Error>> {
     assert_eq!(state_info(handle, entity)?.state_index, 0);
     assert_eq!(state_name(handle, entity)?, "Idle");
 
-    // A reset trigger clears the pending trigger, so no transition happens.
     let name = write_bytes(handle, b"go")?;
     assert_eq!(
         unitas_runtime_animator_set_trigger(handle, entity, name, 2),
@@ -704,6 +700,233 @@ fn animator_abi_scenario_is_repeatable() -> Result<(), Box<dyn Error>> {
     assert!(
         first.iter().any(|observation| observation.0 == 1),
         "the trigger must move the animator into the Run state: {first:?}"
+    );
+    Ok(())
+}
+
+const CHILD_HIERARCHY_SCENE_PATH: &str = "tests/fixtures/scene_animation_children.unity";
+
+fn child_hierarchy_runtime() -> Result<(Runtime, EntityId, EntityId), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(CHILD_HIERARCHY_SCENE_PATH))?;
+    let root = entity_by_name(&runtime, "Root")?;
+    let child = entity_by_name(&runtime, "Child")?;
+    Ok((runtime, root, child))
+}
+
+fn entity_by_name(runtime: &Runtime, name: &str) -> Result<EntityId, Box<dyn Error>> {
+    let graph = runtime.scene_graph().ok_or("no scene graph found")?;
+    graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| graph.entity(*id).is_some_and(|entity| entity.name == name))
+        .ok_or_else(|| -> Box<dyn Error> { format!("entity '{name}' not found").into() })
+}
+
+fn local_position(runtime: &Runtime, entity: EntityId) -> Result<[f32; 3], Box<dyn Error>> {
+    let graph = runtime.scene_graph().ok_or("no scene graph found")?;
+    let transform = graph
+        .transform(entity)
+        .ok_or("entity has no transform in the scene graph")?;
+    Ok(transform.translation)
+}
+
+fn register_controller(
+    runtime: &mut Runtime,
+    controller: &AnimatorController,
+) -> Result<u64, Box<dyn Error>> {
+    let bytes = encode_controller_binary(controller);
+    let decoded = decode_controller_binary(&bytes)?;
+    if decoded != *controller {
+        return Err(String::from("controller round trip mismatch").into());
+    }
+    Ok(runtime
+        .animation_mut()
+        .decode_and_register_controller(&bytes)?)
+}
+
+fn position_clip(path: &str) -> AnimationClip {
+    AnimationClip::new(
+        "Move",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new(path, "Transform", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 4.0)]),
+        )],
+        Vec::new(),
+    )
+}
+
+#[test]
+fn animator_runtime_non_transform_binding_reports_diagnostic_and_keeps_advancing(
+) -> Result<(), Box<dyn Error>> {
+    let clip = AnimationClip::new(
+        "Tint",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "SpriteRenderer", "color"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 1.0)]),
+        )],
+        Vec::new(),
+    );
+    let controller = AnimatorController::new(
+        "Tint",
+        vec![ParameterDef::trigger("go")],
+        vec![
+            AnimatorState::new("Tint", StateMotion::Clip(clip.clone())),
+            AnimatorState::new("Fade", StateMotion::Clip(clip)),
+        ],
+        0,
+        vec![StateTransition::instant(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+        )],
+    );
+    let mut runtime = Runtime::new()?;
+    let entity = runtime.ensure_animator(0);
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(0));
+
+    let handle = register_controller(&mut runtime, &controller)?;
+    runtime.set_animator_controller(entity, handle)?;
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(1));
+    let diagnostics = runtime
+        .animation()
+        .typed_diagnostics(entity)
+        .ok_or("animator has no typed diagnostics")?;
+    assert_eq!(diagnostics.len(), 1);
+    match &diagnostics[0] {
+        AnimationRuntimeDiagnostic::UnsupportedBinding {
+            object_path,
+            component,
+            property,
+            ..
+        } => {
+            assert_eq!(object_path, "");
+            assert_eq!(component, "SpriteRenderer");
+            assert_eq!(property, "color");
+        }
+        other => return Err(format!("unexpected diagnostic {other:?}").into()),
+    }
+    assert!(
+        diagnostics[0]
+            .to_string()
+            .contains("is not yet applied in runtime"),
+        "diagnostic text {}",
+        diagnostics[0]
+    );
+
+    runtime.tick(0.0)?;
+    runtime.tick(1.0)?;
+    let info = runtime.animation().state_info(entity)?;
+    assert_eq!(info.state_index, 0);
+    assert_eq!(info.state_name, "Tint");
+    assert!(
+        (info.normalized_time - 0.5).abs() < 1e-5,
+        "normalized time {}",
+        info.normalized_time
+    );
+
+    runtime.animation_mut().set_trigger(entity, "go")?;
+    runtime.tick(0.1)?;
+    let info = runtime.animation().state_info(entity)?;
+    assert_eq!(info.state_index, 1);
+    assert_eq!(info.state_name, "Fade");
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(1));
+    Ok(())
+}
+
+#[test]
+fn animator_runtime_child_object_path_moves_child_transform() -> Result<(), Box<dyn Error>> {
+    let (mut runtime, root, child) = child_hierarchy_runtime()?;
+    let controller = AnimatorController::new(
+        "ChildMove",
+        Vec::new(),
+        vec![AnimatorState::new(
+            "ChildMove",
+            StateMotion::Clip(position_clip("Parent/Child")),
+        )],
+        0,
+        Vec::new(),
+    );
+    let entity = runtime.ensure_animator(root.as_u64());
+    let handle = register_controller(&mut runtime, &controller)?;
+    runtime.set_animator_controller(entity, handle)?;
+    runtime.tick(0.0)?;
+    let before = local_position(&runtime, child)?;
+    assert!(
+        (before[0] - 0.0).abs() < 1e-6,
+        "child local position before the clip {}",
+        before[0]
+    );
+
+    runtime.tick(1.0)?;
+    let after = local_position(&runtime, child)?;
+    assert!(
+        (after[0] - 2.0).abs() < 1e-5,
+        "child local position {}",
+        after[0]
+    );
+    assert!((after[1] - 0.0).abs() < 1e-6);
+    assert!((after[2] - 0.0).abs() < 1e-6);
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(0));
+    Ok(())
+}
+
+#[test]
+fn animator_runtime_unresolved_child_path_records_diagnostic() -> Result<(), Box<dyn Error>> {
+    let (mut runtime, root, child) = child_hierarchy_runtime()?;
+    let controller = AnimatorController::new(
+        "MissingChild",
+        Vec::new(),
+        vec![AnimatorState::new(
+            "MissingChild",
+            StateMotion::Clip(position_clip("Parent/Missing")),
+        )],
+        0,
+        Vec::new(),
+    );
+    let entity = runtime.ensure_animator(root.as_u64());
+    let handle = register_controller(&mut runtime, &controller)?;
+    runtime.set_animator_controller(entity, handle)?;
+    runtime.tick(0.0)?;
+    runtime.tick(1.0)?;
+
+    let diagnostics = runtime
+        .animation()
+        .typed_diagnostics(entity)
+        .ok_or("animator has no typed diagnostics")?;
+    assert_eq!(diagnostics.len(), 1);
+    match &diagnostics[0] {
+        AnimationRuntimeDiagnostic::UnresolvedChildPath { object_path, .. } => {
+            assert_eq!(object_path, "Parent/Missing");
+        }
+        other => return Err(format!("unexpected diagnostic {other:?}").into()),
+    }
+    assert!(
+        diagnostics[0]
+            .to_string()
+            .contains("could not be resolved in scene graph"),
+        "diagnostic text {}",
+        diagnostics[0]
+    );
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(1));
+
+    let after = local_position(&runtime, child)?;
+    assert!(
+        (after[0] - 0.0).abs() < 1e-6,
+        "an unresolved path must not move the child {}",
+        after[0]
+    );
+    let info = runtime.animation().state_info(entity)?;
+    assert!(
+        (info.normalized_time - 0.5).abs() < 1e-5,
+        "normalized time {}",
+        info.normalized_time
     );
     Ok(())
 }

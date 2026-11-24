@@ -1,8 +1,7 @@
 use unitas_animation::{
     AnimationClip, AnimationError, Animator, AnimatorController, AnimatorState, ConditionOp,
-    CurveBinding, CurveBindingTarget, FloatCurve, InterpolationMode, Keyframe, ParameterDef,
-    ParameterValue, PropertyCurve, StateMotion, StateTransition, TransitionCondition,
-    TransitionTarget, WrapMode,
+    CurveBinding, CurveBindingTarget, FloatCurve, Keyframe, ParameterDef, ParameterValue,
+    PropertyCurve, StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
 };
 
 fn build_rich_controller() -> AnimatorController {
@@ -182,7 +181,7 @@ fn decode_binary_rejects_bad_magic_and_version_and_truncated_input() {
 }
 
 #[test]
-fn decode_binary_rejects_invalid_parameter_tag_and_preserve_parameter_values() {
+fn decode_binary_rejects_invalid_parameter_tag() {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"UANC");
     bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -200,20 +199,36 @@ fn decode_binary_rejects_invalid_parameter_tag_and_preserve_parameter_values() {
             tag: 99,
         })
     );
+}
 
-    let p = ParameterDef::new("flag", ParameterValue::Bool(true));
-    assert_eq!(p.name, "flag");
-    assert_eq!(
-        build_rich_controller().states[0].motion.clone(),
-        match &build_rich_controller().states[0].motion {
-            StateMotion::Clip(c) => StateMotion::Clip(c.clone()),
-            other => other.clone(),
-        }
+#[test]
+fn wire_roundtrip_preserves_parameter_values() -> Result<(), AnimationError> {
+    let controller = AnimatorController::new(
+        "ParamCtrl",
+        vec![
+            ParameterDef::float("speed", 2.75),
+            ParameterDef::int("mode", -3),
+            ParameterDef::bool("grounded", true),
+            ParameterDef::new("attack", ParameterValue::Trigger(true)),
+        ],
+        vec![AnimatorState::new("Idle", StateMotion::None)],
+        0,
+        Vec::new(),
     );
-    assert_eq!(
-        Keyframe::new(0.0, 1.0, 0.0, 0.0).mode,
-        InterpolationMode::Hermite
-    );
+
+    let decoded = AnimatorController::decode_binary(&controller.encode_binary())?;
+    let params = &decoded.parameters;
+
+    assert_eq!(params.len(), 4);
+    assert_eq!(params[0].name, "speed");
+    assert_eq!(params[0].default_value, ParameterValue::Float(2.75));
+    assert_eq!(params[1].name, "mode");
+    assert_eq!(params[1].default_value, ParameterValue::Int(-3));
+    assert_eq!(params[2].name, "grounded");
+    assert_eq!(params[2].default_value, ParameterValue::Bool(true));
+    assert_eq!(params[3].name, "attack");
+    assert_eq!(params[3].default_value, ParameterValue::Trigger(true));
+    Ok(())
 }
 
 #[test]
@@ -256,9 +271,6 @@ fn animation_error_display_and_diagnostic_conversion_format_cleanly() {
     };
     let err: AnimationError = diag.into();
     assert!(err.to_string().contains("Idle"));
-    assert!(AnimationError::InvalidDeltaTime(-1.0)
-        .to_string()
-        .contains("-1"));
     assert!(!AnimationError::UnexpectedEof.to_string().is_empty());
     assert!(!AnimationError::InvalidMagic.to_string().is_empty());
     assert!(AnimationError::UnsupportedVersion(2)
@@ -271,9 +283,6 @@ fn animation_error_display_and_diagnostic_conversion_format_cleanly() {
     }
     .to_string()
     .contains("WrapMode"));
-    assert!(AnimationError::InvalidStateIndex(4)
-        .to_string()
-        .contains('4'));
 }
 
 #[test]

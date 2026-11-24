@@ -107,16 +107,6 @@ impl Keyframe {
             mode: InterpolationMode::Stepped,
         }
     }
-
-    pub const fn clamped_auto(time: f32, value: f32) -> Self {
-        Self {
-            time,
-            value,
-            in_tangent: 0.0,
-            out_tangent: 0.0,
-            mode: InterpolationMode::Hermite,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -173,10 +163,6 @@ impl FloatCurve {
             key.mode = InterpolationMode::Hermite;
         }
         Self { keys }
-    }
-
-    pub fn keys(&self) -> &[Keyframe] {
-        &self.keys
     }
 
     pub fn keyframes(&self) -> &[Keyframe] {
