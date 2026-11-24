@@ -153,7 +153,11 @@ namespace UnityEngine.SceneManagement
 
         public static ISceneHost? Host { get; set; }
 
-        /// <summary>Raised after the load call returned; the load mode is the mode the scene was loaded with.</summary>
+        /// <summary>
+        /// Raised after the load call returned; the load mode is the mode the scene was loaded with.
+        /// The load itself runs inside the call, so this event fires before the newly loaded scene's scripts
+        /// receive their Awake, OnEnable and Start, which happen on the first tick after the load.
+        /// </summary>
         public static event Action<Scene, LoadSceneMode>? sceneLoaded;
 
         /// <summary>Raised after the unload call returned; native teardown callbacks run inside that call.</summary>
@@ -231,14 +235,16 @@ namespace UnityEngine.SceneManagement
         /// <summary>
         /// Loads the scene inside the call; the returned operation completes on the next tick boundary.
         /// The load itself is synchronous, so a failed load surfaces as a <see cref="SceneManagementException"/>
-        /// from this call instead of through the operation.
+        /// from this call instead of through the operation. The completion callback runs on the next tick
+        /// boundary, after the newly loaded scene's scripts have received their Awake, OnEnable and Start.
         /// </summary>
         public static AsyncOperation LoadSceneAsync(string sceneName) => LoadSceneAsync(sceneName, LoadSceneMode.Single);
 
         /// <summary>
         /// Loads the scene inside the call; the returned operation completes on the next tick boundary.
         /// The load itself is synchronous, so a failed load surfaces as a <see cref="SceneManagementException"/>
-        /// from this call instead of through the operation.
+        /// from this call instead of through the operation. The completion callback runs on the next tick
+        /// boundary, after the newly loaded scene's scripts have received their Awake, OnEnable and Start.
         /// </summary>
         public static AsyncOperation LoadSceneAsync(string sceneName, LoadSceneMode mode)
         {
@@ -250,6 +256,8 @@ namespace UnityEngine.SceneManagement
 
         /// <summary>
         /// Unloads the scene inside the call; the returned operation completes on the next tick boundary.
+        /// The teardown callbacks of the unloaded scene run inside the call, before the completion callback
+        /// runs on the next tick boundary.
         /// </summary>
         public static AsyncOperation UnloadSceneAsync(string sceneName)
         {

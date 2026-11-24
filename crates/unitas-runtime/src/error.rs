@@ -33,7 +33,6 @@ impl fmt::Display for RuntimeError {
             RuntimeError::AlreadyShutdown => write!(formatter, "runtime is already shut down"),
             RuntimeError::Poisoned => write!(formatter, "runtime mutex poisoned"),
             RuntimeError::SceneNotFound(name) => write!(formatter, "scene not found: {name}"),
-            RuntimeError::SceneNotFound(name) => write!(formatter, "scene not found: {name}"),
             RuntimeError::InvalidSceneIndex(index) => {
                 write!(formatter, "invalid scene index: {index}")
             }

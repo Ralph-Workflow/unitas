@@ -102,6 +102,8 @@ namespace UnityEngine
         /// <summary>
         /// Marks the object so it survives scene changes. Objects backed by a native entity forward that
         /// entity to the native runtime; managed-only objects are flagged locally and are not forwarded yet.
+        /// Marking a component also marks the game object that owns it, because the bridge keeps a component
+        /// alive by the flag of its game object.
         /// </summary>
         public static void DontDestroyOnLoad(Object target)
         {
@@ -111,6 +113,15 @@ namespace UnityEngine
             }
 
             target._persistent = true;
+            if (target is Component component)
+            {
+                GameObject? owner = component.gameObject;
+                if (owner != null)
+                {
+                    owner._persistent = true;
+                }
+            }
+
             ulong entity = NativeEntityOf(target);
             if (entity != 0)
             {

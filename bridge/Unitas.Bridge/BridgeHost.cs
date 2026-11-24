@@ -191,6 +191,9 @@ namespace Unitas.Bridge
                 DropReplacedScripts();
             }
 
+            // The default provider resolves scene names against the directory of the loaded scene,
+            // so it has to learn the scene root on every load entry point.
+            _defaultSceneProvider.SetSceneRoot(path);
             RegisterLoadedScene(path, mode);
             Scene loaded = FindLoadedScene(path);
             SceneManager.RaiseSceneLoaded(loaded, mode);
@@ -270,7 +273,7 @@ namespace Unitas.Bridge
             }
 
             string name = System.IO.Path.GetFileNameWithoutExtension(scenePath);
-            return new Scene(name, scenePath, buildIndex, IsLoaded(scenePath), 0, 0);
+            return new Scene(name, scenePath, buildIndex, IsLoaded(scenePath), 0, HandleFor(scenePath));
         }
 
         public Scene GetActiveScene()

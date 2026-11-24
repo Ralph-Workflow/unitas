@@ -149,11 +149,13 @@ namespace Unitas.Bridge.Tests
 
         public int DestroyCount;
 
+        public bool MarkSelfPersistent;
+
         public override void Awake()
         {
             Marker = MarkerText;
             GameObjectInstanceId = gameObject.GetInstanceID();
-            UnityEngine.Object.DontDestroyOnLoad(gameObject);
+            UnityEngine.Object.DontDestroyOnLoad(MarkSelfPersistent ? (UnityEngine.Object)this : gameObject);
             SceneIntegrationEventLog.Record("ddol:Awake");
         }
 

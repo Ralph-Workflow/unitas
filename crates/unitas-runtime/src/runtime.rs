@@ -164,6 +164,9 @@ impl Runtime {
             .map(|(entity, _)| EntityId::new(entity_base + entity.as_u64()))
             .collect::<Vec<_>>();
         for (body, desc) in bodies.iter().zip(descs.iter()) {
+            // The atomicity guarantee ends here: the previous scene set is already torn down. The insert
+            // can only fail on a duplicate entity id, and next_entity_base keeps every new id above every
+            // live id, so the failure is unreachable in practice.
             self.world.add_body(*body, desc.1)?;
         }
         let entity_count = graph.len() as u64;

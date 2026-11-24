@@ -31,6 +31,7 @@ namespace Unitas.Bridge.Tests
             ActiveSceneIsQueryableAndChangeable();
             UnloadTearsDownInOrder();
             DontDestroyOnLoadSurvivesSingleLoad();
+            DontDestroyOnLoadOnComponentSurvivesSingleLoad();
             AsyncOperationsCompleteOnTheNextTick();
             FailedLoadLeavesSceneSetIntact();
             FailedUnloadLeavesSceneSetIntact();
@@ -230,6 +231,50 @@ namespace Unitas.Bridge.Tests
                 int updates = persistent.UpdateCount;
                 host.Tick(0.016);
                 Check.That("the persistent recorder keeps ticking after the single load", persistent.UpdateCount > updates);
+            }
+        }
+
+        private static void DontDestroyOnLoadOnComponentSurvivesSingleLoad()
+        {
+            string alpha = ResolveFixture(AlphaFixture);
+            string beta = ResolveFixture(BetaFixture);
+
+            ScriptRegistry.Clear();
+            PersistentSceneIntegrationRecorder persistent = new PersistentSceneIntegrationRecorder();
+            persistent.MarkSelfPersistent = true;
+            ScriptRegistry.Register(AlphaGuid, () => persistent);
+            BetaSceneRecorder betaScript = new BetaSceneRecorder();
+            ScriptRegistry.Register(BetaGuid, () => betaScript);
+
+            using (BridgeHost host = CreateHost(alpha))
+            {
+                host.LoadScene(alpha, LoadSceneMode.Single);
+                host.Tick(0.016);
+                host.Tick(0.016);
+                Check.That(
+                    "the component persistent recorder ticks before the replacement load",
+                    persistent.UpdateCount > 0);
+
+                host.LoadScene(beta, LoadSceneMode.Single);
+                host.Tick(0.016);
+
+                Check.Equal(
+                    "the component persistent recorder keeps the same instance id",
+                    persistent.GameObjectInstanceId,
+                    persistent.gameObject.GetInstanceID());
+                Check.Equal(
+                    "the component persistent recorder is not destroyed by the single load",
+                    0,
+                    persistent.DestroyCount);
+                Check.That(
+                    "the component persistent recorder flags its game object as persistent",
+                    persistent.gameObject.IsPersistent);
+
+                int updates = persistent.UpdateCount;
+                host.Tick(0.016);
+                Check.That(
+                    "the component persistent recorder keeps ticking after the single load",
+                    persistent.UpdateCount > updates);
             }
         }
 
