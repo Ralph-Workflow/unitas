@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use unitas_animation::SampledBinding;
 use unitas_asset::scene::{
     assemble_scene_file_bundle, AudioSourceComponent, CharacterControllerComponent, PhysicsBinding,
     ScriptBinding,
@@ -9,11 +10,14 @@ use unitas_asset::{
     InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 use unitas_audio::{AudioSourceState, AudioWorld};
-use unitas_core::{normalize_rotation, rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
+use unitas_core::{
+    normalize_rotation, rotate_vector, EntityId, SceneGraph, Transform, IDENTITY_ROTATION,
+};
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
 };
 
+use crate::animation::{apply_transform_property, AnimationRuntimeDiagnostic, AnimationWorld};
 use crate::error::RuntimeError;
 use crate::input::{default_axis_configs, AxisConfig, InputState};
 
@@ -31,6 +35,7 @@ pub struct LoadedScene {
     body_offsets: Vec<(EntityId, [f32; 3])>,
     character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
     audio_sources: Vec<(EntityId, AudioSourceComponent)>,
+    animators: Vec<EntityId>,
     diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
@@ -51,6 +56,10 @@ impl LoadedScene {
 
     pub fn audio_sources(&self) -> &[(EntityId, AudioSourceComponent)] {
         &self.audio_sources
+    }
+
+    pub fn animators(&self) -> &[EntityId] {
+        &self.animators
     }
 
     pub fn diagnostics(&self) -> &[(EntityId, String)] {
@@ -117,6 +126,7 @@ pub struct Runtime {
     persistent_entities: Vec<EntityId>,
     persistent_character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
     persistent_audio_sources: Vec<(EntityId, AudioSourceComponent)>,
+    persistent_animators: Vec<EntityId>,
     pending_play_on_awake: Vec<EntityId>,
     dynamic_entity_floor: u64,
     character_states: HashMap<EntityId, CharacterController>,
@@ -124,6 +134,7 @@ pub struct Runtime {
     script_view: Vec<ScriptInstance>,
     world: World,
     audio: AudioWorld,
+    animation: AnimationWorld,
     input: InputState,
     project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
@@ -143,6 +154,7 @@ impl Runtime {
             persistent_entities: Vec::new(),
             persistent_character_controllers: Vec::new(),
             persistent_audio_sources: Vec::new(),
+            persistent_animators: Vec::new(),
             pending_play_on_awake: Vec::new(),
             dynamic_entity_floor: 1,
             character_states: HashMap::new(),
@@ -150,6 +162,7 @@ impl Runtime {
             script_view: Vec::new(),
             world: World::new(),
             audio: AudioWorld::new(),
+            animation: AnimationWorld::new(),
             input: InputState::with_default_axes(),
             project_identity: ProjectIdentity::default(),
             callbacks: None,
@@ -282,6 +295,7 @@ impl Runtime {
             body_offsets,
             character_controllers,
             audio_sources,
+            animators: Vec::new(),
             diagnostics,
             entity_base,
             entity_count,
@@ -327,6 +341,11 @@ impl Runtime {
                 self.pending_play_on_awake.retain(|e| e != entity);
                 self.audio.stop(*entity);
                 self.audio.remove_source(*entity);
+            }
+        }
+        for entity in &scene.animators {
+            if !self.persistent_entities.contains(entity) && !self.persistent_animators.contains(entity) {
+                self.animation.remove_animator(*entity);
             }
         }
         match self.active_scene {
@@ -426,6 +445,26 @@ impl Runtime {
                 break;
             }
         }
+        for index in 0..self.scenes.len() {
+            let anim_index = self.scenes[index]
+                .animators
+                .iter()
+                .position(|id| *id == entity);
+            if let Some(anim_index) = anim_index {
+                let entry = self.scenes[index].animators.remove(anim_index);
+                if !self.persistent_animators.contains(&entry) {
+                    self.persistent_animators.push(entry);
+                }
+                found = true;
+                break;
+            }
+        }
+        if !found && self.animation.entry(entity).is_some() {
+            if !self.persistent_animators.contains(&entity) {
+                self.persistent_animators.push(entity);
+            }
+            found = true;
+        }
         if !found {
             return Err(RuntimeError::EntityNotFound(entity));
         }
@@ -491,6 +530,11 @@ impl Runtime {
                     self.pending_play_on_awake.retain(|e| e != entity);
                     self.audio.stop(*entity);
                     self.audio.remove_source(*entity);
+                }
+            }
+            for entity in &scene.animators {
+                if !self.persistent_entities.contains(entity) && !self.persistent_animators.contains(entity) {
+                    self.animation.remove_animator(*entity);
                 }
             }
         }
@@ -560,6 +604,129 @@ impl Runtime {
 
     pub fn audio_mut(&mut self) -> &mut AudioWorld {
         &mut self.audio
+    }
+
+    pub fn ensure_animator(&mut self, entity: u64) -> EntityId {
+        let id = if entity == 0 {
+            let allocated = self.next_entity_base();
+            self.dynamic_entity_floor = allocated + 1;
+            EntityId::new(allocated)
+        } else {
+            if entity >= self.dynamic_entity_floor {
+                self.dynamic_entity_floor = entity + 1;
+            }
+            EntityId::new(entity)
+        };
+        let mut initial_transform = Transform::default();
+        for scene in &mut self.scenes {
+            if let Some(transform) = scene.graph.transform(id) {
+                initial_transform = transform.clone();
+                if !scene.animators.contains(&id) {
+                    scene.animators.push(id);
+                }
+                break;
+            }
+        }
+        self.animation.ensure_animator(id, initial_transform);
+        id
+    }
+
+    pub fn remove_animator(&mut self, entity: EntityId) -> bool {
+        for scene in &mut self.scenes {
+            scene.animators.retain(|id| *id != entity);
+        }
+        self.persistent_animators.retain(|id| *id != entity);
+        self.animation.remove_animator(entity)
+    }
+
+    pub fn set_animator_controller(
+        &mut self,
+        entity: EntityId,
+        controller_handle: u64,
+    ) -> Result<(), String> {
+        let child_bindings = self.animation.set_controller(entity, controller_handle)?;
+        self.write_back_animator_transform(entity);
+        self.apply_child_animator_bindings(entity, &child_bindings);
+        Ok(())
+    }
+
+    pub fn animation(&self) -> &AnimationWorld {
+        &self.animation
+    }
+
+    pub fn animation_mut(&mut self) -> &mut AnimationWorld {
+        &mut self.animation
+    }
+
+    fn step_animators(&mut self, scaled_delta: f64) {
+        for scene in &self.scenes {
+            for entity in &scene.animators {
+                if let Some(graph_transform) = scene.graph.transform(*entity) {
+                    if let Some(entry) = self.animation.entry_mut(*entity) {
+                        entry.transform.parent = graph_transform.parent;
+                        entry.transform.children = graph_transform.children.clone();
+                    }
+                }
+            }
+        }
+        let child_updates = self.animation.tick(scaled_delta);
+        let entities = self.animation.entities();
+        for entity in entities {
+            self.write_back_animator_transform(entity);
+        }
+        for (entity, child_bindings) in child_updates {
+            self.apply_child_animator_bindings(entity, &child_bindings);
+        }
+    }
+
+    fn write_back_animator_transform(&mut self, entity: EntityId) {
+        let Some(anim_transform) = self.animation.transform(entity).cloned() else {
+            return;
+        };
+        for scene in &mut self.scenes {
+            if let Some(graph_transform) = scene.graph.transform_mut(entity) {
+                graph_transform.translation = anim_transform.translation;
+                graph_transform.rotation = anim_transform.rotation;
+                graph_transform.scale = anim_transform.scale;
+                return;
+            }
+        }
+    }
+
+    fn apply_child_animator_bindings(
+        &mut self,
+        entity: EntityId,
+        child_bindings: &[SampledBinding],
+    ) {
+        for binding in child_bindings {
+            let Some((prop, ch)) = binding.target.parse_transform_property() else {
+                continue;
+            };
+            let mut applied = false;
+            for scene in &mut self.scenes {
+                if !scene.graph.contains(entity) {
+                    continue;
+                }
+                if let Some(child_id) =
+                    resolve_child_path_in_graph(&scene.graph, entity, &binding.target.object_path)
+                {
+                    if let Some(child_transform) = scene.graph.transform_mut(child_id) {
+                        apply_transform_property(child_transform, prop, ch, binding.value);
+                        applied = true;
+                    }
+                }
+                break;
+            }
+            if !applied {
+                self.animation.record_diagnostic(
+                    entity,
+                    AnimationRuntimeDiagnostic::UnresolvedChildPath {
+                        entity,
+                        object_path: binding.target.object_path.clone(),
+                    },
+                );
+            }
+        }
     }
 
     pub fn audio_source_config(&self, entity: EntityId) -> Option<&AudioSourceComponent> {
@@ -779,6 +946,7 @@ impl Runtime {
                 });
             }
         }
+        self.step_animators(scaled_delta);
         self.sync_audio_source_positions();
         self.audio.tick(delta_seconds, self.time_scale);
         Ok(())
@@ -810,10 +978,16 @@ impl Runtime {
                 self.audio.stop(*entity);
                 self.audio.remove_source(*entity);
             }
+            for entity in &scene.animators {
+                self.animation.remove_animator(*entity);
+            }
         }
         for (entity, _) in &self.persistent_audio_sources {
             self.audio.stop(*entity);
             self.audio.remove_source(*entity);
+        }
+        for entity in &self.persistent_animators {
+            self.animation.remove_animator(*entity);
         }
         Ok(())
     }
@@ -841,6 +1015,13 @@ impl Runtime {
                 items.push((*entity, msg.as_str()));
             }
         }
+        for entity in self.animation.entities() {
+            if let Some(diags) = self.animation.diagnostics(entity) {
+                for msg in diags {
+                    items.push((entity, msg.as_str()));
+                }
+            }
+        }
         items
     }
 
@@ -851,6 +1032,11 @@ impl Runtime {
                 if *id == entity {
                     items.push(msg.as_str());
                 }
+            }
+        }
+        if let Some(diags) = self.animation.diagnostics(entity) {
+            for msg in diags {
+                items.push(msg.as_str());
             }
         }
         items
@@ -1636,5 +1822,34 @@ fn phase_code(phase: Phase) -> u32 {
         Phase::Enter => 0,
         Phase::Stay => 1,
         Phase::Exit => 2,
+    }
+}
+
+fn resolve_child_path_in_graph(
+    graph: &SceneGraph,
+    root: EntityId,
+    object_path: &str,
+) -> Option<EntityId> {
+    let mut current = root;
+    for segment in object_path.split('/') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut next = None;
+        for child_id in graph.children(current) {
+            if let Some(entity) = graph.entity(*child_id) {
+                if entity.name == trimmed {
+                    next = Some(*child_id);
+                    break;
+                }
+            }
+        }
+        current = next?;
+    }
+    if current == root {
+        None
+    } else {
+        Some(current)
     }
 }

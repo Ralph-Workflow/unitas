@@ -27,6 +27,7 @@ namespace Unitas.Bridge
         private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly LoadedSceneFileProvider _defaultSceneProvider;
         private readonly NativeSceneBackend _defaultSceneBackend;
+        private readonly RuntimeAnimationProvider _animationProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
         private int _nextSceneHandle = 1;
@@ -69,6 +70,7 @@ namespace Unitas.Bridge
 
             _defaultSceneProvider = new LoadedSceneFileProvider();
             _defaultSceneBackend = new NativeSceneBackend(runtimeHandle);
+            _animationProvider = new RuntimeAnimationProvider(runtimeHandle);
             _sceneProvider = _defaultSceneProvider;
             _sceneBackend = _defaultSceneBackend;
 
@@ -114,6 +116,7 @@ namespace Unitas.Bridge
             SceneManager.Host = this;
             Application.Host = this;
             AudioSource.Provider = this;
+            Animator.Provider = _animationProvider;
         }
 
         public ulong Handle => _runtimeHandle;
@@ -573,6 +576,10 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(AudioSource.Provider, this))
                 {
                     AudioSource.Provider = null;
+                }
+                if (ReferenceEquals(Animator.Provider, _animationProvider))
+                {
+                    Animator.Provider = null;
                 }
                 if (result != 0)
                 {

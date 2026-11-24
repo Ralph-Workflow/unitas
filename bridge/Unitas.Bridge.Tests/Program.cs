@@ -1,11 +1,37 @@
 using System;
+using System.Globalization;
 using System.IO;
+using System.Text;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
 {
     public static class Program
     {
+        private static readonly byte[] ExpectedAnimatorControllerBytes =
+        {
+            85, 65, 78, 67, 1, 0, 0, 0, 1, 0, 0, 0,
+            67, 1, 0, 0, 0, 5, 0, 0, 0, 83, 112, 101,
+            101, 100, 0, 0, 0, 192, 63, 2, 0, 0, 0, 4,
+            0, 0, 0, 73, 100, 108, 101, 0, 0, 128, 63, 0,
+            1, 4, 0, 0, 0, 67, 108, 105, 112, 0, 0, 128,
+            63, 0, 0, 112, 66, 1, 1, 0, 0, 0, 0, 0,
+            0, 0, 9, 0, 0, 0, 84, 114, 97, 110, 115, 102,
+            111, 114, 109, 15, 0, 0, 0, 108, 111, 99, 97, 108,
+            80, 111, 115, 105, 116, 105, 111, 110, 46, 120, 0, 2,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 128, 63,
+            0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 0, 0, 0, 0, 0, 0, 63, 6, 0, 0,
+            0, 79, 110, 83, 116, 101, 112, 0, 0, 192, 63, 2,
+            0, 0, 0, 3, 0, 0, 0, 116, 97, 103, 3, 0,
+            0, 0, 82, 117, 110, 0, 0, 128, 63, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128,
+            62, 1, 0, 0, 0, 5, 0, 0, 0, 83, 112, 101,
+            101, 100, 2, 0, 0, 0, 63,
+        };
+
         public static int Main()
         {
             TestVector3();
@@ -39,6 +65,9 @@ namespace Unitas.Bridge.Tests
             TestEndToEndCharacterControllerMoveAndSceneLoad();
             TestAudioDefaultsAndNullProvider();
             TestEndToEndAudioPlaybackAndSceneLoad();
+            TestAnimatorDefaultsAndNullProvider();
+            TestAnimatorControllerBinaryEncoding();
+            TestEndToEndAnimatorControllerAndTransitions();
 
             if (Check.FailureCount > 0)
             {
@@ -994,6 +1023,223 @@ namespace Unitas.Bridge.Tests
                     Directory.Delete(tempDir, true);
                 }
             }
+        }
+
+        private static void TestAnimatorDefaultsAndNullProvider()
+        {
+            IAnimationProvider? savedProvider = Animator.Provider;
+            Animator.Provider = null;
+            try
+            {
+                GameObject go = new GameObject("AnimatorDefaults");
+                Animator animator = go.AddComponent<Animator>();
+
+                Check.Equal("Animator default speed", 1f, animator.speed);
+                Check.That("Animator has no controller by default", animator.runtimeAnimatorController == null);
+                Check.That("Animator state info is empty without a provider", animator.GetCurrentAnimatorStateInfo().name == string.Empty);
+
+                animator.SetFloat("Speed", 1f);
+                animator.SetInteger("Count", 2);
+                animator.SetBool("Enabled", true);
+                animator.SetTrigger("Go");
+                animator.ResetTrigger("Go");
+                animator.speed = 2f;
+
+                Check.Equal("Animator GetFloat returns 0 without a provider", 0f, animator.GetFloat("Speed"));
+                Check.Equal("Animator GetInteger returns 0 without a provider", 0, animator.GetInteger("Count"));
+                Check.Equal("Animator GetBool returns false without a provider", false, animator.GetBool("Enabled"));
+                Check.Equal("Animator speed is stored without a provider", 2f, animator.speed);
+            }
+            finally
+            {
+                Animator.Provider = savedProvider;
+            }
+        }
+
+        private static void TestAnimatorControllerBinaryEncoding()
+        {
+            AnimationClip clip = new AnimationClip("Clip");
+            clip.duration = 1f;
+            clip.sampleRate = 60f;
+            clip.wrapMode = AnimationWrapMode.Loop;
+            clip.SetCurve(
+                string.Empty,
+                AnimationPropertyType.Float,
+                "localPosition.x",
+                new AnimationCurve(
+                    new Keyframe(0f, 0f, 0f, 0f, KeyframeInterpolationMode.Linear),
+                    new Keyframe(1f, 10f, 0f, 0f, KeyframeInterpolationMode.Linear)));
+            clip.AddEvent(0.5f, "OnStep", 1.5f, 2, "tag");
+
+            AnimatorController controller = new AnimatorController("C");
+            controller.AddParameter("Speed", 1.5f);
+            controller.AddState("Idle", clip);
+            controller.AddState("Run", null);
+            controller.SetEntryState("Idle");
+            controller.AddTransition(
+                "Idle",
+                "Run",
+                0.25f,
+                new AnimatorCondition("Speed", AnimatorConditionMode.Greater, 0.5f));
+
+            byte[] encoded = AnimatorControllerEncoder.Encode(controller);
+            byte[] expected = ExpectedAnimatorControllerBytes;
+
+            Check.Equal("Animator controller encodes to the expected byte length", expected.Length, encoded.Length);
+            Check.That("Animator controller encodes to the expected binary layout", BytesEqual(expected, encoded));
+        }
+
+        private static void TestEndToEndAnimatorControllerAndTransitions()
+        {
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                string firstRun = RunAnimatorScenario();
+                string secondRun = RunAnimatorScenario();
+                Check.Equal("Animator scenario is repeatable", firstRun, secondRun);
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
+            }
+        }
+
+        private static string RunAnimatorScenario()
+        {
+            StringBuilder log = new StringBuilder();
+            using (BridgeHost host = new BridgeHost())
+            {
+                GameObject target = new GameObject("AnimatedTarget");
+                Animator animator = target.AddComponent<Animator>();
+                animator.runtimeAnimatorController = BuildAnimatorController();
+
+                // The first native tick only initializes pending scripts, so it does not advance the animation.
+                host.Tick(0.0);
+
+                AnimatorStateInfo info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "initial", info);
+                Check.Equal("Animator starts in the entry state", "Idle", info.name);
+                Check.Equal("Animator starts with zero normalized time", 0f, info.normalizedTime);
+
+                animator.SetFloat("Speed", 1f);
+                Check.Equal("Animator float parameter round-trips", 1f, animator.GetFloat("Speed"));
+
+                host.Tick(0.1);
+                info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "idleTick", info);
+                Check.Equal("Animator stays in Idle before the trigger fires", "Idle", info.name);
+                Check.Equal("Animator normalized time advances", 0.1f, info.normalizedTime);
+                Check.Equal("Animator applies the sampled clip position", 1f, info.position.x);
+
+                animator.SetTrigger("Go");
+                host.Tick(0.1);
+                info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "transition", info);
+                Check.Equal("Animator transitions to Run once the trigger fires", "Run", info.name);
+                Check.Equal("Animator resets the state time on transition", 0f, info.normalizedTime);
+                Check.Equal("Animator samples the Run clip after the transition", 100f, info.position.x);
+
+                host.Tick(0.1);
+                info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "consumedTrigger", info);
+                Check.Equal("Animator keeps the Run state while the trigger is consumed", "Run", info.name);
+                Check.Equal("Animator advances the Run state", 0.1f, info.normalizedTime);
+                Check.Equal("Animator keeps sampling the Run clip", 101f, info.position.x);
+
+                animator.SetTrigger("Go");
+                host.Tick(0.1);
+                info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "secondTrigger", info);
+                Check.Equal("Animator returns to Idle on the second trigger", "Idle", info.name);
+                Check.Equal("Animator samples the Idle clip after the second transition", 0f, info.position.x);
+
+                Time.timeScale = 0.5f;
+                host.Tick(0.2);
+                info = animator.GetCurrentAnimatorStateInfo();
+                AppendAnimatorState(log, "halfSpeed", info);
+                Check.Equal("Animator advances at half rate when the time scale is 0.5", 0.1f, info.normalizedTime);
+                Check.Equal("Animator samples at half rate when the time scale is 0.5", 1f, info.position.x);
+                Time.timeScale = 1f;
+
+                host.Shutdown();
+            }
+
+            return log.ToString();
+        }
+
+        private static AnimatorController BuildAnimatorController()
+        {
+            AnimationClip idleClip = new AnimationClip("IdleClip");
+            idleClip.duration = 1f;
+            idleClip.sampleRate = 60f;
+            idleClip.wrapMode = AnimationWrapMode.Loop;
+            idleClip.SetCurve(
+                string.Empty,
+                AnimationPropertyType.Float,
+                "localPosition.x",
+                new AnimationCurve(
+                    new Keyframe(0f, 0f, 0f, 0f, KeyframeInterpolationMode.Linear),
+                    new Keyframe(1f, 10f, 0f, 0f, KeyframeInterpolationMode.Linear)));
+
+            AnimationClip runClip = new AnimationClip("RunClip");
+            runClip.duration = 1f;
+            runClip.sampleRate = 60f;
+            runClip.wrapMode = AnimationWrapMode.Loop;
+            runClip.SetCurve(
+                string.Empty,
+                AnimationPropertyType.Float,
+                "localPosition.x",
+                new AnimationCurve(
+                    new Keyframe(0f, 100f, 0f, 0f, KeyframeInterpolationMode.Linear),
+                    new Keyframe(1f, 110f, 0f, 0f, KeyframeInterpolationMode.Linear)));
+
+            AnimatorController controller = new AnimatorController("Locomotion");
+            controller.AddParameter("Speed", 0f);
+            controller.AddTriggerParameter("Go");
+            controller.AddState("Idle", idleClip);
+            controller.AddState("Run", runClip);
+            controller.SetEntryState("Idle");
+            controller.AddTransition(
+                "Idle",
+                "Run",
+                new AnimatorCondition("Speed", AnimatorConditionMode.Greater, 0.5f),
+                new AnimatorCondition("Go", AnimatorConditionMode.If));
+            controller.AddTransition(
+                "Run",
+                "Idle",
+                new AnimatorCondition("Go", AnimatorConditionMode.If));
+            return controller;
+        }
+
+        private static void AppendAnimatorState(StringBuilder log, string label, AnimatorStateInfo info)
+        {
+            log.Append(label)
+                .Append(':')
+                .Append(info.name)
+                .Append(',')
+                .Append(info.normalizedTime.ToString("F4", CultureInfo.InvariantCulture))
+                .Append(',')
+                .Append(info.position.x.ToString("F4", CultureInfo.InvariantCulture))
+                .Append(';');
+        }
+
+        private static bool BytesEqual(byte[] expected, byte[] actual)
+        {
+            if (expected.Length != actual.Length)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < expected.Length; index++)
+            {
+                if (expected[index] != actual[index])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static byte[] BuildTestWav16BitPcmMono(int sampleRate, int frameCount)

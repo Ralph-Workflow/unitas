@@ -1,6 +1,3 @@
-#[cfg(test)]
-extern crate self as unitas_asset;
-
 pub mod material;
 pub mod meta;
 pub mod prefab;

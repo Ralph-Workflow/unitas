@@ -16,6 +16,10 @@ name = "meta_tests"
 path = "tests/meta_tests.rs"
 
 [[test]]
+name = "project_settings"
+path = "tests/project_settings.rs"
+
+[[test]]
 name = "scene_tests"
 path = "tests/scene_tests.rs"
 

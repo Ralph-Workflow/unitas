@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "unitas-animation"
+version = "0.1.0"
+dependencies = [
+ "unitas-core",
+]
+
+[[package]]
 name = "unitas-asset"
 version = "0.1.0"
 dependencies = [
@@ -43,6 +50,7 @@ dependencies = [
 name = "unitas-runtime"
 version = "0.1.0"
 dependencies = [
+ "unitas-animation",
  "unitas-asset",
  "unitas-audio",
  "unitas-core",

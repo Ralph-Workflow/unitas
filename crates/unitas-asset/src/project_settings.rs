@@ -307,7 +307,3 @@ fn parse_finite_f64(node: &Node, key: &str) -> Option<f64> {
         .and_then(Node::as_f64)
         .filter(|value| value.is_finite())
 }
-
-#[cfg(test)]
-#[path = "../tests/project_settings.rs"]
-mod tests;

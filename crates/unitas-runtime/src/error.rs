@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io;
+use unitas_animation::AnimationError;
 use unitas_asset::scene::SceneError;
 use unitas_audio::AudioError;
 use unitas_core::EntityId;
@@ -10,6 +11,7 @@ pub enum RuntimeError {
     Scene(SceneError),
     Physics(PhysicsError),
     Audio(AudioError),
+    Animation(AnimationError),
     Io(io::Error),
     InvalidGuid(String),
     InvalidAddress,
@@ -28,6 +30,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::Scene(err) => write!(formatter, "scene error: {err}"),
             RuntimeError::Physics(err) => write!(formatter, "physics error: {err}"),
             RuntimeError::Audio(err) => write!(formatter, "audio error: {err}"),
+            RuntimeError::Animation(err) => write!(formatter, "animation error: {err}"),
             RuntimeError::Io(err) => write!(formatter, "io error: {err}"),
             RuntimeError::InvalidGuid(guid) => write!(formatter, "invalid guid: {guid}"),
             RuntimeError::InvalidAddress => write!(formatter, "invalid buffer address or length"),
@@ -50,6 +53,7 @@ impl std::error::Error for RuntimeError {
             RuntimeError::Scene(err) => Some(err),
             RuntimeError::Physics(err) => Some(err),
             RuntimeError::Audio(err) => Some(err),
+            RuntimeError::Animation(err) => Some(err),
             RuntimeError::Io(err) => Some(err),
             _ => None,
         }
@@ -71,6 +75,12 @@ impl From<PhysicsError> for RuntimeError {
 impl From<AudioError> for RuntimeError {
     fn from(err: AudioError) -> Self {
         RuntimeError::Audio(err)
+    }
+}
+
+impl From<AnimationError> for RuntimeError {
+    fn from(err: AnimationError) -> Self {
+        RuntimeError::Animation(err)
     }
 }
 

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/unitas-animation",
     "crates/unitas-asset",
     "crates/unitas-audio",
     "crates/unitas-build",

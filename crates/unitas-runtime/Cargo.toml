@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+unitas-animation = { path = "../unitas-animation" }
 unitas-asset = { path = "../unitas-asset" }
 unitas-audio = { path = "../unitas-audio" }
 unitas-core = { path = "../unitas-core" }
