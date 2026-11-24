@@ -1,0 +1,63 @@
+namespace UnityEngine
+{
+    public static class Time
+    {
+        private const float FixedStep = 0.02f;
+        private const float SmoothAlpha = 0.1f;
+
+        private static float _deltaTime;
+        private static float _unscaledDeltaTime;
+        private static float _timeScale = 1f;
+        private static float _time;
+        private static float _unscaledTime;
+        private static int _frameCount;
+        private static float _realtimeSinceStartup;
+        private static float _smoothDeltaTime;
+        private static bool _hasSmoothSample;
+
+        public static float deltaTime => _deltaTime;
+
+        public static float unscaledDeltaTime => _unscaledDeltaTime;
+
+        public static float timeScale
+        {
+            get => _timeScale;
+            set => _timeScale = value;
+        }
+
+        public static float time => _time;
+
+        public static float unscaledTime => _unscaledTime;
+
+        public static float fixedDeltaTime => FixedStep;
+
+        public static float fixedUnscaledDeltaTime => FixedStep;
+
+        public static int frameCount => _frameCount;
+
+        public static float realtimeSinceStartup => _realtimeSinceStartup;
+
+        public static float smoothDeltaTime => _smoothDeltaTime;
+
+        public static void Advance(double deltaSeconds)
+        {
+            float unscaled = (float)deltaSeconds;
+            float scaled = unscaled * _timeScale;
+            _unscaledDeltaTime = unscaled;
+            _deltaTime = scaled;
+            _unscaledTime += unscaled;
+            _time += scaled;
+            _frameCount++;
+            _realtimeSinceStartup += unscaled;
+            if (_hasSmoothSample)
+            {
+                _smoothDeltaTime += (scaled - _smoothDeltaTime) * SmoothAlpha;
+            }
+            else
+            {
+                _smoothDeltaTime = scaled;
+                _hasSmoothSample = true;
+            }
+        }
+    }
+}

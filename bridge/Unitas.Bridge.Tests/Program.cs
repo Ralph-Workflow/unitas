@@ -18,6 +18,9 @@ namespace Unitas.Bridge.Tests
             TestSceneReloadDropsPreviousSceneScripts();
             TestLayerMaskConversions();
             TestEndToEndRustPhysicsQuery();
+            TimeDiagnosticsTests.Run();
+            QuerySurfaceTests.Run();
+            IntegrationTests.Run();
 
             if (Check.FailureCount > 0)
             {

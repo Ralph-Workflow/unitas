@@ -3,15 +3,17 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use unitas_runtime::{
-    test_read_query_buffer, test_write_path_buffer, unitas_runtime_destroy,
-    unitas_runtime_error_message, unitas_runtime_load_scene, unitas_runtime_new,
-    unitas_runtime_overlap_sphere, unitas_runtime_path_buffer, unitas_runtime_query_buffer,
-    unitas_runtime_raycast, Callbacks, Runtime,
+    test_read_query_buffer, test_write_path_buffer, unitas_runtime_box_cast,
+    unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_linecast,
+    unitas_runtime_load_scene, unitas_runtime_new, unitas_runtime_overlap_sphere,
+    unitas_runtime_path_buffer, unitas_runtime_query_buffer, unitas_runtime_raycast,
+    unitas_runtime_sphere_cast, Callbacks, Runtime,
 };
 
 const FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
 const QUERY_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_query_abi.unity";
-const QUERY_RECORD_SIZE: usize = 40;
+const TRIGGER_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_trigger.unity";
+const QUERY_RECORD_SIZE: usize = 64;
 
 #[test]
 fn runtime_scene_binding_extracts_script_and_guid_halves() -> Result<(), Box<dyn Error>> {
@@ -251,6 +253,7 @@ struct QueryRecord {
     entity: u64,
     distance: f64,
     point: [f64; 3],
+    normal: [f64; 3],
 }
 
 fn entity_id_for(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
@@ -276,10 +279,16 @@ fn decode_record(bytes: &[u8], offset: usize) -> Result<QueryRecord, Box<dyn Err
         f64::from_le_bytes(bytes[offset + 24..offset + 32].try_into()?),
         f64::from_le_bytes(bytes[offset + 32..offset + 40].try_into()?),
     ];
+    let normal = [
+        f64::from_le_bytes(bytes[offset + 40..offset + 48].try_into()?),
+        f64::from_le_bytes(bytes[offset + 48..offset + 56].try_into()?),
+        f64::from_le_bytes(bytes[offset + 56..offset + 64].try_into()?),
+    ];
     Ok(QueryRecord {
         entity,
         distance,
         point,
+        normal,
     })
 }
 
@@ -289,6 +298,32 @@ fn query_bytes(handle: u64) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(bytes)
 }
 
+fn query_runtime_handle() -> Result<u64, Box<dyn Error>> {
+    runtime_handle_for(QUERY_FIXTURE_PATH)
+}
+
+fn runtime_handle_for(fixture: &str) -> Result<u64, Box<dyn Error>> {
+    let handle = unitas_runtime_new();
+    if handle == 0 {
+        return Err(String::from("runtime handle creation failed").into());
+    }
+    let address = unitas_runtime_path_buffer(handle, 256);
+    if address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    let fixture_bytes = fixture.as_bytes();
+    test_write_path_buffer(handle, fixture_bytes)?;
+    let rc = unitas_runtime_load_scene(handle, address, fixture_bytes.len() as u64);
+    if rc != 0 {
+        return Err(String::from("query fixture scene load failed").into());
+    }
+    Ok(handle)
+}
+
+fn unit_length(vector: [f64; 3]) -> f64 {
+    (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt()
+}
+
 #[test]
 fn runtime_abi_query_exports_decode_hits() -> Result<(), Box<dyn Error>> {
     let mut probe = Runtime::new()?;
@@ -296,19 +331,12 @@ fn runtime_abi_query_exports_decode_hits() -> Result<(), Box<dyn Error>> {
     let target = entity_id_for(&probe, "QueryTarget")?;
     let other = entity_id_for(&probe, "QueryOther")?;
 
-    let handle = unitas_runtime_new();
-    assert_ne!(handle, 0);
-    let address = unitas_runtime_path_buffer(handle, 256);
-    assert_ne!(address, 0);
-    let fixture_bytes = QUERY_FIXTURE_PATH.as_bytes();
-    test_write_path_buffer(handle, fixture_bytes)?;
-    let rc = unitas_runtime_load_scene(handle, address, fixture_bytes.len() as u64);
-    assert_eq!(rc, 0);
+    let handle = query_runtime_handle()?;
 
     let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
     assert_ne!(buffer, 0);
 
-    let count = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 4);
+    let count = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 32, 0);
     assert_eq!(count, 1);
     let bytes = query_bytes(handle)?;
     let record = decode_record(&bytes, 0)?;
@@ -317,8 +345,13 @@ fn runtime_abi_query_exports_decode_hits() -> Result<(), Box<dyn Error>> {
     assert!((record.point[0] + 0.5).abs() < 1e-9);
     assert!(record.point[1].abs() < 1e-9);
     assert!(record.point[2].abs() < 1e-9);
+    assert!((record.normal[0] + 1.0).abs() < 1e-9);
+    assert!(record.normal[1].abs() < 1e-9);
+    assert!(record.normal[2].abs() < 1e-9);
+    let normal_length = unit_length(record.normal);
+    assert!((normal_length - 1.0).abs() < 1e-9);
 
-    let all = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, u32::MAX);
+    let all = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, u32::MAX, 0);
     assert_eq!(all, 2);
     let bytes = query_bytes(handle)?;
     let first = decode_record(&bytes, 0)?;
@@ -328,24 +361,28 @@ fn runtime_abi_query_exports_decode_hits() -> Result<(), Box<dyn Error>> {
     assert_eq!(second.entity, other);
     assert!((second.distance - 6.5).abs() < 1e-9);
     assert!((second.point[0] - 1.5).abs() < 1e-9);
+    assert!((second.normal[0] + 1.0).abs() < 1e-9);
+    assert!(second.normal[1].abs() < 1e-9);
+    assert!(second.normal[2].abs() < 1e-9);
 
-    let masked = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 2);
+    let masked = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 2, 0);
     assert_eq!(masked, 0);
 
-    let overlap = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, u32::MAX);
+    let overlap = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, u32::MAX, 0);
     assert_eq!(overlap, 1);
     let bytes = query_bytes(handle)?;
     let record = decode_record(&bytes, 0)?;
     assert_eq!(record.entity, target);
     assert_eq!(record.distance, 0.0);
     assert_eq!(record.point, [0.0, 0.0, 0.0]);
+    assert_eq!(record.normal, [0.0, 0.0, 0.0]);
 
-    let other_overlap = unitas_runtime_overlap_sphere(handle, 2.0, 0.0, 0.0, 0.5, u32::MAX);
+    let other_overlap = unitas_runtime_overlap_sphere(handle, 2.0, 0.0, 0.0, 0.5, u32::MAX, 0);
     assert_eq!(other_overlap, 1);
     let bytes = query_bytes(handle)?;
     assert_eq!(decode_record(&bytes, 0)?.entity, other);
 
-    let masked_overlap = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, 2);
+    let masked_overlap = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, 2, 0);
     assert_eq!(masked_overlap, 0);
 
     let destroy_rc = unitas_runtime_destroy(handle);
@@ -354,10 +391,252 @@ fn runtime_abi_query_exports_decode_hits() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn runtime_abi_layer_mask_selects_only_the_requested_layer() -> Result<(), Box<dyn Error>> {
+    let handle = query_runtime_handle()?;
+    let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
+    assert_ne!(buffer, 0);
+
+    let layer_two = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 4, 0);
+    assert_eq!(layer_two, 0);
+
+    let layer_five = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 32, 0);
+    assert_eq!(layer_five, 1);
+    let bytes = query_bytes(handle)?;
+
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(QUERY_FIXTURE_PATH))?;
+    let target = entity_id_for(&runtime, "QueryTarget")?;
+    assert_eq!(decode_record(&bytes, 0)?.entity, target);
+    assert!(runtime
+        .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 4, false)
+        .is_empty());
+    assert_eq!(
+        runtime
+            .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 32, false)
+            .len(),
+        1
+    );
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_query_flag_controls_trigger_inclusion() -> Result<(), Box<dyn Error>> {
+    let mut probe = Runtime::new()?;
+    probe.load_scene(Path::new(TRIGGER_FIXTURE_PATH))?;
+    let ball = entity_id_for(&probe, "Ball")?;
+    let crate_entity = entity_id_for(&probe, "Crate")?;
+
+    let handle = runtime_handle_for(TRIGGER_FIXTURE_PATH)?;
+    let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
+    assert_ne!(buffer, 0);
+
+    let without_triggers =
+        unitas_runtime_raycast(handle, 0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 20.0, 1, 0);
+    assert_eq!(without_triggers, 1);
+    let bytes = query_bytes(handle)?;
+    assert_eq!(decode_record(&bytes, 0)?.entity, ball);
+
+    let with_triggers = unitas_runtime_raycast(handle, 0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 20.0, 1, 1);
+    assert_eq!(with_triggers, 2);
+    let bytes = query_bytes(handle)?;
+    assert_eq!(decode_record(&bytes, 0)?.entity, ball);
+    assert_eq!(
+        decode_record(&bytes, QUERY_RECORD_SIZE)?.entity,
+        crate_entity
+    );
+
+    let overlap_without = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, 1, 0);
+    assert_eq!(overlap_without, 1);
+    let bytes = query_bytes(handle)?;
+    assert_eq!(decode_record(&bytes, 0)?.entity, ball);
+
+    let overlap_with = unitas_runtime_overlap_sphere(handle, 0.0, 0.0, 0.0, 0.5, 1, 1);
+    assert_eq!(overlap_with, 2);
+    let bytes = query_bytes(handle)?;
+    let mut overlapped = [
+        decode_record(&bytes, 0)?.entity,
+        decode_record(&bytes, QUERY_RECORD_SIZE)?.entity,
+    ];
+    overlapped.sort_unstable();
+    let mut expected = [ball, crate_entity];
+    expected.sort_unstable();
+    assert_eq!(overlapped, expected);
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+    Ok(())
+}
+
+#[test]
 fn runtime_abi_query_exports_reject_bad_handle() {
-    let bad = unitas_runtime_raycast(u64::MAX, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 10.0, u32::MAX);
+    let bad = unitas_runtime_raycast(u64::MAX, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 10.0, u32::MAX, 0);
     assert!(bad < 0);
-    let bad_overlap = unitas_runtime_overlap_sphere(u64::MAX, 0.0, 0.0, 0.0, 1.0, u32::MAX);
+    let bad_overlap = unitas_runtime_overlap_sphere(u64::MAX, 0.0, 0.0, 0.0, 1.0, u32::MAX, 0);
     assert!(bad_overlap < 0);
     assert_eq!(unitas_runtime_query_buffer(u64::MAX, 64), 0);
+}
+
+#[test]
+fn runtime_abi_new_cast_exports_reject_bad_handle() {
+    let bad_line =
+        unitas_runtime_linecast(u64::MAX, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 10.0, u32::MAX, 0);
+    assert!(bad_line < 0);
+    let bad_sphere = unitas_runtime_sphere_cast(
+        u64::MAX,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        10.0,
+        u32::MAX,
+        0,
+    );
+    assert!(bad_sphere < 0);
+    let bad_box = unitas_runtime_box_cast(
+        u64::MAX,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        10.0,
+        u32::MAX,
+        0,
+    );
+    assert!(bad_box < 0);
+}
+
+#[test]
+fn runtime_abi_linecast_matches_raycast() -> Result<(), Box<dyn Error>> {
+    let handle = query_runtime_handle()?;
+    let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
+    assert_ne!(buffer, 0);
+
+    let ray_count = unitas_runtime_raycast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 32, 0);
+    assert_eq!(ray_count, 1);
+    let bytes = query_bytes(handle)?;
+    let ray = decode_record(&bytes, 0)?;
+
+    let line_count = unitas_runtime_linecast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 32, 0);
+    assert_eq!(line_count, 1);
+    let bytes = query_bytes(handle)?;
+    let line = decode_record(&bytes, 0)?;
+    assert_eq!(line.entity, ray.entity);
+    assert!((line.distance - ray.distance).abs() < 1e-9);
+    assert!((line.point[0] - ray.point[0]).abs() < 1e-9);
+    assert!((line.point[1] - ray.point[1]).abs() < 1e-9);
+    assert!((line.point[2] - ray.point[2]).abs() < 1e-9);
+    assert!((line.normal[0] + 1.0).abs() < 1e-9);
+    assert!(line.normal[1].abs() < 1e-9);
+    assert!(line.normal[2].abs() < 1e-9);
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_sphere_cast_reports_target_with_normal() -> Result<(), Box<dyn Error>> {
+    let handle = query_runtime_handle()?;
+    let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
+    assert_ne!(buffer, 0);
+
+    let count =
+        unitas_runtime_sphere_cast(handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.25, 20.0, 32, 0);
+    assert_eq!(count, 1);
+    let bytes = query_bytes(handle)?;
+    let record = decode_record(&bytes, 0)?;
+    assert!(record.distance > 4.0 && record.distance <= 4.6);
+    assert!((record.point[0] + 0.5).abs() < 1e-9);
+    assert!(record.point[1].abs() < 1e-9);
+    assert!(record.point[2].abs() < 1e-9);
+    assert!((record.normal[0] + 1.0).abs() < 1e-9);
+    assert!(record.normal[1].abs() < 1e-9);
+    assert!(record.normal[2].abs() < 1e-9);
+    assert!((unit_length(record.normal) - 1.0).abs() < 1e-9);
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_box_cast_reports_target_with_normal() -> Result<(), Box<dyn Error>> {
+    let handle = query_runtime_handle()?;
+    let buffer = unitas_runtime_query_buffer(handle, 4 * QUERY_RECORD_SIZE as u32);
+    assert_ne!(buffer, 0);
+
+    let count = unitas_runtime_box_cast(
+        handle, -5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 0.5, 0.5, 20.0, 32, 0,
+    );
+    assert_eq!(count, 1);
+    let bytes = query_bytes(handle)?;
+    let record = decode_record(&bytes, 0)?;
+    assert!((record.distance - 4.0).abs() < 1e-9);
+    assert!((record.point[0] + 0.5).abs() < 1e-9);
+    assert!(record.point[1].abs() < 1e-9);
+    assert!(record.point[2].abs() < 1e-9);
+    assert!((record.normal[0] + 1.0).abs() < 1e-9);
+    assert!(record.normal[1].abs() < 1e-9);
+    assert!(record.normal[2].abs() < 1e-9);
+    assert!((unit_length(record.normal) - 1.0).abs() < 1e-9);
+
+    let destroy_rc = unitas_runtime_destroy(handle);
+    assert_eq!(destroy_rc, 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_query_api_exposes_linecast_sphere_cast_and_box_cast() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(QUERY_FIXTURE_PATH))?;
+    let target = entity_id_for(&runtime, "QueryTarget")?;
+
+    let ray = runtime.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 32, false);
+    assert_eq!(ray.len(), 1);
+    assert_eq!(ray[0].entity, target);
+    assert!((ray[0].distance - 4.5).abs() < 1e-9);
+    assert!((ray[0].normal[0] + 1.0).abs() < 1e-9);
+
+    let line = runtime.linecast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 32, false);
+    assert_eq!(line.len(), 1);
+    assert_eq!(line[0].entity, target);
+    assert!((line[0].distance - ray[0].distance).abs() < 1e-9);
+
+    let sphere = runtime.sphere_cast([-5.0, 0.0, 0.0], 0.25, [1.0, 0.0, 0.0], 20.0, 32, false);
+    assert_eq!(sphere.len(), 1);
+    assert_eq!(sphere[0].entity, target);
+    assert!(sphere[0].distance > 4.0 && sphere[0].distance <= 4.6);
+    assert!((sphere[0].normal[0] + 1.0).abs() < 1e-9);
+
+    let boxed = runtime.box_cast(
+        [-5.0, 0.0, 0.0],
+        [0.5, 0.5, 0.5],
+        [1.0, 0.0, 0.0],
+        20.0,
+        32,
+        false,
+    );
+    assert_eq!(boxed.len(), 1);
+    assert_eq!(boxed[0].entity, target);
+    assert!((boxed[0].distance - 4.0).abs() < 1e-9);
+    assert!((boxed[0].normal[0] + 1.0).abs() < 1e-9);
+
+    let overlap = runtime.overlap_sphere([0.0, 0.0, 0.0], 0.5, 32, false);
+    assert_eq!(overlap.len(), 1);
+    assert_eq!(overlap[0].entity, target);
+    assert_eq!(overlap[0].distance, 0.0);
+    assert_eq!(overlap[0].point, [0.0, 0.0, 0.0]);
+    assert_eq!(overlap[0].normal, [0.0, 0.0, 0.0]);
+    Ok(())
 }

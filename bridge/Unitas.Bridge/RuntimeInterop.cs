@@ -7,7 +7,7 @@ namespace Unitas.Bridge
     {
         public const string LibraryName = "unitas_runtime";
 
-        public const int QueryRecordSize = 40;
+        public const int QueryRecordSize = 64;
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate ulong CreateScriptCallback(ulong entity, ulong guidHi, ulong guidLo);
@@ -97,7 +97,51 @@ namespace Unitas.Bridge
             double directionY,
             double directionZ,
             double maxDistance,
-            uint layerMask);
+            uint layerMask,
+            int includeTriggers);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_linecast(
+            ulong runtime,
+            double originX,
+            double originY,
+            double originZ,
+            double dirX,
+            double dirY,
+            double dirZ,
+            double maxDistance,
+            uint layerMask,
+            int includeTriggers);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_sphere_cast(
+            ulong runtime,
+            double originX,
+            double originY,
+            double originZ,
+            double dirX,
+            double dirY,
+            double dirZ,
+            double radius,
+            double maxDistance,
+            uint layerMask,
+            int includeTriggers);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_box_cast(
+            ulong runtime,
+            double originX,
+            double originY,
+            double originZ,
+            double dirX,
+            double dirY,
+            double dirZ,
+            double halfX,
+            double halfY,
+            double halfZ,
+            double maxDistance,
+            uint layerMask,
+            int includeTriggers);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_overlap_sphere(
@@ -106,7 +150,8 @@ namespace Unitas.Bridge
             double centerY,
             double centerZ,
             double radius,
-            uint layerMask);
+            uint layerMask,
+            int includeTriggers);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_query_buffer(ulong runtime, uint capacity);
@@ -136,6 +181,9 @@ namespace Unitas.Bridge
                     X = BitConverter.ToDouble(bytes, offset + 16),
                     Y = BitConverter.ToDouble(bytes, offset + 24),
                     Z = BitConverter.ToDouble(bytes, offset + 32),
+                    NX = BitConverter.ToDouble(bytes, offset + 40),
+                    NY = BitConverter.ToDouble(bytes, offset + 48),
+                    NZ = BitConverter.ToDouble(bytes, offset + 56),
                 };
             }
             return hits;
@@ -149,5 +197,8 @@ namespace Unitas.Bridge
         public double X;
         public double Y;
         public double Z;
+        public double NX;
+        public double NY;
+        public double NZ;
     }
 }

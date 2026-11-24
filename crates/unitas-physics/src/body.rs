@@ -72,7 +72,7 @@ fn distance(first: [f64; 3], second: [f64; 3]) -> f64 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn closest_point(center: [f64; 3], half_extents: [f64; 3], point: [f64; 3]) -> [f64; 3] {
+pub(crate) fn closest_point(center: [f64; 3], half_extents: [f64; 3], point: [f64; 3]) -> [f64; 3] {
     [
         point[0].clamp(center[0] - half_extents[0], center[0] + half_extents[0]),
         point[1].clamp(center[1] - half_extents[1], center[1] + half_extents[1]),

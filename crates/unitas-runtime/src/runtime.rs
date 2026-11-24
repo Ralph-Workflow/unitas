@@ -1,7 +1,7 @@
 use std::path::Path;
 use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
 use unitas_core::{EntityId, SceneGraph};
-use unitas_physics::{BodyDesc, Phase, Shape, World};
+use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
 
 use crate::error::RuntimeError;
 
@@ -18,6 +18,14 @@ pub struct Callbacks {
     pub destroy: extern "C" fn(u64),
     pub collision: extern "C" fn(u64, u64, u32),
     pub trigger: extern "C" fn(u64, u64, u32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QueryRecord {
+    pub entity: u64,
+    pub distance: f64,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -185,12 +193,133 @@ impl Runtime {
         self.scene_graph.as_ref()
     }
 
+    pub fn raycast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryRecord> {
+        self.records_from_hits(self.world.raycast_with_triggers(
+            origin,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        ))
+    }
+
+    pub fn linecast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryRecord> {
+        let Some(direction) = normalized(direction) else {
+            return Vec::new();
+        };
+        if max_distance.is_nan() || max_distance <= 0.0 {
+            return Vec::new();
+        }
+        let end = [
+            origin[0] + direction[0] * max_distance,
+            origin[1] + direction[1] * max_distance,
+            origin[2] + direction[2] * max_distance,
+        ];
+        self.records_from_hits(
+            self.world
+                .linecast(origin, end, layer_mask, include_triggers),
+        )
+    }
+
+    pub fn sphere_cast(
+        &self,
+        origin: [f64; 3],
+        radius: f64,
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryRecord> {
+        self.records_from_hits(self.world.sphere_cast(
+            origin,
+            radius,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        ))
+    }
+
+    pub fn box_cast(
+        &self,
+        origin: [f64; 3],
+        half_extents: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryRecord> {
+        self.records_from_hits(self.world.box_cast(
+            origin,
+            half_extents,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        ))
+    }
+
+    pub fn overlap_sphere(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryRecord> {
+        let mut records: Vec<QueryRecord> = self
+            .world
+            .overlap_sphere_with_triggers(center, radius, layer_mask, include_triggers)
+            .into_iter()
+            .map(|entity| QueryRecord {
+                entity: entity.as_u64(),
+                distance: 0.0,
+                point: self.world.position(entity).unwrap_or(center),
+                normal: [0.0, 0.0, 0.0],
+            })
+            .collect();
+        records.sort_by(|first, second| first.entity.cmp(&second.entity));
+        records
+    }
+
     pub fn accumulator(&self) -> f64 {
         self.accumulator
     }
 
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
+    }
+
+    fn records_from_hits(&self, hits: Vec<QueryHit>) -> Vec<QueryRecord> {
+        let mut records: Vec<QueryRecord> = hits
+            .into_iter()
+            .map(|hit| QueryRecord {
+                entity: hit.entity.as_u64(),
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            })
+            .collect();
+        records.sort_by(|first, second| {
+            first
+                .distance
+                .total_cmp(&second.distance)
+                .then(first.entity.cmp(&second.entity))
+        });
+        records
     }
 }
 
@@ -247,7 +376,28 @@ fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {
         use_gravity,
         is_trigger: collider_trigger || rigidbody_trigger,
         shape,
+        layer: layer_bits(binding.layer),
     })
+}
+
+fn layer_bits(layer: u32) -> u32 {
+    if layer >= 32 {
+        return layer;
+    }
+    1 << layer
+}
+
+fn normalized(vector: [f64; 3]) -> Option<[f64; 3]> {
+    let length =
+        (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    Some([
+        vector[0] / length,
+        vector[1] / length,
+        vector[2] / length,
+    ])
 }
 
 fn phase_code(phase: Phase) -> u32 {

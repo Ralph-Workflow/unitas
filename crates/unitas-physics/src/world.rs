@@ -5,7 +5,7 @@ use unitas_core::EntityId;
 use crate::body::{BodyDesc, Shape};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
-use crate::query::{normalized_direction, ray_box_distance, ray_sphere_distance, RaycastHit};
+use crate::query::{cast_against, normalize, CastShape, QueryHit};
 
 const GRAVITY: f64 = 9.81;
 
@@ -103,11 +103,136 @@ impl World {
         direction: [f64; 3],
         max_distance: f64,
         layer_mask: u32,
-    ) -> Vec<RaycastHit> {
+    ) -> Vec<QueryHit> {
+        self.raycast_with_triggers(origin, direction, max_distance, layer_mask, false)
+    }
+
+    pub fn raycast_with_triggers(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
+        self.cast(
+            CastShape::Point,
+            origin,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        )
+    }
+
+    pub fn linecast(
+        &self,
+        start: [f64; 3],
+        end: [f64; 3],
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
+        let delta = [
+            end[0] - start[0],
+            end[1] - start[1],
+            end[2] - start[2],
+        ];
+        let Some(direction) = normalize(delta) else {
+            return Vec::new();
+        };
+        let distance =
+            (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        self.cast(
+            CastShape::Point,
+            start,
+            direction,
+            distance,
+            layer_mask,
+            include_triggers,
+        )
+    }
+
+    pub fn sphere_cast(
+        &self,
+        origin: [f64; 3],
+        radius: f64,
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
+        if !radius.is_finite() || radius <= 0.0 {
+            return Vec::new();
+        }
+        self.cast(
+            CastShape::Sphere { radius },
+            origin,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        )
+    }
+
+    pub fn box_cast(
+        &self,
+        origin: [f64; 3],
+        half_extents: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
+        if !half_extents
+            .iter()
+            .all(|extent| extent.is_finite() && *extent > 0.0)
+        {
+            return Vec::new();
+        }
+        self.cast(
+            CastShape::Box { half_extents },
+            origin,
+            direction,
+            max_distance,
+            layer_mask,
+            include_triggers,
+        )
+    }
+
+    pub fn overlap_sphere(&self, center: [f64; 3], radius: f64, layer_mask: u32) -> Vec<EntityId> {
+        self.overlap_sphere_with_triggers(center, radius, layer_mask, false)
+    }
+
+    pub fn overlap_sphere_with_triggers(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<EntityId> {
+        let probe = Shape::Sphere { radius };
+        self.bodies
+            .iter()
+            .filter(|body| body.layer & layer_mask != 0)
+            .filter(|body| !body.is_trigger || include_triggers)
+            .filter(|body| probe.overlaps(center, &body.shape, body.position))
+            .map(|body| body.entity)
+            .collect()
+    }
+
+    fn cast(
+        &self,
+        cast_shape: CastShape,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
         if max_distance <= 0.0 || max_distance.is_nan() {
             return Vec::new();
         }
-        let Some(direction) = normalized_direction(direction) else {
+        let Some(direction) = normalize(direction) else {
             return Vec::new();
         };
         let mut hits = Vec::new();
@@ -115,42 +240,31 @@ impl World {
             if body.layer & layer_mask == 0 {
                 continue;
             }
-            let distance = match body.shape {
-                Shape::Sphere { radius } => {
-                    ray_sphere_distance(origin, direction, body.position, radius)
-                }
-                Shape::Box { half_extents } => {
-                    ray_box_distance(origin, direction, body.position, half_extents)
-                }
-            };
-            let Some(distance) = distance else {
-                continue;
-            };
-            if distance > max_distance {
+            if body.is_trigger && !include_triggers {
                 continue;
             }
-            hits.push(RaycastHit {
+            let Some(hit) =
+                cast_against(origin, direction, body.position, &body.shape, cast_shape)
+            else {
+                continue;
+            };
+            if hit.distance > max_distance {
+                continue;
+            }
+            hits.push(QueryHit {
                 entity: body.entity,
-                distance,
-                point: [
-                    origin[0] + direction[0] * distance,
-                    origin[1] + direction[1] * distance,
-                    origin[2] + direction[2] * distance,
-                ],
+                point: hit.point,
+                normal: hit.normal,
+                distance: hit.distance,
             });
         }
-        hits.sort_by(|first, second| first.distance.total_cmp(&second.distance));
+        hits.sort_by(|first, second| {
+            first
+                .distance
+                .total_cmp(&second.distance)
+                .then(first.entity.cmp(&second.entity))
+        });
         hits
-    }
-
-    pub fn overlap_sphere(&self, center: [f64; 3], radius: f64, layer_mask: u32) -> Vec<EntityId> {
-        let probe = Shape::Sphere { radius };
-        self.bodies
-            .iter()
-            .filter(|body| body.layer & layer_mask != 0)
-            .filter(|body| probe.overlaps(center, &body.shape, body.position))
-            .map(|body| body.entity)
-            .collect()
     }
 
     fn integrate(&mut self, delta_seconds: f64) {

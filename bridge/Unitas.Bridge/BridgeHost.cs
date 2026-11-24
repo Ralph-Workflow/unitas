@@ -124,7 +124,8 @@ namespace Unitas.Bridge
 
         public void Tick(double deltaSeconds)
         {
-            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, deltaSeconds);
+            Time.Advance(deltaSeconds);
+            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, deltaSeconds * Time.timeScale);
             if (result != 0)
             {
                 string? error = GetErrorMessage();
@@ -182,7 +183,7 @@ namespace Unitas.Bridge
             return script?.GetComponent<Collider>();
         }
 
-        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, out RaycastHit hit)
+        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers, out RaycastHit hit)
         {
             hit = default;
             int count = RuntimeInterop.unitas_runtime_raycast(
@@ -194,7 +195,92 @@ namespace Unitas.Bridge
                 direction.y,
                 direction.z,
                 maxDistance,
-                (uint)layerMask);
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            return TakeNearestHit(count, out hit);
+        }
+
+        public bool Linecast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            hit = default;
+            int count = RuntimeInterop.unitas_runtime_linecast(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                origin.z,
+                direction.x,
+                direction.y,
+                direction.z,
+                maxDistance,
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            return TakeNearestHit(count, out hit);
+        }
+
+        public bool SphereCast(Vector3 origin, Vector3 direction, float radius, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            hit = default;
+            int count = RuntimeInterop.unitas_runtime_sphere_cast(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                origin.z,
+                direction.x,
+                direction.y,
+                direction.z,
+                radius,
+                maxDistance,
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            return TakeNearestHit(count, out hit);
+        }
+
+        public bool BoxCast(Vector3 origin, Vector3 direction, Vector3 halfExtents, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            hit = default;
+            int count = RuntimeInterop.unitas_runtime_box_cast(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                origin.z,
+                direction.x,
+                direction.y,
+                direction.z,
+                halfExtents.x,
+                halfExtents.y,
+                halfExtents.z,
+                maxDistance,
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            return TakeNearestHit(count, out hit);
+        }
+
+        public Collider[] OverlapSphere(Vector3 position, float radius, int layerMask, bool includeTriggers)
+        {
+            int count = RuntimeInterop.unitas_runtime_overlap_sphere(
+                _runtimeHandle,
+                position.x,
+                position.y,
+                position.z,
+                radius,
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            if (count <= 0)
+            {
+                return Array.Empty<Collider>();
+            }
+            QueryHit[] hits = ReadQueryHits(count);
+            Collider[] colliders = new Collider[hits.Length];
+            for (int index = 0; index < hits.Length; index++)
+            {
+                colliders[index] = GetCollider(hits[index].Entity)!;
+            }
+            return colliders;
+        }
+
+        private bool TakeNearestHit(int count, out RaycastHit hit)
+        {
+            hit = default;
             if (count <= 0)
             {
                 return false;
@@ -208,30 +294,9 @@ namespace Unitas.Bridge
             Collider? collider = GetCollider(nearest.Entity);
             hit.collider = collider!;
             hit.point = new Vector3((float)nearest.X, (float)nearest.Y, (float)nearest.Z);
+            hit.normal = new Vector3((float)nearest.NX, (float)nearest.NY, (float)nearest.NZ);
             hit.distance = (float)nearest.Distance;
             return true;
-        }
-
-        public Collider[] OverlapSphere(Vector3 position, float radius, int layerMask)
-        {
-            int count = RuntimeInterop.unitas_runtime_overlap_sphere(
-                _runtimeHandle,
-                position.x,
-                position.y,
-                position.z,
-                radius,
-                (uint)layerMask);
-            if (count <= 0)
-            {
-                return Array.Empty<Collider>();
-            }
-            QueryHit[] hits = ReadQueryHits(count);
-            Collider[] colliders = new Collider[hits.Length];
-            for (int index = 0; index < hits.Length; index++)
-            {
-                colliders[index] = GetCollider(hits[index].Entity)!;
-            }
-            return colliders;
         }
 
         private QueryHit[] ReadQueryHits(int count)
@@ -273,7 +338,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.Awake();
+                InvokeWithOrigin(script, script.Awake);
             }
         }
 
@@ -281,7 +346,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.OnEnable();
+                InvokeWithOrigin(script, script.OnEnable);
             }
         }
 
@@ -289,7 +354,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.Start();
+                InvokeWithOrigin(script, script.Start);
             }
         }
 
@@ -297,7 +362,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.FixedUpdate();
+                InvokeWithOrigin(script, script.FixedUpdate);
             }
         }
 
@@ -305,7 +370,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.Update();
+                InvokeWithOrigin(script, script.Update);
             }
         }
 
@@ -313,7 +378,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.LateUpdate();
+                InvokeWithOrigin(script, script.LateUpdate);
             }
         }
 
@@ -321,7 +386,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.OnDisable();
+                InvokeWithOrigin(script, script.OnDisable);
             }
         }
 
@@ -329,7 +394,7 @@ namespace Unitas.Bridge
         {
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
-                script.OnDestroy();
+                InvokeWithOrigin(script, script.OnDestroy);
                 _scripts.Remove(scriptHandle);
             }
         }
@@ -380,13 +445,13 @@ namespace Unitas.Bridge
             switch (phase)
             {
                 case CollisionPhaseEnter:
-                    script.OnCollisionEnter(collision);
+                    InvokeWithOrigin(script, () => script.OnCollisionEnter(collision));
                     break;
                 case CollisionPhaseStay:
-                    script.OnCollisionStay(collision);
+                    InvokeWithOrigin(script, () => script.OnCollisionStay(collision));
                     break;
                 case CollisionPhaseExit:
-                    script.OnCollisionExit(collision);
+                    InvokeWithOrigin(script, () => script.OnCollisionExit(collision));
                     break;
                 default:
                     break;
@@ -398,16 +463,30 @@ namespace Unitas.Bridge
             switch (phase)
             {
                 case CollisionPhaseEnter:
-                    script.OnTriggerEnter(other);
+                    InvokeWithOrigin(script, () => script.OnTriggerEnter(other));
                     break;
                 case CollisionPhaseStay:
-                    script.OnTriggerStay(other);
+                    InvokeWithOrigin(script, () => script.OnTriggerStay(other));
                     break;
                 case CollisionPhaseExit:
-                    script.OnTriggerExit(other);
+                    InvokeWithOrigin(script, () => script.OnTriggerExit(other));
                     break;
                 default:
                     break;
+            }
+        }
+
+        private static void InvokeWithOrigin(MonoBehaviour script, Action callback)
+        {
+            UnityEngine.Object? previousOrigin = LogRecorder.CurrentOrigin;
+            LogRecorder.CurrentOrigin = script;
+            try
+            {
+                callback();
+            }
+            finally
+            {
+                LogRecorder.CurrentOrigin = previousOrigin;
             }
         }
     }
