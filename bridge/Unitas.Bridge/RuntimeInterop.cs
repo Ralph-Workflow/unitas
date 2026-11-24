@@ -247,6 +247,39 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern double unitas_runtime_time_scale(ulong runtime);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_key_event(ulong runtime, uint key, uint pressed);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_mouse_button_event(ulong runtime, uint btn, uint pressed);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_pointer_move(ulong runtime, double x, double y);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_scroll(ulong runtime, double x, double y);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern uint unitas_runtime_input_key_state(ulong runtime, uint key);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern uint unitas_runtime_input_mouse_state(ulong runtime, uint btn);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_pointer(ulong runtime, IntPtr outBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_scroll_state(ulong runtime, IntPtr outBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double unitas_runtime_input_axis(ulong runtime, IntPtr address, ulong length);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double unitas_runtime_input_axis_raw(ulong runtime, IntPtr address, ulong length);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_button_state(ulong runtime, IntPtr address, ulong length);
+
         public static QueryHit[] ReadQueryHits(IntPtr buffer, int count)
         {
             if (count <= 0)

@@ -26,6 +26,7 @@ namespace Unitas.Bridge.Tests
             CloneTests.Run();
             ActivationTests.Run();
             ExceptionContainmentTests.Run();
+            InputTests.Run();
 
             if (Check.FailureCount > 0)
             {

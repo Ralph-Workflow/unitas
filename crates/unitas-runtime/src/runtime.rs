@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
 use unitas_asset::{
-    parse_dynamics_manager, parse_time_manager, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
+    parse_dynamics_manager, parse_input_manager, parse_time_manager, InputAxis,
+    DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 use unitas_core::{rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
 use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
 
 use crate::error::RuntimeError;
+use crate::input::{default_axis_configs, AxisConfig, InputState};
 
 #[derive(Clone, Copy)]
 pub struct Callbacks {
@@ -47,6 +49,7 @@ pub struct Runtime {
     scene_graph: Option<SceneGraph>,
     scripts: Vec<ScriptInstance>,
     world: World,
+    input: InputState,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
     time_scale: f64,
@@ -61,6 +64,7 @@ impl Runtime {
             scene_graph: None,
             scripts: Vec::new(),
             world: World::new(),
+            input: InputState::with_default_axes(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             time_scale: 1.0,
@@ -72,11 +76,13 @@ impl Runtime {
 
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
         let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
-        let (fixed_timestep, gravity) = discover_project_settings(path);
+        let (fixed_timestep, gravity, axes) = discover_project_settings(path);
         let world = build_world(&graph, &physics, gravity)?;
         self.scene_graph = Some(graph);
         self.world = world;
         self.fixed_timestep = fixed_timestep;
+        self.input.set_axes(axes);
+        self.input.reset();
         self.scripts.clear();
         for binding in bindings {
             if binding.guid.len() != 32 {
@@ -112,43 +118,67 @@ impl Runtime {
     }
 
     pub fn tick(&mut self, delta_seconds: f64) -> Result<(), RuntimeError> {
+        self.tick_with_hook(delta_seconds, |_, f| f())
+    }
+
+    pub fn tick_with_hook<H>(&mut self, delta_seconds: f64, mut hook: H) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
         if self.is_shutdown {
             return Err(RuntimeError::AlreadyShutdown);
         }
         if self.first_tick {
             self.first_tick = false;
             if let Some(callbacks) = self.callbacks {
-                for script in &mut self.scripts {
-                    script.script_handle = (callbacks.create_script)(
-                        script.entity.as_u64(),
-                        script.guid_hi,
-                        script.guid_lo,
-                    );
+                let count = self.scripts.len();
+                for index in 0..count {
+                    let entity = self.scripts[index].entity.as_u64();
+                    let guid_hi = self.scripts[index].guid_hi;
+                    let guid_lo = self.scripts[index].guid_lo;
+                    let mut created = 0;
+                    hook(self, &mut || {
+                        created = (callbacks.create_script)(entity, guid_hi, guid_lo);
+                    });
+                    self.scripts[index].script_handle = created;
                 }
-                for script in &mut self.scripts {
-                    (callbacks.awake)(script.script_handle);
-                    script.awake_called = true;
+                for index in 0..count {
+                    let handle = self.scripts[index].script_handle;
+                    hook(self, &mut || {
+                        (callbacks.awake)(handle);
+                    });
+                    self.scripts[index].awake_called = true;
                 }
-                for script in &mut self.scripts {
-                    (callbacks.on_enable)(script.script_handle);
-                    script.on_enable_called = true;
+                for index in 0..count {
+                    let handle = self.scripts[index].script_handle;
+                    hook(self, &mut || {
+                        (callbacks.on_enable)(handle);
+                    });
+                    self.scripts[index].on_enable_called = true;
                 }
-                for script in &mut self.scripts {
-                    (callbacks.start)(script.script_handle);
-                    script.start_called = true;
+                for index in 0..count {
+                    let handle = self.scripts[index].script_handle;
+                    hook(self, &mut || {
+                        (callbacks.start)(handle);
+                    });
+                    self.scripts[index].start_called = true;
                 }
             }
             return Ok(());
         }
         let scaled_delta = delta_seconds * self.time_scale;
+        self.input.begin_frame(scaled_delta);
         self.accumulator += scaled_delta;
         let fixed_step = self.fixed_timestep;
         const EPSILON: f64 = 1e-9;
         while self.accumulator >= fixed_step - EPSILON {
             self.world.step(fixed_step)?;
             if let Some(callbacks) = self.callbacks {
-                for script in &self.scripts {
-                    (callbacks.fixed_update)(script.script_handle, fixed_step);
+                let handles: Vec<u64> = self.scripts.iter().map(|s| s.script_handle).collect();
+                for handle in handles {
+                    hook(self, &mut || {
+                        (callbacks.fixed_update)(handle, fixed_step);
+                    });
                 }
             }
             self.accumulator -= fixed_step;
@@ -160,36 +190,74 @@ impl Runtime {
         let trigger_events = self.world.drain_trigger_events();
         if let Some(callbacks) = self.callbacks {
             for event in events {
-                (callbacks.collision)(event.a.as_u64(), event.b.as_u64(), phase_code(event.phase));
+                let a = event.a.as_u64();
+                let b = event.b.as_u64();
+                let phase = phase_code(event.phase);
+                hook(self, &mut || {
+                    (callbacks.collision)(a, b, phase);
+                });
             }
             for event in trigger_events {
-                (callbacks.trigger)(event.a.as_u64(), event.b.as_u64(), phase_code(event.phase));
+                let a = event.a.as_u64();
+                let b = event.b.as_u64();
+                let phase = phase_code(event.phase);
+                hook(self, &mut || {
+                    (callbacks.trigger)(a, b, phase);
+                });
             }
-            for script in &self.scripts {
-                (callbacks.update)(script.script_handle, scaled_delta);
+            let handles: Vec<u64> = self.scripts.iter().map(|s| s.script_handle).collect();
+            for handle in &handles {
+                let h = *handle;
+                hook(self, &mut || {
+                    (callbacks.update)(h, scaled_delta);
+                });
             }
-            for script in &self.scripts {
-                (callbacks.late_update)(script.script_handle, scaled_delta);
+            for handle in &handles {
+                let h = *handle;
+                hook(self, &mut || {
+                    (callbacks.late_update)(h, scaled_delta);
+                });
             }
         }
         Ok(())
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
+        self.shutdown_with_hook(|_, f| f())
+    }
+
+    pub fn shutdown_with_hook<H>(&mut self, mut hook: H) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
         if self.is_shutdown {
             return Ok(());
         }
         self.is_shutdown = true;
         if let Some(callbacks) = self.callbacks {
-            for script in self.scripts.iter().rev() {
-                if script.on_enable_called {
-                    (callbacks.on_disable)(script.script_handle);
-                }
+            let disable_handles: Vec<u64> = self
+                .scripts
+                .iter()
+                .rev()
+                .filter(|s| s.on_enable_called)
+                .map(|s| s.script_handle)
+                .collect();
+            for handle in disable_handles {
+                hook(self, &mut || {
+                    (callbacks.on_disable)(handle);
+                });
             }
-            for script in self.scripts.iter().rev() {
-                if script.script_handle != 0 {
-                    (callbacks.destroy)(script.script_handle);
-                }
+            let destroy_handles: Vec<u64> = self
+                .scripts
+                .iter()
+                .rev()
+                .filter(|s| s.script_handle != 0)
+                .map(|s| s.script_handle)
+                .collect();
+            for handle in destroy_handles {
+                hook(self, &mut || {
+                    (callbacks.destroy)(handle);
+                });
             }
         }
         Ok(())
@@ -333,6 +401,58 @@ impl Runtime {
         self.is_shutdown
     }
 
+    pub fn input(&self) -> &InputState {
+        &self.input
+    }
+
+    pub fn input_mut(&mut self) -> &mut InputState {
+        &mut self.input
+    }
+
+    pub fn input_key_event(&mut self, key: u32, pressed: bool) {
+        self.input.queue_key_event(key, pressed);
+    }
+
+    pub fn input_mouse_button_event(&mut self, button: u32, pressed: bool) {
+        self.input.queue_mouse_button_event(button, pressed);
+    }
+
+    pub fn input_pointer_move(&mut self, x: f64, y: f64) {
+        self.input.queue_pointer_move(x, y);
+    }
+
+    pub fn input_scroll(&mut self, x: f64, y: f64) {
+        self.input.queue_scroll(x, y);
+    }
+
+    pub fn input_key_state(&self, key: u32) -> u32 {
+        self.input.key_state(key)
+    }
+
+    pub fn input_mouse_state(&self, button: u32) -> u32 {
+        self.input.mouse_button_state(button)
+    }
+
+    pub fn input_pointer(&self) -> (f64, f64, f64, f64) {
+        self.input.pointer()
+    }
+
+    pub fn input_scroll_state(&self) -> (f64, f64) {
+        self.input.scroll()
+    }
+
+    pub fn input_axis(&self, name: &str) -> Option<f64> {
+        self.input.axis(name)
+    }
+
+    pub fn input_axis_raw(&self, name: &str) -> Option<f64> {
+        self.input.axis_raw(name)
+    }
+
+    pub fn input_button_state(&self, name: &str) -> Option<u32> {
+        self.input.button_state(name)
+    }
+
     fn records_from_hits(&self, hits: Vec<QueryHit>) -> Vec<QueryRecord> {
         let mut records: Vec<QueryRecord> = hits
             .into_iter()
@@ -353,9 +473,13 @@ impl Runtime {
     }
 }
 
-fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3]) {
+fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3], Vec<AxisConfig>) {
     let Some(settings_dir) = find_project_settings_dir(scene_path) else {
-        return (DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY);
+        return (
+            DEFAULT_FIXED_TIMESTEP,
+            DEFAULT_GRAVITY,
+            default_axis_configs(),
+        );
     };
     let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
         Ok(Some(settings)) => settings.fixed_timestep,
@@ -365,7 +489,30 @@ fn discover_project_settings(scene_path: &Path) -> (f64, [f64; 3]) {
         Ok(Some(settings)) => settings.gravity,
         Ok(None) | Err(_) => DEFAULT_GRAVITY,
     };
-    (fixed_timestep, gravity)
+    let axes = match parse_input_manager(&settings_dir.join("InputManager.asset")) {
+        Ok(Some(settings)) => map_input_axes(settings.axes),
+        Ok(None) | Err(_) => default_axis_configs(),
+    };
+    (fixed_timestep, gravity, axes)
+}
+
+fn map_input_axes(axes: Vec<InputAxis>) -> Vec<AxisConfig> {
+    axes.into_iter()
+        .map(|axis| AxisConfig {
+            name: axis.name,
+            negative_button: axis.negative_button,
+            positive_button: axis.positive_button,
+            alt_negative_button: axis.alt_negative_button,
+            alt_positive_button: axis.alt_positive_button,
+            gravity: axis.gravity,
+            dead: axis.dead,
+            sensitivity: axis.sensitivity,
+            snap: axis.snap,
+            invert: axis.invert,
+            axis_type: axis.axis_type,
+            axis: axis.axis,
+        })
+        .collect()
 }
 
 fn find_project_settings_dir(scene_path: &Path) -> Option<PathBuf> {

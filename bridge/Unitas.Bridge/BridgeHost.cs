@@ -7,11 +7,14 @@ using UnityEngine;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider
     {
         private const uint CollisionPhaseEnter = 0;
         private const uint CollisionPhaseStay = 1;
         private const uint CollisionPhaseExit = 2;
+        private const uint InputStateDown = 1;
+        private const uint InputStatePressed = 2;
+        private const uint InputStateReleased = 4;
 
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
@@ -82,6 +85,7 @@ namespace Unitas.Bridge
             }
 
             Physics.Provider = this;
+            Input.Provider = this;
         }
 
         public ulong Handle => _runtimeHandle;
@@ -160,6 +164,10 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(Physics.Provider, this))
                 {
                     Physics.Provider = null;
+                }
+                if (ReferenceEquals(Input.Provider, this))
+                {
+                    Input.Provider = null;
                 }
                 if (result != 0)
                 {
@@ -288,6 +296,216 @@ namespace Unitas.Bridge
                 colliders[index] = GetCollider(hits[index].Entity)!;
             }
             return colliders;
+        }
+
+        public void InjectKey(KeyCode key, bool pressed)
+        {
+            InjectKey((uint)key, pressed);
+        }
+
+        public void InjectKey(uint keyCode, bool pressed)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_key_event(_runtimeHandle, keyCode, pressed ? 1u : 0u);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject key event", result);
+            }
+        }
+
+        public void InjectMouseButton(int button, bool pressed)
+        {
+            if (button < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(button));
+            }
+            int result = RuntimeInterop.unitas_runtime_input_mouse_button_event(_runtimeHandle, (uint)button, pressed ? 1u : 0u);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject mouse button event", result);
+            }
+        }
+
+        public void InjectPointerPosition(double x, double y)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_pointer_move(_runtimeHandle, x, y);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject pointer position", result);
+            }
+        }
+
+        public void InjectScroll(double x, double y)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_scroll(_runtimeHandle, x, y);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject scroll delta", result);
+            }
+        }
+
+        public bool GetKey(KeyCode key)
+        {
+            return (RuntimeInterop.unitas_runtime_input_key_state(_runtimeHandle, (uint)key) & InputStateDown) != 0;
+        }
+
+        public bool GetKeyDown(KeyCode key)
+        {
+            return (RuntimeInterop.unitas_runtime_input_key_state(_runtimeHandle, (uint)key) & InputStatePressed) != 0;
+        }
+
+        public bool GetKeyUp(KeyCode key)
+        {
+            return (RuntimeInterop.unitas_runtime_input_key_state(_runtimeHandle, (uint)key) & InputStateReleased) != 0;
+        }
+
+        public bool GetMouseButton(int button)
+        {
+            return button >= 0 && (RuntimeInterop.unitas_runtime_input_mouse_state(_runtimeHandle, (uint)button) & InputStateDown) != 0;
+        }
+
+        public bool GetMouseButtonDown(int button)
+        {
+            return button >= 0 && (RuntimeInterop.unitas_runtime_input_mouse_state(_runtimeHandle, (uint)button) & InputStatePressed) != 0;
+        }
+
+        public bool GetMouseButtonUp(int button)
+        {
+            return button >= 0 && (RuntimeInterop.unitas_runtime_input_mouse_state(_runtimeHandle, (uint)button) & InputStateReleased) != 0;
+        }
+
+        public Vector3 GetMousePosition()
+        {
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32);
+            if (buffer == IntPtr.Zero || RuntimeInterop.unitas_runtime_input_pointer(_runtimeHandle, buffer) != 0)
+            {
+                return Vector3.zero;
+            }
+            byte[] bytes = new byte[32];
+            Marshal.Copy(buffer, bytes, 0, 32);
+            float x = (float)BitConverter.ToDouble(bytes, 0);
+            float y = (float)BitConverter.ToDouble(bytes, 8);
+            return new Vector3(x, y, 0f);
+        }
+
+        public Vector3 GetMousePositionDelta()
+        {
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32);
+            if (buffer == IntPtr.Zero || RuntimeInterop.unitas_runtime_input_pointer(_runtimeHandle, buffer) != 0)
+            {
+                return Vector3.zero;
+            }
+            byte[] bytes = new byte[32];
+            Marshal.Copy(buffer, bytes, 0, 32);
+            float dx = (float)BitConverter.ToDouble(bytes, 16);
+            float dy = (float)BitConverter.ToDouble(bytes, 24);
+            return new Vector3(dx, dy, 0f);
+        }
+
+        public Vector3 GetMouseScrollDelta()
+        {
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 16);
+            if (buffer == IntPtr.Zero || RuntimeInterop.unitas_runtime_input_scroll_state(_runtimeHandle, buffer) != 0)
+            {
+                return Vector3.zero;
+            }
+            byte[] bytes = new byte[16];
+            Marshal.Copy(buffer, bytes, 0, 16);
+            float sx = (float)BitConverter.ToDouble(bytes, 0);
+            float sy = (float)BitConverter.ToDouble(bytes, 8);
+            return new Vector3(sx, sy, 0f);
+        }
+
+        public bool TryGetAxis(string axisName, out float value)
+        {
+            value = 0f;
+            if (!TryWriteStringToPathBuffer(axisName, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+            double result = RuntimeInterop.unitas_runtime_input_axis(_runtimeHandle, buffer, length);
+            if (RuntimeInterop.unitas_runtime_error_message(_runtimeHandle) != IntPtr.Zero)
+            {
+                return false;
+            }
+            value = (float)result;
+            return true;
+        }
+
+        public bool TryGetAxisRaw(string axisName, out float value)
+        {
+            value = 0f;
+            if (!TryWriteStringToPathBuffer(axisName, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+            double result = RuntimeInterop.unitas_runtime_input_axis_raw(_runtimeHandle, buffer, length);
+            if (RuntimeInterop.unitas_runtime_error_message(_runtimeHandle) != IntPtr.Zero)
+            {
+                return false;
+            }
+            value = (float)result;
+            return true;
+        }
+
+        public bool TryGetButton(string buttonName, out bool value)
+        {
+            return TryQueryButtonState(buttonName, InputStateDown, out value);
+        }
+
+        public bool TryGetButtonDown(string buttonName, out bool value)
+        {
+            return TryQueryButtonState(buttonName, InputStatePressed, out value);
+        }
+
+        public bool TryGetButtonUp(string buttonName, out bool value)
+        {
+            return TryQueryButtonState(buttonName, InputStateReleased, out value);
+        }
+
+        private bool TryQueryButtonState(string buttonName, uint stateMask, out bool value)
+        {
+            value = false;
+            if (!TryWriteStringToPathBuffer(buttonName, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+            int mask = RuntimeInterop.unitas_runtime_input_button_state(_runtimeHandle, buffer, length);
+            if (mask < 0)
+            {
+                return false;
+            }
+            value = ((uint)mask & stateMask) != 0;
+            return true;
+        }
+
+        private bool TryWriteStringToPathBuffer(string text, out IntPtr buffer, out ulong length)
+        {
+            buffer = IntPtr.Zero;
+            length = 0;
+            if (string.IsNullOrEmpty(text))
+            {
+                return false;
+            }
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(text);
+            buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            Marshal.Copy(utf8Bytes, 0, buffer, utf8Bytes.Length);
+            length = (ulong)utf8Bytes.Length;
+            return true;
+        }
+
+        private void ThrowRuntimeError(string prefix, int errorCode)
+        {
+            string? error = GetErrorMessage();
+            string codeStr = errorCode.ToString(CultureInfo.InvariantCulture);
+            if (string.IsNullOrEmpty(error))
+            {
+                throw new InvalidOperationException(prefix + " (error code " + codeStr + ").");
+            }
+            throw new InvalidOperationException(prefix + " (error code " + codeStr + "): " + error);
         }
 
         private bool TakeNearestHit(int count, out RaycastHit hit)
