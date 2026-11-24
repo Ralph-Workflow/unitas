@@ -4,8 +4,8 @@ use unitas_asset::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
     InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
-use unitas_core::{rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
-use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
+use unitas_core::{normalize_rotation, rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
+use unitas_physics::{BodyDesc, BodyRole, Phase, QueryHit, Shape, World};
 
 use crate::error::RuntimeError;
 use crate::input::{default_axis_configs, AxisConfig, InputState};
@@ -21,6 +21,7 @@ pub struct LoadedScene {
     graph: SceneGraph,
     scripts: Vec<ScriptInstance>,
     bodies: Vec<EntityId>,
+    body_offsets: Vec<(EntityId, [f32; 3])>,
     entity_base: u64,
     entity_count: u64,
 }
@@ -70,8 +71,6 @@ pub struct ScriptInstance {
     pub start_called: bool,
 }
 
-/// The headless runtime. Physics lives in one global world: unloading a scene removes exactly that
-/// scene's bodies, so cross-scene contacts can still occur (Unity isolates physics per scene).
 pub struct Runtime {
     scenes: Vec<LoadedScene>,
     active_scene: Option<usize>,
@@ -109,15 +108,11 @@ impl Runtime {
         })
     }
 
-    /// Loads a scene in Single mode, replacing every loaded scene. Returns the number of scripts
-    /// in the newly loaded scene.
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
         self.load_scene_with_hook(path, LoadSceneMode::Single, |_, f| f())?;
         Ok(self.scenes.last().map_or(0, |scene| scene.scripts.len()))
     }
 
-    /// Loads a scene in the given mode. Returns the number of loaded scenes after the operation
-    /// (not the script count, which [`Runtime::load_scene`] reports).
     pub fn load_scene_with_mode(
         &mut self,
         path: &Path,
@@ -163,12 +158,13 @@ impl Runtime {
             .collect::<Vec<_>>();
         let bodies = descs
             .iter()
-            .map(|(entity, _)| EntityId::new(entity_base + entity.as_u64()))
+            .map(|(entity, _, _)| EntityId::new(entity_base + entity.as_u64()))
+            .collect::<Vec<_>>();
+        let body_offsets = descs
+            .iter()
+            .map(|(entity, _, offset)| (EntityId::new(entity_base + entity.as_u64()), *offset))
             .collect::<Vec<_>>();
         for (body, desc) in bodies.iter().zip(descs.iter()) {
-            // The atomicity guarantee ends here: the previous scene set is already torn down. The insert
-            // can only fail on a duplicate entity id, and next_entity_base keeps every new id above every
-            // live id, so the failure is unreachable in practice.
             self.world.add_body(*body, desc.1)?;
         }
         let entity_count = graph.len() as u64;
@@ -177,6 +173,7 @@ impl Runtime {
             graph,
             scripts,
             bodies,
+            body_offsets,
             entity_base,
             entity_count,
         });
@@ -275,6 +272,9 @@ impl Runtime {
                 .position(|body| *body == entity);
             if let Some(body_index) = body_index {
                 self.scenes[index].bodies.remove(body_index);
+                self.scenes[index]
+                    .body_offsets
+                    .retain(|(id, _)| *id != entity);
                 found = true;
                 break;
             }
@@ -370,7 +370,6 @@ impl Runtime {
     }
 
     fn next_entity_base(&self) -> u64 {
-        // Entity id 0 is reserved as "no entity" for the managed bridge, so the first scene starts at 1.
         let mut highest = 1u64;
         for scene in &self.scenes {
             highest = highest.max(scene.entity_base + scene.entity_count);
@@ -439,8 +438,6 @@ impl Runtime {
                 pending.push((script.entity, script.guid_hi, script.guid_lo));
             }
         }
-        // Pending scripts are tracked by entity, not by slot index: a callback may mark a script
-        // persistent and move it out of its scene while that script is being initialised.
         for (entity, guid_hi, guid_lo) in pending.iter().copied() {
             let mut created = 0;
             hook(self, &mut || {
@@ -515,6 +512,7 @@ impl Runtime {
         const EPSILON: f64 = 1e-9;
         while self.accumulator >= fixed_step - EPSILON {
             self.world.step(fixed_step)?;
+            self.write_back_dynamic_transforms();
             if let Some(callbacks) = self.callbacks {
                 let handles = self.all_script_handles();
                 for handle in handles {
@@ -587,8 +585,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// The scripts of the active scene, followed by the scripts that are marked to survive scene
-    /// changes. Scripts of other loaded scenes are not reported here.
     pub fn scripts(&self) -> &[ScriptInstance] {
         &self.script_view
     }
@@ -723,6 +719,39 @@ impl Runtime {
 
     pub fn body_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
         self.world.velocity(entity)
+    }
+
+    pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
+        self.world.body_role(entity)
+    }
+
+    fn write_back_dynamic_transforms(&mut self) {
+        for scene in &mut self.scenes {
+            for (entity, offset) in &scene.body_offsets {
+                if self.world.body_role(*entity) != Some(BodyRole::Dynamic) {
+                    continue;
+                }
+                let Some(world_pos) = self.world.position(*entity) else {
+                    continue;
+                };
+                let world_translation = [
+                    world_pos[0] as f32 - offset[0],
+                    world_pos[1] as f32 - offset[1],
+                    world_pos[2] as f32 - offset[2],
+                ];
+                let local_translation = match scene
+                    .graph
+                    .parent(*entity)
+                    .and_then(|parent| scene.graph.world_transform(parent))
+                {
+                    Some(parent_world) => world_to_local_translation(&parent_world, world_translation),
+                    None => world_translation,
+                };
+                if let Some(transform) = scene.graph.transform_mut(*entity) {
+                    transform.translation = local_translation;
+                }
+            }
+        }
     }
 
     pub fn is_shutdown(&self) -> bool {
@@ -891,21 +920,24 @@ fn build_script_instances(
     Ok(scripts)
 }
 
-fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Vec<(EntityId, BodyDesc)> {
+fn body_descs(
+    graph: &SceneGraph,
+    bindings: &[PhysicsBinding],
+) -> Vec<(EntityId, BodyDesc, [f32; 3])> {
     let mut descs = Vec::new();
     for binding in bindings {
-        let desc = match body_desc(graph, binding) {
-            Some(desc) => desc,
+        let (desc, offset) = match body_desc(graph, binding) {
+            Some(pair) => pair,
             None => continue,
         };
-        descs.push((binding.entity, desc));
+        descs.push((binding.entity, desc, offset));
     }
     descs
 }
 
-fn validate_bodies(descs: &[(EntityId, BodyDesc)]) -> Result<(), RuntimeError> {
+fn validate_bodies(descs: &[(EntityId, BodyDesc, [f32; 3])]) -> Result<(), RuntimeError> {
     let mut world = World::new();
-    for (entity, desc) in descs {
+    for (entity, desc, _) in descs {
         world.add_body(*entity, *desc)?;
     }
     Ok(())
@@ -934,7 +966,7 @@ fn scene_name_from_path(path: &Path) -> String {
     }
 }
 
-fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {
+fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, [f32; 3])> {
     let (shape, center, collider_trigger) = match (&binding.sphere_collider, &binding.box_collider)
     {
         (Some(sphere), _) => (
@@ -967,29 +999,75 @@ fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {
         center[2] as f32 * scale[2],
     ];
     let offset = rotate_vector(rotation, scaled_center);
-    let (mass, use_gravity, rigidbody_trigger) = match &binding.rigidbody {
-        Some(rigidbody) => (rigidbody.mass, rigidbody.use_gravity, rigidbody.is_trigger),
-        None => (0.0, false, false),
+    let (mass, use_gravity, rigidbody_trigger, role) = match &binding.rigidbody {
+        Some(rigidbody) if rigidbody.is_kinematic => (
+            rigidbody.mass,
+            rigidbody.use_gravity,
+            rigidbody.is_trigger,
+            BodyRole::Kinematic,
+        ),
+        Some(rigidbody) => (
+            rigidbody.mass,
+            rigidbody.use_gravity,
+            rigidbody.is_trigger,
+            BodyRole::Dynamic,
+        ),
+        None => (0.0, false, false, BodyRole::Static),
     };
-    Some(BodyDesc {
-        position: [
-            translation[0] as f64 + offset[0] as f64,
-            translation[1] as f64 + offset[1] as f64,
-            translation[2] as f64 + offset[2] as f64,
-        ],
-        rotation: [
-            rotation[0] as f64,
-            rotation[1] as f64,
-            rotation[2] as f64,
-            rotation[3] as f64,
-        ],
-        mass,
-        velocity: [0.0; 3],
-        use_gravity,
-        is_trigger: collider_trigger || rigidbody_trigger,
-        shape,
-        layer: layer_bits(binding.layer),
-    })
+    Some((
+        BodyDesc {
+            position: [
+                translation[0] as f64 + offset[0] as f64,
+                translation[1] as f64 + offset[1] as f64,
+                translation[2] as f64 + offset[2] as f64,
+            ],
+            rotation: [
+                rotation[0] as f64,
+                rotation[1] as f64,
+                rotation[2] as f64,
+                rotation[3] as f64,
+            ],
+            mass,
+            velocity: [0.0; 3],
+            use_gravity,
+            is_trigger: collider_trigger || rigidbody_trigger,
+            shape,
+            layer: layer_bits(binding.layer),
+            role,
+        },
+        offset,
+    ))
+}
+
+fn world_to_local_translation(
+    parent_world: &unitas_core::Transform,
+    world_translation: [f32; 3],
+) -> [f32; 3] {
+    let delta = [
+        world_translation[0] - parent_world.translation[0],
+        world_translation[1] - parent_world.translation[1],
+        world_translation[2] - parent_world.translation[2],
+    ];
+    let unit = normalize_rotation(parent_world.rotation);
+    let inv_rotation = [-unit[0], -unit[1], -unit[2], unit[3]];
+    let unrotated = rotate_vector(inv_rotation, delta);
+    [
+        if parent_world.scale[0] != 0.0 {
+            unrotated[0] / parent_world.scale[0]
+        } else {
+            unrotated[0]
+        },
+        if parent_world.scale[1] != 0.0 {
+            unrotated[1] / parent_world.scale[1]
+        } else {
+            unrotated[1]
+        },
+        if parent_world.scale[2] != 0.0 {
+            unrotated[2] / parent_world.scale[2]
+        } else {
+            unrotated[2]
+        },
+    ]
 }
 
 fn layer_bits(layer: u32) -> u32 {

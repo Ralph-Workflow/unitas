@@ -83,8 +83,6 @@ pub extern "C" fn unitas_runtime_path_buffer(handle: u64, capacity: u64) -> u64 
         Err(_) => return 0,
     };
     with_runtime_state(handle, |state| {
-        // Grow only: callers re-pin the buffer and then write their own bytes,
-        // and `scene_name` leaves a name in it for the bridge to read back.
         if state.path_buffer.len() < cap {
             state.path_buffer.resize(cap, 0);
         }
@@ -99,29 +97,17 @@ pub extern "C" fn unitas_runtime_load_scene(handle: u64, address: u64, length: u
         Ok(l) => l,
         Err(_) => return -2,
     };
-    match with_runtime_state(handle, |state| {
-        let path_str = match read_path_buffer(state, address, len) {
-            Ok(text) => text,
-            Err(code) => return code,
-        };
-        let path = Path::new(&path_str);
-        match state.runtime.load_scene(path) {
-            Ok(_) => {
-                state.clear_error();
-                0
-            }
-            Err(err) => {
-                state.set_error(&err.to_string());
-                -4
-            }
-        }
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    let path_str = match read_path_argument(handle, address, len) {
+        Ok(text) => text,
+        Err(code) => return code,
+    };
+    run_scene_operation(handle, |runtime, hook| {
+        runtime
+            .load_scene_with_hook(Path::new(&path_str), LoadSceneMode::Single, hook)
+            .map(|_| ())
+    })
 }
 
-/// Scene management ABI (PRODUCT_CRITERIA §7).
 #[no_mangle]
 pub extern "C" fn unitas_runtime_load_scene_mode(
     handle: u64,
@@ -476,6 +462,56 @@ pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
     .unwrap_or(0.0)
 }
 
+#[no_mangle]
+pub extern "C" fn unitas_runtime_body_position(handle: u64, entity: u64, out_buffer: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out_buffer == 0
+            || out_buffer != state.path_buffer.as_ptr() as usize as u64
+            || state.path_buffer.len() < 24
+        {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        let Some([x, y, z]) = state.runtime.body_position(EntityId::new(entity)) else {
+            state.set_error("body not found");
+            return -4;
+        };
+        state.path_buffer[0..8].copy_from_slice(&x.to_le_bytes());
+        state.path_buffer[8..16].copy_from_slice(&y.to_le_bytes());
+        state.path_buffer[16..24].copy_from_slice(&z.to_le_bytes());
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_body_velocity(handle: u64, entity: u64, out_buffer: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out_buffer == 0
+            || out_buffer != state.path_buffer.as_ptr() as usize as u64
+            || state.path_buffer.len() < 24
+        {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        let Some([x, y, z]) = state.runtime.body_velocity(EntityId::new(entity)) else {
+            state.set_error("body not found");
+            return -4;
+        };
+        state.path_buffer[0..8].copy_from_slice(&x.to_le_bytes());
+        state.path_buffer[8..16].copy_from_slice(&y.to_le_bytes());
+        state.path_buffer[16..24].copy_from_slice(&z.to_le_bytes());
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
 pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeError> {
     match with_runtime_state_err(handle, |state| {
         if data.len() > state.path_buffer.len() {
@@ -489,7 +525,6 @@ pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeErr
     }
 }
 
-/// Test-only accessor for the persistent-entity flag of the runtime behind `handle`.
 pub fn test_is_persistent_entity(handle: u64, entity: u64) -> Result<bool, RuntimeError> {
     match with_runtime_state_err(handle, |state| {
         Ok(state.runtime.is_persistent(EntityId::new(entity)))
@@ -996,8 +1031,6 @@ fn take_from_registry(handle: u64) -> Option<RuntimeState> {
     map.remove(&handle)
 }
 
-/// Reads a path argument from the state's pinned path buffer. No callback runs while the
-/// registry mutex is held, so this cannot deadlock.
 fn read_path_argument(handle: u64, address: u64, length: usize) -> Result<String, i32> {
     match with_runtime_state(handle, |state| read_path_buffer(state, address, length)) {
         Ok(result) => result,
@@ -1005,10 +1038,6 @@ fn read_path_argument(handle: u64, address: u64, length: usize) -> Result<String
     }
 }
 
-/// Runs a runtime operation that fires lifecycle callbacks. The state leaves the registry while
-/// the operation runs, so a callback that calls back into the runtime cannot deadlock on the
-/// registry mutex; during the callbacks the state is published on the thread-local active stack,
-/// which is where nested calls find it.
 fn run_scene_operation(
     handle: u64,
     op: impl FnOnce(&mut Runtime, &mut dyn FnMut(&mut Runtime, &mut dyn FnMut())) -> Result<(), RuntimeError>,
@@ -1051,7 +1080,6 @@ fn restore_to_registry(handle: u64, state: RuntimeState) -> bool {
     true
 }
 
-/// Scene names are file stems; a path-like argument is reduced to its stem.
 fn scene_name_from_input(text: &str) -> String {
     let path_like = text.contains('/') || text.contains('\\') || text.ends_with(".unity");
     if !path_like {

@@ -1,5 +1,7 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, CollisionEvent, Phase, PhysicsError, QueryHit, Shape, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, QueryHit, Shape, World,
+};
 
 const LAYER_ONE: u32 = 1;
 const LAYER_TWO: u32 = 2;
@@ -16,6 +18,7 @@ fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         is_trigger: false,
         shape: Shape::Sphere { radius },
         layer,
+        role: BodyRole::Dynamic,
     }
 }
 
@@ -29,6 +32,7 @@ fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc 
         is_trigger: false,
         shape: Shape::Box { half_extents },
         layer,
+        role: BodyRole::Static,
     }
 }
 
@@ -42,6 +46,7 @@ fn trigger_sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         is_trigger: true,
         shape: Shape::Sphere { radius },
         layer,
+        role: BodyRole::Static,
     }
 }
 
@@ -60,6 +65,7 @@ fn oriented_box(
         is_trigger: false,
         shape: Shape::Box { half_extents },
         layer,
+        role: BodyRole::Static,
     }
 }
 

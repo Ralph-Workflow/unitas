@@ -345,6 +345,18 @@ namespace Unitas.Bridge.Tests
                 return Array.Empty<Collider>();
             }
 
+            public bool TryGetBodyPosition(ulong entity, out Vector3 position)
+            {
+                position = Vector3.zero;
+                return false;
+            }
+
+            public bool TryGetBodyVelocity(ulong entity, out Vector3 velocity)
+            {
+                velocity = Vector3.zero;
+                return false;
+            }
+
             private void Record(Vector3 origin, Vector3 direction, Vector3 halfExtents, float maxDistance, int layerMask, bool includeTriggers)
             {
                 Origin = origin;

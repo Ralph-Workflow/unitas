@@ -1,5 +1,7 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, CollisionEvent, Phase, PhysicsError, Shape, TriggerEvent, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, Shape, TriggerEvent, World,
+};
 
 const ROTATED_45_DEGREES_ABOUT_Z: [f64; 4] = [0.0, 0.0, 0.38268343, 0.92387953];
 
@@ -13,6 +15,7 @@ fn oriented_box(position: [f64; 3], rotation: [f64; 4], half_extents: [f64; 3]) 
         is_trigger: false,
         shape: Shape::Box { half_extents },
         layer: 0,
+        role: BodyRole::Static,
     }
 }
 
@@ -26,6 +29,7 @@ fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
         is_trigger: false,
         shape: Shape::Sphere { radius: 0.5 },
         layer: 0,
+        role: BodyRole::Dynamic,
     }
 }
 
@@ -41,6 +45,7 @@ fn box_body(position: [f64; 3]) -> BodyDesc {
             half_extents: [1.0, 1.0, 1.0],
         },
         layer: 0,
+        role: BodyRole::Static,
     }
 }
 
@@ -124,6 +129,7 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
             is_trigger: false,
             shape: Shape::Sphere { radius: 0.5 },
             layer: 0,
+            role: BodyRole::Dynamic,
         },
     )?;
 
@@ -390,6 +396,200 @@ fn rotated_boxes_overlap_when_they_really_do() -> Result<(), PhysicsError> {
             a: rotated,
             b: corner,
             phase: Phase::Enter
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn resting_sphere_on_static_box_floor_settles_with_bounded_penetration() -> Result<(), PhysicsError>
+{
+    let mut world = World::new();
+    let floor = EntityId::new(1);
+    let ball = EntityId::new(2);
+    world.add_body(
+        floor,
+        BodyDesc {
+            shape: Shape::Box {
+                half_extents: [5.0, 0.5, 5.0],
+            },
+            ..box_body([0.0, -0.5, 0.0])
+        },
+    )?;
+    world.add_body(
+        ball,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([0.0, 2.0, 0.0], [0.0; 3])
+        },
+    )?;
+
+    for _ in 0..120 {
+        world.step(1.0 / 60.0)?;
+    }
+
+    let pos = world.position(ball).unwrap_or([0.0; 3]);
+    let vel = world.velocity(ball).unwrap_or([0.0; 3]);
+    assert!((pos[1] - 0.5).abs() < 1e-6);
+    assert!(vel[1].abs() < 1e-6);
+    assert_eq!(world.position(floor), Some([0.0, -0.5, 0.0]));
+    Ok(())
+}
+
+#[test]
+fn dynamic_box_landing_on_static_box_comes_to_rest() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let floor = EntityId::new(1);
+    let crate_body = EntityId::new(2);
+    world.add_body(
+        floor,
+        BodyDesc {
+            shape: Shape::Box {
+                half_extents: [4.0, 0.5, 4.0],
+            },
+            ..box_body([0.0, -0.5, 0.0])
+        },
+    )?;
+    world.add_body(
+        crate_body,
+        BodyDesc {
+            position: [0.0, 1.5, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 2.0,
+            velocity: [0.0; 3],
+            use_gravity: true,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            layer: 0,
+            role: BodyRole::Dynamic,
+        },
+    )?;
+
+    for _ in 0..120 {
+        world.step(1.0 / 60.0)?;
+    }
+
+    let pos = world.position(crate_body).unwrap_or([0.0; 3]);
+    let vel = world.velocity(crate_body).unwrap_or([0.0; 3]);
+    assert!((pos[1] - 0.5).abs() < 1e-6);
+    assert!(vel[1].abs() < 1e-6);
+    assert_eq!(world.position(floor), Some([0.0, -0.5, 0.0]));
+    Ok(())
+}
+
+#[test]
+fn two_dynamic_bodies_collide_and_separate_in_proportion_to_inverse_mass(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let left = EntityId::new(1);
+    let right = EntityId::new(2);
+    world.add_body(
+        left,
+        BodyDesc {
+            mass: 1.0,
+            ..sphere([-0.4, 0.0, 0.0], [2.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        right,
+        BodyDesc {
+            mass: 3.0,
+            ..sphere([0.4, 0.0, 0.0], [-2.0, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.1)?;
+
+    let left_pos = world.position(left).unwrap_or([0.0; 3]);
+    let right_pos = world.position(right).unwrap_or([0.0; 3]);
+    let left_vel = world.velocity(left).unwrap_or([0.0; 3]);
+    let right_vel = world.velocity(right).unwrap_or([0.0; 3]);
+    assert!((right_pos[0] - left_pos[0] - 1.0).abs() < 1e-6);
+    assert!((left_vel[0] - (-1.0)).abs() < 1e-6);
+    assert!((right_vel[0] - (-1.0)).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn dynamic_spheres_pushed_together_then_apart_report_enter_stay_exit() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([2.0, 0.0, 0.0]);
+    let ball = EntityId::new(1);
+    let wall = EntityId::new(2);
+    world.add_body(
+        ball,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([-0.6, 0.0, 0.0], [1.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        wall,
+        BodyDesc {
+            role: BodyRole::Static,
+            ..sphere([0.5, 0.0, 0.0], [0.0; 3])
+        },
+    )?;
+
+    world.step(0.1)?;
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: ball,
+            b: wall,
+            phase: Phase::Enter
+        }]
+    );
+
+    world.step(0.1)?;
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: ball,
+            b: wall,
+            phase: Phase::Stay
+        }]
+    );
+
+    world.set_gravity([-20.0, 0.0, 0.0]);
+    world.step(0.1)?;
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: ball,
+            b: wall,
+            phase: Phase::Exit
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn trigger_pair_is_untouched_by_the_solver() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let trigger_zone = EntityId::new(1);
+    let mover = EntityId::new(2);
+    world.add_body(
+        trigger_zone,
+        BodyDesc {
+            is_trigger: true,
+            ..box_body([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(mover, sphere([-0.5, 0.0, 0.0], [1.0, 0.0, 0.0]))?;
+
+    world.step(0.5)?;
+
+    assert_eq!(world.position(mover), Some([0.0, 0.0, 0.0]));
+    assert_eq!(world.velocity(mover), Some([1.0, 0.0, 0.0]));
+    assert!(world.drain_events().is_empty());
+    assert_eq!(
+        world.drain_trigger_events(),
+        vec![TriggerEvent {
+            a: trigger_zone,
+            b: mover,
+            phase: Phase::Enter,
         }]
     );
     Ok(())

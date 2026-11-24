@@ -21,6 +21,8 @@ namespace Unitas.Bridge
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
+        private readonly Dictionary<ulong, SceneRigidbodyMetadata> _sceneRigidbodies = new Dictionary<ulong, SceneRigidbodyMetadata>();
+        private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
         private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly LoadedSceneFileProvider _defaultSceneProvider;
@@ -210,6 +212,7 @@ namespace Unitas.Bridge
             }
 
             DropReplacedScripts();
+            ParseLoadedSceneRigidbodies(path, LoadSceneMode.Single);
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
             RegisterLoadedScene(path, LoadSceneMode.Single);
@@ -239,6 +242,7 @@ namespace Unitas.Bridge
                 DropReplacedScripts();
             }
 
+            ParseLoadedSceneRigidbodies(path, mode);
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
             RegisterLoadedScene(path, mode);
@@ -500,6 +504,7 @@ namespace Unitas.Bridge
                 throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
 
+            SyncSimulatedTransforms();
             SceneManager.PumpAsyncOperations();
         }
 
@@ -516,6 +521,7 @@ namespace Unitas.Bridge
                 _lateUpdateCallsInTick = 0;
                 _scripts.Clear();
                 _entityScripts.Clear();
+                _sceneRigidbodies.Clear();
                 StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
                 {
@@ -802,6 +808,37 @@ namespace Unitas.Bridge
             return colliders;
         }
 
+        public bool TryGetBodyPosition(ulong entity, out Vector3 position)
+        {
+            return TryReadBodyVector(entity, RuntimeInterop.unitas_runtime_body_position, out position);
+        }
+
+        public bool TryGetBodyVelocity(ulong entity, out Vector3 velocity)
+        {
+            return TryReadBodyVector(entity, RuntimeInterop.unitas_runtime_body_velocity, out velocity);
+        }
+
+        private bool TryReadBodyVector(ulong entity, Func<ulong, ulong, IntPtr, int> query, out Vector3 value)
+        {
+            value = Vector3.zero;
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 24);
+            if (buffer == IntPtr.Zero || query(_runtimeHandle, entity, buffer) != 0)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[24];
+            Marshal.Copy(buffer, bytes, 0, 24);
+            float x = (float)BitConverter.ToDouble(bytes, 0);
+            float y = (float)BitConverter.ToDouble(bytes, 8);
+            float z = (float)BitConverter.ToDouble(bytes, 16);
+            value = new Vector3(x, y, z);
+            return true;
+        }
+
         public void InjectKey(KeyCode key, bool pressed)
         {
             InjectKey((uint)key, pressed);
@@ -1069,12 +1106,21 @@ namespace Unitas.Bridge
             if (owner != null)
             {
                 owner.AssignNativeEntityId(entity);
+                if (_sceneRigidbodies.TryGetValue(entity, out SceneRigidbodyMetadata metadata))
+                {
+                    Rigidbody body = owner.GetComponent<Rigidbody>() ?? owner.AddComponent<Rigidbody>();
+                    body.mass = metadata.Mass;
+                    body.useGravity = metadata.UseGravity;
+                    body.isKinematic = metadata.IsKinematic;
+                }
+                SyncSimulatedTransform(owner);
             }
             return handle;
         }
 
         private void OnAwake(ulong scriptHandle)
         {
+            SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script))
             {
                 InvokeWithOrigin(script, script.Awake);
@@ -1091,6 +1137,7 @@ namespace Unitas.Bridge
 
         private void OnStart(ulong scriptHandle)
         {
+            SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
                 InvokeWithOrigin(script!, script!.Start);
@@ -1099,6 +1146,7 @@ namespace Unitas.Bridge
 
         private void OnFixedUpdate(ulong scriptHandle, double fixedDeltaSeconds)
         {
+            SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
                 InvokeWithOrigin(script!, script!.FixedUpdate);
@@ -1113,6 +1161,7 @@ namespace Unitas.Bridge
 
         private void OnUpdate(ulong scriptHandle, double deltaSeconds)
         {
+            SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
                 InvokeWithOrigin(script!, script!.Update);
@@ -1121,6 +1170,7 @@ namespace Unitas.Bridge
 
         private void OnLateUpdate(ulong scriptHandle, double deltaSeconds)
         {
+            SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {
                 InvokeWithOrigin(script!, script!.LateUpdate);
@@ -1162,6 +1212,7 @@ namespace Unitas.Bridge
 
         private void OnCollision(ulong entityA, ulong entityB, uint phase)
         {
+            SyncSimulatedTransforms();
             MonoBehaviour? scriptA = FindScriptByEntity(entityA);
             MonoBehaviour? scriptB = FindScriptByEntity(entityB);
 
@@ -1178,6 +1229,7 @@ namespace Unitas.Bridge
 
         private void OnTrigger(ulong entityA, ulong entityB, uint phase)
         {
+            SyncSimulatedTransforms();
             MonoBehaviour? scriptA = FindScriptByEntity(entityA);
             MonoBehaviour? scriptB = FindScriptByEntity(entityB);
 
@@ -1190,6 +1242,277 @@ namespace Unitas.Bridge
             {
                 DispatchTrigger(scriptB!, scriptA?.GetComponent<Collider>(), phase);
             }
+        }
+
+        private void SyncSimulatedTransforms()
+        {
+            foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
+            {
+                MonoBehaviour? script = entry.Value;
+                GameObject? owner = script == null ? null : script.gameObject;
+                if (owner != null)
+                {
+                    SyncSimulatedTransform(owner);
+                }
+            }
+        }
+
+        private void SyncSimulatedTransform(GameObject owner)
+        {
+            if (owner.IsDestroyed || owner.NativeEntityId == 0)
+            {
+                return;
+            }
+            Rigidbody? body = owner.GetComponent<Rigidbody>();
+            bool hasDynamicBody = body != null && !body.isKinematic;
+            bool hasDynamicMetadata = _sceneRigidbodies.TryGetValue(owner.NativeEntityId, out SceneRigidbodyMetadata metadata) && !metadata.IsKinematic;
+            if (!hasDynamicBody && !hasDynamicMetadata)
+            {
+                return;
+            }
+            if (body != null && body.isKinematic)
+            {
+                return;
+            }
+            if (TryGetBodyPosition(owner.NativeEntityId, out Vector3 simulatedPosition))
+            {
+                owner.transform.position = simulatedPosition;
+            }
+        }
+
+        private void ParseLoadedSceneRigidbodies(string scenePath, LoadSceneMode mode)
+        {
+            if (mode == LoadSceneMode.Single)
+            {
+                _sceneRigidbodies.Clear();
+                _nextSceneEntityBase = 1;
+                foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
+                {
+                    GameObject? owner = entry.Value == null ? null : entry.Value.gameObject;
+                    if (owner != null && owner.IsPersistent && owner.NativeEntityId >= _nextSceneEntityBase)
+                    {
+                        _nextSceneEntityBase = owner.NativeEntityId + 1;
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(scenePath) || !File.Exists(scenePath))
+            {
+                return;
+            }
+
+            string[] lines = File.ReadAllLines(scenePath);
+            Dictionary<string, ulong> gameObjectEntities = new Dictionary<string, ulong>(StringComparer.Ordinal);
+            ulong localEntityIndex = 0;
+
+            int currentClassId = 0;
+            string currentFileId = string.Empty;
+            string currentGameObjectFileId = string.Empty;
+            float currentMass = 1f;
+            bool currentUseGravity = true;
+            bool currentIsKinematic = false;
+            List<ParsedRigidbodyRecord> rigidbodies = new List<ParsedRigidbodyRecord>();
+
+            for (int index = 0; index < lines.Length; index++)
+            {
+                string line = lines[index].Trim();
+                if (line.StartsWith("--- !u!", StringComparison.Ordinal))
+                {
+                    FlushDocument(
+                        currentClassId,
+                        currentFileId,
+                        currentGameObjectFileId,
+                        currentMass,
+                        currentUseGravity,
+                        currentIsKinematic,
+                        ref localEntityIndex,
+                        gameObjectEntities,
+                        rigidbodies);
+
+                    ParseDocumentHeader(line, out currentClassId, out currentFileId);
+                    currentGameObjectFileId = string.Empty;
+                    currentMass = 1f;
+                    currentUseGravity = true;
+                    currentIsKinematic = false;
+                    continue;
+                }
+
+                if (currentClassId == 54)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_Mass:", StringComparison.Ordinal))
+                    {
+                        currentMass = ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_UseGravity:", StringComparison.Ordinal))
+                    {
+                        currentUseGravity = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_IsKinematic:", StringComparison.Ordinal))
+                    {
+                        currentIsKinematic = ParseBoolValue(line, false);
+                    }
+                }
+            }
+
+            FlushDocument(
+                currentClassId,
+                currentFileId,
+                currentGameObjectFileId,
+                currentMass,
+                currentUseGravity,
+                currentIsKinematic,
+                ref localEntityIndex,
+                gameObjectEntities,
+                rigidbodies);
+
+            for (int index = 0; index < rigidbodies.Count; index++)
+            {
+                ParsedRigidbodyRecord record = rigidbodies[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneRigidbodies[shiftedEntity] = new SceneRigidbodyMetadata(
+                        record.Mass,
+                        record.UseGravity,
+                        record.IsKinematic);
+                }
+            }
+
+            _nextSceneEntityBase += localEntityIndex;
+        }
+
+        private static void FlushDocument(
+            int classId,
+            string fileId,
+            string gameObjectFileId,
+            float mass,
+            bool useGravity,
+            bool isKinematic,
+            ref ulong localEntityIndex,
+            Dictionary<string, ulong> gameObjectEntities,
+            List<ParsedRigidbodyRecord> rigidbodies)
+        {
+            if (classId == 1 && !string.IsNullOrEmpty(fileId))
+            {
+                gameObjectEntities[fileId] = localEntityIndex;
+                localEntityIndex++;
+            }
+            else if (classId == 54 && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                rigidbodies.Add(new ParsedRigidbodyRecord(gameObjectFileId, mass, useGravity, isKinematic));
+            }
+        }
+
+        private static void ParseDocumentHeader(string headerLine, out int classId, out string fileId)
+        {
+            classId = 0;
+            fileId = string.Empty;
+            if (headerLine.EndsWith("stripped", StringComparison.Ordinal))
+            {
+                return;
+            }
+            int tagStart = headerLine.IndexOf("!u!", StringComparison.Ordinal);
+            int ampIndex = headerLine.IndexOf('&', StringComparison.Ordinal);
+            if (tagStart < 0 || ampIndex <= tagStart + 3)
+            {
+                return;
+            }
+            string classPart = headerLine.Substring(tagStart + 3, ampIndex - (tagStart + 3)).Trim();
+            if (!int.TryParse(classPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out classId))
+            {
+                classId = 0;
+                return;
+            }
+            fileId = headerLine.Substring(ampIndex + 1).Trim();
+        }
+
+        private static string ExtractFileId(string line)
+        {
+            int keyIndex = line.IndexOf("fileID:", StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return string.Empty;
+            }
+            string tail = line.Substring(keyIndex + 7).Trim();
+            int endIndex = tail.IndexOfAny(new char[] { ',', '}', ' ' });
+            return endIndex >= 0 ? tail.Substring(0, endIndex).Trim() : tail;
+        }
+
+        private static float ParseFloatValue(string line, float fallback)
+        {
+            int colon = line.IndexOf(':', StringComparison.Ordinal);
+            if (colon < 0)
+            {
+                return fallback;
+            }
+            string raw = line.Substring(colon + 1).Trim();
+            if (float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed))
+            {
+                return parsed;
+            }
+            return fallback;
+        }
+
+        private static bool ParseBoolValue(string line, bool fallback)
+        {
+            int colon = line.IndexOf(':', StringComparison.Ordinal);
+            if (colon < 0)
+            {
+                return fallback;
+            }
+            string raw = line.Substring(colon + 1).Trim();
+            if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double numeric))
+            {
+                return numeric != 0.0;
+            }
+            return fallback;
+        }
+
+        private readonly struct SceneRigidbodyMetadata
+        {
+            public SceneRigidbodyMetadata(float mass, bool useGravity, bool isKinematic)
+            {
+                Mass = mass;
+                UseGravity = useGravity;
+                IsKinematic = isKinematic;
+            }
+
+            public float Mass { get; }
+
+            public bool UseGravity { get; }
+
+            public bool IsKinematic { get; }
+        }
+
+        private readonly struct ParsedRigidbodyRecord
+        {
+            public ParsedRigidbodyRecord(string gameObjectFileId, float mass, bool useGravity, bool isKinematic)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Mass = mass;
+                UseGravity = useGravity;
+                IsKinematic = isKinematic;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public float Mass { get; }
+
+            public bool UseGravity { get; }
+
+            public bool IsKinematic { get; }
         }
 
         private MonoBehaviour? FindScriptByEntity(ulong entity)

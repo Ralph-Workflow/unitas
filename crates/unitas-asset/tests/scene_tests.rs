@@ -15,6 +15,7 @@ const SCENE_FIXTURE: &str = "tests/fixtures/scene.unity";
 const PREFAB_FIXTURE: &str = "tests/fixtures/prefab.prefab";
 const PHYSICS_FIXTURE: &str = "tests/fixtures/physics.unity";
 const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
+const PHYSICS_KINEMATIC_FIXTURE: &str = "tests/fixtures/physics_kinematic.unity";
 const PHYSICS_LAYER_FIXTURE: &str = "tests/fixtures/physics_layer.unity";
 const PROJECT_DIR: &str = "tests/fixtures/project";
 const PREFAB_SCENE_FIXTURE: &str =
@@ -379,6 +380,7 @@ fn physics_defaults_apply_when_a_field_is_absent() -> TestResult {
     assert_eq!(rigidbody.mass, 1.0);
     assert!(rigidbody.use_gravity);
     assert!(!rigidbody.is_trigger);
+    assert!(!rigidbody.is_kinematic);
     let box_collider = binding.box_collider.as_ref().ok_or("Defaults has no box collider")?;
     assert_eq!(box_collider.size, [1.0, 1.0, 1.0]);
     assert_eq!(box_collider.center, [0.0, 0.0, 0.0]);
@@ -437,6 +439,46 @@ fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
         .ok_or("TriggerRig has no sphere collider")?;
     assert!(rig_rb.is_trigger);
     assert!(rig_sphere.is_trigger);
+    Ok(())
+}
+
+#[test]
+fn physics_is_kinematic_flag_parses_from_rigidbody_components() -> TestResult {
+    let (graph, _scripts, bindings) =
+        assemble_scene_file_with_physics(Path::new(PHYSICS_KINEMATIC_FIXTURE))?;
+    let kinematic_body = entity_named(&graph, "KinematicBody")?;
+    let dynamic_body = entity_named(&graph, "DynamicBody")?;
+    let legacy_body = entity_named(&graph, "LegacyBody")?;
+
+    let kinematic_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == kinematic_body)
+        .ok_or("no physics binding for KinematicBody")?;
+    let kinematic_rb = kinematic_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("KinematicBody has no rigidbody")?;
+    assert!(kinematic_rb.is_kinematic);
+
+    let dynamic_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == dynamic_body)
+        .ok_or("no physics binding for DynamicBody")?;
+    let dynamic_rb = dynamic_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("DynamicBody has no rigidbody")?;
+    assert!(!dynamic_rb.is_kinematic);
+
+    let legacy_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == legacy_body)
+        .ok_or("no physics binding for LegacyBody")?;
+    let legacy_rb = legacy_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("LegacyBody has no rigidbody")?;
+    assert!(!legacy_rb.is_kinematic);
     Ok(())
 }
 

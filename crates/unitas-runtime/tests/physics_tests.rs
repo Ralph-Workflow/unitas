@@ -2,6 +2,8 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::Mutex;
 
+use unitas_core::EntityId;
+use unitas_physics::BodyRole;
 use unitas_runtime::{Callbacks, Runtime};
 
 const PHYSICS_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_collision.unity";
@@ -355,8 +357,175 @@ fn runtime_scene_without_physics_dispatches_no_collisions() -> Result<(), Box<dy
     );
     assert!(
         trigger_events.is_empty(),
-        "unexpected trigger events: {trigger_events:?}"
+        "unexpected trigger events on non-trigger scene: {trigger_events:?}"
     );
     assert_eq!(runtime.scripts().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_graph(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_resting_sphere_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("resting_sphere.unity");
+    let yaml = include_str!("fixtures/scene_physics_collision.unity").replace(
+        "  m_LocalPosition: {x: 0.9999999, y: 0.499, z: 0}",
+        "  m_LocalPosition: {x: 0, y: 1.5, z: 0}",
+    );
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+    let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
+    let crate_entity = EntityId::new(entity_handle(&runtime, CRATE_NAME)?);
+    assert_eq!(runtime.body_role(ball), Some(BodyRole::Dynamic));
+    assert_eq!(runtime.body_role(crate_entity), Some(BodyRole::Static));
+
+    for _ in 0..TICK_COUNT {
+        runtime.tick(TICK_DELTA)?;
+    }
+
+    let ball_body_pos = match runtime.body_position(ball) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing ball body position").into()),
+    };
+    let crate_body_pos = match runtime.body_position(crate_entity) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing crate body position").into()),
+    };
+    assert_vector_close(ball_body_pos, [0.0, 1.25, 0.0], "ball body position");
+    assert_vector_close(crate_body_pos, [0.0, 0.0, 0.0], "crate body position");
+
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("missing scene graph").into()),
+    };
+    let ball_local = match graph.transform(ball) {
+        Some(transform) => transform.translation,
+        None => return Err(String::from("missing ball local transform").into()),
+    };
+    let ball_world = match graph.world_transform(ball) {
+        Some(transform) => transform.translation,
+        None => return Err(String::from("missing ball world transform").into()),
+    };
+    assert_close(
+        f64::from(ball_local[1]),
+        ball_body_pos[1],
+        "ball local transform y",
+    );
+    assert_close(
+        f64::from(ball_world[1]),
+        ball_body_pos[1],
+        "ball world transform y",
+    );
+    let crate_local = match graph.transform(crate_entity) {
+        Some(transform) => transform.translation,
+        None => return Err(String::from("missing crate local transform").into()),
+    };
+    assert_eq!(crate_local, [0.0, 0.0, 0.0]);
+    Ok(())
+}
+
+#[test]
+fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_kinematic_role_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("kinematic_role.unity");
+    let yaml = include_str!("fixtures/scene_physics_collision.unity").replace(
+        "  m_Mass: 1\n  m_UseGravity: 1",
+        "  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 1",
+    );
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
+    assert_eq!(runtime.body_role(ball), Some(BodyRole::Kinematic));
+    for _ in 0..10 {
+        runtime.tick(TICK_DELTA)?;
+    }
+    let pos = match runtime.body_position(ball) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing ball body position").into()),
+    };
+    assert_vector_close(pos, [0.9999999, 0.499, 0.0], "kinematic ball position");
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("missing scene graph").into()),
+    };
+    let local = match graph.transform(ball) {
+        Some(transform) => transform.translation,
+        None => return Err(String::from("missing ball transform").into()),
+    };
+    assert_close(f64::from(local[1]), 0.499, "kinematic ball transform y");
+    Ok(())
+}
+
+#[test]
+fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_offset(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_parented_dynamic_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("parented_dynamic.unity");
+    let yaml = include_str!("fixtures/scene_physics_rotated_nested.unity").replace(
+        "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}",
+        "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}\n  - component: {fileID: 1311639365}",
+    )
+    .replace(
+        "  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &519420062",
+        "  m_Center: {x: 0.5, y: 0, z: 0}\n--- !u!54 &1311639365\nRigidbody:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: 519420061}\n  m_Mass: 1\n  m_UseGravity: 1\n--- !u!1 &519420062",
+    );
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let crate_entity = EntityId::new(entity_handle(&runtime, CRATE_NAME)?);
+    assert_eq!(runtime.body_role(crate_entity), Some(BodyRole::Dynamic));
+    runtime.tick(TICK_DELTA)?;
+    runtime.tick(TICK_DELTA)?;
+
+    let body_pos = match runtime.body_position(crate_entity) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing crate body position").into()),
+    };
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("missing scene graph").into()),
+    };
+    let world_transform = match graph.world_transform(crate_entity) {
+        Some(transform) => transform,
+        None => return Err(String::from("missing crate world transform").into()),
+    };
+    assert_close(
+        f64::from(world_transform.translation[0]),
+        body_pos[0],
+        "parented crate world x",
+    );
+    assert_close(
+        f64::from(world_transform.translation[1]) + 0.5,
+        body_pos[1],
+        "parented crate world y plus rotated offset",
+    );
+    assert_close(
+        f64::from(world_transform.translation[2]),
+        body_pos[2],
+        "parented crate world z",
+    );
     Ok(())
 }

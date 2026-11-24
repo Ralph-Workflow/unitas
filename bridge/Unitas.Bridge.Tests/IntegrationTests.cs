@@ -31,6 +31,23 @@ namespace Unitas.Bridge.Tests
     {
     }
 
+    public class MotionRecorderScript : MonoBehaviour
+    {
+        private readonly List<float> _positionY = new List<float>();
+        private readonly List<float> _velocityY = new List<float>();
+
+        public IReadOnlyList<float> PositionY => _positionY;
+
+        public IReadOnlyList<float> VelocityY => _velocityY;
+
+        public override void FixedUpdate()
+        {
+            _positionY.Add(transform.position.y);
+            Rigidbody? body = GetComponent<Rigidbody>();
+            _velocityY.Add(body == null ? 0f : body.velocity.y);
+        }
+    }
+
     public static class IntegrationTests
     {
         public static void Run()
@@ -38,6 +55,141 @@ namespace Unitas.Bridge.Tests
             ScriptedUpdateLogsStructuredEntryAndSphereCastHits();
             TimeScaleReachesTheNativeFixedStep();
             FixedDeltaTimeFollowsProjectSettingsOnLoadScene();
+            BallFallsUnderGravityAndComesToRestOnFloor();
+            KinematicRigidbodyParsedAtLoadPreservesTransformUnderGravity();
+        }
+
+        private static void BallFallsUnderGravityAndComesToRestOnFloor()
+        {
+            string baseScenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_collision.unity");
+            Check.That("Base collision scene file exists", File.Exists(baseScenePath));
+
+            string tempDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_bridge_ball_falls_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string tempScenePath = Path.Combine(tempDir, "ball_falls.unity");
+            string yaml = File.ReadAllText(baseScenePath)
+                .Replace(
+                    "  m_LocalPosition: {x: 0.9999999, y: 0.499, z: 0}",
+                    "  m_LocalPosition: {x: 0, y: 2, z: 0}",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "  m_Size: {x: 1, y: 1.5, z: 1}",
+                    "  m_Size: {x: 4, y: 1, z: 4}",
+                    StringComparison.Ordinal);
+            File.WriteAllText(tempScenePath, yaml);
+
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                ScriptRegistry.Clear();
+                MotionRecorderScript? recorder = null;
+                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new MotionRecorderScript());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(tempScenePath);
+                    host.Tick(0.0);
+
+                    Check.That("Ball script created on load", recorder != null);
+                    Rigidbody? attachedBody = recorder!.GetComponent<Rigidbody>();
+                    Check.That("Rigidbody parsed and attached on scene load", attachedBody != null);
+                    Check.Equal("Parsed Rigidbody default isKinematic is false", false, attachedBody!.isKinematic);
+                    Check.Equal("Initial ball transform position y is 2", 2f, recorder.transform.position.y);
+                    Check.Equal("Initial ball velocity y is 0", 0f, attachedBody.velocity.y);
+
+                    for (int tick = 0; tick < 60; tick++)
+                    {
+                        host.Tick(0.02);
+                    }
+
+                    IReadOnlyList<float> posHistory = recorder.PositionY;
+                    IReadOnlyList<float> velHistory = recorder.VelocityY;
+                    Check.That("FixedUpdate recorded motion samples", posHistory.Count >= 40);
+                    Check.That("Ball falls downward on first fixed step", posHistory[0] < 2f && posHistory[0] > 1f);
+                    Check.That("Ball velocity is negative while falling", velHistory[0] < -0.1f);
+                    Check.That("Ball continues falling before impact", posHistory[5] < posHistory[0]);
+                    Check.That("Ball downward speed increases while falling", velHistory[5] < velHistory[0]);
+
+                    Check.Equal("Ball settles on floor at y = 1", 1f, recorder.transform.position.y);
+                    Check.Equal("Ball velocity settles to 0 at rest", 0f, attachedBody.velocity.y);
+                    Check.Equal("Last recorded FixedUpdate position y is 1", 1f, posHistory[posHistory.Count - 1]);
+                    Check.Equal("Last recorded FixedUpdate velocity y is 0", 0f, velHistory[velHistory.Count - 1]);
+                }
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        private static void KinematicRigidbodyParsedAtLoadPreservesTransformUnderGravity()
+        {
+            string baseScenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_collision.unity");
+            Check.That("Base scene file exists for kinematic parse test", File.Exists(baseScenePath));
+
+            string tempDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_bridge_kinematic_ball_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string tempScenePath = Path.Combine(tempDir, "kinematic_ball.unity");
+            string yaml = File.ReadAllText(baseScenePath)
+                .Replace(
+                    "  m_LocalPosition: {x: 0.9999999, y: 0.499, z: 0}",
+                    "  m_LocalPosition: {x: 0, y: 2, z: 0}",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "  m_Mass: 1\n  m_UseGravity: 1",
+                    "  m_Mass: 2.5\n  m_UseGravity: 1\n  m_IsKinematic: 1",
+                    StringComparison.Ordinal);
+            File.WriteAllText(tempScenePath, yaml);
+
+            float savedScale = Time.timeScale;
+            Time.timeScale = 1f;
+            try
+            {
+                ScriptRegistry.Clear();
+                MotionRecorderScript? recorder = null;
+                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new MotionRecorderScript());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(tempScenePath);
+                    host.Tick(0.0);
+
+                    Check.That("Kinematic ball script created", recorder != null);
+                    Rigidbody? attachedBody = recorder!.GetComponent<Rigidbody>();
+                    Check.That("Kinematic Rigidbody attached on load", attachedBody != null);
+                    Check.Equal("Parsed Rigidbody isKinematic is true", true, attachedBody!.isKinematic);
+                    Check.Equal("Parsed Rigidbody mass is 2.5", 2.5f, attachedBody.mass);
+                    Check.Equal("Parsed Rigidbody useGravity is true", true, attachedBody.useGravity);
+
+                    recorder.transform.position = new Vector3(0f, 3.5f, 0f);
+                    attachedBody.velocity = new Vector3(0f, -4f, 0f);
+
+                    for (int tick = 0; tick < 10; tick++)
+                    {
+                        host.Tick(0.02);
+                    }
+
+                    Check.Equal("Kinematic transform position is not overwritten by native gravity", 3.5f, recorder.transform.position.y);
+                    Check.Equal("Kinematic Rigidbody retains local velocity", -4f, attachedBody.velocity.y);
+                }
+            }
+            finally
+            {
+                Time.timeScale = savedScale;
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
         }
 
         private static void FixedDeltaTimeFollowsProjectSettingsOnLoadScene()

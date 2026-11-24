@@ -2,6 +2,20 @@ pub(crate) const IDENTITY_ROTATION: [f64; 4] = [0.0, 0.0, 0.0, 1.0];
 
 const OVERLAP_EPSILON: f64 = 1e-9;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BodyRole {
+    #[default]
+    Dynamic,
+    Kinematic,
+    Static,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Contact {
+    pub(crate) normal: [f64; 3],
+    pub(crate) depth: f64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
     Sphere { radius: f64 },
@@ -52,6 +66,81 @@ impl Shape {
             }
         }
     }
+
+    pub(crate) fn in_contact(
+        &self,
+        position: [f64; 3],
+        rotation: [f64; 4],
+        other: &Self,
+        other_position: [f64; 3],
+        other_rotation: [f64; 4],
+    ) -> bool {
+        const CONTACT_SLOP: f64 = 1e-8;
+        match (self, other) {
+            (Self::Sphere { radius }, Self::Sphere { radius: other_radius }) => {
+                distance(position, other_position) < radius + other_radius
+            }
+            (Self::Sphere { radius }, Self::Box { half_extents }) => {
+                let local = to_local(other_rotation, other_position, position);
+                let closest = closest_point([0.0; 3], *half_extents, local);
+                distance(local, closest) <= *radius + CONTACT_SLOP
+            }
+            (Self::Box { half_extents }, Self::Sphere { radius }) => {
+                let local = to_local(rotation, position, other_position);
+                let closest = closest_point([0.0; 3], *half_extents, local);
+                distance(local, closest) <= *radius + CONTACT_SLOP
+            }
+            (Self::Box { half_extents }, Self::Box { half_extents: other_half_extents }) => {
+                boxes_overlap(
+                    position,
+                    rotation,
+                    *half_extents,
+                    other_position,
+                    other_rotation,
+                    *other_half_extents,
+                )
+            }
+        }
+    }
+
+    pub(crate) fn contact(
+        &self,
+        position: [f64; 3],
+        rotation: [f64; 4],
+        other: &Self,
+        other_position: [f64; 3],
+        other_rotation: [f64; 4],
+    ) -> Option<Contact> {
+        match (self, other) {
+            (Self::Sphere { radius }, Self::Sphere { radius: other_radius }) => {
+                sphere_sphere_contact(position, *radius, other_position, *other_radius)
+            }
+            (Self::Sphere { radius }, Self::Box { half_extents }) => {
+                sphere_box_contact(position, *radius, other_position, other_rotation, *half_extents)
+            }
+            (Self::Box { half_extents }, Self::Sphere { radius }) => sphere_box_contact(
+                other_position,
+                *radius,
+                position,
+                rotation,
+                *half_extents,
+            )
+            .map(|contact| Contact {
+                normal: [-contact.normal[0], -contact.normal[1], -contact.normal[2]],
+                depth: contact.depth,
+            }),
+            (Self::Box { half_extents }, Self::Box { half_extents: other_half_extents }) => {
+                box_box_contact(
+                    position,
+                    rotation,
+                    *half_extents,
+                    other_position,
+                    other_rotation,
+                    *other_half_extents,
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,9 +153,17 @@ pub struct BodyDesc {
     pub is_trigger: bool,
     pub shape: Shape,
     pub layer: u32,
+    pub role: BodyRole,
 }
 
 impl BodyDesc {
+    pub fn effective_role(&self) -> BodyRole {
+        match self.role {
+            BodyRole::Dynamic if self.mass <= 0.0 => BodyRole::Static,
+            role => role,
+        }
+    }
+
     pub(crate) fn is_valid(&self) -> bool {
         self.mass.is_finite()
             && self.position.iter().all(|value| value.is_finite())
@@ -163,6 +260,86 @@ fn boxes_overlap(
     other_rotation: [f64; 4],
     other_half_extents: [f64; 3],
 ) -> bool {
+    box_box_contact(
+        position,
+        rotation,
+        half_extents,
+        other_position,
+        other_rotation,
+        other_half_extents,
+    )
+    .is_some()
+}
+
+fn sphere_sphere_contact(
+    position: [f64; 3],
+    radius: f64,
+    other_position: [f64; 3],
+    other_radius: f64,
+) -> Option<Contact> {
+    let delta = subtract(other_position, position);
+    let dist = vector_length(delta);
+    let sum = radius + other_radius;
+    if dist >= sum {
+        return None;
+    }
+    let normal = if dist > OVERLAP_EPSILON {
+        [delta[0] / dist, delta[1] / dist, delta[2] / dist]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    Some(Contact {
+        normal,
+        depth: sum - dist,
+    })
+}
+
+fn sphere_box_contact(
+    sphere_position: [f64; 3],
+    radius: f64,
+    box_position: [f64; 3],
+    box_rotation: [f64; 4],
+    half_extents: [f64; 3],
+) -> Option<Contact> {
+    let local = to_local(box_rotation, box_position, sphere_position);
+    let closest = closest_point([0.0; 3], half_extents, local);
+    let delta = subtract(closest, local);
+    let dist = vector_length(delta);
+    if dist >= radius {
+        return None;
+    }
+    if dist > OVERLAP_EPSILON {
+        let local_normal = [delta[0] / dist, delta[1] / dist, delta[2] / dist];
+        return Some(Contact {
+            normal: rotate_vector(box_rotation, local_normal),
+            depth: radius - dist,
+        });
+    }
+    let mut best_axis = 0usize;
+    let mut min_clearance = half_extents[0] - local[0].abs();
+    for axis in 1..3 {
+        let clearance = half_extents[axis] - local[axis].abs();
+        if clearance < min_clearance {
+            min_clearance = clearance;
+            best_axis = axis;
+        }
+    }
+    let mut local_normal = [0.0; 3];
+    local_normal[best_axis] = if local[best_axis] >= 0.0 { -1.0 } else { 1.0 };
+    Some(Contact {
+        normal: rotate_vector(box_rotation, local_normal),
+        depth: radius + min_clearance,
+    })
+}
+
+fn box_box_contact(
+    position: [f64; 3],
+    rotation: [f64; 4],
+    half_extents: [f64; 3],
+    other_position: [f64; 3],
+    other_rotation: [f64; 4],
+    other_half_extents: [f64; 3],
+) -> Option<Contact> {
     let axes = basis(rotation);
     let other_axes = basis(other_rotation);
     let offset = subtract(other_position, position);
@@ -170,9 +347,22 @@ fn boxes_overlap(
         projected_radius(axis, &axes, half_extents)
             + projected_radius(axis, &other_axes, other_half_extents)
     };
+    let mut min_depth = f64::INFINITY;
+    let mut best_normal = [0.0, 1.0, 0.0];
     for axis in axes.iter().chain(other_axes.iter()) {
-        if separates(*axis, offset, reach(*axis)) {
-            return false;
+        let span = reach(*axis);
+        let proj = dot(offset, *axis);
+        if proj.abs() >= span - OVERLAP_EPSILON {
+            return None;
+        }
+        let depth = span - proj.abs();
+        if depth < min_depth {
+            min_depth = depth;
+            best_normal = if proj >= 0.0 {
+                *axis
+            } else {
+                [-axis[0], -axis[1], -axis[2]]
+            };
         }
     }
     for first in &axes {
@@ -183,12 +373,26 @@ fn boxes_overlap(
                 continue;
             }
             let axis = [cross[0] / length, cross[1] / length, cross[2] / length];
-            if separates(axis, offset, reach(axis)) {
-                return false;
+            let span = reach(axis);
+            let proj = dot(offset, axis);
+            if proj.abs() >= span - OVERLAP_EPSILON {
+                return None;
+            }
+            let depth = span - proj.abs();
+            if depth < min_depth {
+                min_depth = depth;
+                best_normal = if proj >= 0.0 {
+                    axis
+                } else {
+                    [-axis[0], -axis[1], -axis[2]]
+                };
             }
         }
     }
-    true
+    Some(Contact {
+        normal: best_normal,
+        depth: min_depth,
+    })
 }
 
 fn basis(rotation: [f64; 4]) -> [[f64; 3]; 3] {
@@ -197,10 +401,6 @@ fn basis(rotation: [f64; 4]) -> [[f64; 3]; 3] {
         rotate_vector(rotation, [0.0, 1.0, 0.0]),
         rotate_vector(rotation, [0.0, 0.0, 1.0]),
     ]
-}
-
-fn separates(axis: [f64; 3], offset: [f64; 3], reach: f64) -> bool {
-    dot(offset, axis).abs() >= reach - OVERLAP_EPSILON
 }
 
 fn projected_radius(axis: [f64; 3], axes: &[[f64; 3]; 3], half_extents: [f64; 3]) -> f64 {

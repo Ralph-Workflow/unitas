@@ -1,5 +1,5 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
 const GRAVITY: f64 = 9.81;
 
@@ -13,6 +13,7 @@ fn sphere(position: [f64; 3]) -> BodyDesc {
         is_trigger: false,
         shape: Shape::Sphere { radius: 0.5 },
         layer: 0,
+        role: BodyRole::Dynamic,
     }
 }
 
@@ -60,6 +61,7 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
                 half_extents: [0.5, 0.5, 0.5],
             },
             layer: 0,
+            role: BodyRole::Dynamic,
         },
     )?;
 
@@ -242,5 +244,92 @@ fn remove_body_drops_only_the_named_body() -> Result<(), PhysicsError> {
     assert_eq!(world.position(kept), Some([2.0, 0.0, 0.0]));
     world.step(0.1)?;
     assert_eq!(world.position(kept), Some([2.0, 0.0, 0.0]));
+    Ok(())
+}
+
+#[test]
+fn kinematic_body_is_immovable_under_gravity_and_collision() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let platform = EntityId::new(1);
+    let ball = EntityId::new(2);
+    world.add_body(
+        platform,
+        BodyDesc {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [1.0, 2.0, 3.0],
+            use_gravity: true,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [2.0, 0.5, 2.0],
+            },
+            layer: 0,
+            role: BodyRole::Kinematic,
+        },
+    )?;
+    world.add_body(
+        ball,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([0.0, 1.1, 0.0])
+        },
+    )?;
+
+    for _ in 0..30 {
+        world.step(1.0 / 60.0)?;
+    }
+
+    assert_eq!(world.body_role(platform), Some(BodyRole::Kinematic));
+    assert_eq!(world.body_role(ball), Some(BodyRole::Dynamic));
+    assert_eq!(world.position(platform), Some([0.0, 0.0, 0.0]));
+    assert_eq!(world.velocity(platform), Some([1.0, 2.0, 3.0]));
+    let ball_y = world.position(ball).map_or(0.0, |p| p[1]);
+    assert!((ball_y - 1.0).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn explicit_static_role_and_non_positive_mass_resolve_to_static_role() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let explicit_static = EntityId::new(1);
+    let zero_mass_dynamic = EntityId::new(2);
+    let negative_mass_dynamic = EntityId::new(3);
+    world.add_body(
+        explicit_static,
+        BodyDesc {
+            mass: 10.0,
+            use_gravity: true,
+            role: BodyRole::Static,
+            ..sphere([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        zero_mass_dynamic,
+        BodyDesc {
+            mass: 0.0,
+            use_gravity: true,
+            role: BodyRole::Dynamic,
+            ..sphere([5.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        negative_mass_dynamic,
+        BodyDesc {
+            mass: -1.0,
+            use_gravity: true,
+            role: BodyRole::Dynamic,
+            ..sphere([10.0, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.5)?;
+
+    assert_eq!(world.body_role(explicit_static), Some(BodyRole::Static));
+    assert_eq!(world.body_role(zero_mass_dynamic), Some(BodyRole::Static));
+    assert_eq!(world.body_role(negative_mass_dynamic), Some(BodyRole::Static));
+    assert_eq!(world.position(explicit_static), Some([0.0, 0.0, 0.0]));
+    assert_eq!(world.position(zero_mass_dynamic), Some([5.0, 0.0, 0.0]));
+    assert_eq!(world.position(negative_mass_dynamic), Some([10.0, 0.0, 0.0]));
     Ok(())
 }

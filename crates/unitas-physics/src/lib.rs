@@ -4,7 +4,7 @@ mod event;
 mod query;
 mod world;
 
-pub use body::{BodyDesc, Shape};
+pub use body::{BodyDesc, BodyRole, Shape};
 pub use error::PhysicsError;
 pub use event::{CollisionEvent, Phase, TriggerEvent};
 pub use query::QueryHit;

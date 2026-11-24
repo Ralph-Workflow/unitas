@@ -155,6 +155,7 @@ pub struct RigidbodyComponent {
     pub mass: f64,
     pub use_gravity: bool,
     pub is_trigger: bool,
+    pub is_kinematic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -612,6 +613,7 @@ fn rigidbody_component(body: &Node) -> RigidbodyComponent {
         mass: body.get("m_Mass").and_then(Node::as_f64).unwrap_or(1.0),
         use_gravity: yaml_bool(body.get("m_UseGravity"), true),
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+        is_kinematic: yaml_bool(body.get("m_IsKinematic"), false),
     }
 }
 

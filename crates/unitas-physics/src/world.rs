@@ -2,12 +2,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use unitas_core::EntityId;
 
-use crate::body::{BodyDesc, Shape, IDENTITY_ROTATION};
+use crate::body::{BodyDesc, BodyRole, Shape, IDENTITY_ROTATION};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::query::{cast_against, normalize, CastShape, QueryHit};
 
 const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
+const SOLVER_ITERATIONS: usize = 4;
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
 
@@ -16,6 +17,7 @@ struct Body {
     entity: EntityId,
     shape: Shape,
     mass: f64,
+    role: BodyRole,
     use_gravity: bool,
     is_trigger: bool,
     position: [f64; 3],
@@ -24,11 +26,28 @@ struct Body {
     layer: u32,
 }
 
+impl Body {
+    fn inverse_mass(&self) -> f64 {
+        match self.role {
+            BodyRole::Dynamic if self.mass > 0.0 => 1.0 / self.mass,
+            BodyRole::Dynamic | BodyRole::Kinematic | BodyRole::Static => 0.0,
+        }
+    }
+
+    fn effective_velocity(&self) -> [f64; 3] {
+        match self.role {
+            BodyRole::Dynamic => self.velocity,
+            BodyRole::Kinematic | BodyRole::Static => [0.0; 3],
+        }
+    }
+}
+
 pub struct World {
     gravity: [f64; 3],
     bodies: Vec<Body>,
     indices: HashMap<EntityId, usize>,
     overlapping: BTreeSet<(EntityId, EntityId)>,
+    resolved_contacts: BTreeSet<(EntityId, EntityId)>,
     overlapping_triggers: BTreeSet<(EntityId, EntityId)>,
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
@@ -51,6 +70,7 @@ impl World {
             bodies: Vec::new(),
             indices: HashMap::new(),
             overlapping: BTreeSet::new(),
+            resolved_contacts: BTreeSet::new(),
             overlapping_triggers: BTreeSet::new(),
             events: Vec::new(),
             trigger_events: Vec::new(),
@@ -73,6 +93,7 @@ impl World {
             entity,
             shape: desc.shape,
             mass: desc.mass,
+            role: desc.effective_role(),
             use_gravity: desc.use_gravity,
             is_trigger: desc.is_trigger,
             position: desc.position,
@@ -89,10 +110,23 @@ impl World {
             return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
         }
         self.integrate(delta_seconds);
-        let (overlapping, overlapping_triggers) = self.overlapping_pairs();
-        self.emit_events(&overlapping);
+        let (mut overlapping, mut overlapping_triggers) = self.overlapping_pairs();
+        let resolved = self.resolve_contacts();
+        let (post_overlapping, post_triggers) = self.overlapping_pairs();
+        overlapping.extend(post_overlapping);
+        overlapping_triggers.extend(post_triggers);
+        let mut active = overlapping.clone();
+        active.extend(self.resolved_contacts.iter().copied());
+        self.emit_events(&active);
         self.emit_trigger_events(&overlapping_triggers);
-        self.overlapping = overlapping;
+        let mut next_resolved = BTreeSet::new();
+        for pair in resolved {
+            if !self.overlapping.contains(&pair) {
+                next_resolved.insert(pair);
+            }
+        }
+        self.overlapping = active;
+        self.resolved_contacts = next_resolved;
         self.overlapping_triggers = overlapping_triggers;
         Ok(())
     }
@@ -117,6 +151,12 @@ impl World {
             .map(|index| self.bodies[*index].velocity)
     }
 
+    pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].role)
+    }
+
     pub fn body_count(&self) -> usize {
         self.bodies.len()
     }
@@ -132,6 +172,8 @@ impl World {
             }
         }
         self.overlapping
+            .retain(|(first, second)| *first != entity && *second != entity);
+        self.resolved_contacts
             .retain(|(first, second)| *first != entity && *second != entity);
         self.overlapping_triggers
             .retain(|(first, second)| *first != entity && *second != entity);
@@ -327,7 +369,7 @@ impl World {
 
     fn integrate(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
-            if body.mass <= 0.0 {
+            if body.role != BodyRole::Dynamic {
                 continue;
             }
             if body.use_gravity {
@@ -341,12 +383,81 @@ impl World {
         }
     }
 
+    fn resolve_contacts(&mut self) -> PairSet {
+        let mut resolved = BTreeSet::new();
+        let count = self.bodies.len();
+        for _ in 0..SOLVER_ITERATIONS {
+            for first_index in 0..count {
+                for second_index in (first_index + 1)..count {
+                    let first = self.bodies[first_index];
+                    let second = self.bodies[second_index];
+                    if first.is_trigger || second.is_trigger {
+                        continue;
+                    }
+                    let inv_a = first.inverse_mass();
+                    let inv_b = second.inverse_mass();
+                    let inv_sum = inv_a + inv_b;
+                    if inv_sum <= 0.0 {
+                        continue;
+                    }
+                    let Some(contact) = first.shape.contact(
+                        first.position,
+                        first.rotation,
+                        &second.shape,
+                        second.position,
+                        second.rotation,
+                    ) else {
+                        continue;
+                    };
+                    let move_a = contact.depth * (inv_a / inv_sum);
+                    let move_b = contact.depth * (inv_b / inv_sum);
+                    self.bodies[first_index].position[0] -= contact.normal[0] * move_a;
+                    self.bodies[first_index].position[1] -= contact.normal[1] * move_a;
+                    self.bodies[first_index].position[2] -= contact.normal[2] * move_a;
+                    self.bodies[second_index].position[0] += contact.normal[0] * move_b;
+                    self.bodies[second_index].position[1] += contact.normal[1] * move_b;
+                    self.bodies[second_index].position[2] += contact.normal[2] * move_b;
+
+                    let first_velocity = self.bodies[first_index].effective_velocity();
+                    let second_velocity = self.bodies[second_index].effective_velocity();
+                    let relative_velocity = [
+                        second_velocity[0] - first_velocity[0],
+                        second_velocity[1] - first_velocity[1],
+                        second_velocity[2] - first_velocity[2],
+                    ];
+                    let normal_speed = relative_velocity[0] * contact.normal[0]
+                        + relative_velocity[1] * contact.normal[1]
+                        + relative_velocity[2] * contact.normal[2];
+                    if normal_speed < 0.0 {
+                        let impulse = -normal_speed / inv_sum;
+                        self.bodies[first_index].velocity[0] -= contact.normal[0] * impulse * inv_a;
+                        self.bodies[first_index].velocity[1] -= contact.normal[1] * impulse * inv_a;
+                        self.bodies[first_index].velocity[2] -= contact.normal[2] * impulse * inv_a;
+                        self.bodies[second_index].velocity[0] +=
+                            contact.normal[0] * impulse * inv_b;
+                        self.bodies[second_index].velocity[1] +=
+                            contact.normal[1] * impulse * inv_b;
+                        self.bodies[second_index].velocity[2] +=
+                            contact.normal[2] * impulse * inv_b;
+                        let pair = if first.entity < second.entity {
+                            (first.entity, second.entity)
+                        } else {
+                            (second.entity, first.entity)
+                        };
+                        resolved.insert(pair);
+                    }
+                }
+            }
+        }
+        resolved
+    }
+
     fn overlapping_pairs(&self) -> (PairSet, PairSet) {
         let mut pairs = BTreeSet::new();
         let mut trigger_pairs = BTreeSet::new();
         for (index, first) in self.bodies.iter().enumerate() {
             for second in self.bodies.iter().skip(index + 1) {
-                if first.shape.overlaps(
+                if first.shape.in_contact(
                     first.position,
                     first.rotation,
                     &second.shape,

@@ -137,13 +137,18 @@ namespace Unitas.Bridge.Tests
             Rigidbody body = go.AddComponent<Rigidbody>();
             Check.Equal("Rigidbody default mass", 1f, body.mass);
             Check.Equal("Rigidbody default useGravity", true, body.useGravity);
+            Check.Equal("Rigidbody default isKinematic", false, body.isKinematic);
             Check.Equal("Rigidbody default velocity x", 0f, body.velocity.x);
             Check.Equal("Rigidbody default velocity y", 0f, body.velocity.y);
             Check.Equal("Rigidbody default velocity z", 0f, body.velocity.z);
             body.mass = 2.5f;
             body.useGravity = false;
+            body.isKinematic = true;
             Check.Equal("Rigidbody mass round trip", 2.5f, body.mass);
             Check.Equal("Rigidbody useGravity round trip", false, body.useGravity);
+            Check.Equal("Rigidbody isKinematic round trip", true, body.isKinematic);
+            body.isKinematic = false;
+            Check.Equal("Rigidbody isKinematic reset round trip", false, body.isKinematic);
 
             BoxCollider box = go.AddComponent<BoxCollider>();
             Check.That("BoxCollider is a Collider", box is Collider);

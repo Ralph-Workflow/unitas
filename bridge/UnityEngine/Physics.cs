@@ -13,6 +13,10 @@ namespace UnityEngine
         bool BoxCast(Vector3 origin, Vector3 direction, Vector3 halfExtents, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers);
 
         Collider[] OverlapSphere(Vector3 position, float radius, int layerMask, bool includeTriggers);
+
+        bool TryGetBodyPosition(ulong entity, out Vector3 position);
+
+        bool TryGetBodyVelocity(ulong entity, out Vector3 velocity);
     }
 
     public static class Physics

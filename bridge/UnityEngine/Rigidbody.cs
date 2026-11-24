@@ -4,6 +4,7 @@ namespace UnityEngine
     {
         private float _mass = 1f;
         private bool _useGravity = true;
+        private bool _isKinematic;
         private Vector3 _velocity;
 
         public float mass
@@ -18,9 +19,24 @@ namespace UnityEngine
             set => _useGravity = value;
         }
 
+        public bool isKinematic
+        {
+            get => _isKinematic;
+            set => _isKinematic = value;
+        }
+
         public Vector3 velocity
         {
-            get => _velocity;
+            get
+            {
+                GameObject? owner = gameObject;
+                IPhysicsProvider? provider = Physics.Provider;
+                if (!_isKinematic && owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null && provider.TryGetBodyVelocity(owner.NativeEntityId, out Vector3 nativeVelocity))
+                {
+                    return nativeVelocity;
+                }
+                return _velocity;
+            }
             set => _velocity = value;
         }
     }

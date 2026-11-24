@@ -4,13 +4,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use unitas_runtime::{
     test_is_persistent_entity, test_read_path_buffer, test_write_path_buffer,
-    unitas_runtime_active_scene_index, unitas_runtime_company_name, unitas_runtime_destroy,
-    unitas_runtime_dont_destroy_on_load, unitas_runtime_error_message,
-    unitas_runtime_load_scene_mode, unitas_runtime_new, unitas_runtime_path_buffer,
-    unitas_runtime_product_name, unitas_runtime_project_version, unitas_runtime_scene_count,
-    unitas_runtime_scene_name, unitas_runtime_set_active_scene, unitas_runtime_set_callbacks,
-    unitas_runtime_set_time_scale, unitas_runtime_tick, unitas_runtime_time_scale,
-    unitas_runtime_unload_scene, Runtime,
+    unitas_runtime_active_scene_index, unitas_runtime_body_position, unitas_runtime_body_velocity,
+    unitas_runtime_company_name, unitas_runtime_destroy, unitas_runtime_dont_destroy_on_load,
+    unitas_runtime_error_message, unitas_runtime_load_scene_mode, unitas_runtime_new,
+    unitas_runtime_path_buffer, unitas_runtime_product_name, unitas_runtime_project_version,
+    unitas_runtime_scene_count, unitas_runtime_scene_name, unitas_runtime_set_active_scene,
+    unitas_runtime_set_callbacks, unitas_runtime_set_time_scale, unitas_runtime_tick,
+    unitas_runtime_time_scale, unitas_runtime_unload_scene, Runtime,
 };
 
 const SCENE_A: &str = "tests/fixtures/scene_with_script.unity";
@@ -27,7 +27,6 @@ fn new_handle() -> Result<u64, Box<dyn Error>> {
     Ok(handle)
 }
 
-/// Pins the path buffer, writes `text` into it and returns (address, length).
 fn write_path(handle: u64, text: &str) -> Result<(u64, u64), Box<dyn Error>> {
     let bytes = text.as_bytes();
     let address = unitas_runtime_path_buffer(handle, 256);
@@ -171,7 +170,6 @@ fn abi_scene_name_writes_a_nul_terminated_name_into_the_path_buffer() -> Result<
     test_read_path_buffer(handle, &mut bytes)?;
     assert_eq!(&bytes[..SCENE_A_NAME.len()], SCENE_A_NAME.as_bytes());
     assert_eq!(bytes[SCENE_A_NAME.len()], 0);
-    // Re-pinning the buffer must not wipe the name the scene export wrote.
     assert_ne!(unitas_runtime_path_buffer(handle, 256), 0);
     test_read_path_buffer(handle, &mut bytes)?;
     assert_eq!(&bytes[..SCENE_A_NAME.len()], SCENE_A_NAME.as_bytes());
@@ -260,7 +258,6 @@ extern "C" fn nested_on_disable(_handle: u64) {
     if handle == 0 {
         return;
     }
-    // Calls back into the runtime while the runtime is tearing a scene down.
     unitas_runtime_set_time_scale(handle, 0.5);
     NESTED_CALLS.fetch_add(1, Ordering::SeqCst);
 }
@@ -370,6 +367,84 @@ fn abi_project_identity_externs_return_negative_when_settings_missing_or_handle_
         runtime.project_identity().company_name.as_deref(),
         Some("Unitas")
     );
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+fn read_vec3_from_path_buffer(handle: u64) -> Result<[f64; 3], Box<dyn Error>> {
+    let mut bytes = [0u8; 24];
+    test_read_path_buffer(handle, &mut bytes)?;
+    let x = f64::from_le_bytes(bytes[0..8].try_into()?);
+    let y = f64::from_le_bytes(bytes[8..16].try_into()?);
+    let z = f64::from_le_bytes(bytes[16..24].try_into()?);
+    Ok([x, y, z])
+}
+
+#[test]
+fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
+) -> Result<(), Box<dyn Error>> {
+    let handle = new_handle()?;
+    assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
+    let ball = entity_id_for(SCENE_B, "Ball")?;
+    let crate_entity = entity_id_for(SCENE_B, "Crate")?;
+    let out_buffer = unitas_runtime_path_buffer(handle, 24);
+    assert_ne!(out_buffer, 0);
+
+    assert_eq!(unitas_runtime_body_position(handle, ball, out_buffer), 0);
+    let initial_pos = read_vec3_from_path_buffer(handle)?;
+    assert!((initial_pos[0] - 0.0).abs() < 1e-6);
+    assert!((initial_pos[1] - 0.2).abs() < 1e-6);
+    assert!((initial_pos[2] - 0.0).abs() < 1e-6);
+
+    assert_eq!(unitas_runtime_body_velocity(handle, ball, out_buffer), 0);
+    let initial_vel = read_vec3_from_path_buffer(handle)?;
+    assert_eq!(initial_vel, [0.0, 0.0, 0.0]);
+
+    assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+    for _ in 0..10 {
+        assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+    }
+
+    assert_eq!(unitas_runtime_body_position(handle, ball, out_buffer), 0);
+    let resting_pos = read_vec3_from_path_buffer(handle)?;
+    assert!((resting_pos[1] - 1.0).abs() < 1e-5);
+
+    assert_eq!(unitas_runtime_body_velocity(handle, ball, out_buffer), 0);
+    let resting_vel = read_vec3_from_path_buffer(handle)?;
+    assert!(resting_vel[1].abs() < 1e-5);
+
+    assert_eq!(
+        unitas_runtime_body_position(handle, crate_entity, out_buffer),
+        0
+    );
+    let crate_pos = read_vec3_from_path_buffer(handle)?;
+    assert_eq!(crate_pos, [0.0, 0.0, 0.0]);
+
+    assert_eq!(
+        unitas_runtime_body_position(u64::MAX, ball, out_buffer),
+        -1
+    );
+    assert_eq!(
+        unitas_runtime_body_velocity(u64::MAX, ball, out_buffer),
+        -1
+    );
+
+    assert_eq!(unitas_runtime_body_position(handle, ball, 0), -2);
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(unitas_runtime_body_velocity(handle, ball, 0), -2);
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(
+        unitas_runtime_body_position(handle, 999_999, out_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_body_velocity(handle, 999_999, out_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
 
     assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())
