@@ -21,9 +21,13 @@ pub use project_settings::{
     DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 pub use scene::{
-    assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
-    assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    BoxColliderComponent, CapsuleColliderComponent, MaterialValues, PhysicsBinding,
-    RigidbodyComponent, SceneError, SphereColliderComponent,
+    assemble_scene, assemble_scene_bundle, assemble_scene_bundle_with_guids, assemble_scene_file,
+    assemble_scene_file_bundle, assemble_scene_file_bundle_with_guids,
+    assemble_scene_file_with_audio, assemble_scene_file_with_guids, assemble_scene_file_with_index,
+    assemble_scene_file_with_physics, assemble_scene_with_audio, assemble_scene_with_guids,
+    assemble_scene_with_index, assemble_scene_with_physics, AssembledScene, AssetGuid,
+    AudioBinding, AudioSourceComponent, BoxColliderComponent, CapsuleColliderComponent,
+    CharacterControllerComponent, MaterialValues, PhysicsBinding, RigidbodyComponent, SceneError,
+    ScriptBinding, SphereColliderComponent, AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS,
 };
 pub use unity_yaml::{AssetError, Document, Header, Node, Stream, YamlError, YamlNode};

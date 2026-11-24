@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "unitas-audio"
+version = "0.1.0"
+dependencies = [
+ "unitas-core",
+]
+
+[[package]]
 name = "unitas-build"
 version = "0.1.0"
 
@@ -37,6 +44,7 @@ name = "unitas-runtime"
 version = "0.1.0"
 dependencies = [
  "unitas-asset",
+ "unitas-audio",
  "unitas-core",
  "unitas-physics",
 ]

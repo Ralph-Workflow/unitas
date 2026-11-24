@@ -1,12 +1,15 @@
 use std::error::Error;
 use std::f32::consts::FRAC_1_SQRT_2;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
-    assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
-    assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
+    assemble_scene, assemble_scene_bundle, assemble_scene_bundle_with_guids, assemble_scene_file,
+    assemble_scene_file_bundle, assemble_scene_file_bundle_with_guids,
+    assemble_scene_file_with_guids, assemble_scene_file_with_physics, assemble_scene_with_guids,
+    assemble_scene_with_physics, AssembledScene, AudioBinding, AudioSourceComponent,
     CapsuleColliderComponent, CharacterControllerComponent, MaterialValues, SceneError,
+    AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -1251,5 +1254,237 @@ fn character_controller_invalid_values_fall_back_to_defaults() -> TestResult {
     assert_eq!(controller.step_offset, 0.3);
     assert_eq!(controller.skin_width, 0.08);
     assert_eq!(controller.min_move_distance, 0.0);
+    Ok(())
+}
+
+#[test]
+fn audio_source_parses_explicit_and_default_fields_and_ignores_audio_clip_documents() -> TestResult {
+    assert_eq!(AUDIO_SOURCE_CLASS, 82);
+    assert_eq!(AUDIO_CLIP_CLASS, 83);
+    let clip_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let alt_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let stream = unity_yaml::parse(&format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: Speaker\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_Enabled: 0\n  m_audioClip: {{fileID: 8300000, guid: {clip_guid}, type: 3}}\n  m_PlayOnAwake: 0\n  m_Volume: 0.75\n  m_Pitch: 1.25\n  Loop: 1\n  Mute: 1\n  Priority: 64\n  m_SpatialBlend: 0.5\n  MinDistance: 2.5\n  MaxDistance: 250.0\n--- !u!1 &20\nGameObject:\n  m_Name: DefaultSpeaker\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &22\nAudioSource:\n  m_GameObject: {{fileID: 20}}\n  m_AudioClip: {{fileID: 0}}\n--- !u!1 &30\nGameObject:\n  m_Name: AltKeysSpeaker\n--- !u!4 &31\nTransform:\n  m_GameObject: {{fileID: 30}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &32\nAudioSource:\n  m_GameObject: {{fileID: 30}}\n  m_AudioClip: {{fileID: 8300000, guid: {alt_guid}, type: 3}}\n  m_Loop: 1\n  m_Mute: 1\n  m_Priority: 200\n  m_MinDistance: 3.0\n  m_MaxDistance: 100.0\n--- !u!83 &8300000\nAudioClip:\n  m_Name: InlineBeep\n"
+    ))?;
+
+    let mut index = GuidIndex::default();
+    index.insert(clip_guid.to_string(), PathBuf::from("Assets/Audio/beep.wav"))?;
+    index.insert(alt_guid.to_string(), PathBuf::from("Assets/Audio/alt.WAV"))?;
+
+    let assembled: AssembledScene = assemble_scene_bundle_with_guids(&stream, &index)?;
+    let speaker = entity_named(&assembled.graph, "Speaker")?;
+    let default_speaker = entity_named(&assembled.graph, "DefaultSpeaker")?;
+    let alt_speaker = entity_named(&assembled.graph, "AltKeysSpeaker")?;
+
+    assert_eq!(assembled.audio_bindings.len(), 3);
+    assert!(assembled.diagnostics.is_empty());
+
+    let (_, speaker_audio): &(EntityId, AudioSourceComponent) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(entity, _)| *entity == speaker)
+        .ok_or("missing Speaker audio binding")?;
+    assert!(!speaker_audio.enabled);
+    assert_eq!(speaker_audio.clip_guid.as_deref(), Some(clip_guid));
+    assert_eq!(
+        speaker_audio.clip_path.as_deref(),
+        Some(Path::new("Assets/Audio/beep.wav"))
+    );
+    assert_eq!(speaker_audio.clip_diagnostic, None);
+    assert_eq!(speaker_audio.volume, 0.75);
+    assert_eq!(speaker_audio.pitch, 1.25);
+    assert!(speaker_audio.looping);
+    assert!(!speaker_audio.play_on_awake);
+    assert_eq!(speaker_audio.priority, 64);
+    assert_eq!(speaker_audio.spatial_blend, 0.5);
+    assert_eq!(speaker_audio.min_distance, 2.5);
+    assert_eq!(speaker_audio.max_distance, 250.0);
+    assert!(speaker_audio.mute);
+
+    let (_, default_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(entity, _)| *entity == default_speaker)
+        .ok_or("missing DefaultSpeaker audio binding")?;
+    assert!(default_audio.enabled);
+    assert_eq!(default_audio.clip_guid, None);
+    assert_eq!(default_audio.clip_path, None);
+    assert_eq!(default_audio.clip_diagnostic, None);
+    assert_eq!(default_audio.volume, 1.0);
+    assert_eq!(default_audio.pitch, 1.0);
+    assert!(!default_audio.looping);
+    assert!(default_audio.play_on_awake);
+    assert_eq!(default_audio.priority, 128);
+    assert_eq!(default_audio.spatial_blend, 0.0);
+    assert_eq!(default_audio.min_distance, 1.0);
+    assert_eq!(default_audio.max_distance, 500.0);
+    assert!(!default_audio.mute);
+
+    let (_, alt_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(entity, _)| *entity == alt_speaker)
+        .ok_or("missing AltKeysSpeaker audio binding")?;
+    assert!(alt_audio.enabled);
+    assert_eq!(alt_audio.clip_guid.as_deref(), Some(alt_guid));
+    assert_eq!(
+        alt_audio.clip_path.as_deref(),
+        Some(Path::new("Assets/Audio/alt.WAV"))
+    );
+    assert!(alt_audio.looping);
+    assert!(alt_audio.mute);
+    assert_eq!(alt_audio.priority, 200);
+    assert_eq!(alt_audio.min_distance, 3.0);
+    assert_eq!(alt_audio.max_distance, 100.0);
+
+    let binding_check: AudioBinding = (speaker, speaker_audio.clone());
+    assert_eq!(binding_check.0, speaker);
+
+    Ok(())
+}
+
+#[test]
+fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_unsupported_clips(
+) -> TestResult {
+    let temp = std::env::temp_dir().join(format!(
+        "unitas_audio_clip_resolve_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    let settings = temp.join("ProjectSettings");
+    let assets = temp.join("Assets");
+    std::fs::create_dir_all(&settings)?;
+    std::fs::create_dir_all(&assets)?;
+
+    let wav_guid = "11111111111111111111111111111111";
+    let ogg_guid = "22222222222222222222222222222222";
+    let missing_guid = "33333333333333333333333333333333";
+
+    let wav_path = assets.join("Tone.wav");
+    std::fs::write(&wav_path, b"RIFF")?;
+    std::fs::write(
+        assets.join("Tone.wav.meta"),
+        format!("fileFormatVersion: 2\nguid: {wav_guid}\n"),
+    )?;
+
+    let ogg_path = assets.join("Music.ogg");
+    std::fs::write(&ogg_path, b"OggS")?;
+    std::fs::write(
+        assets.join("Music.ogg.meta"),
+        format!("fileFormatVersion: 2\nguid: {ogg_guid}\n"),
+    )?;
+
+    let scene_path = assets.join("AudioScene.unity");
+    std::fs::write(
+        &scene_path,
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: WavEmitter\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n--- !u!1 &20\nGameObject:\n  m_Name: OggEmitter\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &22\nAudioSource:\n  m_GameObject: {{fileID: 20}}\n  m_audioClip: {{fileID: 8300000, guid: {ogg_guid}, type: 3}}\n--- !u!1 &30\nGameObject:\n  m_Name: MissingEmitter\n--- !u!4 &31\nTransform:\n  m_GameObject: {{fileID: 30}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &32\nAudioSource:\n  m_GameObject: {{fileID: 30}}\n  m_audioClip: {{fileID: 8300000, guid: {missing_guid}, type: 3}}\n"
+        ),
+    )?;
+
+    let result = assemble_scene_file_bundle(&scene_path);
+    let index_result = GuidIndex::build(&assets).and_then(|idx| {
+        assemble_scene_file_bundle_with_guids(&scene_path, &idx).map_err(|_| {
+            unitas_asset::MetaError::MissingGuid {
+                path: scene_path.clone(),
+            }
+        })
+    });
+    let _ = std::fs::remove_dir_all(&temp);
+    let assembled = result?;
+    let assembled_with_index = index_result?;
+    assert_eq!(
+        assembled.audio_bindings.len(),
+        assembled_with_index.audio_bindings.len()
+    );
+
+    let wav_entity = entity_named(&assembled.graph, "WavEmitter")?;
+    let ogg_entity = entity_named(&assembled.graph, "OggEmitter")?;
+    let missing_entity = entity_named(&assembled.graph, "MissingEmitter")?;
+
+    let (_, wav_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(e, _)| *e == wav_entity)
+        .ok_or("missing WavEmitter binding")?;
+    assert_eq!(wav_audio.clip_guid.as_deref(), Some(wav_guid));
+    assert_eq!(wav_audio.clip_path.as_deref(), Some(wav_path.as_path()));
+    assert_eq!(wav_audio.clip_diagnostic, None);
+
+    let (_, ogg_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(e, _)| *e == ogg_entity)
+        .ok_or("missing OggEmitter binding")?;
+    assert_eq!(ogg_audio.clip_guid.as_deref(), Some(ogg_guid));
+    assert_eq!(ogg_audio.clip_path.as_deref(), Some(ogg_path.as_path()));
+    let ogg_diag = ogg_audio
+        .clip_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for unsupported .ogg AudioClip")?;
+    assert!(ogg_diag.contains("AudioSource"));
+    assert!(ogg_diag.contains("OggEmitter"));
+    assert!(ogg_diag.contains(ogg_guid));
+
+    let (_, missing_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(e, _)| *e == missing_entity)
+        .ok_or("missing MissingEmitter binding")?;
+    assert_eq!(missing_audio.clip_guid.as_deref(), Some(missing_guid));
+    assert_eq!(missing_audio.clip_path, None);
+    let missing_diag = missing_audio
+        .clip_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for unresolved AudioClip guid")?;
+    assert!(missing_diag.contains("AudioSource"));
+    assert!(missing_diag.contains("MissingEmitter"));
+    assert!(missing_diag.contains(missing_guid));
+
+    assert!(assembled
+        .diagnostics
+        .iter()
+        .any(|(entity, msg)| *entity == ogg_entity && msg.contains(ogg_guid)));
+    assert!(assembled
+        .diagnostics
+        .iter()
+        .any(|(entity, msg)| *entity == missing_entity && msg.contains(missing_guid)));
+
+    Ok(())
+}
+
+#[test]
+fn audio_source_missing_game_object_is_an_error_and_in_memory_bundle_reports_unindexed_clip(
+) -> TestResult {
+    let bad_stream = unity_yaml::parse(
+        "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Alone\n--- !u!82 &2\nAudioSource:\n  m_GameObject: {fileID: 99}\n",
+    )?;
+    let bad_result = assemble_scene_bundle(&bad_stream);
+    assert!(matches!(
+        bad_result,
+        Err(SceneError::MissingGameObject { .. })
+    ));
+
+    let guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let stream = unity_yaml::parse(&format!(
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: UnindexedSpeaker\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {guid}, type: 3}}\n"
+    ))?;
+    let assembled = assemble_scene_bundle(&stream)?;
+    assert_eq!(assembled.audio_bindings.len(), 1);
+    let (entity, audio) = &assembled.audio_bindings[0];
+    assert_eq!(audio.clip_guid.as_deref(), Some(guid));
+    assert_eq!(audio.clip_path, None);
+    assert!(audio.clip_diagnostic.is_some());
+    assert_eq!(assembled.diagnostics.len(), 1);
+    assert_eq!(assembled.diagnostics[0].0, *entity);
+    assert!(assembled.diagnostics[0].1.contains(guid));
+
+    let curve_stream = unity_yaml::parse(
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: CurveSpeaker\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Father: {fileID: 0}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {fileID: 10}\n  panLevelCustomCurve:\n    serializedVersion: 2\n    m_Curve:\n    - serializedVersion: 3\n      time: 0\n      value: 0.8\n",
+    )?;
+    let curve_assembled = assemble_scene_bundle(&curve_stream)?;
+    assert_eq!(curve_assembled.audio_bindings.len(), 1);
+    assert_eq!(curve_assembled.audio_bindings[0].1.spatial_blend, 0.8);
+
     Ok(())
 }

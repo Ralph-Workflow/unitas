@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use unitas_core::{CoreError, EntityId, SceneGraph};
 
 use crate::meta::{GuidIndex, MetaError};
 use crate::prefab;
 use crate::unity_yaml::{self, Node, Stream, YamlError};
+
+pub const AUDIO_SOURCE_CLASS: u32 = 82;
+pub const AUDIO_CLIP_CLASS: u32 = 83;
+pub type AssetGuid = String;
 
 const GAME_OBJECT_CLASS: u32 = 1;
 const TRANSFORM_CLASS: u32 = 4;
@@ -32,6 +36,16 @@ const DEFAULT_CHARACTER_CONTROLLER_SLOPE_LIMIT: f64 = 45.0;
 const DEFAULT_CHARACTER_CONTROLLER_STEP_OFFSET: f64 = 0.3;
 const DEFAULT_CHARACTER_CONTROLLER_SKIN_WIDTH: f64 = 0.08;
 const DEFAULT_CHARACTER_CONTROLLER_MIN_MOVE_DISTANCE: f64 = 0.0;
+const DEFAULT_AUDIO_ENABLED: bool = true;
+const DEFAULT_AUDIO_VOLUME: f32 = 1.0;
+const DEFAULT_AUDIO_PITCH: f32 = 1.0;
+const DEFAULT_AUDIO_LOOPING: bool = false;
+const DEFAULT_AUDIO_PLAY_ON_AWAKE: bool = true;
+const DEFAULT_AUDIO_PRIORITY: u8 = 128;
+const DEFAULT_AUDIO_SPATIAL_BLEND: f32 = 0.0;
+const DEFAULT_AUDIO_MIN_DISTANCE: f32 = 1.0;
+const DEFAULT_AUDIO_MAX_DISTANCE: f32 = 500.0;
+const DEFAULT_AUDIO_MUTE: bool = false;
 const CHARACTER_CONTROLLER_SCRIPT_NAME: &str = "CharacterController";
 const CHARACTER_CONTROLLER_FIELD_KEYS: [&str; 4] = [
     "m_SlopeLimit",
@@ -240,23 +254,66 @@ pub struct PhysicsBinding {
     pub layer: u32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioSourceComponent {
+    pub enabled: bool,
+    pub clip_guid: Option<AssetGuid>,
+    pub clip_path: Option<PathBuf>,
+    pub clip_diagnostic: Option<String>,
+    pub volume: f32,
+    pub pitch: f32,
+    pub looping: bool,
+    pub play_on_awake: bool,
+    pub priority: u8,
+    pub spatial_blend: f32,
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub mute: bool,
+}
+
+impl Default for AudioSourceComponent {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_AUDIO_ENABLED,
+            clip_guid: None,
+            clip_path: None,
+            clip_diagnostic: None,
+            volume: DEFAULT_AUDIO_VOLUME,
+            pitch: DEFAULT_AUDIO_PITCH,
+            looping: DEFAULT_AUDIO_LOOPING,
+            play_on_awake: DEFAULT_AUDIO_PLAY_ON_AWAKE,
+            priority: DEFAULT_AUDIO_PRIORITY,
+            spatial_blend: DEFAULT_AUDIO_SPATIAL_BLEND,
+            min_distance: DEFAULT_AUDIO_MIN_DISTANCE,
+            max_distance: DEFAULT_AUDIO_MAX_DISTANCE,
+            mute: DEFAULT_AUDIO_MUTE,
+        }
+    }
+}
+
+pub type AudioBinding = (EntityId, AudioSourceComponent);
+
+#[derive(Debug)]
+pub struct AssembledScene {
+    pub graph: SceneGraph,
+    pub scripts: Vec<ScriptBinding>,
+    pub physics: Vec<PhysicsBinding>,
+    pub audio_bindings: Vec<AudioBinding>,
+    pub diagnostics: Vec<(EntityId, String)>,
+}
+
 struct DocumentSet {
     game_objects: GameObjectRecords,
     transforms: HashMap<i64, EntityId>,
     root: Option<EntityId>,
     scripts: Vec<ScriptBinding>,
     physics: Vec<PhysicsBinding>,
+    audio_bindings: Vec<AudioBinding>,
 }
 
 struct PrefabContext<'a> {
     index: Option<&'a GuidIndex>,
     stack: Vec<String>,
-}
-
-struct Assembly {
-    graph: SceneGraph,
-    scripts: Vec<ScriptBinding>,
-    physics: Vec<PhysicsBinding>,
 }
 
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
@@ -295,24 +352,78 @@ pub fn assemble_scene_file_with_physics(
     Ok((assembly.graph, assembly.scripts, assembly.physics))
 }
 
+pub fn assemble_scene_bundle(stream: &Stream) -> Result<AssembledScene, SceneError> {
+    assemble_stream(stream, None, false)
+}
+
+pub fn assemble_scene_bundle_with_guids(
+    stream: &Stream,
+    index: &GuidIndex,
+) -> Result<AssembledScene, SceneError> {
+    assemble_stream(stream, Some(index), false)
+}
+
+pub fn assemble_scene_with_index(
+    stream: &Stream,
+    index: &GuidIndex,
+) -> Result<AssembledScene, SceneError> {
+    assemble_stream(stream, Some(index), false)
+}
+
+pub fn assemble_scene_file_bundle(path: &Path) -> Result<AssembledScene, SceneError> {
+    assemble_file(path, None)
+}
+
+pub fn assemble_scene_file_bundle_with_guids(
+    path: &Path,
+    index: &GuidIndex,
+) -> Result<AssembledScene, SceneError> {
+    assemble_file(path, Some(index))
+}
+
+pub fn assemble_scene_file_with_index(
+    path: &Path,
+    index: &GuidIndex,
+) -> Result<AssembledScene, SceneError> {
+    assemble_file(path, Some(index))
+}
+
+pub fn assemble_scene_with_audio(
+    stream: &Stream,
+    index: Option<&GuidIndex>,
+) -> Result<AssembledScene, SceneError> {
+    assemble_stream(stream, index, false)
+}
+
+pub fn assemble_scene_file_with_audio(path: &Path) -> Result<AssembledScene, SceneError> {
+    assemble_file(path, None)
+}
+
 fn assemble_stream(
     stream: &Stream,
     index: Option<&GuidIndex>,
     expand: bool,
-) -> Result<Assembly, SceneError> {
+) -> Result<AssembledScene, SceneError> {
     if !expand {
         check_external_references(stream, index)?;
     }
     let mut graph = SceneGraph::new();
     let mut context = PrefabContext { index, stack: Vec::new() };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
-    Ok(Assembly { graph, scripts: set.scripts, physics: set.physics })
+    let diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings);
+    Ok(AssembledScene {
+        graph,
+        scripts: set.scripts,
+        physics: set.physics,
+        audio_bindings: set.audio_bindings,
+        diagnostics,
+    })
 }
 
-fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<Assembly, SceneError> {
+fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<AssembledScene, SceneError> {
     let stream = unity_yaml::parse_file(path)?;
     let expand = has_prefab_instances(&stream);
-    let resolve_guids = expand || has_material_references(&stream);
+    let resolve_guids = expand || has_material_references(&stream) || has_audio_references(&stream);
     let discovered = match index {
         Some(_) => None,
         None => {
@@ -383,6 +494,19 @@ fn has_material_references(stream: &Stream) -> bool {
     })
 }
 
+fn has_audio_references(stream: &Stream) -> bool {
+    stream.documents.iter().any(|document| {
+        if document.stripped || document.class_id != AUDIO_SOURCE_CLASS {
+            return false;
+        }
+        document
+            .root
+            .get("AudioSource")
+            .and_then(|node| node.get("m_audioClip").or_else(|| node.get("m_AudioClip")))
+            .is_some()
+    })
+}
+
 fn assemble_documents(
     stream: &Stream,
     graph: &mut SceneGraph,
@@ -395,6 +519,7 @@ fn assemble_documents(
         root: None,
         scripts: Vec::new(),
         physics: Vec::new(),
+        audio_bindings: Vec::new(),
     };
     let instance_roots = prefab_instance_roots(stream);
     for document in &stream.documents {
@@ -535,6 +660,8 @@ fn assemble_documents(
         set.scripts.push(ScriptBinding { entity, guid });
     }
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.audio_bindings =
+        collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     if expand {
         for document in &stream.documents {
             if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
@@ -606,6 +733,7 @@ fn expand_instance(
     }
     set.scripts.extend(prefab_set.scripts);
     set.physics.extend(prefab_set.physics);
+    set.audio_bindings.extend(prefab_set.audio_bindings);
     Ok(())
 }
 
@@ -1014,6 +1142,244 @@ fn load_physic_material(path: &Path) -> Result<MaterialValues, String> {
         friction,
         restitution,
     })
+}
+
+fn collect_audio(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+    index: Option<&GuidIndex>,
+) -> Result<Vec<AudioBinding>, SceneError> {
+    let mut bindings = Vec::new();
+    for document in &stream.documents {
+        if document.stripped {
+            continue;
+        }
+        if document.class_id == AUDIO_CLIP_CLASS {
+            continue;
+        }
+        if document.class_id != AUDIO_SOURCE_CLASS {
+            continue;
+        }
+        let body = match document.root.get("AudioSource") {
+            Some(body) => body,
+            None => continue,
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
+            Some(file_id) => file_id,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id: ROOT_FILE_ID,
+                })
+            }
+        };
+        let record = match game_objects.get(&game_object_file_id) {
+            Some(record) => record,
+            None => {
+                if instance_roots.contains(&game_object_file_id) {
+                    continue;
+                }
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id,
+                });
+            }
+        };
+        let component = audio_source_component(body, &record.name, index);
+        bindings.push((record.entity, component));
+    }
+    Ok(bindings)
+}
+
+fn audio_source_component(
+    body: &Node,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> AudioSourceComponent {
+    let (clip_guid, clip_path, clip_diagnostic) =
+        resolve_audio_clip(body, game_object_name, index);
+    let volume = yaml_f32(body.get("m_Volume"), DEFAULT_AUDIO_VOLUME, |value| {
+        (0.0..=1.0).contains(&value)
+    });
+    let pitch = yaml_f32(body.get("m_Pitch"), DEFAULT_AUDIO_PITCH, |value| {
+        value.is_finite()
+    });
+    let looping = yaml_bool(
+        body.get("m_Loop").or_else(|| body.get("Loop")),
+        DEFAULT_AUDIO_LOOPING,
+    );
+    let play_on_awake = yaml_bool(body.get("m_PlayOnAwake"), DEFAULT_AUDIO_PLAY_ON_AWAKE);
+    let priority = yaml_u8(
+        body.get("m_Priority").or_else(|| body.get("Priority")),
+        DEFAULT_AUDIO_PRIORITY,
+    );
+    let spatial_blend_node = body.get("m_SpatialBlend").or_else(|| {
+        body.get("panLevelCustomCurve")
+            .and_then(|curve| {
+                curve
+                    .get("m_Curve")
+                    .and_then(Node::as_sequence)
+                    .and_then(|seq| seq.first())
+                    .and_then(|point| point.get("value"))
+                    .or(Some(curve))
+            })
+    });
+    let spatial_blend = yaml_f32(
+        spatial_blend_node,
+        DEFAULT_AUDIO_SPATIAL_BLEND,
+        |value| (0.0..=1.0).contains(&value),
+    );
+    let min_distance = yaml_f32(
+        body.get("m_MinDistance").or_else(|| body.get("MinDistance")),
+        DEFAULT_AUDIO_MIN_DISTANCE,
+        |value| value >= 0.0,
+    );
+    let max_distance = yaml_f32(
+        body.get("m_MaxDistance").or_else(|| body.get("MaxDistance")),
+        DEFAULT_AUDIO_MAX_DISTANCE,
+        |value| value > 0.0,
+    );
+    let mute = yaml_bool(
+        body.get("m_Mute").or_else(|| body.get("Mute")),
+        DEFAULT_AUDIO_MUTE,
+    );
+    AudioSourceComponent {
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_AUDIO_ENABLED),
+        clip_guid,
+        clip_path,
+        clip_diagnostic,
+        volume,
+        pitch,
+        looping,
+        play_on_awake,
+        priority,
+        spatial_blend,
+        min_distance,
+        max_distance,
+        mute,
+    }
+}
+
+fn resolve_audio_clip(
+    body: &Node,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> (Option<AssetGuid>, Option<PathBuf>, Option<String>) {
+    let clip_node = match body.get("m_audioClip").or_else(|| body.get("m_AudioClip")) {
+        Some(node) => node,
+        None => return (None, None, None),
+    };
+    let file_id = clip_node.get("fileID").and_then(Node::as_i64);
+    let guid = clip_node
+        .get("guid")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let guid = match (file_id, guid) {
+        (Some(0) | None, None) => return (None, None, None),
+        (Some(id), None) => {
+            return (
+                None,
+                None,
+                Some(format!(
+                    "AudioSource on '{game_object_name}' references m_audioClip fileID {id} without a guid"
+                )),
+            )
+        }
+        (None, Some(guid)) | (Some(_), Some(guid)) => guid.to_string(),
+    };
+
+    let path = match index.and_then(|guids| guids.get(&guid)) {
+        Some(path) => path.to_path_buf(),
+        None => {
+            return (
+                Some(guid.clone()),
+                None,
+                Some(format!(
+                    "AudioSource on '{game_object_name}' references unresolved AudioClip guid {guid}"
+                )),
+            )
+        }
+    };
+
+    let supported = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false);
+
+    if !supported {
+        let ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("unknown");
+        return (
+            Some(guid.clone()),
+            Some(path.clone()),
+            Some(format!(
+                "AudioSource on '{game_object_name}' AudioClip guid {guid} ({}): unsupported audio format .{ext} (only .wav is supported)",
+                path.display()
+            )),
+        );
+    }
+
+    (Some(guid), Some(path), None)
+}
+
+fn collect_scene_diagnostics(
+    physics: &[PhysicsBinding],
+    audio_bindings: &[AudioBinding],
+) -> Vec<(EntityId, String)> {
+    let mut diagnostics = Vec::new();
+    for binding in physics {
+        if let Some(sphere) = &binding.sphere_collider {
+            if let Some(diag) = &sphere.material_diagnostic {
+                diagnostics.push((binding.entity, diag.clone()));
+            }
+        }
+        if let Some(collider) = &binding.box_collider {
+            if let Some(diag) = &collider.material_diagnostic {
+                diagnostics.push((binding.entity, diag.clone()));
+            }
+        }
+        if let Some(capsule) = &binding.capsule_collider {
+            if let Some(diag) = &capsule.material_diagnostic {
+                diagnostics.push((binding.entity, diag.clone()));
+            }
+            if let Some(diag) = &capsule.geometry_diagnostic {
+                diagnostics.push((binding.entity, diag.clone()));
+            }
+        }
+    }
+    for (entity, audio) in audio_bindings {
+        if let Some(diag) = &audio.clip_diagnostic {
+            diagnostics.push((*entity, diag.clone()));
+        }
+    }
+    diagnostics
+}
+
+fn yaml_u8(node: Option<&Node>, default: u8) -> u8 {
+    match node.and_then(Node::as_i64) {
+        Some(value) if (0..=255).contains(&value) => u8::try_from(value).unwrap_or(default),
+        _ => default,
+    }
+}
+
+fn yaml_f32(node: Option<&Node>, default: f32, valid: impl Fn(f32) -> bool) -> f32 {
+    match node.and_then(Node::as_f64) {
+        Some(value) if value.is_finite() => {
+            let value = value as f32;
+            if value.is_finite() && valid(value) {
+                value
+            } else {
+                default
+            }
+        }
+        _ => default,
+    }
 }
 
 fn yaml_u32(node: Option<&Node>, default: u32) -> u32 {

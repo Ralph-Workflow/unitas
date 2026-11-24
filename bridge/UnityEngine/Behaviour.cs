@@ -2,8 +2,27 @@ namespace UnityEngine
 {
     public class Behaviour : Component
     {
-        public bool enabled { get; set; } = true;
+        private bool _enabled = true;
 
-        public bool isActiveAndEnabled => enabled && gameObject != null && gameObject.activeInHierarchy;
+        public bool enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value)
+                {
+                    return;
+                }
+
+                _enabled = value;
+                OnEnabledChanged(value);
+            }
+        }
+
+        public bool isActiveAndEnabled => _enabled && gameObject != null && gameObject.activeInHierarchy;
+
+        internal virtual void OnEnabledChanged(bool isEnabled)
+        {
+        }
     }
 }

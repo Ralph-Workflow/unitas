@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use unitas_asset::scene::{
-    assemble_scene_file_with_physics, CharacterControllerComponent, PhysicsBinding, ScriptBinding,
+    assemble_scene_file_bundle, AudioSourceComponent, CharacterControllerComponent, PhysicsBinding,
+    ScriptBinding,
 };
 use unitas_asset::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
     InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
+use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{normalize_rotation, rotate_vector, EntityId, SceneGraph, IDENTITY_ROTATION};
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
@@ -28,6 +30,7 @@ pub struct LoadedScene {
     bodies: Vec<EntityId>,
     body_offsets: Vec<(EntityId, [f32; 3])>,
     character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
+    audio_sources: Vec<(EntityId, AudioSourceComponent)>,
     diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
@@ -44,6 +47,10 @@ impl LoadedScene {
 
     pub fn character_controllers(&self) -> &[(EntityId, CharacterControllerComponent)] {
         &self.character_controllers
+    }
+
+    pub fn audio_sources(&self) -> &[(EntityId, AudioSourceComponent)] {
+        &self.audio_sources
     }
 
     pub fn diagnostics(&self) -> &[(EntityId, String)] {
@@ -109,10 +116,14 @@ pub struct Runtime {
     persistent: Vec<ScriptInstance>,
     persistent_entities: Vec<EntityId>,
     persistent_character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
+    persistent_audio_sources: Vec<(EntityId, AudioSourceComponent)>,
+    pending_play_on_awake: Vec<EntityId>,
+    dynamic_entity_floor: u64,
     character_states: HashMap<EntityId, CharacterController>,
     default_character_state: CharacterController,
     script_view: Vec<ScriptInstance>,
     world: World,
+    audio: AudioWorld,
     input: InputState,
     project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
@@ -131,10 +142,14 @@ impl Runtime {
             persistent: Vec::new(),
             persistent_entities: Vec::new(),
             persistent_character_controllers: Vec::new(),
+            persistent_audio_sources: Vec::new(),
+            pending_play_on_awake: Vec::new(),
+            dynamic_entity_floor: 1,
             character_states: HashMap::new(),
             default_character_state: CharacterController::default(),
             script_view: Vec::new(),
             world: World::new(),
+            audio: AudioWorld::new(),
             input: InputState::with_default_axes(),
             project_identity: ProjectIdentity::default(),
             callbacks: None,
@@ -168,7 +183,11 @@ impl Runtime {
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
-        let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
+        let assembled = assemble_scene_file_bundle(path)?;
+        let graph = assembled.graph;
+        let bindings = assembled.scripts;
+        let physics = assembled.physics;
+        let audio_bindings = assembled.audio_bindings;
         let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
@@ -207,7 +226,50 @@ impl Runtime {
             self.character_states
                 .insert(*entity, controller_from_component(Some(*entity), config));
         }
-        let diagnostics = collect_material_diagnostics(&physics, entity_base);
+        let mut diagnostics = collect_material_diagnostics(&physics, entity_base);
+        let mut audio_sources = Vec::with_capacity(audio_bindings.len());
+        for (entity, comp) in audio_bindings {
+            let shifted = EntityId::new(entity_base + entity.as_u64());
+            self.audio.ensure_source(shifted);
+            self.audio.set_volume(shifted, comp.volume);
+            self.audio.set_pitch(shifted, comp.pitch);
+            self.audio.set_looping(shifted, comp.looping);
+            self.audio.set_play_on_awake(shifted, comp.play_on_awake);
+            self.audio.set_priority(shifted, comp.priority);
+            self.audio.set_spatial_blend(shifted, comp.spatial_blend);
+            self.audio.set_min_distance(shifted, comp.min_distance);
+            self.audio.set_max_distance(shifted, comp.max_distance);
+            self.audio.set_mute(shifted, comp.mute);
+            if let Some(world_transform) = graph.world_transform(shifted) {
+                self.audio
+                    .set_source_position(shifted, world_transform.translation);
+            }
+            if let Some(ref diag) = comp.clip_diagnostic {
+                diagnostics.push((shifted, diag.clone()));
+                self.audio.mark_source_unsupported_clip(shifted);
+            } else if let Some(ref clip_path) = comp.clip_path {
+                match self.audio.load_wav_file(clip_path) {
+                    Ok(clip_id) => {
+                        self.audio.set_source_clip(shifted, Some(clip_id));
+                    }
+                    Err(err) => {
+                        diagnostics.push((
+                            shifted,
+                            format!(
+                                "AudioSource on entity {} failed to load clip '{}': {err}",
+                                shifted.as_u64(),
+                                clip_path.display()
+                            ),
+                        ));
+                        self.audio.mark_source_unsupported_clip(shifted);
+                    }
+                }
+            }
+            if comp.enabled && comp.play_on_awake {
+                self.pending_play_on_awake.push(shifted);
+            }
+            audio_sources.push((shifted, comp));
+        }
         for (body, desc) in bodies.iter().zip(descs.iter()) {
             self.world.add_body(*body, desc.1)?;
         }
@@ -219,6 +281,7 @@ impl Runtime {
             bodies,
             body_offsets,
             character_controllers,
+            audio_sources,
             diagnostics,
             entity_base,
             entity_count,
@@ -257,6 +320,13 @@ impl Runtime {
         for (entity, _) in &scene.character_controllers {
             if !self.persistent_entities.contains(entity) {
                 self.character_states.remove(entity);
+            }
+        }
+        for (entity, _) in &scene.audio_sources {
+            if !self.persistent_entities.contains(entity) {
+                self.pending_play_on_awake.retain(|e| e != entity);
+                self.audio.stop(*entity);
+                self.audio.remove_source(*entity);
             }
         }
         match self.active_scene {
@@ -344,6 +414,18 @@ impl Runtime {
                 break;
             }
         }
+        for index in 0..self.scenes.len() {
+            let audio_index = self.scenes[index]
+                .audio_sources
+                .iter()
+                .position(|(id, _)| *id == entity);
+            if let Some(audio_index) = audio_index {
+                let entry = self.scenes[index].audio_sources.remove(audio_index);
+                self.persistent_audio_sources.push(entry);
+                found = true;
+                break;
+            }
+        }
         if !found {
             return Err(RuntimeError::EntityNotFound(entity));
         }
@@ -404,6 +486,13 @@ impl Runtime {
                     self.character_states.remove(entity);
                 }
             }
+            for (entity, _) in &scene.audio_sources {
+                if !self.persistent_entities.contains(entity) {
+                    self.pending_play_on_awake.retain(|e| e != entity);
+                    self.audio.stop(*entity);
+                    self.audio.remove_source(*entity);
+                }
+            }
         }
     }
 
@@ -440,7 +529,7 @@ impl Runtime {
     }
 
     fn next_entity_base(&self) -> u64 {
-        let mut highest = 1u64;
+        let mut highest = self.dynamic_entity_floor.max(1);
         for scene in &self.scenes {
             highest = highest.max(scene.entity_base + scene.entity_count);
         }
@@ -448,6 +537,62 @@ impl Runtime {
             highest = highest.max(entity.as_u64() + 1);
         }
         highest
+    }
+
+    pub fn ensure_audio_source(&mut self, entity: u64) -> EntityId {
+        let id = if entity == 0 {
+            let allocated = self.next_entity_base();
+            self.dynamic_entity_floor = allocated + 1;
+            EntityId::new(allocated)
+        } else {
+            if entity >= self.dynamic_entity_floor {
+                self.dynamic_entity_floor = entity + 1;
+            }
+            EntityId::new(entity)
+        };
+        self.audio.ensure_source(id);
+        id
+    }
+
+    pub fn audio(&self) -> &AudioWorld {
+        &self.audio
+    }
+
+    pub fn audio_mut(&mut self) -> &mut AudioWorld {
+        &mut self.audio
+    }
+
+    pub fn audio_source_config(&self, entity: EntityId) -> Option<&AudioSourceComponent> {
+        for scene in &self.scenes {
+            if let Some((_, config)) = scene.audio_sources.iter().find(|(id, _)| *id == entity) {
+                return Some(config);
+            }
+        }
+        self.persistent_audio_sources
+            .iter()
+            .find(|(id, _)| *id == entity)
+            .map(|(_, config)| config)
+    }
+
+    fn drain_pending_play_on_awake(&mut self) {
+        self.sync_audio_source_positions();
+        let pending = std::mem::take(&mut self.pending_play_on_awake);
+        for entity in pending {
+            if self.audio.source_state(entity) == AudioSourceState::Stopped {
+                self.audio.play(entity, false);
+            }
+        }
+    }
+
+    fn sync_audio_source_positions(&mut self) {
+        for scene in &self.scenes {
+            for (entity, _) in &scene.audio_sources {
+                if let Some(world_transform) = scene.graph.world_transform(*entity) {
+                    self.audio
+                        .set_source_position(*entity, world_transform.translation);
+                }
+            }
+        }
     }
 
     fn refresh_script_view(&mut self) {
@@ -572,8 +717,12 @@ impl Runtime {
             if let Some(callbacks) = self.callbacks {
                 self.init_pending_scripts(callbacks, &mut hook);
             }
+            self.drain_pending_play_on_awake();
             self.refresh_script_view();
             return Ok(());
+        }
+        if !self.pending_play_on_awake.is_empty() {
+            self.drain_pending_play_on_awake();
         }
         let scaled_delta = delta_seconds * self.time_scale;
         self.input.begin_frame(scaled_delta);
@@ -630,6 +779,8 @@ impl Runtime {
                 });
             }
         }
+        self.sync_audio_source_positions();
+        self.audio.tick(delta_seconds, self.time_scale);
         Ok(())
     }
 
@@ -652,6 +803,17 @@ impl Runtime {
             }
             let (disable, destroy) = teardown_handles(&self.persistent);
             self.fire_teardown(disable, destroy, callbacks, &mut hook);
+        }
+        self.pending_play_on_awake.clear();
+        for scene in &self.scenes {
+            for (entity, _) in &scene.audio_sources {
+                self.audio.stop(*entity);
+                self.audio.remove_source(*entity);
+            }
+        }
+        for (entity, _) in &self.persistent_audio_sources {
+            self.audio.stop(*entity);
+            self.audio.remove_source(*entity);
         }
         Ok(())
     }

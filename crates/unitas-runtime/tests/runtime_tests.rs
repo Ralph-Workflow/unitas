@@ -1395,3 +1395,463 @@ fn runtime_forwards_capsule_material_and_geometry_diagnostics() -> Result<(), Bo
     assert!((hits[0].distance - 4.8).abs() < 1e-6);
     Ok(())
 }
+
+fn build_test_wav(
+    audio_format: u16,
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+    pcm_samples: &[i16],
+) -> Vec<u8> {
+    let byte_rate = sample_rate * u32::from(channels) * (u32::from(bits_per_sample) / 8);
+    let block_align = channels * (bits_per_sample / 8);
+    let data_size = (pcm_samples.len() * 2) as u32;
+    let riff_size = 4 + (8 + 16) + (8 + data_size);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&riff_size.to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&audio_format.to_le_bytes());
+    bytes.extend_from_slice(&channels.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    for sample in pcm_samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn runtime_audio_scene_play_on_awake_ticks_to_completed_and_teardown_stops_source(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_audio_play_on_awake_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    std::fs::create_dir_all(&assets_dir)?;
+    let wav_guid = "11111111111111111111111111111111";
+    let wav_path = assets_dir.join("beep.wav");
+    let wav_bytes = build_test_wav(1, 1, 10, 16, &[16384, 16384, 16384, 16384, 16384]);
+    std::fs::write(&wav_path, &wav_bytes)?;
+    std::fs::write(
+        assets_dir.join("beep.wav.meta"),
+        format!("fileFormatVersion: 2\nguid: {wav_guid}\n"),
+    )?;
+    let scene_path = assets_dir.join("AudioScene.unity");
+    let yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Speaker\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 3, y: 4, z: 5}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!82 &102\nAudioSource:\n  m_GameObject: {{fileID: 100}}\n  m_Enabled: 1\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n  m_PlayOnAwake: 1\n  m_Volume: 0.75\n  m_Pitch: 1.0\n  m_Loop: 0\n  m_Mute: 0\n  m_SpatialBlend: 1.0\n  m_MinDistance: 2.0\n  m_MaxDistance: 50.0\n  m_Priority: 64\n"
+    );
+    std::fs::write(&scene_path, yaml)?;
+
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let speaker_id = entity_id_for(&runtime, "Speaker")?;
+    let speaker = unitas_core::EntityId::new(speaker_id);
+    let scene = match runtime.scene(0) {
+        Some(s) => s,
+        None => return Err(String::from("missing scene").into()),
+    };
+    assert_eq!(scene.audio_sources().len(), 1);
+    assert_eq!(scene.audio_sources()[0].0, speaker);
+    assert!(runtime.audio_source_config(speaker).is_some());
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Stopped
+    );
+
+    runtime.tick(0.02)?;
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Playing
+    );
+    assert_eq!(runtime.audio().source_position(speaker), [3.0, 4.0, 5.0]);
+
+    runtime.tick(0.2)?;
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Playing
+    );
+    assert!((runtime.audio().source_time(speaker) - 0.2).abs() < 1e-6);
+
+    runtime.tick(0.35)?;
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Completed
+    );
+    assert!((runtime.audio().source_time(speaker) - 0.5).abs() < 1e-6);
+
+    runtime.audio_mut().play(speaker, false);
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Playing
+    );
+    runtime.unload_scene("AudioScene")?;
+    assert_eq!(
+        runtime.audio().source_state(speaker),
+        unitas_audio::AudioSourceState::Stopped
+    );
+    assert!(runtime.audio().source(speaker).is_none());
+    Ok(())
+}
+
+#[test]
+fn runtime_audio_time_scale_and_application_pause_control_audio_advancement(
+) -> Result<(), Box<dyn Error>> {
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    let path_addr = unitas_runtime_path_buffer(handle, 256);
+    assert_ne!(path_addr, 0);
+    let fixture_bytes = FIXTURE_PATH.as_bytes();
+    test_write_path_buffer(handle, fixture_bytes)?;
+    assert_eq!(
+        unitas_runtime_load_scene(handle, path_addr, fixture_bytes.len() as u64),
+        0
+    );
+
+    let entity = unitas_runtime::unitas_runtime_audio_create(handle, 0);
+    assert_ne!(entity, 0);
+    let clip_id =
+        unitas_runtime::unitas_runtime_audio_register_clip_samples(handle, 1, 100, 200, 0);
+    assert_ne!(clip_id, 0);
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_clip(handle, entity, clip_id),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_play(handle, entity, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, entity),
+        2
+    );
+
+    assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.02), 0);
+
+    assert_eq!(unitas_runtime_set_time_scale(handle, 0.0), 0);
+    assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.5), 0);
+    assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.0).abs() < 1e-9);
+
+    assert_eq!(unitas_runtime_set_time_scale(handle, 1.0), 0);
+    assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.5), 0);
+    assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.5).abs() < 1e-9);
+
+    assert_eq!(unitas_runtime::unitas_runtime_audio_set_paused(handle, 1), 0);
+    assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.5), 0);
+    assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.5).abs() < 1e-9);
+
+    assert_eq!(unitas_runtime::unitas_runtime_audio_set_paused(handle, 0), 0);
+    assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.25), 0);
+    assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.75).abs() < 1e-9);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_audio_unsupported_or_invalid_clip_emits_diagnostic_and_fails_source(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_audio_diagnostics_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    std::fs::create_dir_all(&assets_dir)?;
+
+    let ogg_guid = "22222222222222222222222222222222";
+    let ogg_path = assets_dir.join("music.ogg");
+    std::fs::write(&ogg_path, b"OggS\x00\x02\x00\x00")?;
+    std::fs::write(
+        assets_dir.join("music.ogg.meta"),
+        format!("fileFormatVersion: 2\nguid: {ogg_guid}\n"),
+    )?;
+
+    let bad_wav_guid = "33333333333333333333333333333333";
+    let bad_wav_path = assets_dir.join("float.wav");
+    let bad_wav_bytes = build_test_wav(3, 1, 44100, 16, &[0, 0]);
+    std::fs::write(&bad_wav_path, &bad_wav_bytes)?;
+    std::fs::write(
+        assets_dir.join("float.wav.meta"),
+        format!("fileFormatVersion: 2\nguid: {bad_wav_guid}\n"),
+    )?;
+
+    let scene_path = assets_dir.join("BadAudioScene.unity");
+    let yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: OggSpeaker\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!82 &102\nAudioSource:\n  m_GameObject: {{fileID: 100}}\n  m_Enabled: 1\n  m_audioClip: {{fileID: 8300000, guid: {ogg_guid}, type: 3}}\n  m_PlayOnAwake: 1\n--- !u!1 &200\nGameObject:\n  m_Name: BadWavSpeaker\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!82 &202\nAudioSource:\n  m_GameObject: {{fileID: 200}}\n  m_Enabled: 1\n  m_audioClip: {{fileID: 8300000, guid: {bad_wav_guid}, type: 3}}\n  m_PlayOnAwake: 1\n"
+    );
+    std::fs::write(&scene_path, yaml)?;
+
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let ogg_id = unitas_core::EntityId::new(entity_id_for(&runtime, "OggSpeaker")?);
+    let bad_wav_id = unitas_core::EntityId::new(entity_id_for(&runtime, "BadWavSpeaker")?);
+
+    assert_eq!(runtime.diagnostics().len(), 2);
+    assert_eq!(runtime.entity_diagnostics(ogg_id).len(), 1);
+    assert_eq!(runtime.entity_diagnostics(bad_wav_id).len(), 1);
+
+    assert_eq!(
+        runtime.audio().source_state(ogg_id),
+        unitas_audio::AudioSourceState::Failed
+    );
+    assert_eq!(
+        runtime.audio().inaudible_reason(ogg_id),
+        Some(unitas_audio::SilenceReason::UnsupportedClip)
+    );
+    assert_eq!(
+        runtime.audio().source_state(bad_wav_id),
+        unitas_audio::AudioSourceState::Failed
+    );
+    assert_eq!(
+        runtime.audio().inaudible_reason(bad_wav_id),
+        Some(unitas_audio::SilenceReason::UnsupportedClip)
+    );
+
+    runtime.tick(0.02)?;
+    assert_eq!(
+        runtime.audio().source_state(ogg_id),
+        unitas_audio::AudioSourceState::Failed
+    );
+    assert_eq!(
+        runtime.audio().source_state(bad_wav_id),
+        unitas_audio::AudioSourceState::Failed
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_abi_audio_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    std::fs::create_dir_all(&assets_dir)?;
+    let wav_guid = "44444444444444444444444444444444";
+    let wav_path = assets_dir.join("tone.wav");
+    let wav_bytes = build_test_wav(1, 1, 10, 16, &[16384, 16384, 16384, 16384]);
+    std::fs::write(&wav_path, &wav_bytes)?;
+    std::fs::write(
+        assets_dir.join("tone.wav.meta"),
+        format!("fileFormatVersion: 2\nguid: {wav_guid}\n"),
+    )?;
+    let scene_path = assets_dir.join("AbiAudioScene.unity");
+    let yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: AbiSpeaker\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 1, y: 2, z: 3}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!82 &102\nAudioSource:\n  m_GameObject: {{fileID: 100}}\n  m_Enabled: 1\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n  m_PlayOnAwake: 0\n  m_Volume: 0.5\n  m_Pitch: 1.25\n  m_Loop: 1\n  m_Mute: 0\n  m_SpatialBlend: 0.5\n  m_MinDistance: 2.0\n  m_MaxDistance: 20.0\n  m_Priority: 100\n"
+    );
+    std::fs::write(&scene_path, yaml)?;
+
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    let buf_addr = unitas_runtime_path_buffer(handle, 512);
+    assert_ne!(buf_addr, 0);
+    let scene_path_str = scene_path.to_string_lossy();
+    let scene_bytes = scene_path_str.as_bytes();
+    test_write_path_buffer(handle, scene_bytes)?;
+    assert_eq!(
+        unitas_runtime_load_scene(handle, buf_addr, scene_bytes.len() as u64),
+        0
+    );
+
+    let rc_cfg = unitas_runtime::unitas_runtime_audio_source_config(handle, 1, buf_addr);
+    assert_eq!(rc_cfg, 0);
+    let mut cfg_bytes = [0u8; 44];
+    unitas_runtime::test_read_path_buffer(handle, &mut cfg_bytes)?;
+    let cfg_vol = f32::from_le_bytes(cfg_bytes[0..4].try_into()?);
+    let cfg_pitch = f32::from_le_bytes(cfg_bytes[4..8].try_into()?);
+    let cfg_blend = f32::from_le_bytes(cfg_bytes[8..12].try_into()?);
+    let cfg_min = f32::from_le_bytes(cfg_bytes[12..16].try_into()?);
+    let cfg_max = f32::from_le_bytes(cfg_bytes[16..20].try_into()?);
+    let cfg_clip_id = u64::from_le_bytes(cfg_bytes[20..28].try_into()?);
+    let cfg_clip_dur = f64::from_le_bytes(cfg_bytes[28..36].try_into()?);
+    assert!((cfg_vol - 0.5).abs() < 1e-6);
+    assert!((cfg_pitch - 1.25).abs() < 1e-6);
+    assert!((cfg_blend - 0.5).abs() < 1e-6);
+    assert!((cfg_min - 2.0).abs() < 1e-6);
+    assert!((cfg_max - 20.0).abs() < 1e-6);
+    assert_ne!(cfg_clip_id, 0);
+    assert!((cfg_clip_dur - 0.4).abs() < 1e-6);
+    assert_eq!(cfg_bytes[36], 100);
+    assert_eq!(cfg_bytes[37], 1);
+    assert_eq!(cfg_bytes[38], 0);
+    assert_eq!(cfg_bytes[39], 0);
+    assert_eq!(cfg_bytes[40], 1);
+
+    let wav_path_str = wav_path.to_string_lossy();
+    let wav_path_bytes = wav_path_str.as_bytes();
+    test_write_path_buffer(handle, wav_path_bytes)?;
+    let loaded_clip = unitas_runtime::unitas_runtime_audio_load_clip(
+        handle,
+        buf_addr,
+        wav_path_bytes.len() as u64,
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert_ne!(loaded_clip, 0);
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_clip_info(handle, loaded_clip, buf_addr),
+        0
+    );
+    let mut info_bytes = [0u8; 16];
+    unitas_runtime::test_read_path_buffer(handle, &mut info_bytes)?;
+    let info_dur = f64::from_le_bytes(info_bytes[0..8].try_into()?);
+    let info_rate = u32::from_le_bytes(info_bytes[8..12].try_into()?);
+    let info_ch = u32::from_le_bytes(info_bytes[12..16].try_into()?);
+    assert!((info_dur - 0.4).abs() < 1e-6);
+    assert_eq!(info_rate, 10);
+    assert_eq!(info_ch, 1);
+
+    let dyn_entity = unitas_runtime::unitas_runtime_audio_create(handle, 0);
+    assert!(dyn_entity > 1);
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_clip(handle, dyn_entity, loaded_clip),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_volume(handle, dyn_entity, 1.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_pitch(handle, dyn_entity, 1.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_loop(handle, dyn_entity, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_priority(handle, dyn_entity, 64),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_spatial_blend(handle, dyn_entity, 1.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_min_max_distance(handle, dyn_entity, 1.0, 10.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_position(handle, dyn_entity, 0.0, 0.0, 2.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_listener(handle, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        0
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, dyn_entity),
+        5
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_silence_reason(handle, dyn_entity),
+        7
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_play(handle, dyn_entity, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, dyn_entity),
+        2
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_silence_reason(handle, dyn_entity),
+        -1
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_mute(handle, dyn_entity, 1),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_silence_reason(handle, dyn_entity),
+        1
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_mute(handle, dyn_entity, 0),
+        0
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_pause(handle, dyn_entity),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, dyn_entity),
+        3
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_silence_reason(handle, dyn_entity),
+        2
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_unpause(handle, dyn_entity),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, dyn_entity),
+        2
+    );
+
+    let mixed_frames = unitas_runtime::unitas_runtime_audio_mix(handle, 2, buf_addr);
+    assert_eq!(mixed_frames, 2);
+    let mut mix_bytes = [0u8; 16];
+    unitas_runtime::test_read_path_buffer(handle, &mut mix_bytes)?;
+    let sample_l0 = f32::from_le_bytes(mix_bytes[0..4].try_into()?);
+    let sample_r0 = f32::from_le_bytes(mix_bytes[4..8].try_into()?);
+    assert!(sample_l0 > 0.0);
+    assert!((sample_l0 - sample_r0).abs() < 1e-6);
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_time(handle, dyn_entity, 0.1),
+        0
+    );
+    assert!((unitas_runtime::unitas_runtime_audio_time(handle, dyn_entity) - 0.1).abs() < 1e-6);
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_clear_listener(handle),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_silence_reason(handle, dyn_entity),
+        5
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_stop(handle, dyn_entity),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_state(handle, dyn_entity),
+        5
+    );
+
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_custom_duration(handle, dyn_entity, 1.5),
+        0
+    );
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_destroy(handle, dyn_entity),
+        0
+    );
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}

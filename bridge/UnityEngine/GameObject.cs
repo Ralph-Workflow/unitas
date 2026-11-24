@@ -695,6 +695,10 @@ namespace UnityEngine
                 {
                     CoroutineScheduler.OwnerDeactivated(behaviour);
                 }
+                else if (_components[i] is AudioSource audioSource)
+                {
+                    audioSource.Stop();
+                }
             }
 
             for (int i = 0; i < transform.childCount; i++)

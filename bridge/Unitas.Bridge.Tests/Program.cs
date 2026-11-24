@@ -37,6 +37,8 @@ namespace Unitas.Bridge.Tests
             LoggingTests.Run();
             TestCharacterControllerDefaultsAndNullProvider();
             TestEndToEndCharacterControllerMoveAndSceneLoad();
+            TestAudioDefaultsAndNullProvider();
+            TestEndToEndAudioPlaybackAndSceneLoad();
 
             if (Check.FailureCount > 0)
             {
@@ -674,6 +676,462 @@ namespace Unitas.Bridge.Tests
                 }
             }
         }
+
+        private static void TestAudioDefaultsAndNullProvider()
+        {
+            IAudioProvider? savedProvider = AudioSource.Provider;
+            AudioSource.Provider = null;
+            float savedListenerVolume = AudioListener.volume;
+            bool savedListenerPause = AudioListener.pause;
+            try
+            {
+                Check.Equal("AudioSourceState.Scheduled value", 0, (int)AudioSourceState.Scheduled);
+                Check.Equal("AudioSourceState.Loading value", 1, (int)AudioSourceState.Loading);
+                Check.Equal("AudioSourceState.Playing value", 2, (int)AudioSourceState.Playing);
+                Check.Equal("AudioSourceState.Paused value", 3, (int)AudioSourceState.Paused);
+                Check.Equal("AudioSourceState.Virtualized value", 4, (int)AudioSourceState.Virtualized);
+                Check.Equal("AudioSourceState.Stopped value", 5, (int)AudioSourceState.Stopped);
+                Check.Equal("AudioSourceState.Completed value", 6, (int)AudioSourceState.Completed);
+                Check.Equal("AudioSourceState.Failed value", 7, (int)AudioSourceState.Failed);
+
+                Check.Equal("AudioSilenceReason.None value", -1, (int)AudioSilenceReason.None);
+                Check.Equal("AudioSilenceReason.ZeroVolume value", 0, (int)AudioSilenceReason.ZeroVolume);
+                Check.Equal("AudioSilenceReason.Muted value", 1, (int)AudioSilenceReason.Muted);
+                Check.Equal("AudioSilenceReason.Paused value", 2, (int)AudioSilenceReason.Paused);
+                Check.Equal("AudioSilenceReason.Virtualized value", 3, (int)AudioSilenceReason.Virtualized);
+                Check.Equal("AudioSilenceReason.OutOfRange value", 4, (int)AudioSilenceReason.OutOfRange);
+                Check.Equal("AudioSilenceReason.NoListener value", 5, (int)AudioSilenceReason.NoListener);
+                Check.Equal("AudioSilenceReason.UnsupportedClip value", 6, (int)AudioSilenceReason.UnsupportedClip);
+                Check.Equal("AudioSilenceReason.Stopped value", 7, (int)AudioSilenceReason.Stopped);
+                Check.Equal("AudioSilenceReason.Completed value", 8, (int)AudioSilenceReason.Completed);
+
+                AudioClip emptyClip = new AudioClip();
+                Check.Equal("AudioClip default name", string.Empty, emptyClip.name);
+                Check.Equal("AudioClip default length", 0f, emptyClip.length);
+                Check.Equal("AudioClip default channels", 1, emptyClip.channels);
+                Check.Equal("AudioClip default frequency", 44100, emptyClip.frequency);
+                Check.Equal("AudioClip default sampleRate", 44100, emptyClip.sampleRate);
+                Check.Equal("AudioClip default samples", 0, emptyClip.samples);
+                Check.That("AudioClip default NativeClipId is 0", emptyClip.NativeClipId == 0UL);
+
+                AudioClip createdClip = AudioClip.Create("Tone", 500, 2, 1000);
+                Check.Equal("AudioClip.Create name", "Tone", createdClip.name);
+                Check.Equal("AudioClip.Create length", 0.5f, createdClip.length);
+                Check.Equal("AudioClip.Create channels", 2, createdClip.channels);
+                Check.Equal("AudioClip.Create frequency", 1000, createdClip.frequency);
+                Check.Equal("AudioClip.Create samples", 500, createdClip.samples);
+                Check.That("AudioClip.Create with null provider leaves NativeClipId 0", createdClip.NativeClipId == 0UL);
+                Check.That("AudioClip.LoadFromFile with null provider returns null", AudioClip.LoadFromFile("nonexistent.wav") == null);
+
+                GameObject listenerGo = new GameObject("ListenerDefaults");
+                AudioListener listener = listenerGo.AddComponent<AudioListener>();
+                Check.Equal("AudioListener default static volume", 1.0f, AudioListener.volume);
+                Check.Equal("AudioListener default static pause", false, AudioListener.pause);
+                Check.That("AudioListener default forward is (0, 0, 1)", listener.forward == new Vector3(0f, 0f, 1f));
+                Check.That("AudioListener default Velocity is zero", listener.Velocity == Vector3.zero);
+                UnityEngine.Object.Destroy(listenerGo);
+
+                GameObject go = new GameObject("AudioDefaults");
+                AudioSource source = go.AddComponent<AudioSource>();
+                Check.That("GetComponent<AudioSource> resolves source", ReferenceEquals(go.GetComponent<AudioSource>(), source));
+                Check.Equal("AudioSource default enabled", true, source.enabled);
+                Check.Equal("AudioSource default volume", 1.0f, source.volume);
+                Check.Equal("AudioSource default pitch", 1.0f, source.pitch);
+                Check.Equal("AudioSource default priority", 128, source.priority);
+                Check.Equal("AudioSource default minDistance", 1.0f, source.minDistance);
+                Check.Equal("AudioSource default maxDistance", 500.0f, source.maxDistance);
+                Check.Equal("AudioSource default playOnAwake", true, source.playOnAwake);
+                Check.Equal("AudioSource default loop", false, source.loop);
+                Check.Equal("AudioSource default mute", false, source.mute);
+                Check.Equal("AudioSource default spatialBlend", 0.0f, source.spatialBlend);
+                Check.Equal("AudioSource default time", 0.0f, source.time);
+                Check.Equal("AudioSource default isPlaying", false, source.isPlaying);
+                Check.That("AudioSource default state is Stopped", source.state == AudioSourceState.Stopped);
+                Check.That("AudioSource default silenceReason is Stopped", source.silenceReason == AudioSilenceReason.Stopped);
+                Check.That("AudioSource default clip is null", source.clip == null);
+
+                source.clip = createdClip;
+                source.volume = 0.75f;
+                source.pitch = 1.25f;
+                source.priority = 64;
+                source.minDistance = 2.0f;
+                source.maxDistance = 50.0f;
+                source.playOnAwake = false;
+                source.loop = true;
+                source.spatialBlend = 0.5f;
+                source.time = 0.2f;
+                Check.That("AudioSource clip round trip", ReferenceEquals(source.clip, createdClip));
+                Check.Equal("AudioSource volume round trip", 0.75f, source.volume);
+                Check.Equal("AudioSource pitch round trip", 1.25f, source.pitch);
+                Check.Equal("AudioSource priority round trip", 64, source.priority);
+                Check.Equal("AudioSource minDistance round trip", 2.0f, source.minDistance);
+                Check.Equal("AudioSource maxDistance round trip", 50.0f, source.maxDistance);
+                Check.Equal("AudioSource playOnAwake round trip", false, source.playOnAwake);
+                Check.Equal("AudioSource loop round trip", true, source.loop);
+                Check.Equal("AudioSource spatialBlend round trip", 0.5f, source.spatialBlend);
+                Check.Equal("AudioSource time round trip", 0.2f, source.time);
+
+                source.mute = true;
+                Check.Equal("AudioSource mute round trip", true, source.mute);
+                Check.That("AudioSource silenceReason when muted (null provider)", source.silenceReason == AudioSilenceReason.Muted);
+                source.mute = false;
+
+                source.volume = 0f;
+                Check.That("AudioSource silenceReason when zero volume (null provider)", source.silenceReason == AudioSilenceReason.ZeroVolume);
+                source.volume = 1f;
+                Check.That("AudioSource silenceReason when unmuted and stopped (null provider)", source.silenceReason == AudioSilenceReason.Stopped);
+
+                source.Play();
+                Check.Equal("AudioSource Play with null provider sets isPlaying true", true, source.isPlaying);
+                Check.That("AudioSource Play with null provider sets state Playing", source.state == AudioSourceState.Playing);
+
+                source.Pause();
+                Check.Equal("AudioSource Pause with null provider sets isPlaying false", false, source.isPlaying);
+                Check.That("AudioSource Pause with null provider sets state Paused", source.state == AudioSourceState.Paused);
+
+                source.UnPause();
+                Check.Equal("AudioSource UnPause with null provider sets isPlaying true", true, source.isPlaying);
+                Check.That("AudioSource UnPause with null provider sets state Playing", source.state == AudioSourceState.Playing);
+
+                source.Stop();
+                Check.Equal("AudioSource Stop with null provider sets isPlaying false", false, source.isPlaying);
+                Check.That("AudioSource Stop with null provider sets state Stopped", source.state == AudioSourceState.Stopped);
+                Check.Equal("AudioSource Stop with null provider resets time to 0", 0f, source.time);
+
+                source.PlayOneShot(createdClip, 0.5f);
+                Check.Equal("AudioSource PlayOneShot with null provider sets isPlaying true", true, source.isPlaying);
+                source.Stop();
+                UnityEngine.Object.Destroy(go);
+                UnityEngine.Object.Destroy(emptyClip);
+                UnityEngine.Object.Destroy(createdClip);
+            }
+            finally
+            {
+                AudioListener.volume = savedListenerVolume;
+                AudioListener.pause = savedListenerPause;
+                AudioSource.Provider = savedProvider;
+            }
+        }
+
+        private static void TestEndToEndAudioPlaybackAndSceneLoad()
+        {
+            string tempDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_bridge_audio_e2e_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string wavPath = Path.Combine(tempDir, "beep.wav");
+            string wavMetaPath = Path.Combine(tempDir, "beep.wav.meta");
+            string scenePath = Path.Combine(tempDir, "audio_e2e.unity");
+
+            File.WriteAllBytes(wavPath, BuildTestWav16BitPcmMono(1000, 500));
+            File.WriteAllText(wavMetaPath, "fileFormatVersion: 2\nguid: 00000000000000000000000000000082\n");
+            File.WriteAllText(scenePath, AudioE2eSceneYaml);
+
+            float savedScale = Time.timeScale;
+            bool savedListenerPause = AudioListener.pause;
+            Time.timeScale = 1f;
+            AudioListener.pause = false;
+            try
+            {
+                ScriptRegistry.Clear();
+                AudioStarterScript? starterScript = null;
+                ScriptRegistry.Register(0x1111111111111111UL, 0x2222222222222222UL, () => starterScript = new AudioStarterScript());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    Check.That("BridgeHost wires AudioSource.Provider", ReferenceEquals(AudioSource.Provider, host));
+                    host.LoadScene(scenePath);
+                    host.Tick(0.016);
+
+                    Check.That("AudioStarterScript created and Start ran on first tick", starterScript != null && starterScript.StartCalled);
+                    Check.Equal("Start observed scene-loaded volume 0.8", 0.8f, starterScript!.ObservedVolume);
+                    Check.Equal("Start observed scene-loaded pitch 1.0", 1.0f, starterScript.ObservedPitch);
+                    Check.Equal("Start observed scene-loaded priority 64", 64, starterScript.ObservedPriority);
+                    Check.Equal("Start observed scene-loaded playOnAwake false", false, starterScript.ObservedPlayOnAwake);
+                    Check.That("Start observed non-null scene-loaded AudioClip", starterScript.ObservedClipPresent);
+                    Check.Equal("Start observed scene-loaded clip length 0.5s", 0.5f, starterScript.ObservedClipLength);
+                    Check.Equal("Start observed scene-loaded clip channels 1", 1, starterScript.ObservedClipChannels);
+                    Check.Equal("Start observed scene-loaded clip frequency 1000", 1000, starterScript.ObservedClipFrequency);
+
+                    AudioSource? audioSource = starterScript.GetComponent<AudioSource>();
+                    Check.That("AudioSource component remains attached", audioSource != null);
+                    ulong entityId = starterScript.gameObject.NativeEntityId;
+                    Check.That("AudioSource GameObject has non-zero NativeEntityId", entityId != 0UL);
+
+                    Check.Equal("AudioSource.isPlaying is true after Start calls Play()", true, audioSource!.isPlaying);
+                    Check.That("AudioSource.state is Playing after Start", audioSource.state == AudioSourceState.Playing);
+                    Check.That("Native GetAudioState is Playing after Start", host.GetAudioState(entityId) == AudioSourceState.Playing);
+                    Check.That("AudioSource.silenceReason is None while audible", audioSource.silenceReason == AudioSilenceReason.None);
+                    Check.That("Native GetAudioSilenceReason is None (-1) while audible", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+
+                    float[] mixedSamples = host.MixAudio(64);
+                    Check.Equal("MixAudio(64) returns 128 interleaved stereo samples", 128, mixedSamples.Length);
+                    bool hasNonZeroSample = false;
+                    for (int i = 0; i < mixedSamples.Length; i++)
+                    {
+                        if (Math.Abs(mixedSamples[i]) > 1e-4f)
+                        {
+                            hasNonZeroSample = true;
+                            break;
+                        }
+                    }
+                    Check.That("MixAudio(64) produces non-zero stereo samples", hasNonZeroSample);
+
+                    audioSource.mute = true;
+                    Check.That("Native GetAudioSilenceReason is Muted when mute = true", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.Muted);
+                    Check.That("AudioSource.silenceReason is Muted when mute = true", audioSource.silenceReason == AudioSilenceReason.Muted);
+                    audioSource.mute = false;
+                    Check.That("Native GetAudioSilenceReason returns to None when unmuted", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+
+                    audioSource.volume = 0f;
+                    Check.That("Native GetAudioSilenceReason is ZeroVolume when volume = 0", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.ZeroVolume);
+                    audioSource.volume = 0.8f;
+                    Check.That("Native GetAudioSilenceReason returns to None when volume restored", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+
+                    audioSource.Pause();
+                    Check.Equal("AudioSource.isPlaying is false when paused", false, audioSource.isPlaying);
+                    Check.That("AudioSource.state is Paused after Pause()", audioSource.state == AudioSourceState.Paused);
+                    Check.That("Native GetAudioState is Paused after Pause()", host.GetAudioState(entityId) == AudioSourceState.Paused);
+                    Check.That("Native GetAudioSilenceReason is Paused after Pause()", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.Paused);
+
+                    audioSource.UnPause();
+                    Check.Equal("AudioSource.isPlaying is true after UnPause()", true, audioSource.isPlaying);
+                    Check.That("AudioSource.state is Playing after UnPause()", audioSource.state == AudioSourceState.Playing);
+                    Check.That("Native GetAudioState is Playing after UnPause()", host.GetAudioState(entityId) == AudioSourceState.Playing);
+                    Check.That("Native GetAudioSilenceReason is None after UnPause()", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+
+                    GameObject listenerObj = new GameObject("MainAudioListener");
+                    listenerObj.transform.position = new Vector3(0f, 0f, 0f);
+                    AudioListener listener = listenerObj.AddComponent<AudioListener>();
+                    listener.forward = new Vector3(0f, 0f, 1f);
+
+                    audioSource.spatialBlend = 1.0f;
+                    audioSource.minDistance = 1.0f;
+                    audioSource.maxDistance = 10.0f;
+                    starterScript.transform.position = new Vector3(0f, 0f, 20f);
+                    host.Tick(0.01);
+                    Check.That("Native GetAudioSilenceReason is OutOfRange at distance 20 (maxDistance 10)", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.OutOfRange);
+                    Check.That("AudioSource.silenceReason is OutOfRange at distance 20", audioSource.silenceReason == AudioSilenceReason.OutOfRange);
+
+                    double timeAtOutOfRange = host.GetAudioTime(entityId);
+                    starterScript.transform.position = new Vector3(0f, 0f, 2f);
+                    host.Tick(0.1);
+                    double timeAfterInRangeTick = host.GetAudioTime(entityId);
+                    Check.That("Native GetAudioSilenceReason is None after moving back inside range (z = 2)", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+                    Check.That("GetAudioTime advanced after 0.1s tick in range", timeAfterInRangeTick > timeAtOutOfRange + 0.08);
+
+                    UnityEngine.Object.Destroy(listenerObj);
+                    host.Tick(0.0);
+                    Check.That("Native GetAudioSilenceReason is NoListener when active AudioListener is removed", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.NoListener);
+
+                    listenerObj = new GameObject("RestoredAudioListener");
+                    listenerObj.transform.position = new Vector3(0f, 0f, 0f);
+                    listener = listenerObj.AddComponent<AudioListener>();
+                    listener.forward = new Vector3(0f, 0f, 1f);
+
+                    Time.timeScale = 0f;
+                    host.Tick(0.1);
+                    double timeAfterZeroScaleTick = host.GetAudioTime(entityId);
+                    Check.Equal("GetAudioTime is unchanged when Time.timeScale = 0", timeAfterInRangeTick, timeAfterZeroScaleTick);
+                    Check.That("SyncAudioBeforeTick restores active AudioListener pose", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.None);
+                    Time.timeScale = 1f;
+
+                    host.SetPaused(true);
+                    host.Tick(0.2);
+                    double timeWhileAppPaused = host.GetAudioTime(entityId);
+                    Check.Equal("GetAudioTime is unchanged while application is paused", timeAfterZeroScaleTick, timeWhileAppPaused);
+                    host.SetPaused(false);
+
+                    AudioClip? createdNativeClip = AudioClip.Create("GeneratedTone", 200, 1, 1000);
+                    Check.That("AudioClip.Create with active provider registers non-zero NativeClipId", createdNativeClip != null && createdNativeClip.NativeClipId != 0UL);
+                    AudioClip? loadedFileClip = AudioClip.LoadFromFile(wavPath);
+                    Check.That("AudioClip.LoadFromFile loads WAV clip with non-zero NativeClipId", loadedFileClip != null && loadedFileClip.NativeClipId != 0UL);
+                    Check.Equal("AudioClip.LoadFromFile duration is 0.5s", 0.5f, loadedFileClip!.length);
+                    UnityEngine.Object.Destroy(createdNativeClip!);
+                    UnityEngine.Object.Destroy(loadedFileClip);
+
+                    host.Tick(0.5);
+                    Check.Equal("AudioSource.isPlaying is false after clip duration completes", false, audioSource.isPlaying);
+                    Check.That("AudioSource.state is Completed after advancing past duration", audioSource.state == AudioSourceState.Completed);
+                    Check.That("Native GetAudioState is Completed after advancing past duration", host.GetAudioState(entityId) == AudioSourceState.Completed);
+                    Check.That("Native GetAudioSilenceReason is Completed after advancing past duration", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.Completed);
+
+                    audioSource.Stop();
+                    Check.That("Native GetAudioState is Stopped after Stop()", host.GetAudioState(entityId) == AudioSourceState.Stopped);
+                    Check.That("Native GetAudioSilenceReason is Stopped after Stop()", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.Stopped);
+
+                    audioSource.Play();
+                    Check.That("Native GetAudioState is Playing before enabled = false", host.GetAudioState(entityId) == AudioSourceState.Playing);
+                    audioSource.enabled = false;
+                    Check.That("Disabling AudioSource stops playback natively", host.GetAudioState(entityId) == AudioSourceState.Stopped);
+                    audioSource.enabled = true;
+
+                    audioSource.Play();
+                    Check.That("Native GetAudioState is Playing before SetActive(false)", host.GetAudioState(entityId) == AudioSourceState.Playing);
+                    starterScript.gameObject.SetActive(false);
+                    Check.That("Deactivating GameObject stops playback natively", host.GetAudioState(entityId) == AudioSourceState.Stopped);
+                    starterScript.gameObject.SetActive(true);
+
+                    audioSource.Play();
+                    Check.That("Native GetAudioState is Playing before scene teardown", host.GetAudioState(entityId) == AudioSourceState.Playing);
+                    string emptyScenePath = Path.Combine(tempDir, "empty_teardown.unity");
+                    File.WriteAllText(emptyScenePath, EmptyTeardownSceneYaml);
+                    host.LoadScene(emptyScenePath);
+                    Check.That("Scene reload tears down previous scene native AudioSource", host.GetAudioState(entityId) == AudioSourceState.Stopped);
+                    Check.That("Scene reload native SilenceReason is Stopped for torn-down entity", host.GetAudioSilenceReason(entityId) == AudioSilenceReason.Stopped);
+
+                    UnityEngine.Object.Destroy(listenerObj);
+                    host.Shutdown();
+                }
+                Check.That("Disposing BridgeHost clears AudioSource.Provider", AudioSource.Provider == null);
+            }
+            finally
+            {
+                AudioListener.pause = savedListenerPause;
+                Time.timeScale = savedScale;
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        private static byte[] BuildTestWav16BitPcmMono(int sampleRate, int frameCount)
+        {
+            int dataBytes = frameCount * 2;
+            int riffSize = 36 + dataBytes;
+            byte[] buffer = new byte[44 + dataBytes];
+
+            buffer[0] = (byte)'R';
+            buffer[1] = (byte)'I';
+            buffer[2] = (byte)'F';
+            buffer[3] = (byte)'F';
+            BitConverter.GetBytes(riffSize).CopyTo(buffer, 4);
+            buffer[8] = (byte)'W';
+            buffer[9] = (byte)'A';
+            buffer[10] = (byte)'V';
+            buffer[11] = (byte)'E';
+
+            buffer[12] = (byte)'f';
+            buffer[13] = (byte)'m';
+            buffer[14] = (byte)'t';
+            buffer[15] = (byte)' ';
+            BitConverter.GetBytes(16).CopyTo(buffer, 16);
+            BitConverter.GetBytes((short)1).CopyTo(buffer, 20);
+            BitConverter.GetBytes((short)1).CopyTo(buffer, 22);
+            BitConverter.GetBytes(sampleRate).CopyTo(buffer, 24);
+            BitConverter.GetBytes(sampleRate * 2).CopyTo(buffer, 28);
+            BitConverter.GetBytes((short)2).CopyTo(buffer, 32);
+            BitConverter.GetBytes((short)16).CopyTo(buffer, 34);
+
+            buffer[36] = (byte)'d';
+            buffer[37] = (byte)'a';
+            buffer[38] = (byte)'t';
+            buffer[39] = (byte)'a';
+            BitConverter.GetBytes(dataBytes).CopyTo(buffer, 40);
+
+            for (int i = 0; i < frameCount; i++)
+            {
+                short sample = (i % 2 == 0) ? (short)12000 : (short)-12000;
+                BitConverter.GetBytes(sample).CopyTo(buffer, 44 + (i * 2));
+            }
+
+            return buffer;
+        }
+
+        private sealed class AudioStarterScript : MonoBehaviour
+        {
+            public bool StartCalled { get; private set; }
+
+            public float ObservedVolume { get; private set; }
+
+            public float ObservedPitch { get; private set; }
+
+            public int ObservedPriority { get; private set; }
+
+            public bool ObservedPlayOnAwake { get; private set; }
+
+            public bool ObservedClipPresent { get; private set; }
+
+            public float ObservedClipLength { get; private set; }
+
+            public int ObservedClipChannels { get; private set; }
+
+            public int ObservedClipFrequency { get; private set; }
+
+            public override void Start()
+            {
+                StartCalled = true;
+                AudioSource? source = GetComponent<AudioSource>();
+                if (source != null)
+                {
+                    ObservedVolume = source.volume;
+                    ObservedPitch = source.pitch;
+                    ObservedPriority = source.priority;
+                    ObservedPlayOnAwake = source.playOnAwake;
+                    AudioClip? clip = source.clip;
+                    if (clip != null)
+                    {
+                        ObservedClipPresent = true;
+                        ObservedClipLength = clip.length;
+                        ObservedClipChannels = clip.channels;
+                        ObservedClipFrequency = clip.frequency;
+                    }
+                    source.Play();
+                }
+            }
+        }
+
+        private const string AudioE2eSceneYaml = @"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: Emitter
+  m_Layer: 0
+--- !u!4 &101
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!82 &102
+AudioSource:
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_audioClip: {fileID: 8300000, guid: 00000000000000000000000000000082, type: 3}
+  m_PlayOnAwake: 0
+  m_Volume: 0.8
+  m_Pitch: 1
+  Loop: 0
+  Mute: 0
+  Priority: 64
+  m_SpatialBlend: 0
+  MinDistance: 1
+  MaxDistance: 500
+--- !u!114 &103
+MonoBehaviour:
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 11111111111111112222222222222222, type: 3}
+";
+
+        private const string EmptyTeardownSceneYaml = @"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: EmptyRoot
+  m_Layer: 0
+--- !u!4 &101
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+";
 
         private sealed class CharacterProbeScript : MonoBehaviour
         {

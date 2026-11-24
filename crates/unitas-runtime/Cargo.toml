@@ -8,5 +8,6 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 unitas-asset = { path = "../unitas-asset" }
+unitas-audio = { path = "../unitas-audio" }
 unitas-core = { path = "../unitas-core" }
 unitas-physics = { path = "../unitas-physics" }

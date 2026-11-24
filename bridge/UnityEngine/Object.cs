@@ -393,6 +393,10 @@ namespace UnityEngine
         {
             component._destroyed = true;
             DeregisterLiveObject(component);
+            if (component is AudioSource audioSource)
+            {
+                audioSource.OnComponentDestroyed();
+            }
             if (!(component is MonoBehaviour behaviour))
             {
                 return;
