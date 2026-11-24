@@ -35,6 +35,7 @@ namespace Unitas.Bridge.Tests
             AsyncOperationsCompleteOnTheNextTick();
             FailedLoadLeavesSceneSetIntact();
             FailedUnloadLeavesSceneSetIntact();
+            FailedAsyncLoadAndUnloadLeaveSceneSetIntact();
             LoadByNameAndByBuildIndex();
         }
 
@@ -447,6 +448,126 @@ namespace Unitas.Bridge.Tests
                 int updatesBefore = alphaScript.UpdateCount;
                 host.Tick(0.016);
                 Check.That("the loaded scene keeps ticking after the failed unload", alphaScript.UpdateCount > updatesBefore);
+            }
+        }
+
+        private static void FailedAsyncLoadAndUnloadLeaveSceneSetIntact()
+        {
+            string alpha = ResolveFixture(AlphaFixture);
+            string missing = ResolveFixture(MissingFixture);
+            Check.That("the missing scene fixture does not exist for async failure coverage", !File.Exists(missing));
+
+            ScriptRegistry.Clear();
+            AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
+            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
+
+            using (BridgeHost host = CreateHost(alpha))
+            {
+                host.LoadScene(alpha, LoadSceneMode.Single);
+                host.Tick(0.016);
+                host.Tick(0.016);
+                Check.That("the alpha script ticks before the failed async operations", alphaScript.UpdateCount > 0);
+                Check.Equal("one scene is loaded before the failed async operations", 1, SceneManager.sceneCount);
+
+                int countBefore = SceneManager.sceneCount;
+                string activeBefore = StemOf(SceneManager.GetActiveScene());
+
+                bool asyncUnknownLoadThrew = false;
+                string asyncUnknownLoadError = string.Empty;
+                try
+                {
+                    SceneManager.LoadSceneAsync("does_not_exist", LoadSceneMode.Single);
+                }
+                catch (SceneManagementException ex)
+                {
+                    asyncUnknownLoadThrew = true;
+                    asyncUnknownLoadError = ex.Message;
+                }
+
+                Check.That("async loading an unknown scene name throws", asyncUnknownLoadThrew);
+                Check.That("the failed async load reports an error message", asyncUnknownLoadError.Length > 0);
+                string? nativeUnknownLoadError = host.GetErrorMessage();
+                Check.That(
+                    "the failed async load surfaces the native error message",
+                    !string.IsNullOrEmpty(nativeUnknownLoadError) &&
+                    asyncUnknownLoadError.Contains(nativeUnknownLoadError, StringComparison.Ordinal));
+                Check.Equal("the failed async load leaves the scene count unchanged", countBefore, SceneManager.sceneCount);
+                Check.Equal(
+                    "the failed async load leaves the active scene unchanged",
+                    activeBefore,
+                    StemOf(SceneManager.GetActiveScene()));
+
+                int updatesBeforeMissingLoad = alphaScript.UpdateCount;
+                host.Tick(0.016);
+                Check.That(
+                    "the loaded scene keeps ticking after the failed async unknown load",
+                    alphaScript.UpdateCount > updatesBeforeMissingLoad);
+
+                host.Provider = new IntegrationSceneProvider(alpha, missing);
+                bool asyncMissingLoadThrew = false;
+                string asyncMissingLoadError = string.Empty;
+                try
+                {
+                    SceneManager.LoadSceneAsync("does_not_exist", LoadSceneMode.Single);
+                }
+                catch (SceneManagementException ex)
+                {
+                    asyncMissingLoadThrew = true;
+                    asyncMissingLoadError = ex.Message;
+                }
+
+                Check.That("async loading a missing scene fixture throws", asyncMissingLoadThrew);
+                Check.That("the failed async missing-fixture load reports an error message", asyncMissingLoadError.Length > 0);
+                string? nativeMissingLoadError = host.GetErrorMessage();
+                Check.That(
+                    "the failed async missing-fixture load surfaces the native error message",
+                    !string.IsNullOrEmpty(nativeMissingLoadError) &&
+                    asyncMissingLoadError.Contains(nativeMissingLoadError, StringComparison.Ordinal));
+                Check.Equal(
+                    "the failed async missing-fixture load leaves the scene count unchanged",
+                    countBefore,
+                    SceneManager.sceneCount);
+                Check.Equal(
+                    "the failed async missing-fixture load leaves the active scene unchanged",
+                    activeBefore,
+                    StemOf(SceneManager.GetActiveScene()));
+
+                int updatesBeforeUnload = alphaScript.UpdateCount;
+                host.Tick(0.016);
+                Check.That(
+                    "the loaded scene keeps ticking after the failed async missing-fixture load",
+                    alphaScript.UpdateCount > updatesBeforeUnload);
+
+                bool asyncUnloadThrew = false;
+                string asyncUnloadError = string.Empty;
+                try
+                {
+                    SceneManager.UnloadSceneAsync("NoSuchScene");
+                }
+                catch (SceneManagementException ex)
+                {
+                    asyncUnloadThrew = true;
+                    asyncUnloadError = ex.Message;
+                }
+
+                Check.That("async unloading an unknown scene throws", asyncUnloadThrew);
+                Check.That("the failed async unload reports an error message", asyncUnloadError.Length > 0);
+                string? nativeUnloadError = host.GetErrorMessage();
+                Check.That(
+                    "the failed async unload surfaces the native error message",
+                    !string.IsNullOrEmpty(nativeUnloadError) &&
+                    asyncUnloadError.Contains(nativeUnloadError, StringComparison.Ordinal));
+                Check.Equal("the failed async unload leaves the scene count unchanged", countBefore, SceneManager.sceneCount);
+                Check.Equal(
+                    "the failed async unload leaves the active scene unchanged",
+                    activeBefore,
+                    StemOf(SceneManager.GetActiveScene()));
+
+                int updatesAfterUnload = alphaScript.UpdateCount;
+                host.Tick(0.016);
+                Check.That(
+                    "the loaded scene keeps ticking after the failed async unload",
+                    alphaScript.UpdateCount > updatesAfterUnload);
             }
         }
 

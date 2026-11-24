@@ -49,6 +49,10 @@ namespace Unitas.Bridge.Tests
 
         public int DestroyCount;
 
+        public bool StartCoroutineOnStart;
+
+        public int CoroutineTickCount;
+
         public override void Awake()
         {
             AwakeCount++;
@@ -65,6 +69,19 @@ namespace Unitas.Bridge.Tests
         {
             StartCount++;
             SceneIntegrationEventLog.Record("alpha:Start");
+            if (StartCoroutineOnStart)
+            {
+                StartCoroutine(AdvanceCoroutineTicks());
+            }
+        }
+
+        private System.Collections.IEnumerator AdvanceCoroutineTicks()
+        {
+            while (true)
+            {
+                CoroutineTickCount++;
+                yield return null;
+            }
         }
 
         public override void Update()
@@ -151,12 +168,33 @@ namespace Unitas.Bridge.Tests
 
         public bool MarkSelfPersistent;
 
+        public bool StartCoroutineOnStart;
+
+        public int CoroutineTickCount;
+
         public override void Awake()
         {
             Marker = MarkerText;
             GameObjectInstanceId = gameObject.GetInstanceID();
             UnityEngine.Object.DontDestroyOnLoad(MarkSelfPersistent ? (UnityEngine.Object)this : gameObject);
             SceneIntegrationEventLog.Record("ddol:Awake");
+        }
+
+        public override void Start()
+        {
+            if (StartCoroutineOnStart)
+            {
+                StartCoroutine(AdvanceCoroutineTicks());
+            }
+        }
+
+        private System.Collections.IEnumerator AdvanceCoroutineTicks()
+        {
+            while (true)
+            {
+                CoroutineTickCount++;
+                yield return null;
+            }
         }
 
         public override void Update()

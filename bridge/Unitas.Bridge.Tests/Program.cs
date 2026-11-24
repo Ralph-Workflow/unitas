@@ -29,6 +29,7 @@ namespace Unitas.Bridge.Tests
             InputTests.Run();
             SceneManagementTests.Run();
             SceneManagementIntegrationTests.Run();
+            SceneManagementPersistenceTests.Run();
 
             if (Check.FailureCount > 0)
             {

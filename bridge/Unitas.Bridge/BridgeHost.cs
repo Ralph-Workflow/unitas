@@ -129,6 +129,12 @@ namespace Unitas.Bridge
             return null;
         }
 
+        /// <summary>
+        /// Loads a scene directly in <see cref="LoadSceneMode.Single"/> mode against the native runtime,
+        /// bypassing <see cref="Backend"/> and throwing <see cref="InvalidOperationException"/> on failure.
+        /// Retained for direct host callers; <see cref="SceneManager"/> routes through
+        /// <see cref="LoadScene(string, LoadSceneMode)"/>.
+        /// </summary>
         public void LoadScene(string path)
         {
             ArgumentNullException.ThrowIfNull(path);
@@ -278,6 +284,7 @@ namespace Unitas.Bridge
 
         public Scene GetActiveScene()
         {
+            // Native and managed scene ordering agree because every load and unload flows through the host.
             int index = Backend.ActiveSceneIndex;
             if (index < 0 || index >= _loadedScenes.Count)
             {
@@ -327,12 +334,11 @@ namespace Unitas.Bridge
         }
 
         /// <summary>
-        /// Drops the scripts of the replaced scene. Scripts marked to survive scene changes keep running;
-        /// the dropped scripts are not torn down with lifecycle callbacks, matching the scene reload contract.
+        /// Drops the scripts of the replaced scene. Persistent scripts and their coroutines keep running;
+        /// the dropped scripts have already received their teardown callbacks during the native load.
         /// </summary>
         private void DropReplacedScripts()
         {
-            StopAllSafely();
             _fixedUpdateCallsInStep = 0;
             _lateUpdateCallsInTick = 0;
             List<ulong> dropped = new List<ulong>();
@@ -343,6 +349,11 @@ namespace Unitas.Bridge
                 if (owner != null && owner.IsPersistent)
                 {
                     continue;
+                }
+
+                if (script is not null)
+                {
+                    StopAllSafely(script);
                 }
 
                 dropped.Add(entry.Key);
@@ -1102,6 +1113,18 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.OwnerDestroyed(script);
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex, script);
+            }
+        }
+
+        private static void StopAllSafely(MonoBehaviour script)
+        {
+            try
+            {
+                CoroutineScheduler.StopAll(script);
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
