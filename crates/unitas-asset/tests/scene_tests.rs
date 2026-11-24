@@ -6,7 +6,7 @@ use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
     assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
     assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    SceneError,
+    MaterialValues, SceneError,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -664,5 +664,191 @@ fn unity_prefab_instance_root_is_assembled_once() -> TestResult {
 fn prefab_instance_without_a_source_is_an_error() -> TestResult {
     let result = assemble_scene_file(Path::new(PREFAB_NO_SOURCE_FIXTURE));
     assert!(matches!(result, Err(SceneError::MissingPrefabSource { .. })));
+    Ok(())
+}
+
+#[test]
+fn collider_resolves_physic_material_from_project_meta_index() -> TestResult {
+    let temp = std::env::temp_dir().join(format!(
+        "unitas_physic_material_resolve_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    let settings = temp.join("ProjectSettings");
+    let assets = temp.join("Assets");
+    std::fs::create_dir_all(&settings)?;
+    std::fs::create_dir_all(&assets)?;
+
+    let mat_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let default_mat_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    std::fs::write(
+        assets.join("Bouncy.physicMaterial"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!134 &13400000\nPhysicMaterial:\n  m_Name: Bouncy\n  m_DynamicFriction: 0.25\n  m_StaticFriction: 0.4\n  m_Bounciness: 0.8\n",
+    )?;
+    std::fs::write(
+        assets.join("Bouncy.physicMaterial.meta"),
+        format!("fileFormatVersion: 2\nguid: {mat_guid}\n"),
+    )?;
+
+    std::fs::write(
+        assets.join("DefaultValues.physicMaterial"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!134 &13400000\nPhysicMaterial:\n  m_Name: DefaultValues\n",
+    )?;
+    std::fs::write(
+        assets.join("DefaultValues.physicMaterial.meta"),
+        format!("fileFormatVersion: 2\nguid: {default_mat_guid}\n"),
+    )?;
+
+    let scene_path = assets.join("TestScene.unity");
+    std::fs::write(
+        &scene_path,
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: BouncyBall\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!135 &12\nSphereCollider:\n  m_GameObject: {{fileID: 10}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_Radius: 0.5\n--- !u!1 &20\nGameObject:\n  m_Name: DefaultCrate\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!65 &22\nBoxCollider:\n  m_GameObject: {{fileID: 20}}\n  m_Material: {{fileID: 13400000, guid: {default_mat_guid}, type: 2}}\n"
+        ),
+    )?;
+
+    let result = assemble_scene_file_with_physics(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp);
+    let (graph, _scripts, bindings) = result?;
+
+    let ball = entity_named(&graph, "BouncyBall")?;
+    let ball_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == ball)
+        .ok_or("missing BouncyBall binding")?;
+    let sphere = ball_binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("missing SphereCollider")?;
+    assert_eq!(
+        sphere.material,
+        Some(MaterialValues {
+            friction: 0.25,
+            restitution: 0.8,
+        })
+    );
+    assert_eq!(sphere.material_diagnostic, None);
+
+    let crate_entity = entity_named(&graph, "DefaultCrate")?;
+    let crate_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == crate_entity)
+        .ok_or("missing DefaultCrate binding")?;
+    let box_collider = crate_binding
+        .box_collider
+        .as_ref()
+        .ok_or("missing BoxCollider")?;
+    assert_eq!(
+        box_collider.material,
+        Some(MaterialValues {
+            friction: 0.6,
+            restitution: 0.0,
+        })
+    );
+    assert_eq!(box_collider.material_diagnostic, None);
+
+    Ok(())
+}
+
+#[test]
+fn collider_reports_diagnostic_for_unresolved_or_invalid_physic_material() -> TestResult {
+    let dangling_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let stream = unity_yaml::parse(&format!(
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: SlipperyBox\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!65 &12\nBoxCollider:\n  m_GameObject: {{fileID: 10}}\n  m_Material: {{fileID: 13400000, guid: {dangling_guid}, type: 2}}\n"
+    ))?;
+    let (_graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+    assert_eq!(bindings.len(), 1);
+    let box_collider = bindings[0]
+        .box_collider
+        .as_ref()
+        .ok_or("missing BoxCollider")?;
+    assert_eq!(box_collider.material, None);
+    let diag = box_collider
+        .material_diagnostic
+        .as_ref()
+        .ok_or("expected material_diagnostic for dangling guid")?;
+    assert!(diag.contains("BoxCollider"));
+    assert!(diag.contains("SlipperyBox"));
+    assert!(diag.contains(dangling_guid));
+
+    let temp = std::env::temp_dir().join(format!(
+        "unitas_physic_material_invalid_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    let settings = temp.join("ProjectSettings");
+    let assets = temp.join("Assets");
+    std::fs::create_dir_all(&settings)?;
+    std::fs::create_dir_all(&assets)?;
+
+    let bad_guid = "cccccccccccccccccccccccccccccccc";
+    std::fs::write(
+        assets.join("Bad.physicMaterial"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!134 &13400000\nPhysicMaterial:\n  m_DynamicFriction: -0.5\n  m_Bounciness: 1.5\n",
+    )?;
+    std::fs::write(
+        assets.join("Bad.physicMaterial.meta"),
+        format!("fileFormatVersion: 2\nguid: {bad_guid}\n"),
+    )?;
+
+    let scene_path = assets.join("BadScene.unity");
+    std::fs::write(
+        &scene_path,
+        format!(
+            "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: BadSphere\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!135 &12\nSphereCollider:\n  m_GameObject: {{fileID: 10}}\n  m_Material: {{fileID: 13400000, guid: {bad_guid}, type: 2}}\n"
+        ),
+    )?;
+
+    let result = assemble_scene_file_with_physics(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp);
+    let (_graph, _scripts, bindings) = result?;
+    let sphere = bindings[0]
+        .sphere_collider
+        .as_ref()
+        .ok_or("missing SphereCollider")?;
+    assert_eq!(sphere.material, None);
+    let bad_diag = sphere
+        .material_diagnostic
+        .as_ref()
+        .ok_or("expected material_diagnostic for invalid material values")?;
+    assert!(bad_diag.contains("SphereCollider"));
+    assert!(bad_diag.contains("BadSphere"));
+    assert!(bad_diag.contains(bad_guid));
+
+    Ok(())
+}
+
+#[test]
+fn collider_without_material_or_zero_file_id_has_no_material_and_no_diagnostic() -> TestResult {
+    let stream = unity_yaml::parse(
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: PlainBox\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Father: {fileID: 0}\n--- !u!65 &12\nBoxCollider:\n  m_GameObject: {fileID: 10}\n  m_Material: {fileID: 0}\n--- !u!1 &20\nGameObject:\n  m_Name: PlainSphere\n--- !u!4 &21\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Father: {fileID: 0}\n--- !u!135 &22\nSphereCollider:\n  m_GameObject: {fileID: 20}\n",
+    )?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+
+    let plain_box = entity_named(&graph, "PlainBox")?;
+    let box_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == plain_box)
+        .ok_or("missing PlainBox binding")?;
+    let box_collider = box_binding
+        .box_collider
+        .as_ref()
+        .ok_or("missing BoxCollider")?;
+    assert_eq!(box_collider.material, None);
+    assert_eq!(box_collider.material_diagnostic, None);
+
+    let plain_sphere = entity_named(&graph, "PlainSphere")?;
+    let sphere_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == plain_sphere)
+        .ok_or("missing PlainSphere binding")?;
+    let sphere_collider = sphere_binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("missing SphereCollider")?;
+    assert_eq!(sphere_collider.material, None);
+    assert_eq!(sphere_collider.material_diagnostic, None);
+
     Ok(())
 }

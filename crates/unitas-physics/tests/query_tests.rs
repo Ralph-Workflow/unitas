@@ -19,6 +19,8 @@ fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         shape: Shape::Sphere { radius },
         layer,
         role: BodyRole::Dynamic,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -33,6 +35,8 @@ fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc 
         shape: Shape::Box { half_extents },
         layer,
         role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -47,6 +51,8 @@ fn trigger_sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         shape: Shape::Sphere { radius },
         layer,
         role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -66,6 +72,8 @@ fn oriented_box(
         shape: Shape::Box { half_extents },
         layer,
         role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -441,7 +449,10 @@ fn a_ray_hit_on_the_far_face_of_a_box_reports_the_outward_normal() -> Result<(),
 #[test]
 fn triggers_are_excluded_from_raycast_by_default() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(
+        EntityId::new(1),
+        trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE),
+    )?;
 
     let hits = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
@@ -452,7 +463,10 @@ fn triggers_are_excluded_from_raycast_by_default() -> Result<(), PhysicsError> {
 #[test]
 fn triggers_are_excluded_from_overlap_sphere_by_default() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(
+        EntityId::new(1),
+        trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE),
+    )?;
 
     let overlapping = world.overlap_sphere([0.0, 0.0, 0.0], 0.5, LAYER_ONE);
 
@@ -481,13 +495,8 @@ fn triggers_are_included_in_raycast_when_requested() -> Result<(), PhysicsError>
     let entity = EntityId::new(1);
     world.add_body(entity, trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
-    let hits = world.raycast_with_triggers(
-        [-5.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        100.0,
-        LAYER_ONE,
-        true,
-    );
+    let hits =
+        world.raycast_with_triggers([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE, true);
 
     assert_eq!(
         hits,
@@ -569,7 +578,10 @@ fn a_linecast_starting_inside_a_collider_does_not_hit() -> Result<(), PhysicsErr
 #[test]
 fn triggers_are_excluded_from_linecast_by_default() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(
+        EntityId::new(1),
+        trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE),
+    )?;
 
     let hits = world.linecast([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], LAYER_ONE, false);
 
@@ -704,7 +716,10 @@ fn a_sphere_cast_beyond_the_max_distance_is_not_reported() -> Result<(), Physics
 #[test]
 fn triggers_are_excluded_from_sphere_cast_by_default() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(
+        EntityId::new(1),
+        trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE),
+    )?;
 
     let hits = world.sphere_cast(
         [-5.0, 0.0, 0.0],
@@ -856,7 +871,10 @@ fn a_box_cast_beyond_the_max_distance_is_not_reported() -> Result<(), PhysicsErr
 #[test]
 fn triggers_are_excluded_from_box_cast_by_default() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(
+        EntityId::new(1),
+        trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE),
+    )?;
 
     let hits = world.box_cast(
         [-5.0, 0.0, 0.0],
@@ -935,13 +953,8 @@ fn a_body_that_was_never_added_is_never_returned_by_any_query() -> Result<(), Ph
     world.add_body(present, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
     let raycast_hits = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
-    let trigger_raycast_hits = world.raycast_with_triggers(
-        [-5.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        100.0,
-        LAYER_ONE,
-        true,
-    );
+    let trigger_raycast_hits =
+        world.raycast_with_triggers([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE, true);
     let linecast_hits = world.linecast([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], LAYER_ONE, true);
     let sphere_cast_hits = world.sphere_cast(
         [-5.0, 0.0, 0.0],
@@ -1000,7 +1013,12 @@ fn ray_misses_a_rotated_box_where_the_axis_aligned_test_would_hit() -> Result<()
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.raycast([1.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
@@ -1015,7 +1033,12 @@ fn ray_still_hits_a_rotated_box_through_its_flat_face() -> Result<(), PhysicsErr
     let entity = EntityId::new(1);
     world.add_body(
         entity,
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.raycast([0.0, 0.0, -5.0], [0.0, 0.0, 1.0], 100.0, LAYER_ONE);
@@ -1038,7 +1061,12 @@ fn ray_hits_a_rotated_box_side_face_with_a_rotated_normal() -> Result<(), Physic
     let entity = EntityId::new(1);
     world.add_body(
         entity,
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.raycast([-5.0, 0.5, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
@@ -1058,7 +1086,12 @@ fn linecast_against_a_rotated_box_respects_orientation() -> Result<(), PhysicsEr
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.linecast([1.0, 1.0, 0.0], [5.0, 1.0, 0.0], LAYER_ONE, false);
@@ -1072,10 +1105,22 @@ fn sphere_cast_against_a_rotated_box_respects_orientation() -> Result<(), Physic
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
-    let hits = world.sphere_cast([1.0, 1.0, 0.0], 0.2, [1.0, 0.0, 0.0], 100.0, LAYER_ONE, false);
+    let hits = world.sphere_cast(
+        [1.0, 1.0, 0.0],
+        0.2,
+        [1.0, 0.0, 0.0],
+        100.0,
+        LAYER_ONE,
+        false,
+    );
 
     assert!(hits.is_empty());
     Ok(())
@@ -1086,7 +1131,12 @@ fn overlap_sphere_against_a_rotated_box_respects_orientation() -> Result<(), Phy
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.overlap_sphere([1.0, 1.0, 0.0], 0.1, LAYER_ONE);
@@ -1101,7 +1151,12 @@ fn sphere_overlap_against_a_rotated_box_is_rotation_invariant() -> Result<(), Ph
     let entity = EntityId::new(1);
     world.add_body(
         entity,
-        oriented_box([0.0, 0.0, 0.0], ROTATED_45_DEGREES_ABOUT_Z, [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            ROTATED_45_DEGREES_ABOUT_Z,
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.overlap_sphere([0.0, 0.0, 0.0], 0.5, LAYER_ONE);
@@ -1116,7 +1171,12 @@ fn degenerate_rotation_falls_back_to_identity() -> Result<(), PhysicsError> {
     let entity = EntityId::new(1);
     world.add_body(
         entity,
-        oriented_box([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
+        oriented_box(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            LAYER_ONE,
+        ),
     )?;
 
     let hits = world.raycast([0.0, 0.0, -5.0], [0.0, 0.0, 1.0], 100.0, LAYER_ONE);

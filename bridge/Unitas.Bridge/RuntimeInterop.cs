@@ -254,6 +254,12 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_body_velocity(ulong runtime, ulong entity, IntPtr outBuffer);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_body_position(ulong runtime, ulong entity, IntPtr inBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_body_velocity(ulong runtime, ulong entity, IntPtr inBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_input_key_event(ulong runtime, uint key, uint pressed);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

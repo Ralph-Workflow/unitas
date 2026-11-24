@@ -17,6 +17,10 @@ namespace UnityEngine
         bool TryGetBodyPosition(ulong entity, out Vector3 position);
 
         bool TryGetBodyVelocity(ulong entity, out Vector3 velocity);
+
+        bool TrySetBodyPosition(ulong entity, Vector3 position);
+
+        bool TrySetBodyVelocity(ulong entity, Vector3 velocity);
     }
 
     public static class Physics

@@ -529,3 +529,146 @@ fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_off
     );
     Ok(())
 }
+
+#[test]
+fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynamic_body(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_kinematic_carry_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("kinematic_carry.unity");
+    let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Platform\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 1\n  m_UseGravity: 0\n  m_IsKinematic: 1\n--- !u!65 &103\nBoxCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Size: {x: 4, y: 1, z: 4}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: Cargo\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 1.0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {fileID: 200}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!65 &203\nBoxCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 1, z: 1}\n  m_Center: {x: 0, y: 0, z: 0}\n";
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let platform = EntityId::new(entity_handle(&runtime, "Platform")?);
+    let cargo = EntityId::new(entity_handle(&runtime, "Cargo")?);
+    assert_eq!(runtime.body_role(platform), Some(BodyRole::Kinematic));
+    assert_eq!(runtime.body_role(cargo), Some(BodyRole::Dynamic));
+
+    runtime.tick(TICK_DELTA)?;
+    for step in 1..=25 {
+        let x = step as f32 * 0.04;
+        let graph = match runtime.scene_graph_mut() {
+            Some(graph) => graph,
+            None => return Err(String::from("missing mutable scene graph").into()),
+        };
+        let transform = match graph.transform_mut(platform) {
+            Some(transform) => transform,
+            None => return Err(String::from("missing platform transform").into()),
+        };
+        transform.translation[0] = x;
+        runtime.tick(TICK_DELTA)?;
+    }
+
+    let platform_pos = match runtime.body_position(platform) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing platform body position").into()),
+    };
+    let cargo_pos = match runtime.body_position(cargo) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing cargo body position").into()),
+    };
+    assert_close(platform_pos[0], 1.0, "platform x after kinematic sync");
+    assert!(
+        cargo_pos[0] > 0.3,
+        "expected resting dynamic body to be carried horizontally, got x = {}",
+        cargo_pos[0]
+    );
+    assert_close(cargo_pos[1], 1.0, "cargo resting y on platform");
+    Ok(())
+}
+
+#[test]
+fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diagnostics(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_physic_material_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    std::fs::create_dir_all(&assets_dir)?;
+
+    let mat_guid = "feedfacefeedfacefeedfacefeedface";
+    let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let mat_path = assets_dir.join("Bouncy.physicMaterial");
+    let mat_meta_path = assets_dir.join("Bouncy.physicMaterial.meta");
+    std::fs::write(
+        &mat_path,
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!134 &13400000\nPhysicMaterial:\n  m_Name: Bouncy\n  m_DynamicFriction: 0.2\n  m_StaticFriction: 0.2\n  m_Bounciness: 1.0\n",
+    )?;
+    std::fs::write(
+        &mat_meta_path,
+        format!("fileFormatVersion: 2\nguid: {mat_guid}\n"),
+    )?;
+
+    let bouncy_scene = assets_dir.join("BouncyScene.unity");
+    std::fs::write(
+        &bouncy_scene,
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Size: {{x: 4, y: 1, z: 4}}\n  m_Center: {{x: 0, y: 0, z: 0}}\n--- !u!1 &200\nGameObject:\n  m_Name: Ball\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 2.0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {{fileID: 200}}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!135 &203\nSphereCollider:\n  m_GameObject: {{fileID: 200}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
+        ),
+    )?;
+
+    let unresolved_scene = assets_dir.join("UnresolvedScene.unity");
+    std::fs::write(
+        &unresolved_scene,
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {missing_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Size: {{x: 4, y: 1, z: 4}}\n  m_Center: {{x: 0, y: 0, z: 0}}\n--- !u!1 &200\nGameObject:\n  m_Name: Ball\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 2.0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {{fileID: 200}}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!135 &203\nSphereCollider:\n  m_GameObject: {{fileID: 200}}\n  m_Material: {{fileID: 13400000, guid: {missing_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
+        ),
+    )?;
+
+    let mut bouncy_runtime = Runtime::new()?;
+    let bouncy_load = bouncy_runtime.load_scene(&bouncy_scene);
+    let mut unresolved_runtime = Runtime::new()?;
+    let unresolved_load = unresolved_runtime.load_scene(&unresolved_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    bouncy_load?;
+    unresolved_load?;
+
+    assert!(bouncy_runtime.diagnostics().is_empty());
+    let bouncy_ball = EntityId::new(entity_handle(&bouncy_runtime, "Ball")?);
+    let mut max_rebound_velocity = 0.0_f64;
+    for _ in 0..35 {
+        bouncy_runtime.tick(TICK_DELTA)?;
+        if let Some(vel) = bouncy_runtime.body_velocity(bouncy_ball) {
+            if vel[1] > max_rebound_velocity {
+                max_rebound_velocity = vel[1];
+            }
+        }
+    }
+    assert!(
+        max_rebound_velocity > 2.0,
+        "expected bouncy ball to rebound upward, max v_y = {max_rebound_velocity}"
+    );
+
+    let unresolved_ball = EntityId::new(entity_handle(&unresolved_runtime, "Ball")?);
+    let unresolved_floor = EntityId::new(entity_handle(&unresolved_runtime, "Floor")?);
+    assert_eq!(unresolved_runtime.diagnostics().len(), 2);
+    let ball_diags = unresolved_runtime.entity_diagnostics(unresolved_ball);
+    assert_eq!(ball_diags.len(), 1);
+    assert!(ball_diags[0].contains(missing_guid));
+    let floor_diags = unresolved_runtime.entity_diagnostics(unresolved_floor);
+    assert_eq!(floor_diags.len(), 1);
+    assert!(floor_diags[0].contains(missing_guid));
+
+    let mut unresolved_max_rebound = 0.0_f64;
+    for _ in 0..35 {
+        unresolved_runtime.tick(TICK_DELTA)?;
+        if let Some(vel) = unresolved_runtime.body_velocity(unresolved_ball) {
+            if vel[1] > unresolved_max_rebound {
+                unresolved_max_rebound = vel[1];
+            }
+        }
+    }
+    assert!(
+        unresolved_max_rebound < 0.1,
+        "expected unresolved material fallback to have zero restitution, max v_y = {unresolved_max_rebound}"
+    );
+    Ok(())
+}

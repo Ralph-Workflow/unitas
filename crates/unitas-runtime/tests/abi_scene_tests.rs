@@ -9,6 +9,7 @@ use unitas_runtime::{
     unitas_runtime_error_message, unitas_runtime_load_scene_mode, unitas_runtime_new,
     unitas_runtime_path_buffer, unitas_runtime_product_name, unitas_runtime_project_version,
     unitas_runtime_scene_count, unitas_runtime_scene_name, unitas_runtime_set_active_scene,
+    unitas_runtime_set_body_position, unitas_runtime_set_body_velocity,
     unitas_runtime_set_callbacks, unitas_runtime_set_time_scale, unitas_runtime_tick,
     unitas_runtime_time_scale, unitas_runtime_unload_scene, Runtime,
 };
@@ -381,6 +382,19 @@ fn read_vec3_from_path_buffer(handle: u64) -> Result<[f64; 3], Box<dyn Error>> {
     Ok([x, y, z])
 }
 
+fn write_vec3_to_path_buffer(handle: u64, value: [f64; 3]) -> Result<u64, Box<dyn Error>> {
+    let address = unitas_runtime_path_buffer(handle, 24);
+    if address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    let mut bytes = [0u8; 24];
+    bytes[0..8].copy_from_slice(&value[0].to_le_bytes());
+    bytes[8..16].copy_from_slice(&value[1].to_le_bytes());
+    bytes[16..24].copy_from_slice(&value[2].to_le_bytes());
+    test_write_path_buffer(handle, &bytes)?;
+    Ok(address)
+}
+
 #[test]
 fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
 ) -> Result<(), Box<dyn Error>> {
@@ -442,6 +456,81 @@ fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
     assert_ne!(unitas_runtime_error_message(handle), 0);
     assert_eq!(
         unitas_runtime_body_velocity(handle, 999_999, out_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn abi_set_body_velocity_and_position_update_simulation_and_reject_invalid_writes(
+) -> Result<(), Box<dyn Error>> {
+    let handle = new_handle()?;
+    assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
+    let ball = entity_id_for(SCENE_B, "Ball")?;
+    let crate_entity = entity_id_for(SCENE_B, "Crate")?;
+
+    let vel_buffer = write_vec3_to_path_buffer(handle, [4.0, 8.0, -2.0])?;
+    assert_eq!(
+        unitas_runtime_set_body_velocity(handle, ball, vel_buffer),
+        0
+    );
+    assert_eq!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(unitas_runtime_body_velocity(handle, ball, vel_buffer), 0);
+    assert_eq!(read_vec3_from_path_buffer(handle)?, [4.0, 8.0, -2.0]);
+
+    assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+    assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+
+    assert_eq!(unitas_runtime_body_position(handle, ball, vel_buffer), 0);
+    let moved_ball_pos = read_vec3_from_path_buffer(handle)?;
+    assert!((moved_ball_pos[0] - 0.08).abs() < 1e-6);
+    assert!(moved_ball_pos[1] > 0.3);
+    assert!((moved_ball_pos[2] - (-0.04)).abs() < 1e-6);
+
+    let pos_buffer = write_vec3_to_path_buffer(handle, [10.0, 20.0, 30.0])?;
+    assert_eq!(
+        unitas_runtime_set_body_position(handle, ball, pos_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(
+        unitas_runtime_set_body_position(handle, crate_entity, pos_buffer),
+        0
+    );
+    assert_eq!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_body_position(handle, crate_entity, pos_buffer),
+        0
+    );
+    assert_eq!(read_vec3_from_path_buffer(handle)?, [10.0, 20.0, 30.0]);
+
+    assert_eq!(
+        unitas_runtime_set_body_position(u64::MAX, crate_entity, pos_buffer),
+        -1
+    );
+    assert_eq!(
+        unitas_runtime_set_body_velocity(u64::MAX, ball, pos_buffer),
+        -1
+    );
+    assert_eq!(
+        unitas_runtime_set_body_position(handle, crate_entity, 0),
+        -2
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(unitas_runtime_set_body_velocity(handle, ball, 0), -2);
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_set_body_position(handle, 999_999, pos_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_set_body_velocity(handle, 999_999, pos_buffer),
         -4
     );
     assert_ne!(unitas_runtime_error_message(handle), 0);

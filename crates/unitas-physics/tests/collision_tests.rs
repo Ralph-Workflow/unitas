@@ -16,6 +16,8 @@ fn oriented_box(position: [f64; 3], rotation: [f64; 4], half_extents: [f64; 3]) 
         shape: Shape::Box { half_extents },
         layer: 0,
         role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -30,6 +32,8 @@ fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
         shape: Shape::Sphere { radius: 0.5 },
         layer: 0,
         role: BodyRole::Dynamic,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -46,6 +50,8 @@ fn box_body(position: [f64; 3]) -> BodyDesc {
         },
         layer: 0,
         role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -115,6 +121,8 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
             shape: Shape::Box {
                 half_extents: [2.0, 1.0, 2.0],
             },
+            friction: 0.6,
+            restitution: 0.0,
             ..box_body([0.0, 0.0, 0.0])
         },
     )?;
@@ -130,6 +138,8 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
             shape: Shape::Sphere { radius: 0.5 },
             layer: 0,
             role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
         },
     )?;
 
@@ -230,6 +240,8 @@ fn trigger_and_non_trigger_pair_emits_trigger_enter_stay_exit_and_zero_collision
         trigger_zone,
         BodyDesc {
             is_trigger: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..box_body([0.0, 0.0, 0.0])
         },
     )?;
@@ -279,6 +291,8 @@ fn both_triggers_pair_emits_trigger_events_and_zero_collision_events() -> Result
         left,
         BodyDesc {
             is_trigger: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([-1.0, 0.0, 0.0], [0.6, 0.0, 0.0])
         },
     )?;
@@ -286,6 +300,8 @@ fn both_triggers_pair_emits_trigger_events_and_zero_collision_events() -> Result
         right,
         BodyDesc {
             is_trigger: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([1.0, 0.0, 0.0], [-0.6, 0.0, 0.0])
         },
     )?;
@@ -334,6 +350,8 @@ fn draining_trigger_events_empties_the_trigger_queue() -> Result<(), PhysicsErro
         left,
         BodyDesc {
             is_trigger: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([-0.4, 0.0, 0.0], [0.0; 3])
         },
     )?;
@@ -413,6 +431,8 @@ fn resting_sphere_on_static_box_floor_settles_with_bounded_penetration() -> Resu
             shape: Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
             },
+            friction: 0.6,
+            restitution: 0.0,
             ..box_body([0.0, -0.5, 0.0])
         },
     )?;
@@ -420,6 +440,8 @@ fn resting_sphere_on_static_box_floor_settles_with_bounded_penetration() -> Resu
         ball,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 2.0, 0.0], [0.0; 3])
         },
     )?;
@@ -447,6 +469,8 @@ fn dynamic_box_landing_on_static_box_comes_to_rest() -> Result<(), PhysicsError>
             shape: Shape::Box {
                 half_extents: [4.0, 0.5, 4.0],
             },
+            friction: 0.6,
+            restitution: 0.0,
             ..box_body([0.0, -0.5, 0.0])
         },
     )?;
@@ -464,6 +488,8 @@ fn dynamic_box_landing_on_static_box_comes_to_rest() -> Result<(), PhysicsError>
             },
             layer: 0,
             role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
         },
     )?;
 
@@ -489,6 +515,8 @@ fn two_dynamic_bodies_collide_and_separate_in_proportion_to_inverse_mass(
         left,
         BodyDesc {
             mass: 1.0,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([-0.4, 0.0, 0.0], [2.0, 0.0, 0.0])
         },
     )?;
@@ -496,6 +524,8 @@ fn two_dynamic_bodies_collide_and_separate_in_proportion_to_inverse_mass(
         right,
         BodyDesc {
             mass: 3.0,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.4, 0.0, 0.0], [-2.0, 0.0, 0.0])
         },
     )?;
@@ -521,6 +551,8 @@ fn dynamic_spheres_pushed_together_then_apart_report_enter_stay_exit() -> Result
         ball,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([-0.6, 0.0, 0.0], [1.0, 0.0, 0.0])
         },
     )?;
@@ -528,6 +560,8 @@ fn dynamic_spheres_pushed_together_then_apart_report_enter_stay_exit() -> Result
         wall,
         BodyDesc {
             role: BodyRole::Static,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.5, 0.0, 0.0], [0.0; 3])
         },
     )?;
@@ -574,6 +608,8 @@ fn trigger_pair_is_untouched_by_the_solver() -> Result<(), PhysicsError> {
         trigger_zone,
         BodyDesc {
             is_trigger: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..box_body([0.0, 0.0, 0.0])
         },
     )?;
@@ -592,5 +628,181 @@ fn trigger_pair_is_untouched_by_the_solver() -> Result<(), PhysicsError> {
             phase: Phase::Enter,
         }]
     );
+    Ok(())
+}
+
+#[test]
+fn sphere_with_restitution_rebounds_off_a_static_floor() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let floor = EntityId::new(1);
+    let ball = EntityId::new(2);
+    world.add_body(
+        floor,
+        BodyDesc {
+            position: [0.0, -0.5, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [5.0, 0.5, 5.0],
+            },
+            layer: 0,
+            role: BodyRole::Static,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    world.add_body(
+        ball,
+        BodyDesc {
+            position: [0.0, 1.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [0.0, -5.0, 0.0],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Sphere { radius: 0.5 },
+            layer: 0,
+            role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.5,
+        },
+    )?;
+
+    world.step(0.1)?;
+    world.step(0.1)?;
+
+    let velocity = world.velocity(ball).unwrap_or([0.0; 3]);
+    let position = world.position(ball).unwrap_or([0.0; 3]);
+    assert!(velocity[1] > 0.0);
+    assert!((velocity[1] - 1.25).abs() < 1e-9);
+    assert!((position[1] - 0.5).abs() < 1e-9);
+    Ok(())
+}
+
+#[test]
+fn sliding_box_decelerates_with_friction_and_keeps_its_speed_without_it() -> Result<(), PhysicsError>
+{
+    fn sliding_world(friction: f64) -> Result<(World, EntityId), PhysicsError> {
+        let mut world = World::new();
+        let floor = EntityId::new(1);
+        let slider = EntityId::new(2);
+        world.add_body(
+            floor,
+            BodyDesc {
+                position: [0.0, -0.5, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                mass: 0.0,
+                velocity: [0.0; 3],
+                use_gravity: false,
+                is_trigger: false,
+                shape: Shape::Box {
+                    half_extents: [5.0, 0.5, 5.0],
+                },
+                layer: 0,
+                role: BodyRole::Static,
+                friction,
+                restitution: 0.0,
+            },
+        )?;
+        world.add_body(
+            slider,
+            BodyDesc {
+                position: [0.0, 0.5, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                mass: 1.0,
+                velocity: [2.0, 0.0, 0.0],
+                use_gravity: true,
+                is_trigger: false,
+                shape: Shape::Box {
+                    half_extents: [0.5, 0.5, 0.5],
+                },
+                layer: 0,
+                role: BodyRole::Dynamic,
+                friction,
+                restitution: 0.0,
+            },
+        )?;
+        Ok((world, slider))
+    }
+
+    let (mut with_friction, slider) = sliding_world(0.6)?;
+    let (mut without_friction, frictionless_slider) = sliding_world(0.0)?;
+
+    for _ in 0..5 {
+        with_friction.step(1.0 / 60.0)?;
+        without_friction.step(1.0 / 60.0)?;
+    }
+
+    let friction_velocity = with_friction.velocity(slider).unwrap_or([0.0; 3]);
+    let frictionless_velocity = without_friction
+        .velocity(frictionless_slider)
+        .unwrap_or([0.0; 3]);
+    assert!(friction_velocity[0] < 2.0);
+    assert!(friction_velocity[0] > 1.0);
+    assert!(friction_velocity[1].abs() < 1e-9);
+    assert!((frictionless_velocity[0] - 2.0).abs() < 1e-12);
+    assert!(frictionless_velocity[1].abs() < 1e-9);
+    Ok(())
+}
+
+#[test]
+fn pushed_kinematic_platform_carries_a_resting_dynamic_body() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let platform = EntityId::new(1);
+    let rider = EntityId::new(2);
+    world.add_body(
+        platform,
+        BodyDesc {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [2.0, 0.5, 2.0],
+            },
+            layer: 0,
+            role: BodyRole::Kinematic,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    world.add_body(
+        rider,
+        BodyDesc {
+            position: [0.0, 1.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [0.0; 3],
+            use_gravity: true,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            layer: 0,
+            role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+
+    world.step(1.0 / 60.0)?;
+    assert!(world.velocity(rider).unwrap_or([0.0; 3])[0].abs() < 1e-12);
+
+    world.set_position(platform, [0.02, 0.0, 0.0])?;
+    world.step(1.0 / 60.0)?;
+
+    let rider_velocity = world.velocity(rider).unwrap_or([0.0; 3]);
+    assert!(rider_velocity[0] > 0.0);
+    assert_eq!(world.position(platform), Some([0.02, 0.0, 0.0]));
+
+    world.step(1.0 / 60.0)?;
+
+    let rider_position = world.position(rider).unwrap_or([0.0; 3]);
+    assert!(rider_position[0] > 0.0);
     Ok(())
 }

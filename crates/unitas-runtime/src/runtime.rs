@@ -22,6 +22,7 @@ pub struct LoadedScene {
     scripts: Vec<ScriptInstance>,
     bodies: Vec<EntityId>,
     body_offsets: Vec<(EntityId, [f32; 3])>,
+    diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
 }
@@ -33,6 +34,10 @@ impl LoadedScene {
 
     pub fn bodies(&self) -> &[EntityId] {
         &self.bodies
+    }
+
+    pub fn diagnostics(&self) -> &[(EntityId, String)] {
+        &self.diagnostics
     }
 }
 
@@ -164,6 +169,7 @@ impl Runtime {
             .iter()
             .map(|(entity, _, offset)| (EntityId::new(entity_base + entity.as_u64()), *offset))
             .collect::<Vec<_>>();
+        let diagnostics = collect_material_diagnostics(&physics, entity_base);
         for (body, desc) in bodies.iter().zip(descs.iter()) {
             self.world.add_body(*body, desc.1)?;
         }
@@ -174,6 +180,7 @@ impl Runtime {
             scripts,
             bodies,
             body_offsets,
+            diagnostics,
             entity_base,
             entity_count,
         });
@@ -511,6 +518,7 @@ impl Runtime {
         let fixed_step = self.fixed_timestep;
         const EPSILON: f64 = 1e-9;
         while self.accumulator >= fixed_step - EPSILON {
+            self.sync_kinematic_transforms();
             self.world.step(fixed_step)?;
             self.write_back_dynamic_transforms();
             if let Some(callbacks) = self.callbacks {
@@ -593,6 +601,34 @@ impl Runtime {
         self.active_scene
             .and_then(|index| self.scenes.get(index))
             .map(|scene| &scene.graph)
+    }
+
+    pub fn scene_graph_mut(&mut self) -> Option<&mut SceneGraph> {
+        self.active_scene
+            .and_then(|index| self.scenes.get_mut(index))
+            .map(|scene| &mut scene.graph)
+    }
+
+    pub fn diagnostics(&self) -> Vec<(EntityId, &str)> {
+        let mut items = Vec::new();
+        for scene in &self.scenes {
+            for (entity, msg) in &scene.diagnostics {
+                items.push((*entity, msg.as_str()));
+            }
+        }
+        items
+    }
+
+    pub fn entity_diagnostics(&self, entity: EntityId) -> Vec<&str> {
+        let mut items = Vec::new();
+        for scene in &self.scenes {
+            for (id, msg) in &scene.diagnostics {
+                if *id == entity {
+                    items.push(msg.as_str());
+                }
+            }
+        }
+        items
     }
 
     pub fn raycast(
@@ -721,8 +757,86 @@ impl Runtime {
         self.world.velocity(entity)
     }
 
+    pub fn set_body_position(
+        &mut self,
+        entity: EntityId,
+        position: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        self.world.set_position(entity, position)?;
+        self.write_back_body_transform(entity, position);
+        Ok(())
+    }
+
+    pub fn set_body_velocity(
+        &mut self,
+        entity: EntityId,
+        velocity: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        self.world.set_velocity(entity, velocity)?;
+        Ok(())
+    }
+
     pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
         self.world.body_role(entity)
+    }
+
+    fn sync_kinematic_transforms(&mut self) {
+        for scene in &self.scenes {
+            for (entity, offset) in &scene.body_offsets {
+                if self.world.body_role(*entity) != Some(BodyRole::Kinematic) {
+                    continue;
+                }
+                let Some(world_transform) = scene.graph.world_transform(*entity) else {
+                    continue;
+                };
+                let graph_pos = [
+                    f64::from(world_transform.translation[0]) + f64::from(offset[0]),
+                    f64::from(world_transform.translation[1]) + f64::from(offset[1]),
+                    f64::from(world_transform.translation[2]) + f64::from(offset[2]),
+                ];
+                let should_update = match self.world.position(*entity) {
+                    Some(current) => {
+                        (graph_pos[0] - current[0]).abs() > 1e-6
+                            || (graph_pos[1] - current[1]).abs() > 1e-6
+                            || (graph_pos[2] - current[2]).abs() > 1e-6
+                    }
+                    None => false,
+                };
+                if should_update {
+                    let _ = self.world.set_position(*entity, graph_pos);
+                }
+            }
+        }
+    }
+
+    fn write_back_body_transform(&mut self, entity: EntityId, world_pos: [f64; 3]) {
+        for scene in &mut self.scenes {
+            let Some((_, offset)) = scene
+                .body_offsets
+                .iter()
+                .find(|(body_entity, _)| *body_entity == entity)
+                .copied()
+            else {
+                continue;
+            };
+            let world_translation = [
+                world_pos[0] as f32 - offset[0],
+                world_pos[1] as f32 - offset[1],
+                world_pos[2] as f32 - offset[2],
+            ];
+            let local_translation = match scene
+                .graph
+                .parent(entity)
+                .and_then(|parent| scene.graph.world_transform(parent))
+            {
+                Some(parent_world) => world_to_local_translation(&parent_world, world_translation),
+                None => world_translation,
+            };
+            if let Some(transform) = scene.graph.transform_mut(entity) {
+                transform.translation = local_translation;
+            }
+            return;
+        }
     }
 
     fn write_back_dynamic_transforms(&mut self) {
@@ -966,29 +1080,54 @@ fn scene_name_from_path(path: &Path) -> String {
     }
 }
 
+fn collect_material_diagnostics(
+    bindings: &[PhysicsBinding],
+    entity_base: u64,
+) -> Vec<(EntityId, String)> {
+    let mut diagnostics = Vec::new();
+    for binding in bindings {
+        let entity = EntityId::new(entity_base + binding.entity.as_u64());
+        if let Some(sphere) = &binding.sphere_collider {
+            if let Some(diag) = &sphere.material_diagnostic {
+                diagnostics.push((entity, diag.clone()));
+            }
+        }
+        if let Some(collider) = &binding.box_collider {
+            if let Some(diag) = &collider.material_diagnostic {
+                diagnostics.push((entity, diag.clone()));
+            }
+        }
+    }
+    diagnostics
+}
+
 fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, [f32; 3])> {
-    let (shape, center, collider_trigger) = match (&binding.sphere_collider, &binding.box_collider)
-    {
-        (Some(sphere), _) => (
-            Shape::Sphere {
-                radius: sphere.radius,
-            },
-            sphere.center,
-            sphere.is_trigger,
-        ),
-        (None, Some(collider)) => (
-            Shape::Box {
-                half_extents: [
-                    collider.size[0] / 2.0,
-                    collider.size[1] / 2.0,
-                    collider.size[2] / 2.0,
-                ],
-            },
-            collider.center,
-            collider.is_trigger,
-        ),
-        (None, None) => return None,
-    };
+    let (shape, center, collider_trigger, material) =
+        match (&binding.sphere_collider, &binding.box_collider) {
+            (Some(sphere), _) => (
+                Shape::Sphere {
+                    radius: sphere.radius,
+                },
+                sphere.center,
+                sphere.is_trigger,
+                sphere.material,
+            ),
+            (None, Some(collider)) => (
+                Shape::Box {
+                    half_extents: [
+                        collider.size[0] / 2.0,
+                        collider.size[1] / 2.0,
+                        collider.size[2] / 2.0,
+                    ],
+                },
+                collider.center,
+                collider.is_trigger,
+                collider.material,
+            ),
+            (None, None) => return None,
+        };
+    let friction = material.map_or(0.6, |m| m.friction);
+    let restitution = material.map_or(0.0, |m| m.restitution);
     let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
         Some(world) => (world.translation, world.rotation, world.scale),
         None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
@@ -1034,6 +1173,8 @@ fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, 
             shape,
             layer: layer_bits(binding.layer),
             role,
+            friction,
+            restitution,
         },
         offset,
     ))

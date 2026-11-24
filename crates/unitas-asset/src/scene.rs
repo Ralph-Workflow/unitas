@@ -13,10 +13,13 @@ const TRANSFORM_CLASS: u32 = 4;
 const RIGIDBODY_CLASS: u32 = 54;
 const BOX_COLLIDER_CLASS: u32 = 65;
 const MONO_BEHAVIOUR_CLASS: u32 = 114;
+const PHYSIC_MATERIAL_CLASS: u32 = 134;
 const SPHERE_COLLIDER_CLASS: u32 = 135;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
 const UNIT_QUATERNION_TOLERANCE: f64 = 1e-3;
+const DEFAULT_PHYSIC_MATERIAL_FRICTION: f64 = 0.6;
+const DEFAULT_PHYSIC_MATERIAL_RESTITUTION: f64 = 0.0;
 
 #[derive(Debug)]
 pub enum SceneError {
@@ -141,6 +144,7 @@ type GameObjectRecords = HashMap<i64, GameObjectRecord>;
 
 pub(crate) struct GameObjectRecord {
     pub(crate) entity: EntityId,
+    pub(crate) name: String,
     pub(crate) layer: u32,
 }
 
@@ -148,6 +152,12 @@ pub(crate) struct GameObjectRecord {
 pub struct ScriptBinding {
     pub entity: EntityId,
     pub guid: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialValues {
+    pub friction: f64,
+    pub restitution: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +173,8 @@ pub struct BoxColliderComponent {
     pub size: [f64; 3],
     pub center: [f64; 3],
     pub is_trigger: bool,
+    pub material: Option<MaterialValues>,
+    pub material_diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,6 +182,8 @@ pub struct SphereColliderComponent {
     pub radius: f64,
     pub center: [f64; 3],
     pub is_trigger: bool,
+    pub material: Option<MaterialValues>,
+    pub material_diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,11 +267,17 @@ fn assemble_stream(
 fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<Assembly, SceneError> {
     let stream = unity_yaml::parse_file(path)?;
     let expand = has_prefab_instances(&stream);
+    let resolve_guids = expand || has_material_references(&stream);
     let discovered = match index {
         Some(_) => None,
         None => {
-            if expand {
-                prefab::guid_index(path)?
+            if resolve_guids {
+                match prefab::guid_index(path)? {
+                    Some(found) => Some(found),
+                    None => path
+                        .parent()
+                        .and_then(|parent| GuidIndex::build(parent).ok()),
+                }
             } else {
                 None
             }
@@ -303,6 +323,20 @@ fn has_prefab_instances(stream: &Stream) -> bool {
         .any(|document| document.class_id == PREFAB_INSTANCE_CLASS && !document.stripped)
 }
 
+fn has_material_references(stream: &Stream) -> bool {
+    stream.documents.iter().any(|document| {
+        if document.stripped {
+            return false;
+        }
+        let body = match document.class_id {
+            BOX_COLLIDER_CLASS => document.root.get("BoxCollider"),
+            SPHERE_COLLIDER_CLASS => document.root.get("SphereCollider"),
+            _ => None,
+        };
+        body.and_then(|node| node.get("m_Material")).is_some()
+    })
+}
+
 fn assemble_documents(
     stream: &Stream,
     graph: &mut SceneGraph,
@@ -332,9 +366,10 @@ fn assemble_documents(
             Some(name) => name.to_string(),
             None => String::from("GameObject"),
         };
-        let entity = graph.add_entity(name);
+        let entity = graph.add_entity(name.clone());
         let layer = yaml_u32(body.and_then(|body| body.get("m_Layer")), 0);
-        set.game_objects.insert(document.file_id, GameObjectRecord { entity, layer });
+        set.game_objects
+            .insert(document.file_id, GameObjectRecord { entity, name, layer });
     }
     let mut owners: HashMap<i64, i64> = HashMap::new();
     let mut records: Vec<TransformRecord> = Vec::new();
@@ -453,7 +488,7 @@ fn assemble_documents(
         };
         set.scripts.push(ScriptBinding { entity, guid });
     }
-    set.physics = collect_physics(stream, &set.game_objects, &instance_roots)?;
+    set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     if expand {
         for document in &stream.documents {
             if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
@@ -538,6 +573,7 @@ fn collect_physics(
     stream: &Stream,
     game_objects: &GameObjectRecords,
     instance_roots: &HashSet<i64>,
+    index: Option<&GuidIndex>,
 ) -> Result<Vec<PhysicsBinding>, SceneError> {
     let mut bindings: Vec<PhysicsBinding> = Vec::new();
     let mut positions: HashMap<EntityId, usize> = HashMap::new();
@@ -545,17 +581,17 @@ fn collect_physics(
         if document.stripped {
             continue;
         }
-        let (body, component) = match document.class_id {
+        let body = match document.class_id {
             RIGIDBODY_CLASS => match document.root.get("Rigidbody") {
-                Some(body) => (body, PhysicsComponent::Rigidbody(rigidbody_component(body))),
+                Some(body) => body,
                 None => continue,
             },
             BOX_COLLIDER_CLASS => match document.root.get("BoxCollider") {
-                Some(body) => (body, PhysicsComponent::BoxCollider(box_collider_component(body))),
+                Some(body) => body,
                 None => continue,
             },
             SPHERE_COLLIDER_CLASS => match document.root.get("SphereCollider") {
-                Some(body) => (body, PhysicsComponent::SphereCollider(sphere_collider_component(body))),
+                Some(body) => body,
                 None => continue,
             },
             _ => continue,
@@ -580,6 +616,18 @@ fn collect_physics(
                     game_object_file_id,
                 })
             }
+        };
+        let component = match document.class_id {
+            RIGIDBODY_CLASS => PhysicsComponent::Rigidbody(rigidbody_component(body)),
+            BOX_COLLIDER_CLASS => {
+                PhysicsComponent::BoxCollider(box_collider_component(body, &record.name, index))
+            }
+            SPHERE_COLLIDER_CLASS => PhysicsComponent::SphereCollider(sphere_collider_component(
+                body,
+                &record.name,
+                index,
+            )),
+            _ => continue,
         };
         let entity = record.entity;
         let layer = record.layer;
@@ -617,20 +665,138 @@ fn rigidbody_component(body: &Node) -> RigidbodyComponent {
     }
 }
 
-fn box_collider_component(body: &Node) -> BoxColliderComponent {
+fn box_collider_component(
+    body: &Node,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> BoxColliderComponent {
+    let (material, material_diagnostic) =
+        resolve_collider_material(body, "BoxCollider", game_object_name, index);
     BoxColliderComponent {
         size: vector3_or(body.get("m_Size"), [1.0, 1.0, 1.0]),
         center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+        material,
+        material_diagnostic,
     }
 }
 
-fn sphere_collider_component(body: &Node) -> SphereColliderComponent {
+fn sphere_collider_component(
+    body: &Node,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> SphereColliderComponent {
+    let (material, material_diagnostic) =
+        resolve_collider_material(body, "SphereCollider", game_object_name, index);
     SphereColliderComponent {
         radius: body.get("m_Radius").and_then(Node::as_f64).unwrap_or(0.5),
         center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+        material,
+        material_diagnostic,
     }
+}
+
+fn resolve_collider_material(
+    body: &Node,
+    collider_kind: &str,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> (Option<MaterialValues>, Option<String>) {
+    let material_node = match body.get("m_Material") {
+        Some(node) => node,
+        None => return (None, None),
+    };
+    let file_id = material_node.get("fileID").and_then(Node::as_i64);
+    let guid = material_node
+        .get("guid")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let guid = match (file_id, guid) {
+        (Some(0) | None, None) => return (None, None),
+        (Some(id), None) => {
+            return (
+                None,
+                Some(format!(
+                    "{collider_kind} on '{game_object_name}' references m_Material fileID {id} without a guid"
+                )),
+            )
+        }
+        (None, Some(guid)) | (Some(_), Some(guid)) => guid,
+    };
+
+    let path = match index.and_then(|guids| guids.get(guid)) {
+        Some(path) => path,
+        None => {
+            return (
+                None,
+                Some(format!(
+                    "{collider_kind} on '{game_object_name}' references unresolved PhysicMaterial guid {guid}"
+                )),
+            )
+        }
+    };
+
+    match load_physic_material(path) {
+        Ok(values) => (Some(values), None),
+        Err(reason) => (
+            None,
+            Some(format!(
+                "{collider_kind} on '{game_object_name}' PhysicMaterial guid {guid} ({}): {reason}",
+                path.display()
+            )),
+        ),
+    }
+}
+
+fn load_physic_material(path: &Path) -> Result<MaterialValues, String> {
+    let stream = unity_yaml::parse_file(path).map_err(|error| error.to_string())?;
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| {
+            if document.class_id == PHYSIC_MATERIAL_CLASS {
+                document.root.get("PhysicMaterial")
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            stream
+                .documents
+                .iter()
+                .filter(|document| !document.stripped)
+                .find_map(|document| document.root.get("PhysicMaterial"))
+        })
+        .ok_or_else(|| String::from("missing PhysicMaterial document"))?;
+
+    let friction = match body.get("m_DynamicFriction") {
+        Some(node) => node
+            .as_f64()
+            .ok_or_else(|| String::from("invalid m_DynamicFriction"))?,
+        None => DEFAULT_PHYSIC_MATERIAL_FRICTION,
+    };
+    if !friction.is_finite() || friction < 0.0 {
+        return Err(format!("invalid m_DynamicFriction {friction}"));
+    }
+
+    let restitution = match body.get("m_Bounciness") {
+        Some(node) => node
+            .as_f64()
+            .ok_or_else(|| String::from("invalid m_Bounciness"))?,
+        None => DEFAULT_PHYSIC_MATERIAL_RESTITUTION,
+    };
+    if !restitution.is_finite() || !(0.0..=1.0).contains(&restitution) {
+        return Err(format!("invalid m_Bounciness {restitution}"));
+    }
+
+    Ok(MaterialValues {
+        friction,
+        restitution,
+    })
 }
 
 fn yaml_u32(node: Option<&Node>, default: u32) -> u32 {

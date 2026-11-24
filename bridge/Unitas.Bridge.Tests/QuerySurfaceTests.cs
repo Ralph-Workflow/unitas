@@ -357,6 +357,16 @@ namespace Unitas.Bridge.Tests
                 return false;
             }
 
+            public bool TrySetBodyPosition(ulong entity, Vector3 position)
+            {
+                return false;
+            }
+
+            public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
+            {
+                return false;
+            }
+
             private void Record(Vector3 origin, Vector3 direction, Vector3 halfExtents, float maxDistance, int layerMask, bool includeTriggers)
             {
                 Origin = origin;

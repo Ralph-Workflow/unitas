@@ -818,6 +818,16 @@ namespace Unitas.Bridge
             return TryReadBodyVector(entity, RuntimeInterop.unitas_runtime_body_velocity, out velocity);
         }
 
+        public bool TrySetBodyPosition(ulong entity, Vector3 position)
+        {
+            return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_position, position);
+        }
+
+        public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
+        {
+            return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_velocity, velocity);
+        }
+
         private bool TryReadBodyVector(ulong entity, Func<ulong, ulong, IntPtr, int> query, out Vector3 value)
         {
             value = Vector3.zero;
@@ -837,6 +847,25 @@ namespace Unitas.Bridge
             float z = (float)BitConverter.ToDouble(bytes, 16);
             value = new Vector3(x, y, z);
             return true;
+        }
+
+        private bool TryWriteBodyVector(ulong entity, Func<ulong, ulong, IntPtr, int> setter, Vector3 value)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 24);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[24];
+            BitConverter.GetBytes((double)value.x).CopyTo(bytes, 0);
+            BitConverter.GetBytes((double)value.y).CopyTo(bytes, 8);
+            BitConverter.GetBytes((double)value.z).CopyTo(bytes, 16);
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+            return setter(_runtimeHandle, entity, buffer) == 0;
         }
 
         public void InjectKey(KeyCode key, bool pressed)

@@ -37,7 +37,16 @@ namespace UnityEngine
                 }
                 return _velocity;
             }
-            set => _velocity = value;
+            set
+            {
+                _velocity = value;
+                GameObject? owner = gameObject;
+                IPhysicsProvider? provider = Physics.Provider;
+                if (!_isKinematic && owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null)
+                {
+                    provider.TrySetBodyVelocity(owner.NativeEntityId, value);
+                }
+            }
         }
     }
 }

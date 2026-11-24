@@ -1,8 +1,6 @@
 use unitas_core::EntityId;
 
-use crate::body::{
-    add, closest_point, inverse_rotation, rotate_vector, subtract, Shape,
-};
+use crate::body::{add, closest_point, inverse_rotation, rotate_vector, subtract, Shape};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QueryHit {
@@ -27,16 +25,11 @@ pub(crate) enum CastShape {
 }
 
 pub(crate) fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    let length =
-        (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
     if !length.is_finite() || length <= 0.0 {
         return None;
     }
-    Some([
-        vector[0] / length,
-        vector[1] / length,
-        vector[2] / length,
-    ])
+    Some([vector[0] / length, vector[1] / length, vector[2] / length])
 }
 
 pub(crate) fn cast_against(
@@ -48,9 +41,7 @@ pub(crate) fn cast_against(
     cast: CastShape,
 ) -> Option<CastHit> {
     match shape {
-        Shape::Sphere { radius } => {
-            cast_against_sphere(origin, direction, position, *radius, cast)
-        }
+        Shape::Sphere { radius } => cast_against_sphere(origin, direction, position, *radius, cast),
         Shape::Box { half_extents } => {
             cast_against_box(origin, direction, position, rotation, *half_extents, cast)
         }
@@ -73,7 +64,9 @@ pub(crate) fn cast_against_sphere(
                 normal,
             })
         }
-        CastShape::Sphere { radius: cast_radius } => {
+        CastShape::Sphere {
+            radius: cast_radius,
+        } => {
             let (distance, normal) =
                 ray_sphere_hit(origin, direction, center, radius + cast_radius)?;
             Some(CastHit {

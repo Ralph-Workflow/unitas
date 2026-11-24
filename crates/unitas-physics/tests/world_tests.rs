@@ -14,6 +14,8 @@ fn sphere(position: [f64; 3]) -> BodyDesc {
         shape: Shape::Sphere { radius: 0.5 },
         layer: 0,
         role: BodyRole::Dynamic,
+        friction: 0.6,
+        restitution: 0.0,
     }
 }
 
@@ -25,6 +27,8 @@ fn dynamic_body_falls_under_gravity() -> Result<(), PhysicsError> {
         entity,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 10.0, 0.0])
         },
     )?;
@@ -62,6 +66,8 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
             },
             layer: 0,
             role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
         },
     )?;
 
@@ -106,16 +112,22 @@ fn invalid_body_descriptions_are_rejected() -> Result<(), PhysicsError> {
 
     let zero_radius = BodyDesc {
         shape: Shape::Sphere { radius: 0.0 },
+        friction: 0.6,
+        restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
     let negative_extent = BodyDesc {
         shape: Shape::Box {
             half_extents: [1.0, -1.0, 1.0],
         },
+        friction: 0.6,
+        restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
     let infinite_mass = BodyDesc {
         mass: f64::INFINITY,
+        friction: 0.6,
+        restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
 
@@ -161,6 +173,8 @@ fn custom_gravity_accelerates_dynamic_body_along_configured_vector() -> Result<(
         entity,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 0.0, 0.0])
         },
     )?;
@@ -173,7 +187,8 @@ fn custom_gravity_accelerates_dynamic_body_along_configured_vector() -> Result<(
 }
 
 #[test]
-fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() -> Result<(), PhysicsError> {
+fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies(
+) -> Result<(), PhysicsError> {
     let mut custom_world = World::with_gravity([1.5, -2.0, 0.5]);
     let gravity_body = EntityId::new(1);
     let floating_body = EntityId::new(2);
@@ -182,6 +197,8 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() ->
         gravity_body,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 0.0, 0.0])
         },
     )?;
@@ -190,6 +207,8 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() ->
         BodyDesc {
             use_gravity: false,
             velocity: [1.0, 1.0, 1.0],
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 0.0, 0.0])
         },
     )?;
@@ -198,6 +217,8 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() ->
         BodyDesc {
             mass: 0.0,
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([5.0, 5.0, 5.0])
         },
     )?;
@@ -217,6 +238,8 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() ->
         zero_entity,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([1.0, 2.0, 3.0])
         },
     )?;
@@ -266,12 +289,16 @@ fn kinematic_body_is_immovable_under_gravity_and_collision() -> Result<(), Physi
             },
             layer: 0,
             role: BodyRole::Kinematic,
+            friction: 0.6,
+            restitution: 0.0,
         },
     )?;
     world.add_body(
         ball,
         BodyDesc {
             use_gravity: true,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 1.1, 0.0])
         },
     )?;
@@ -301,6 +328,8 @@ fn explicit_static_role_and_non_positive_mass_resolve_to_static_role() -> Result
             mass: 10.0,
             use_gravity: true,
             role: BodyRole::Static,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([0.0, 0.0, 0.0])
         },
     )?;
@@ -310,6 +339,8 @@ fn explicit_static_role_and_non_positive_mass_resolve_to_static_role() -> Result
             mass: 0.0,
             use_gravity: true,
             role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([5.0, 0.0, 0.0])
         },
     )?;
@@ -319,6 +350,8 @@ fn explicit_static_role_and_non_positive_mass_resolve_to_static_role() -> Result
             mass: -1.0,
             use_gravity: true,
             role: BodyRole::Dynamic,
+            friction: 0.6,
+            restitution: 0.0,
             ..sphere([10.0, 0.0, 0.0])
         },
     )?;
@@ -327,9 +360,88 @@ fn explicit_static_role_and_non_positive_mass_resolve_to_static_role() -> Result
 
     assert_eq!(world.body_role(explicit_static), Some(BodyRole::Static));
     assert_eq!(world.body_role(zero_mass_dynamic), Some(BodyRole::Static));
-    assert_eq!(world.body_role(negative_mass_dynamic), Some(BodyRole::Static));
+    assert_eq!(
+        world.body_role(negative_mass_dynamic),
+        Some(BodyRole::Static)
+    );
     assert_eq!(world.position(explicit_static), Some([0.0, 0.0, 0.0]));
     assert_eq!(world.position(zero_mass_dynamic), Some([5.0, 0.0, 0.0]));
-    assert_eq!(world.position(negative_mass_dynamic), Some([10.0, 0.0, 0.0]));
+    assert_eq!(
+        world.position(negative_mass_dynamic),
+        Some([10.0, 0.0, 0.0])
+    );
+    Ok(())
+}
+
+#[test]
+fn set_velocity_redirects_dynamic_bodies_and_set_position_rejects_them() -> Result<(), PhysicsError>
+{
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let entity = EntityId::new(1);
+    world.add_body(entity, sphere([0.0, 0.0, 0.0]))?;
+
+    assert_eq!(world.set_velocity(entity, [3.0, 0.0, 0.0]), Ok(()));
+    world.step(0.5)?;
+
+    assert_eq!(world.velocity(entity), Some([3.0, 0.0, 0.0]));
+    assert_eq!(world.position(entity), Some([1.5, 0.0, 0.0]));
+
+    assert_eq!(
+        world.set_position(entity, [1.0, 2.0, 3.0]),
+        Err(PhysicsError::InvalidBody(entity))
+    );
+    assert_eq!(world.position(entity), Some([1.5, 0.0, 0.0]));
+
+    let absent = EntityId::new(2);
+    assert_eq!(
+        world.set_velocity(absent, [1.0, 0.0, 0.0]),
+        Err(PhysicsError::InvalidBody(absent))
+    );
+    assert_eq!(
+        world.set_position(absent, [1.0, 0.0, 0.0]),
+        Err(PhysicsError::InvalidBody(absent))
+    );
+    Ok(())
+}
+
+#[test]
+fn set_position_moves_kinematic_and_static_bodies() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let kinematic = EntityId::new(1);
+    let static_body = EntityId::new(2);
+    world.add_body(
+        kinematic,
+        BodyDesc {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [1.0, 1.0, 1.0],
+            },
+            layer: 0,
+            role: BodyRole::Kinematic,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    world.add_body(
+        static_body,
+        BodyDesc {
+            mass: 0.0,
+            role: BodyRole::Static,
+            friction: 0.6,
+            restitution: 0.0,
+            ..sphere([5.0, 0.0, 0.0])
+        },
+    )?;
+
+    assert_eq!(world.set_position(kinematic, [1.0, 2.0, 3.0]), Ok(()));
+    assert_eq!(world.set_position(static_body, [6.0, 0.0, 0.0]), Ok(()));
+
+    assert_eq!(world.position(kinematic), Some([1.0, 2.0, 3.0]));
+    assert_eq!(world.position(static_body), Some([6.0, 0.0, 0.0]));
     Ok(())
 }

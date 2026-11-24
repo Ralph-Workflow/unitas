@@ -24,6 +24,10 @@ struct Body {
     rotation: [f64; 4],
     velocity: [f64; 3],
     layer: u32,
+    friction: f64,
+    restitution: f64,
+    previous_position: [f64; 3],
+    sweep_velocity: [f64; 3],
 }
 
 impl Body {
@@ -37,7 +41,8 @@ impl Body {
     fn effective_velocity(&self) -> [f64; 3] {
         match self.role {
             BodyRole::Dynamic => self.velocity,
-            BodyRole::Kinematic | BodyRole::Static => [0.0; 3],
+            BodyRole::Kinematic => self.sweep_velocity,
+            BodyRole::Static => [0.0; 3],
         }
     }
 }
@@ -100,6 +105,10 @@ impl World {
             rotation: desc.rotation,
             velocity: desc.velocity,
             layer: desc.layer,
+            friction: desc.friction,
+            restitution: desc.restitution,
+            previous_position: desc.position,
+            sweep_velocity: [0.0; 3],
         });
         self.indices.insert(entity, index);
         Ok(())
@@ -110,6 +119,7 @@ impl World {
             return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
         }
         self.integrate(delta_seconds);
+        self.update_sweep_velocities(delta_seconds);
         let (mut overlapping, mut overlapping_triggers) = self.overlapping_pairs();
         let resolved = self.resolve_contacts();
         let (post_overlapping, post_triggers) = self.overlapping_pairs();
@@ -128,6 +138,7 @@ impl World {
         self.overlapping = active;
         self.resolved_contacts = next_resolved;
         self.overlapping_triggers = overlapping_triggers;
+        self.commit_positions();
         Ok(())
     }
 
@@ -155,6 +166,31 @@ impl World {
         self.indices
             .get(&entity)
             .map(|index| self.bodies[*index].role)
+    }
+
+    pub fn set_velocity(&mut self, body: EntityId, v: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !v.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        self.bodies[index].velocity = v;
+        Ok(())
+    }
+
+    pub fn set_position(&mut self, body: EntityId, p: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !p.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        if self.bodies[index].role == BodyRole::Dynamic {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        self.bodies[index].position = p;
+        Ok(())
     }
 
     pub fn body_count(&self) -> usize {
@@ -219,16 +255,11 @@ impl World {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryHit> {
-        let delta = [
-            end[0] - start[0],
-            end[1] - start[1],
-            end[2] - start[2],
-        ];
+        let delta = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
         let Some(direction) = normalize(delta) else {
             return Vec::new();
         };
-        let distance =
-            (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
         self.cast(
             CastShape::Point,
             start,
@@ -344,7 +375,7 @@ impl World {
                 body.position,
                 body.rotation,
                 &body.shape,
-                cast_shape
+                cast_shape,
             ) else {
                 continue;
             };
@@ -380,6 +411,29 @@ impl World {
             body.position[0] += body.velocity[0] * delta_seconds;
             body.position[1] += body.velocity[1] * delta_seconds;
             body.position[2] += body.velocity[2] * delta_seconds;
+        }
+    }
+
+    fn update_sweep_velocities(&mut self, delta_seconds: f64) {
+        for body in &mut self.bodies {
+            if body.role != BodyRole::Kinematic {
+                continue;
+            }
+            if delta_seconds <= 0.0 {
+                body.sweep_velocity = [0.0; 3];
+                continue;
+            }
+            body.sweep_velocity = [
+                (body.position[0] - body.previous_position[0]) / delta_seconds,
+                (body.position[1] - body.previous_position[1]) / delta_seconds,
+                (body.position[2] - body.previous_position[2]) / delta_seconds,
+            ];
+        }
+    }
+
+    fn commit_positions(&mut self) {
+        for body in &mut self.bodies {
+            body.previous_position = body.position;
         }
     }
 
@@ -429,7 +483,9 @@ impl World {
                         + relative_velocity[1] * contact.normal[1]
                         + relative_velocity[2] * contact.normal[2];
                     if normal_speed < 0.0 {
-                        let impulse = -normal_speed / inv_sum;
+                        let restitution = (first.restitution + second.restitution) / 2.0;
+                        let friction = (first.friction + second.friction) / 2.0;
+                        let impulse = -normal_speed / inv_sum * (1.0 + restitution);
                         self.bodies[first_index].velocity[0] -= contact.normal[0] * impulse * inv_a;
                         self.bodies[first_index].velocity[1] -= contact.normal[1] * impulse * inv_a;
                         self.bodies[first_index].velocity[2] -= contact.normal[2] * impulse * inv_a;
@@ -439,6 +495,36 @@ impl World {
                             contact.normal[1] * impulse * inv_b;
                         self.bodies[second_index].velocity[2] +=
                             contact.normal[2] * impulse * inv_b;
+                        let tangential = [
+                            relative_velocity[0] - contact.normal[0] * normal_speed,
+                            relative_velocity[1] - contact.normal[1] * normal_speed,
+                            relative_velocity[2] - contact.normal[2] * normal_speed,
+                        ];
+                        let tangential_speed = (tangential[0] * tangential[0]
+                            + tangential[1] * tangential[1]
+                            + tangential[2] * tangential[2])
+                            .sqrt();
+                        if tangential_speed > 0.0 {
+                            let friction_impulse =
+                                (tangential_speed / inv_sum).min(friction * impulse);
+                            let direction = [
+                                tangential[0] / tangential_speed,
+                                tangential[1] / tangential_speed,
+                                tangential[2] / tangential_speed,
+                            ];
+                            self.bodies[first_index].velocity[0] +=
+                                direction[0] * friction_impulse * inv_a;
+                            self.bodies[first_index].velocity[1] +=
+                                direction[1] * friction_impulse * inv_a;
+                            self.bodies[first_index].velocity[2] +=
+                                direction[2] * friction_impulse * inv_a;
+                            self.bodies[second_index].velocity[0] -=
+                                direction[0] * friction_impulse * inv_b;
+                            self.bodies[second_index].velocity[1] -=
+                                direction[1] * friction_impulse * inv_b;
+                            self.bodies[second_index].velocity[2] -=
+                                direction[2] * friction_impulse * inv_b;
+                        }
                         let pair = if first.entity < second.entity {
                             (first.entity, second.entity)
                         } else {

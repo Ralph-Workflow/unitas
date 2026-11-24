@@ -41,9 +41,12 @@ impl Shape {
         other_rotation: [f64; 4],
     ) -> bool {
         match (self, other) {
-            (Self::Sphere { radius }, Self::Sphere { radius: other_radius }) => {
-                distance(position, other_position) < radius + other_radius
-            }
+            (
+                Self::Sphere { radius },
+                Self::Sphere {
+                    radius: other_radius,
+                },
+            ) => distance(position, other_position) < radius + other_radius,
             (Self::Sphere { radius }, Self::Box { half_extents }) => {
                 let local = to_local(other_rotation, other_position, position);
                 let closest = closest_point([0.0; 3], *half_extents, local);
@@ -54,16 +57,19 @@ impl Shape {
                 let closest = closest_point([0.0; 3], *half_extents, local);
                 distance(local, closest) < *radius
             }
-            (Self::Box { half_extents }, Self::Box { half_extents: other_half_extents }) => {
-                boxes_overlap(
-                    position,
-                    rotation,
-                    *half_extents,
-                    other_position,
-                    other_rotation,
-                    *other_half_extents,
-                )
-            }
+            (
+                Self::Box { half_extents },
+                Self::Box {
+                    half_extents: other_half_extents,
+                },
+            ) => boxes_overlap(
+                position,
+                rotation,
+                *half_extents,
+                other_position,
+                other_rotation,
+                *other_half_extents,
+            ),
         }
     }
 
@@ -77,9 +83,12 @@ impl Shape {
     ) -> bool {
         const CONTACT_SLOP: f64 = 1e-8;
         match (self, other) {
-            (Self::Sphere { radius }, Self::Sphere { radius: other_radius }) => {
-                distance(position, other_position) < radius + other_radius
-            }
+            (
+                Self::Sphere { radius },
+                Self::Sphere {
+                    radius: other_radius,
+                },
+            ) => distance(position, other_position) < radius + other_radius,
             (Self::Sphere { radius }, Self::Box { half_extents }) => {
                 let local = to_local(other_rotation, other_position, position);
                 let closest = closest_point([0.0; 3], *half_extents, local);
@@ -90,16 +99,19 @@ impl Shape {
                 let closest = closest_point([0.0; 3], *half_extents, local);
                 distance(local, closest) <= *radius + CONTACT_SLOP
             }
-            (Self::Box { half_extents }, Self::Box { half_extents: other_half_extents }) => {
-                boxes_overlap(
-                    position,
-                    rotation,
-                    *half_extents,
-                    other_position,
-                    other_rotation,
-                    *other_half_extents,
-                )
-            }
+            (
+                Self::Box { half_extents },
+                Self::Box {
+                    half_extents: other_half_extents,
+                },
+            ) => boxes_overlap(
+                position,
+                rotation,
+                *half_extents,
+                other_position,
+                other_rotation,
+                *other_half_extents,
+            ),
         }
     }
 
@@ -112,33 +124,40 @@ impl Shape {
         other_rotation: [f64; 4],
     ) -> Option<Contact> {
         match (self, other) {
-            (Self::Sphere { radius }, Self::Sphere { radius: other_radius }) => {
-                sphere_sphere_contact(position, *radius, other_position, *other_radius)
-            }
-            (Self::Sphere { radius }, Self::Box { half_extents }) => {
-                sphere_box_contact(position, *radius, other_position, other_rotation, *half_extents)
-            }
-            (Self::Box { half_extents }, Self::Sphere { radius }) => sphere_box_contact(
-                other_position,
+            (
+                Self::Sphere { radius },
+                Self::Sphere {
+                    radius: other_radius,
+                },
+            ) => sphere_sphere_contact(position, *radius, other_position, *other_radius),
+            (Self::Sphere { radius }, Self::Box { half_extents }) => sphere_box_contact(
+                position,
                 *radius,
+                other_position,
+                other_rotation,
+                *half_extents,
+            ),
+            (Self::Box { half_extents }, Self::Sphere { radius }) => {
+                sphere_box_contact(other_position, *radius, position, rotation, *half_extents).map(
+                    |contact| Contact {
+                        normal: [-contact.normal[0], -contact.normal[1], -contact.normal[2]],
+                        depth: contact.depth,
+                    },
+                )
+            }
+            (
+                Self::Box { half_extents },
+                Self::Box {
+                    half_extents: other_half_extents,
+                },
+            ) => box_box_contact(
                 position,
                 rotation,
                 *half_extents,
-            )
-            .map(|contact| Contact {
-                normal: [-contact.normal[0], -contact.normal[1], -contact.normal[2]],
-                depth: contact.depth,
-            }),
-            (Self::Box { half_extents }, Self::Box { half_extents: other_half_extents }) => {
-                box_box_contact(
-                    position,
-                    rotation,
-                    *half_extents,
-                    other_position,
-                    other_rotation,
-                    *other_half_extents,
-                )
-            }
+                other_position,
+                other_rotation,
+                *other_half_extents,
+            ),
         }
     }
 }
@@ -154,6 +173,8 @@ pub struct BodyDesc {
     pub shape: Shape,
     pub layer: u32,
     pub role: BodyRole,
+    pub friction: f64,
+    pub restitution: f64,
 }
 
 impl BodyDesc {
@@ -168,6 +189,10 @@ impl BodyDesc {
         self.mass.is_finite()
             && self.position.iter().all(|value| value.is_finite())
             && self.velocity.iter().all(|value| value.is_finite())
+            && self.friction.is_finite()
+            && self.friction >= 0.0
+            && self.restitution.is_finite()
+            && self.restitution >= 0.0
             && self.shape.is_valid()
     }
 }

@@ -36,6 +36,7 @@ namespace UnityEngine
                 {
                     _localPosition = value;
                 }
+                PushKinematicPositionToNative();
             }
         }
 
@@ -87,6 +88,25 @@ namespace UnityEngine
         public void Translate(Vector3 translation)
         {
             position += translation;
+        }
+
+        private void PushKinematicPositionToNative()
+        {
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed || owner.NativeEntityId == 0)
+            {
+                return;
+            }
+            Rigidbody? body = owner.GetComponent<Rigidbody>();
+            if (body == null || !body.isKinematic)
+            {
+                return;
+            }
+            IPhysicsProvider? provider = Physics.Provider;
+            if (provider != null)
+            {
+                provider.TrySetBodyPosition(owner.NativeEntityId, position);
+            }
         }
     }
 }

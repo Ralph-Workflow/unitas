@@ -23,6 +23,7 @@ pub use project_settings::{
 pub use scene::{
     assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
     assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    BoxColliderComponent, PhysicsBinding, RigidbodyComponent, SceneError, SphereColliderComponent,
+    BoxColliderComponent, MaterialValues, PhysicsBinding, RigidbodyComponent, SceneError,
+    SphereColliderComponent,
 };
 pub use unity_yaml::{AssetError, Document, Header, Node, Stream, YamlError, YamlNode};
