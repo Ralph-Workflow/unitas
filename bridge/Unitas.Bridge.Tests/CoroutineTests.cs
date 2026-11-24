@@ -419,7 +419,19 @@ namespace Unitas.Bridge.Tests
                     host.LoadScene(plainScene);
                     host.Tick(0.02);
                     host.Tick(0.02);
-                    Check.Equal("LoadScene stops coroutines from previous scene", countBeforeReload, sceneScript.Events.Count);
+                    int countAfterReload = sceneScript.Events.Count;
+                    string teardownEvents = string.Empty;
+                    for (int index = countBeforeReload; index < sceneScript.Events.Count; index++)
+                    {
+                        string recorded = sceneScript.Events[index];
+                        teardownEvents = teardownEvents.Length == 0 ? recorded : teardownEvents + ", " + recorded;
+                    }
+
+                    Check.Equal(
+                        "LoadScene tears the previous scene script down at the reload boundary",
+                        "OnDisable, OnDestroy",
+                        teardownEvents);
+                    Check.Equal("LoadScene stops coroutines from previous scene", countBeforeReload + 2, countAfterReload);
                     host.Shutdown();
                 }
             }

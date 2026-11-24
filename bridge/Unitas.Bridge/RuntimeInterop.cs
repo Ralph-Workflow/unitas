@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Unitas.Bridge
 {
-    public static class RuntimeInterop
+    public static partial class RuntimeInterop
     {
         public const string LibraryName = "unitas_runtime";
 

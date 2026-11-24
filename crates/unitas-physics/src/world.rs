@@ -121,6 +121,27 @@ impl World {
         self.bodies.len()
     }
 
+    pub fn remove_body(&mut self, entity: EntityId) -> bool {
+        let Some(index) = self.indices.remove(&entity) else {
+            return false;
+        };
+        self.bodies.remove(index);
+        for slot in self.indices.values_mut() {
+            if *slot > index {
+                *slot -= 1;
+            }
+        }
+        self.overlapping
+            .retain(|(first, second)| *first != entity && *second != entity);
+        self.overlapping_triggers
+            .retain(|(first, second)| *first != entity && *second != entity);
+        true
+    }
+
+    pub fn set_gravity(&mut self, gravity: [f64; 3]) {
+        self.gravity = gravity;
+    }
+
     pub fn raycast(
         &self,
         origin: [f64; 3],

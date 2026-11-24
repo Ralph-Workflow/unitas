@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use unitas_asset::scene::SceneError;
+use unitas_core::EntityId;
 use unitas_physics::PhysicsError;
 
 #[derive(Debug)]
@@ -14,6 +15,9 @@ pub enum RuntimeError {
     NotFound,
     AlreadyShutdown,
     Poisoned,
+    SceneNotFound(String),
+    InvalidSceneIndex(usize),
+    EntityNotFound(EntityId),
 }
 
 impl fmt::Display for RuntimeError {
@@ -28,6 +32,12 @@ impl fmt::Display for RuntimeError {
             RuntimeError::NotFound => write!(formatter, "runtime handle not found"),
             RuntimeError::AlreadyShutdown => write!(formatter, "runtime is already shut down"),
             RuntimeError::Poisoned => write!(formatter, "runtime mutex poisoned"),
+            RuntimeError::SceneNotFound(name) => write!(formatter, "scene not found: {name}"),
+            RuntimeError::SceneNotFound(name) => write!(formatter, "scene not found: {name}"),
+            RuntimeError::InvalidSceneIndex(index) => {
+                write!(formatter, "invalid scene index: {index}")
+            }
+            RuntimeError::EntityNotFound(entity) => write!(formatter, "entity not found: {entity}"),
         }
     }
 }

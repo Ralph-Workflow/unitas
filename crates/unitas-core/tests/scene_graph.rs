@@ -627,3 +627,32 @@ fn core_error_display_and_trait() -> Result<(), CoreError> {
     assert!(error_trait.source().is_none());
     Ok(())
 }
+
+#[test]
+fn scene_graph_shift_entity_ids_moves_keys_ids_and_links() -> Result<(), Box<dyn std::error::Error>> {
+    let mut graph = SceneGraph::new();
+    let root = graph.add_entity("Root");
+    let child = graph.add_entity("Child");
+    graph.attach(child, root)?;
+
+    graph.shift_entity_ids(10);
+
+    let shifted_root = EntityId::new(10);
+    let shifted_child = EntityId::new(11);
+    assert!(graph.entity(root).is_none());
+    assert!(graph.entity(child).is_none());
+    assert_eq!(
+        graph.entity(shifted_root).map(|entity| entity.name.clone()),
+        Some(String::from("Root"))
+    );
+    assert_eq!(
+        graph.entity(shifted_child).map(|entity| entity.name.clone()),
+        Some(String::from("Child"))
+    );
+    assert_eq!(graph.parent_of(shifted_child), Some(shifted_root));
+    assert_eq!(graph.children_of(shifted_root), &[shifted_child][..]);
+    assert_eq!(graph.breadth_first_order(), vec![shifted_root, shifted_child]);
+    let added = graph.add_entity("Added");
+    assert!(added.as_u64() > shifted_child.as_u64());
+    Ok(())
+}

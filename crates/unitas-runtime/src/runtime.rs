@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding};
+use unitas_asset::scene::{assemble_scene_file_with_physics, PhysicsBinding, ScriptBinding};
 use unitas_asset::{
     parse_dynamics_manager, parse_input_manager, parse_time_manager, InputAxis,
     DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
@@ -9,6 +9,31 @@ use unitas_physics::{BodyDesc, Phase, QueryHit, Shape, World};
 
 use crate::error::RuntimeError;
 use crate::input::{default_axis_configs, AxisConfig, InputState};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadSceneMode {
+    Single,
+    Additive,
+}
+
+pub struct LoadedScene {
+    name: String,
+    graph: SceneGraph,
+    scripts: Vec<ScriptInstance>,
+    bodies: Vec<EntityId>,
+    entity_base: u64,
+    entity_count: u64,
+}
+
+impl LoadedScene {
+    pub fn scripts(&self) -> &[ScriptInstance] {
+        &self.scripts
+    }
+
+    pub fn bodies(&self) -> &[EntityId] {
+        &self.bodies
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Callbacks {
@@ -45,9 +70,14 @@ pub struct ScriptInstance {
     pub start_called: bool,
 }
 
+/// The headless runtime. Physics lives in one global world: unloading a scene removes exactly that
+/// scene's bodies, so cross-scene contacts can still occur (Unity isolates physics per scene).
 pub struct Runtime {
-    scene_graph: Option<SceneGraph>,
-    scripts: Vec<ScriptInstance>,
+    scenes: Vec<LoadedScene>,
+    active_scene: Option<usize>,
+    persistent: Vec<ScriptInstance>,
+    persistent_entities: Vec<EntityId>,
+    script_view: Vec<ScriptInstance>,
     world: World,
     input: InputState,
     callbacks: Option<Callbacks>,
@@ -61,8 +91,11 @@ pub struct Runtime {
 impl Runtime {
     pub fn new() -> Result<Self, RuntimeError> {
         Ok(Self {
-            scene_graph: None,
-            scripts: Vec::new(),
+            scenes: Vec::new(),
+            active_scene: None,
+            persistent: Vec::new(),
+            persistent_entities: Vec::new(),
+            script_view: Vec::new(),
             world: World::new(),
             input: InputState::with_default_axes(),
             callbacks: None,
@@ -74,43 +107,354 @@ impl Runtime {
         })
     }
 
+    /// Loads a scene in Single mode, replacing every loaded scene. Returns the number of scripts
+    /// in the newly loaded scene.
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
+        self.load_scene_with_hook(path, LoadSceneMode::Single, |_, f| f())?;
+        Ok(self.scenes.last().map_or(0, |scene| scene.scripts.len()))
+    }
+
+    /// Loads a scene in the given mode. Returns the number of loaded scenes after the operation
+    /// (not the script count, which [`Runtime::load_scene`] reports).
+    pub fn load_scene_with_mode(
+        &mut self,
+        path: &Path,
+        mode: LoadSceneMode,
+    ) -> Result<usize, RuntimeError> {
+        self.load_scene_with_hook(path, mode, |_, f| f())
+    }
+
+    pub fn load_scene_with_hook<H>(
+        &mut self,
+        path: &Path,
+        mode: LoadSceneMode,
+        mut hook: H,
+    ) -> Result<usize, RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
         let (graph, bindings, physics) = assemble_scene_file_with_physics(path)?;
         let (fixed_timestep, gravity, axes) = discover_project_settings(path);
-        let world = build_world(&graph, &physics, gravity)?;
-        self.scene_graph = Some(graph);
-        self.world = world;
-        self.fixed_timestep = fixed_timestep;
-        self.input.set_axes(axes);
-        self.input.reset();
-        self.scripts.clear();
-        for binding in bindings {
-            if binding.guid.len() != 32 {
-                return Err(RuntimeError::InvalidGuid(binding.guid));
+        let scripts = build_script_instances(&bindings)?;
+        let descs = body_descs(&graph, &physics);
+        validate_bodies(&descs)?;
+        match mode {
+            LoadSceneMode::Single => {
+                self.unload_all_scenes(&mut hook);
+                self.apply_project_settings(fixed_timestep, gravity, axes);
             }
-            let guid_hi = match u64::from_str_radix(&binding.guid[0..16], 16) {
-                Ok(val) => val,
-                Err(_) => return Err(RuntimeError::InvalidGuid(binding.guid)),
-            };
-            let guid_lo = match u64::from_str_radix(&binding.guid[16..32], 16) {
-                Ok(val) => val,
-                Err(_) => return Err(RuntimeError::InvalidGuid(binding.guid)),
-            };
-            self.scripts.push(ScriptInstance {
-                entity: binding.entity,
-                guid: binding.guid,
-                guid_hi,
-                guid_lo,
-                script_handle: 0,
-                awake_called: false,
-                on_enable_called: false,
-                start_called: false,
-            });
+            LoadSceneMode::Additive => {
+                if self.scenes.is_empty() {
+                    self.apply_project_settings(fixed_timestep, gravity, axes);
+                }
+            }
+        }
+        let entity_base = self.next_entity_base();
+        let mut graph = graph;
+        graph.shift_entity_ids(entity_base);
+        let scripts = scripts
+            .into_iter()
+            .map(|script| ScriptInstance {
+                entity: EntityId::new(entity_base + script.entity.as_u64()),
+                ..script
+            })
+            .collect::<Vec<_>>();
+        let bodies = descs
+            .iter()
+            .map(|(entity, _)| EntityId::new(entity_base + entity.as_u64()))
+            .collect::<Vec<_>>();
+        for (body, desc) in bodies.iter().zip(descs.iter()) {
+            self.world.add_body(*body, desc.1)?;
+        }
+        let entity_count = graph.len() as u64;
+        self.scenes.push(LoadedScene {
+            name: scene_name_from_path(path),
+            graph,
+            scripts,
+            bodies,
+            entity_base,
+            entity_count,
+        });
+        if self.active_scene.is_none() {
+            self.active_scene = Some(self.scenes.len() - 1);
         }
         self.accumulator = 0.0;
         self.first_tick = true;
         self.is_shutdown = false;
-        Ok(self.scripts.len())
+        self.refresh_script_view();
+        Ok(self.scenes.len())
+    }
+
+    pub fn unload_scene(&mut self, name: &str) -> Result<(), RuntimeError> {
+        self.unload_scene_with_hook(name, |_, f| f())
+    }
+
+    pub fn unload_scene_with_hook<H>(
+        &mut self,
+        name: &str,
+        mut hook: H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let index = match self.scenes.iter().position(|scene| scene.name == name) {
+            Some(index) => index,
+            None => return Err(RuntimeError::SceneNotFound(name.to_string())),
+        };
+        let scene = self.scenes.remove(index);
+        self.teardown_scene(&scene, &mut hook);
+        for body in &scene.bodies {
+            self.world.remove_body(*body);
+        }
+        match self.active_scene {
+            Some(active) if active == index => {
+                self.active_scene = if self.scenes.is_empty() {
+                    None
+                } else {
+                    Some(index.min(self.scenes.len() - 1))
+                };
+            }
+            Some(active) if active > index => self.active_scene = Some(active - 1),
+            _ => {}
+        }
+        self.refresh_script_view();
+        Ok(())
+    }
+
+    pub fn scene_count(&self) -> usize {
+        self.scenes.len()
+    }
+
+    pub fn scene_name(&self, index: usize) -> Option<&str> {
+        self.scenes.get(index).map(|scene| scene.name.as_str())
+    }
+
+    pub fn scene(&self, index: usize) -> Option<&LoadedScene> {
+        self.scenes.get(index)
+    }
+
+    pub fn set_active_scene(&mut self, index: usize) -> Result<(), RuntimeError> {
+        if index >= self.scenes.len() {
+            return Err(RuntimeError::InvalidSceneIndex(index));
+        }
+        self.active_scene = Some(index);
+        self.refresh_script_view();
+        Ok(())
+    }
+
+    pub fn active_scene_index(&self) -> Option<usize> {
+        self.active_scene
+    }
+
+    pub fn dont_destroy_on_load(&mut self, entity: EntityId) -> Result<(), RuntimeError> {
+        if self.persistent_entities.contains(&entity) {
+            return Ok(());
+        }
+        let mut found = false;
+        for index in 0..self.scenes.len() {
+            let script_index = self.scenes[index]
+                .scripts
+                .iter()
+                .position(|script| script.entity == entity);
+            if let Some(script_index) = script_index {
+                let script = self.scenes[index].scripts.remove(script_index);
+                self.persistent.push(script);
+                found = true;
+                break;
+            }
+        }
+        for index in 0..self.scenes.len() {
+            let body_index = self.scenes[index]
+                .bodies
+                .iter()
+                .position(|body| *body == entity);
+            if let Some(body_index) = body_index {
+                self.scenes[index].bodies.remove(body_index);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(RuntimeError::EntityNotFound(entity));
+        }
+        self.persistent_entities.push(entity);
+        self.refresh_script_view();
+        Ok(())
+    }
+
+    pub fn is_persistent(&self, entity: EntityId) -> bool {
+        self.persistent_entities.contains(&entity)
+    }
+
+    fn apply_project_settings(&mut self, fixed_timestep: f64, gravity: [f64; 3], axes: Vec<AxisConfig>) {
+        self.world.set_gravity(gravity);
+        self.fixed_timestep = fixed_timestep;
+        self.input.set_axes(axes);
+        self.input.reset();
+    }
+
+    fn unload_all_scenes<H>(&mut self, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let scenes = std::mem::take(&mut self.scenes);
+        self.active_scene = None;
+        for scene in &scenes {
+            self.teardown_scene(scene, hook);
+        }
+        for scene in &scenes {
+            for body in &scene.bodies {
+                self.world.remove_body(*body);
+            }
+        }
+    }
+
+    fn teardown_scene<H>(&mut self, scene: &LoadedScene, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let Some(callbacks) = self.callbacks else {
+            return;
+        };
+        let (disable, destroy) = teardown_handles(&scene.scripts);
+        self.fire_teardown(disable, destroy, callbacks, hook);
+    }
+
+    fn fire_teardown<H>(
+        &mut self,
+        disable: Vec<u64>,
+        destroy: Vec<u64>,
+        callbacks: Callbacks,
+        hook: &mut H,
+    ) where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        for handle in disable {
+            hook(self, &mut || {
+                (callbacks.on_disable)(handle);
+            });
+        }
+        for handle in destroy {
+            hook(self, &mut || {
+                (callbacks.destroy)(handle);
+            });
+        }
+    }
+
+    fn next_entity_base(&self) -> u64 {
+        // Entity id 0 is reserved as "no entity" for the managed bridge, so the first scene starts at 1.
+        let mut highest = 1u64;
+        for scene in &self.scenes {
+            highest = highest.max(scene.entity_base + scene.entity_count);
+        }
+        for entity in &self.persistent_entities {
+            highest = highest.max(entity.as_u64() + 1);
+        }
+        highest
+    }
+
+    fn refresh_script_view(&mut self) {
+        let scene_scripts = match self.active_scene.and_then(|index| self.scenes.get(index)) {
+            Some(scene) => scene.scripts.clone(),
+            None => Vec::new(),
+        };
+        let persistent = self.persistent.clone();
+        self.script_view = scene_scripts;
+        self.script_view.extend(persistent);
+    }
+
+    fn all_script_handles(&self) -> Vec<u64> {
+        let mut handles = Vec::new();
+        for scene in &self.scenes {
+            for script in &scene.scripts {
+                handles.push(script.script_handle);
+            }
+        }
+        for script in &self.persistent {
+            handles.push(script.script_handle);
+        }
+        handles
+    }
+
+    fn find_script(&self, entity: EntityId) -> Option<&ScriptInstance> {
+        for scene in &self.scenes {
+            if let Some(script) = scene.scripts.iter().find(|script| script.entity == entity) {
+                return Some(script);
+            }
+        }
+        self.persistent.iter().find(|script| script.entity == entity)
+    }
+
+    fn find_script_mut(&mut self, entity: EntityId) -> Option<&mut ScriptInstance> {
+        for scene in &mut self.scenes {
+            if let Some(script) = scene.scripts.iter_mut().find(|script| script.entity == entity) {
+                return Some(script);
+            }
+        }
+        self.persistent.iter_mut().find(|script| script.entity == entity)
+    }
+
+    fn init_pending_scripts<H>(&mut self, callbacks: Callbacks, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let mut pending: Vec<(EntityId, u64, u64)> = Vec::new();
+        for scene in &self.scenes {
+            for script in &scene.scripts {
+                if !script.awake_called {
+                    pending.push((script.entity, script.guid_hi, script.guid_lo));
+                }
+            }
+        }
+        for script in &self.persistent {
+            if !script.awake_called {
+                pending.push((script.entity, script.guid_hi, script.guid_lo));
+            }
+        }
+        // Pending scripts are tracked by entity, not by slot index: a callback may mark a script
+        // persistent and move it out of its scene while that script is being initialised.
+        for (entity, guid_hi, guid_lo) in pending.iter().copied() {
+            let mut created = 0;
+            hook(self, &mut || {
+                created = (callbacks.create_script)(entity.as_u64(), guid_hi, guid_lo);
+            });
+            if let Some(script) = self.find_script_mut(entity) {
+                script.script_handle = created;
+            }
+        }
+        for (entity, _, _) in pending.iter().copied() {
+            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+                continue;
+            };
+            hook(self, &mut || {
+                (callbacks.awake)(handle);
+            });
+            if let Some(script) = self.find_script_mut(entity) {
+                script.awake_called = true;
+            }
+        }
+        for (entity, _, _) in pending.iter().copied() {
+            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+                continue;
+            };
+            hook(self, &mut || {
+                (callbacks.on_enable)(handle);
+            });
+            if let Some(script) = self.find_script_mut(entity) {
+                script.on_enable_called = true;
+            }
+        }
+        for (entity, _, _) in pending.iter().copied() {
+            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+                continue;
+            };
+            hook(self, &mut || {
+                (callbacks.start)(handle);
+            });
+            if let Some(script) = self.find_script_mut(entity) {
+                script.start_called = true;
+            }
+        }
     }
 
     pub fn set_callbacks(&mut self, callbacks: Callbacks) {
@@ -131,39 +475,9 @@ impl Runtime {
         if self.first_tick {
             self.first_tick = false;
             if let Some(callbacks) = self.callbacks {
-                let count = self.scripts.len();
-                for index in 0..count {
-                    let entity = self.scripts[index].entity.as_u64();
-                    let guid_hi = self.scripts[index].guid_hi;
-                    let guid_lo = self.scripts[index].guid_lo;
-                    let mut created = 0;
-                    hook(self, &mut || {
-                        created = (callbacks.create_script)(entity, guid_hi, guid_lo);
-                    });
-                    self.scripts[index].script_handle = created;
-                }
-                for index in 0..count {
-                    let handle = self.scripts[index].script_handle;
-                    hook(self, &mut || {
-                        (callbacks.awake)(handle);
-                    });
-                    self.scripts[index].awake_called = true;
-                }
-                for index in 0..count {
-                    let handle = self.scripts[index].script_handle;
-                    hook(self, &mut || {
-                        (callbacks.on_enable)(handle);
-                    });
-                    self.scripts[index].on_enable_called = true;
-                }
-                for index in 0..count {
-                    let handle = self.scripts[index].script_handle;
-                    hook(self, &mut || {
-                        (callbacks.start)(handle);
-                    });
-                    self.scripts[index].start_called = true;
-                }
+                self.init_pending_scripts(callbacks, &mut hook);
             }
+            self.refresh_script_view();
             return Ok(());
         }
         let scaled_delta = delta_seconds * self.time_scale;
@@ -174,7 +488,7 @@ impl Runtime {
         while self.accumulator >= fixed_step - EPSILON {
             self.world.step(fixed_step)?;
             if let Some(callbacks) = self.callbacks {
-                let handles: Vec<u64> = self.scripts.iter().map(|s| s.script_handle).collect();
+                let handles = self.all_script_handles();
                 for handle in handles {
                     hook(self, &mut || {
                         (callbacks.fixed_update)(handle, fixed_step);
@@ -205,7 +519,7 @@ impl Runtime {
                     (callbacks.trigger)(a, b, phase);
                 });
             }
-            let handles: Vec<u64> = self.scripts.iter().map(|s| s.script_handle).collect();
+            let handles = self.all_script_handles();
             for handle in &handles {
                 let h = *handle;
                 hook(self, &mut || {
@@ -235,40 +549,26 @@ impl Runtime {
         }
         self.is_shutdown = true;
         if let Some(callbacks) = self.callbacks {
-            let disable_handles: Vec<u64> = self
-                .scripts
-                .iter()
-                .rev()
-                .filter(|s| s.on_enable_called)
-                .map(|s| s.script_handle)
-                .collect();
-            for handle in disable_handles {
-                hook(self, &mut || {
-                    (callbacks.on_disable)(handle);
-                });
+            for index in (0..self.scenes.len()).rev() {
+                let (disable, destroy) = teardown_handles(&self.scenes[index].scripts);
+                self.fire_teardown(disable, destroy, callbacks, &mut hook);
             }
-            let destroy_handles: Vec<u64> = self
-                .scripts
-                .iter()
-                .rev()
-                .filter(|s| s.script_handle != 0)
-                .map(|s| s.script_handle)
-                .collect();
-            for handle in destroy_handles {
-                hook(self, &mut || {
-                    (callbacks.destroy)(handle);
-                });
-            }
+            let (disable, destroy) = teardown_handles(&self.persistent);
+            self.fire_teardown(disable, destroy, callbacks, &mut hook);
         }
         Ok(())
     }
 
+    /// The scripts of the active scene, followed by the scripts that are marked to survive scene
+    /// changes. Scripts of other loaded scenes are not reported here.
     pub fn scripts(&self) -> &[ScriptInstance] {
-        &self.scripts
+        &self.script_view
     }
 
     pub fn scene_graph(&self) -> Option<&SceneGraph> {
-        self.scene_graph.as_ref()
+        self.active_scene
+            .and_then(|index| self.scenes.get(index))
+            .map(|scene| &scene.graph)
     }
 
     pub fn raycast(
@@ -526,20 +826,77 @@ fn find_project_settings_dir(scene_path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn build_world(
-    graph: &SceneGraph,
-    bindings: &[PhysicsBinding],
-    gravity: [f64; 3],
-) -> Result<World, RuntimeError> {
-    let mut world = World::with_gravity(gravity);
+fn build_script_instances(
+    bindings: &[ScriptBinding],
+) -> Result<Vec<ScriptInstance>, RuntimeError> {
+    let mut scripts = Vec::new();
+    for binding in bindings {
+        if binding.guid.len() != 32 {
+            return Err(RuntimeError::InvalidGuid(binding.guid.clone()));
+        }
+        let guid_hi = match u64::from_str_radix(&binding.guid[0..16], 16) {
+            Ok(val) => val,
+            Err(_) => return Err(RuntimeError::InvalidGuid(binding.guid.clone())),
+        };
+        let guid_lo = match u64::from_str_radix(&binding.guid[16..32], 16) {
+            Ok(val) => val,
+            Err(_) => return Err(RuntimeError::InvalidGuid(binding.guid.clone())),
+        };
+        scripts.push(ScriptInstance {
+            entity: binding.entity,
+            guid: binding.guid.clone(),
+            guid_hi,
+            guid_lo,
+            script_handle: 0,
+            awake_called: false,
+            on_enable_called: false,
+            start_called: false,
+        });
+    }
+    Ok(scripts)
+}
+
+fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Vec<(EntityId, BodyDesc)> {
+    let mut descs = Vec::new();
     for binding in bindings {
         let desc = match body_desc(graph, binding) {
             Some(desc) => desc,
             None => continue,
         };
-        world.add_body(binding.entity, desc)?;
+        descs.push((binding.entity, desc));
     }
-    Ok(world)
+    descs
+}
+
+fn validate_bodies(descs: &[(EntityId, BodyDesc)]) -> Result<(), RuntimeError> {
+    let mut world = World::new();
+    for (entity, desc) in descs {
+        world.add_body(*entity, *desc)?;
+    }
+    Ok(())
+}
+
+fn teardown_handles(scripts: &[ScriptInstance]) -> (Vec<u64>, Vec<u64>) {
+    let disable = scripts
+        .iter()
+        .rev()
+        .filter(|s| s.on_enable_called)
+        .map(|s| s.script_handle)
+        .collect();
+    let destroy = scripts
+        .iter()
+        .rev()
+        .filter(|s| s.script_handle != 0)
+        .map(|s| s.script_handle)
+        .collect();
+    (disable, destroy)
+}
+
+fn scene_name_from_path(path: &Path) -> String {
+    match path.file_stem().and_then(|stem| stem.to_str()) {
+        Some(stem) => stem.to_string(),
+        None => String::from("scene"),
+    }
 }
 
 fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<BodyDesc> {

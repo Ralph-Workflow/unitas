@@ -1,16 +1,26 @@
 using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 
 namespace UnityEngine
 {
     public class GameObject : Object
     {
         private readonly List<Component> _components = new List<Component>();
+        private ulong _nativeEntityId;
 
         public Transform transform { get; }
 
         public bool activeSelf { get; set; }
 
         internal IReadOnlyList<Component> Components => _components;
+
+        /// <summary>Native entity backing this object; 0 when the object has no native counterpart.</summary>
+        internal ulong NativeEntityId => _nativeEntityId;
+
+        internal void AssignNativeEntityId(ulong entity)
+        {
+            _nativeEntityId = entity;
+        }
 
         public GameObject() : this("New Game Object")
         {
@@ -20,10 +30,10 @@ namespace UnityEngine
         {
             this.name = name;
             activeSelf = true;
+            scene = SceneManager.GetActiveScene();
             Transform t = new Transform();
-            t.gameObject = this;
+            AttachComponent(t);
             transform = t;
-            _components.Add(t);
         }
 
         public bool activeInHierarchy
@@ -105,6 +115,7 @@ namespace UnityEngine
         internal void AttachComponent(Component component)
         {
             component.gameObject = this;
+            component.scene = scene;
             _components.Add(component);
         }
 

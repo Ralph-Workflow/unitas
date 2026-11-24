@@ -226,3 +226,21 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies() ->
     assert_eq!(World::default().gravity(), [0.0, -9.81, 0.0]);
     Ok(())
 }
+
+#[test]
+fn remove_body_drops_only_the_named_body() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let removed = EntityId::new(1);
+    let kept = EntityId::new(2);
+    world.add_body(removed, sphere([0.0, 0.0, 0.0]))?;
+    world.add_body(kept, sphere([2.0, 0.0, 0.0]))?;
+    assert_eq!(world.body_count(), 2);
+    assert!(world.remove_body(removed));
+    assert!(!world.remove_body(removed));
+    assert_eq!(world.body_count(), 1);
+    assert_eq!(world.position(removed), None);
+    assert_eq!(world.position(kept), Some([2.0, 0.0, 0.0]));
+    world.step(0.1)?;
+    assert_eq!(world.position(kept), Some([2.0, 0.0, 0.0]));
+    Ok(())
+}

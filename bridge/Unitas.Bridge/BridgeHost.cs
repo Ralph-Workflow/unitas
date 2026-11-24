@@ -4,10 +4,11 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IInputProvider, ISceneHost
     {
         private const uint CollisionPhaseEnter = 0;
         private const uint CollisionPhaseStay = 1;
@@ -19,6 +20,13 @@ namespace Unitas.Bridge
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
+        private readonly List<Scene> _loadedScenes = new List<Scene>();
+        private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly LoadedSceneFileProvider _defaultSceneProvider;
+        private readonly NativeSceneBackend _defaultSceneBackend;
+        private ISceneProvider _sceneProvider;
+        private ISceneBackend _sceneBackend;
+        private int _nextSceneHandle = 1;
         private ulong _nextScriptHandle = 1;
         private int _fixedUpdateCallsInStep;
         private int _lateUpdateCallsInTick;
@@ -47,6 +55,11 @@ namespace Unitas.Bridge
                 throw new ArgumentException("Runtime handle must be non-zero.", nameof(runtimeHandle));
             }
             _runtimeHandle = runtimeHandle;
+
+            _defaultSceneProvider = new LoadedSceneFileProvider();
+            _defaultSceneBackend = new NativeSceneBackend(runtimeHandle);
+            _sceneProvider = _defaultSceneProvider;
+            _sceneBackend = _defaultSceneBackend;
 
             _createScriptCallback = OnCreateScript;
             _awakeCallback = OnAwake;
@@ -86,11 +99,26 @@ namespace Unitas.Bridge
 
             Physics.Provider = this;
             Input.Provider = this;
+            SceneManager.Host = this;
         }
 
         public ulong Handle => _runtimeHandle;
 
         public int ScriptCount => _scripts.Count;
+
+        /// <summary>Resolves scene names and build indices to loadable paths; replaceable for tests.</summary>
+        public ISceneProvider Provider
+        {
+            get => _sceneProvider;
+            set => _sceneProvider = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        /// <summary>Performs the native scene calls; replaceable for tests.</summary>
+        public ISceneBackend Backend
+        {
+            get => _sceneBackend;
+            set => _sceneBackend = value ?? throw new ArgumentNullException(nameof(value));
+        }
 
         public MonoBehaviour? GetScript(ulong handle)
         {
@@ -104,11 +132,6 @@ namespace Unitas.Bridge
         public void LoadScene(string path)
         {
             ArgumentNullException.ThrowIfNull(path);
-            StopAllSafely();
-            _fixedUpdateCallsInStep = 0;
-            _lateUpdateCallsInTick = 0;
-            _scripts.Clear();
-            _entityScripts.Clear();
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(path);
             IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
             if (buffer == IntPtr.Zero)
@@ -131,6 +154,286 @@ namespace Unitas.Bridge
             {
                 Time.SetFixedDeltaTime((float)fixedTimestep);
             }
+
+            // The native load tore the replaced scene down inside the call above, so the managed
+            // scripts of that scene have already received their teardown callbacks.
+            DropReplacedScripts();
+            _defaultSceneProvider.SetSceneRoot(path);
+            RegisterLoadedScene(path, LoadSceneMode.Single);
+            SceneManager.RaiseSceneLoaded(FindLoadedScene(path), LoadSceneMode.Single);
+        }
+
+        /// <summary>
+        /// Loads a scene through the scene backend. The native load runs inside this call; the
+        /// <c>sceneLoaded</c> event is raised after that call returned.
+        /// </summary>
+        public Scene LoadScene(string path, LoadSceneMode mode)
+        {
+            ArgumentNullException.ThrowIfNull(path);
+
+            try
+            {
+                Backend.LoadScene(path, mode);
+            }
+            catch (SceneManagementException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                throw new SceneManagementException("Failed to load scene '" + path + "': " + ex.Message, ex);
+            }
+
+            // The native load tore the replaced scene down inside the call above, so the managed
+            // scripts of that scene have already received their teardown callbacks.
+            if (mode == LoadSceneMode.Single)
+            {
+                DropReplacedScripts();
+            }
+
+            RegisterLoadedScene(path, mode);
+            Scene loaded = FindLoadedScene(path);
+            SceneManager.RaiseSceneLoaded(loaded, mode);
+            return loaded;
+        }
+
+        /// <summary>
+        /// Unloads a scene through the scene backend. Native teardown callbacks run inside the call, so the
+        /// <c>sceneUnloaded</c> event is raised after that call returned.
+        /// </summary>
+        public void UnloadScene(string name)
+        {
+            ArgumentNullException.ThrowIfNull(name);
+            Scene scene = GetSceneByName(name);
+            try
+            {
+                Backend.UnloadScene(name);
+            }
+            catch (SceneManagementException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                throw new SceneManagementException("Failed to unload scene '" + name + "': " + ex.Message, ex);
+            }
+
+            RemoveLoadedScene(name);
+            SceneManager.RaiseSceneUnloaded(scene);
+        }
+
+        public bool TryResolveScenePath(string sceneName, out string scenePath)
+        {
+            return Provider.TryResolveScenePath(sceneName, out scenePath);
+        }
+
+        public int SceneCount => _loadedScenes.Count;
+
+        public Scene GetSceneAt(int index)
+        {
+            if (index < 0 || index >= _loadedScenes.Count)
+            {
+                return default;
+            }
+
+            return _loadedScenes[index];
+        }
+
+        public Scene GetSceneByName(string sceneName)
+        {
+            if (string.IsNullOrEmpty(sceneName))
+            {
+                return default;
+            }
+
+            for (int index = 0; index < _loadedScenes.Count; index++)
+            {
+                if (string.Equals(_loadedScenes[index].name, sceneName, StringComparison.Ordinal))
+                {
+                    return _loadedScenes[index];
+                }
+            }
+
+            if (!Provider.TryResolveScenePath(sceneName, out string scenePath))
+            {
+                return default;
+            }
+
+            return new Scene(sceneName, scenePath, BuildIndexOf(scenePath), false, 0, 0);
+        }
+
+        public Scene GetSceneByBuildIndex(int buildIndex)
+        {
+            if (!Provider.TryResolveScenePathByBuildIndex(buildIndex, out string scenePath))
+            {
+                return default;
+            }
+
+            string name = System.IO.Path.GetFileNameWithoutExtension(scenePath);
+            return new Scene(name, scenePath, buildIndex, IsLoaded(scenePath), 0, 0);
+        }
+
+        public Scene GetActiveScene()
+        {
+            int index = Backend.ActiveSceneIndex;
+            if (index < 0 || index >= _loadedScenes.Count)
+            {
+                return default;
+            }
+
+            return _loadedScenes[index];
+        }
+
+        public bool SetActiveScene(Scene scene)
+        {
+            int index = IndexOfLoadedScene(scene);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            return Backend.SetActiveScene(index);
+        }
+
+        public void DontDestroyOnLoad(ulong entity)
+        {
+            Backend.DontDestroyOnLoad(entity);
+        }
+
+        private void RegisterLoadedScene(string path, LoadSceneMode mode)
+        {
+            string name = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (mode == LoadSceneMode.Single)
+            {
+                _loadedScenes.Clear();
+            }
+
+            RemoveLoadedScene(name);
+            _loadedScenes.Add(new Scene(name, path, BuildIndexOf(path), true, 0, HandleFor(path)));
+        }
+
+        private void RemoveLoadedScene(string sceneName)
+        {
+            for (int index = _loadedScenes.Count - 1; index >= 0; index--)
+            {
+                if (string.Equals(_loadedScenes[index].name, sceneName, StringComparison.Ordinal))
+                {
+                    _loadedScenes.RemoveAt(index);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Drops the scripts of the replaced scene. Scripts marked to survive scene changes keep running;
+        /// the dropped scripts are not torn down with lifecycle callbacks, matching the scene reload contract.
+        /// </summary>
+        private void DropReplacedScripts()
+        {
+            StopAllSafely();
+            _fixedUpdateCallsInStep = 0;
+            _lateUpdateCallsInTick = 0;
+            List<ulong> dropped = new List<ulong>();
+            foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
+            {
+                MonoBehaviour script = entry.Value;
+                GameObject? owner = script == null ? null : script.gameObject;
+                if (owner != null && owner.IsPersistent)
+                {
+                    continue;
+                }
+
+                dropped.Add(entry.Key);
+            }
+
+            for (int index = 0; index < dropped.Count; index++)
+            {
+                ulong handle = dropped[index];
+                ulong entity = EntityForScript(handle);
+                _scripts.Remove(handle);
+                if (entity != 0)
+                {
+                    _entityScripts.Remove(entity);
+                }
+            }
+        }
+
+        private ulong EntityForScript(ulong scriptHandle)
+        {
+            foreach (KeyValuePair<ulong, ulong> entry in _entityScripts)
+            {
+                if (entry.Value == scriptHandle)
+                {
+                    return entry.Key;
+                }
+            }
+
+            return 0;
+        }
+
+        private int BuildIndexOf(string scenePath)
+        {
+            IReadOnlyList<string> paths = Provider.ScenePaths;
+            for (int index = 0; index < paths.Count; index++)
+            {
+                if (string.Equals(paths[index], scenePath, StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private bool IsLoaded(string scenePath)
+        {
+            for (int index = 0; index < _loadedScenes.Count; index++)
+            {
+                if (string.Equals(_loadedScenes[index].path, scenePath, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private int IndexOfLoadedScene(Scene scene)
+        {
+            for (int index = 0; index < _loadedScenes.Count; index++)
+            {
+                if (scene.handle != 0 && _loadedScenes[index].handle == scene.handle)
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private Scene FindLoadedScene(string scenePath)
+        {
+            for (int index = 0; index < _loadedScenes.Count; index++)
+            {
+                if (string.Equals(_loadedScenes[index].path, scenePath, StringComparison.Ordinal))
+                {
+                    return _loadedScenes[index];
+                }
+            }
+
+            string name = System.IO.Path.GetFileNameWithoutExtension(scenePath);
+            return new Scene(name, scenePath, BuildIndexOf(scenePath), true, 0, HandleFor(scenePath));
+        }
+
+        private int HandleFor(string scenePath)
+        {
+            if (_sceneHandles.TryGetValue(scenePath, out int handle))
+            {
+                return handle;
+            }
+
+            handle = _nextSceneHandle++;
+            _sceneHandles[scenePath] = handle;
+            return handle;
         }
 
         public void Tick(double deltaSeconds)
@@ -148,6 +451,8 @@ namespace Unitas.Bridge
                 }
                 throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
+
+            SceneManager.PumpAsyncOperations();
         }
 
         public void Shutdown()
@@ -168,6 +473,10 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(Input.Provider, this))
                 {
                     Input.Provider = null;
+                }
+                if (ReferenceEquals(SceneManager.Host, this))
+                {
+                    SceneManager.Host = null;
                 }
                 if (result != 0)
                 {
@@ -561,6 +870,11 @@ namespace Unitas.Bridge
             ulong handle = _nextScriptHandle++;
             _scripts[handle] = script;
             _entityScripts[entity] = handle;
+            GameObject? owner = script.gameObject;
+            if (owner != null)
+            {
+                owner.AssignNativeEntityId(entity);
+            }
             return handle;
         }
 

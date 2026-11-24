@@ -6,4 +6,4 @@ mod runtime;
 pub use abi::*;
 pub use error::RuntimeError;
 pub use input::*;
-pub use runtime::{Callbacks, Runtime, ScriptInstance};
+pub use runtime::{Callbacks, LoadSceneMode, LoadedScene, Runtime, ScriptInstance};

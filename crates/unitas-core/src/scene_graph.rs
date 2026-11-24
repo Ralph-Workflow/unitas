@@ -79,6 +79,25 @@ impl SceneGraph {
         id
     }
 
+    /// Shifts every entity id in the graph by `base` so that graphs loaded from different scenes
+    /// can live in one runtime without colliding entity ids.
+    pub fn shift_entity_ids(&mut self, base: u64) {
+        let mut shifted = HashMap::with_capacity(self.index.len());
+        for (position, node) in self.nodes.iter_mut().enumerate() {
+            let new_id = EntityId::new(base + node.entity.id.as_u64());
+            node.entity.id = new_id;
+            if let Some(parent) = node.transform.parent {
+                node.transform.parent = Some(EntityId::new(base + parent.as_u64()));
+            }
+            for child in node.transform.children.iter_mut() {
+                *child = EntityId::new(base + child.as_u64());
+            }
+            shifted.insert(new_id, position);
+        }
+        self.index = shifted;
+        self.next_id += base;
+    }
+
     pub fn entity(&self, id: impl Borrow<EntityId>) -> Option<&Entity> {
         let index = self.index.get(id.borrow())?;
         Some(&self.nodes[*index].entity)

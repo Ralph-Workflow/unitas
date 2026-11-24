@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::error::Error;
 use std::path::Path;
 use std::sync::Mutex;
@@ -8,12 +9,17 @@ use unitas_runtime::{
     unitas_runtime_linecast, unitas_runtime_load_scene, unitas_runtime_new,
     unitas_runtime_overlap_sphere, unitas_runtime_path_buffer, unitas_runtime_query_buffer,
     unitas_runtime_raycast, unitas_runtime_set_time_scale, unitas_runtime_sphere_cast,
-    unitas_runtime_time_scale, Callbacks, Runtime,
+    unitas_runtime_time_scale, Callbacks, LoadSceneMode, Runtime, RuntimeError,
 };
 
 const FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
 const QUERY_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_query_abi.unity";
 const TRIGGER_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_trigger.unity";
+const ALPHA_FIXTURE_PATH: &str = "tests/fixtures/scene_alpha.unity";
+const BETA_FIXTURE_PATH: &str = "tests/fixtures/scene_beta.unity";
+const COLLISION_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_collision.unity";
+const NESTED_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_rotated_nested.unity";
+const MISSING_FIXTURE_PATH: &str = "tests/fixtures/scene_missing.unity";
 const QUERY_RECORD_SIZE: usize = 64;
 
 #[test]
@@ -949,5 +955,302 @@ fn runtime_abi_time_scale_round_trips_and_rejects_invalid_handles() -> Result<()
     assert_eq!(unitas_runtime_set_time_scale(u64::MAX, 0.5), -1);
     assert_eq!(unitas_runtime_time_scale(u64::MAX), 0.0);
     assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+thread_local! {
+    static SCENE_EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static SCENE_UPDATE_HANDLES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_scene_event(event: &str) {
+    SCENE_EVENTS.with(|events| events.borrow_mut().push(event.to_string()));
+}
+extern "C" fn scene_create_script(entity: u64, _guid_hi: u64, _guid_lo: u64) -> u64 {
+    entity
+}
+
+extern "C" fn scene_awake(_handle: u64) {
+    record_scene_event("Awake");
+}
+
+extern "C" fn scene_on_enable(_handle: u64) {
+    record_scene_event("OnEnable");
+}
+
+extern "C" fn scene_start(_handle: u64) {
+    record_scene_event("Start");
+}
+
+extern "C" fn scene_fixed_update(_handle: u64, _step: f64) {}
+
+extern "C" fn scene_update(handle: u64, _delta: f64) {
+    SCENE_UPDATE_HANDLES.with(|handles| handles.borrow_mut().push(handle));
+}
+
+extern "C" fn scene_late_update(_handle: u64, _delta: f64) {}
+
+extern "C" fn scene_on_disable(_handle: u64) {
+    record_scene_event("OnDisable");
+}
+
+extern "C" fn scene_destroy(_handle: u64) {
+    record_scene_event("OnDestroy");
+}
+
+extern "C" fn scene_collision(_a: u64, _b: u64, _phase: u32) {}
+
+extern "C" fn scene_trigger(_a: u64, _b: u64, _phase: u32) {}
+
+fn scene_callbacks() -> Callbacks {
+    Callbacks {
+        create_script: scene_create_script,
+        awake: scene_awake,
+        on_enable: scene_on_enable,
+        start: scene_start,
+        fixed_update: scene_fixed_update,
+        update: scene_update,
+        late_update: scene_late_update,
+        on_disable: scene_on_disable,
+        destroy: scene_destroy,
+        collision: scene_collision,
+        trigger: scene_trigger,
+    }
+}
+
+fn clear_scene_state() {
+    SCENE_EVENTS.with(|events| events.borrow_mut().clear());
+    SCENE_UPDATE_HANDLES.with(|handles| handles.borrow_mut().clear());
+}
+
+fn scene_events() -> Vec<String> {
+    SCENE_EVENTS.with(|events| events.borrow().clone())
+}
+
+fn scene_update_handles() -> Vec<u64> {
+    SCENE_UPDATE_HANDLES.with(|handles| handles.borrow().clone())
+}
+
+#[test]
+fn runtime_single_load_replaces_the_loaded_scene_set() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
+    assert_eq!(runtime.scripts().len(), 1);
+    assert_eq!(runtime.scripts()[0].guid, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("no scene graph found").into()),
+    };
+    let alpha_name = graph
+        .entity(runtime.scripts()[0].entity)
+        .map(|entity| entity.name.clone());
+    assert_eq!(alpha_name, Some(String::from("AlphaObject")));
+
+    runtime.load_scene(Path::new(BETA_FIXTURE_PATH))?;
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_beta"));
+    assert_eq!(runtime.scene_name(1), None);
+    assert_eq!(runtime.scripts().len(), 1);
+    assert_eq!(runtime.scripts()[0].guid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("no scene graph found").into()),
+    };
+    let beta_name = graph
+        .entity(runtime.scripts()[0].entity)
+        .map(|entity| entity.name.clone());
+    assert_eq!(beta_name, Some(String::from("BetaObject")));
+    Ok(())
+}
+
+#[test]
+fn runtime_additive_load_keeps_both_scenes_alive() -> Result<(), Box<dyn Error>> {
+    clear_scene_state();
+    let mut runtime = Runtime::new()?;
+    runtime.set_callbacks(scene_callbacks());
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    let count = runtime.load_scene_with_mode(Path::new(BETA_FIXTURE_PATH), LoadSceneMode::Additive)?;
+    assert_eq!(count, 2);
+    assert_eq!(runtime.scene_count(), 2);
+    assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
+    assert_eq!(runtime.scene_name(1), Some("scene_beta"));
+    assert_eq!(runtime.active_scene_index(), Some(0));
+    let alpha_scene = match runtime.scene(0) {
+        Some(scene) => scene,
+        None => return Err(String::from("alpha scene missing").into()),
+    };
+    let beta_scene = match runtime.scene(1) {
+        Some(scene) => scene,
+        None => return Err(String::from("beta scene missing").into()),
+    };
+    let alpha_entity = match alpha_scene.scripts().first() {
+        Some(script) => script.entity,
+        None => return Err(String::from("alpha script missing").into()),
+    };
+    let beta_entity = match beta_scene.scripts().first() {
+        Some(script) => script.entity,
+        None => return Err(String::from("beta script missing").into()),
+    };
+    assert_ne!(alpha_entity, beta_entity);
+    runtime.tick(0.02)?;
+    runtime.tick(0.02)?;
+    let handles = scene_update_handles();
+    assert!(handles.contains(&alpha_entity.as_u64()));
+    assert!(handles.contains(&beta_entity.as_u64()));
+    Ok(())
+}
+
+#[test]
+fn runtime_active_scene_selection_rejects_out_of_range_indexes() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    assert_eq!(runtime.active_scene_index(), None);
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    assert_eq!(runtime.active_scene_index(), Some(0));
+    runtime.load_scene_with_mode(Path::new(BETA_FIXTURE_PATH), LoadSceneMode::Additive)?;
+    runtime.set_active_scene(1)?;
+    assert_eq!(runtime.active_scene_index(), Some(1));
+    match runtime.set_active_scene(5) {
+        Err(RuntimeError::InvalidSceneIndex(index)) => assert_eq!(index, 5),
+        Err(_) => return Err(String::from("unexpected error variant").into()),
+        Ok(_) => return Err(String::from("out of range scene index accepted").into()),
+    }
+    assert_eq!(runtime.active_scene_index(), Some(1));
+    assert_eq!(runtime.scene_count(), 2);
+    assert_eq!(runtime.scene_name(1), Some("scene_beta"));
+    Ok(())
+}
+
+#[test]
+fn runtime_unload_of_an_unknown_scene_is_an_error_and_changes_nothing(
+) -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    match runtime.unload_scene("scene_missing") {
+        Err(RuntimeError::SceneNotFound(name)) => assert_eq!(name, "scene_missing"),
+        Err(_) => return Err(String::from("unexpected error variant").into()),
+        Ok(_) => return Err(String::from("unload of an unknown scene succeeded").into()),
+    }
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
+    assert_eq!(runtime.active_scene_index(), Some(0));
+    assert_eq!(runtime.scripts().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_unload_scene_disables_then_destroys_its_scripts() -> Result<(), Box<dyn Error>> {
+    clear_scene_state();
+    let mut runtime = Runtime::new()?;
+    runtime.set_callbacks(scene_callbacks());
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    runtime.tick(0.02)?;
+    runtime.load_scene_with_mode(Path::new(BETA_FIXTURE_PATH), LoadSceneMode::Additive)?;
+    runtime.tick(0.02)?;
+    clear_scene_state();
+    runtime.unload_scene("scene_beta")?;
+    let events = scene_events();
+    assert_eq!(
+        events,
+        vec![String::from("OnDisable"), String::from("OnDestroy")]
+    );
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
+    assert_eq!(runtime.active_scene_index(), Some(0));
+    Ok(())
+}
+
+#[test]
+fn runtime_unload_scene_removes_only_its_physics_bodies() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(COLLISION_FIXTURE_PATH))?;
+    runtime.load_scene_with_mode(Path::new(NESTED_FIXTURE_PATH), LoadSceneMode::Additive)?;
+    let collision_scene = match runtime.scene(0) {
+        Some(scene) => scene,
+        None => return Err(String::from("collision scene missing").into()),
+    };
+    let nested_scene = match runtime.scene(1) {
+        Some(scene) => scene,
+        None => return Err(String::from("nested scene missing").into()),
+    };
+    let collision_bodies: Vec<_> = collision_scene.bodies().to_vec();
+    let nested_bodies: Vec<_> = nested_scene.bodies().to_vec();
+    assert_eq!(collision_bodies.len(), 2);
+    assert_eq!(nested_bodies.len(), 2);
+    for body in &collision_bodies {
+        assert!(runtime.body_position(*body).is_some());
+    }
+    for body in &nested_bodies {
+        assert!(runtime.body_position(*body).is_some());
+    }
+    runtime.unload_scene("scene_physics_rotated_nested")?;
+    for body in &nested_bodies {
+        assert!(runtime.body_position(*body).is_none());
+    }
+    for body in &collision_bodies {
+        assert!(runtime.body_position(*body).is_some());
+    }
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_physics_collision"));
+    Ok(())
+}
+
+#[test]
+fn runtime_dont_destroy_on_load_survives_a_single_load_replacement() -> Result<(), Box<dyn Error>> {
+    clear_scene_state();
+    let mut runtime = Runtime::new()?;
+    runtime.set_callbacks(scene_callbacks());
+    runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
+    runtime.tick(0.02)?;
+    let alpha_entity = match runtime.scripts().first() {
+        Some(script) => script.entity,
+        None => return Err(String::from("alpha script missing").into()),
+    };
+    runtime.dont_destroy_on_load(alpha_entity)?;
+    assert!(runtime.is_persistent(alpha_entity));
+    runtime.load_scene(Path::new(BETA_FIXTURE_PATH))?;
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_beta"));
+    assert!(runtime.is_persistent(alpha_entity));
+    runtime.tick(0.02)?;
+    let events = scene_events();
+    let awake = events.iter().filter(|event| *event == "Awake").count();
+    let disabled = events.iter().filter(|event| *event == "OnDisable").count();
+    let destroyed = events.iter().filter(|event| *event == "OnDestroy").count();
+    assert_eq!(awake, 2);
+    assert_eq!(disabled, 0);
+    assert_eq!(destroyed, 0);
+    let scripts = runtime.scripts();
+    assert_eq!(scripts.len(), 2);
+    let persistent = match scripts.iter().find(|script| script.entity == alpha_entity) {
+        Some(script) => script,
+        None => return Err(String::from("persistent script missing").into()),
+    };
+    assert_eq!(persistent.script_handle, alpha_entity.as_u64());
+    assert!(persistent.awake_called);
+    Ok(())
+}
+
+#[test]
+fn runtime_failed_load_leaves_the_scene_set_and_world_unchanged() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(COLLISION_FIXTURE_PATH))?;
+    let bodies: Vec<_> = match runtime.scene(0) {
+        Some(scene) => scene.bodies().to_vec(),
+        None => return Err(String::from("collision scene missing").into()),
+    };
+    let script_count = runtime.scripts().len();
+    match runtime.load_scene(Path::new(MISSING_FIXTURE_PATH)) {
+        Err(_) => {}
+        Ok(_) => return Err(String::from("load of a missing scene succeeded").into()),
+    }
+    assert_eq!(runtime.scene_count(), 1);
+    assert_eq!(runtime.scene_name(0), Some("scene_physics_collision"));
+    assert_eq!(runtime.active_scene_index(), Some(0));
+    assert_eq!(runtime.scripts().len(), script_count);
+    for body in &bodies {
+        assert!(runtime.body_position(*body).is_some());
+    }
     Ok(())
 }

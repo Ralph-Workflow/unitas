@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using UnityEngine.SceneManagement;
 
 namespace UnityEngine
 {
@@ -17,6 +18,8 @@ namespace UnityEngine
         private string _name = string.Empty;
         private bool _destroyed;
         private bool _destroying;
+        private bool _persistent;
+        private Scene _scene;
 
         public virtual string name
         {
@@ -32,6 +35,16 @@ namespace UnityEngine
             }
         }
 
+        /// <summary>
+        /// The scene the object belongs to. A new object takes the scene that was active when it was
+        /// created; a component takes the scene of the game object it is attached to.
+        /// </summary>
+        public Scene scene
+        {
+            get => _scene;
+            internal set => _scene = value;
+        }
+
         public int GetInstanceID() => _instanceId;
 
         public override string ToString() => _destroyed ? "null" : _name;
@@ -41,6 +54,9 @@ namespace UnityEngine
         public override int GetHashCode() => _destroyed ? 0 : _instanceId;
 
         internal bool IsDestroyed => _destroyed;
+
+        /// <summary>True once the object was marked to survive scene changes.</summary>
+        internal bool IsPersistent => _persistent;
 
         internal void AssignNewInstanceId()
         {
@@ -82,6 +98,41 @@ namespace UnityEngine
         public static bool operator !=(Object? left, Object? right) => !(left == right);
 
         public static implicit operator bool(Object? value) => value is not null && !value._destroyed;
+
+        /// <summary>
+        /// Marks the object so it survives scene changes. Objects backed by a native entity forward that
+        /// entity to the native runtime; managed-only objects are flagged locally and are not forwarded yet.
+        /// </summary>
+        public static void DontDestroyOnLoad(Object target)
+        {
+            if (target == null)
+            {
+                throw new ArgumentNullException(nameof(target));
+            }
+
+            target._persistent = true;
+            ulong entity = NativeEntityOf(target);
+            if (entity != 0)
+            {
+                SceneManager.Host?.DontDestroyOnLoad(entity);
+            }
+        }
+
+        private static ulong NativeEntityOf(Object target)
+        {
+            if (target is GameObject gameObject)
+            {
+                return gameObject.NativeEntityId;
+            }
+
+            if (target is Component component)
+            {
+                GameObject? owner = component.gameObject;
+                return owner == null ? 0 : owner.NativeEntityId;
+            }
+
+            return 0;
+        }
 
         public static void Destroy(Object obj)
         {

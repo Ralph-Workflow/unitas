@@ -4,8 +4,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use unitas_core::EntityId;
+
 use crate::error::RuntimeError;
-use crate::runtime::{Callbacks, QueryRecord, Runtime};
+use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, Runtime};
 
 const QUERY_RECORD_SIZE: usize = 64;
 
@@ -81,7 +83,11 @@ pub extern "C" fn unitas_runtime_path_buffer(handle: u64, capacity: u64) -> u64 
         Err(_) => return 0,
     };
     with_runtime_state(handle, |state| {
-        state.path_buffer = vec![0u8; cap];
+        // Grow only: callers re-pin the buffer and then write their own bytes,
+        // and `scene_name` leaves a name in it for the bridge to read back.
+        if state.path_buffer.len() < cap {
+            state.path_buffer.resize(cap, 0);
+        }
         state.path_buffer.as_ptr() as usize as u64
     })
     .unwrap_or_default()
@@ -94,25 +100,163 @@ pub extern "C" fn unitas_runtime_load_scene(handle: u64, address: u64, length: u
         Err(_) => return -2,
     };
     match with_runtime_state(handle, |state| {
-        if address == 0 || address != state.path_buffer.as_ptr() as usize as u64 {
-            state.set_error("buffer address mismatch");
-            return -2;
-        }
-        if len > state.path_buffer.len() {
-            state.set_error("buffer length exceeds capacity");
-            return -2;
-        }
-        let path_str = match std::str::from_utf8(&state.path_buffer[..len]) {
-            Ok(s) => s.trim_end_matches('\0').to_string(),
-            Err(err) => {
-                let msg = err.to_string();
-                state.set_error(&msg);
-                return -3;
-            }
+        let path_str = match read_path_buffer(state, address, len) {
+            Ok(text) => text,
+            Err(code) => return code,
         };
         let path = Path::new(&path_str);
         match state.runtime.load_scene(path) {
             Ok(_) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+/// Scene management ABI (PRODUCT_CRITERIA §7).
+#[no_mangle]
+pub extern "C" fn unitas_runtime_load_scene_mode(
+    handle: u64,
+    address: u64,
+    length: u64,
+    mode: u32,
+) -> i32 {
+    let len = match usize::try_from(length) {
+        Ok(l) => l,
+        Err(_) => return -2,
+    };
+    let load_mode = match mode {
+        0 => LoadSceneMode::Single,
+        1 => LoadSceneMode::Additive,
+        _ => {
+            return match with_runtime_state(handle, |state| {
+                state.set_error("unknown load scene mode");
+                -2
+            }) {
+                Ok(code) => code,
+                Err(code) => code,
+            };
+        }
+    };
+    let path_str = match read_path_argument(handle, address, len) {
+        Ok(text) => text,
+        Err(code) => return code,
+    };
+    run_scene_operation(handle, |runtime, hook| {
+        runtime
+            .load_scene_with_hook(Path::new(&path_str), load_mode, hook)
+            .map(|_| ())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_unload_scene(handle: u64, address: u64, length: u64) -> i32 {
+    let len = match usize::try_from(length) {
+        Ok(l) => l,
+        Err(_) => return -2,
+    };
+    let name = match read_path_argument(handle, address, len) {
+        Ok(text) => scene_name_from_input(&text),
+        Err(code) => return code,
+    };
+    run_scene_operation(handle, |runtime, hook| runtime.unload_scene_with_hook(&name, hook))
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_scene_count(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match i32::try_from(state.runtime.scene_count()) {
+            Ok(count) => count,
+            Err(_) => {
+                state.set_error("scene count exceeds supported range");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_scene_name(handle: u64, index: u32) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let name = match state.runtime.scene_name(index as usize) {
+            Some(name) => name.to_string(),
+            None => {
+                state.set_error("scene index out of range");
+                return -4;
+            }
+        };
+        let bytes = name.as_bytes();
+        let needed = bytes.len() + 1;
+        if state.path_buffer.len() < needed {
+            state.path_buffer.resize(needed, 0);
+        }
+        state.path_buffer[..bytes.len()].copy_from_slice(bytes);
+        state.path_buffer[bytes.len()] = 0;
+        match i32::try_from(bytes.len()) {
+            Ok(length) => length,
+            Err(_) => {
+                state.set_error("scene name exceeds supported length");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_set_active_scene(handle: u64, index: u32) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match state.runtime.set_active_scene(index as usize) {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_active_scene_index(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| match state.runtime.active_scene_index() {
+        Some(index) => match i32::try_from(index) {
+            Ok(value) => value,
+            Err(_) => {
+                state.set_error("scene index exceeds supported range");
+                -4
+            }
+        },
+        None => -1,
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn unitas_runtime_dont_destroy_on_load(handle: u64, entity: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match state.runtime.dont_destroy_on_load(EntityId::new(entity)) {
+            Ok(()) => {
                 state.clear_error();
                 0
             }
@@ -277,6 +421,16 @@ pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeErr
         }
         state.path_buffer[..data.len()].copy_from_slice(data);
         Ok(())
+    }) {
+        Ok(res) => res,
+        Err(err) => Err(err),
+    }
+}
+
+/// Test-only accessor for the persistent-entity flag of the runtime behind `handle`.
+pub fn test_is_persistent_entity(handle: u64, entity: u64) -> Result<bool, RuntimeError> {
+    match with_runtime_state_err(handle, |state| {
+        Ok(state.runtime.is_persistent(EntityId::new(entity)))
     }) {
         Ok(res) => res,
         Err(err) => Err(err),
@@ -780,6 +934,50 @@ fn take_from_registry(handle: u64) -> Option<RuntimeState> {
     map.remove(&handle)
 }
 
+/// Reads a path argument from the state's pinned path buffer. No callback runs while the
+/// registry mutex is held, so this cannot deadlock.
+fn read_path_argument(handle: u64, address: u64, length: usize) -> Result<String, i32> {
+    match with_runtime_state(handle, |state| read_path_buffer(state, address, length)) {
+        Ok(result) => result,
+        Err(code) => Err(code),
+    }
+}
+
+/// Runs a runtime operation that fires lifecycle callbacks. The state leaves the registry while
+/// the operation runs, so a callback that calls back into the runtime cannot deadlock on the
+/// registry mutex; during the callbacks the state is published on the thread-local active stack,
+/// which is where nested calls find it.
+fn run_scene_operation(
+    handle: u64,
+    op: impl FnOnce(&mut Runtime, &mut dyn FnMut(&mut Runtime, &mut dyn FnMut())) -> Result<(), RuntimeError>,
+) -> i32 {
+    if with_active_state(handle, |_| ()).is_some() {
+        let _ = with_active_state(handle, |state| {
+            state.set_error("scene operations cannot run inside a runtime callback");
+        });
+        return -5;
+    }
+    let mut state = match take_from_registry(handle) {
+        Some(state) => state,
+        None => return -1,
+    };
+    let result = run_reentrant_operation(handle, &mut state, |runtime, hook| op(runtime, hook));
+    let code = match result {
+        Ok(()) => {
+            state.clear_error();
+            0
+        }
+        Err(err) => {
+            state.set_error(&err.to_string());
+            -4
+        }
+    };
+    if !restore_to_registry(handle, state) {
+        return -1;
+    }
+    code
+}
+
 fn restore_to_registry(handle: u64, state: RuntimeState) -> bool {
     let Ok(reg) = registry() else {
         return false;
@@ -789,6 +987,38 @@ fn restore_to_registry(handle: u64, state: RuntimeState) -> bool {
     };
     map.insert(handle, state);
     true
+}
+
+/// Scene names are file stems; a path-like argument is reduced to its stem.
+fn scene_name_from_input(text: &str) -> String {
+    let path_like = text.contains('/') || text.contains('\\') || text.ends_with(".unity");
+    if !path_like {
+        return text.to_string();
+    }
+    Path::new(text)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(text)
+        .to_string()
+}
+
+fn read_path_buffer(state: &mut RuntimeState, address: u64, length: usize) -> Result<String, i32> {
+    if address == 0 || address != state.path_buffer.as_ptr() as usize as u64 {
+        state.set_error("buffer address mismatch");
+        return Err(-2);
+    }
+    if length > state.path_buffer.len() {
+        state.set_error("buffer length exceeds capacity");
+        return Err(-2);
+    }
+    match std::str::from_utf8(&state.path_buffer[..length]) {
+        Ok(text) => Ok(text.trim_end_matches('\0').to_string()),
+        Err(err) => {
+            let msg = err.to_string();
+            state.set_error(&msg);
+            Err(-3)
+        }
+    }
 }
 
 fn with_runtime_state<T>(
