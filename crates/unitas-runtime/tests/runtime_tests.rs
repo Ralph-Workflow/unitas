@@ -1254,3 +1254,144 @@ fn runtime_failed_load_leaves_the_scene_set_and_world_unchanged() -> Result<(), 
     }
     Ok(())
 }
+
+#[test]
+fn runtime_loads_capsule_collider_and_supports_raycast_and_overlap_queries(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_capsule_query_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("capsule_query.unity");
+    let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Pillar\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!136 &102\nCapsuleCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Height: 2.0\n  m_Direction: 1\n  m_Center: {x: 0, y: 0, z: 0}\n";
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let pillar = entity_id_for(&runtime, "Pillar")?;
+    let top_hits = runtime.raycast([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 20.0, 1, false);
+    assert_eq!(top_hits.len(), 1);
+    assert_eq!(top_hits[0].entity, pillar);
+    assert!((top_hits[0].distance - 4.0).abs() < 1e-6);
+    assert!((top_hits[0].point[1] - 1.0).abs() < 1e-6);
+    assert!((top_hits[0].normal[1] - 1.0).abs() < 1e-6);
+
+    let side_hits = runtime.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1, false);
+    assert_eq!(side_hits.len(), 1);
+    assert_eq!(side_hits[0].entity, pillar);
+    assert!((side_hits[0].distance - 4.5).abs() < 1e-6);
+    assert!((side_hits[0].point[0] + 0.5).abs() < 1e-6);
+    assert!((side_hits[0].normal[0] + 1.0).abs() < 1e-6);
+
+    let overlaps = runtime.overlap_sphere([0.0, 0.9, 0.0], 0.2, 1, false);
+    assert_eq!(overlaps.len(), 1);
+    assert_eq!(overlaps[0].entity, pillar);
+    Ok(())
+}
+
+#[test]
+fn runtime_maps_capsule_collider_direction_rotation_center_and_simulates_dynamic_fall(
+) -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_capsule_direction_sim_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("capsule_direction_sim.unity");
+    let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: HorizontalBar\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!136 &102\nCapsuleCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Height: 4.0\n  m_Direction: 0\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: RotatedZBar\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0.70710678, z: 0, w: 0.70710678}\n  m_LocalPosition: {x: 0, y: 5, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!136 &202\nCapsuleCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 1\n  m_Radius: 0.5\n  m_Height: 4.0\n  m_Direction: 2\n  m_Center: {x: 0, y: 0, z: 1}\n--- !u!1 &300\nGameObject:\n  m_Name: FallingCapsule\n  m_Layer: 0\n--- !u!4 &301\nTransform:\n  m_GameObject: {fileID: 300}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 2.0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &302\nRigidbody:\n  m_GameObject: {fileID: 300}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!136 &303\nCapsuleCollider:\n  m_GameObject: {fileID: 300}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Height: 2.0\n  m_Direction: 1\n  m_Center: {x: 0, y: 0, z: 0}\n";
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let bar = entity_id_for(&runtime, "HorizontalBar")?;
+    let rotated = entity_id_for(&runtime, "RotatedZBar")?;
+    let falling_id = entity_id_for(&runtime, "FallingCapsule")?;
+
+    let x_cap_hit = runtime.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1, false);
+    assert_eq!(x_cap_hit.len(), 1);
+    assert_eq!(x_cap_hit[0].entity, bar);
+    assert!((x_cap_hit[0].distance - 3.0).abs() < 1e-6);
+    assert!((x_cap_hit[0].point[0] + 2.0).abs() < 1e-6);
+
+    let trigger_excluded = runtime.raycast([-5.0, 5.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1, false);
+    assert!(trigger_excluded.is_empty());
+
+    let trigger_included = runtime.raycast([-5.0, 5.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1, true);
+    assert_eq!(trigger_included.len(), 1);
+    assert_eq!(trigger_included[0].entity, rotated);
+    assert!((trigger_included[0].distance - 4.0).abs() < 1e-5);
+    assert!((trigger_included[0].point[0] + 1.0).abs() < 1e-5);
+
+    for _ in 0..40 {
+        runtime.tick(0.02)?;
+    }
+    let graph = match runtime.scene_graph() {
+        Some(g) => g,
+        None => return Err(String::from("no scene graph").into()),
+    };
+    let falling_entity = match graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| id.as_u64() == falling_id)
+    {
+        Some(id) => id,
+        None => return Err(String::from("falling entity not found").into()),
+    };
+    let pos = match runtime.body_position(falling_entity) {
+        Some(p) => p,
+        None => return Err(String::from("missing falling capsule position").into()),
+    };
+    assert!((pos[1] - 1.5).abs() < 1e-4);
+    Ok(())
+}
+
+#[test]
+fn runtime_forwards_capsule_material_and_geometry_diagnostics() -> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_capsule_diagnostics_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    std::fs::create_dir_all(&assets_dir)?;
+    let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let scene_path = assets_dir.join("CapsuleDiagnostics.unity");
+    let yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: ShortCapsule\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!136 &102\nCapsuleCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {missing_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Height: 0.4\n  m_Direction: 1\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
+    );
+    std::fs::write(&scene_path, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let capsule_id = entity_id_for(&runtime, "ShortCapsule")?;
+    let graph = match runtime.scene_graph() {
+        Some(g) => g,
+        None => return Err(String::from("no scene graph").into()),
+    };
+    let capsule_entity = match graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| id.as_u64() == capsule_id)
+    {
+        Some(id) => id,
+        None => return Err(String::from("capsule entity not found").into()),
+    };
+    let all_diags = runtime.diagnostics();
+    assert_eq!(all_diags.len(), 2);
+    let entity_diags = runtime.entity_diagnostics(capsule_entity);
+    assert_eq!(entity_diags.len(), 2);
+    assert!(entity_diags.iter().any(|msg| msg.contains(missing_guid)));
+    assert!(entity_diags.iter().any(|msg| msg.contains("clamped")));
+
+    let hits = runtime.raycast([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 20.0, 1, false);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].entity, capsule_id);
+    assert!((hits[0].distance - 4.8).abs() < 1e-6);
+    Ok(())
+}

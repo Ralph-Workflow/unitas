@@ -730,21 +730,24 @@ namespace Unitas.Bridge
             return TakeNearestHit(count, out hit);
         }
 
-        public bool Linecast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
+        public bool Linecast(Vector3 start, Vector3 end, out RaycastHit hitInfo, int layerMask, QueryTriggerInteraction queryTriggerInteraction)
         {
-            hit = default;
+            hitInfo = default;
+            Vector3 delta = end - start;
+            float maxDistance = delta.magnitude;
+            Vector3 direction = maxDistance > 0f ? delta / maxDistance : Vector3.zero;
             int count = RuntimeInterop.unitas_runtime_linecast(
                 _runtimeHandle,
-                origin.x,
-                origin.y,
-                origin.z,
+                start.x,
+                start.y,
+                start.z,
                 direction.x,
                 direction.y,
                 direction.z,
                 maxDistance,
                 (uint)layerMask,
-                includeTriggers ? 1 : 0);
-            return TakeNearestHit(count, out hit);
+                queryTriggerInteraction.IncludesTriggers() ? 1 : 0);
+            return TakeNearestHit(count, out hitInfo);
         }
 
         public bool SphereCast(Vector3 origin, Vector3 direction, float radius, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)

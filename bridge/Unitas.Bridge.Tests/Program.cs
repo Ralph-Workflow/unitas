@@ -177,6 +177,30 @@ namespace Unitas.Bridge.Tests
             sphere.radius = 1.25f;
             Check.Equal("SphereCollider radius round trip", 1.25f, sphere.radius);
 
+            CapsuleCollider capsule = go.AddComponent<CapsuleCollider>();
+            Check.That("CapsuleCollider is a Collider", capsule is Collider);
+            Check.That("GetComponent finds CapsuleCollider", ReferenceEquals(go.GetComponent<CapsuleCollider>(), capsule));
+            Check.That("CapsuleCollider attachedRigidbody resolves owner Rigidbody", ReferenceEquals(capsule.attachedRigidbody, body));
+            Check.Equal("CapsuleCollider default radius", 0.5f, capsule.radius);
+            Check.Equal("CapsuleCollider default height", 2f, capsule.height);
+            Check.Equal("CapsuleCollider default direction", 1, capsule.direction);
+            Check.Equal("CapsuleCollider default center x", 0f, capsule.center.x);
+            Check.Equal("CapsuleCollider default center y", 0f, capsule.center.y);
+            Check.Equal("CapsuleCollider default center z", 0f, capsule.center.z);
+            Check.Equal("CapsuleCollider default isTrigger", false, capsule.isTrigger);
+            capsule.isTrigger = true;
+            capsule.radius = 0.75f;
+            capsule.height = 3.5f;
+            capsule.direction = 2;
+            capsule.center = new Vector3(0.1f, 0.2f, -0.3f);
+            Check.Equal("CapsuleCollider isTrigger round trip", true, capsule.isTrigger);
+            Check.Equal("CapsuleCollider radius round trip", 0.75f, capsule.radius);
+            Check.Equal("CapsuleCollider height round trip", 3.5f, capsule.height);
+            Check.Equal("CapsuleCollider direction round trip", 2, capsule.direction);
+            Check.Equal("CapsuleCollider center round trip x", 0.1f, capsule.center.x);
+            Check.Equal("CapsuleCollider center round trip y", 0.2f, capsule.center.y);
+            Check.Equal("CapsuleCollider center round trip z", -0.3f, capsule.center.z);
+
             Collision empty = new Collision(null);
             Check.That("Collision without other party has null gameObject", empty.gameObject == null);
             Collision filled = new Collision(go);

@@ -806,3 +806,151 @@ fn pushed_kinematic_platform_carries_a_resting_dynamic_body() -> Result<(), Phys
     assert!(rider_position[0] > 0.0);
     Ok(())
 }
+
+fn capsule_body(
+    position: [f64; 3],
+    radius: f64,
+    height: f64,
+    direction: u8,
+    role: BodyRole,
+    velocity: [f64; 3],
+) -> BodyDesc {
+    BodyDesc {
+        position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: if role == BodyRole::Dynamic { 1.0 } else { 0.0 },
+        velocity,
+        use_gravity: false,
+        is_trigger: false,
+        shape: Shape::Capsule {
+            radius,
+            height,
+            direction,
+        },
+        layer: 0,
+        role,
+        friction: 0.6,
+        restitution: 0.0,
+    }
+}
+
+#[test]
+fn dynamic_capsule_landing_on_static_box_floor_comes_to_rest() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let floor = EntityId::new(1);
+    let capsule = EntityId::new(2);
+    world.add_body(
+        floor,
+        BodyDesc {
+            shape: Shape::Box {
+                half_extents: [5.0, 0.5, 5.0],
+            },
+            friction: 0.6,
+            restitution: 0.0,
+            ..box_body([0.0, -0.5, 0.0])
+        },
+    )?;
+    world.add_body(
+        capsule,
+        BodyDesc {
+            use_gravity: true,
+            ..capsule_body([0.0, 2.0, 0.0], 0.5, 2.0, 1, BodyRole::Dynamic, [0.0; 3])
+        },
+    )?;
+
+    for _ in 0..120 {
+        world.step(1.0 / 60.0)?;
+    }
+
+    let pos = world.position(capsule).unwrap_or([0.0; 3]);
+    let vel = world.velocity(capsule).unwrap_or([0.0; 3]);
+    assert!((pos[1] - 1.0).abs() < 1e-6);
+    assert!(vel[1].abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn dynamic_sphere_colliding_with_static_capsule_along_y_extent_is_stopped() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let post = EntityId::new(1);
+    let ball = EntityId::new(2);
+    world.add_body(
+        post,
+        capsule_body([0.0, 0.0, 0.0], 0.5, 3.0, 1, BodyRole::Static, [0.0; 3]),
+    )?;
+    world.add_body(ball, sphere([-1.2, 0.8, 0.0], [3.0, 0.0, 0.0]))?;
+
+    world.step(0.1)?;
+
+    let events = world.drain_events();
+    assert_eq!(
+        events,
+        vec![CollisionEvent {
+            a: post,
+            b: ball,
+            phase: Phase::Enter,
+        }]
+    );
+    let ball_pos = world.position(ball).unwrap_or([0.0; 3]);
+    assert!((ball_pos[0] - (-1.0)).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn capsules_with_x_and_z_directions_collide_along_their_declared_axes() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let x_capsule = EntityId::new(1);
+    let z_capsule = EntityId::new(2);
+    world.add_body(
+        x_capsule,
+        capsule_body([0.0, 0.0, 0.0], 0.5, 3.0, 0, BodyRole::Static, [0.0; 3]),
+    )?;
+    world.add_body(
+        z_capsule,
+        capsule_body([1.0, 0.8, 0.0], 0.5, 3.0, 2, BodyRole::Dynamic, [0.0, -2.0, 0.0]),
+    )?;
+
+    world.step(0.1)?;
+
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: x_capsule,
+            b: z_capsule,
+            phase: Phase::Enter,
+        }]
+    );
+    let z_pos = world.position(z_capsule).unwrap_or([0.0; 3]);
+    assert!((z_pos[1] - 1.0).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn kinematic_capsule_pushes_dynamic_capsule() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let pusher = EntityId::new(1);
+    let target = EntityId::new(2);
+    world.add_body(
+        pusher,
+        capsule_body([-1.0, 0.0, 0.0], 0.5, 2.0, 1, BodyRole::Kinematic, [0.0; 3]),
+    )?;
+    world.add_body(
+        target,
+        capsule_body([0.0, 0.0, 0.0], 0.5, 2.0, 1, BodyRole::Dynamic, [0.0; 3]),
+    )?;
+
+    world.set_position(pusher, [-0.8, 0.0, 0.0])?;
+    world.step(0.1)?;
+
+    let target_pos = world.position(target).unwrap_or([0.0; 3]);
+    assert!(target_pos[0] > 0.19);
+    assert_eq!(
+        world.drain_events(),
+        vec![CollisionEvent {
+            a: pusher,
+            b: target,
+            phase: Phase::Enter,
+        }]
+    );
+    Ok(())
+}

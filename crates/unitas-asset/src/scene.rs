@@ -15,11 +15,15 @@ const BOX_COLLIDER_CLASS: u32 = 65;
 const MONO_BEHAVIOUR_CLASS: u32 = 114;
 const PHYSIC_MATERIAL_CLASS: u32 = 134;
 const SPHERE_COLLIDER_CLASS: u32 = 135;
+const CAPSULE_COLLIDER_CLASS: u32 = 136;
 const PREFAB_INSTANCE_CLASS: u32 = 1001;
 const ROOT_FILE_ID: i64 = 0;
 const UNIT_QUATERNION_TOLERANCE: f64 = 1e-3;
 const DEFAULT_PHYSIC_MATERIAL_FRICTION: f64 = 0.6;
 const DEFAULT_PHYSIC_MATERIAL_RESTITUTION: f64 = 0.0;
+const DEFAULT_CAPSULE_RADIUS: f64 = 0.5;
+const DEFAULT_CAPSULE_HEIGHT: f64 = 2.0;
+const DEFAULT_CAPSULE_DIRECTION: u32 = 1;
 
 #[derive(Debug)]
 pub enum SceneError {
@@ -187,11 +191,24 @@ pub struct SphereColliderComponent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CapsuleColliderComponent {
+    pub radius: f64,
+    pub height: f64,
+    pub direction: u32,
+    pub center: [f64; 3],
+    pub is_trigger: bool,
+    pub material: Option<MaterialValues>,
+    pub material_diagnostic: Option<String>,
+    pub geometry_diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicsBinding {
     pub entity: EntityId,
     pub rigidbody: Option<RigidbodyComponent>,
     pub box_collider: Option<BoxColliderComponent>,
     pub sphere_collider: Option<SphereColliderComponent>,
+    pub capsule_collider: Option<CapsuleColliderComponent>,
     pub layer: u32,
 }
 
@@ -331,6 +348,7 @@ fn has_material_references(stream: &Stream) -> bool {
         let body = match document.class_id {
             BOX_COLLIDER_CLASS => document.root.get("BoxCollider"),
             SPHERE_COLLIDER_CLASS => document.root.get("SphereCollider"),
+            CAPSULE_COLLIDER_CLASS => document.root.get("CapsuleCollider"),
             _ => None,
         };
         body.and_then(|node| node.get("m_Material")).is_some()
@@ -567,6 +585,7 @@ enum PhysicsComponent {
     Rigidbody(RigidbodyComponent),
     BoxCollider(BoxColliderComponent),
     SphereCollider(SphereColliderComponent),
+    CapsuleCollider(CapsuleColliderComponent),
 }
 
 fn collect_physics(
@@ -591,6 +610,10 @@ fn collect_physics(
                 None => continue,
             },
             SPHERE_COLLIDER_CLASS => match document.root.get("SphereCollider") {
+                Some(body) => body,
+                None => continue,
+            },
+            CAPSULE_COLLIDER_CLASS => match document.root.get("CapsuleCollider") {
                 Some(body) => body,
                 None => continue,
             },
@@ -627,6 +650,9 @@ fn collect_physics(
                 &record.name,
                 index,
             )),
+            CAPSULE_COLLIDER_CLASS => PhysicsComponent::CapsuleCollider(
+                capsule_collider_component(body, &record.name, index),
+            ),
             _ => continue,
         };
         let entity = record.entity;
@@ -639,6 +665,7 @@ fn collect_physics(
                     rigidbody: None,
                     box_collider: None,
                     sphere_collider: None,
+                    capsule_collider: None,
                     layer,
                 });
                 let position = bindings.len() - 1;
@@ -651,6 +678,7 @@ fn collect_physics(
             PhysicsComponent::Rigidbody(value) => binding.rigidbody = Some(value),
             PhysicsComponent::BoxCollider(value) => binding.box_collider = Some(value),
             PhysicsComponent::SphereCollider(value) => binding.sphere_collider = Some(value),
+            PhysicsComponent::CapsuleCollider(value) => binding.capsule_collider = Some(value),
         }
     }
     Ok(bindings)
@@ -694,6 +722,97 @@ fn sphere_collider_component(
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
         material,
         material_diagnostic,
+    }
+}
+
+fn capsule_collider_component(
+    body: &Node,
+    game_object_name: &str,
+    index: Option<&GuidIndex>,
+) -> CapsuleColliderComponent {
+    let (material, material_diagnostic) =
+        resolve_collider_material(body, "CapsuleCollider", game_object_name, index);
+    let mut geometry_notes: Vec<String> = Vec::new();
+    let radius = match body.get("m_Radius") {
+        Some(node) => match node.as_f64() {
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            Some(value) => {
+                geometry_notes.push(format!(
+                    "invalid m_Radius {value} clamped to {DEFAULT_CAPSULE_RADIUS}"
+                ));
+                DEFAULT_CAPSULE_RADIUS
+            }
+            None => {
+                geometry_notes.push(format!(
+                    "invalid m_Radius clamped to {DEFAULT_CAPSULE_RADIUS}"
+                ));
+                DEFAULT_CAPSULE_RADIUS
+            }
+        },
+        None => DEFAULT_CAPSULE_RADIUS,
+    };
+    let raw_height = match body.get("m_Height") {
+        Some(node) => match node.as_f64() {
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            Some(value) => {
+                let fallback = DEFAULT_CAPSULE_HEIGHT.max(2.0 * radius);
+                geometry_notes.push(format!("invalid m_Height {value} clamped to {fallback}"));
+                fallback
+            }
+            None => {
+                let fallback = DEFAULT_CAPSULE_HEIGHT.max(2.0 * radius);
+                geometry_notes.push(format!("invalid m_Height clamped to {fallback}"));
+                fallback
+            }
+        },
+        None => DEFAULT_CAPSULE_HEIGHT,
+    };
+    let radius = if raw_height < 2.0 * radius {
+        let clamped_radius = raw_height / 2.0;
+        geometry_notes.push(format!(
+            "m_Radius {radius} exceeds half of m_Height {raw_height}; clamped to {clamped_radius}"
+        ));
+        clamped_radius
+    } else {
+        radius
+    };
+    let direction = match body.get("m_Direction") {
+        Some(node) => match node.as_i64() {
+            Some(0) => 0,
+            Some(1) => 1,
+            Some(2) => 2,
+            Some(value) => {
+                geometry_notes.push(format!(
+                    "invalid m_Direction {value} defaulted to {DEFAULT_CAPSULE_DIRECTION}"
+                ));
+                DEFAULT_CAPSULE_DIRECTION
+            }
+            None => {
+                geometry_notes.push(format!(
+                    "invalid m_Direction defaulted to {DEFAULT_CAPSULE_DIRECTION}"
+                ));
+                DEFAULT_CAPSULE_DIRECTION
+            }
+        },
+        None => DEFAULT_CAPSULE_DIRECTION,
+    };
+    let geometry_diagnostic = if geometry_notes.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "CapsuleCollider on '{game_object_name}': {}",
+            geometry_notes.join("; ")
+        ))
+    };
+    CapsuleColliderComponent {
+        radius,
+        height: raw_height,
+        direction,
+        center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
+        is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+        material,
+        material_diagnostic,
+        geometry_diagnostic,
     }
 }
 

@@ -6,7 +6,7 @@ namespace UnityEngine
     {
         bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers, out RaycastHit hit);
 
-        bool Linecast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers);
+        bool Linecast(Vector3 start, Vector3 end, out RaycastHit hitInfo, int layerMask, QueryTriggerInteraction queryTriggerInteraction);
 
         bool SphereCast(Vector3 origin, Vector3 direction, float radius, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers);
 
@@ -25,7 +25,11 @@ namespace UnityEngine
 
     public static class Physics
     {
+        public const int DefaultRaycastLayers = -1;
+
         public static IPhysicsProvider? Provider { get; set; }
+
+        public static bool queriesHitTriggers { get; set; } = true;
 
         public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, QueryTriggerInteraction queryTriggerInteraction = QueryTriggerInteraction.UseGlobal)
         {
@@ -38,15 +42,20 @@ namespace UnityEngine
             return provider.Raycast(origin, direction, maxDistance, layerMask, IncludesTriggers(queryTriggerInteraction), out hit);
         }
 
-        public static bool Linecast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, QueryTriggerInteraction queryTriggerInteraction = QueryTriggerInteraction.UseGlobal)
+        public static bool Linecast(Vector3 start, Vector3 end, int layerMask = DefaultRaycastLayers, QueryTriggerInteraction queryTriggerInteraction = QueryTriggerInteraction.UseGlobal)
         {
-            hit = default;
+            return Linecast(start, end, out _, layerMask, queryTriggerInteraction);
+        }
+
+        public static bool Linecast(Vector3 start, Vector3 end, out RaycastHit hitInfo, int layerMask = DefaultRaycastLayers, QueryTriggerInteraction queryTriggerInteraction = QueryTriggerInteraction.UseGlobal)
+        {
+            hitInfo = default;
             IPhysicsProvider? provider = Provider;
             if (provider == null)
             {
                 return false;
             }
-            return provider.Linecast(origin, direction, out hit, maxDistance, layerMask, IncludesTriggers(queryTriggerInteraction));
+            return provider.Linecast(start, end, out hitInfo, layerMask, queryTriggerInteraction);
         }
 
         public static bool SphereCast(Vector3 origin, Vector3 direction, float radius, out RaycastHit hit, float maxDistance, int layerMask, QueryTriggerInteraction queryTriggerInteraction = QueryTriggerInteraction.UseGlobal)
@@ -81,9 +90,9 @@ namespace UnityEngine
             return provider.OverlapSphere(position, radius, layerMask, IncludesTriggers(queryTriggerInteraction));
         }
 
-        private static bool IncludesTriggers(QueryTriggerInteraction queryTriggerInteraction)
+        internal static bool IncludesTriggers(QueryTriggerInteraction queryTriggerInteraction)
         {
-            return queryTriggerInteraction == QueryTriggerInteraction.Collide;
+            return queryTriggerInteraction.IncludesTriggers();
         }
     }
 }

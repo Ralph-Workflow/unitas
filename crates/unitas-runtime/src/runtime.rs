@@ -1097,35 +1097,56 @@ fn collect_material_diagnostics(
                 diagnostics.push((entity, diag.clone()));
             }
         }
+        if let Some(capsule) = &binding.capsule_collider {
+            if let Some(diag) = &capsule.material_diagnostic {
+                diagnostics.push((entity, diag.clone()));
+            }
+            if let Some(diag) = &capsule.geometry_diagnostic {
+                diagnostics.push((entity, diag.clone()));
+            }
+        }
     }
     diagnostics
 }
 
 fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, [f32; 3])> {
-    let (shape, center, collider_trigger, material) =
-        match (&binding.sphere_collider, &binding.box_collider) {
-            (Some(sphere), _) => (
-                Shape::Sphere {
-                    radius: sphere.radius,
-                },
-                sphere.center,
-                sphere.is_trigger,
-                sphere.material,
-            ),
-            (None, Some(collider)) => (
-                Shape::Box {
-                    half_extents: [
-                        collider.size[0] / 2.0,
-                        collider.size[1] / 2.0,
-                        collider.size[2] / 2.0,
-                    ],
-                },
-                collider.center,
-                collider.is_trigger,
-                collider.material,
-            ),
-            (None, None) => return None,
-        };
+    let (shape, center, collider_trigger, material) = match (
+        &binding.sphere_collider,
+        &binding.box_collider,
+        &binding.capsule_collider,
+    ) {
+        (Some(sphere), _, _) => (
+            Shape::Sphere {
+                radius: sphere.radius,
+            },
+            sphere.center,
+            sphere.is_trigger,
+            sphere.material,
+        ),
+        (None, Some(collider), _) => (
+            Shape::Box {
+                half_extents: [
+                    collider.size[0] / 2.0,
+                    collider.size[1] / 2.0,
+                    collider.size[2] / 2.0,
+                ],
+            },
+            collider.center,
+            collider.is_trigger,
+            collider.material,
+        ),
+        (None, None, Some(capsule)) => (
+            Shape::Capsule {
+                radius: capsule.radius,
+                height: capsule.height,
+                direction: capsule.direction as u8,
+            },
+            capsule.center,
+            capsule.is_trigger,
+            capsule.material,
+        ),
+        (None, None, None) => return None,
+    };
     let friction = material.map_or(0.6, |m| m.friction);
     let restitution = material.map_or(0.0, |m| m.restitution);
     let (translation, rotation, scale) = match graph.world_transform(binding.entity) {

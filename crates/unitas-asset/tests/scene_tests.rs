@@ -6,7 +6,7 @@ use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
     assemble_scene, assemble_scene_file, assemble_scene_file_with_guids,
     assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    MaterialValues, SceneError,
+    CapsuleColliderComponent, MaterialValues, SceneError,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -14,6 +14,7 @@ use unitas_core::{EntityId, SceneGraph};
 const SCENE_FIXTURE: &str = "tests/fixtures/scene.unity";
 const PREFAB_FIXTURE: &str = "tests/fixtures/prefab.prefab";
 const PHYSICS_FIXTURE: &str = "tests/fixtures/physics.unity";
+const PHYSICS_CAPSULE_FIXTURE: &str = "tests/fixtures/physics_capsule.unity";
 const PHYSICS_TRIGGER_FIXTURE: &str = "tests/fixtures/physics_trigger.unity";
 const PHYSICS_KINEMATIC_FIXTURE: &str = "tests/fixtures/physics_kinematic.unity";
 const PHYSICS_LAYER_FIXTURE: &str = "tests/fixtures/physics_layer.unity";
@@ -849,6 +850,207 @@ fn collider_without_material_or_zero_file_id_has_no_material_and_no_diagnostic()
         .ok_or("missing SphereCollider")?;
     assert_eq!(sphere_collider.material, None);
     assert_eq!(sphere_collider.material_diagnostic, None);
+
+    Ok(())
+}
+
+#[test]
+fn capsule_collider_parses_from_scene_fixture_with_explicit_and_default_values() -> TestResult {
+    let (graph, scripts, bindings) =
+        assemble_scene_file_with_physics(Path::new(PHYSICS_CAPSULE_FIXTURE))?;
+    assert!(scripts.is_empty());
+    let pillar = entity_named(&graph, "Pillar")?;
+    let default_capsule = entity_named(&graph, "DefaultCapsule")?;
+
+    let pillar_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == pillar)
+        .ok_or("no physics binding for Pillar")?;
+    let pillar_rb = pillar_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("Pillar has no rigidbody")?;
+    assert_eq!(pillar_rb.mass, 1.5);
+    assert!(pillar_rb.use_gravity);
+    assert!(pillar_binding.box_collider.is_none());
+    assert!(pillar_binding.sphere_collider.is_none());
+    let pillar_capsule: &CapsuleColliderComponent = pillar_binding
+        .capsule_collider
+        .as_ref()
+        .ok_or("Pillar has no capsule collider")?;
+    assert_eq!(pillar_capsule.radius, 0.25);
+    assert_eq!(pillar_capsule.height, 2.0);
+    assert_eq!(pillar_capsule.direction, 2);
+    assert_eq!(pillar_capsule.center, [0.1, 0.2, -0.3]);
+    assert!(pillar_capsule.is_trigger);
+    assert_eq!(pillar_capsule.material, None);
+    assert_eq!(pillar_capsule.material_diagnostic, None);
+    assert_eq!(pillar_capsule.geometry_diagnostic, None);
+
+    let default_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == default_capsule)
+        .ok_or("no physics binding for DefaultCapsule")?;
+    assert!(default_binding.rigidbody.is_none());
+    assert!(default_binding.box_collider.is_none());
+    assert!(default_binding.sphere_collider.is_none());
+    let capsule = default_binding
+        .capsule_collider
+        .as_ref()
+        .ok_or("DefaultCapsule has no capsule collider")?;
+    assert_eq!(capsule.radius, 0.5);
+    assert_eq!(capsule.height, 2.0);
+    assert_eq!(capsule.direction, 1);
+    assert_eq!(capsule.center, [0.0, 0.0, 0.0]);
+    assert!(!capsule.is_trigger);
+    assert_eq!(capsule.material, None);
+    assert_eq!(capsule.material_diagnostic, None);
+    assert_eq!(capsule.geometry_diagnostic, None);
+
+    Ok(())
+}
+
+#[test]
+fn capsule_collider_resolves_physic_material_and_reports_material_diagnostics() -> TestResult {
+    let temp = std::env::temp_dir().join(format!(
+        "unitas_capsule_material_resolve_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    let settings = temp.join("ProjectSettings");
+    let assets = temp.join("Assets");
+    std::fs::create_dir_all(&settings)?;
+    std::fs::create_dir_all(&assets)?;
+
+    let mat_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let dangling_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+
+    std::fs::write(
+        assets.join("Bouncy.physicMaterial"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!134 &13400000\nPhysicMaterial:\n  m_Name: Bouncy\n  m_DynamicFriction: 0.35\n  m_StaticFriction: 0.4\n  m_Bounciness: 0.75\n",
+    )?;
+    std::fs::write(
+        assets.join("Bouncy.physicMaterial.meta"),
+        format!("fileFormatVersion: 2\nguid: {mat_guid}\n"),
+    )?;
+
+    let scene_path = assets.join("CapsuleMaterialScene.unity");
+    std::fs::write(
+        &scene_path,
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: BouncyCapsule\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!136 &12\nCapsuleCollider:\n  m_GameObject: {{fileID: 10}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_Radius: 0.5\n  m_Height: 2.0\n--- !u!1 &20\nGameObject:\n  m_Name: DanglingCapsule\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!136 &22\nCapsuleCollider:\n  m_GameObject: {{fileID: 20}}\n  m_Material: {{fileID: 13400000, guid: {dangling_guid}, type: 2}}\n"
+        ),
+    )?;
+
+    let result = assemble_scene_file_with_physics(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp);
+    let (graph, _scripts, bindings) = result?;
+
+    let bouncy = entity_named(&graph, "BouncyCapsule")?;
+    let bouncy_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == bouncy)
+        .ok_or("missing BouncyCapsule binding")?;
+    let bouncy_capsule = bouncy_binding
+        .capsule_collider
+        .as_ref()
+        .ok_or("missing CapsuleCollider on BouncyCapsule")?;
+    assert_eq!(
+        bouncy_capsule.material,
+        Some(MaterialValues {
+            friction: 0.35,
+            restitution: 0.75,
+        })
+    );
+    assert_eq!(bouncy_capsule.material_diagnostic, None);
+
+    let dangling = entity_named(&graph, "DanglingCapsule")?;
+    let dangling_binding = bindings
+        .iter()
+        .find(|binding| binding.entity == dangling)
+        .ok_or("missing DanglingCapsule binding")?;
+    let dangling_capsule = dangling_binding
+        .capsule_collider
+        .as_ref()
+        .ok_or("missing CapsuleCollider on DanglingCapsule")?;
+    assert_eq!(dangling_capsule.material, None);
+    let diag = dangling_capsule
+        .material_diagnostic
+        .as_ref()
+        .ok_or("expected material_diagnostic for DanglingCapsule")?;
+    assert!(diag.contains("CapsuleCollider"));
+    assert!(diag.contains("DanglingCapsule"));
+    assert!(diag.contains(dangling_guid));
+
+    Ok(())
+}
+
+#[test]
+fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_direction(
+) -> TestResult {
+    let stream = unity_yaml::parse(
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: ShortCapsule\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Father: {fileID: 0}\n--- !u!136 &12\nCapsuleCollider:\n  m_GameObject: {fileID: 10}\n  m_Radius: 1.5\n  m_Height: 2.0\n--- !u!1 &20\nGameObject:\n  m_Name: NegativeRadiusCapsule\n--- !u!4 &21\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Father: {fileID: 0}\n--- !u!136 &22\nCapsuleCollider:\n  m_GameObject: {fileID: 20}\n  m_Radius: -0.5\n  m_Height: 2.0\n--- !u!1 &30\nGameObject:\n  m_Name: NegativeHeightCapsule\n--- !u!4 &31\nTransform:\n  m_GameObject: {fileID: 30}\n  m_Father: {fileID: 0}\n--- !u!136 &32\nCapsuleCollider:\n  m_GameObject: {fileID: 30}\n  m_Radius: 0.5\n  m_Height: 0.0\n--- !u!1 &40\nGameObject:\n  m_Name: BadDirectionCapsule\n--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 40}\n  m_Father: {fileID: 0}\n--- !u!136 &42\nCapsuleCollider:\n  m_GameObject: {fileID: 40}\n  m_Radius: 0.5\n  m_Height: 2.0\n  m_Direction: 7\n",
+    )?;
+    let (graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
+
+    let short = entity_named(&graph, "ShortCapsule")?;
+    let short_capsule = bindings
+        .iter()
+        .find(|binding| binding.entity == short)
+        .and_then(|binding| binding.capsule_collider.as_ref())
+        .ok_or("missing ShortCapsule")?;
+    assert_eq!(short_capsule.radius, 1.0);
+    assert_eq!(short_capsule.height, 2.0);
+    let short_diag = short_capsule
+        .geometry_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for ShortCapsule")?;
+    assert!(short_diag.contains("CapsuleCollider"));
+    assert!(short_diag.contains("ShortCapsule"));
+
+    let neg_rad = entity_named(&graph, "NegativeRadiusCapsule")?;
+    let neg_rad_capsule = bindings
+        .iter()
+        .find(|binding| binding.entity == neg_rad)
+        .and_then(|binding| binding.capsule_collider.as_ref())
+        .ok_or("missing NegativeRadiusCapsule")?;
+    assert!(neg_rad_capsule.radius > 0.0);
+    assert!(neg_rad_capsule.height >= 2.0 * neg_rad_capsule.radius);
+    let neg_rad_diag = neg_rad_capsule
+        .geometry_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for NegativeRadiusCapsule")?;
+    assert!(neg_rad_diag.contains("CapsuleCollider"));
+    assert!(neg_rad_diag.contains("NegativeRadiusCapsule"));
+
+    let neg_height = entity_named(&graph, "NegativeHeightCapsule")?;
+    let neg_height_capsule = bindings
+        .iter()
+        .find(|binding| binding.entity == neg_height)
+        .and_then(|binding| binding.capsule_collider.as_ref())
+        .ok_or("missing NegativeHeightCapsule")?;
+    assert!(neg_height_capsule.radius > 0.0);
+    assert!(neg_height_capsule.height >= 2.0 * neg_height_capsule.radius);
+    let neg_height_diag = neg_height_capsule
+        .geometry_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for NegativeHeightCapsule")?;
+    assert!(neg_height_diag.contains("CapsuleCollider"));
+    assert!(neg_height_diag.contains("NegativeHeightCapsule"));
+
+    let bad_dir = entity_named(&graph, "BadDirectionCapsule")?;
+    let bad_dir_capsule = bindings
+        .iter()
+        .find(|binding| binding.entity == bad_dir)
+        .and_then(|binding| binding.capsule_collider.as_ref())
+        .ok_or("missing BadDirectionCapsule")?;
+    assert_eq!(bad_dir_capsule.direction, 1);
+    let bad_dir_diag = bad_dir_capsule
+        .geometry_diagnostic
+        .as_ref()
+        .ok_or("expected diagnostic for BadDirectionCapsule")?;
+    assert!(bad_dir_diag.contains("CapsuleCollider"));
+    assert!(bad_dir_diag.contains("BadDirectionCapsule"));
 
     Ok(())
 }

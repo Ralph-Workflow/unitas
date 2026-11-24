@@ -329,7 +329,8 @@ impl World {
         include_triggers: bool,
     ) -> Vec<EntityId> {
         let probe = Shape::Sphere { radius };
-        self.bodies
+        let mut entities: Vec<EntityId> = self
+            .bodies
             .iter()
             .filter(|body| body.layer & layer_mask != 0)
             .filter(|body| !body.is_trigger || include_triggers)
@@ -343,7 +344,9 @@ impl World {
                 )
             })
             .map(|body| body.entity)
-            .collect()
+            .collect();
+        entities.sort();
+        entities
     }
 
     fn cast(

@@ -130,6 +130,36 @@ fn invalid_body_descriptions_are_rejected() -> Result<(), PhysicsError> {
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
+    let zero_capsule_radius = BodyDesc {
+        shape: Shape::Capsule {
+            radius: 0.0,
+            height: 2.0,
+            direction: 1,
+        },
+        friction: 0.6,
+        restitution: 0.0,
+        ..sphere([0.0, 0.0, 0.0])
+    };
+    let negative_capsule_height = BodyDesc {
+        shape: Shape::Capsule {
+            radius: 0.5,
+            height: -1.0,
+            direction: 1,
+        },
+        friction: 0.6,
+        restitution: 0.0,
+        ..sphere([0.0, 0.0, 0.0])
+    };
+    let invalid_capsule_direction = BodyDesc {
+        shape: Shape::Capsule {
+            radius: 0.5,
+            height: 2.0,
+            direction: 3,
+        },
+        friction: 0.6,
+        restitution: 0.0,
+        ..sphere([0.0, 0.0, 0.0])
+    };
 
     assert_eq!(
         world.add_body(entity, zero_radius),
@@ -143,7 +173,68 @@ fn invalid_body_descriptions_are_rejected() -> Result<(), PhysicsError> {
         world.add_body(entity, infinite_mass),
         Err(PhysicsError::InvalidBody(entity))
     );
+    assert_eq!(
+        world.add_body(entity, zero_capsule_radius),
+        Err(PhysicsError::InvalidBody(entity))
+    );
+    assert_eq!(
+        world.add_body(entity, negative_capsule_height),
+        Err(PhysicsError::InvalidBody(entity))
+    );
+    assert_eq!(
+        world.add_body(entity, invalid_capsule_direction),
+        Err(PhysicsError::InvalidBody(entity))
+    );
     assert_eq!(world.body_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn capsule_bodies_support_dynamic_kinematic_and_static_roles() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let dynamic_capsule = EntityId::new(1);
+    let kinematic_capsule = EntityId::new(2);
+    let static_capsule = EntityId::new(3);
+    let capsule_shape = Shape::Capsule {
+        radius: 0.5,
+        height: 2.0,
+        direction: 1,
+    };
+
+    world.add_body(
+        dynamic_capsule,
+        BodyDesc {
+            use_gravity: true,
+            shape: capsule_shape,
+            ..sphere([0.0, 5.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        kinematic_capsule,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            shape: capsule_shape,
+            ..sphere([2.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        static_capsule,
+        BodyDesc {
+            role: BodyRole::Static,
+            mass: 0.0,
+            shape: capsule_shape,
+            ..sphere([-2.0, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.1)?;
+
+    assert_eq!(world.body_role(dynamic_capsule), Some(BodyRole::Dynamic));
+    assert_eq!(world.body_role(kinematic_capsule), Some(BodyRole::Kinematic));
+    assert_eq!(world.body_role(static_capsule), Some(BodyRole::Static));
+    assert!(world.position(dynamic_capsule).map_or(5.0, |p| p[1]) < 5.0);
+    assert_eq!(world.position(kinematic_capsule), Some([2.0, 0.0, 0.0]));
+    assert_eq!(world.position(static_capsule), Some([-2.0, 0.0, 0.0]));
     Ok(())
 }
 

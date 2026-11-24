@@ -300,27 +300,45 @@ fn a_ray_grazing_a_box_edge_does_not_hit() -> Result<(), PhysicsError> {
 }
 
 #[test]
-fn a_ray_starting_inside_a_sphere_does_not_hit() -> Result<(), PhysicsError> {
+fn a_ray_starting_inside_a_sphere_hits_the_exit_surface_with_inward_normal() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    let entity = EntityId::new(1);
+    world.add_body(entity, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
     let hits = world.raycast([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
-    assert!(hits.is_empty());
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [1.0, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 1.0,
+        }]
+    );
     Ok(())
 }
 
 #[test]
-fn a_ray_starting_inside_a_box_does_not_hit() -> Result<(), PhysicsError> {
+fn a_ray_starting_inside_a_box_hits_the_exit_face_with_inward_normal() -> Result<(), PhysicsError> {
     let mut world = World::new();
+    let entity = EntityId::new(1);
     world.add_body(
-        EntityId::new(1),
+        entity,
         box_body([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
     )?;
 
     let hits = world.raycast([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
-    assert!(hits.is_empty());
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [1.0, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 1.0,
+        }]
+    );
     Ok(())
 }
 
@@ -565,13 +583,22 @@ fn a_linecast_with_a_zero_length_segment_hits_nothing() -> Result<(), PhysicsErr
 }
 
 #[test]
-fn a_linecast_starting_inside_a_collider_does_not_hit() -> Result<(), PhysicsError> {
+fn a_linecast_starting_inside_a_collider_hits_the_exit_surface() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    let entity = EntityId::new(1);
+    world.add_body(entity, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
     let hits = world.linecast([0.0, 0.0, 0.0], [5.0, 0.0, 0.0], LAYER_ONE, false);
 
-    assert!(hits.is_empty());
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [1.0, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 1.0,
+        }]
+    );
     Ok(())
 }
 
@@ -660,12 +687,13 @@ fn a_sphere_cast_reports_the_contact_point_and_normal_of_a_box() -> Result<(), P
 }
 
 #[test]
-fn a_sphere_cast_starting_inside_a_collider_does_not_hit() -> Result<(), PhysicsError> {
+fn a_sphere_cast_starting_inside_a_collider_hits_at_distance_zero() -> Result<(), PhysicsError> {
     let mut world = World::new();
-    world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    let entity = EntityId::new(1);
+    world.add_body(entity, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
     let hits = world.sphere_cast(
-        [0.0, 0.0, 0.0],
+        [-1.2, 0.0, 0.0],
         0.5,
         [1.0, 0.0, 0.0],
         100.0,
@@ -673,7 +701,15 @@ fn a_sphere_cast_starting_inside_a_collider_does_not_hit() -> Result<(), Physics
         false,
     );
 
-    assert!(hits.is_empty());
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 0.0,
+        }]
+    );
     Ok(())
 }
 
@@ -812,15 +848,16 @@ fn a_box_cast_reports_the_contact_point_and_normal_of_a_sphere() -> Result<(), P
 }
 
 #[test]
-fn a_box_cast_starting_inside_a_collider_does_not_hit() -> Result<(), PhysicsError> {
+fn a_box_cast_starting_inside_a_collider_hits_at_distance_zero() -> Result<(), PhysicsError> {
     let mut world = World::new();
+    let entity = EntityId::new(1);
     world.add_body(
-        EntityId::new(1),
+        entity,
         box_body([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
     )?;
 
     let hits = world.box_cast(
-        [0.0, 0.0, 0.0],
+        [-1.2, 0.0, 0.0],
         [0.5, 0.5, 0.5],
         [1.0, 0.0, 0.0],
         100.0,
@@ -828,7 +865,15 @@ fn a_box_cast_starting_inside_a_collider_does_not_hit() -> Result<(), PhysicsErr
         false,
     );
 
-    assert!(hits.is_empty());
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 0.0,
+        }]
+    );
     Ok(())
 }
 
@@ -1211,5 +1256,247 @@ fn sphere_overlap_against_a_rotated_non_cubic_box_uses_the_inverse_rotation(
     let hits = world.overlap_sphere([2.0, 1.0, 0.0], 0.2, LAYER_ONE);
 
     assert_eq!(hits, vec![entity]);
+    Ok(())
+}
+
+fn capsule_body(
+    position: [f64; 3],
+    rotation: [f64; 4],
+    radius: f64,
+    height: f64,
+    direction: u8,
+    layer: u32,
+) -> BodyDesc {
+    BodyDesc {
+        position,
+        rotation,
+        mass: 0.0,
+        velocity: [0.0; 3],
+        use_gravity: false,
+        is_trigger: false,
+        shape: Shape::Capsule {
+            radius,
+            height,
+            direction,
+        },
+        layer,
+        role: BodyRole::Static,
+        friction: 0.6,
+        restitution: 0.0,
+    }
+}
+
+#[test]
+fn overlap_sphere_returns_entities_sorted_by_ascending_entity_id() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let third = EntityId::new(30);
+    let first = EntityId::new(10);
+    let second = EntityId::new(20);
+    world.add_body(third, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(first, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(second, trigger_sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
+
+    let non_trigger = world.overlap_sphere([0.0, 0.0, 0.0], 0.5, LAYER_ONE);
+    let with_triggers = world.overlap_sphere_with_triggers([0.0, 0.0, 0.0], 0.5, LAYER_ONE, true);
+
+    assert_eq!(non_trigger, vec![first, third]);
+    assert_eq!(with_triggers, vec![first, second, third]);
+    Ok(())
+}
+
+#[test]
+fn raycast_and_linecast_hit_capsule_cylinder_and_cap_surfaces() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        capsule_body(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            1.0,
+            4.0,
+            1,
+            LAYER_ONE,
+        ),
+    )?;
+
+    let cylinder_hits = world.raycast([-5.0, 0.5, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+    assert_eq!(
+        cylinder_hits,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 4.0,
+        }]
+    );
+
+    let cap_hits = world.linecast([0.0, 5.0, 0.0], [0.0, -5.0, 0.0], LAYER_ONE, false);
+    assert_eq!(
+        cap_hits,
+        vec![QueryHit {
+            entity,
+            point: [0.0, 2.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            distance: 3.0,
+        }]
+    );
+
+    let miss_above_cap = world.raycast([-5.0, 2.5, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+    assert!(miss_above_cap.is_empty());
+    Ok(())
+}
+
+#[test]
+fn raycast_starting_inside_capsule_hits_exit_surface() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        capsule_body(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            1.0,
+            4.0,
+            1,
+            LAYER_ONE,
+        ),
+    )?;
+
+    let hits = world.raycast([0.0, 0.5, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+
+    assert_eq!(
+        hits,
+        vec![QueryHit {
+            entity,
+            point: [1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 1.0,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn sphere_cast_and_box_cast_hit_capsule_target_and_handle_initial_overlap(
+) -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        capsule_body(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            1.0,
+            4.0,
+            1,
+            LAYER_ONE,
+        ),
+    )?;
+
+    let sphere_hits = world.sphere_cast(
+        [-5.0, 0.5, 0.0],
+        0.5,
+        [1.0, 0.0, 0.0],
+        100.0,
+        LAYER_ONE,
+        false,
+    );
+    assert_eq!(
+        sphere_hits,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 3.5,
+        }]
+    );
+
+    let overlapped_sphere = world.sphere_cast(
+        [-1.2, 0.5, 0.0],
+        0.5,
+        [1.0, 0.0, 0.0],
+        100.0,
+        LAYER_ONE,
+        false,
+    );
+    assert_eq!(
+        overlapped_sphere,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 0.0,
+        }]
+    );
+
+    let box_hits = world.box_cast(
+        [-5.0, 0.5, 0.0],
+        [0.5, 0.5, 0.5],
+        [1.0, 0.0, 0.0],
+        100.0,
+        LAYER_ONE,
+        false,
+    );
+    assert_eq!(
+        box_hits,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 3.5,
+        }]
+    );
+
+    let overlapped_box = world.box_cast(
+        [-1.2, 0.5, 0.0],
+        [0.5, 0.5, 0.5],
+        [1.0, 0.0, 0.0],
+        100.0,
+        LAYER_ONE,
+        false,
+    );
+    assert_eq!(
+        overlapped_box,
+        vec![QueryHit {
+            entity,
+            point: [-1.0, 0.5, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 0.0,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn capsule_direction_and_rotation_are_honored_in_queries() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let entity = EntityId::new(1);
+    world.add_body(
+        entity,
+        capsule_body(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            0.5,
+            4.0,
+            0,
+            LAYER_ONE,
+        ),
+    )?;
+
+    let hit_along_x_extent = world.raycast([1.2, -3.0, 0.0], [0.0, 1.0, 0.0], 100.0, LAYER_ONE);
+    assert_eq!(
+        hit_along_x_extent,
+        vec![QueryHit {
+            entity,
+            point: [1.2, -0.5, 0.0],
+            normal: [0.0, -1.0, 0.0],
+            distance: 2.5,
+        }]
+    );
+    assert_eq!(
+        world.overlap_sphere([1.6, 0.0, 0.0], 0.6, LAYER_ONE),
+        vec![entity]
+    );
     Ok(())
 }
