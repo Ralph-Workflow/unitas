@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using UnityEngine.SceneManagement;
 
@@ -13,6 +14,8 @@ namespace UnityEngine
 
     public partial class Object
     {
+        private static readonly object s_registryLock = new object();
+        private static readonly List<Object> s_liveObjects = new List<Object>();
         private static int s_nextInstanceId = 1;
         private int _instanceId = Interlocked.Increment(ref s_nextInstanceId);
         private string _name = string.Empty;
@@ -20,6 +23,11 @@ namespace UnityEngine
         private bool _destroying;
         private bool _persistent;
         private Scene _scene;
+
+        public Object()
+        {
+            RegisterLiveObject(this);
+        }
 
         public virtual string name
         {
@@ -61,9 +69,189 @@ namespace UnityEngine
         internal void AssignNewInstanceId()
         {
             _instanceId = Interlocked.Increment(ref s_nextInstanceId);
+            RegisterLiveObject(this);
+        }
+
+        internal static void RegisterLiveObject(Object instance)
+        {
+            if (instance is null || instance._destroyed)
+            {
+                return;
+            }
+
+            lock (s_registryLock)
+            {
+                for (int i = 0; i < s_liveObjects.Count; i++)
+                {
+                    if (ReferenceEquals(s_liveObjects[i], instance))
+                    {
+                        return;
+                    }
+                }
+
+                s_liveObjects.Add(instance);
+            }
+        }
+
+        internal static void DeregisterLiveObject(Object instance)
+        {
+            if (instance is null)
+            {
+                return;
+            }
+
+            lock (s_registryLock)
+            {
+                for (int i = s_liveObjects.Count - 1; i >= 0; i--)
+                {
+                    if (ReferenceEquals(s_liveObjects[i], instance))
+                    {
+                        s_liveObjects.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
+        internal static List<Object> SnapshotLiveObjects()
+        {
+            lock (s_registryLock)
+            {
+                return new List<Object>(s_liveObjects);
+            }
         }
 
         internal Component ShallowClone() => (Component)MemberwiseClone();
+
+        public static T[] FindObjectsOfType<T>() where T : Object => FindObjectsOfType<T>(false);
+
+        public static T[] FindObjectsOfType<T>(bool includeInactive) where T : Object
+        {
+            List<Object> snapshot = SnapshotLiveObjects();
+            List<T> matches = new List<T>();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                Object candidate = snapshot[i];
+                if (!IsDiscoverable(candidate, includeInactive))
+                {
+                    continue;
+                }
+
+                if (candidate is T typed)
+                {
+                    matches.Add(typed);
+                }
+            }
+
+            return matches.ToArray();
+        }
+
+        public static T? FindObjectOfType<T>() where T : Object => FindObjectOfType<T>(false);
+
+        public static T? FindObjectOfType<T>(bool includeInactive) where T : Object
+        {
+            List<Object> snapshot = SnapshotLiveObjects();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                Object candidate = snapshot[i];
+                if (!IsDiscoverable(candidate, includeInactive))
+                {
+                    continue;
+                }
+
+                if (candidate is T typed)
+                {
+                    return typed;
+                }
+            }
+
+            return null;
+        }
+
+        public static Object[] FindObjectsOfType(Type type) => FindObjectsOfType(type, false);
+
+        public static Object[] FindObjectsOfType(Type type, bool includeInactive)
+        {
+            ValidateSearchType(type);
+            List<Object> snapshot = SnapshotLiveObjects();
+            List<Object> matches = new List<Object>();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                Object candidate = snapshot[i];
+                if (!IsDiscoverable(candidate, includeInactive))
+                {
+                    continue;
+                }
+
+                if (type.IsInstanceOfType(candidate))
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            return matches.ToArray();
+        }
+
+        public static Object? FindObjectOfType(Type type) => FindObjectOfType(type, false);
+
+        public static Object? FindObjectOfType(Type type, bool includeInactive)
+        {
+            ValidateSearchType(type);
+            List<Object> snapshot = SnapshotLiveObjects();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                Object candidate = snapshot[i];
+                if (!IsDiscoverable(candidate, includeInactive))
+                {
+                    continue;
+                }
+
+                if (type.IsInstanceOfType(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        private static void ValidateSearchType(Type type)
+        {
+            if (type == null)
+            {
+                throw new ArgumentNullException(nameof(type));
+            }
+
+            if (!typeof(Object).IsAssignableFrom(type))
+            {
+                throw new ArgumentException("Type must derive from UnityEngine.Object.", nameof(type));
+            }
+        }
+
+        private static bool IsDiscoverable(Object candidate, bool includeInactive)
+        {
+            if (candidate is null || candidate._destroyed)
+            {
+                return false;
+            }
+
+            if (includeInactive)
+            {
+                return true;
+            }
+
+            if (candidate is GameObject gameObject)
+            {
+                return gameObject.activeInHierarchy;
+            }
+
+            if (candidate is Component component)
+            {
+                GameObject? owner = component.gameObject;
+                return owner is not null && !owner._destroyed && owner.activeInHierarchy;
+            }
+
+            return true;
+        }
 
         public static bool operator ==(Object? left, Object? right)
         {
@@ -159,6 +347,7 @@ namespace UnityEngine
                 {
                     bool notifyDisable = IsEffectivelyEnabled(component);
                     obj._destroyed = true;
+                    DeregisterLiveObject(component);
                     DestroyComponent(component, notifyDisable);
                 }
                 else if (obj is GameObject gameObject)
@@ -171,14 +360,17 @@ namespace UnityEngine
                     }
 
                     obj._destroyed = true;
+                    DeregisterLiveObject(gameObject);
                     for (int i = 0; i < count; i++)
                     {
+                        DeregisterLiveObject(gameObject.Components[i]);
                         DestroyComponent(gameObject.Components[i], notify[i]);
                     }
                 }
                 else
                 {
                     obj._destroyed = true;
+                    DeregisterLiveObject(obj);
                 }
             }
             finally
@@ -200,6 +392,7 @@ namespace UnityEngine
         private static void DestroyComponent(Component component, bool notifyDisable)
         {
             component._destroyed = true;
+            DeregisterLiveObject(component);
             if (!(component is MonoBehaviour behaviour))
             {
                 return;

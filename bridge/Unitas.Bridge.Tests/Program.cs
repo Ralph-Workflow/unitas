@@ -32,6 +32,9 @@ namespace Unitas.Bridge.Tests
             SceneManagementPersistenceTests.Run();
             ApplicationTests.Run();
             PlayerPrefsTests.Run();
+            ObjectDiscoveryTests.Run();
+            GameObjectDiscoveryTests.Run();
+            LoggingTests.Run();
 
             if (Check.FailureCount > 0)
             {
