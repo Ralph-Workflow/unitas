@@ -1,15 +1,15 @@
 # unitas
 
 > **Work in progress.** unitas is in early development. It is not ready for
-> production use, it does not yet open real Unity projects end to end, and its
-> APIs, file formats, and behavior change without notice. Nothing here is
-> released.
+> production use, it does not yet open real existing game projects end to end,
+> and its APIs, file formats, and behavior change without notice. Nothing here
+> is released.
 
 unitas is an open-source game engine, runtime, and build product that is
 C#-first and built for AI agents and the Model Context Protocol (MCP). The goal
-is that an existing Unity 2022.3 LTS project opens in place, and that an
-authorized agent, a developer, or both together can inspect it, change it, run
-it, test it, debug it, and build it without converting it first.
+is that an existing C# game project opens in place, and that an authorized
+agent, a developer, or both together can inspect it, change it, run it, test
+it, debug it, and build it without converting it first.
 
 ## Status
 
@@ -19,8 +19,8 @@ about what exists today.
 
 What the repository contains today:
 
-* **Asset import.** Parsing of Unity YAML scenes, prefabs, materials, `.meta`
-  files and GUIDs, and project settings (`crates/unitas-asset`).
+* **Asset import.** Parsing of YAML-serialized scenes, prefabs, materials,
+  `.meta` files and GUIDs, and project settings (`crates/unitas-asset`).
 * **Scene graph and transforms** (`crates/unitas-core`).
 * **Runtime.** Script lifecycle ticks, coroutines, multi-scene loading, legacy
   input, application lifecycle, and persistent preferences
@@ -31,17 +31,16 @@ What the repository contains today:
 * **Animation.** Animation clips, curves, and animator controllers
   (`crates/unitas-animation`).
 * **Audio.** Scene audio playback of WAV clips (`crates/unitas-audio`).
-* **Rendering.** A headless software renderer for scenes and Unity materials
+* **Rendering.** A headless software renderer for scenes and their materials
   (`crates/unitas-render`).
 * **Builds.** Build configuration, content bundles, build reports, and a
   `unitas-player` binary that launches a bundle and steps it headlessly
   (`crates/unitas-build`).
-* **C# bridge.** A `UnityEngine` API surface written in C# that runs
-  `MonoBehaviour` scripts against the Rust runtime, plus a declarative playtest
-  scenario runner (`bridge/`).
+* **C# bridge.** A C# scripting API that runs component scripts against the
+  Rust runtime, plus a declarative playtest scenario runner (`bridge/`).
 
-Not built yet: the visual editor, the MCP and automation layer, opening a
-Unity project directly, GPU rendering, platform targets beyond the headless
+Not built yet: the visual editor, the MCP and automation layer, opening an
+existing project directly, GPU rendering, platform targets beyond the headless
 player, and most of the [feature catalog](docs/product-specification/feature-catalog.md).
 
 ## Repository layout
@@ -49,7 +48,7 @@ player, and most of the [feature catalog](docs/product-specification/feature-cat
 | Path | Contents |
 | --- | --- |
 | `crates/` | Rust workspace: engine, runtime, and build crates |
-| `bridge/` | C# `UnityEngine` API surface, bridge host, and their tests |
+| `bridge/` | C# scripting API, bridge host, and their tests |
 | `docs/product-specification/` | What the finished product does, feature by feature |
 | `docs/ralph-workflow-policy/` | Quality policy that every change must satisfy |
 | `tools/` | Verification gates and the CLA check, in standard-library Python |
@@ -85,3 +84,16 @@ unitas is dual licensed. It is available under the
 [GNU General Public License version 3](LICENSE) and under a separate commercial
 license from Ralph Workflow. For commercial licensing, contact
 hello@ralphworkflow.com.
+
+## Trademarks and affiliation
+
+unitas is an independent open-source project. It is not affiliated with,
+endorsed by, sponsored by, or otherwise connected to any other game engine, its
+vendor, or its products. Any third-party product names, logos, and trademarks
+that appear in this repository's code or documentation belong to their
+respective owners and are used only to describe compatibility. Such use does
+not imply any relationship with, or endorsement by, those owners.
+
+unitas is written independently. Contributions must not include code, assets,
+or documentation copied or decompiled from proprietary engines, editors, or
+their tools.
