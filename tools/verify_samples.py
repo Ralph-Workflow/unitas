@@ -220,8 +220,7 @@ def run_lane() -> int:
         scenario_env = persist_env if needs_persist else env
         rc = run_scenario(name, scenario_file, extra_args, scenario_env)
         results.append((name, rc))
-    for step in editor_scenario_steps():
-        results.append((step[0], run_step(step, env)))
+    results.extend((step[0], run_step(step, env)) for step in editor_scenario_steps())
 
     emit("scenario summary:")
     for name, rc in results:
