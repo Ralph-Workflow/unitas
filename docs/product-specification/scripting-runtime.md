@@ -23,7 +23,25 @@ runs in headless sessions as well as in the visual editor.
 No project code described here (runtime scripts, editor scripts, analyzers,
 source generators, importers, or postprocessors) executes before the project is
 trusted, as defined by PRJ-008 in [Projects and assets](project-and-assets.md).
-Project code runs with the privileges of the user who trusted the project.
+Project code runs with the privileges of the user account running unitas and is
+not sandboxed (PRJ-008).
+
+Play, agent, and headless sessions are defined by AUT-004 in
+[Automation and MCP](automation-and-mcp.md).
+
+### Compatibility tiers
+
+Every feature in this specification is in the Semantic tier, as recorded in the
+[Feature catalog](feature-catalog.md) and defined in the
+[Compatibility contract](compatibility-contract.md): RUN-001, RUN-002, RUN-003,
+RUN-004, RUN-005, RUN-006, RUN-007, RUN-008, RUN-009, RUN-010, and RUN-011 are
+Semantic. Throughout this specification, ``as in Unity'' and ``Unity's''
+behavior, rules, errors, and ordering mean the documented, observable behavior
+of Unity 2022.3 LTS in ordinary use. Undocumented quirks are not promised; a
+found difference is reported as Partially supported naming the difference.
+Projects saved by earlier Unity releases are compiled and run with the 2022.3
+LTS behavior after their serialized forms migrate (SER-005 in
+[Serialization and prefabs](serialization-and-prefabs.md)).
 
 ## Script authoring experience
 
@@ -126,6 +144,18 @@ not support for that version, such as covariant return types, are diagnosed as
 in Unity. The unitas profile is never wider than the project's version
 without being reported.
 
+### Native interop
+
+On the targets that provide them, `AndroidJavaObject`, `AndroidJavaClass`,
+`AndroidJavaProxy`, `AndroidJNI`, and `AndroidJNIHelper`; `UnitySendMessage`
+calls from native code; reverse callbacks marked `[MonoPInvokeCallback]` under
+ahead-of-time compilation (BLD-003 in
+[Builds, platforms, XR, and networking](build-platforms-xr-networking.md)); and
+browser JavaScript calls into managed code through `SendMessage` behave as in
+Unity. On other targets, including the editor host where Unity also lacks them,
+these APIs raise Unity's exception, and the build report lists each use as
+Platform-limited naming the calling member.
+
 ### Analyzers and source generators
 
 Roslyn analyzers and source generators labeled for use as analyzers run against
@@ -171,10 +201,11 @@ recompile after play ends, or stop play and recompile.
 
 ## Runtime type behavior
 
-The end-state scripting profile includes the C# 9 and .NET Standard 2.1 surface
-declared by unitas. Compatibility reports distinguish this unitas profile from
-the language and API profiles actually available in each supported Unity
-project version. A supported type or member has compatible
+The scripting profile for a project is the C# language version and API
+compatibility level defined in
+[Defines, compiler options, and language profile](#defines-compiler-options-and-language-profile)
+for that project's Unity version and Player settings. Compatibility reports
+state the profile in effect for the project. A supported type or member has compatible
 effects, return values, exceptions, null behavior, timing, object lifetime, and
 platform limits.
 
@@ -190,8 +221,8 @@ discovery, and component access, together with:
 * `Mathf`, including `Approximately`, angle, interpolation, smoothing, and
   rounding functions;
 * `Time`, `Debug`, `Application`, `SystemInfo`, `Screen` (dimensions, DPI,
-  orientation, safe area, and cutouts), and `Cursor` (visibility, lock state,
-  and custom cursors);
+  orientation, safe area, cutouts, sleep timeout, and autorotation), and
+  `Cursor` (visibility, lock state, and custom cursors);
 * `Resources` (see [Resource loading](#resource-loading-and-content-catalogs))
   and `PlayerPrefs`, whose storage behavior is owned by SAV-001 in
   [Accessibility, localization, and persistence](accessibility-localization-persistence.md).
@@ -201,6 +232,54 @@ Results of floating-point operations are equivalent within the variation the
 parity is not claimed. Cursor lock, cursor images, and screen orientation are
 Platform-limited where the target restricts them, for example browser cursor
 lock requiring a user gesture.
+
+### Application, system, and device information
+
+`Application.isPlaying`, `isEditor`, `platform`, `unityVersion`, `version`,
+`identifier`, `productName`, `runInBackground`, `internetReachability`,
+`systemLanguage`, `isMobilePlatform`, `absoluteURL`, and `deepLinkActivated`
+return Unity's values for the running context:
+
+* In the editor and in headless sessions, `platform` reports the host editor
+  value (`WindowsEditor`, `OSXEditor`, or `LinuxEditor`).
+* `unityVersion` reports the Unity version the project declares, not a unitas
+  version.
+* `Application.Quit` is ignored during an editor play session and on targets
+  that forbid an application from quitting itself, as in Unity, and otherwise
+  ends the player with the quit messages defined in
+  [Additional messages](#additional-messages).
+* `Application.OpenURL` opens the URL through the platform where the target
+  permits it.
+
+`SystemInfo` reports the actual host or device; with no graphics device, such
+as in a headless session without rendering, `graphicsDeviceType` is `Null`.
+`Screen.sleepTimeout`, autorotation settings, and `Handheld.Vibrate` on a
+target or host that lacks the capability return or report an explicit
+unavailable status instead of appearing to succeed.
+
+### Logging APIs
+
+`Debug.Log`, `LogWarning`, `LogError`, `LogException`, `LogAssertion`, and
+their format variants produce entries with type, message, context object, and
+stack trace. `Application.logMessageReceived` delivers every entry on the main
+thread and `Application.logMessageReceivedThreaded` delivers every entry from
+any thread, each with its type and stack trace. `Debug.unityLogger` honors
+`logEnabled` and `filterLogType`, and its `logHandler` can be replaced.
+`Debug.Assert` calls are compiled out when `UNITY_ASSERTIONS` is not defined.
+`Debug.Break` pauses an editor play session after the current frame and has no
+effect in players. `Application.SetStackTraceLogType` and the per-log-type
+stack trace Player settings determine the stack detail recorded. Players write
+their log file to the location Unity uses on each target and honor the
+`-logFile` command-line argument. Collecting player logs from devices is owned
+by DIA-003 in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
+
+### Recognized unsupported content
+
+Visual Scripting graphs, script machines, and state machines are recognized
+and reported Unsupported, as declared in the [Index](INDEX.md). Their graphs do
+not execute; the GameObjects that carry them, and every other component on
+those objects, remain usable, and the report names each affected object.
 
 Where an API is unavailable, the product identifies the exact type or member
 and its consequence. An inert placeholder is not reported as support.
@@ -229,6 +308,49 @@ Object discovery:
 * returns components from the correct owner, parents, or descendants;
 * never returns a different object merely because a referenced object is gone;
 * produces deterministic results where the Unity contract defines ordering.
+
+The discovery and component APIs behave as in Unity:
+
+* `Object.FindObjectOfType` and `FindObjectsOfType`, with and without
+  `includeInactive`, and `FindObjectsByType`, `FindFirstObjectByType`, and
+  `FindAnyObjectByType` in the baseline releases that define them;
+* `GameObject.Find`, which returns active objects only and accepts
+  hierarchy path syntax;
+* `GameObject.FindWithTag`, `FindGameObjectsWithTag`, and `CompareTag`, which
+  raise Unity's error for a tag that is not defined in the project;
+* `Resources.FindObjectsOfTypeAll`, which includes inactive, hidden, and asset
+  objects;
+* `Transform.Find` by child name or relative path;
+* `GetComponent`, `GetComponents`, `GetComponentInChildren`,
+  `GetComponentInParent`, and their plural forms, with `includeInactive` where
+  the baseline release defines it, and `TryGetComponent`.
+
+In the editor and editor play sessions, an unassigned serialized reference or
+an absent requested component returns Unity's editor placeholder object, so
+member access raises `UnassignedReferenceException` or
+`MissingComponentException` naming the field or component; in players the same
+access raises `NullReferenceException`, as in Unity.
+
+### Transform behavior
+
+`Transform.SetParent` with `worldPositionStays` true preserves world position,
+rotation, and scale as closely as Unity does, and with false preserves local
+values. `lossyScale` approximates scale under skew as Unity does. A negative
+scale mirrors the object and reverses triangle winding for rendering and
+physics as in Unity. Sibling index operations (`SetSiblingIndex`,
+`SetAsFirstSibling`, `SetAsLastSibling`, `GetSiblingIndex`) define hierarchy
+order. `Transform.hasChanged` becomes true when Unity sets it and stays true
+until script code resets it.
+
+### Instantiation and cloning
+
+`Object.Instantiate` with and without parent, position, and rotation clones
+GameObjects, components, ScriptableObjects, and other assets at runtime. The
+clone's name receives Unity's `(Clone)` suffix; references to objects inside the
+cloned hierarchy are remapped to their clones; references to objects outside
+it are kept; and `Awake` and `OnEnable` run on active clones before
+`Instantiate` returns. Serialized-value preservation in clones follows SER-001
+in [Serialization and prefabs](serialization-and-prefabs.md).
 
 ## Activation and lifecycle
 
@@ -310,11 +432,12 @@ MonoBehaviours also receive these messages under Unity's conditions:
   `OnMouseOver`, `OnMouseExit`, and `OnMouseDrag` for objects with colliders,
   delivered only when the legacy input manager is active, as in Unity
   (INP-001 in [UI, audio, and input](ui-audio-input.md));
-* `OnRenderObject`, `OnWillRenderObject`, and camera messages, delivered under
-  the conditions the active render pipeline defines in Unity (REN-006 in
-  [Rendering and animation](rendering-and-animation.md));
 * `OnAnimatorMove` and `OnAnimatorIK`, owned by ANI-002 in
   [Rendering and animation](rendering-and-animation.md).
+
+Rendering and camera messages such as `OnRenderObject`, `OnWillRenderObject`,
+`OnPreCull`, `OnPreRender`, `OnPostRender`, and `OnRenderImage` are owned by
+REN-006 in [Rendering and animation](rendering-and-animation.md).
 
 Collision and trigger messages are owned by PHY-001 and PHY-002 in
 [Physics, navigation, and terrain](physics-navigation-terrain.md), `OnGUI` by
@@ -330,9 +453,10 @@ Entering play mode honors the project's Enter Play Mode Options:
 * With domain reload enabled, static state is reset and `[InitializeOnLoad]`
   and runtime initialization methods run again.
 * With domain reload disabled, static fields, static event subscriptions, and
-  running background work retain their values from the previous session, and
+  running background work retain their values from the previous play session, and
   only explicit resets such as `SubsystemRegistration` initialization methods
-  clear them.
+  clear them. A player loop modified through `PlayerLoop.SetPlayerLoop`
+  persists into the next play session, as in Unity.
 * With scene reload disabled, the open scenes are not reloaded from disk and
   object lifecycle callbacks follow Unity's rules for that option.
 
@@ -349,6 +473,12 @@ frame, and running multiple fixed steps in one rendered frame have defined
 effects. Target frame rate and frame pacing are owned by REN-007 in
 [Rendering and animation](rendering-and-animation.md).
 
+`Time.captureFramerate` set above zero makes each rendered frame advance game
+time by exactly one over that value, regardless of wall-clock time, as in
+Unity. A play session can also run on a fixed simulated frame delta,
+independent of wall-clock time; starting, stopping, and stepping that mode is
+the play control owned by AUT-002 in [Automation and MCP](automation-and-mcp.md).
+
 As a developer, I can distinguish:
 
 * rendered frames from fixed simulation steps;
@@ -357,6 +487,16 @@ As a developer, I can distinguish:
 * runtime time from edit-time preview time;
 * a slow frame from an intentional time-scale change.
 
+### Player loop
+
+`PlayerLoop.GetDefaultPlayerLoop`, `PlayerLoop.GetCurrentPlayerLoop`, and
+`PlayerLoop.SetPlayerLoop` expose the `PlayerLoopSystem` tree with the
+subsystem types of the project's Unity version. A system inserted by script
+code runs at its position in every frame of editor play sessions, headless
+play sessions, and players. Removing or reordering built-in systems has the
+effect it has in Unity, including the loss of the work those systems perform.
+The effective player loop is inspectable in the editor and through automation.
+
 ## Coroutines and asynchronous operations
 
 A MonoBehaviour can start, enumerate, and stop supported coroutines. A
@@ -364,12 +504,38 @@ coroutine can wait for the next frame, a fixed update, end of frame, a scaled or
 unscaled duration, a predicate, another coroutine, or a supported asynchronous
 operation, including custom `CustomYieldInstruction` subclasses.
 
-The coroutine ends when it completes, is stopped through a compatible API, its
-owner is destroyed or made inactive under the compatible rule, or another
-compatible lifetime rule applies. Disabling a MonoBehaviour and deactivating
-its GameObject remain distinct cases and do not implicitly share stop behavior.
-Yielded nulls, already-completed operations, nested enumerators, destroyed
-objects, predicate exceptions, and scene unloading all have explicit behavior.
+A coroutine ends when one of the following occurs:
+
+* its enumerator completes or throws, in which case the exception is logged
+  naming the script, object, and coroutine;
+* it is stopped by `StopCoroutine` or `StopAllCoroutines` on its owner;
+* its owning MonoBehaviour is destroyed, including by unloading its scene;
+* its owner's GameObject becomes inactive in the hierarchy.
+
+Setting the owning MonoBehaviour's `enabled` to false does not stop its
+coroutines. `StartCoroutine` on a MonoBehaviour whose GameObject is inactive
+fails with Unity's error naming the object, and no coroutine starts.
+`StopCoroutine` with a method name stops only coroutines that were started by
+name; coroutines started from an enumerator or `Coroutine` value are stopped
+through that value.
+
+Resumption points follow Unity's frame order:
+
+* `yield return null` and a yielded integer resume after `Update` in the next
+  frame;
+* `WaitForFixedUpdate` resumes after the next fixed simulation step;
+* `WaitForEndOfFrame` resumes after the frame has rendered; in a headless play
+  session without rendering, it resumes at the point in the frame where
+  rendering would have occurred;
+* `WaitForSeconds` uses scaled time, and `WaitForSecondsRealtime` unscaled
+  time, each evaluated at Unity's point in the frame;
+* `WaitUntil` and `WaitWhile` evaluate their predicates once per frame at
+  Unity's point, and an exception in a predicate ends the coroutine with the
+  exception logged;
+* a nested coroutine or yielded enumerator resumes its caller after it
+  completes;
+* an already-completed asynchronous operation resumes the coroutine at the
+  next resumption point, not synchronously.
 
 `AsyncOperation` and its subclasses expose `progress`, `isDone`, `priority`,
 and the `completed` event with Unity's timing, including a `completed`
@@ -392,8 +558,8 @@ on background threads under .NET rules.
 Asynchronous work, threads, and timers that outlive the play session in which
 they started are reported at the end of that session with their origin, and
 their later attempts to touch destroyed objects or main-thread APIs are
-reported as such. Ending a session does not silently cancel such work, as in
-Unity.
+reported as such. Ending a play session does not silently cancel such work, as
+in Unity.
 
 On targets without threads, such as the browser, thread creation and blocking
 waits are Platform-limited: the build report and runtime diagnostics name the
@@ -441,7 +607,7 @@ players.
 * `SceneManager.MoveGameObjectToScene` moves root objects only into a loaded
   scene, with Unity's errors otherwise.
 * `Object.DontDestroyOnLoad` moves a root object into the `DontDestroyOnLoad`
-  scene, where it survives single loads until the session ends; applied to a
+  scene, where it survives single loads until the play session ends; applied to a
   child object it warns and has no effect, as in Unity.
 
 ### Resolution and failure
@@ -501,6 +667,14 @@ synchronously and asynchronously, and expose their assets and scenes.
   is reported Unsupported naming the bundle and reason rather than partially
   loaded.
 
+Bundles are built and read with LZMA, LZ4, or no compression.
+`AssetBundle.RecompressAssetBundleAsync` converts between compression forms.
+A load with a CRC value fails on a mismatch with a diagnostic naming the
+bundle. `UnityWebRequestAssetBundle` with a version, hash, or
+`CachedAssetBundle` stores and reuses downloads through `Caching`, which exposes
+cache paths, `ClearCache`, and space limits as in Unity; a cache that cannot be
+written on the target is reported with the target and path.
+
 ### Addressables
 
 With the Addressables package (scoped by CMP-002 in the
@@ -512,8 +686,10 @@ exception. Each load increments a reference count; `Release` and
 Releasing an invalid or already-released handle is reported. Local and remote
 catalogs, catalog update checks, content updates, download size queries, and
 dependency downloads behave as the package defines, and an invalid key fails
-with the package's exception. In the editor, the selected Addressables play
-mode script (asset database, simulated groups, or existing build) is honored
+with the package's exception. `WaitForCompletion` completes an operation
+synchronously where the package version allows it; on the browser it is
+Platform-limited and reported naming the calling member. In the editor, the
+selected Addressables play mode script (asset database, simulated groups, or existing build) is honored
 and reported.
 
 ### Residency
@@ -614,42 +790,39 @@ available to editor scripts.
 `UnityEngine.Random.InitState` and `Random.state` seed, save, and restore the
 generator. The same seed produces the same sequence as Unity for `value` and
 for integer and floating-point `Range`, and derived values such as
-`insideUnitSphere` and `rotation` are equivalent within allowed floating-point
-variation. Integer `Range` excludes its maximum and floating-point `Range`
-includes it, as in Unity. `System.Random` follows .NET behavior.
+`insideUnitSphere` and `rotation` are equivalent within the floating-point
+variation the [Compatibility contract](compatibility-contract.md) allows.
+Integer `Range` excludes its maximum and floating-point `Range` includes it,
+as in Unity. `System.Random` follows .NET behavior.
 
 ## Serialization-facing script behavior
 
-Supported public fields and fields marked for serialization appear in the
-inspector and retain compatible values. Hidden serialized fields remain stored
-without being presented as ordinary editable fields. Static, constant,
-unsupported, or explicitly nonserialized values do not appear as persisted
-instance state.
-
-Supported values include primitives, enumerations, strings, engine object
-references, compatible structs and classes, arrays, lists, and declared managed
-references. The editor distinguishes null, missing object reference, invalid
-type, renamed or absent field, and value conversion failure.
-
-`[SerializeField]` persists a non-public field; `[HideInInspector]` hides a
-persisted field from presentation; `[NonSerialized]` excludes a public field;
-`[SerializeReference]` persists managed references with polymorphism and
-shared identity; and `[FormerlySerializedAs]` loads a value stored under an old
-field name. The stored form and preservation rules are owned by SER-001 in
-[Serialization and prefabs](serialization-and-prefabs.md).
+Which script fields persist, which value kinds are supported, and how
+`[SerializeField]`, `[HideInInspector]`, `[NonSerialized]`,
+`[SerializeReference]`, and `[FormerlySerializedAs]` affect storage are owned
+by SER-001 in [Serialization and prefabs](serialization-and-prefabs.md).
+Presentation of serialized fields in the inspector is owned by EDT-002 in
+[Editor and authoring](editor-and-authoring.md).
 
 ## ScriptableObject behavior
 
-As a developer, I can create ScriptableObject assets, reference them from scenes
-and other assets, inspect and edit their supported fields, instantiate temporary
-runtime copies, and preserve asset identity across moves and renames.
-`[CreateAssetMenu]` offers the type for creation in the editor and through
-automation.
+ScriptableObject asset identity, duplication, and the separation between a
+project asset and its runtime instances are owned by SER-001 in
+[Serialization and prefabs](serialization-and-prefabs.md); runtime cloning is
+defined in [Instantiation and cloning](#instantiation-and-cloning).
 
-Changing a runtime copy does not silently mutate the project asset. Shared asset
-references continue to refer to the same asset unless explicitly replaced.
-Changes made to a project asset during play mode persist after play mode ends,
-as in Unity, and are shown as unsaved asset changes.
+`[CreateAssetMenu]` offers the type for creation in the editor and through
+automation. Changes that script code makes to a project ScriptableObject asset
+during an editor play session persist after the play session ends, as in
+Unity, and are shown as unsaved asset changes.
+
+ScriptableObjects receive `Awake`, `OnEnable`, `OnDisable`, `OnDestroy`, and
+`OnValidate` at Unity's points: when the asset loads, when it unloads, around
+each editor domain reload, and on `ScriptableObject.CreateInstance`. In
+players, only ScriptableObjects referenced by included content, `Resources`
+folders, loaded bundles or Addressables content, or the Preloaded Assets
+Player setting exist, and changes made to them at player time are lost when
+the player restarts.
 
 ## Editor-time scripts and content hooks
 
@@ -691,17 +864,46 @@ remain available even though their custom drawing is not.
 
 ### Editor APIs
 
-`AssetDatabase`, `EditorUtility`, `SerializedObject`, `SerializedProperty`,
-`Undo`, `EditorPrefs`, `EditorSceneManager`, and `PrefabUtility` are supported
-for the members listed as Supported in the API reference owned by AUT-006 in
-[Automation and MCP](automation-and-mcp.md); any other editor member is
-reported Unsupported naming the member when called. Edits made through these
+At minimum, the following editor APIs are Supported:
+
+* `AssetDatabase` create, import, refresh, move, rename, copy, delete, find,
+  load, and GUID-to-path conversion;
+* `EditorUtility.SetDirty`, dialogs, and progress bars;
+* `SerializedObject` and `SerializedProperty` reading and writing, including
+  `ApplyModifiedProperties` and `Update`;
+* `Undo.RecordObject` and `Undo.RegisterCreatedObjectUndo`;
+* `EditorPrefs`;
+* `EditorSceneManager` scene opening and saving;
+* `PrefabUtility` instantiation, applying, reverting, and unpacking.
+
+Every other editor member carries its own compatibility state in the API
+reference owned by AUT-006 in [Automation and MCP](automation-and-mcp.md), and
+calling an Unsupported member reports the member. Edits made through these
 APIs join undo history (EDT-005) and are attributed to the person or agent
 session that invoked the script (EDT-008), as defined in
-[Editor and authoring](editor-and-authoring.md). Modal dialogs and progress
-bars raised in headless or agent-driven sessions never block: they are
-reported as structured events and return the default answer that the session
-declares.
+[Editor and authoring](editor-and-authoring.md).
+
+In a headless session or when an agent session invoked the script, modal
+dialogs and progress bars never block. Each is reported as a structured event,
+and a dialog returns its default button (`ok` for
+`EditorUtility.DisplayDialog`) unless the agent session or command-line
+invocation supplied an answer for that dialog (AUT-004 in
+[Automation and MCP](automation-and-mcp.md)).
+
+### Build scripting API
+
+`BuildPipeline.BuildPlayer` with `BuildPlayerOptions` produces the same build
+as an equivalent build request made through unitas (BLD-001 in
+[Builds, platforms, XR, and networking](build-platforms-xr-networking.md)) and
+returns a `BuildReport` with its summary, steps, and messages.
+`IPreprocessBuildWithReport`, `IPostprocessBuildWithReport`,
+`IProcessSceneWithReport`, `IFilterBuildAssemblies`, and `[PostProcessBuild]`
+callbacks run in Unity's order, honoring `callbackOrder`. An exception in a
+build callback fails the build with a diagnostic naming the callback type and
+method. `EditorUserBuildSettings` and `PlayerSettings` members read and change
+the project settings owned by PRJ-007 in
+[Projects and assets](project-and-assets.md), and changes are stored in
+Unity-readable form.
 
 ### Custom editor drawing and gizmos
 
@@ -737,8 +939,9 @@ In the editor and in development players, safety checks raise Unity's
 exceptions for conflicting access between scheduled jobs and the main thread,
 writes outside a parallel job's permitted range, access after disposal, and
 writes to read-only containers, naming the job and container; undisposed
-allocations are reported as leaks with their allocation site where available.
-Release players omit these checks, as in Unity.
+allocations are reported as leaks, with their allocation site when leak
+detection with full stack traces is enabled. Release players omit these
+checks, as in Unity.
 
 ### Burst and Unity.Mathematics
 
@@ -752,14 +955,23 @@ same results. `Unity.Mathematics` types and functions have the same semantics
 in managed and Burst-compiled code.
 
 On targets without worker threads, such as the browser, jobs run on the main
-thread with the same results, and the lack of parallelism is reported as
-Platform-limited.
+thread with the same results, and the absence of parallelism is reported as a
+performance property (PRF-001), not as a compatibility limitation.
+
+### Entities content
+
+Entities and Entities Graphics (`com.unity.rendering.hybrid` and
+`com.unity.entities.graphics`) content is recognized and reported Unsupported, as declared
+in the [Index](INDEX.md), naming each affected asset, subscene, and script.
+Jobs, Burst-compiled code, and native containers that do not depend on those
+packages remain Supported.
 
 ## Logging and exception behavior
 
 Log entries expose severity, message, time, frame, stack information, runtime
-instance, originating object, and player connection where available. Repeated
-messages may be grouped without losing their count or distinct context.
+instance, originating object, and, for entries received from a connected
+player, that player connection. Repeated messages may be grouped without
+losing their count or distinct context.
 Presentation and navigation of logs are owned by DIA-001 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
@@ -772,7 +984,7 @@ that an exception did not occur merely because extended details were omitted.
 
 1. A supported Unity MonoBehaviour compiles, attaches to the intended object,
    retains inspector values, and receives its expected lifecycle callbacks.
-   (RUN-002, RUN-003, RUN-007)
+   (RUN-002, RUN-003, RUN-007, SER-001)
 2. Cloning and destroying an object produces compatible identity, reference,
    callback, and frame-boundary behavior, and a retained reference to the
    destroyed object compares equal to null through Unity's operators while
@@ -873,3 +1085,61 @@ that an exception did not occur merely because extended details were omitted.
     execution within its declared floating-point mode, and on a target
     without native acceleration the report lists that as a performance
     property only. (RUN-011)
+32. A coroutine keeps running after its MonoBehaviour's `enabled` is set to
+    false and stops when its GameObject is deactivated; `StartCoroutine` on an
+    inactive GameObject fails with Unity's error naming the object; a
+    by-name `StopCoroutine` leaves enumerator-started coroutines running; and
+    `WaitForEndOfFrame` resumes in a headless play session without rendering.
+    (RUN-004)
+33. A custom system inserted with `PlayerLoop.SetPlayerLoop` runs at its
+    position every frame in an editor play session, a headless play session,
+    and a player, and with domain reload disabled it remains installed in the
+    next play session. (RUN-003, RUN-004)
+34. With `Time.captureFramerate` set to 30, each rendered frame advances game
+    time by one thirtieth of a second regardless of wall-clock duration.
+    (RUN-004)
+35. In a headless session, `Application.platform` reports the host editor
+    value, `Application.unityVersion` reports the project's declared version,
+    `Application.Quit` is ignored during play, and `SystemInfo.graphicsDeviceType`
+    is `Null` without a graphics device. (RUN-002)
+36. A handler on `Application.logMessageReceivedThreaded` receives entries
+    logged from a worker thread with type and stack trace, `Debug.Assert` is
+    absent from a build without `UNITY_ASSERTIONS`, and a player honors
+    `-logFile`. (RUN-002)
+37. A Visual Scripting script machine and an Entities subscene are each
+    reported Unsupported naming the affected objects, while the GameObject that
+    carries the script machine, and a job using `NativeArray` in the same
+    project, keep working. (RUN-002, RUN-011)
+38. On an Android player, an `AndroidJavaClass` call reaches Java and an
+    `AndroidJavaProxy` callback reaches managed code; on a desktop build, the
+    same calls are listed as Platform-limited naming the calling member, and an
+    iOS build's `[MonoPInvokeCallback]` reverse callback is invoked under
+    ahead-of-time compilation. (RUN-007)
+39. `GameObject.Find` ignores an inactive object that
+    `FindObjectsOfType(true)` returns, `CompareTag` with an undefined tag
+    raises Unity's error, and accessing an unassigned serialized reference
+    raises `UnassignedReferenceException` in an editor play session and
+    `NullReferenceException` in a player. (RUN-001)
+40. `SetParent` with `worldPositionStays` true keeps the world pose of a child
+    under a negatively scaled parent, sibling index changes reorder the
+    hierarchy, and an instantiated hierarchy's internal references point to
+    the clones while external references are kept. (RUN-001)
+41. A ScriptableObject created with `CreateInstance` receives `Awake` and
+    `OnEnable`; a ScriptableObject referenced only by Preloaded Assets exists
+    in a player; and a change made at player time is gone after restart.
+    (RUN-001)
+42. An LZ4 AssetBundle downloaded with a version hash is cached and reused on
+    the next request, a CRC mismatch fails naming the bundle, and
+    Addressables `WaitForCompletion` in a browser build is reported
+    Platform-limited. (RUN-006)
+43. A `BuildPipeline.BuildPlayer` call from a `[MenuItem]` command produces the
+    same build as the equivalent unitas build request, runs preprocess,
+    scene-processing, and postprocess callbacks in `callbackOrder`, returns a
+    `BuildReport`, and a throwing preprocess callback fails the build naming
+    it. (RUN-010)
+44. An editor script that calls `EditorUtility.DisplayDialog` during an agent
+    session returns `ok` without blocking unless the agent session supplied an
+    answer, and the dialog is reported as a structured event. (RUN-010)
+45. On a browser build, an `IJobParallelFor` job runs on the main thread with
+    the same results as on a desktop build, and the report lists the absence
+    of parallelism as a performance property. (RUN-011)

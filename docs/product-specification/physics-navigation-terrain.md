@@ -26,6 +26,26 @@ constraints, interpolation, collision detection mode (discrete, continuous,
 continuous dynamic, continuous speculative), sleeping, and the `Rigidbody`
 force and torque operations with each `ForceMode`.
 
+The `Rigidbody` scripting surface behaves as in Unity, including:
+
+* `MovePosition` and `MoveRotation` on kinematic bodies move the body during
+  the next simulation step, honor interpolation, and generate contacts with
+  the bodies swept through; writing `Transform.position`, `Transform.rotation`,
+  `Rigidbody.position`, or `Rigidbody.rotation` teleports the body without
+  sweeping.
+* Setting `velocity` and `angularVelocity` replaces the current values for the
+  next step; `AddForce`, `AddRelativeForce`, `AddForceAtPosition`,
+  `AddTorque`, `AddRelativeTorque`, and `AddExplosionForce` accumulate until
+  the next step.
+* `GetPointVelocity`, `GetRelativePointVelocity`, `ClosestPointOnBounds`,
+  `maxDepenetrationVelocity`, `maxAngularVelocity`, and per-body
+  `solverIterations` and `solverVelocityIterations`.
+* Toggling `isKinematic` keeps the body's position and changes its role at the
+  next step; `Sleep`, `WakeUp`, `IsSleeping`, and `sleepThreshold` control
+  and report sleeping.
+* `ConstantForce` applies its force, relative force, torque, and relative
+  torque every step.
+
 Colliders expose shape, center, orientation where applicable, trigger state,
 enabled state, material, contact offset, layer participation, and owning body.
 Changing object activation, collider enablement, hierarchy, scale, or body role
@@ -66,7 +86,7 @@ The project's physics settings change simulation and queries as follows:
   world before each query or only at the next simulation step; with it off,
   `Physics.SyncTransforms` applies pending changes on request.
 * Queries hit triggers, queries hit backfaces, reuse collision callbacks, and
-  the contact pairs mode apply as their Unity settings declare.
+  the contact pairs mode apply as in Unity.
 
 A setting that is recognized but not honored is reported with its name and
 consequence; it is never silently ignored.
@@ -79,8 +99,9 @@ contain multiple fixed steps, up to the maximum allowed timestep. Pausing, frame
 stepping, and resuming preserve simulation state: positions, velocities,
 contacts, and sleeping state after resume are the state that existed at pause.
 
-Dynamic bodies own their simulated position. Kinematic and static objects
-respond to transform changes according to their declared roles. Interpolation
+Dynamic bodies own their simulated position. Kinematic bodies follow their
+transforms and `MovePosition`/`MoveRotation` requests, and static colliders
+move only when their transforms are changed. Interpolation
 and extrapolation change only presented transforms between steps, not
 simulated positions. The editor and automation identify whether a script,
 animation, parenting change, or physics simulation is the effective source of
@@ -94,6 +115,14 @@ Collision information identifies the other collider, body, object, relative
 velocity, impulse, and contacts. Events reflect layers, ignored pairs
 (`Physics.IgnoreCollision`, `Physics.IgnoreLayerCollision`), activation,
 destruction, shape changes, teleportation, and scene unloading.
+
+Which messages a pair exchanges follows Unity's collision action matrix for
+static, kinematic, and dynamic bodies and trigger colliders. For example, a
+collision or trigger message requires a `Rigidbody` on at least one side, two
+static colliders exchange no messages, and a kinematic body receives collision
+messages only from dynamic bodies. Messages are sent to the collider's
+GameObject and to the GameObject of its attached `Rigidbody`, including
+disabled MonoBehaviours on those objects, as in Unity.
 
 No event is reported for a pair excluded by its effective collision rules.
 Destroying or disabling an object during a callback leaves subsequent event
@@ -120,8 +149,9 @@ ordering is guaranteed only when the compatible API contract defines it.
 Fixed, hinge, spring, character, and configurable joints relate bodies with
 visible anchors, axes, limits, motors, drives, break force and torque
 thresholds, connected bodies, and connected mass scale. Constraints retain
-their declared meaning when either body sleeps, becomes kinematic, is disabled,
-or is destroyed. A broken joint calls `OnJointBreak` and is observable by
+their anchors, axes, and limits when either body sleeps or becomes kinematic;
+disabling or destroying either body or the joint removes the constraint, and
+re-enabling it restores the constraint at its current anchors. A broken joint calls `OnJointBreak` and is observable by
 scripts and diagnostics.
 
 ## Character movement
@@ -145,7 +175,8 @@ casts, overlaps, contacts, sleeping, gravity, and fixed-step events operate in
 the two-dimensional world. 2D and 3D physics remain distinct; content does not
 interact across systems. The project's 2D physics settings, including the 2D
 layer collision matrix, gravity, velocity and position iterations, and queries
-start in colliders, apply as their Unity settings declare.
+start in colliders, apply as in Unity. `PhysicsMaterial2D` friction and
+bounciness apply as in Unity.
 
 ### Bodies
 
@@ -155,8 +186,8 @@ bodies move only by velocity or `MovePosition`/`MoveRotation` and contact
 other kinematic and static bodies only when full kinematic contacts is
 enabled. Static bodies do not move under simulation. The simulated flag
 removes a body and its colliders from the simulation without destroying them.
-Collision detection mode, sleeping mode, and interpolation behave as their
-Unity settings declare.
+Collision detection mode, sleeping mode, and interpolation behave as in
+Unity.
 
 ### Colliders
 
@@ -195,10 +226,19 @@ affected.
 ### Joints and queries
 
 Distance, fixed, friction, hinge, relative, slider, spring, target, and wheel
-2D joints behave as their Unity settings declare, including motors, limits, and
-break thresholds. `Physics2D` casts and overlaps, including `ContactFilter2D`
+2D joints behave as in Unity, including motors, limits, and break thresholds. `Physics2D` casts and overlaps, including `ContactFilter2D`
 filtering by layer, depth, normal angle, and trigger use, return results with
 the same identity and capacity rules as 3D queries.
+
+### 2D collision and trigger messages
+
+`OnCollisionEnter2D`, `OnCollisionStay2D`, `OnCollisionExit2D`,
+`OnTriggerEnter2D`, `OnTriggerStay2D`, and `OnTriggerExit2D` follow the same
+recipient and eligibility rules as their 3D counterparts, using the 2D body
+types. `Collision2D` identifies the other collider, body, relative velocity,
+and `ContactPoint2D` contacts. `Collider2D.IsTouching`, `IsTouchingLayers`,
+`GetContacts`, `Physics2D.IgnoreCollision`, `Physics2D.IgnoreLayerCollision`,
+and `Physics2D.callbacksOnDisable` behave as in Unity.
 
 ## Vehicles, articulations, cloth, and simulation control
 
@@ -210,9 +250,10 @@ damper, target position), and forward and sideways friction curves (extremum
 slip and value, asymptote slip and value, stiffness). Motor torque, brake
 torque, and steer angle change wheel behavior on the next simulation step.
 Each wheel exposes `isGrounded`, `rpm`, sprung mass, `GetGroundHit`, and
-`GetWorldPose`. `ConfigureVehicleSubsteps` changes wheel substepping as Unity
-declares. Wheel behavior is equivalent to Unity within the declared
-floating-point tolerance and is not promised to be bit-identical.
+`GetWorldPose`. `ConfigureVehicleSubsteps` changes wheel substepping as in
+Unity. Wheel behavior is equivalent to Unity within the floating-point
+variation the [Compatibility contract](compatibility-contract.md) allows, and
+is not promised to be bit-identical.
 
 ### Articulation bodies
 
@@ -232,16 +273,16 @@ constraints (maximum distance and surface penetration), stretching and
 bending stiffness, damping, external and random acceleration, world velocity
 and acceleration scale, friction, and self-collision. Cloth collides only with
 the sphere, capsule, and sphere-pair capsule colliders assigned to it, as in
-Unity; it does not collide with other scene colliders. Cloth state resets and
-teleports as the corresponding Unity members declare.
+Unity; it does not collide with other scene colliders. `ClearTransformMotion`
+and teleport behavior reset cloth motion as in Unity.
 
 ### Simulation control
 
 The simulation mode decides when physics advances:
 
 * `Physics.simulationMode` (Fixed Update, Update, or Script) and, in baseline
-  releases that use it, `Physics.autoSimulation`, behave as the project's
-  baseline Unity release declares.
+  releases that use it, `Physics.autoSimulation`, behave as in the project's
+  baseline Unity release.
 * In script mode, physics advances only when a script calls
   `Physics.Simulate`, by the requested step, and collision and trigger
   callbacks for that step occur during the call.
@@ -295,16 +336,26 @@ and the project's named areas. Area costs set in project settings,
 masks restrict which areas an agent or query uses.
 
 Off-mesh links (`OffMeshLink`, `NavMeshLink`, and generated drop and jump
-links) connect regions with declared endpoints, width, bidirectionality, area,
-and cost override. An agent reports `isOnOffMeshLink` and the current link
+links) connect regions with their authored endpoints, width,
+bidirectionality, area, and cost override. An agent reports `isOnOffMeshLink` and the current link
 data; with automatic traversal off, the agent waits on the link until a script
 moves it and calls `CompleteOffMeshLink`.
 
 ### Agents, obstacles, and queries
 
 As a developer, I can define agent radius, height, base offset, speed, angular
-speed, acceleration, stopping distance, auto braking, obstacle avoidance
-quality, and priority.
+speed, acceleration, stopping distance, auto braking, auto repath, obstacle
+avoidance quality, and priority.
+
+The `NavMeshAgent` scripting surface behaves as in Unity, including
+`SetDestination`, `destination`, `path` and `SetPath`, `ResetPath`,
+`isStopped`, `Warp`, `Move`, `nextPosition`, `updatePosition`,
+`updateRotation`, `updateUpAxis`, `autoRepath`, and queries filtered by
+`NavMeshQueryFilter`. With `updatePosition` off, the agent's simulated
+position advances in `nextPosition` while the transform stays where scripts
+put it. An agent that is not placed on navigation data reports `isOnNavMesh`
+false, and calling `SetDestination` or the path-dependent members produces
+Unity's error naming the agent rather than a silent no-op.
 
 At runtime an agent can request a destination and expose:
 
@@ -337,8 +388,8 @@ height and surface resolution, material, collider state, vegetation density,
 and runtime cost.
 
 Terrain editing supports selections and undo. Neighboring terrains connect by
-grouping and auto-connect settings and meet without gaps where their declared
-data aligns. Surface textures, normals, holes, vegetation, lighting, shadows,
+grouping and auto-connect settings and meet without gaps when their edge
+heights match. Surface textures, normals, holes, vegetation, lighting, shadows,
 rendering, and collision agree on the same terrain shape.
 
 ### Terrain data
@@ -354,7 +405,8 @@ Scripts read and change terrain through `TerrainData.GetHeights`/`SetHeights`,
 `SetHeightsDelayLOD` with `SyncHeightmap`, `GetAlphamaps`/`SetAlphamaps`,
 `SetHoles`, `SetDetailLayer`, and `SetTreeInstances`, and query it with
 `Terrain.SampleHeight`. Runtime terrain changes affect rendering and collision
-at the boundary the Unity API declares. The serialized form of terrain data,
+at the point the corresponding Unity member does: immediately for
+`SetHeights`, and at `SyncHeightmap` for `SetHeightsDelayLOD`. The serialized form of terrain data,
 including binary storage, is owned by SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md).
 
@@ -362,11 +414,27 @@ Large terrain content communicates loading, memory, rendering, and physics
 limitations. Missing layers or vegetation assets remain identifiable and do not
 silently substitute unrelated content.
 
+### Terrain rendering and trees
+
+Terrain rendering honors draw instanced, pixel error, basemap distance,
+detail distance and density, tree distance, billboard start, fade length, and
+maximum mesh trees. Detail prototypes render in grass texture, vertex lit, and
+instanced modes. Trees render with billboards and LOD transitions, and trees
+with colliders on their prototype contribute colliders when the terrain
+collider enables tree colliders. Terrain materials include the Built-in
+Terrain Standard material and the URP Terrain Lit material, and custom terrain
+materials follow the shader rules owned by REN-002 in
+[Rendering and animation](rendering-and-animation.md).
+
+SpeedTree 7 (`.spm`) and SpeedTree 8 (`.st`) assets are Partially supported:
+geometry, materials, and LOD are supported; SpeedTree wind animation is
+excluded and reported on each affected tree.
+
 ### Wind zones
 
 `WindZone` components in directional and spherical modes, with main strength,
-turbulence, pulse magnitude, pulse frequency, and radius, move trees that
-respond to wind. Terrain grass waves according to the terrain's wind settings.
+turbulence, pulse magnitude, pulse frequency, and radius, move Tree Creator
+trees and other tree content whose materials respond to wind. Terrain grass waves according to the terrain's wind settings.
 Wind effects on particles are owned by REN-004 in
 [Rendering and animation](rendering-and-animation.md).
 
@@ -374,11 +442,12 @@ Wind effects on particles are owned by REN-004 in
 
 Positions, rotations, and simulation use single-precision values as in Unity.
 Rendering, physics, animation, and navigation far from the world origin show
-precision loss equivalent to Unity within the declared floating-point
-tolerance; unitas does not silently rebase the world origin or change
-precision. The editor and automation identify objects whose position magnitude
-exceeds the Unity floating-point precision warning threshold and the systems
-on them whose results are affected. Projects that move content toward the
+precision loss equivalent to Unity within the floating-point variation the
+[Compatibility contract](compatibility-contract.md) allows; unitas does not
+silently rebase the world origin or change precision. The editor and
+automation identify objects with any world-position component of magnitude
+100,000 units or more (the threshold at which Unity warns about precision)
+and the systems on them whose results are affected. Projects that move content toward the
 origin by script observe the same results as in Unity.
 
 ## Diagnostics
@@ -392,13 +461,18 @@ terrain region, or setting.
 
 ## Acceptance stories
 
-1. A dynamic object collides, sleeps, wakes, and emits the callbacks declared by
-   the target's compatible behavior across editor play and a supported player;
-   this does not promise bit-identical simulation across platforms. (PHY-001)
-2. Changing the layer collision matrix, auto sync transforms, or the default
-   physics material changes simulation events and query results exactly as
-   declared, and layer and trigger rules affect events and queries as declared.
-   (PHY-001, PHY-002)
+1. A dynamic box dropped onto a static floor receives `OnCollisionEnter` once,
+   `OnCollisionStay` while resting, falls asleep after its velocity stays below
+   the sleep threshold, wakes when a force is applied, and receives
+   `OnCollisionExit` when lifted off, in editor play and in a supported
+   player; positions agree within the floating-point variation the
+   Compatibility contract allows, not bit-identically. (PHY-001)
+2. Removing a layer pair from the collision matrix stops collision and trigger
+   callbacks between those layers and their hits in default-mask queries; with
+   auto sync transforms off, a moved collider is not visible to queries until
+   `Physics.SyncTransforms` or the next simulation step; a collider with no
+   material uses the default physics material; the same holds for the 2D
+   matrix and 2D queries. (PHY-001, PHY-002)
 3. A non-convex mesh collider on a dynamic body reports the Unity-compatible
    diagnostic naming the object and does not simulate as a dynamic shape. (PHY-001)
 4. A character traverses supported steps, slopes, and moving platforms while
@@ -412,7 +486,7 @@ terrain region, or setting.
    and steers in response to motor torque, brake torque, and steer angle, and
    reports ground hits per wheel. (PHY-004)
 7. An `ArticulationBody` arm reaches drive targets on revolute and prismatic
-   joints within declared limits, and cloth on a character collides with its
+   joints without exceeding their authored limits, and cloth on a character collides with its
    assigned capsule colliders only. (PHY-004)
 8. With the simulation mode set to script, physics advances only when a script
    calls `Physics.Simulate`; a scene loaded with a local physics mode simulates
@@ -425,6 +499,21 @@ terrain region, or setting.
 11. Terrain rendering and collision agree with its authored height, holes, and
     world placement, including after a runtime `SetHeights` change shared by
     every terrain that uses the same `TerrainData`. (ENV-001)
-12. Trees and grass respond to a `WindZone`, and an object placed beyond the
-    floating-point precision threshold is identified with its affected
-    systems. (ENV-001)
+12. Tree Creator trees and terrain grass respond to a `WindZone`, and an object
+    at a world-position component of 100,000 units is identified with its
+    affected systems. (ENV-001)
+13. A kinematic body moved with `MovePosition` pushes a dynamic body and both
+    receive collision messages, while a trigger between two colliders without
+    a `Rigidbody` produces no trigger messages; a disabled MonoBehaviour on the
+    collider's GameObject still receives `OnTriggerEnter`. (PHY-001)
+14. A 2D dynamic body hitting a static `BoxCollider2D` delivers
+    `OnCollisionEnter2D` with `ContactPoint2D` contacts, `IsTouching` reports
+    true while they touch, and `Physics2D.IgnoreCollision` stops further
+    messages. (PHY-002)
+15. An agent with `updatePosition` off advances `nextPosition` while its
+    transform stays put, `Warp` relocates it without a path, and an agent
+    placed off navigation data reports `isOnNavMesh` false and `SetDestination`
+    produces Unity's error naming the agent. (NAV-001)
+16. A terrain using instanced drawing, instanced detail grass, and billboarded
+    trees renders with the URP Terrain Lit material, and a SpeedTree 8 tree
+    renders with its LODs while its wind is reported as excluded. (ENV-001)

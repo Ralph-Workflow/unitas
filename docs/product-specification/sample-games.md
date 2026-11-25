@@ -30,9 +30,10 @@ Each playable sample includes:
 * Keyboard accessibility and at least one additional suitable input mode where
   the target supports it.
 
-Performance expectations refer to the engine budgets owned by PRF-002 in
-[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)
-and add no budgets of their own.
+Sample performance expectations are project-declared expectations as defined
+under Performance validation (TST-002) in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md);
+they are distinct from, and never presented as, the engine budgets of PRF-002.
 
 ## Headless and Agent Execution
 
@@ -106,8 +107,10 @@ and doors, follows spatial sound, changes graphics and controls, and completes a
 short puzzle.
 
 It demonstrates pointer look, cursor capture, rebinding, physics queries,
-dynamic bodies, joints, impact feedback (URP decals on URP version lines that
-provide the decal renderer feature, particle and mesh feedback otherwise),
+dynamic bodies, joints, impact feedback (URP `DecalProjector` decals on URP 12.x
+and 14.x, as defined by REN-006 in
+[Rendering and animation](rendering-and-animation.md), and particle and mesh
+feedback on the Built-in Render Pipeline and URP 10.x),
 lighting, shadows, particles, spatial audio, focus behavior, and performance
 profiles.
 
@@ -125,9 +128,9 @@ through authorized automation on every target.
 The sample covers Canvas and RectTransform behavior, layout, text, font
 fallback, controls, focus, navigation, safe areas, accessibility names, dynamic
 scaling, multiple locales, long translations, plurals, variables, right-to-left
-behavior for the languages that LOC-001 in
-[Accessibility, localization, and persistence](accessibility-localization-persistence.md)
-declares right-to-left, and persistent preferences.
+behavior for the showcase's locales marked right-to-left as defined by LOC-001
+in [Accessibility, localization, and persistence](accessibility-localization-persistence.md),
+and persistent preferences.
 
 ## Mobile Game
 
@@ -273,6 +276,12 @@ failure of AUT-001 naming the capability.
   NET-001)
 * The XR interaction room never reports a feature as passing on hardware that
   does not expose it. (SMP-001, XR-001)
+* A sample's performance report presents its project-declared expectations
+  separately from the PRF-002 engine budgets and never labels them as engine
+  budgets. (SMP-001, TST-002, PRF-002)
+* The first-person interaction sample shows `DecalProjector` impact decals on
+  URP 12.x and 14.x and particle and mesh feedback on the Built-in Render
+  Pipeline and URP 10.x. (SMP-001, REN-006)
 * A failing sample identifies the first failed behavior without erasing later
   evidence. (SMP-001, TST-002)
 * Visual appeal never substitutes for behavioral coverage, and broad feature

@@ -16,8 +16,10 @@ and serialization forms and generated caches (SER-005) are owned by
 relies on those contracts and does not restate them.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. Unity 2022.3 LTS behavior is the baseline where a feature is part of
-stock Unity. Package behavior is covered only for the package families and
+capability. The project's declared Unity release, from Unity 2020.3 LTS through
+Unity 2022.3 LTS, is its behavioral baseline, with Unity 2022.3 LTS as the
+principal reference, as defined in the
+[Compatibility contract](compatibility-contract.md). Package behavior is covered only for the package families and
 version lines listed in the supported package matrix (CMP-002 in
 [Compatibility contract](compatibility-contract.md)).
 
@@ -140,10 +142,18 @@ and other editor-load hooks, build callbacks, and code contained in packages.
 * An agent can request trust; the request reaches the user with the project
   location and the list of code that would run. An agent cannot grant trust,
   and an automation request that needs trust fails with a trust-required
-  result naming the operation. Headless and command-line runs accept trust
-  only from user-controlled invocation configuration (BLD-002 in
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)),
-  never from an MCP request.
+  result naming the operation.
+* Headless and command-line runs (BLD-002 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
+  treat a project as trusted only through the per-user trust record that the
+  user created, or through an explicit trust argument on a command-line
+  invocation that the user or the user's continuous-integration configuration
+  starts. An MCP request can never create either.
+* An agent session that holds both the permission to edit scripts and the
+  permission to execute project code (AUT-007 in
+  [Automation and MCP](automation-and-mcp.md)) can run code of its choosing
+  with the privileges of the account running unitas. The prompt that grants
+  the second of these permissions states this.
 
 ## Asset browser
 
@@ -205,6 +215,13 @@ can change. Unrelated assets retain their current state. A cancelled import does
 not replace a previously valid result with an incomplete result. Retrying a
 failed import preserves the prior diagnostic history for the current session.
 
+A long import, such as a first open or a reimport of many assets, continues
+past individual asset failures, reports each failure, and ends as a partial
+success when any asset failed. After an interruption or crash, the next import
+reuses completed results whose recorded inputs (source content, metadata,
+import settings, importer version, and dependencies) are unchanged, and states
+which assets were imported again and why.
+
 Diagnostics state:
 
 * The asset and sub-object involved.
@@ -215,7 +232,7 @@ Diagnostics state:
 
 Supported import settings, including per-target overrides, survive open, edit,
 save, reimport, and reopening without unexplained changes. Settings recognized
-but not honored are marked unsupported. Read-only content remains inspectable,
+but not honored are reported Unsupported. Read-only content remains inspectable,
 and an attempted edit reports that it was not committed rather than appearing
 saved.
 
@@ -225,11 +242,28 @@ trusted projects; their behavior is owned by RUN-010 in
 
 ## Texture and image assets
 
-Supported source families include PNG, JPEG, TGA, PSD, DDS, and KTX2. A file
-that uses an encoding or feature of its format that unitas does not support is
-reported Partially supported or Unsupported with that feature named. An image asset exposes dimensions, color-space
-interpretation, alpha behavior, wrap mode, filtering, mip behavior, normal-map
-interpretation, sprite settings, readability, and target-specific quality.
+PNG, JPEG, TGA, PSD, DDS, KTX2, EXR, HDR, BMP, and TIFF sources are Supported.
+GIF is Partially supported: only the first frame imports, and the asset
+reports that later frames are excluded. IFF and PICT sources are Unsupported
+and are reported with the file named. A file that uses an encoding or feature
+of a supported format that unitas does not support is reported Partially
+supported or Unsupported with that feature named.
+
+An image asset exposes dimensions, color-space interpretation, alpha behavior,
+wrap mode, filtering, mip behavior, normal-map interpretation, sprite settings,
+readability, and target-specific quality. The texture importer honors:
+
+* Texture types: Default, Normal map, Editor GUI and Legacy GUI, Sprite (2D and
+  UI), Cursor, Cookie, Lightmap, Directional Lightmap, Shadowmask, and Single
+  Channel.
+* Texture shapes: 2D, Cube, 2D Array, and 3D, with their layout settings.
+* Maximum size, resize algorithm, non-power-of-two handling, sRGB, alpha
+  source, alpha is transparency, mipmap generation and filtering, mipmap
+  streaming, and Read/Write.
+* Per-target format, compression quality, and Crunch compression overrides.
+* Sprite Mode Single, Multiple, and Polygon. Multiple-mode slices keep their
+  names, rectangles, pivots, borders, and physics shapes, and produce the same
+  sprite sub-assets with the same identities as Unity (PRJ-003).
 
 The preview distinguishes source appearance from the in-game result. Changes to
 delivery quality do not modify the source image. Invalid dimensions, missing
@@ -239,18 +273,42 @@ treated as ordinary color images.
 
 ## Model and mesh assets
 
-Supported source families include FBX, glTF/GLB, and OBJ, with the same
-per-file reporting of unsupported format features. A model exposes only capabilities its source format and file contain.
-FBX and glTF/GLB may contain hierarchy, materials, skeletons, skinning,
-animation, and blend shapes. OBJ provides static geometry and
-associated material data where present; it is never reported as containing
-native skinning or animation. All models expose applicable scale, axis
-interpretation, normals, tangents, and collision content.
+FBX, glTF/GLB, and OBJ sources are Supported, with the same per-file reporting
+of unsupported format features. Content-creation application formats (such as
+`.blend`, `.max`, `.ma`, `.mb`, `.c4d`, `.lxo`, and `.3ds`) are Unsupported
+and are reported with the file named; unitas never launches a
+content-creation application to convert them.
+
+A model exposes only capabilities its source format and file contain. FBX and
+glTF/GLB may contain hierarchy, materials, skeletons, skinning, animation, and
+blend shapes. OBJ provides static geometry and associated material data where
+present; it is never reported as containing native skinning or animation. All
+models expose applicable scale, axis interpretation, normals, tangents, and
+collision content.
+
+The model importer honors:
+
+* Mesh settings: scale factor, convert units, Read/Write, index format, mesh
+  compression, mesh optimization, blend shape import and normals, lightmap UV
+  generation with its parameters, normals and tangents import or calculation
+  modes with smoothing angle, and collider generation.
+* Rig settings: animation type None, Legacy, Generic, or Humanoid; avatar
+  creation from the model or copying from another avatar; root bone; and
+  Optimize Game Objects with its exposed transforms.
+* Animation settings: clip splitting by frame range, loop time and loop pose,
+  cycle offset, root transform rotation, position Y, and position XZ bake
+  settings and offsets, mirror, additive reference pose, per-clip curves,
+  events, and masks, and animation compression Off, Keyframe Reduction, or
+  Optimal with rotation, position, and scale error tolerances.
+* Material settings: material creation mode, location (embedded or external),
+  extraction of materials and textures, and remapping to existing materials.
 
 The user can preview geometry, materials, rigging, blend shapes, and clips;
 select relevant clips; and assign or remap materials. Reimport preserves stable
 references to unchanged named or identified sub-assets as defined by PRJ-003.
-Removed nodes or clips leave explicit missing references.
+Removed nodes or clips leave explicit missing references. Avatar and animation
+behavior at runtime is owned by ANI-001 and ANI-002 in
+[Rendering and animation](rendering-and-animation.md).
 
 Invalid topology, missing bones, invalid weights, degenerate bounds, ambiguous
 units, absent normals, and unsupported animation data are reported separately.
@@ -258,24 +316,48 @@ The asset never appears fully ready merely because some geometry was readable.
 
 ## Audio assets
 
-Supported source families include WAV, MP3, and OGG, with the same per-file
-reporting of unsupported format features. An audio asset exposes duration, channel layout, sample rate, load behavior,
-looping suitability, preview controls, and target-specific quality.
+WAV, AIFF, MP3, and OGG sources are Supported. Tracker modules (`.mod`, `.it`,
+`.s3m`, `.xm`) are Unsupported and are reported with the file named. An audio
+asset exposes duration, channel layout, sample rate, load behavior, looping
+suitability, preview controls, and target-specific quality.
+
+The audio importer honors Force To Mono, Normalize, Ambisonic, Load In
+Background, Preload Audio Data, load type, and per-target compression format
+(PCM, ADPCM, Vorbis, MP3), quality, and sample rate setting (preserve,
+optimize, or override). Load-type behavior at runtime is owned by AUD-001 in
+[UI, audio, and input](ui-audio-input.md).
 
 The user can tell whether audio is immediately available, progressively
 available, or unavailable during play. Unsupported channel layouts, corrupt
 frames, truncated data, inaudible clips, and target codec limits are explicit.
 Preview failure is distinct from runtime incompatibility.
 
-## Other recognized asset families
+## Text and other recognized asset families
 
-The browser identifies scenes, prefabs, materials, shaders, animation clips,
-animator controllers, fonts, video, scripts, ScriptableObjects, physics
-materials, input configuration, localization content, terrain data, render
-textures, and supported package content. Each family links to its owning feature
-specification and uses the common identity, dependency, status, and diagnostic
-contracts defined here and in
-[Serialization and prefabs](serialization-and-prefabs.md).
+Files with the extensions `.txt`, `.json`, `.bytes`, `.csv`, `.xml`, `.html`,
+`.htm`, `.yaml`, and `.fnt` import as `TextAsset` with `text` and `bytes`
+exactly equal to the file content. `.md` files import as `TextAsset` in
+baseline releases that import them that way.
+
+The browser identifies scenes, prefabs, materials, shaders, compute shaders,
+shader include files (`.hlsl`, `.cginc`), shader variant collections,
+animation clips, animator controllers, animator override controllers, avatar
+masks, audio mixers, fonts and custom fonts, GUI skins, video, scripts,
+ScriptableObjects, physics materials and 2D physics materials, input
+configuration and input action assets, localization content, terrain data and
+terrain layers, lighting settings, cubemaps, flares, render textures, Sprite
+Atlas (v1 and v2) assets, presets, Timeline and signal assets, and supported
+package content. Each family links to its owning feature specification and
+uses the common identity, dependency, status, and diagnostic contracts defined
+here and in [Serialization and prefabs](serialization-and-prefabs.md).
+
+### Unity package files
+
+Importing a `.unitypackage` shows its contents, their destination paths, and
+every GUID that collides with an existing asset before anything is written; the
+user chooses which items to import. A `.unitypackage` that contains scripts,
+precompiled assemblies, native plugins, or editor code adds that code under
+the project trust rules of [Project trust](#project-trust).
 
 ## Packages and project extensions
 
@@ -359,6 +441,8 @@ Unity-readable form. Each family below links its effect to the owning feature:
   symbols, and active input handling (BLD-001 and BLD-003 in
   [Builds, platforms, XR, and networking](build-platforms-xr-networking.md);
   RUN-007; INP-001 and INP-002 in [UI, audio, and input](ui-audio-input.md)).
+* Player color space, Gamma or Linear (REN-002 in
+  [Rendering and animation](rendering-and-animation.md)).
 * Input Manager axes and buttons (INP-001).
 * Audio: speaker mode, DSP buffer size, sample rate, and default volume
   (AUD-001 in [UI, audio, and input](ui-audio-input.md)).
@@ -385,7 +469,7 @@ Unity-readable form. Each family below links its effect to the owning feature:
 * Settings changed outside the editor are detected as external changes.
 * Unknown settings keys and settings for unrecognized packages are preserved
   across saves.
-* Settings that are recognized but not honored are marked unsupported with
+* Settings that are recognized but not honored are reported Unsupported with
   their consequence. Settings for unsupported families listed in the
   [Index](INDEX.md), such as HDRP or Visual Effect Graph settings, are
   preserved and reported Unsupported.
@@ -417,11 +501,38 @@ Unity-readable form. Each family below links its effect to the owning feature:
    (PRJ-006)
 10. Changing the layer collision matrix, fixed timestep, or a per-target
     scripting define saves Unity-readable settings, shows the effective value
-    for the selected target, and changes behavior at the declared boundary.
-    (PRJ-007)
+    for the selected target, and changes behavior at the boundary its owning
+    feature names. (PRJ-007)
 11. Opening an untrusted project with an `[InitializeOnLoad]` editor script, a
     source generator, and a git package runs none of them and fetches nothing,
     while scenes and assets remain inspectable; an agent's trust request
     reaches the user and the agent cannot grant it. (PRJ-008)
 12. A compatibility report can account for every recognized project asset,
     package, and setting. (PRJ-001, PRJ-006, PRJ-007)
+13. A continuous-integration run started with an explicit trust argument
+    compiles and runs project code, the same run without the argument or a
+    per-user trust record stays restricted, and an MCP request to trust the
+    project is refused. (PRJ-008)
+14. Granting an agent session the execute-project-code permission while it
+    holds the edit-scripts permission shows a prompt stating that the session
+    can run code with the privileges of the account running unitas. (PRJ-008)
+15. A texture imported as Sprite in Multiple mode yields the same named sprite
+    sub-assets and identities as in Unity; per-target compression overrides
+    survive reimport; an EXR imports, a GIF imports its first frame with the
+    exclusion reported, and a PICT file is reported Unsupported. (PRJ-004)
+16. An FBX imported with a Humanoid rig, split clips with loop pose and baked
+    root rotation, Optimal compression, and extracted materials produces the
+    avatar, clips, and materials Unity produces; a `.blend` file is reported
+    Unsupported without launching any application. (PRJ-004)
+17. An AIFF clip imports with per-target Vorbis compression and Force To Mono
+    honored, and an `.xm` module is reported Unsupported. (PRJ-004)
+18. A `.json` and a `.bytes` file import as `TextAsset` with content equal to
+    the file, and an avatar mask, an audio mixer, and a Sprite Atlas v2 asset
+    are each identified with their family. (PRJ-002, PRJ-004)
+19. Importing a `.unitypackage` lists its contents and GUID collisions before
+    writing, and its scripts do not run in a project that is not trusted.
+    (PRJ-004, PRJ-008)
+20. A first-open import with three corrupt textures completes the rest, reports
+    the three failures and a partial success, and after a forced interruption
+    the next open reuses unchanged results and lists what it imported again.
+    (PRJ-004)

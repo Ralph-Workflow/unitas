@@ -8,15 +8,17 @@ spatialization, mixing, capture, video playback, and the diagnostics used to
 validate them.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. Stock Unity 2022.3 LTS defines the baseline. uGUI
-(`com.unity.ugui`) 1.0.x, TextMeshPro 3.0.x, the Input System 1.x, and other
-package features are covered only for the package families and version lines
+capability. The project's Unity release, from Unity 2020.3 LTS through Unity
+2022.3 LTS, is the behavioral baseline, with Unity 2022.3 LTS as the principal
+reference, as defined in the [Compatibility contract](compatibility-contract.md).
+uGUI (`com.unity.ugui`) 1.0.x, TextMeshPro 3.0.x, the Input System 1.x, and
+other package features are covered only for the package families and version lines
 listed in the supported package matrix (CMP-002, owned by the
 [Compatibility contract](compatibility-contract.md)). In this document,
 "within scope" means those listed packages and versions for the project's
 baseline editor release together with the built-in modules described here.
 UI Toolkit runtime panels and documents are recognized and reported as
-Unsupported, as declared in the [index](INDEX.md).
+Unsupported, as listed in the [index](INDEX.md).
 
 Localized content is owned by LOC-001 in
 [Accessibility, localization, and persistence](accessibility-localization-persistence.md).
@@ -44,7 +46,7 @@ relationships.
 * `CanvasScaler` Constant Pixel Size, Scale With Screen Size (with match width
   or height and expand and shrink modes), and Constant Physical Size modes
   produce Unity's scale factor for the same screen and DPI.
-* Anchors and pivots retain their declared geometric meaning.
+* Anchors and pivots retain their Unity geometric meaning.
 * Horizontal, vertical, and grid layout groups, `ContentSizeFitter`,
   `LayoutElement`, and `AspectRatioFitter` compute Unity's layout for the same
   content, including child control, child force expand, and preferred,
@@ -69,7 +71,7 @@ A control has visible, interactable, highlighted, focused, selected, pressed,
 and disabled states, and input fields additionally have a validation state.
 Selectable transitions (color tint, sprite swap, and animation) present those
 states as in Unity. Pointer, touch, keyboard, gamepad, and automation can
-interact through the same declared control behavior.
+interact through the same control behavior.
 
 Events include pointer enter and exit, down, up, click, initialize-potential-
 drag, begin drag, drag, end drag, drop, scroll, select, deselect, update
@@ -80,6 +82,34 @@ the others in uGUI) to the first handler found walking up from the raycast
 target, as `ExecuteEvents` does in Unity. A control cannot report a successful
 activation when effective pointer hit-testing routes that input to another
 element; visibility alone does not imply input blocking.
+
+### Graphics and mesh effects
+
+* `Image` supports Simple, Sliced, Tiled, and Filled types, with fill method
+  (horizontal, vertical, radial 90, radial 180, and radial 360), fill origin,
+  fill amount, and clockwise direction, `preserveAspect`, fill center, and
+  `pixelsPerUnitMultiplier`, producing Unity's geometry.
+* `Image.alphaHitTestMinimumThreshold` restricts pointer hits to texels at or
+  above the threshold; it requires a readable sprite texture, and a
+  non-readable texture produces Unity's compatible error naming it.
+* `RawImage` draws its texture with its `uvRect`.
+* `Shadow`, `Outline`, and `PositionAsUV1` effects, and project subclasses of
+  `BaseMeshEffect` or implementations of `IMeshModifier`, modify the generated
+  UI mesh in component order as in Unity.
+
+### Rebuild timing and scrolling
+
+* `Canvas.willRenderCanvases` fires before canvases render each frame, and
+  layout and graphic rebuilds run at Unity's point in that sequence.
+  `Canvas.ForceUpdateCanvases` and
+  `LayoutRebuilder.ForceRebuildLayoutImmediate` complete pending rebuilds
+  before returning, so RectTransform values read afterwards reflect them.
+* `ScrollRect` movement types (unrestricted, elastic, and clamped),
+  elasticity, inertia, deceleration rate, scroll sensitivity, viewport, and
+  scrollbar visibility modes behave as in Unity.
+* `EventSystem.IsPointerOverGameObject`, with no argument for the mouse and
+  with a pointer or touch identifier, returns whether that pointer is over an
+  object that a raycaster hits, as in Unity for the active input module.
 
 Control callbacks such as `Button.onClick`, `Toggle.onValueChanged`, and
 `Slider.onValueChanged` are `UnityEvent`s; their persistent and dynamic
@@ -151,14 +181,29 @@ players:
   top and receives input first. IMGUI draws after all cameras in screen
   coordinates with the origin at the top left.
 * IMGUI in editor extensions (custom inspectors and editor windows) is outside
-  this feature and is reported as declared in the [index](INDEX.md).
+  this feature and is reported as listed in the [index](INDEX.md).
 
 ## Text and fonts
 
-Runtime text supports Unicode content, declared font assets, fallback fonts,
+Runtime text supports Unicode content, font assets, fallback fonts,
 size and auto-sizing, alignment, wrapping, overflow, spacing, style, supported
 rich text, and resolution-aware rendering for the legacy text components
 (UI `Text` and `TextMesh`) and for TextMeshPro 3.0.x.
+
+### Legacy fonts and text
+
+* TrueType and OpenType font import retains font size, rendering mode,
+  character set (Dynamic, Unicode, ASCII default set, and custom set),
+  Include Font Data, ascent calculation mode, and fallback font names.
+  Custom fonts (`.fontsettings`) render from their character table and
+  material.
+* `Font.CreateDynamicFontFromOSFont` returns a font backed by the named
+  operating-system font; on targets where operating-system fonts are not
+  accessible (the browser target and others that report it), it is
+  Platform-limited and the result is reported.
+* Legacy UI `Text` Best Fit chooses the size Unity chooses between its
+  minimum and maximum, and `Font.RequestCharactersInTexture`,
+  `Font.textureRebuilt`, and `Font.GetCharacterInfo` behave as in Unity.
 
 ### TextMeshPro scope
 
@@ -191,14 +236,14 @@ state; the missing-glyph character is drawn as Unity draws it.
 Layout uses the displayed glyph metrics and updates when content, font,
 scaling, or locale changes. Text layout responds to scaling, long strings,
 line breaks, mixed scripts, bidirectional content, and dynamic values within
-declared language support.
+the language support stated for each locale under LOC-001.
 
 Text rendering produces what the Unity text system in use produces for the
 same content: right-to-left presentation through TextMeshPro's right-to-left
 option, and no implicit script shaping or bidirectional reordering that
 Unity's text systems do not perform. Basic character display is not
-represented as complete complex-script support; per-language support is
-declared by the project's localization settings as defined by LOC-001.
+represented as complete complex-script support; per-locale support states are
+reported as defined by LOC-001.
 
 ### Input fields
 
@@ -223,8 +268,8 @@ the Input Manager settings, raw axes, touches, `simulateMouseWithTouches`,
 multi-touch, acceleration, gyroscope, compass, and location where the device
 provides them.
 
-Frame transitions are true only for the eligible frame. Named axes respect configured sources, dead
-zone, sensitivity, gravity, inversion, snapping, and joystick number.
+Frame transitions are true only for the eligible frame. Named axes respect
+configured sources, dead zone, sensitivity, gravity, inversion, snapping, and joystick number.
 Focus loss, cursor lock (`Cursor.lockState`), cursor visibility, and device
 disconnection have defined outcomes. Touch identity remains stable from begin
 through end or cancel.
@@ -244,8 +289,8 @@ and multi-tap), processors, and control schemes.
 ### User stories
 
 * As a player, I can use keyboard and mouse, gamepad, touch, pen, or supported
-  XR controls according to the game's declared schemes. XR device behavior is
-  owned by XR-001 in
+  XR controls according to the control schemes the game's input actions
+  define. XR device behavior is owned by XR-001 in
   [Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
 * As a player, I can rebind controls and retain my choices.
 * As a local multiplayer developer, I can assign distinct devices to players.
@@ -261,6 +306,23 @@ and multi-tap), processors, and control schemes.
   control scheme auto-switching behave as in the package. `PlayerInputManager`
   join behaviors, maximum player count, and split-screen layouts assign
   devices and viewports as in the package.
+* Device-level access through `Keyboard.current`, `Mouse.current`,
+  `Gamepad.current`, `Touchscreen.current`, `Pen.current`, and
+  `InputSystem.devices`, and control-level `isPressed`,
+  `wasPressedThisFrame`, `wasReleasedThisFrame`, and `ReadValue`, report the
+  same values and frame transitions as in the package. `EnhancedTouch`
+  (`Touch.activeTouches` and finger tracking) is Supported once enabled.
+* On-screen controls (`OnScreenStick` and `OnScreenButton`) feed their bound
+  control paths as virtual devices.
+* The Input System settings asset (update mode, background behavior, default
+  dead zones, default press point and tap and hold times, supported devices,
+  and filtering of noisy controls) applies as in the package.
+* Custom processors, interactions, composites, and device layouts registered
+  by project code (`InputSystem.RegisterProcessor`, `RegisterInteraction`,
+  `RegisterBindingComposite`, and `RegisterLayout`) participate in binding
+  resolution as built-in ones do. A binding that names an unregistered
+  processor, interaction, composite, or layout is reported with the action
+  and binding.
 * The generated C# wrapper class for an action asset exposes the same maps and
   actions as the asset.
 * The input update mode (dynamic update, fixed update, or manual) determines
@@ -289,10 +351,15 @@ playback with clip, volume, pitch, mute, pause, start time (`time` and
 `timeSamples`), priority, output mixer group, bypass settings, and spatial
 behavior.
 
+`AudioSource.PlayClipAtPoint` creates a temporary GameObject with an
+`AudioSource` at the given position, plays the clip, and destroys the object
+when the clip ends, as in Unity; the temporary source is visible in voice
+inspection while it plays.
+
 Playback state distinguishes scheduled, loading, playing, paused, virtualized,
 stopped, completed, and failed. Seeking and time reporting use the clip's
-declared duration and platform capability. Loop boundaries are gapless for
-clips whose load type and encoding allow seamless looping on the target.
+length in samples and the target's decoder capability. Loop boundaries are
+gapless for clips whose load type and encoding allow seamless looping on the target.
 
 Destroying or disabling an owner, changing scenes, pausing the application
 (`AudioListener.pause`, `ignoreListenerPause`, and application pause),
@@ -310,7 +377,7 @@ according to the compatible API and project settings.
   samples that later playback renders. Reading a clip whose load type does not
   permit it fails with Unity's compatible error naming the clip.
 * `AudioClip.Create`, including streamed clips with PCM reader and position
-  callbacks, produces playable clips with the declared length, channels, and
+  callbacks, produces playable clips with the requested length, channels, and
   frequency.
 * Encodings or sample rates that a target cannot play are reported at import
   or build with the clip and target named.
@@ -321,6 +388,12 @@ Three-dimensional audio responds to listener and source position, distance
 attenuation (logarithmic, linear, and custom rolloff curves), spatial blend,
 source direction, Doppler behavior, spread, and reverb zone mix.
 Two-dimensional audio remains independent of scene distance.
+
+Spatializer and ambisonic decoder plugins selected in the project's audio
+settings are native plugins assessed as defined by CMP-003 in the
+[Compatibility contract](compatibility-contract.md); the selected plugin and
+its compatibility state are reported. Audio import formats are owned by
+[Projects and assets](project-and-assets.md).
 
 `AudioReverbZone` components apply their preset or custom room parameters
 between minimum and maximum distance, and overlapping zones blend as in Unity.
@@ -344,6 +417,11 @@ effect chains, ducking, solo, mute, bypass, and views.
 * Exposed parameters are readable and writable by name through `SetFloat`,
   `GetFloat`, and `ClearFloat`; an unknown parameter name returns false as in
   Unity and is reported in diagnostics.
+* Playable audio follows the same routing: an `AudioPlayableOutput` plays
+  through its target `AudioSource`, whose output mixer group then applies,
+  and an `AudioClipPlayable` honors its clip's load type and its own loop
+  setting. Playable graph behavior is owned by ANI-002 in
+  [Rendering and animation](rendering-and-animation.md).
 * Mixer effects provided by native audio plugins are project native plugins,
   assessed as defined by CMP-003 in the
   [Compatibility contract](compatibility-contract.md).
@@ -383,8 +461,8 @@ source. Preview audio is distinguished from runtime audio.
   `SetScheduledEndTime` adjust a scheduled source. Two clips scheduled back to
   back at exact sample boundaries play with no gap and no overlap. A time
   already in the past starts playback at the next audio buffer.
-* In headless sessions, audio renders to a capturable output at the declared
-  sample rate so scheduling and mixing results can be verified as defined in
+* In headless sessions, audio renders to a capturable output at the project's
+  audio output sample rate so scheduling and mixing results can be verified as defined in
   [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
 ## Microphone capture
@@ -432,7 +510,7 @@ StreamingAssets path, or network address), as in Unity.
   play is reported at import, at build, and at runtime with the source, codec,
   container, and target named, and `errorReceived` fires; it never plays as a
   silent black frame. Unsupported formats are Platform-limited, not
-  Unsupported, when another declared target plays them.
+  Unsupported, when another supported target plays them.
 
 Video state (source, prepared state, playing state, time, frame, frame count,
 frame rate, dropped frames, render target, and audio routing) is inspectable
@@ -464,54 +542,76 @@ recovery.
 
 ## Acceptance outcomes
 
-1. The same UI flow can be completed with every input scheme the game declares
-   supported, through both `StandaloneInputModule` and
+1. The same UI flow can be completed with every control scheme the game's input
+   actions define, through both `StandaloneInputModule` and
    `InputSystemUIInputModule`. (UI-001, INP-001, INP-002)
-2. Layout matches Unity's RectTransform results across declared resolutions,
-   aspects, safe areas, and `CanvasScaler` modes, and a layout cycle is
-   reported with the participating objects. (UI-001)
+2. Layout matches Unity's RectTransform results across the resolutions and
+   aspects a scenario lists, safe areas, and `CanvasScaler` modes, and a layout
+   cycle is reported with the participating objects. (UI-001)
 3. Pointer events reach UI graphics through `GraphicRaycaster` and scene
    objects through `PhysicsRaycaster` and `Physics2DRaycaster`, and an object
    that received no event reports why. (UI-001)
 4. A `Button.onClick` persistent listener and a dynamically added listener both
    run on activation, as defined by RUN-008. (UI-001)
-5. An `OnGUI` script with `GUILayout` controls, a custom `GUISkin`, and two
+5. An `Image` in Filled radial 360 mode at fill amount 0.25, a sliced image
+   with `pixelsPerUnitMultiplier` 2, and an `Outline` effect produce Unity's
+   geometry; `alphaHitTestMinimumThreshold` ignores transparent texels; and
+   `LayoutRebuilder.ForceRebuildLayoutImmediate` makes updated sizes readable
+   in the same frame. (UI-001)
+6. `EventSystem.IsPointerOverGameObject` returns true for the mouse and for a
+   touch identifier over UI, and a `ScrollRect` with elastic movement and
+   inertia settles at Unity's position. (UI-001)
+7. An `OnGUI` script with `GUILayout` controls, a custom `GUISkin`, and two
    scripts at different `GUI.depth` values draws, orders input, and returns
    control values as in Unity. (UI-002)
-6. TextMeshPro text with fallback fonts, sprite assets, rich-text tags, and
+8. TextMeshPro text with fallback fonts, sprite assets, rich-text tags, and
    ellipsis overflow renders with Unity's layout and `textInfo`. (TXT-001)
-7. Missing glyphs are visible diagnostics that name the character, font,
+9. Missing glyphs are visible diagnostics that name the character, font,
    fallback chain, locale, and text object, and fallback selection is the
    same on every run and target. (TXT-001)
-8. Mixed-script and right-to-left text render as the Unity text system in use
-   renders them, and no complex-script support beyond that is claimed.
-   (TXT-001)
-9. Frame-based legacy input transitions occur only on their eligible frames,
-   and legacy `Input` APIs throw Unity's exception when the project uses the
-   Input System only. (INP-001)
-10. Interactive rebinding excludes reserved controls, saved overrides restore
+10. Mixed-script and right-to-left text render as the Unity text system in use
+    renders them, and no complex-script support beyond that is claimed.
+    (TXT-001)
+11. A legacy UI `Text` using Best Fit and a dynamic TrueType font selects
+    Unity's size and populates its glyph texture, and
+    `Font.CreateDynamicFontFromOSFont` is reported Platform-limited on the
+    browser target. (TXT-001)
+12. Frame-based legacy input transitions occur only on their eligible frames,
+    and legacy `Input` APIs throw Unity's exception when the project uses the
+    Input System only. (INP-001)
+13. Interactive rebinding excludes reserved controls, saved overrides restore
     on the next run, and stale or conflicting bindings are reported explicitly.
     (INP-002)
-11. Two local players join through `PlayerInputManager` with distinct devices,
+14. `Gamepad.current` and `Keyboard.current` report `wasPressedThisFrame` on
+    the same frame as the bound action performs, an `OnScreenStick` drives a
+    2D vector action, and a project-registered custom processor alters the
+    action value. (INP-002)
+15. Two local players join through `PlayerInputManager` with distinct devices,
     and device disconnection and reconnection neither duplicate nor lose an
     action. (INP-002)
-12. Every inaudible AudioSource has an inspectable state and routing reason.
+16. Every inaudible AudioSource has an inspectable state and routing reason.
     (AUD-001)
-13. Spatial audio responds consistently to source and listener transforms and
+17. Spatial audio responds consistently to source and listener transforms and
     to reverb zones. (AUD-001)
-14. A mixer snapshot transition and an exposed parameter change alter the
-    captured output level over the declared time, and filter components and an
-    `OnAudioFilterRead` script process audio in component order. (AUD-001)
-15. Two clips scheduled with `PlayScheduled` at adjacent sample boundaries
+18. A mixer snapshot transition and an exposed parameter change alter the
+    captured output level over the given transition time, and filter
+    components and an `OnAudioFilterRead` script process audio in component
+    order. (AUD-001)
+19. Two clips scheduled with `PlayScheduled` at adjacent sample boundaries
     render with no gap or overlap in captured headless output, and
     `AudioClip.GetData` and `SetData` round-trip samples on a Decompress On Load
     clip. (AUD-001)
-16. Microphone capture records samples when permission is granted and reports
+20. `AudioSource.PlayClipAtPoint` plays a clip at a position and its
+    temporary object is destroyed when playback ends, and an
+    `AudioPlayableOutput` plays through its `AudioSource` with the source's
+    mixer group applied. (AUD-001)
+21. Microphone capture records samples when permission is granted and reports
     an explicit denied status otherwise. (AUD-001)
-17. A `VideoPlayer` prepares, plays, pauses, seeks, loops, and fires its events
+22. A `VideoPlayer` prepares, plays, pauses, seeks, loops, and fires its events
     in each render mode and audio output mode, and a clip with a codec the
     target cannot play reports the codec, container, and target through
     `errorReceived` and diagnostics. (MED-001)
-18. UI, text, input, audio, and video behavior agrees between editor play,
-    headless sessions, and supported players, subject to declared device
-    differences. (UI-001, UI-002, TXT-001, INP-001, INP-002, AUD-001, MED-001)
+23. UI, text, input, audio, and video behavior agrees between editor play,
+    headless sessions, and supported players, except for device capabilities
+    reported as Platform-limited. (UI-001, UI-002, TXT-001, INP-001, INP-002,
+    AUD-001, MED-001)

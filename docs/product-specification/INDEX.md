@@ -24,18 +24,25 @@ without a corresponding update to this index.
 
 ## Product Vision
 
-unitas is an AI- and MCP-native game engine, runtime, and build product for
-existing Unity projects. A user opens a supported Unity project in place, and
-then an authorized agent, a developer, or both together inspect it, change it,
-run it, test it, debug it, and build it without first converting it into a
-unitas-specific project.
+unitas is an open-source game engine, runtime, and build product that is AI-
+and MCP-native and C#-first. Existing Unity projects are its on-ramp: a user
+opens a supported Unity 2022.3 LTS project in place, and then an authorized
+agent, a developer, or both together inspect it, change it, run it, test it,
+debug it, and build it without first converting it into a unitas-specific
+project. Unity compatibility is the way projects arrive; it is not the
+definition of the product. Each feature's compatibility promise is bounded by
+its tier, and outside the Exact and Semantic tiers unitas defines its own
+behavior.
 
 unitas is agent-first:
 
 * Every product capability is available to authorized agents through
   structured automation and the Model Context Protocol (MCP). A capability
-  that a person can use but an agent cannot is incomplete. The detailed
-  contract is owned by [Automation and MCP](automation-and-mcp.md).
+  that a person can use but an agent cannot is incomplete. The person-only
+  actions enumerated by AUT-007 (trust, grants, approvals, confirmations, and
+  similar consent decisions) are the only exceptions; agents can discover and
+  request them. The detailed contract is owned by
+  [Automation and MCP](automation-and-mcp.md).
 * The visual editor presents and edits the same project model the agents
   use. Its purpose is to make project and runtime state clear, to support
   direct authoring of scenes and content, and to let a developer review,
@@ -52,10 +59,37 @@ unitas is agent-first:
 
 ### Compatibility baseline
 
-The compatibility baseline is observable behavior from Unity 2020.3 LTS through
-Unity 2022.3 LTS, with Unity 2022.3 LTS as the principal behavioral reference.
-The [Compatibility contract](compatibility-contract.md) defines what
-compatibility means and how it is reported.
+The compatibility baseline is the documented, observable behavior of Unity
+2022.3 LTS, a finished release line. Projects saved by Unity 2020.3 LTS or
+2021.3 LTS open by migrating their serialized forms to the 2022.3 baseline;
+behavior that differs between those releases and 2022.3 is not matched
+separately. Unity releases after 2022.3 LTS are outside the baseline; a
+later-release feature becomes part of unitas only when a specification adopts
+it explicitly. The [Compatibility contract](compatibility-contract.md) defines
+what compatibility means and how it is reported.
+
+### Compatibility tiers
+
+Every catalog feature has exactly one tier, recorded in the
+[Feature catalog](feature-catalog.md) and defined in the
+[Compatibility contract](compatibility-contract.md):
+
+* **Exact:** content identity and serialization (scenes, prefabs and
+  overrides, GUIDs and local identifiers, materials, project settings, and
+  round-trip saving) match Unity 2022.3 LTS exactly.
+* **Semantic:** the core scripting model, physics bodies, callbacks, and
+  queries, scene loading, and resource loading behave as Unity 2022.3 LTS does
+  in ordinary use; bug-for-bug parity is not promised.
+* **Familiar:** UI, text, animation, audio, video, input, particles,
+  navigation, terrain, localization, XR, and networking import Unity content
+  and keep Unity's API shape, while unitas defines the behavior and reports
+  every difference.
+* **Native:** rendering, the editor, builds and platforms, diagnostics, and
+  the agent and MCP layer are unitas-defined. Unity shaders and materials are
+  translated; pixel identity with Unity is not promised.
+
+Behavior outside a feature's tier is reported with a compatibility state and is
+never silently approximated.
 
 ### Packages
 
@@ -79,6 +113,10 @@ the project remains usable:
 * Visual Effect Graph assets.
 * UI Toolkit runtime panels and documents.
 * Visual Scripting graphs.
+* Enlighten realtime global illumination data.
+* Loading AssetBundles and Addressables content built by Unity in a unitas
+  player; such content is rebuilt by unitas, as defined by BLD-005 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
 * Baking lightmaps and occlusion culling data inside unitas. Lightmaps,
   light probes, reflection probe captures, and occlusion data that Unity baked
   remain supported as project content, as defined in
@@ -107,9 +145,10 @@ Each feature document answers the same questions:
 6. What Unity-compatible behavior is promised?
 7. What observable stories establish that the feature is complete?
 
-“Compatible” always refers to observable behavior within the declared Unity
-2020.3 LTS through 2022.3 LTS scope. It never means only that a file parses, a
-type exists, a script compiles, or a scene opens.
+“Compatible” always refers to the observable behavior that a feature's
+compatibility tier promises against the Unity 2022.3 LTS baseline. It never
+means only that a file parses, a type exists, a script compiles, or a scene
+opens.
 
 ## Specification Map
 

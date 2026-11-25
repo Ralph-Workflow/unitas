@@ -28,7 +28,9 @@ here (EDT-008). Automation rules are owned by
 [Automation and MCP](automation-and-mcp.md) and are not restated here.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. Stock Unity 2022.3 LTS behavior provides the compatibility baseline;
+capability. The project's declared Unity release (2020.3 LTS through 2022.3 LTS)
+is the behavioral baseline, with 2022.3 LTS as the principal reference, as
+defined in the [Compatibility contract](compatibility-contract.md);
 package-dependent features are bounded by the supported package matrix (CMP-002)
 in the [Compatibility contract](compatibility-contract.md).
 
@@ -89,7 +91,7 @@ the effect on references and prefab relationships explicit. Deleting a parent
 shows the complete descendant scope.
 
 Objects and scenes that an active agent session is currently changing carry a
-live indicator naming that session (EDT-008).
+live indicator naming that agent session (EDT-008).
 
 ## Inspector
 
@@ -119,7 +121,7 @@ and managed references (`[SerializeReference]`).
 
 Custom inspectors (`Editor` subclasses), property drawers (`PropertyDrawer`,
 `DecoratorDrawer`), and editor windows (`EditorWindow`) are recognized, but
-drawing their user interface is Unsupported, as declared in the
+drawing their user interface is Unsupported, as listed in the
 [index](INDEX.md). For a type with a custom inspector or drawer, the inspector
 uses the default presentation of the same serialized properties and states that
 a custom presentation exists but is not drawn. The commands those extensions
@@ -160,7 +162,7 @@ and exact resulting values. Cancelling a manipulation restores the prior state.
 The scene view draws gizmos from `OnDrawGizmos` and `OnDrawGizmosSelected`
 using the `Gizmos` drawing calls (lines, rays, wire and solid cubes and spheres,
 meshes, frustums, icons) with their color and matrix state. `OnDrawGizmosSelected`
-draws only for selected objects and their selection-relevant parents, as in
+draws for each selected object and for each ancestor of a selected object, as in
 Unity. Gizmo drawing can be toggled globally and per component type.
 
 Lines and rays from `Debug.DrawLine` and `Debug.DrawRay` appear in the scene
@@ -186,10 +188,11 @@ displays are selectable when the project uses them. (EDT-004)
 
 ## Play mode
 
-Entering play mode starts a runtime session from the approved project state. If
-unsaved content is used by the session, the editor identifies whether the
-session uses saved content or current unsaved editor content. It does not
-silently mix the two. Play, pause, and frame-step states are unambiguous.
+Entering play mode starts a play session from the current project state;
+proposed changes held under the require-approval policy (EDT-008) are excluded
+unless the developer previews them. If unsaved content is used by the play
+session, the editor identifies whether the play session uses saved content or
+current unsaved editor content. It does not silently mix the two. Play, pause, and frame-step states are unambiguous.
 Domain reload and scene reload follow the project's Enter Play Mode Options as
 defined by RUN-003 in [Scripting runtime](scripting-runtime.md).
 
@@ -371,9 +374,9 @@ tools, and to agents through MCP, with the same results.
 
 ### Change sets
 
-Every agent session's changes form a reviewable change set. A session can divide
-its work into multiple named change sets. Each item in a change set records the
-session, agent identity, time, the request that produced it, and its affected
+Every agent session's changes form a reviewable change set. An agent session can
+divide its work into multiple named change sets. Each item in a change set
+records the agent session, agent identity, time, the request that produced it, and its affected
 identities. (EDT-008)
 
 A change set presents:
@@ -382,7 +385,7 @@ A change set presents:
   settings, in the same form as semantic diff (EDT-007);
 * text diffs for scripts and other text files;
 * asset creation, move, rename, and deletion with their dependency effects;
-* compilation, test, and scenario results the session recorded against it.
+* compilation, test, and scenario results the agent session recorded against it.
 
 Change sets remain available across editor restarts until they are accepted,
 rejected, or reverted, and are readable through MCP as well as in the editor.
@@ -393,12 +396,64 @@ Each project and each agent session has one of two review policies, chosen by
 the developer:
 
 * **Apply immediately:** agent changes take effect in the project and the open
-  editor at once. Accepting marks items as reviewed; rejecting reverts them.
+  editor at once. Accepting marks items as reviewed; rejecting an unreviewed
+  item reverts it exactly as Revert does and marks it rejected.
 * **Require approval:** agent changes are held as a proposed change set that the
   developer can preview, including in the scene view and inspector, without the
   project files changing. Approving applies them; rejecting discards them.
 
-An agent cannot change its own review policy.
+A session's policy, when set, overrides the project's policy for that session;
+a new session inherits the project's policy. An agent session cannot change its
+own review policy.
+
+### Isolated proposal environment
+
+Under the require-approval policy, an agent session can compile, run tests
+(TST-003) and scenarios (TST-002), and enter play mode against its proposed
+change set in an isolated environment. Doing so changes no project files, does
+not change the editor's compilation or play mode, and is not visible to other
+agent sessions. Results are recorded against the change set and name the
+proposed revision they ran on. Approval shows the latest results and states
+whether the proposal changed after they were produced.
+
+Agent-authored code is not compiled into the editor process or a headless
+server process until it is approved, except in that isolated environment.
+
+### Risk flags
+
+A change set lists the following ahead of its other items, each flagged with its
+category:
+
+* changes to tests and test assemblies;
+* changes to scenario expectations, approved visual references, and comparison
+  tolerances;
+* changes to project settings and package manifests;
+* changes to build configuration and signing configuration;
+* changes to editor-time scripts (scripts in editor assemblies or using
+  `UnityEditor`);
+* additions or changes of native plugins.
+
+Removing or disabling a test, removing or loosening a scenario expectation, and
+widening a tolerance are additionally labeled as weakening verification.
+
+### Side effects of invoked project code
+
+When an agent session invokes project code (for example a `[MenuItem]` command,
+an editor method, a test, or a play session), files in the project that the code
+creates, changes, or deletes are detected and listed in the change set as
+file-level changes attributed to that invocation. Changes the code makes outside
+the project folder are reported as untracked effects of that invocation; they
+cannot be reverted through change review.
+
+### Who can review
+
+Accepting, approving, rejecting, or reverting a change set requires a person, or
+an agent session to which a person granted the review scope for that project
+(AUT-007 in [Automation and MCP](automation-and-mcp.md)). An agent session never
+accepts or approves a change set it authored; such a request returns a
+permission outcome and changes nothing. When no visual editor is running, a
+person reviews and approves through the command line or through an MCP client
+authenticated as that person.
 
 ### Accept, reject, and revert
 
@@ -407,7 +462,7 @@ items. Reverting an applied item restores the content it changed to its prior
 state and is itself an undoable operation. When other items depend on a rejected
 or reverted item (for example a property set on a component the item created),
 the dependent items are listed before the action proceeds. When content changed
-by an item has since been changed by a person or another session, the revert
+by an item has since been changed by a person or another agent session, the revert
 reports a conflict for that content instead of overwriting the newer change.
 Reverting never rewrites source-control history; it produces ordinary working
 changes.
@@ -416,8 +471,8 @@ changes.
 
 The editor shows each connected agent session, its identity, its current
 operation, its play sessions, and the objects and assets it is changing. Changes
-from an active session appear in the views as they happen, marked with that
-session.
+from an active agent session appear in the views as they happen, marked with
+that agent session.
 
 The developer can hold agent writes for all sessions or for one session. While
 writes are held, read and inspection requests continue; write requests return a
@@ -451,7 +506,7 @@ the keyboard.
    explicitly applies a value, and pause and frame step are reflected in the
    game view and play controls. (EDT-004)
 6. Undo and redo restore a multi-object hierarchy edit completely, including one
-   made by an agent and attributed to its session. (EDT-005)
+   made by an agent and attributed to its agent session. (EDT-005)
 7. Every unsaved or conflicting file, including agent-produced changes, is
    accounted for before close or reload. (EDT-005, EDT-007)
 8. Every editor action is found by name in the command palette, a disabled
@@ -463,7 +518,7 @@ the keyboard.
     incompatible asset on a reference field states why and changes nothing.
     (EDT-006)
 11. Opening a script from a compiler diagnostic opens the configured external
-    editor at the reported file and line. (EDT-006)
+    editor at the reported file and line. (DIA-001, DIA-002)
 12. A console or compatibility finding navigates to the responsible content.
     (EDT-001)
 13. A three-way merge of a scene changed on two branches combines changes to
@@ -482,3 +537,21 @@ the keyboard.
     (EDT-008)
 18. Changing, saving, and resetting the workspace arrangement and shortcuts do
     not dirty shared project content. (EDT-006)
+19. An agent session's request to accept or approve its own change set returns a
+    permission outcome and changes nothing; a person approves the same change
+    set through the command line with no visual editor running. (EDT-008)
+20. Under the require-approval policy, an agent session compiles its proposed
+    script change, runs the project's tests, and enters play mode against it in
+    the isolated environment; project files, the editor's compilation, and
+    other agent sessions are unchanged, and approval shows those results with
+    the proposed revision they ran on. (EDT-008, AUT-005)
+21. A change set that deletes a test and widens a visual comparison tolerance
+    lists both ahead of its other items and labels them as weakening
+    verification. (EDT-008)
+22. A `[MenuItem]` command invoked by an agent session that writes a file in the
+    project and one outside it lists the first as a file-level change
+    attributed to that invocation and the second as an untracked effect.
+    (EDT-008)
+23. Entering play mode while an agent's proposed change is held for approval
+    runs the play session without that change unless the developer is
+    previewing it. (EDT-004, EDT-008)

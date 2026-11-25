@@ -30,14 +30,14 @@ Each diagnostic identifier resolves to an explanation through product knowledge
 (AUT-006).
 
 The behavior of the `Debug.Log` family and of unhandled exceptions in scripts is
-owned by [Scripting runtime](scripting-runtime.md); this section owns how the
+owned by RUN-002 in [Scripting runtime](scripting-runtime.md); this section owns how the
 resulting entries are collected, grouped, filtered, and navigated.
 
 ## Debug drawing capture
 
 Lines and rays from `Debug.DrawLine` and `Debug.DrawRay`, and gizmos drawn
 through `Gizmos` in `OnDrawGizmos` and `OnDrawGizmosSelected`, are captured as
-structured data in editor and headless sessions. Each captured item records its
+structured data in editor and headless play sessions and in edit mode. Each captured item records its
 primitive kind (line, ray, cube, sphere, mesh, frustum, icon, wire or solid),
 world-space coordinates after the active `Gizmos.matrix`, color, duration,
 `depthTest` setting, frame, and originating object and script location.
@@ -52,14 +52,48 @@ is reported as such rather than as an empty result.
 
 ## Runtime inspection
 
-During an authorized session, a developer or agent can inspect open scenes,
+During an authorized play session, a developer or agent can inspect open scenes,
 hierarchies, components, values, lifecycle state, input, physics contacts,
 animation states, active audio, UI focus, loaded content, logs, timing, and
 memory. (DIA-001)
 
-Inspection alone does not change the session. A state-changing intervention is
-marked in the session evidence so the resulting behavior is not represented as
+Inspection alone does not change the play session. A state-changing intervention
+is marked in the play session's evidence so the resulting behavior is not represented as
 an untouched run.
+
+## Player crash reports, symbols, and device logs
+
+### Crash and exception reports
+
+Development and release players capture unhandled managed exceptions and native
+crashes into a crash report. Each report records the build identifier, unitas
+version, target, device model, operating system and version, the managed stack
+of every managed thread, and the native stack of the crashing thread. A crash
+during startup, before the first scene loads, produces a report as well.
+(DIA-003)
+
+### Symbols
+
+Every build produces symbol files matched to its build identifier: PDB files
+for Windows players, dSYM bundles for Apple targets, Android native symbols in
+the form Google Play accepts for upload, and source maps for browser players.
+A report from a release player is symbolicated through the visual editor, the
+command line, and MCP using the symbols whose build identifier matches; a report
+with no matching symbols states that and keeps its unsymbolicated addresses.
+
+Players send crash reports only to destinations that the project configures.
+No destination is configured by default; a player with no destination sends no
+report off the device.
+
+### Device logs
+
+Logs are collected from a connected player as a live stream, or from a copied
+log file: the desktop `Player.log` locations of each desktop target, Android
+logcat, the iOS device console, and the browser console. Collected lines become
+structured entries with time, severity, source (player, engine, or operating
+system), and, for player entries, the originating message as defined by the log
+APIs of RUN-002 in [Scripting runtime](scripting-runtime.md). People and agents
+read the same entries, filtered by player, severity, and time range.
 
 ## External code tools and script debugging
 
@@ -101,7 +135,8 @@ to:
 
 * the editor's play session and edit-time script execution (editor scripts,
   `[InitializeOnLoad]` code, and commands);
-* headless sessions, including each isolated agent play session (AUT-004);
+* headless play sessions, including each play session that an agent session
+  starts (AUT-004);
 * development players built with script debugging enabled, including a player
   started to wait for a debugger before running project code.
 
@@ -128,7 +163,7 @@ reason. A release player, or a target whose scripting backend cannot support
 managed debugging, reports debugging as unavailable at build time with the
 reason, using the Platform-limited state where the limit belongs to the target.
 
-Several clients can attach to the same session. Breakpoints from every attached
+Several clients can attach to the same play session or player. Breakpoints from every attached
 client apply, each attributed to its client, and every client is notified of
 each stop.
 
@@ -138,7 +173,7 @@ The same debugging operations are available to agents as MCP tools: attach,
 set and clear breakpoints, continue, step, read stack frames and values,
 evaluate expressions, and detach. A stop is delivered to the agent as a
 notification with the stopping location and reason. An agent and a person can
-debug the same session at once under the multiple-client rule above.
+debug the same play session at once under the multiple-client rule above.
 
 ## Profiling
 
@@ -167,7 +202,8 @@ their differences.
 
 ## Engine performance and scale commitments
 
-unitas states the performance it delivers as declared, measured budgets.
+unitas states the performance it delivers as per-release budgets with published
+measurements.
 (PRF-002)
 
 ### Scale floor
@@ -195,6 +231,8 @@ recorded hardware, operating system, and target, for:
   same target and hardware;
 * player startup time;
 * editor, headless, and player memory overhead;
+* hierarchy and asset queries, search, selection, property edits, undo, and
+  save on the scale-floor reference projects;
 * build time and player size.
 
 Budgets and their measurements are published with the release and record the
@@ -205,10 +243,10 @@ generally available on that target, as defined by CMP-004 in the
 reference project, machine, or target are never presented as applying to
 another.
 
-## Playtest sessions
+## Playtests
 
 As a developer, I can begin a playtest at the normal entry point, a selected
-scene, or an approved checkpoint. A session identifies project state, build,
+scene, or an approved checkpoint. A playtest identifies project state, build,
 target, quality, display, locale, input devices, controlled random seed when the
 game exposes one, start and end time, and editor or player environment.
 (TST-001)
@@ -390,3 +428,17 @@ scenarios are structured scenarios as defined in this document (TST-002).
     declares the log with `LogAssert.Expect`. (TST-003)
 17. A cancelled test run reports which tests completed and does not report the
     remainder as passed. (TST-003)
+18. A native crash in a release Android player produces a report with its build
+    identifier, device, and stacks, which an agent symbolicates through MCP
+    with that build's symbols. (DIA-003)
+19. A browser player's unhandled exception is mapped to source locations through
+    the build's source maps, and a report with no matching symbols states that.
+    (DIA-003)
+20. A player built with no configured report destination sends no crash report
+    off the device. (DIA-003)
+21. Logs streamed from a connected iOS development player and from a copied
+    Windows `Player.log` both appear as structured entries filterable by
+    severity and time. (DIA-003)
+22. The published budgets include hierarchy and asset queries, search,
+    selection, property edits, undo, and save on the scale-floor reference
+    projects. (PRF-002)

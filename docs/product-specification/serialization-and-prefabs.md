@@ -76,7 +76,7 @@ references declared with `[SerializeReference]`.
 * Array and list ordering is stable.
 * Repeated references remain repeated references rather than duplicate objects.
 * Internal references within a duplicated hierarchy target the corresponding
-  duplicated objects where Unity behavior requires it.
+  duplicated objects, as in Unity.
 * External references remain external.
 * Intentional null, missing target, incompatible target, and unsupported value
   remain distinguishable.
@@ -90,9 +90,9 @@ references declared with `[SerializeReference]`.
 Public fields and fields marked `[SerializeField]` of supported types are
 serialized and appear in the inspector. Fields marked `[NonSerialized]` are not
 serialized, and fields marked `[HideInInspector]` are serialized but not
-shown. The attribute contract is owned by RUN-003 in
-[Scripting runtime](scripting-runtime.md). Supported serializable nested types
-retain their field structure.
+shown. The attributes are listed by RUN-003 in
+[Scripting runtime](scripting-runtime.md); their serialized effect is defined
+here. Supported serializable nested types retain their field structure.
 
 When script fields change, compatible values remain associated with their
 intended fields. Removed or incompatible fields are reported before data is
@@ -108,6 +108,45 @@ Managed references keep their type identity (assembly, namespace, and class
 name) and reference identity. A managed reference whose type no longer exists
 is reported as a missing type with its serialized data preserved, and its data
 is restored when the type returns.
+
+### Serializable types
+
+The serializer applies Unity's type rules:
+
+* Properties, static fields, `const` fields, and `readonly` fields are not
+  serialized.
+* Dictionaries, multidimensional arrays, jagged arrays, nested collections
+  (such as a list of lists), and delegates are not serialized.
+* Fields whose declared type is an interface or abstract class are not
+  serialized unless they are marked `[SerializeReference]`.
+* Closed generic types marked `[Serializable]` are serialized as fields.
+* A field of a custom `[Serializable]` class that is not marked
+  `[SerializeReference]` is stored inline: it has no shared identity and no
+  polymorphism, and a null value loads as a default-constructed instance.
+* Inline nesting deeper than Unity's serialization depth limit of 10 levels
+  is truncated at that depth, with Unity's warning naming the type.
+
+A field that these rules exclude is absent from saved data and from the
+inspector, exactly as in Unity; unitas does not serialize it as an extension.
+
+### Serialization callbacks
+
+`ISerializationCallbackReceiver.OnBeforeSerialize` and `OnAfterDeserialize`
+run on every occasion Unity runs them, including saving, loading,
+`Object.Instantiate`, inspector refresh, domain reload, and serialization
+during play. An exception thrown by a callback is reported with the type and
+object and does not corrupt the stored data. Calls to Unity APIs from these
+callbacks follow Unity's restrictions for code that can run on the
+serialization thread, and a disallowed call produces Unity's error.
+
+### Hide flags
+
+`HideFlags` values `HideInHierarchy`, `HideInInspector`, `DontSaveInEditor`,
+`DontSaveInBuild`, `DontUnloadUnusedAsset`, `NotEditable`, `DontSave`, and
+`HideAndDontSave` have their Unity effects on hierarchy visibility, inspector
+visibility, saving, build inclusion, unloading by `UnloadUnusedAssets`, and
+editability. Automation can still list hidden objects, and each one is marked
+with its flags.
 
 ## Object references
 
@@ -234,17 +273,14 @@ while preserving current observable values and child relationships. Unpacking
 one level keeps nested prefab boundaries; unpacking completely removes them.
 Unpacking is distinct from losing a source through an error.
 
-## Instantiation and cloning
+## Instantiation and duplication
 
-At runtime and in supported editor actions, cloning reproduces the selected
-object or prefab hierarchy, components, serialized values, activation, and
-internal references. The clone has distinct runtime identity. References from
-the clone to objects inside the cloned hierarchy target clone counterparts;
-references to external objects retain their intended external targets.
-
-Instantiation applies the requested parent, scene, position, rotation, and
-activation behavior consistently. Lifecycle events observe the completed
-supported serialized state rather than a partially populated object.
+Runtime instantiation and cloning are owned by RUN-001 in
+[Scripting runtime](scripting-runtime.md). Editor duplication of objects and
+prefab instances preserves internal references as defined in the
+[Serialization contract](#serialization-contract): references inside the
+duplicated hierarchy target the duplicates, and references outside it keep
+their targets.
 
 ## ScriptableObject assets
 
@@ -312,6 +348,11 @@ preserved rather than downgraded silently.
   [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
   and playtest scenarios, is stored in files that Unity does not import or
   misinterpret.
+* Generated IDE project files (`.sln` and `.csproj`) are written at the
+  project root as defined by DIA-002 in
+  [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
+  They are the only files unitas writes outside project content and
+  unitas-owned state, and either unitas or Unity may regenerate them.
 
 ## Save integrity and interoperability
 
@@ -346,14 +387,14 @@ requires an explicit user-visible boundary before commitment.
    only the selected ownership level. (SER-003)
 8. Nested prefab and variant values expose an unambiguous inheritance path, and
    a missing base remains a broken relationship. (SER-003)
-9. Runtime cloning redirects internal references to clone counterparts.
-   (SER-003, SER-004)
+9. Duplicating a hierarchy in the editor redirects its internal references to
+   the duplicates and keeps references to outside objects. (SER-001, SER-004)
 10. A missing script, a missing prefab source, and an unrecognized serialized
     class each remain identifiable with their data preserved across an
     unrelated edit and save. (SER-004)
-11. A circular reference graph and an editor-time cross-scene reference
-    attempt behave as declared, and no persistent cross-scene reference is
-    invented. (SER-004)
+11. A circular reference graph reloads with every reference resolving to the
+    same targets, and assigning a reference to an object in another scene in
+    the editor produces the diagnostic and saves no reference. (SER-004)
 12. In a Mixed-mode project, an edited binary asset stays binary, an edited text
     asset stays text, baked lighting and navigation data are readable, and an
     asset with an older `serializedVersion` is rewritten only after an edit, in
@@ -361,3 +402,16 @@ requires an explicit user-visible boundary before commitment.
 13. Opening, editing, and saving a project without `Library/` writes nothing
     into Unity-generated folders, and a repository using the standard Unity
     ignore template shows only the edited assets as changed. (SER-005)
+14. A component with a property, a `readonly` field, a dictionary, and an
+    interface-typed field saves none of them; a null field of a custom
+    `[Serializable]` class reloads as a default-constructed instance; a
+    closed generic `[Serializable]` field round-trips. (SER-001)
+15. A component whose `OnAfterDeserialize` throws reports the type and object,
+    and the stored data is unchanged after reload; `OnBeforeSerialize` runs
+    on save and on `Object.Instantiate`. (SER-001)
+16. An object with `HideFlags.DontSaveInEditor` is absent from the saved scene,
+    an object with `HideInHierarchy` is not shown in the hierarchy, and
+    automation lists both with their flags. (SER-001)
+17. After unitas opens a project, the only files written outside project
+    content and unitas-owned state are the generated `.sln` and `.csproj`
+    files at the project root. (SER-005)

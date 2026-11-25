@@ -5,8 +5,10 @@
 This specification defines the user-visible build product, headless and
 continuous-integration operation, scripting backends and code stripping, player
 behavior, platform integration, XR behavior, the supported networked-game
-experience, product licensing as it applies to shipped players, and product
-installation, updates, and target toolchains.
+experience, deployment to devices and development-player connections, content
+builds and post-release content updates, product licensing as it applies to
+shipped players, product installation, updates, and target toolchains, and the
+product's own data flows and privacy behavior.
 
 Every capability in this specification is available to authorized agents
 through structured automation and MCP as well as to people, under the rules
@@ -62,6 +64,30 @@ Cancellation leaves no artifact presented as a successful player. Repeated
 builds with the same project state, build choices, toolchain, dependency
 versions, and target environment have no unexplained behavioral or content
 differences. Changes in external content used by a build are recorded.
+
+## Build identity, reproducibility, and long builds
+
+Every build has a unique build identifier, which the player exposes as
+`Application.buildGUID`. Every build produces a build manifest that records
+digests of its inputs (project content, settings, packages, and plug-ins),
+toolchain versions, the unitas version, the build choices, and digests of every
+output it produced. Comparing the manifests of two builds names each differing
+input and each differing output. The manifest includes a machine-readable
+software bill of materials listing the unitas components and the third-party
+components included in the player, with their versions and licenses.
+
+A build that encounters a content failure fails, and its result reports every
+failure found during the build, not only the first. After a build is cancelled,
+interrupted, or fails, the next build reuses completed results whose recorded
+inputs are unchanged and states which work it redid and why.
+
+## Release hardening
+
+A release player contains no automation, remote-control, debugger, or profiler
+endpoint. It embeds no absolute paths of the build host and no account names
+beyond those present in the project's own content. It loads native libraries
+only from its own installation locations. When a release build contains any
+development-only capability, the build result names that capability.
 
 ## Signing, notarization, and store packaging
 
@@ -124,7 +150,14 @@ interrupted.
 A headless run of a project that is not trusted performs only operations that
 execute no project code and reports each operation it refused. Trust is granted
 only by the user, through the mechanism owned by PRJ-008 in
-[Projects and assets](project-and-assets.md).
+[Projects and assets](project-and-assets.md). The trust argument defined by
+PRJ-008 is the only invocation input that trusts a project.
+
+Builds started from project scripts through `BuildPipeline.BuildPlayer`, and
+build callbacks such as `IPreprocessBuildWithReport` and
+`IPostprocessBuildWithReport`, behave as defined by RUN-010 in
+[Scripting runtime](scripting-runtime.md); their results are reported with the
+same build result as any other build.
 
 unitas-owned caches can be preserved and restored between continuous-
 integration runs. A restored cache whose recorded inputs match the project
@@ -171,9 +204,10 @@ available on a target is reported as a performance property of the build.
 
 ## Target families
 
-The desired target experience covers Windows x86-64 and ARM64, macOS Apple
-Silicon and Intel, Linux x86-64 and AArch64, Android ARM64 and x86-64, iOS
-ARM64, browser delivery, Linux handhelds, supported XR platforms, and licensed
+Targets are Windows x86-64 and ARM64, macOS Apple Silicon and Intel, Linux
+x86-64 and AArch64, Android ARM64 and x86-64, iOS ARM64, browser delivery,
+Linux-based handheld devices (for example Steam Deck), XR devices reached
+through the XR Plugin Management providers that CMP-002 lists, and licensed
 console environments when the user possesses required access.
 
 Compatibility reporting distinguishes targets and capabilities derived from the
@@ -181,13 +215,21 @@ Unity 2020.3–2022.3 baseline from unitas extensions such as WebGPU, visionOS-
 class devices, and architecture variants not offered uniformly by those Unity
 releases. An extension is not presented as evidence of Unity parity.
 
-Target status uses the compatibility states defined in the
-[Compatibility contract](compatibility-contract.md). A target is Supported,
-Partially supported with its excluded behavior named, Unsupported, or
-Externally unavailable; an Externally unavailable target states whether the
-cause is the current host (for example an Apple target on a host without the
-required Apple toolchain), a missing toolchain, or a missing user entitlement.
+A target carries one of the compatibility states defined in the
+[Compatibility contract](compatibility-contract.md); an Externally unavailable
+target states whether the cause is the current host (for example an Apple
+target on a host without the required Apple toolchain), a missing toolchain, or
+a missing user entitlement.
 Proprietary platform access is never implied by the existence of a target name.
+
+## Dedicated server players
+
+Windows and Linux dedicated server players build and run with no rendering or
+audio output. Unity 2020.3 projects select them through the Server Build
+option, and Unity 2021.2 and later projects through the Dedicated Server
+target. A server build defines `UNITY_SERVER`, applies server-build asset
+stripping, and runs with `-batchmode -nographics`. Graphics and audio API use
+in a server player is reported as Platform-limited, naming the API.
 
 ## Player lifecycle
 
@@ -288,6 +330,39 @@ capabilities that originate in separately versioned Unity packages are reported
 against the specific package and version line listed in CMP-002. Project use of
 one version is not evidence that every version or provider behaves identically.
 
+## Deployment, device connection, and development players
+
+A developer or authorized agent can deploy, install, launch, and remove a built
+player on a selected connected device or on the local host: an Android device
+or emulator, an iOS device or simulator, a desktop host, or a local browser.
+Device discovery lists each device with its name, target, architecture,
+operating system version, and connection state, and states why a listed device
+is unusable, such as being locked, unauthorized for debugging, on an
+incompatible operating system version, or missing a required provisioning
+profile. A failed deployment names the device, the step that failed, and the
+reason.
+
+A development player opens its profiler, debugger, log-stream, and
+remote-control connections only when it was built with those options. It
+accepts a connection only from a session that holds that build's pairing
+credential, and it reports each accepted and refused connection. These
+operations are available through MCP under the deploy permission scope owned
+by AUT-007 in [Automation and MCP](automation-and-mcp.md).
+
+## Content builds and post-release content updates
+
+Addressables groups build for the selected target using the project's
+Addressables profiles and their build and load paths. Updating a previous
+content build uses that build's recorded content state to produce only the
+changed bundles and a new content catalog. Every content build result states
+which shipped player versions can load the content it produced, and records
+the unitas version, the target, and the bundles and catalog it produced.
+
+A player that encounters content built for an incompatible player version, or
+content built by Unity rather than by unitas, reports each affected bundle by
+name with the reason, and does not load that content partially. Runtime loading
+behavior is owned by RUN-006 in [Scripting runtime](scripting-runtime.md).
+
 ## Licensing
 
 unitas is dual licensed: it is available under the GNU General Public License
@@ -309,10 +384,11 @@ the player includes the GPLv3 license text. For a commercially licensed build,
 the result identifies the commercial license that governs the included unitas
 components.
 
-For targets whose distribution terms are known to conflict with GPLv3
-distribution, including licensed console environments and app stores whose
-terms are known to impose such conflicts, the build result and target status
-state that distribution requires the commercial license. A development build for
+Each release publishes a licensing table that states, for every target, its
+status with respect to GPLv3 distribution. For the targets that the release's
+licensing table lists as conflicting with GPLv3 distribution (at minimum
+licensed console environments), the build result and target status state that
+distribution requires the commercial license. A development build for
 such a target is not blocked on that basis.
 
 Every player includes the notices and license texts of the third-party
@@ -360,6 +436,16 @@ found, the required range, and the action that resolves it. Accepting a
 toolchain vendor's license terms is a user action; an agent can inspect
 installed versions and toolchain state and can request acquisition, and cannot
 accept those terms.
+
+## Product data flows, telemetry, and privacy
+
+A player contains no telemetry, analytics, or network connection that the game
+itself did not request. The editor, the command line, and the MCP server send no
+project content to any destination. Usage reporting and crash reporting for
+unitas itself are off until a person enables them; when enabled, each lists the data it sends
+and its destination, and neither ever blocks offline use. Apple target builds
+include a privacy manifest that covers the required-reason APIs used by the
+included unitas components.
 
 ## Acceptance stories
 
@@ -418,3 +504,36 @@ accept those terms.
     player build, queries license and toolchain state, and is refused when it
     attempts to accept a toolchain vendor's license terms. (BLD-001, LIC-001,
     PRD-001, AUT-001)
+18. Two builds from identical inputs produce manifests whose comparison shows no
+    differing inputs or outputs; changing one texture makes the comparison name
+    that input and each output it changed, and each player reports its own
+    `Application.buildGUID`. (BLD-001)
+19. A build with three broken assets fails and reports all three; the next build
+    after the fix reuses unchanged completed work and states what it redid.
+    (BLD-001)
+20. A release player contains no automation, debugger, or profiler endpoint and
+    no build-host absolute paths, and a release build that contains a
+    development-only capability names it in the build result. (BLD-001)
+21. A headless invocation without the PRJ-008 trust argument refuses to run a
+    project's static editor method, and a project build started through
+    `BuildPipeline.BuildPlayer` produces the same build result as a command-line
+    build. (BLD-002, PRJ-008, RUN-010)
+22. A Linux dedicated server player runs with `-batchmode -nographics`, defines
+    `UNITY_SERVER`, and reports a graphics API call as Platform-limited.
+    (PLT-001)
+23. A target listed in the release's licensing table as conflicting with GPLv3
+    distribution states that distribution requires the commercial license.
+    (LIC-001)
+24. An agent lists connected devices, sees an Android device reported as
+    unauthorized for debugging, then deploys, launches, and removes a player on
+    an emulator; a development player refuses a profiler connection from a
+    session without its pairing credential. (BLD-004, AUT-007)
+25. After a player ships, a content update produces only the changed bundles and
+    a new catalog that the shipped player loads; content built for an
+    incompatible player version or by Unity is reported by bundle name and
+    reason and is not loaded partially. (BLD-005, RUN-006)
+26. A player built from a project that makes no network requests opens no
+    network connection, the editor and MCP server send no project content
+    anywhere, unitas crash reporting stays off until a person enables it, and an iOS
+    build includes a privacy manifest for the included unitas components.
+    (PRD-002)

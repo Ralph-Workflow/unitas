@@ -38,7 +38,7 @@ As a developer, I can:
 
 Commands contributed by custom editor extensions appear as keyboard-reachable
 commands with accessible names. Custom editor extension drawing is Unsupported
-as declared in the [index](INDEX.md), so an extension never removes
+as listed in the [index](INDEX.md), so an extension never removes
 accessibility from the default inspector presentation used in its place or from
 unrelated editor functions.
 
@@ -103,13 +103,14 @@ When the project uses a listed Localization package version:
 * Locale-aware number, currency, date, and time formatting follows the
   selected locale's culture or custom formatter.
 * Startup locale selectors (command line, system locale, specific locale, and
-  player preference selectors) run in their declared order, and the result is
+  player preference selectors) run in the order listed in the Localization
+  Settings, and the result is
   distinguishable from the device locale and the project default.
 * `LocalizationSettings.SelectedLocale`, `SelectedLocaleChanged`, the
   initialization operation, table preloading, and asynchronous table and asset
   loading behave as in the package. Loading through Addressables follows
   RUN-006 in [Scripting runtime](scripting-runtime.md).
-* Fallback locales apply in their declared chain, and the missing-translation
+* Fallback locales apply in the order set by each Locale's fallback metadata, and the missing-translation
   behavior configured in the project (showing the missing message, an empty
   string, or the fallback) is honored and diagnosed.
 * Pseudo-localization locales produce their expanded, accented, or bracketed
@@ -130,10 +131,11 @@ reloading scenes or recreating unrelated game state. Changing locale does not
 corrupt saved game state or confuse content identity with translated display
 text.
 
-Right-to-left and complex-script support is declared per language and feature
-by the project, and the declared support state for each locale is reported.
-The presence of Unicode characters alone is not treated as full language
-support, and text rendering for a locale is bounded by TXT-001.
+A locale is right-to-left when its Locale asset metadata or the project's
+localization settings mark it so. For each locale, the right-to-left state and
+the support state of the text system that renders it, as defined by TXT-001 in
+[UI, audio, and input](ui-audio-input.md), are reported. The presence of
+Unicode characters alone is not treated as full language support.
 
 Missing translations remain visibly diagnosable and do not silently masquerade
 as translated content.
@@ -168,9 +170,16 @@ owned by RUN-009 in [Scripting runtime](scripting-runtime.md).
 
 ## Game saves
 
+unitas provides no save API beyond `PlayerPrefs` and file access (RUN-009 in
+[Scripting runtime](scripting-runtime.md)). The outcomes in this section and
+the next are what the engine's storage behavior, diagnostics, and playtest
+tools (TST-002 in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md))
+let a project observe and verify for the save system it implements.
+
 As a player, I can create, update, load, enumerate, and delete save data when the
-game exposes those actions. A save identifies its game or profile, declared
-version, timestamp or play context when used, and slot or identity.
+game exposes those actions. A save identifies its game or profile, the version
+number the game writes into it, timestamp or play context when used, and slot or identity.
 
 As a developer, I can distinguish:
 
@@ -181,29 +190,47 @@ As a developer, I can distinguish:
 * local data from cloud or externally synchronized data;
 * a user cancellation from an I/O or permission failure.
 
-For each target, the declared storage contract identifies when a save is
-committed and whether the prior valid save survives interruption, quota
-exhaustion, and process termination. A save operation does not report success
-until durable state is available under that contract. An interrupted or
-out-of-space save does not replace a valid prior save with an apparently
-successful corrupt one.
+For each target, unitas documents in its product knowledge (AUT-006 in
+[Automation and MCP](automation-and-mcp.md)) when `PlayerPrefs.Save` and a file
+write under `Application.persistentDataPath` become durable (including the
+browser target's synchronized storage), whether a crash loses `PlayerPrefs`
+changes not yet saved, and whether a prior file survives interruption, quota
+exhaustion, and process termination during a write. Engine storage behavior
+matches that documentation: a write that fails for lack of space or
+permission reports the failure to the calling code, and the engine never
+reports a write as complete before it is durable under that documentation.
+A game that writes to a new file and replaces the prior one only after the
+write completes keeps its prior valid save on every target whose
+documentation says the replacement is atomic.
+
+### Serializers for save data
+
+* `JsonUtility` and Newtonsoft Json (`com.unity.nuget.newtonsoft-json` 3.x) are
+  Supported on every scripting backend.
+* `System.Xml.Serialization.XmlSerializer` is Supported, with the
+  ahead-of-time compilation limits defined by BLD-003 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
+* `BinaryFormatter` is Partially supported: it is unavailable on the browser
+  target, and it is subject to the BLD-003 ahead-of-time compilation limits.
+* A serialization that fails because of ahead-of-time compilation or managed
+  code stripping names the type and member that could not be serialized.
 
 ## Save evolution and migration
 
-When a project declares support for older save versions, loading preserves the
+When a project's load code accepts older save versions, loading preserves the
 meaning of supported player progress and settings. A migration identifies input
 version, resulting version, outcome, and any data that cannot retain meaning.
 
 Migration can be playtested using representative older saves. A failed
-migration leaves the original data available where the platform's storage
-contract permits it and does not masquerade as a new game.
+migration leaves the original data available on targets whose documented
+storage behavior keeps the prior file, and does not masquerade as a new game.
 
 ## Cloud and conflict behavior
 
-When synchronized storage is supported, the game distinguishes local and remote
+When a game uses synchronized storage from a platform service, the game distinguishes local and remote
 versions, offline changes, upload or download failure, quota, authentication,
-and conflict. A conflict exposes enough information for the game's declared
-policy or user choice; it never silently treats the newest timestamp as correct
+and conflict. A conflict exposes enough information for the conflict policy
+the game implements or for a user choice; it never silently treats the newest timestamp as correct
 when ordering is unknown.
 
 ## Privacy and user control
@@ -225,14 +252,26 @@ unavailable, or controlled by an external platform service.
    strings and assets without reloading the scene, reports fallback and layout
    failures, and preserves game-state identity. (LOC-001)
 4. Smart Strings with variables and plurals and locale-aware number and date
-   formatting produce the package's output for each declared locale. (LOC-001)
+   formatting produce the package's output for each locale the project defines.
+   (LOC-001)
 5. Previewing a pseudo-localized or right-to-left locale in the editor or
    through automation reports missing translations, missing assets, overflow,
-   and the declared script support state without changing saved content.
-   (LOC-001)
+   and the reported right-to-left and text-system support state without
+   changing saved content. (LOC-001)
 6. `PlayerPrefs` values survive a player restart in Unity's per-target
    location, and clearing preferences does not remove save data. (SAV-001)
-7. Interrupted saving never appears successful and does not silently destroy a
-   prior valid save. (SAV-001)
-8. Older supported saves migrate with declared results; corrupt, incompatible,
-   absent, and failed data remain distinct outcomes. (SAV-001)
+7. A playtest scenario that terminates the player during a save file write
+   under `Application.persistentDataPath`, and one that exhausts storage
+   quota, each observe the outcome that the target's product-knowledge
+   documentation states, and a write-then-replace save keeps the prior valid
+   save on targets documented as atomic. (SAV-001)
+8. Older saves that a project's load code accepts migrate with reported input
+   version, resulting version, and outcome; corrupt, incompatible, absent, and
+   failed data remain distinct outcomes. (SAV-001)
+9. Save data round-trips through `JsonUtility`, Newtonsoft Json, and
+   `XmlSerializer` on each scripting backend; `BinaryFormatter` is reported
+   Partially supported and unavailable on the browser target; and a type
+   removed by stripping produces a diagnostic naming the type. (SAV-001)
+10. Product knowledge available through automation states, for each target,
+    when `PlayerPrefs.Save` and persistent-data file writes are durable and
+    what a crash loses. (SAV-001)

@@ -9,11 +9,13 @@ particles, and cinematic sequencing. It describes observable output and
 diagnostics, not a rendering architecture.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. Stock Unity 2022.3 LTS defines the baseline. URP, Shader Graph,
-Post Processing (v2), the 2D packages, Timeline, Cinemachine, and other package
-behavior is covered only for the package families and version lines listed in
-the supported package matrix (CMP-002, owned by the
-[Compatibility contract](compatibility-contract.md)).
+capability. The project's Unity release, from Unity 2020.3 LTS through Unity
+2022.3 LTS, is the behavioral baseline, with Unity 2022.3 LTS as the principal
+reference, as defined in the [Compatibility contract](compatibility-contract.md).
+URP, Shader Graph, Post Processing (v2), the 2D packages, Timeline,
+Cinemachine, and other package behavior is covered only for the package
+families and version lines listed in the supported package matrix (CMP-002,
+owned by the [Compatibility contract](compatibility-contract.md)).
 
 In this document, "within scope" means the render pipelines named in
 [Render pipeline scope](#render-pipeline-scope) combined with the package
@@ -37,12 +39,13 @@ to draw it.
 
 For each supported build target and current host, developers can inspect the
 selected graphics API and version, the device and driver where the host
-reports them, and which declared rendering features are supported or limited.
-If no usable graphics device or API is available, startup or build fails with
-an actionable reason; it does not silently claim a working renderer. A change
-of graphics API does not silently change the specified visible behavior of a
-supported scene. Target-specific visual differences or unsupported shader
-features are reported as limitations under the compatibility contract.
+reports them, and which rendering features named in this document are
+Supported or Platform-limited there. If no usable graphics device or API is
+available, startup or build fails with an actionable reason; it does not
+silently claim a working renderer. A change of graphics API does not silently
+change the specified visible behavior of a supported scene. Target-specific
+visual differences or unsupported shader features are reported as limitations
+under the compatibility contract.
 
 ## Render pipeline scope
 
@@ -52,9 +55,10 @@ settings render pipeline asset and the per-quality-level override, as in
 Unity; the effective pipeline asset for each quality level and target is
 inspectable.
 
-* **Built-in Render Pipeline:** forward and deferred rendering paths, legacy
-  vertex-lit behavior where the Camera or Graphics settings select it, camera
-  rendering path overrides, and Built-in quality settings are Supported.
+* **Built-in Render Pipeline:** forward and deferred rendering paths, the
+  legacy vertex-lit path where the Camera or Graphics settings select it,
+  camera rendering path overrides, and Built-in quality settings are
+  Supported.
 * **URP:** the URP 10.x line on Unity 2020.3, 12.x on Unity 2021.3, and 14.x on
   Unity 2022.3, as listed in the supported package matrix. The Forward
   rendering path is Supported on every listed line. The Deferred rendering path
@@ -64,7 +68,7 @@ inspectable.
   render scale, HDR, MSAA, depth and opaque texture options, and per-camera
   renderer selection retain their Unity meaning.
 * **High Definition Render Pipeline (HDRP):** HDRP assets, materials, volumes,
-  and settings are recognized and reported as Unsupported, as declared in the
+  and settings are recognized and reported as Unsupported, as listed in the
   [index](INDEX.md). Objects using HDRP materials remain present and
   inspectable and render as an unmistakable failed-shader result.
 * **Custom scriptable render pipelines:** a project whose render pipeline asset
@@ -80,8 +84,8 @@ silently falling back to another pipeline.
 
 A Camera renders selected scene content to a game display or render target.
 It exposes projection, field of view or orthographic size, clipping range,
-viewport, depth order, background and clear behavior, culling mask, target
-texture, target display, enabled state, and supported quality choices.
+viewport, depth, background and clear behavior, culling mask, target texture,
+target display, enabled state, and quality choices.
 
 ### Required behavior
 
@@ -89,22 +93,42 @@ texture, target display, enabled state, and supported quality choices.
   coordinate conversion APIs.
 * World-to-screen, screen-to-world, viewport, and ray conversions correspond to
   the actual rendered image.
-* Multiple cameras contribute in declared depth order (Built-in) or stack order
+* Multiple cameras contribute in `Camera.depth` order (Built-in) or stack order
   (URP base and overlay cameras) and according to their viewport and clear
   behavior.
+* `Camera.main` returns the first enabled camera tagged `MainCamera`, as in
+  Unity, and returns null when there is none.
 * A disabled, culled, targetless, or obscured camera has an inspectable reason
   for producing no visible output.
 * Aspect changes, safe areas, dynamic resolution on targets that report support
   for it, and display selection have explicit effects.
-* Render targets display the same camera result expected from their declared
-  dimensions, color interpretation, and update behavior.
+* Render targets display the camera result implied by their dimensions,
+  format, color space, and update behavior.
 * `Camera.Render` and manual camera rendering produce the same image as the
   automatic render of the same camera state.
 
+### Camera callbacks and depth textures
+
+* On the Built-in Render Pipeline, `OnPreCull`, `OnPreRender`, `OnPostRender`,
+  and `OnRenderImage` on scripts attached to a camera, and the
+  `Camera.onPreCull`, `Camera.onPreRender`, and `Camera.onPostRender`
+  delegates, run at Unity's points in that camera's render. `OnRenderImage`
+  receives the source and destination render textures and its output becomes
+  the camera's image.
+* `Camera.depthTextureMode` (Depth, DepthNormals, and MotionVectors) makes
+  `_CameraDepthTexture`, `_CameraDepthNormalsTexture`, and
+  `_CameraMotionVectorsTexture` available to shaders as in Unity.
+* On URP, these Built-in camera callbacks are not invoked, as in Unity. The
+  project compatibility report names every script that defines them in a URP
+  project, with the consequence that they do not run.
+* On URP, `RenderPipelineManager.beginFrameRendering`, `endFrameRendering`,
+  `beginCameraRendering`, `endCameraRendering`, and, in releases that define
+  them, `beginContextRendering` and `endContextRendering` fire in Unity order.
+
 ## Mesh and sprite rendering
 
-Static meshes, skinned meshes, sprites, tilemaps, lines, trails, and supported
-particle renderers participate in camera culling, transforms, sorting, layers,
+Static meshes, skinned meshes, sprites, tilemaps, lines, trails, and particle
+renderers participate in camera culling, transforms, sorting, layers,
 materials, lighting, and shadows according to their feature contracts.
 
 A renderer exposes its source geometry, material slots, bounds, enablement,
@@ -116,11 +140,24 @@ Skinned meshes reflect bone transforms, bind poses, weights, blend shapes, and
 animation. Negative or non-uniform transforms produce defined results. A
 renderer does not appear compatible merely because a fallback shape is visible.
 
-Meshes created or modified at runtime through the `Mesh` API (vertices,
-indices, submeshes, normals, tangents, UVs, colors, bounds recalculation, and
-`MarkDynamic`) render the data the script supplied. Reading mesh data that was
-imported without Read/Write enabled fails in a player with a compatible error
-naming the mesh.
+### Runtime meshes and mesh instances
+
+* Meshes created or modified at runtime through the `Mesh` API (vertices,
+  indices, submeshes, normals, tangents, UVs, colors, bounds recalculation,
+  and `MarkDynamic`) render the data the script supplied.
+* `Mesh.indexFormat` selects 16-bit or 32-bit indices; a 16-bit mesh with more
+  than 65,535 vertices, or an index outside the vertex range, fails with
+  Unity's compatible error naming the mesh.
+* `Mesh.CombineMeshes`, `SetVertexBufferParams`, `SetVertexBufferData`,
+  `SetIndexBufferParams`, `SetIndexBufferData`, `SetSubMesh`, and the
+  `Mesh.MeshData` APIs (`AcquireReadOnlyMeshData`, `AllocateWritableMeshData`,
+  and `ApplyAndDisposeWritableMeshData`) produce the same mesh as in Unity.
+* Reading mesh data that was imported without Read/Write enabled fails in a
+  player with a compatible error naming the mesh.
+* `MeshFilter.mesh` creates a per-renderer copy of the shared mesh on first
+  access, and `MeshFilter.sharedMesh` reads and edits the asset. Copies live
+  until destroyed or released by `Resources.UnloadUnusedAssets`, and appear
+  in residency inspection as runtime instances distinct from the asset.
 
 ## Materials
 
@@ -128,23 +165,36 @@ Materials retain their shader relationship and supported textures, colors,
 numbers, vectors, keywords, render queue, surface mode, transparency, alpha
 clipping, culling, depth behavior, tiling, and offsets.
 
-The product supports the observable behavior of Unity Built-in standard
-materials and the URP Lit, Simple Lit, Unlit, Baked Lit, and 2D sprite
-materials of the listed URP lines. Metallic, smoothness, normal, occlusion,
-emission, transparency, and alpha-clipping controls have compatible visible
-meaning within scope.
+The product supports the observable behavior of the Built-in shaders listed in
+[Built-in shaders](#built-in-shaders) and the URP Lit, Simple Lit, Unlit,
+Baked Lit, and 2D sprite materials of the listed URP lines. Metallic,
+smoothness, normal, occlusion, emission, transparency, and alpha-clipping
+controls have Unity's visible meaning within scope.
 
-Editing a shared material affects every renderer using that asset. Accessing or
-creating an instance-specific material through `Renderer.material` produces a
-distinct editable identity according to the compatible API contract, while
-`Renderer.sharedMaterial` edits the asset. Missing properties never silently
-accept values that have no visible effect.
+Editing a shared material affects every renderer using that asset.
+`Renderer.material` and `Renderer.materials` create per-renderer copies on
+first access, while `Renderer.sharedMaterial` and `Renderer.sharedMaterials`
+read and edit the asset. Material copies live until destroyed or released by
+`Resources.UnloadUnusedAssets`, and appear in residency inspection as runtime
+instances. Missing properties never silently accept values that have no
+visible effect.
 
 A `MaterialPropertyBlock` applied to a renderer overrides the named properties
 for that renderer only, without creating a material instance and without
 changing the shared material. The effective value of each property on a
 renderer, and whether it comes from the material or a property block, is
 inspectable.
+
+## Color space
+
+The Player color space setting (Gamma or Linear), reported at runtime through
+`QualitySettings.activeColorSpace`, governs sRGB texture sampling, lighting
+and blending math, render texture sRGB read and write, and UI and vertex color
+conversion as in Unity. Texture import sRGB flags and `RenderTexture`
+read-write modes keep their meaning in both color spaces. A target whose
+graphics API cannot provide Linear rendering reports Linear color space as
+Platform-limited, naming the target and graphics API; it does not silently
+render in Gamma.
 
 ## Textures at runtime
 
@@ -162,14 +212,32 @@ anisotropy, color space interpretation, readability, and residency.
 * `Texture2D.ReadPixels` copies from the active render target into the texture
   at the requested rectangle and offset; the result becomes visible after
   `Apply`.
-* `ImageConversion.LoadImage`, `EncodeToPNG`, and `EncodeToJPG` produce
-  images whose decoded texels match the source within the declared format.
+* `ImageConversion.LoadImage` decodes PNG and JPG data, and `EncodeToPNG`,
+  `EncodeToJPG`, `EncodeToTGA`, and `EncodeToEXR` produce files whose decoded
+  texels match the source exactly for lossless formats and within the
+  requested quality for JPG.
+* `Cubemap`, `Texture2DArray`, `Texture3D`, `CubemapArray`, and
+  `CustomRenderTexture` (with its initialization, update mode, update zones,
+  and double buffering) are created, written, and sampled as in Unity.
+* `Sprite.Create` produces a sprite with the given rectangle, pivot,
+  pixels-per-unit, mesh type, and border.
+* Mipmap streaming honors the quality settings memory budget, per-texture
+  priority, and `Texture2D.requestedMipmapLevel`; the loaded and desired mip
+  levels of each streamed texture are inspectable.
+* `AsyncGPUReadback.Request` completes on a later frame with `done`, `hasError`,
+  and `GetData` behaving as in Unity; a target without readback support
+  reports the request as Platform-limited and completes it with an error.
 * `RenderTexture` creation, `Create`, `Release`, `IsCreated`,
   `RenderTexture.active`, temporary render textures (`GetTemporary` and
   `ReleaseTemporary`), depth buffers, MSAA, and random-write enablement behave
   as in Unity. A format that the target cannot create is reported as
   Platform-limited with the format and target named; it is not silently
   replaced with a different format.
+* `WebCamTexture` plays the selected camera device after the target's camera
+  permission is granted. A denied permission or an absent camera returns an
+  explicit status and an empty `WebCamTexture.devices` list or a texture that
+  reports it is not playing; targets without camera access report
+  `WebCamTexture` as Platform-limited.
 * Texture formats and compression that a target does not support are reported
   at import or build with the asset and target named, together with the
   fallback format Unity would use where one applies.
@@ -177,8 +245,7 @@ anisotropy, color space interpretation, readability, and residency.
 ## Shaders
 
 Supported ShaderLab and HLSL assets retain their shader name, properties,
-subshaders, passes, tags, render states, variants, keywords, and declared visual
-role within scope.
+subshaders, passes, tags, render states, variants, and keywords.
 
 Unsupported syntax or behavior identifies the shader, pass, variant, property,
 and target where known. A failed shader is unmistakable in the scene and
@@ -186,16 +253,70 @@ diagnostics. It never renders a plausible substitute while being reported as
 fully correct.
 
 Shader selection respects material keywords, global keywords, project quality,
-renderer state, camera context, pipeline tags, and target capability as
-declared. Variant absence is distinct from missing source or invalid material
-data. Shader variant stripping at build time reports which variants were
-excluded and why.
+renderer state, camera context, pipeline tags, `Shader.globalMaximumLOD` and
+per-shader LOD, and target capability as in Unity. Variant absence is distinct
+from missing source or invalid material data. Shader variant stripping at
+build time reports which variants were excluded and why.
+
+### ShaderLab and HLSL content
+
+The following ShaderLab and shader-program forms are Supported:
+
+* Built-in surface shaders (`#pragma surface`) with the Standard,
+  StandardSpecular, Lambert, BlinnPhong, and custom lighting models, their
+  options, and the forward, deferred, shadow-caster, and meta passes that Unity
+  generates from them.
+* `CGPROGRAM` and `HLSLPROGRAM` blocks, vertex, fragment, geometry, and
+  tessellation programs on targets whose graphics API offers those stages,
+  and `#pragma target` levels with the target-capability check Unity applies.
+* Built-in includes (`UnityCG.cginc`, `Lighting.cginc`, `AutoLight.cginc`,
+  `UnityShaderVariables.cginc`, and the other Built-in shader includes) and the
+  URP ShaderLibrary of each listed URP line.
+* `multi_compile`, `shader_feature`, their `_local` forms, and their
+  vertex-only and fragment-only variants.
+* `Fallback`, `UsePass`, `GrabPass`, `Category`, `LOD`, and fixed-function
+  render state (blend, blend operation, color mask, cull, depth test and
+  write, offset, stencil, and alpha-to-mask).
+
+A construct that the active pipeline ignores in Unity, such as `GrabPass` or a
+Built-in-only `LightMode` pass under URP, is ignored in the same way and is
+reported with that consequence for the shader and pass.
+
+### Built-in shaders
+
+The Built-in shader families Standard, Standard (Specular setup), Autodesk
+Interactive, `Legacy Shaders/*`, `Mobile/*`, `Unlit/*`, `Particles/*`,
+`Sprites/*`, `UI/*`, `Skybox/*`, and `Nature/*` are Supported with Unity's
+visible results on the Built-in Render Pipeline, and with Unity's behavior
+under URP for the ones URP renders.
+
+`Shader.Find` returns the shader in the editor and in a player when that shader
+is referenced by content included in the build or listed in the Graphics
+settings Always Included Shaders. Otherwise it returns null in a player, as in
+Unity. The build report lists the shaders reachable by `Shader.Find`.
+
+### Shader globals, keywords, and warm-up
+
+* `Shader.SetGlobalFloat`, `SetGlobalInt`, `SetGlobalVector`,
+  `SetGlobalColor`, `SetGlobalMatrix`, `SetGlobalTexture`, `SetGlobalBuffer`,
+  and their array forms set values that every shader not overriding the
+  property observes. `Shader.PropertyToID` returns a stable identifier for the
+  play session.
+* `Shader.EnableKeyword`, `Shader.DisableKeyword`, `Material.EnableKeyword`,
+  `Material.DisableKeyword`, `Material.shaderKeywords`, and, in releases that
+  define them, `LocalKeyword`, `GlobalKeyword`, and `Material.SetKeyword`
+  select variants as in Unity.
+* Exceeding the keyword limit of the project's release produces Unity's
+  compatible error naming the shader and keyword.
+* `ShaderVariantCollection.WarmUp` and `Shader.WarmupAllShaders` complete the
+  preparation of the listed variants before returning, so the first draw that
+  uses them does not incur that preparation.
 
 ## Shader Graph
 
 Shader Graph assets of the versions that the supported package matrix lists are
 treated as shader content for the URP and Built-in targets that their graph
-settings declare. A Shader Graph asset retains its exposed properties,
+settings select. A Shader Graph asset retains its exposed properties,
 keywords, sub graph references, graph target, surface options, and material
 interface, and a material using it behaves as a material using an equivalent
 hand-written shader.
@@ -203,12 +324,12 @@ hand-written shader.
 * Sub graphs, keywords (boolean and enum), exposed and hidden properties,
   custom interpolators where the listed version offers them, and Custom
   Function nodes with inline or file-based HLSL are Supported.
-* A graph that uses a node unitas cannot represent is reported with the graph
-  asset, the node type, the node identity within the graph, and every
-  material affected. The node is named in the report; the graph is not
-  reported as Supported, and the material renders as a failed shader.
-* A graph whose target is HDRP or Visual Effect Graph is reported as
-  Unsupported as declared in the [index](INDEX.md).
+* Excluded, and reported as Unsupported: graph targets for HDRP and for Visual
+  Effect Graph, as listed in the [index](INDEX.md).
+* Excluded per graph and node: a graph that uses a node unitas cannot
+  represent is reported with the graph asset, the node type, the node identity
+  within the graph, and every material affected. The graph is not reported as
+  Supported, and the material renders as a failed shader.
 * Shader Graph authoring user interface is not required; graphs are accepted
   as project content and their properties are editable through materials.
 
@@ -220,10 +341,14 @@ on the target reports the command, the script location, and the target.
 
 * **URP renderer features:** `ScriptableRendererFeature` and
   `ScriptableRenderPass` subclasses added to a Universal Renderer or 2D
-  Renderer data asset run at their declared `RenderPassEvent`, with their
-  configured inputs, render targets, and clear behavior. Disabled features do
-  not run. A feature that references a missing script is reported against the
-  renderer data asset.
+  Renderer data asset run at their `RenderPassEvent`, with their configured
+  inputs, render targets, and clear behavior. Disabled features do not run. A
+  feature that references a missing script is reported against the renderer
+  data asset.
+* **Decals:** the URP Decal Renderer Feature and `DecalProjector` are Supported
+  on URP 12.x and 14.x with their technique (DBuffer or screen space),
+  projection size, pivot, fade, and decal layers. The Built-in Render Pipeline
+  has no decal system, as in Unity.
 * **Command buffers:** `CommandBuffer` contents execute in recorded order
   through `Graphics.ExecuteCommandBuffer`, through camera and light events on
   the Built-in Render Pipeline (`Camera.AddCommandBuffer`,
@@ -253,18 +378,37 @@ on the target reports the command, the script location, and the target.
 ## Lighting and environment
 
 Directional, point, and spot lights expose color, intensity, range or angle,
-enablement, layers, shadow choice, render mode, and supported quality settings.
+enablement, culling mask, shadow choice, render mode, and quality settings.
 The visible result respects object transforms and material response.
 
-Environment lighting includes supported ambient, sky, reflection, fog, and
-exposure behavior. A project can inspect which environment settings affect a
-camera and scene. Baked, mixed, and realtime lighting modes are identified
-accurately rather than treated as interchangeable.
+* Light cookies, Built-in light halos and the `Halo` component, and Built-in
+  `Flare` assets with a camera Flare Layer render as in Unity. On URP 14.x the
+  Lens Flare (SRP) component renders its lens flare data asset.
+* On the Built-in Render Pipeline, the Important and Not Important light render
+  modes and the quality pixel light count decide per-pixel or per-vertex
+  lighting as in Unity. On URP, the main light, the additional lights per
+  object limit, and per-vertex or per-pixel additional lights follow the URP
+  asset.
+* `Light.cullingMask` excludes layers from a light. URP light layers (12.x)
+  and rendering layers (14.x) restrict which renderers a light affects.
+* Area lights are Supported as baked-only lights, contributing through
+  Unity-baked lighting data.
+* Enlighten realtime global illumination data is Unsupported; baked lighting
+  data remains Supported as defined below.
 
-Light limits (per-object and per-pipeline additional-light limits), target
-limitations, and quality reductions are visible in diagnostics. A light ignored
-because of a layer, range, disabled state, or limit can be distinguished from
-an invalid light.
+Environment lighting includes skybox materials (`Skybox/Procedural`,
+`Skybox/6 Sided`, `Skybox/Cubemap`, and `Skybox/Panoramic`), ambient source
+(skybox, gradient, or color) and intensity, environment reflection source,
+resolution, intensity, and bounces, fog, and exposure behavior. Changing
+`RenderSettings` at runtime and calling `DynamicGI.UpdateEnvironment` updates
+ambient and reflection lighting as in Unity. A project can inspect which
+environment settings affect a camera and scene. Baked, mixed, and realtime
+lighting modes are identified accurately rather than treated as
+interchangeable.
+
+Light limits, target limitations, and quality reductions are visible in
+diagnostics. A light ignored because of a layer, range, disabled state, or limit
+can be distinguished from an invalid light.
 
 ## Shadows
 
@@ -277,6 +421,20 @@ Shadow bias, normal bias, strength, softness, distance, resolution, and cascade
 choices have visible and inspectable effects. Missing shadows identify whether
 the cause is caster state, receiver material, light state, culling, quality,
 target support, or resource limits.
+
+## Quality levels
+
+`QualitySettings.SetQualityLevel(level, applyExpensiveChanges)` switches the
+active quality level with Unity's immediate and deferred effects: settings that
+Unity applies only when `applyExpensiveChanges` is true (such as anti-aliasing
+changes that recreate render targets) wait in the same way.
+
+Each quality level's pixel light count, texture quality and mipmap limit,
+anisotropic textures, anti-aliasing, soft particles, realtime reflection
+probes, shadow settings, LOD bias, maximum LOD level, skin weights, and render
+pipeline asset take effect as in Unity. A setting that the active target or
+pipeline ignores in Unity is ignored in the same way and reported with the
+quality level and target.
 
 ## Baked lighting data, probes, fog, LOD, and occlusion
 
@@ -292,7 +450,7 @@ captured result. Realtime reflection probes update according to their refresh
 mode and time-slicing settings.
 
 Baking lightmaps and occlusion culling data inside unitas is Unsupported, as
-declared in the [index](INDEX.md). A request to generate lighting or bake
+listed in the [index](INDEX.md). A request to generate lighting or bake
 occlusion is recognized and reports that state.
 
 When an edit invalidates baked data, for example moving or changing a static
@@ -304,8 +462,8 @@ as it was baked until it is replaced; it is not silently discarded. A missing
 bake, a stale bake, and baked data in a form that unitas cannot read remain
 three distinct states.
 
-Supported fog retains its mode, color, density, and range settings and its
-camera participation. Level-of-detail groups expose renderer sets, transitions,
+Fog retains its mode, color, density, and range settings and its camera
+participation. Level-of-detail groups expose renderer sets, transitions,
 cross-fade state, bounds, and current level. Occlusion status is
 distinguishable from layer or frustum culling, LOD, disabled state, and missing
 geometry.
@@ -467,26 +625,28 @@ package matrix lists.
 * HDR display output is Supported on targets and devices that report HDR
   output support, with the HDR output state and the selected tonemapping and
   paper-white settings inspectable; otherwise it is Platform-limited.
-* In a headless session without a display, frames render to an offscreen
-  target of the declared resolution, and frame pacing follows the declared
-  simulation rate rather than a display refresh.
+* In a headless session without a display, frames render offscreen at the
+  resolution the agent session or scenario requests, defaulting to the
+  project's default player resolution. Frames advance at the rate the session
+  requests or, by default, as fast as they complete; when
+  `Application.targetFrameRate` is set, `Time` values are computed from it so
+  that simulated time matches a player running at that rate.
 
 ## Animation clips
 
-Animation clips drive supported numeric, vector, color, transform, blend-shape,
-and object-reference properties over time. A clip exposes duration, sample
-rate, curves, interpolation, wrap behavior, looping, root motion, and events.
+Animation clips drive numeric, vector, color, transform, blend-shape, and
+object-reference properties over time. A clip exposes duration, sample rate,
+curves, interpolation, wrap behavior, looping, root motion, and events.
 
 The editor and automation can preview, play, pause, and scrub a clip on a
 compatible target. Bindings identify their object path, component, and
 property. Missing, ambiguous, incompatible, and inactive bindings are distinct.
 Preview changes do not silently become saved scene values.
 
-Animation events occur at compatible times. Events from the same clip that
-share a frame preserve their declared order; ordering across clips or animators
-is guaranteed only where the compatible API contract defines it. Loop
-boundaries, reverse or scaled playback, and zero-duration clips have defined
-outcomes.
+Animation events occur at Unity's times. Events from the same clip that share
+a frame fire in their order in the clip; ordering across clips or animators is
+guaranteed only where Unity documents it. Loop boundaries, reverse or scaled
+playback, and zero-duration clips have defined outcomes.
 
 ## Animator controllers
 
@@ -499,7 +659,7 @@ masks, speed, interruption, normalized time, override controllers, and
 At runtime, boolean, integer, float, and trigger parameters affect transitions
 as in Unity. Trigger consumption, transition duration, exit time, interruption
 source and ordered interruption, layer weight, override and additive layer
-blending, and synced layers follow the declared compatibility behavior. The
+blending, and synced layers behave as in Unity for the project's release. The
 editor and automation show active states, transitions, parameters, and weights
 during play.
 
@@ -507,6 +667,34 @@ during play.
 `OnStateExit`, `OnStateMove`, `OnStateIK`, `OnStateMachineEnter`, and
 `OnStateMachineExit`) run at the points Unity defines relative to the
 transition that causes them.
+
+### Write Defaults and state reset
+
+* A state with Write Defaults on writes the controller's captured default
+  value to every property that other states in the controller animate and
+  this state does not. A state with Write Defaults off leaves those properties
+  at their last written value.
+* Disabling and re-enabling the Animator, assigning
+  `runtimeAnimatorController`, and calling `Rebind` reset state machine state
+  and restore captured defaults as in Unity, unless the Keep Animator State On
+  Disable option (`keepAnimatorStateOnDisable`, together with
+  `writeDefaultValuesOnDisable` in the releases that define it) preserves
+  state on disable.
+
+### Update timing and scripting
+
+* Update modes Normal, Animate Physics, and Unscaled Time advance the Animator
+  at Unity's points: Normal after `Update` and before `LateUpdate` using
+  scaled time, Animate Physics in the fixed time step, and Unscaled Time after
+  `Update` using unscaled time.
+* Culling modes Always Animate, Cull Update Transforms, and Cull Completely
+  decide, as in Unity, whether an off-screen Animator advances its state,
+  writes transforms, and fires animation events and root motion.
+* `Play`, `CrossFade`, `CrossFadeInFixedTime`, `GetCurrentAnimatorStateInfo`,
+  `GetNextAnimatorStateInfo`, `IsInTransition`, `Animator.StringToHash`,
+  parameter setters, and `SetLayerWeight` take effect at Unity's evaluation
+  point, so a value set in `Update` is observed in that frame's evaluation and
+  state info queried before evaluation reports the previous frame's result.
 
 Missing motions, invalid parameter references, unreachable states, invalid
 bindings, and conflicting transition behavior produce specific diagnostics.
@@ -554,7 +742,8 @@ The Playables API is Supported for animation, audio, and script playables:
   `AnimationLayerMixerPlayable` (with layer masks and additive layers),
   `AnimatorControllerPlayable`, and `AnimationPlayableOutput`.
 * Audio playables: `AudioClipPlayable`, `AudioMixerPlayable`, and
-  `AudioPlayableOutput`, routed as defined in
+  `AudioPlayableOutput`, routed through their output's `AudioSource` and that
+  source's mixer group as defined by AUD-001 in
   [UI, audio, and input](ui-audio-input.md).
 * `ScriptPlayable<T>` with `PlayableBehaviour` callbacks (`OnGraphStart`,
   `OnGraphStop`, `OnBehaviourPlay`, `OnBehaviourPause`, `PrepareFrame`,
@@ -567,22 +756,39 @@ The Playables API is Supported for animation, audio, and script playables:
 
 Particle systems expose duration, looping, start state, emission, lifetime,
 shape, velocity, force, color, size, rotation, noise, collision, triggers,
-sub-emitters, texture sheet animation, trails, lights, renderer state,
-simulation space, scaling mode, and prewarm behavior within scope.
+sub-emitters, texture sheet animation, trails, lights, custom data, renderer
+state (including custom vertex streams and mesh GPU instancing), simulation
+space, scaling mode, culling mode, and prewarm behavior within scope.
+
+* `Play`, `Stop` (with `ParticleSystemStopBehavior` emitting-only or
+  emitting-and-clear), `Pause`, `Clear`, `Emit` (count or `EmitParams`),
+  `Simulate`, `GetParticles`, `SetParticles`, `GetCustomParticleData`, and
+  `SetCustomParticleData` behave as in Unity.
+* Stop actions None, Disable, Destroy, and Callback run when the system and
+  its sub-emitters finish; Callback invokes `OnParticleSystemStopped`.
+* Culling modes (automatic, pause and catch-up, pause, and always simulate)
+  decide off-screen simulation as in Unity.
+* With Send Collision Messages enabled, `OnParticleCollision` runs on the
+  particle system's and the collided object's scripts, and
+  `GetCollisionEvents` returns the contacts. `OnParticleTrigger` runs for
+  trigger module events, and `GetTriggerParticles` returns the particles in
+  each event category.
+* `ParticleSystemForceField` components and the External Forces module
+  (with its influence filter and layer mask) affect particles as in Unity.
 
 Effects can be previewed, restarted, paused, and scrubbed in the editor and
 through automation for systems whose simulation is time-deterministic under
 their random seed. Runtime control reports whether a system is playing,
 emitting, paused, stopped, or complete. Bounds, sorting, material, layer, camera
 visibility, and target limits are inspectable. Visual Effect Graph assets are
-Unsupported as declared in the [index](INDEX.md).
+Unsupported as listed in the [index](INDEX.md).
 
 ## Sequencing and cinematics
 
 Time-based sequences built with Timeline 1.x coordinate animation, audio,
-activation, cameras, signals, control tracks, and supported properties. A
-sequence exposes duration, tracks, clips, blends, extrapolation, markers,
-bindings, and evaluation time.
+activation, cameras, signals, control tracks, and property tracks. A sequence
+exposes duration, tracks, clips, blends, extrapolation, markers, bindings, and
+evaluation time.
 
 The editor and automation can preview and scrub without persisting preview
 state. Runtime `PlayableDirector` play, pause, resume, stop, seek, wrap mode
@@ -612,13 +818,13 @@ inspectable during play.
 Users and authorized agents can inspect camera contribution, visible and culled
 renderers, geometry counts, material and shader selection, active lights,
 shadow participation, active volumes, render targets, renderer features and
-command buffers that ran, texture residency, animation state, playable graphs,
-and frame cost.
+command buffers that ran, texture residency, runtime mesh and material
+instances, animation state, playable graphs, and frame cost.
 
 Diagnostics navigate to responsible project content and distinguish correctness
 errors from performance warnings. A captured image records target, resolution,
-aspect, quality, camera, render pipeline and renderer, scene state, and
-relevant color interpretation.
+aspect, quality level, color space, camera, render pipeline and renderer, scene
+state, and relevant color interpretation.
 
 Gizmos, `Debug.DrawLine`, and `Debug.DrawRay` visualization, frame capture as
 structured data, and profiling of rendering cost are owned by
@@ -629,65 +835,121 @@ their drawing in the scene and game views is owned by
 ## Acceptance outcomes
 
 1. Camera coordinate conversions agree with the rendered image, multiple
-   cameras and URP camera stacks contribute in declared order, and a camera
-   without visible output reports its reason. (REN-001)
-2. Supported Built-in and URP materials preserve their declared visible
-   properties across editor and player, and a `MaterialPropertyBlock` changes
-   one renderer without creating a material instance. (REN-002)
-3. A script writes pixels with `SetPixels`, calls `Apply`, reads them back with
-   `GetPixels`, and copies a render target with `ReadPixels`; reading a
-   non-readable texture fails with a compatible error naming it. (REN-002)
-4. Missing visual output has an inspectable cause that distinguishes renderer,
-   material, shader, light, culling, and target reasons. (REN-001, REN-002,
-   REN-003)
-5. A scene with Unity-baked lightmaps, light probes, reflection probes, and
-   occlusion data renders with that data in editor and player; moving a static
-   contributing renderer marks the data stale and names the affected
-   renderers; requesting a bake reports Unsupported. (REN-003)
-6. Each listed PPv2 and URP Volume effect renders with its blended parameters,
-   and the contributing volumes for a camera position are inspectable; an
-   unlisted effect type is reported rather than silently ignored. (REN-003)
-7. Particle systems, trails, and line renderers report their playback state and
-   render the same in preview, play mode, and player, while a Visual Effect
-   Graph asset is reported Unsupported. (REN-004)
-8. A 2D scene with sliced and tiled sprites, a late-bound Sprite Atlas, a
-   Sorting Group, a Sprite Mask, URP 2D lights, a rule-tile Tilemap, a Pixel
-   Perfect Camera, and a skinned 2D character renders with the same draw order
-   and pixel placement as the Unity reference. (REN-005)
-9. A project on each listed URP line renders with Forward, with Deferred where
-   the line offers it, and with Forward+ on URP 14; an HDRP project and a
-   custom SRP project are each reported Unsupported while remaining
-   inspectable. (REN-006)
-10. A Shader Graph material renders equivalently to its Unity result, and a
-    graph containing an unrepresentable node is reported with the graph, node,
-    and affected materials. (REN-006)
-11. A `ScriptableRendererFeature`, a camera `CommandBuffer`,
-    `Graphics.DrawMeshInstanced`, and a compute shader dispatch each produce
-    the Unity-equivalent image; on a target without compute the dispatch is
-    reported Platform-limited; enabling the SRP Batcher changes only reported
-    performance. (REN-006)
-12. Failed or unsupported shaders cannot appear as successful compatibility.
+   cameras and URP camera stacks contribute in depth and stack order,
+   `Camera.main` resolves the first enabled `MainCamera`, and a camera without
+   visible output reports its reason. (REN-001)
+2. On the Built-in Render Pipeline, `OnRenderImage` and `Camera.onPreRender`
+   run and alter the image as in Unity; in a URP project they do not run, the
+   compatibility report names the scripts that define them, and
+   `RenderPipelineManager.beginCameraRendering` fires instead. (REN-001,
+   REN-006)
+3. Built-in shader-family and URP materials preserve their visible properties
+   across editor and player, and a `MaterialPropertyBlock` changes one
+   renderer without creating a material instance. (REN-002)
+4. Accessing `Renderer.material` and `MeshFilter.mesh` creates runtime
+   instances visible in residency inspection that `Resources.UnloadUnusedAssets`
+   releases after they are unreferenced, while `sharedMaterial` and
+   `sharedMesh` edits change the asset; a 32-bit-index mesh with more than
+   65,535 vertices renders and an out-of-range index fails with Unity's error.
+   (REN-002)
+5. A script writes pixels with `SetPixels`, calls `Apply`, reads them back with
+   `GetPixels`, copies a render target with `ReadPixels`, and reads a render
+   texture with `AsyncGPUReadback`; reading a non-readable texture fails with a
+   compatible error naming it. (REN-002)
+6. The same scene rendered in Gamma and Linear color space matches Unity's
+   output for each, and a target without Linear support reports it as
+   Platform-limited naming the graphics API. (REN-002)
+7. `WebCamTexture` plays after camera permission is granted and returns an
+   explicit status when permission is denied or no camera exists. (REN-002)
+8. A surface shader, a `CGPROGRAM` shader using `UnityCG.cginc` and
+   `multi_compile` keywords, and a shader with `GrabPass` render as in Unity on
+   the Built-in Render Pipeline; under URP the `GrabPass` is reported as
+   ignored. (REN-002, REN-006)
+9. `Shader.Find` for a shader in Always Included Shaders succeeds in a player,
+   for an unreferenced shader returns null, and the build report lists the
+   shaders reachable by `Shader.Find`. (REN-002)
+10. Missing visual output has an inspectable cause that distinguishes renderer,
+    material, shader, light, culling, and target reasons. (REN-001, REN-002,
+    REN-003)
+11. A scene with Unity-baked lightmaps, light probes, reflection probes, and
+    occlusion data renders with that data in editor and player; moving a
+    static contributing renderer marks the data stale and names the affected
+    renderers; requesting a bake reports Unsupported. (REN-003)
+12. Switching skybox and ambient settings through `RenderSettings` followed by
+    `DynamicGI.UpdateEnvironment` changes ambient and reflection lighting as in
+    Unity; light cookies, flares, light culling masks, URP light layers, and
+    Built-in pixel light count produce Unity's result; Enlighten realtime GI
+    data is reported Unsupported. (REN-003)
+13. `QualitySettings.SetQualityLevel` with `applyExpensiveChanges` false and
+    then true applies each quality setting at Unity's point, and a setting the
+    target ignores is reported. (REN-003)
+14. Each listed PPv2 and URP Volume effect renders with its blended parameters,
+    and the contributing volumes for a camera position are inspectable; an
+    unlisted effect type is reported rather than silently ignored. (REN-003)
+15. Particle systems, trails, and line renderers report their playback state
+    and render the same in preview, play mode, and player, while a Visual
+    Effect Graph asset is reported Unsupported. (REN-004)
+16. `Emit` with `EmitParams`, `SetParticles`, custom data, a Destroy stop action,
+    a Callback stop action invoking `OnParticleSystemStopped`,
+    `OnParticleCollision`, `OnParticleTrigger`, and a force field behave as in
+    Unity. (REN-004)
+17. A 2D scene with sliced and tiled sprites, a late-bound Sprite Atlas, a
+    Sorting Group, a Sprite Mask, URP 2D lights, a rule-tile Tilemap, a Pixel
+    Perfect Camera, and a skinned 2D character renders with the same draw order
+    and pixel placement as the Unity reference. (REN-005)
+18. A project on each listed URP line renders with Forward, with Deferred where
+    the line offers it, and with Forward+ on URP 14; an HDRP project and a
+    custom SRP project are each reported Unsupported while remaining
+    inspectable. (REN-006)
+19. A Shader Graph material renders equivalently to its Unity result; an HDRP
+    or Visual Effect Graph target is reported Unsupported; and a graph
+    containing an unrepresentable node is reported with the graph, node, and
+    affected materials. (REN-006)
+20. A `ScriptableRendererFeature`, a URP `DecalProjector` on 12.x and 14.x, a
+    camera `CommandBuffer`, `Graphics.DrawMeshInstanced`, and a compute shader
+    dispatch each produce the Unity-equivalent image; on a target without
+    compute the dispatch is reported Platform-limited; enabling the SRP
+    Batcher changes only reported performance. (REN-006)
+21. Global shader properties and keywords set from script select the same
+    variants as in Unity, exceeding the keyword limit produces Unity's error,
+    and after `ShaderVariantCollection.WarmUp` returns the listed variants are
+    ready. (REN-006)
+22. Failed or unsupported shaders cannot appear as successful compatibility.
     (REN-002, REN-006)
-13. `Application.targetFrameRate`, `QualitySettings.vSyncCount`, fullscreen mode,
-    resolution changes, and a second display take effect in a desktop player,
-    and the achieved frame pacing is observable through automation. (REN-007)
-14. Visual comparison captures identify all conditions needed for evaluation,
-    including target, resolution, quality, camera, and render pipeline.
-    (REN-001, REN-006, REN-007)
-15. On each declared target, a developer or agent can identify the effective
-    graphics API and diagnose missing device capabilities without assuming
-    Direct3D on Linux or macOS. (REN-006, REN-007)
-16. Animation preview, play mode, and built-player timing agree within declared
-    platform limits, and animation events fire at their compatible times.
+23. `Application.targetFrameRate`, `QualitySettings.vSyncCount`, fullscreen
+    mode, resolution changes, and a second display take effect in a desktop
+    player, and the achieved frame pacing is observable through automation.
+    (REN-007)
+24. A headless session renders frames at the requested resolution, or at the
+    project's default player resolution when none is requested, and with
+    `Application.targetFrameRate` set reports `Time` values computed from that
+    rate. (REN-007)
+25. Visual comparison captures identify all conditions needed for evaluation,
+    including target, resolution, quality level, color space, camera, and
+    render pipeline. (REN-001, REN-006, REN-007)
+26. On each supported build target, a developer or agent can identify the
+    effective graphics API and diagnose missing device capabilities without
+    assuming Direct3D on Linux or macOS. (REN-006, REN-007)
+27. Animation preview, play mode, and built-player playback produce the same
+    pose and animation event sequence for the same sequence of frame times.
     (ANI-001)
-17. Animator state, transition, blend-tree, and `StateMachineBehaviour` behavior
+28. Animator state, transition, blend-tree, and `StateMachineBehaviour` behavior
     is observable during runtime. (ANI-001)
-18. A humanoid clip retargets onto a differently proportioned avatar with muscle
-    limits honored, `OnAnimatorIK` and `OnAnimatorMove` alter the pose and
-    motion, and an avatar mask restricts a layer. (ANI-002)
-19. A `PlayableGraph` mixing two `AnimationClipPlayable` inputs and a
-    `ScriptPlayable` produces the Unity-equivalent pose and callback order, and
+29. A controller mixing Write Defaults on and off states leaves properties with
+    Unity's values after each transition, and disabling and re-enabling the
+    Animator resets or keeps state according to Keep Animator State On
+    Disable. (ANI-001)
+30. Animators in Normal, Animate Physics, and Unscaled Time update modes advance
+    at Unity's points with `Time.timeScale` at 0 and 1; culling modes decide
+    off-screen state and events as in Unity; `CrossFade` and parameter setters
+    called in `Update` are observed in that frame's evaluation. (ANI-001)
+31. A humanoid clip retargets onto a differently proportioned avatar with
+    muscle limits honored, `OnAnimatorIK` and `OnAnimatorMove` alter the pose
+    and motion, and an avatar mask restricts a layer. (ANI-002)
+32. A `PlayableGraph` mixing two `AnimationClipPlayable` inputs and a
+    `ScriptPlayable` produces the Unity-equivalent pose and callback order, an
+    `AudioPlayableOutput` plays through its `AudioSource` and mixer group, and
     the legacy `Animation` component cross-fades legacy clips. (ANI-002)
-20. A Timeline with animation, audio, activation, signal, and Cinemachine shot
+33. A Timeline with animation, audio, activation, signal, and Cinemachine shot
     tracks plays, pauses, seeks, and completes as in Unity, and the live
     virtual camera and active blend are inspectable during play. (CIN-001)

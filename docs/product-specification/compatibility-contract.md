@@ -75,6 +75,14 @@ the wrong object receiving an event, a reference resolving to a different
 asset, a save losing a value, a collision failing to occur, or a control
 performing another action.
 
+Wherever any unitas specification says "as in Unity", "Unity's rules", "Unity's
+conditions", or "as the package defines", the reference is the documented and
+observable behavior of the Unity release that the project declares in
+`ProjectSettings/ProjectVersion.txt`, or of the package version listed in the
+supported package matrix that the project resolves. When the declared Unity
+release and the resolved package version differ in that behavior, the declared
+Unity release controls.
+
 ## Round-Trip Expectations
 
 Supported project edits preserve Unity-readable identities and content where
@@ -135,7 +143,7 @@ Matrix rules:
 | Package | 2020.3 LTS | 2021.3 LTS | 2022.3 LTS | State | Owning specification |
 |---|---|---|---|---|---|
 | Universal Render Pipeline (`com.unity.render-pipelines.universal`) | 10.x | 12.x | 14.x | Supported | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Shader Graph (`com.unity.shadergraph`) | 10.x | 12.x | 14.x | Partially supported: excludes the nodes that Rendering and animation names as unsupported, and graph targets for HDRP and Visual Effect Graph | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Shader Graph (`com.unity.shadergraph`) | 10.x | 12.x | 14.x | Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported; a graph that uses a node unitas cannot represent is reported per graph and node under REN-006 | [Rendering and animation](rendering-and-animation.md) (REN-006) |
 | Post Processing v2 (`com.unity.postprocessing`) | 3.x | 3.x | 3.x | Supported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
 | 2D Sprite (`com.unity.2d.sprite`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
 | 2D Tilemap Editor (`com.unity.2d.tilemap`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
@@ -276,8 +284,9 @@ T and with that release:
 
 * the acceptance outcomes in its owning specification pass;
 * the sample scenarios that map to it (SMP-001) pass;
-* the behavioral benchmarks that cover it (CMP-001) pass, or each failure is
-  named as an excluded behavior and the family is declared Partially supported;
+* the behavioral benchmarks that cover it (CMP-001) pass, or each failing
+  behavior is named as an exclusion in the family's Partially supported claim
+  for T, and the readiness declaration lists those exclusions;
 * the engine performance budgets owned by PRF-002 in
   [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)
   are met.
@@ -297,6 +306,32 @@ A release declares target T production-ready only when:
 Each readiness declaration links to the scenario, benchmark, and budget
 evidence it rests on, recorded with the unitas version, and is available to
 people and agents through automation.
+
+## Support Lifecycle, Host Requirements, and Store Requirements
+
+Each release line declares its support window: the date it was released, the
+period during which it receives security patches, the period during which it
+receives correction patches, and the date support ends. A release line past the
+end of its support window is identified as unsupported in the editor, on the
+command line, in build results, and through automation, and continues to run
+as installed.
+
+Each release declares:
+
+* the supported host operating systems, with their versions and architectures,
+  for the editor, the command line, and headless operation;
+* for each target, the minimum target operating system version and, where the
+  target has one, the minimum API level;
+* for each target with a store, the store submission requirements that the
+  release meets, such as the Android target API level and the minimum Xcode and
+  platform SDK versions used for Apple targets.
+
+A host outside the declared host requirements is reported before a project is
+opened, naming the requirement it fails. A target whose store submission
+requirement the release does not meet reports store submission blocked, naming
+the requirement, while development and local builds for that target remain
+available. These declarations are versioned with the release under CMP-004 and
+are available to people and agents through automation.
 
 ## Acceptance Stories
 
@@ -339,3 +374,20 @@ people and agents through automation.
   licensing report, the Roll-a-Ball-style sample, and one further sample pass in
   editor and player on that target. (CMP-004, BLD-001, PLT-001, LIC-001,
   SMP-001)
+* A readiness declaration for a target with a failing benchmark lists the
+  failing behavior as an exclusion of that family's Partially supported claim.
+  (CMP-004, CMP-001)
+* A project declaring Unity 2021.3 in `ProjectVersion.txt` is assessed against
+  2021.3 behavior wherever a specification refers to Unity's behavior, including
+  where a resolved package version documents different behavior. (CMP-002)
+* A Shader Graph asset that uses a node unitas cannot represent is reported by
+  graph and node, and an HDRP graph target is reported Unsupported. (CMP-002,
+  REN-006)
+* A release line reports its security and correction patch periods and end of
+  support, and an installation past end of support identifies itself as
+  unsupported while continuing to run. (CMP-005)
+* An Android build from a release that does not meet the current store target
+  API level reports store submission blocked with that requirement, while a
+  development build for the device still succeeds; an unsupported host
+  operating system version is reported before the project opens. (CMP-005,
+  BLD-001)
