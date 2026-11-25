@@ -5,6 +5,7 @@ export DOTNET_ROOT := $(HOME)/.dotnet
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
+DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \
@@ -28,9 +29,11 @@ verify-suite-gates:
 	@$(MAKE) --no-print-directory test
 
 verify-dotnet-gates:
-	@$(MAKE) --no-print-directory dotnet-build
-	@$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
-	$(MAKE) --no-print-directory dotnet-test-run; rc=$$?; \
+	@$(MAKE) --no-print-directory runtime-build & pr=$$!; \
+	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND); rc=$$?; \
+	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
+	wait $$pr || rc=1; \
+	$(MAKE) --no-print-directory dotnet-test-run || rc=1; \
 	wait $$pf || rc=1; \
 	exit $$rc
 
@@ -69,7 +72,7 @@ runtime-build:
 	@python3 tools/verify.py timed runtime-build $(VERIFY_BUDGET_SECONDS) cargo build -p unitas-runtime
 
 dotnet-build: runtime-build
-	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All
+	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND)
 
 dotnet-format:
 	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) dotnet format bridge/Unitas.sln --verify-no-changes --no-restore
