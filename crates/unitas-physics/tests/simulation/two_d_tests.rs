@@ -591,3 +591,158 @@ fn separate_tilemap_collider_supports_grid_sprite_and_none_tile_types_and_feeds_
         "sprite tile at [2, 0] must remain active in composite"
     );
 }
+
+#[test]
+fn continuous_collision_detection_prevents_fast_body_tunneling_while_discrete_tunnels() {
+    use unitas_physics::two_d::body::CollisionDetectionMode2D;
+
+    let run_with_mode = |mode: CollisionDetectionMode2D| -> (f32, bool) {
+        let mut world = World2D::with_gravity([0.0, 0.0]);
+        let wall_go = EntityId::new(500);
+        let bullet_go = EntityId::new(501);
+
+        let wall_body = world.add_body(BodyDesc2D::static_body(wall_go, [2.0, 0.0]));
+        world.add_collider(
+            ColliderDesc2D::box_collider(wall_go, [0.05, 3.0]).with_attached_body(wall_body),
+        );
+
+        let bullet_body = world.add_body(
+            BodyDesc2D::dynamic(bullet_go, [0.0, 0.0])
+                .with_velocity([200.0, 0.0])
+                .with_collision_detection_mode(mode),
+        );
+        world.add_collider(
+            ColliderDesc2D::circle_collider(bullet_go, 0.2).with_attached_body(bullet_body),
+        );
+
+        world.step(0.05);
+        let x = world.body(bullet_body).map_or(0.0, |b| b.position[0]);
+        let hit_msg = world
+            .drain_messages()
+            .iter()
+            .any(|m| m.recipient == bullet_go && m.kind == MessageKind2D::CollisionEnter2D);
+        (x, hit_msg)
+    };
+
+    let (discrete_x, discrete_hit) = run_with_mode(CollisionDetectionMode2D::Discrete);
+    assert!(
+        discrete_x > 5.0 && !discrete_hit,
+        "Discrete fast body must tunnel past thin wall at x=2.0, got x={discrete_x}, hit={discrete_hit}"
+    );
+
+    let (continuous_x, continuous_hit) = run_with_mode(CollisionDetectionMode2D::Continuous);
+    assert!(
+        continuous_x < 2.0 && continuous_hit,
+        "Continuous fast body must be stopped by thin wall at x=2.0 and emit CollisionEnter2D, got x={continuous_x}, hit={continuous_hit}"
+    );
+}
+
+#[test]
+fn rigidbody2d_sleep_modes_and_interpolation_modes_behave_per_mode() {
+    use unitas_physics::two_d::body::{RigidbodyInterpolation2D, RigidbodySleepMode2D};
+
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+
+    let never_go = EntityId::new(600);
+    let awake_go = EntityId::new(601);
+    let asleep_go = EntityId::new(602);
+
+    let never_body = world.add_body(
+        BodyDesc2D::dynamic(never_go, [0.0, 0.0])
+            .with_gravity_scale(0.0)
+            .with_sleep_mode(RigidbodySleepMode2D::NeverSleep),
+    );
+    let awake_body = world.add_body(
+        BodyDesc2D::dynamic(awake_go, [2.0, 0.0])
+            .with_gravity_scale(0.0)
+            .with_sleep_mode(RigidbodySleepMode2D::StartAwake),
+    );
+    let asleep_body = world.add_body(
+        BodyDesc2D::dynamic(asleep_go, [4.0, 5.0])
+            .with_gravity_scale(1.0)
+            .with_sleep_mode(RigidbodySleepMode2D::StartAsleep),
+    );
+
+    assert_eq!(world.body(never_body).map(|b| b.is_sleeping()), Some(false));
+    assert_eq!(world.body(awake_body).map(|b| b.is_sleeping()), Some(false));
+    assert_eq!(world.body(asleep_body).map(|b| b.is_sleeping()), Some(true));
+
+    for _ in 0..35 {
+        world.step(0.02);
+    }
+
+    assert_eq!(
+        world.body(never_body).map(|b| b.is_sleeping()),
+        Some(false),
+        "NeverSleep body must stay awake even after resting past sleep threshold"
+    );
+    assert_eq!(
+        world.body(awake_body).map(|b| b.is_sleeping()),
+        Some(true),
+        "StartAwake stationary body must fall asleep after resting past sleep threshold"
+    );
+    assert_eq!(
+        world.body(asleep_body).map(|b| b.position[1]),
+        Some(5.0),
+        "StartAsleep body must remain asleep and not fall under gravity until woken"
+    );
+
+    if let Some(b) = world.body_mut(asleep_body) {
+        b.add_impulse([0.0, -2.0]);
+    }
+    world.step(0.05);
+    let asleep_y_after_wake = world.body(asleep_body).map_or(5.0, |b| b.position[1]);
+    assert!(
+        asleep_y_after_wake < 4.95,
+        "StartAsleep body woken by impulse must move on subsequent step, got y={asleep_y_after_wake}"
+    );
+
+    let mut interp_world = World2D::with_gravity([0.0, 0.0]);
+    interp_world.set_fixed_timestep(0.1);
+
+    let none_body = interp_world.add_body(
+        BodyDesc2D::dynamic(EntityId::new(700), [0.0, 0.0])
+            .with_velocity([10.0, 0.0])
+            .with_interpolation(RigidbodyInterpolation2D::None),
+    );
+    let interp_body = interp_world.add_body(
+        BodyDesc2D::dynamic(EntityId::new(701), [0.0, 0.0])
+            .with_velocity([10.0, 0.0])
+            .with_interpolation(RigidbodyInterpolation2D::Interpolate),
+    );
+    let extrap_body = interp_world.add_body(
+        BodyDesc2D::dynamic(EntityId::new(702), [0.0, 0.0])
+            .with_velocity([10.0, 0.0])
+            .with_interpolation(RigidbodyInterpolation2D::Extrapolate),
+    );
+
+    let steps = interp_world.advance(0.15);
+    assert_eq!(steps, 1);
+
+    let (none_pos, _) = interp_world
+        .presented_pose(none_body)
+        .unwrap_or(([0.0, 0.0], 0.0));
+    let (interp_pos, _) = interp_world
+        .presented_pose(interp_body)
+        .unwrap_or(([0.0, 0.0], 0.0));
+    let (extrap_pos, _) = interp_world
+        .presented_pose(extrap_body)
+        .unwrap_or(([0.0, 0.0], 0.0));
+
+    assert!(
+        (none_pos[0] - 1.0).abs() < 1e-4,
+        "Interpolation::None must present exact simulated position 1.0, got {}",
+        none_pos[0]
+    );
+    assert!(
+        (interp_pos[0] - 0.5).abs() < 1e-4,
+        "Interpolation::Interpolate at alpha=0.5 between 0.0 and 1.0 must present 0.5, got {}",
+        interp_pos[0]
+    );
+    assert!(
+        (extrap_pos[0] - 1.5).abs() < 1e-4,
+        "Interpolation::Extrapolate at alpha=0.5 (dt_rem=0.05) from 1.0 with v=10.0 must present 1.5, got {}",
+        extrap_pos[0]
+    );
+}
+

@@ -1,10 +1,3 @@
-//! Model import for OBJ, glTF/GLB, and binary FBX sources.
-//!
-//! Every importer produces `MeshData` whose sub-meshes carry a `sub_asset_id`
-//! derived from the named group or primitive in the source, so reimporting the
-//! same bytes keeps the same identities and malformed sources are reported as
-//! named diagnostics instead of panics.
-
 use std::fmt;
 
 use crate::primitive::{MeshData, SubMesh};
@@ -17,7 +10,6 @@ pub use fbx::{import_fbx, import_fbx_bytes, FbxImportError};
 pub use gltf::import_gltf;
 pub use obj::{import_obj, import_obj_bytes};
 
-/// Named reasons why a model source could not be imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelImportError {
     MalformedObj { line: usize, reason: String },
@@ -42,6 +34,7 @@ pub enum ModelImportError {
     UnsupportedBufferUri { uri: String },
     InvalidBase64 { reason: String },
     UnsupportedFileType { file_name: String },
+    UnsupportedFormat { file_name: String, format: String },
 }
 
 impl From<FbxImportError> for ModelImportError {
@@ -103,27 +96,33 @@ impl fmt::Display for ModelImportError {
             ModelImportError::UnsupportedFileType { file_name } => {
                 write!(formatter, "unsupported model file type: {file_name}")
             }
+            ModelImportError::UnsupportedFormat { file_name, format } => {
+                write!(
+                    formatter,
+                    "{file_name}: {format} format is Unsupported (content-creation application files are not converted)"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for ModelImportError {}
 
-/// Imports a model source, choosing the reader from the file extension.
 pub fn import_model(bytes: &[u8], file_name: &str) -> Result<MeshData, ModelImportError> {
     let meshes = import_model_sub_assets(bytes, file_name)?;
     Ok(combine_meshes(meshes, file_name))
 }
 
-/// Imports a model source, keeping every source mesh as its own sub-asset.
-///
-/// A model file can carry several meshes; this path returns them one by one so
-/// each keeps its own name, vertex data, and sub-asset ids instead of being
-/// merged into a single mesh.
 pub fn import_model_sub_assets(
     bytes: &[u8],
     file_name: &str,
 ) -> Result<Vec<MeshData>, ModelImportError> {
+    if is_blender_source(bytes, file_name) {
+        return Err(ModelImportError::UnsupportedFormat {
+            file_name: file_name.to_string(),
+            format: "blend".to_string(),
+        });
+    }
     let extension = match file_name.rsplit('.').next() {
         Some(extension) => extension.to_ascii_lowercase(),
         None => String::new(),
@@ -136,8 +135,20 @@ pub fn import_model_sub_assets(
         }
         "gltf" | "glb" => Ok(vec![gltf::import_gltf(bytes)?]),
         "fbx" => Ok(fbx::import_fbx(bytes)?),
+        "max" | "ma" | "mb" | "c4d" | "lxo" | "3ds" => Err(ModelImportError::UnsupportedFormat {
+            file_name: file_name.to_string(),
+            format: extension,
+        }),
         _ => Err(ModelImportError::UnsupportedFileType { file_name: extension }),
     }
+}
+
+fn is_blender_source(bytes: &[u8], file_name: &str) -> bool {
+    let has_blend_ext = file_name
+        .rsplit('.')
+        .next()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("blend"));
+    has_blend_ext || bytes.starts_with(b"BLENDER")
 }
 
 fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {

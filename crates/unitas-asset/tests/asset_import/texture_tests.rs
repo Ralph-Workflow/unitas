@@ -1,6 +1,8 @@
 use unitas_asset::texture::import::{
-    apply_max_size, decode_texture, generate_mip_chain, srgb_to_linear, DecodedTexture,
-    FilterMode, SpriteMode, TextureFormat, TextureImportError, TextureImportSettings, WrapMode,
+    apply_max_size, decode_texture, generate_mip_chain, import_texture,
+    import_texture_for_target, srgb_to_linear, DecodedTexture, FilterMode, SpriteMode,
+    TextureCompressionQuality, TextureFormat, TextureImportError, TextureImportSettings,
+    TexturePlatformFormat, TexturePlatformSettings, WrapMode,
 };
 use unitas_asset::texture::jpeg::decode_jpeg;
 use unitas_asset::texture::png::decode_png;
@@ -463,7 +465,7 @@ fn flips_right_to_left_tga_to_top_left_origin() -> Result<(), Box<dyn std::error
 
 #[test]
 fn generates_mip_chain_with_box_filter() -> Result<(), Box<dyn std::error::Error>> {
-    let rows = vec![
+    let rows = [
         vec![0u8, 10, 20, 30],
         vec![40, 50, 60, 70],
         vec![80, 90, 100, 110],
@@ -487,7 +489,7 @@ fn generates_mip_chain_with_box_filter() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn limits_imported_size_to_the_configured_maximum() -> Result<(), Box<dyn std::error::Error>> {
-    let rows = vec![
+    let rows = [
         vec![0u8, 10, 20, 30],
         vec![40, 50, 60, 70],
         vec![80, 90, 100, 110],
@@ -531,6 +533,7 @@ fn import_settings_survive_a_meta_text_round_trip() -> Result<(), Box<dyn std::e
         alpha_is_transparency: false,
         wrap_mode: WrapMode::Clamp,
         filter_mode: FilterMode::Trilinear,
+        platform_settings: Vec::new(),
     };
     let text = settings.to_meta_text();
     let restored = TextureImportSettings::from_meta_text(&text)?;
@@ -772,6 +775,7 @@ fn applies_srgb_mipmaps_and_sprite_settings_to_decoded_jpeg(
         alpha_is_transparency: true,
         wrap_mode: WrapMode::Clamp,
         filter_mode: FilterMode::Bilinear,
+        platform_settings: Vec::new(),
     };
     assert!(!settings.is_linear());
     let red_pixel = texture.pixel(0, 0).unwrap_or(&[0, 0, 0, 0]);
@@ -814,5 +818,206 @@ fn reports_malformed_and_truncated_jpeg_errors() -> Result<(), Box<dyn std::erro
         corrupt,
         TextureImportError::Truncated | TextureImportError::CorruptData(_)
     ));
+    Ok(())
+}
+
+fn build_gif_frame(
+    width: u16,
+    height: u16,
+    min_code_size: u8,
+    lzw_codes: &[(u16, usize)],
+) -> Vec<u8> {
+    let mut frame = vec![0x2Cu8, 0, 0, 0, 0];
+    frame.extend_from_slice(&width.to_le_bytes());
+    frame.extend_from_slice(&height.to_le_bytes());
+    frame.push(0x00);
+    frame.push(min_code_size);
+    let mut bit_buffer: u64 = 0;
+    let mut bit_len: usize = 0;
+    let mut sub_block = Vec::new();
+    for (code, code_bits) in lzw_codes {
+        bit_buffer |= u64::from(*code) << bit_len;
+        bit_len += *code_bits;
+        while bit_len >= 8 {
+            sub_block.push((bit_buffer & 0xFF) as u8);
+            bit_buffer >>= 8;
+            bit_len -= 8;
+        }
+    }
+    if bit_len > 0 {
+        sub_block.push((bit_buffer & 0xFF) as u8);
+    }
+    frame.push(sub_block.len() as u8);
+    frame.extend_from_slice(&sub_block);
+    frame.push(0x00);
+    frame
+}
+
+fn two_frame_animated_gif_2x2() -> Vec<u8> {
+    let mut gif = Vec::new();
+    gif.extend_from_slice(b"GIF89a");
+    gif.extend_from_slice(&2u16.to_le_bytes());
+    gif.extend_from_slice(&2u16.to_le_bytes());
+    gif.push(0x81);
+    gif.push(0x00);
+    gif.push(0x00);
+    gif.extend_from_slice(&[
+        255, 0, 0,
+        0, 255, 0,
+        0, 0, 255,
+        255, 255, 0,
+    ]);
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x03, 0x00]);
+    gif.extend_from_slice(&build_gif_frame(
+        2,
+        2,
+        2,
+        &[(4, 3), (0, 3), (1, 3), (2, 3), (3, 4), (5, 4)],
+    ));
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]);
+    gif.extend_from_slice(&build_gif_frame(
+        2,
+        2,
+        2,
+        &[(4, 3), (2, 3), (2, 3), (2, 3), (2, 4), (5, 4)],
+    ));
+    gif.push(0x3B);
+    gif
+}
+
+#[test]
+fn reports_pict_as_unsupported_by_name() {
+    let pict_bytes = vec![0u8; 528];
+    let error = decode_error(decode_texture(&pict_bytes, "Assets/Textures/legacy.pict"));
+    assert_eq!(
+        error,
+        TextureImportError::UnsupportedFormat("PICT (Assets/Textures/legacy.pict)".to_string())
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("PICT") && message.contains("Assets/Textures/legacy.pict"),
+        "expected PICT and file name in unsupported error: {message}"
+    );
+
+    let pct_error = decode_error(decode_texture(&pict_bytes, "icon.pct"));
+    assert_eq!(
+        pct_error,
+        TextureImportError::UnsupportedFormat("PICT (icon.pct)".to_string())
+    );
+    let import_error = match import_texture(&pict_bytes, "icon.pic", &TextureImportSettings::default()) {
+        Ok(_) => TextureImportError::InvalidSignature,
+        Err(error) => error,
+    };
+    assert_eq!(
+        import_error,
+        TextureImportError::UnsupportedFormat("PICT (icon.pic)".to_string())
+    );
+}
+
+#[test]
+fn imports_gif_first_frame_and_reports_excluded_later_frames(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gif = two_frame_animated_gif_2x2();
+    let settings = TextureImportSettings::default();
+    let imported = import_texture(&gif, "Assets/Sprites/explosion.gif", &settings)?;
+    assert_eq!(imported.texture.width, 2);
+    assert_eq!(imported.texture.height, 2);
+    assert_eq!(imported.texture.format, TextureFormat::Rgba8);
+    assert_eq!(imported.frame_count, 2);
+    assert_eq!(imported.excluded_frames, 1);
+    assert_eq!(
+        imported.texture.pixels,
+        vec![
+            255, 0, 0, 255,
+            0, 255, 0, 255,
+            0, 0, 255, 255,
+            255, 255, 0, 0,
+        ]
+    );
+    assert!(
+        imported.notes.iter().any(|note| {
+            note.contains("GIF")
+                && note.contains("first frame")
+                && note.contains("excluded")
+        }),
+        "expected GIF first-frame exclusion notice in notes: {:?}",
+        imported.notes
+    );
+
+    let decoded = decode_texture(&gif, "explosion.gif")?;
+    assert_eq!(decoded, imported.texture);
+    Ok(())
+}
+
+#[test]
+fn per_target_texture_compression_overrides_survive_meta_round_trip_and_reimport(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut settings = TextureImportSettings {
+        srgb: true,
+        max_size: 8,
+        mipmaps: true,
+        sprite_mode: SpriteMode::Multiple,
+        alpha_is_transparency: true,
+        wrap_mode: WrapMode::Clamp,
+        filter_mode: FilterMode::Bilinear,
+        platform_settings: Vec::new(),
+    };
+    settings.set_platform_override(TexturePlatformSettings {
+        build_target: "Standalone".to_string(),
+        overridden: true,
+        max_texture_size: 4,
+        texture_compression: TextureCompressionQuality::HighQuality,
+        format: TexturePlatformFormat::Bc7,
+        compression_quality: 80,
+        crunched_compression: false,
+    });
+    settings.set_platform_override(TexturePlatformSettings {
+        build_target: "Android".to_string(),
+        overridden: true,
+        max_texture_size: 2,
+        texture_compression: TextureCompressionQuality::Normal,
+        format: TexturePlatformFormat::Astc6x6,
+        compression_quality: 65,
+        crunched_compression: true,
+    });
+    settings.set_platform_override(TexturePlatformSettings {
+        build_target: "iPhone".to_string(),
+        overridden: false,
+        max_texture_size: 2,
+        texture_compression: TextureCompressionQuality::LowQuality,
+        format: TexturePlatformFormat::Astc4x4,
+        compression_quality: 50,
+        crunched_compression: false,
+    });
+
+    let meta_text = settings.to_meta_text();
+    assert!(meta_text.contains("platformSettings:"));
+    assert!(meta_text.contains("buildTarget: Standalone"));
+    assert!(meta_text.contains("buildTarget: Android"));
+
+    let restored = TextureImportSettings::from_meta_text(&meta_text)?;
+    assert_eq!(restored, settings);
+    assert_eq!(restored.effective_max_size(None), 8);
+    assert_eq!(restored.effective_max_size(Some("Standalone")), 4);
+    assert_eq!(restored.effective_max_size(Some("Android")), 2);
+    assert_eq!(
+        restored.effective_max_size(Some("iPhone")),
+        8,
+        "non-overridden target falls back to default max_size"
+    );
+
+    let source = baseline_jpeg_4x4();
+    let first_import = import_texture_for_target(&source, "atlas.jpg", &restored, Some("Android"))?;
+    assert_eq!((first_import.texture.width, first_import.texture.height), (2, 2));
+    assert_eq!(first_import.applied_target.as_deref(), Some("Android"));
+    assert_eq!(
+        first_import.applied_format,
+        Some(TexturePlatformFormat::Astc6x6)
+    );
+
+    let reimported_settings = restored.round_trip()?;
+    let second_import =
+        import_texture_for_target(&source, "atlas.jpg", &reimported_settings, Some("Android"))?;
+    assert_eq!(first_import, second_import);
     Ok(())
 }

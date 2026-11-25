@@ -520,3 +520,31 @@ fn import_reports_an_unsupported_container_as_an_error() {
         "expected an unsupported container to fail the import"
     );
 }
+
+#[test]
+fn xm_tracker_module_reports_unsupported_by_name() {
+    let xm_header = b"Extended Module: ChipTune       \x1aFastTracker v2.00   \x04\x01";
+    let settings = AudioImportSettings::default();
+    assert_eq!(
+        detect_audio_state(xm_header, "Assets/Audio/level1.xm"),
+        AudioImportState::NotYetSupported
+    );
+    let result = match import_audio(xm_header, "Assets/Audio/level1.xm", &settings) {
+        Ok(result) => result,
+        Err(error) => {
+            assert_eq!(error, AudioImportError::NotAiff, "unexpected error: {error}");
+            return;
+        }
+    };
+    assert_eq!(result.state, AudioImportState::NotYetSupported);
+    assert!(result.clip.samples.is_empty());
+    assert!(
+        result.notes.iter().any(|note| {
+            note.contains("Assets/Audio/level1.xm")
+                && note.contains("xm")
+                && note.contains("Unsupported")
+        }),
+        "expected note naming file, format 'xm', and 'Unsupported': {:?}",
+        result.notes
+    );
+}

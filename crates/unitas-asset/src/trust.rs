@@ -39,6 +39,178 @@ pub struct ProjectCapabilities {
     pub restricted: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BlockedVectorKind {
+    InitializeOnLoad,
+    SourceGenerator,
+    GitPackageFetch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BlockedVector {
+    pub kind: BlockedVectorKind,
+    pub identifier: String,
+    pub executed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TrustGateReport {
+    pub blocked_vectors: Vec<BlockedVector>,
+    pub permitted_vectors: Vec<BlockedVector>,
+}
+
+impl TrustGateReport {
+    pub fn has_blocked_vector(&self, kind: BlockedVectorKind, identifier: &str) -> bool {
+        self.blocked_vectors
+            .iter()
+            .any(|v| v.kind == kind && v.identifier == identifier && !v.executed)
+    }
+
+    pub fn has_permitted_vector(&self, kind: BlockedVectorKind, identifier: &str) -> bool {
+        self.permitted_vectors
+            .iter()
+            .any(|v| v.kind == kind && v.identifier == identifier && !v.executed)
+    }
+}
+
+pub fn scan_project_vectors(
+    root: &Path,
+    capabilities: ProjectCapabilities,
+    git_package_names: &[String],
+) -> TrustGateReport {
+    let mut code_vectors = Vec::new();
+    let assets_dir = root.join("Assets");
+    if assets_dir.is_dir() {
+        collect_code_vectors(root, &assets_dir, &mut code_vectors);
+    }
+    let packages_dir = root.join("Packages");
+    if packages_dir.is_dir() {
+        collect_code_vectors(root, &packages_dir, &mut code_vectors);
+    }
+    code_vectors.sort();
+    code_vectors.dedup();
+
+    let mut blocked_vectors = Vec::new();
+    let mut permitted_vectors = Vec::new();
+
+    for vector in code_vectors {
+        if capabilities.may_run_code {
+            permitted_vectors.push(vector);
+        } else {
+            blocked_vectors.push(vector);
+        }
+    }
+
+    let mut git_names: Vec<String> = git_package_names.to_vec();
+    git_names.sort();
+    git_names.dedup();
+    for pkg in git_names {
+        let vector = BlockedVector {
+            kind: BlockedVectorKind::GitPackageFetch,
+            identifier: pkg,
+            executed: false,
+        };
+        if capabilities.may_fetch {
+            permitted_vectors.push(vector);
+        } else {
+            blocked_vectors.push(vector);
+        }
+    }
+
+    TrustGateReport {
+        blocked_vectors,
+        permitted_vectors,
+    }
+}
+
+fn collect_code_vectors(root: &Path, directory: &Path, out: &mut Vec<BlockedVector>) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            collect_code_vectors(root, &path, out);
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        if name.ends_with(".meta") {
+            if let Ok(meta_text) = fs::read_to_string(&path) {
+                if is_roslyn_analyzer_meta(&meta_text) {
+                    let asset_rel = rel.strip_suffix(".meta").unwrap_or(&rel).to_string();
+                    out.push(BlockedVector {
+                        kind: BlockedVectorKind::SourceGenerator,
+                        identifier: asset_rel,
+                        executed: false,
+                    });
+                }
+            }
+            continue;
+        }
+        if name.ends_with(".cs") {
+            if let Ok(source) = fs::read_to_string(&path) {
+                if has_initialize_on_load(&source) {
+                    out.push(BlockedVector {
+                        kind: BlockedVectorKind::InitializeOnLoad,
+                        identifier: rel.clone(),
+                        executed: false,
+                    });
+                }
+                if is_source_generator_script(&source) {
+                    out.push(BlockedVector {
+                        kind: BlockedVectorKind::SourceGenerator,
+                        identifier: rel,
+                        executed: false,
+                    });
+                }
+            }
+        } else if name.ends_with(".dll") && is_source_generator_dll_name(name, &rel) {
+            out.push(BlockedVector {
+                kind: BlockedVectorKind::SourceGenerator,
+                identifier: rel,
+                executed: false,
+            });
+        }
+    }
+}
+
+fn is_roslyn_analyzer_meta(meta_text: &str) -> bool {
+    meta_text.contains("RoslynAnalyzer")
+}
+
+fn has_initialize_on_load(source: &str) -> bool {
+    source.contains("[InitializeOnLoad]")
+        || source.contains("[InitializeOnLoadMethod")
+        || source.contains("InitializeOnLoadAttribute")
+        || source.contains("InitializeOnLoadMethodAttribute")
+}
+
+fn is_source_generator_script(source: &str) -> bool {
+    source.contains("[Generator")
+        || source.contains("ISourceGenerator")
+        || source.contains("IIncrementalGenerator")
+        || source.contains("DiagnosticAnalyzer")
+}
+
+fn is_source_generator_dll_name(name: &str, rel_path: &str) -> bool {
+    let lower_name = name.to_ascii_lowercase();
+    let lower_path = rel_path.to_ascii_lowercase();
+    lower_name.contains("generator")
+        || lower_name.contains("analyzer")
+        || lower_path.contains("/analyzers/")
+        || lower_path.contains("/sourcegenerators/")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustError {
     StoreInsideProject {

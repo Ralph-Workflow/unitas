@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::binary_ser::SerializedAsset;
+use crate::prefab_variant::{PrefabVariantDefinition, ScenePrefabInstance};
 use crate::unity_yaml::{Node, Stream};
 
 const MAX_FLOW_ENTRIES: usize = 4;
@@ -89,6 +90,23 @@ pub fn save_scene_set(scenes: &[SceneFile], edited: &Path) -> Result<(), SceneSa
         None => return Err(SceneSaveError::UnknownScene { path: edited.to_path_buf() }),
     };
     save_stream(&scene.path, &scene.stream)
+}
+
+pub fn save_prefab_variant(
+    path: &Path,
+    definition: &PrefabVariantDefinition,
+) -> Result<(), SceneSaveError> {
+    definition.save_to_file(path)
+}
+
+pub fn save_scene_prefab_instance(
+    path: &Path,
+    stream: &mut Stream,
+    instance: &ScenePrefabInstance,
+    instance_file_id: i64,
+) -> Result<(), SceneSaveError> {
+    instance.apply_to_stream(stream, instance_file_id);
+    save_stream(path, stream)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), SceneSaveError> {

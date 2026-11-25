@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::Path;
 
 use crate::json::{parse, write as write_json, JsonValue};
 
@@ -28,6 +30,258 @@ impl PackageSource {
             PackageSource::Embedded => "embedded",
             PackageSource::Tarball(_) => "tarball",
             PackageSource::BuiltIn => "builtin",
+        }
+    }
+
+    pub fn is_editable(&self) -> bool {
+        matches!(self, PackageSource::Embedded | PackageSource::Local(_))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageEditOutcome {
+    Committed {
+        package: String,
+        path: String,
+    },
+    NotCommitted {
+        package: String,
+        source: PackageSource,
+        path: String,
+        remediation: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageModificationReason {
+    ReadOnlyCacheModified,
+    EmbeddedDivergesFromRelease,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageAssessmentClassification {
+    ReleasedVersion,
+    ThirdPartyContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageModificationFinding {
+    pub package: String,
+    pub version: Option<String>,
+    pub source: PackageSource,
+    pub modified_paths: Vec<String>,
+    pub committed: bool,
+    pub reason: PackageModificationReason,
+    pub classification: PackageAssessmentClassification,
+    pub message: String,
+}
+
+pub fn attempt_package_edit(
+    manifest: &PackageManifest,
+    package_name: &str,
+    relative_path: &str,
+) -> PackageEditOutcome {
+    let source = manifest
+        .dependencies
+        .iter()
+        .find(|d| d.name == package_name)
+        .map(|d| d.source.clone())
+        .unwrap_or(PackageSource::Registry);
+    if source.is_editable() {
+        PackageEditOutcome::Committed {
+            package: package_name.to_string(),
+            path: relative_path.to_string(),
+        }
+    } else {
+        PackageEditOutcome::NotCommitted {
+            package: package_name.to_string(),
+            source,
+            path: relative_path.to_string(),
+            remediation: "embed the package under Packages/ to edit its content".to_string(),
+        }
+    }
+}
+
+pub fn detect_package_modifications(
+    project_root: &Path,
+    manifest: &PackageManifest,
+    lock: Option<&PackageLock>,
+) -> Vec<PackageModificationFinding> {
+    let mut findings = Vec::new();
+    let locked_by_name: BTreeMap<&str, &LockedPackage> = lock
+        .map(|l| {
+            l.dependencies
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let cache_dir = project_root.join("Library").join("PackageCache");
+    for dep in &manifest.dependencies {
+        let locked = locked_by_name.get(dep.name.as_str()).copied();
+        let version = dep
+            .version
+            .clone()
+            .or_else(|| locked.and_then(|l| l.version.clone()));
+        match &dep.source {
+            PackageSource::Registry
+            | PackageSource::ScopedRegistry(_)
+            | PackageSource::Git(_)
+            | PackageSource::Tarball(_)
+            | PackageSource::BuiltIn => {
+                if let Some(pkg_cache_dir) = find_cached_package_dir(&cache_dir, &dep.name, version.as_deref()) {
+                    let modified_paths = detect_modified_files_in_dir(&pkg_cache_dir, locked);
+                    if !modified_paths.is_empty() {
+                        findings.push(PackageModificationFinding {
+                            package: dep.name.clone(),
+                            version: version.clone(),
+                            source: dep.source.clone(),
+                            modified_paths,
+                            committed: false,
+                            reason: PackageModificationReason::ReadOnlyCacheModified,
+                            classification: PackageAssessmentClassification::ThirdPartyContent,
+                            message: format!(
+                                "edit to read-only {} package {} was not committed; embed the package under Packages/ to modify it",
+                                dep.source.kind(),
+                                dep.name
+                            ),
+                        });
+                    }
+                }
+            }
+            PackageSource::Embedded => {
+                let folder_name = dep.path.as_deref().unwrap_or(&dep.name);
+                let embedded_dir = project_root.join("Packages").join(folder_name);
+                if embedded_dir.is_dir() {
+                    let modified_paths = detect_embedded_divergence(&embedded_dir, locked);
+                    if !modified_paths.is_empty() {
+                        findings.push(PackageModificationFinding {
+                            package: dep.name.clone(),
+                            version,
+                            source: PackageSource::Embedded,
+                            modified_paths,
+                            committed: true,
+                            reason: PackageModificationReason::EmbeddedDivergesFromRelease,
+                            classification: PackageAssessmentClassification::ThirdPartyContent,
+                            message: format!(
+                                "embedded package {} is locally modified from the released version and is assessed as third-party content",
+                                dep.name
+                            ),
+                        });
+                    }
+                }
+            }
+            PackageSource::Local(_) => {}
+        }
+    }
+    findings.sort_by(|a, b| a.package.cmp(&b.package));
+    findings
+}
+
+fn find_cached_package_dir(
+    cache_dir: &Path,
+    package_name: &str,
+    version: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    if !cache_dir.is_dir() {
+        return None;
+    }
+    if let Some(ver) = version {
+        let exact = cache_dir.join(format!("{package_name}@{ver}"));
+        if exact.is_dir() {
+            return Some(exact);
+        }
+    }
+    let prefix = format!("{package_name}@");
+    let entries = fs::read_dir(cache_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with(&prefix) || name == package_name {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn detect_modified_files_in_dir(
+    dir: &Path,
+    locked: Option<&LockedPackage>,
+) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_relative_files(dir, dir, &mut files);
+    files.sort();
+    let non_manifest: Vec<String> = files
+        .into_iter()
+        .filter(|rel| rel != "package.json" && rel != "package.json.meta")
+        .collect();
+    if !non_manifest.is_empty() {
+        return non_manifest;
+    }
+    if let Some(lock_entry) = locked {
+        if let Ok(pkg_json_text) = fs::read_to_string(dir.join("package.json")) {
+            if let Ok(root) = parse(&pkg_json_text) {
+                let disk_version = root.get("version").and_then(|v| v.as_str());
+                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref()) {
+                    if disk_v != lock_v {
+                        return vec!["package.json".to_string()];
+                    }
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn detect_embedded_divergence(
+    dir: &Path,
+    locked: Option<&LockedPackage>,
+) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_relative_files(dir, dir, &mut files);
+    files.sort();
+    if let Ok(pkg_json_text) = fs::read_to_string(dir.join("package.json")) {
+        if let Ok(root) = parse(&pkg_json_text) {
+            let disk_version = root.get("version").and_then(|v| v.as_str());
+            if let Some(lock_entry) = locked {
+                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref()) {
+                    if disk_v != lock_v {
+                        return files;
+                    }
+                }
+                if lock_entry.hash.is_some() {
+                    let non_manifest: Vec<String> = files
+                        .iter()
+                        .filter(|rel| *rel != "package.json" && *rel != "package.json.meta")
+                        .cloned()
+                        .collect();
+                    if !non_manifest.is_empty() {
+                        return non_manifest;
+                    }
+                }
+            } else if !files.is_empty() {
+                return files;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn collect_relative_files(root: &Path, current: &Path, out: &mut Vec<String>) {
+    let entries = match fs::read_dir(current) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_relative_files(root, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(root) {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
         }
     }
 }

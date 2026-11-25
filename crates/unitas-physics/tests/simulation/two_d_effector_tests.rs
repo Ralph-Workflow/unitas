@@ -238,3 +238,91 @@ fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
     let repelled_x = world.body(metal_body).map_or(2.0, |b| b.position[0]);
     assert!(repelled_x > 2.5, "positive PointEffector2D force must repel metal away from origin, got x={repelled_x}");
 }
+
+#[test]
+fn buoyancy_effector_floats_and_sinks_bodies_by_density_and_applies_submerged_drag_and_flow() {
+    use unitas_physics::two_d::effector::BuoyancyEffector2D;
+
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let water_go = EntityId::new(40);
+    let cork_go = EntityId::new(41);
+    let stone_go = EntityId::new(42);
+    let air_go = EntityId::new(43);
+
+    let water_col = world.add_collider(
+        ColliderDesc2D::box_collider(water_go, [10.0, 4.0])
+            .with_trigger(true)
+            .with_used_by_effector(true),
+    );
+    world.attach_effector(
+        water_col,
+        BuoyancyEffector2D::new(2.0, 2.0)
+            .with_drag(2.0, 3.0)
+            .with_flow(0.0, 8.0, 0.0)
+            .with_collider_mask(1 << 0),
+    );
+
+    let cork_body = world.add_body(
+        BodyDesc2D::dynamic(cork_go, [-2.0, 0.0])
+            .with_mass(1.0)
+            .with_velocity([0.0, -2.0]),
+    );
+    if let Some(b) = world.body_mut(cork_body) {
+        b.angular_velocity = 4.0;
+    }
+    world.add_collider(
+        ColliderDesc2D::box_collider(cork_go, [0.5, 0.5]).with_attached_body(cork_body),
+    );
+
+    let stone_body = world.add_body(
+        BodyDesc2D::dynamic(stone_go, [2.0, 0.0]).with_mass(8.0),
+    );
+    world.add_collider(
+        ColliderDesc2D::box_collider(stone_go, [0.5, 0.5]).with_attached_body(stone_body),
+    );
+
+    let air_body = world.add_body(
+        BodyDesc2D::dynamic(air_go, [0.0, 3.2])
+            .with_mass(1.0)
+            .with_gravity_scale(0.0),
+    );
+    world.add_collider(
+        ColliderDesc2D::box_collider(air_go, [0.5, 0.5]).with_attached_body(air_body),
+    );
+
+    for _ in 0..40 {
+        world.step(0.02);
+    }
+
+    let cork = world.body(cork_body);
+    let cork_y = cork.map_or(0.0, |b| b.position[1]);
+    let cork_x = cork.map_or(-2.0, |b| b.position[0]);
+    let cork_vx = cork.map_or(0.0, |b| b.linear_velocity[0]);
+    let cork_ang_vel = cork.map_or(4.0, |b| b.angular_velocity);
+    assert!(
+        cork_y > 0.3,
+        "low-mass cork submerged below surface_level=2.0 in density=2.0 water must float upward, got y={cork_y}"
+    );
+    assert!(
+        cork_x > -1.8 && cork_vx > 0.5,
+        "submerged cork must experience rightward flow force, got x={cork_x}, vx={cork_vx}"
+    );
+    assert!(
+        cork_ang_vel < 1.5,
+        "submerged angular drag must damp cork angular velocity from 4.0, got {cork_ang_vel}"
+    );
+
+    let stone_y = world.body(stone_body).map_or(0.0, |b| b.position[1]);
+    assert!(
+        stone_y < -1.0,
+        "high-mass stone whose weight exceeds displaced fluid buoyancy must sink, got y={stone_y}"
+    );
+
+    let air_x = world.body(air_body).map_or(0.0, |b| b.position[0]);
+    let air_y = world.body(air_body).map_or(3.2, |b| b.position[1]);
+    assert!(
+        air_x.abs() < 1e-4 && (air_y - 3.2).abs() < 1e-4,
+        "body inside effector collider but above surface_level=2.0 must receive zero buoyancy or flow, got ({air_x}, {air_y})"
+    );
+}
+

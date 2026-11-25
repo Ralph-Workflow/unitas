@@ -6,11 +6,14 @@ use std::path::{Path, PathBuf};
 
 use crate::binary_ser::{is_text_serialized, read_serialized_file};
 use crate::meta::parse_meta_text;
-use crate::packages::{parse_lock, parse_manifest, resolve};
+use crate::packages::{
+    detect_package_modifications, parse_lock, parse_manifest, resolve, PackageLock,
+    PackageManifest, PackageModificationFinding, PackageSource,
+};
 use crate::project_settings::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
 };
-use crate::trust::{ProjectCapabilities, TrustStore};
+use crate::trust::{scan_project_vectors, ProjectCapabilities, TrustGateReport, TrustStore};
 use crate::unity_yaml::{self, Node};
 
 pub const BASELINE_UNITY_VERSION: &str = "2022.3";
@@ -104,7 +107,9 @@ pub struct OpenReport {
     pub migration: MigrationStatus,
     pub inventory: AssetInventory,
     pub capabilities: ProjectCapabilities,
+    pub trust_gate: TrustGateReport,
     pub recognized_packages: Vec<String>,
+    pub package_modifications: Vec<PackageModificationFinding>,
     pub recognized_settings: Vec<String>,
 }
 
@@ -113,6 +118,7 @@ pub struct Project {
     pub(crate) root: PathBuf,
     pub(crate) inventory: AssetInventory,
     capabilities: ProjectCapabilities,
+    trust_gate: TrustGateReport,
 }
 
 impl Project {
@@ -124,8 +130,15 @@ impl Project {
         let declared_version = read_declared_version(root)?;
         let inventory = build_inventory(root)?;
         let recognized_settings = read_settings(root);
-        let recognized_packages = read_packages(root)?;
+        let (manifest, lock) = load_manifest_and_lock(root)?;
+        let recognized_packages = recognized_package_names(manifest.as_ref(), lock.as_ref());
+        let git_packages = git_package_names(manifest.as_ref(), lock.as_ref());
         let capabilities = trust.capabilities(&root.to_string_lossy());
+        let trust_gate = scan_project_vectors(root, capabilities, &git_packages);
+        let package_modifications = match &manifest {
+            Some(manifest) => detect_package_modifications(root, manifest, lock.as_ref()),
+            None => Vec::new(),
+        };
         let migration = match classify_version(declared_version.as_deref()) {
             VersionClass::Current => MigrationStatus::Current,
             VersionClass::Migratable => MigrationStatus::RequiresUpgrade(upgrade_preview(
@@ -144,7 +157,9 @@ impl Project {
             migration,
             inventory: inventory.clone(),
             capabilities,
+            trust_gate: trust_gate.clone(),
             recognized_packages,
+            package_modifications,
             recognized_settings,
         };
         Ok((
@@ -152,6 +167,7 @@ impl Project {
                 root: root.to_path_buf(),
                 inventory,
                 capabilities,
+                trust_gate,
             },
             report,
         ))
@@ -167,6 +183,10 @@ impl Project {
 
     pub fn capabilities(&self) -> ProjectCapabilities {
         self.capabilities
+    }
+
+    pub fn trust_gate(&self) -> &TrustGateReport {
+        &self.trust_gate
     }
 }
 
@@ -558,11 +578,13 @@ fn read_settings(root: &Path) -> Vec<String> {
     recognized
 }
 
-fn read_packages(root: &Path) -> Result<Vec<String>, ProjectError> {
+fn load_manifest_and_lock(
+    root: &Path,
+) -> Result<(Option<PackageManifest>, Option<PackageLock>), ProjectError> {
     let directory = root.join("Packages");
     let manifest_path = directory.join("manifest.json");
     if !manifest_path.is_file() {
-        return Ok(Vec::new());
+        return Ok((None, None));
     }
     let text = fs::read_to_string(&manifest_path).map_err(|error| ProjectError::Io {
         path: manifest_path.clone(),
@@ -583,7 +605,18 @@ fn read_packages(root: &Path) -> Result<Vec<String>, ProjectError> {
     } else {
         None
     };
-    let report = resolve(&manifest, lock.as_ref());
+    Ok((Some(manifest), lock))
+}
+
+fn recognized_package_names(
+    manifest: Option<&PackageManifest>,
+    lock: Option<&PackageLock>,
+) -> Vec<String> {
+    let manifest = match manifest {
+        Some(manifest) => manifest,
+        None => return Vec::new(),
+    };
+    let report = resolve(manifest, lock);
     let mut names: Vec<String> = report
         .resolved
         .iter()
@@ -592,7 +625,31 @@ fn read_packages(root: &Path) -> Result<Vec<String>, ProjectError> {
         .collect();
     names.sort();
     names.dedup();
-    Ok(names)
+    names
+}
+
+fn git_package_names(
+    manifest: Option<&PackageManifest>,
+    lock: Option<&PackageLock>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(manifest) = manifest {
+        for dep in &manifest.dependencies {
+            if matches!(dep.source, PackageSource::Git(_)) {
+                names.push(dep.name.clone());
+            }
+        }
+    }
+    if let Some(lock) = lock {
+        for dep in &lock.dependencies {
+            if matches!(dep.source, PackageSource::Git(_)) {
+                names.push(dep.name.clone());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn upgrade_preview(

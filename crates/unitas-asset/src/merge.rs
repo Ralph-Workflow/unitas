@@ -716,13 +716,13 @@ fn build_paths(objects: &[Object], names: &BTreeMap<i64, String>) -> BTreeMap<i6
     let mut visiting: BTreeSet<i64> = BTreeSet::new();
     for (game_object, name) in names {
         let path = match transform_of_game_object.get(game_object) {
-            Some(transform) => transform_path(*transform, &transforms, &names, &mut visiting),
+            Some(transform) => transform_path(*transform, &transforms, names, &mut visiting),
             None => name.clone(),
         };
         paths.insert(*game_object, path);
     }
     for transform in transforms.keys() {
-        let path = transform_path(*transform, &transforms, &names, &mut visiting);
+        let path = transform_path(*transform, &transforms, names, &mut visiting);
         paths.insert(*transform, format!("{path}/Transform"));
     }
     for object in objects {
@@ -1099,9 +1099,8 @@ fn write_flow_mapping(out: &mut String, entries: &[(String, Node)]) {
         }
         write_scalar(out, key);
         out.push_str(": ");
-        match value {
-            Node::Scalar(scalar) => write_scalar(out, scalar),
-            _ => {}
+        if let Node::Scalar(scalar) = value {
+            write_scalar(out, scalar);
         }
     }
     out.push('}');
@@ -1167,3 +1166,848 @@ fn needs_quotes(text: &str) -> bool {
         )
     })
 }
+
+const PREFAB_INSTANCE_CLASS_ID: u32 = 1001;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffChangeKind {
+    Added,
+    Removed,
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyDiff {
+    pub object_path: String,
+    pub file_id: i64,
+    pub property_path: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectDiff {
+    pub change: DiffChangeKind,
+    pub file_id: i64,
+    pub class_id: Option<u32>,
+    pub type_name: Option<String>,
+    pub object_path: String,
+    pub properties: Vec<PropertyDiff>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentDiff {
+    pub change: DiffChangeKind,
+    pub file_id: i64,
+    pub class_id: Option<u32>,
+    pub type_name: Option<String>,
+    pub owner_file_id: Option<i64>,
+    pub object_path: String,
+    pub properties: Vec<PropertyDiff>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverrideSection {
+    Modifications,
+    RemovedComponents,
+    AddedComponents,
+    AddedGameObjects,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefabOverrideDiff {
+    pub change: DiffChangeKind,
+    pub section: OverrideSection,
+    pub prefab_instance_file_id: i64,
+    pub object_path: String,
+    pub target_file_id: Option<i64>,
+    pub target_guid: Option<String>,
+    pub property_path: Option<String>,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub old_object_reference: Option<String>,
+    pub new_object_reference: Option<String>,
+    pub added_object_file_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SemanticDiff {
+    pub objects: Vec<ObjectDiff>,
+    pub components: Vec<ComponentDiff>,
+    pub properties: Vec<PropertyDiff>,
+    pub prefab_overrides: Vec<PrefabOverrideDiff>,
+}
+
+impl SemanticDiff {
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+            && self.components.is_empty()
+            && self.properties.is_empty()
+            && self.prefab_overrides.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffOutcome {
+    Diff(SemanticDiff),
+    NotSemanticallyDiffable { reason: String },
+}
+
+impl DiffOutcome {
+    pub fn is_diffable(&self) -> bool {
+        matches!(self, DiffOutcome::Diff(_))
+    }
+
+    pub fn as_diff(&self) -> Option<&SemanticDiff> {
+        match self {
+            DiffOutcome::Diff(diff) => Some(diff),
+            DiffOutcome::NotSemanticallyDiffable { .. } => None,
+        }
+    }
+}
+
+pub fn semantic_diff_bytes(old: &[u8], new: &[u8]) -> Result<DiffOutcome, MergeError> {
+    let old_asset = match parse_asset(old, MergeSide::Ours) {
+        Ok(asset) => asset,
+        Err(MergeError::NotMergeable { reason }) => {
+            return Ok(DiffOutcome::NotSemanticallyDiffable { reason })
+        }
+        Err(error) => return Err(error),
+    };
+    let new_asset = match parse_asset(new, MergeSide::Theirs) {
+        Ok(asset) => asset,
+        Err(MergeError::NotMergeable { reason }) => {
+            return Ok(DiffOutcome::NotSemanticallyDiffable { reason })
+        }
+        Err(error) => return Err(error),
+    };
+    if old_asset.kind != new_asset.kind {
+        return Ok(DiffOutcome::NotSemanticallyDiffable {
+            reason: String::from("asset revisions use different serialization forms"),
+        });
+    }
+    let diff = diff_parsed_assets(&old_asset, &new_asset)?;
+    Ok(DiffOutcome::Diff(diff))
+}
+
+pub fn semantic_diff(old: &str, new: &str) -> Result<DiffOutcome, MergeError> {
+    semantic_diff_bytes(old.as_bytes(), new.as_bytes())
+}
+
+pub fn semantic_diff_files(old: &Path, new: &Path) -> Result<DiffOutcome, MergeError> {
+    let old_bytes = read_file(old)?;
+    let new_bytes = read_file(new)?;
+    semantic_diff_bytes(&old_bytes, &new_bytes)
+}
+
+pub fn diff_streams(old: &Stream, new: &Stream) -> Result<SemanticDiff, MergeError> {
+    let old_asset = asset_from_stream(old.clone());
+    let new_asset = asset_from_stream(new.clone());
+    diff_parsed_assets(&old_asset, &new_asset)
+}
+
+pub fn diff_assets(old: &[u8], new: &[u8]) -> Result<DiffOutcome, MergeError> {
+    semantic_diff_bytes(old, new)
+}
+
+fn is_prefab_instance(object: &Object) -> bool {
+    object.type_name.as_deref() == Some("PrefabInstance")
+        || object.class_id == Some(PREFAB_INSTANCE_CLASS_ID)
+}
+
+fn build_owner_map(objects: &[Object]) -> BTreeMap<i64, i64> {
+    let mut owner: BTreeMap<i64, i64> = BTreeMap::new();
+    for object in objects {
+        if is_game_object(object) {
+            if let Some(Node::Sequence(items)) = object.properties.get("m_Component") {
+                for item in items {
+                    if let Some(component_id) = reference_id(item.get("component")) {
+                        owner.insert(component_id, object.file_id);
+                    }
+                }
+            }
+        }
+        if is_transform(object) {
+            if let Some(game_object) = reference_id(object.properties.get("m_GameObject")) {
+                if game_object != 0 {
+                    owner.insert(object.file_id, game_object);
+                }
+            }
+        }
+        if let Some(game_object) = reference_id(object.properties.get("m_GameObject")) {
+            if game_object != 0 && !is_game_object(object) {
+                owner.entry(object.file_id).or_insert(game_object);
+            }
+        }
+    }
+    owner
+}
+
+fn is_component_object(object: &Object, owners: &BTreeMap<i64, i64>) -> bool {
+    if is_game_object(object) || is_prefab_instance(object) {
+        return false;
+    }
+    if is_transform(object) || owners.contains_key(&object.file_id) {
+        return true;
+    }
+    if let Some(game_object) = reference_id(object.properties.get("m_GameObject")) {
+        if game_object != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_object_path(
+    file_id: i64,
+    object: &Object,
+    primary_paths: &BTreeMap<i64, String>,
+    fallback_paths: &BTreeMap<i64, String>,
+) -> String {
+    if let Some(path) = primary_paths
+        .get(&file_id)
+        .or_else(|| fallback_paths.get(&file_id))
+    {
+        return path.clone();
+    }
+    if is_prefab_instance(object) {
+        if let Some(modifications) = object
+            .properties
+            .get("m_Modification")
+            .and_then(|node| node.get("m_Modifications"))
+            .and_then(Node::as_sequence)
+        {
+            for item in modifications {
+                if item.get("propertyPath").and_then(Node::as_scalar) == Some("m_Name") {
+                    if let Some(val) = item.get("value").and_then(Node::as_scalar) {
+                        if !val.is_empty() {
+                            return format!("PrefabInstance({val})");
+                        }
+                    }
+                }
+            }
+        }
+        return format!("PrefabInstance{file_id}");
+    }
+    if let Some(type_name) = &object.type_name {
+        return format!("{type_name}{file_id}");
+    }
+    if file_id == META_FILE_ID {
+        return String::from("Meta");
+    }
+    format!("fileID:{file_id}")
+}
+
+fn diff_parsed_assets(old: &Asset, new: &Asset) -> Result<SemanticDiff, MergeError> {
+    let old_objects = index_objects(&old.objects)?;
+    let new_objects = index_objects(&new.objects)?;
+
+    let old_names = object_names(&old.objects);
+    let new_names = object_names(&new.objects);
+    let old_paths = build_paths(&old.objects, &old_names);
+    let new_paths = build_paths(&new.objects, &new_names);
+
+    let old_owners = build_owner_map(&old.objects);
+    let new_owners = build_owner_map(&new.objects);
+
+    let mut file_ids: BTreeSet<i64> = BTreeSet::new();
+    for id in old_objects.keys().chain(new_objects.keys()) {
+        file_ids.insert(*id);
+    }
+
+    let mut objects = Vec::new();
+    let mut components = Vec::new();
+    let mut properties = Vec::new();
+    let mut prefab_overrides = Vec::new();
+
+    for file_id in file_ids {
+        let old_obj = old_objects.get(&file_id);
+        let new_obj = new_objects.get(&file_id);
+        match (old_obj, new_obj) {
+            (None, Some(added)) => {
+                let object_path = resolve_object_path(file_id, added, &new_paths, &old_paths);
+                if is_component_object(added, &new_owners) {
+                    components.push(ComponentDiff {
+                        change: DiffChangeKind::Added,
+                        file_id,
+                        class_id: added.class_id,
+                        type_name: added.type_name.clone(),
+                        owner_file_id: new_owners.get(&file_id).copied(),
+                        object_path,
+                        properties: Vec::new(),
+                    });
+                } else {
+                    if is_prefab_instance(added) {
+                        prefab_overrides.extend(diff_prefab_instance_overrides(
+                            file_id,
+                            &object_path,
+                            None,
+                            Some(&added.properties),
+                        ));
+                    }
+                    objects.push(ObjectDiff {
+                        change: DiffChangeKind::Added,
+                        file_id,
+                        class_id: added.class_id,
+                        type_name: added.type_name.clone(),
+                        object_path,
+                        properties: Vec::new(),
+                    });
+                }
+            }
+            (Some(removed), None) => {
+                let object_path = resolve_object_path(file_id, removed, &old_paths, &new_paths);
+                if is_component_object(removed, &old_owners) {
+                    components.push(ComponentDiff {
+                        change: DiffChangeKind::Removed,
+                        file_id,
+                        class_id: removed.class_id,
+                        type_name: removed.type_name.clone(),
+                        owner_file_id: old_owners.get(&file_id).copied(),
+                        object_path,
+                        properties: Vec::new(),
+                    });
+                } else {
+                    if is_prefab_instance(removed) {
+                        prefab_overrides.extend(diff_prefab_instance_overrides(
+                            file_id,
+                            &object_path,
+                            Some(&removed.properties),
+                            None,
+                        ));
+                    }
+                    objects.push(ObjectDiff {
+                        change: DiffChangeKind::Removed,
+                        file_id,
+                        class_id: removed.class_id,
+                        type_name: removed.type_name.clone(),
+                        object_path,
+                        properties: Vec::new(),
+                    });
+                }
+            }
+            (Some(old_item), Some(new_item)) => {
+                let object_path = resolve_object_path(file_id, new_item, &new_paths, &old_paths);
+                let is_comp = is_component_object(new_item, &new_owners)
+                    || is_component_object(old_item, &old_owners);
+                let is_go = is_game_object(new_item) || is_game_object(old_item);
+                let is_prefab = is_prefab_instance(new_item) || is_prefab_instance(old_item);
+
+                if is_prefab {
+                    prefab_overrides.extend(diff_prefab_instance_overrides(
+                        file_id,
+                        &object_path,
+                        Some(&old_item.properties),
+                        Some(&new_item.properties),
+                    ));
+                }
+
+                let mut prop_diffs = Vec::new();
+                diff_object_properties(
+                    file_id,
+                    &object_path,
+                    old_item,
+                    new_item,
+                    is_go,
+                    is_prefab,
+                    &mut prop_diffs,
+                );
+
+                if !prop_diffs.is_empty() {
+                    properties.extend(prop_diffs.clone());
+                    if is_comp {
+                        components.push(ComponentDiff {
+                            change: DiffChangeKind::Changed,
+                            file_id,
+                            class_id: new_item.class_id,
+                            type_name: new_item.type_name.clone(),
+                            owner_file_id: new_owners
+                                .get(&file_id)
+                                .or_else(|| old_owners.get(&file_id))
+                                .copied(),
+                            object_path,
+                            properties: prop_diffs,
+                        });
+                    } else {
+                        objects.push(ObjectDiff {
+                            change: DiffChangeKind::Changed,
+                            file_id,
+                            class_id: new_item.class_id,
+                            type_name: new_item.type_name.clone(),
+                            object_path,
+                            properties: prop_diffs,
+                        });
+                    }
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    Ok(SemanticDiff {
+        objects,
+        components,
+        properties,
+        prefab_overrides,
+    })
+}
+
+fn diff_object_properties(
+    file_id: i64,
+    object_path: &str,
+    old_item: &Object,
+    new_item: &Object,
+    is_go: bool,
+    is_prefab: bool,
+    out: &mut Vec<PropertyDiff>,
+) {
+    if old_item.class_id != new_item.class_id {
+        out.push(PropertyDiff {
+            object_path: object_path.to_string(),
+            file_id,
+            property_path: String::from("class_id"),
+            old_value: old_item.class_id.map(|id| id.to_string()),
+            new_value: new_item.class_id.map(|id| id.to_string()),
+        });
+    }
+    if old_item.type_name != new_item.type_name {
+        out.push(PropertyDiff {
+            object_path: object_path.to_string(),
+            file_id,
+            property_path: String::from("type_name"),
+            old_value: old_item.type_name.clone(),
+            new_value: new_item.type_name.clone(),
+        });
+    }
+    let ctx = DiffNodeContext {
+        file_id,
+        object_path,
+        is_go,
+        is_prefab,
+    };
+    diff_nodes(
+        &ctx,
+        "",
+        Some(&old_item.properties),
+        Some(&new_item.properties),
+        out,
+    );
+}
+
+fn is_prefab_override_property(is_prefab: bool, path: &str) -> bool {
+    is_prefab
+        && matches!(
+            path,
+            "m_Modification.m_Modifications"
+                | "m_Modification.m_RemovedComponents"
+                | "m_Modification.m_AddedComponents"
+                | "m_Modification.m_AddedGameObjects"
+        )
+}
+
+fn is_reference_mapping(entries: &[(String, Node)]) -> bool {
+    !entries.is_empty()
+        && entries.len() <= MAX_FLOW_ENTRIES
+        && entries.iter().all(|(_, value)| matches!(value, Node::Scalar(_)))
+        && entries.iter().any(|(key, _)| key == FLOW_REFERENCE_KEY)
+}
+
+fn canonicalize_node(node: &Node) -> Node {
+    match node {
+        Node::Scalar(val) => Node::Scalar(val.clone()),
+        Node::Mapping(entries) => {
+            let mut sorted: Vec<(String, Node)> = entries
+                .iter()
+                .map(|(k, v)| (k.clone(), canonicalize_node(v)))
+                .collect();
+            sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Node::Mapping(sorted)
+        }
+        Node::Sequence(items) => {
+            Node::Sequence(items.iter().map(canonicalize_node).collect())
+        }
+    }
+}
+
+fn nodes_semantically_equal(left: Option<&Node>, right: Option<&Node>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(l), Some(r)) => canonicalize_node(l) == canonicalize_node(r),
+        _ => false,
+    }
+}
+
+struct DiffNodeContext<'a> {
+    file_id: i64,
+    object_path: &'a str,
+    is_go: bool,
+    is_prefab: bool,
+}
+
+fn diff_nodes(
+    ctx: &DiffNodeContext<'_>,
+    property_path: &str,
+    old: Option<&Node>,
+    new: Option<&Node>,
+    out: &mut Vec<PropertyDiff>,
+) {
+    if ctx.is_go && property_path == "m_Component" {
+        return;
+    }
+    if is_prefab_override_property(ctx.is_prefab, property_path) {
+        return;
+    }
+    if nodes_semantically_equal(old, new) {
+        return;
+    }
+    match (old, new) {
+        (Some(Node::Mapping(old_entries)), Some(Node::Mapping(new_entries))) => {
+            if is_reference_mapping(old_entries) || is_reference_mapping(new_entries) {
+                out.push(PropertyDiff {
+                    object_path: ctx.object_path.to_string(),
+                    file_id: ctx.file_id,
+                    property_path: property_path.to_string(),
+                    old_value: old.map(render_node),
+                    new_value: new.map(render_node),
+                });
+                return;
+            }
+            let mut keys: Vec<String> = Vec::new();
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            for source in [old_entries.as_slice(), new_entries.as_slice()] {
+                for (key, _) in source {
+                    if seen.insert(key.clone()) {
+                        keys.push(key.clone());
+                    }
+                }
+            }
+            for key in keys {
+                let old_child = lookup(old_entries, &key);
+                let new_child = lookup(new_entries, &key);
+                let child_path = if property_path.is_empty() {
+                    key
+                } else {
+                    format!("{property_path}.{key}")
+                };
+                diff_nodes(
+                    ctx,
+                    &child_path,
+                    old_child,
+                    new_child,
+                    out,
+                );
+            }
+        }
+        _ => {
+            out.push(PropertyDiff {
+                object_path: ctx.object_path.to_string(),
+                file_id: ctx.file_id,
+                property_path: property_path.to_string(),
+                old_value: old.map(render_node),
+                new_value: new.map(render_node),
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ModificationKey {
+    target_file_id: Option<i64>,
+    target_guid: Option<String>,
+    property_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModificationEntry {
+    value: Option<String>,
+    object_reference: Option<String>,
+}
+
+fn parse_target_ref(node: Option<&Node>) -> (Option<i64>, Option<String>) {
+    let target = match node {
+        Some(target) => target,
+        None => return (None, None),
+    };
+    let file_id = reference_id(Some(target));
+    let guid = target
+        .get("guid")
+        .and_then(Node::as_scalar)
+        .map(String::from);
+    (file_id, guid)
+}
+
+fn extract_modification_map(
+    properties: Option<&Node>,
+) -> BTreeMap<ModificationKey, ModificationEntry> {
+    let mut map = BTreeMap::new();
+    let items = match properties
+        .and_then(|p| p.get("m_Modification"))
+        .and_then(|m| m.get("m_Modifications"))
+        .and_then(Node::as_sequence)
+    {
+        Some(items) => items,
+        None => return map,
+    };
+    for item in items {
+        let (target_file_id, target_guid) = parse_target_ref(item.get("target"));
+        let property_path = item
+            .get("propertyPath")
+            .and_then(Node::as_scalar)
+            .unwrap_or_default()
+            .to_string();
+        let value = item.get("value").map(render_node);
+        let object_reference = item.get("objectReference").map(render_node);
+        map.insert(
+            ModificationKey {
+                target_file_id,
+                target_guid,
+                property_path,
+            },
+            ModificationEntry {
+                value,
+                object_reference,
+            },
+        );
+    }
+    map
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TargetRefKey {
+    target_file_id: Option<i64>,
+    target_guid: Option<String>,
+}
+
+fn extract_removed_components(properties: Option<&Node>) -> BTreeSet<TargetRefKey> {
+    let mut set = BTreeSet::new();
+    let items = match properties
+        .and_then(|p| p.get("m_Modification"))
+        .and_then(|m| m.get("m_RemovedComponents"))
+        .and_then(Node::as_sequence)
+    {
+        Some(items) => items,
+        None => return set,
+    };
+    for item in items {
+        let target_node = item.get("target").unwrap_or(item);
+        let (target_file_id, target_guid) = parse_target_ref(Some(target_node));
+        set.insert(TargetRefKey {
+            target_file_id,
+            target_guid,
+        });
+    }
+    set
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AddedObjectKey {
+    target_file_id: Option<i64>,
+    target_guid: Option<String>,
+    added_object_file_id: Option<i64>,
+}
+
+fn extract_added_objects(properties: Option<&Node>, field: &str) -> BTreeMap<AddedObjectKey, Option<String>> {
+    let mut map = BTreeMap::new();
+    let items = match properties
+        .and_then(|p| p.get("m_Modification"))
+        .and_then(|m| m.get(field))
+        .and_then(Node::as_sequence)
+    {
+        Some(items) => items,
+        None => return map,
+    };
+    for item in items {
+        let target_node = item
+            .get("targetCorrespondingSourceObject")
+            .or_else(|| item.get("target"));
+        let (target_file_id, target_guid) = parse_target_ref(target_node);
+        let added_object_file_id = reference_id(item.get("addedObject")).or_else(|| reference_id(Some(item)));
+        let insert_index = item
+            .get("insertIndex")
+            .and_then(Node::as_scalar)
+            .map(String::from);
+        map.insert(
+            AddedObjectKey {
+                target_file_id,
+                target_guid,
+                added_object_file_id,
+            },
+            insert_index,
+        );
+    }
+    map
+}
+
+fn diff_prefab_instance_overrides(
+    prefab_instance_file_id: i64,
+    object_path: &str,
+    old_props: Option<&Node>,
+    new_props: Option<&Node>,
+) -> Vec<PrefabOverrideDiff> {
+    let mut diffs = Vec::new();
+
+    let old_mods = extract_modification_map(old_props);
+    let new_mods = extract_modification_map(new_props);
+    let mut mod_keys: BTreeSet<ModificationKey> = BTreeSet::new();
+    for key in old_mods.keys().chain(new_mods.keys()) {
+        mod_keys.insert(key.clone());
+    }
+    for key in mod_keys {
+        match (old_mods.get(&key), new_mods.get(&key)) {
+            (None, Some(added)) => {
+                diffs.push(PrefabOverrideDiff {
+                    change: DiffChangeKind::Added,
+                    section: OverrideSection::Modifications,
+                    prefab_instance_file_id,
+                    object_path: object_path.to_string(),
+                    target_file_id: key.target_file_id,
+                    target_guid: key.target_guid,
+                    property_path: Some(key.property_path),
+                    old_value: None,
+                    new_value: added.value.clone(),
+                    old_object_reference: None,
+                    new_object_reference: added.object_reference.clone(),
+                    added_object_file_id: None,
+                });
+            }
+            (Some(removed), None) => {
+                diffs.push(PrefabOverrideDiff {
+                    change: DiffChangeKind::Removed,
+                    section: OverrideSection::Modifications,
+                    prefab_instance_file_id,
+                    object_path: object_path.to_string(),
+                    target_file_id: key.target_file_id,
+                    target_guid: key.target_guid,
+                    property_path: Some(key.property_path),
+                    old_value: removed.value.clone(),
+                    new_value: None,
+                    old_object_reference: removed.object_reference.clone(),
+                    new_object_reference: None,
+                    added_object_file_id: None,
+                });
+            }
+            (Some(old_entry), Some(new_entry)) => {
+                if old_entry != new_entry {
+                    diffs.push(PrefabOverrideDiff {
+                        change: DiffChangeKind::Changed,
+                        section: OverrideSection::Modifications,
+                        prefab_instance_file_id,
+                        object_path: object_path.to_string(),
+                        target_file_id: key.target_file_id,
+                        target_guid: key.target_guid,
+                        property_path: Some(key.property_path),
+                        old_value: old_entry.value.clone(),
+                        new_value: new_entry.value.clone(),
+                        old_object_reference: old_entry.object_reference.clone(),
+                        new_object_reference: new_entry.object_reference.clone(),
+                        added_object_file_id: None,
+                    });
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    let old_removed = extract_removed_components(old_props);
+    let new_removed = extract_removed_components(new_props);
+    for added_rem in new_removed.difference(&old_removed) {
+        diffs.push(PrefabOverrideDiff {
+            change: DiffChangeKind::Added,
+            section: OverrideSection::RemovedComponents,
+            prefab_instance_file_id,
+            object_path: object_path.to_string(),
+            target_file_id: added_rem.target_file_id,
+            target_guid: added_rem.target_guid.clone(),
+            property_path: None,
+            old_value: None,
+            new_value: None,
+            old_object_reference: None,
+            new_object_reference: None,
+            added_object_file_id: None,
+        });
+    }
+    for removed_rem in old_removed.difference(&new_removed) {
+        diffs.push(PrefabOverrideDiff {
+            change: DiffChangeKind::Removed,
+            section: OverrideSection::RemovedComponents,
+            prefab_instance_file_id,
+            object_path: object_path.to_string(),
+            target_file_id: removed_rem.target_file_id,
+            target_guid: removed_rem.target_guid.clone(),
+            property_path: None,
+            old_value: None,
+            new_value: None,
+            old_object_reference: None,
+            new_object_reference: None,
+            added_object_file_id: None,
+        });
+    }
+
+    for (field, section) in [
+        ("m_AddedComponents", OverrideSection::AddedComponents),
+        ("m_AddedGameObjects", OverrideSection::AddedGameObjects),
+    ] {
+        let old_added = extract_added_objects(old_props, field);
+        let new_added = extract_added_objects(new_props, field);
+        let mut keys: BTreeSet<AddedObjectKey> = BTreeSet::new();
+        for key in old_added.keys().chain(new_added.keys()) {
+            keys.insert(key.clone());
+        }
+        for key in keys {
+            match (old_added.get(&key), new_added.get(&key)) {
+                (None, Some(new_idx)) => {
+                    diffs.push(PrefabOverrideDiff {
+                        change: DiffChangeKind::Added,
+                        section,
+                        prefab_instance_file_id,
+                        object_path: object_path.to_string(),
+                        target_file_id: key.target_file_id,
+                        target_guid: key.target_guid,
+                        property_path: None,
+                        old_value: None,
+                        new_value: new_idx.clone(),
+                        old_object_reference: None,
+                        new_object_reference: None,
+                        added_object_file_id: key.added_object_file_id,
+                    });
+                }
+                (Some(old_idx), None) => {
+                    diffs.push(PrefabOverrideDiff {
+                        change: DiffChangeKind::Removed,
+                        section,
+                        prefab_instance_file_id,
+                        object_path: object_path.to_string(),
+                        target_file_id: key.target_file_id,
+                        target_guid: key.target_guid,
+                        property_path: None,
+                        old_value: old_idx.clone(),
+                        new_value: None,
+                        old_object_reference: None,
+                        new_object_reference: None,
+                        added_object_file_id: key.added_object_file_id,
+                    });
+                }
+                (Some(old_idx), Some(new_idx)) if old_idx != new_idx => {
+                    diffs.push(PrefabOverrideDiff {
+                        change: DiffChangeKind::Changed,
+                        section,
+                        prefab_instance_file_id,
+                        object_path: object_path.to_string(),
+                        target_file_id: key.target_file_id,
+                        target_guid: key.target_guid,
+                        property_path: None,
+                        old_value: old_idx.clone(),
+                        new_value: new_idx.clone(),
+                        old_object_reference: None,
+                        new_object_reference: None,
+                        added_object_file_id: key.added_object_file_id,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    diffs
+}
+

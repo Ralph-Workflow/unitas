@@ -1,8 +1,12 @@
 use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_asset::packages::{
-    open_offline, parse_lock, parse_manifest, resolve, PackageSource, ResolutionConflict,
-    UnresolvedReason,
+    attempt_package_edit, detect_package_modifications, open_offline, parse_lock, parse_manifest,
+    resolve, PackageAssessmentClassification, PackageEditOutcome, PackageModificationReason,
+    PackageSource, ResolutionConflict, UnresolvedReason,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -269,5 +273,185 @@ fn manifest_and_lock_round_trip_through_json_write() -> TestResult {
     let written_lock = lock.write();
     assert_eq!(written_lock, lock.write());
     assert_eq!(parse_lock(&written_lock)?, lock);
+    Ok(())
+}
+
+fn temp_dir(name: &str) -> std::io::Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("unitas-{name}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&path)?;
+    Ok(path)
+}
+
+fn write_test_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, contents)
+}
+
+#[test]
+fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_local_are_committed(
+) -> TestResult {
+    let manifest = parse_manifest(MANIFEST)?;
+
+    let registry_edit = attempt_package_edit(
+        &manifest,
+        "com.example.direct",
+        "Runtime/Direct.cs",
+    );
+    assert_eq!(
+        registry_edit,
+        PackageEditOutcome::NotCommitted {
+            package: "com.example.direct".to_string(),
+            source: PackageSource::Registry,
+            path: "Runtime/Direct.cs".to_string(),
+            remediation: "embed the package under Packages/ to edit its content".to_string(),
+        }
+    );
+
+    let scoped_edit = attempt_package_edit(
+        &manifest,
+        "com.example.scoped",
+        "Runtime/Scoped.cs",
+    );
+    assert!(matches!(
+        scoped_edit,
+        PackageEditOutcome::NotCommitted {
+            ref package,
+            source: PackageSource::ScopedRegistry(_),
+            ..
+        } if package == "com.example.scoped"
+    ));
+
+    let git_edit = attempt_package_edit(
+        &manifest,
+        "com.example.git",
+        "Runtime/GitFile.cs",
+    );
+    assert!(matches!(
+        git_edit,
+        PackageEditOutcome::NotCommitted {
+            ref package,
+            source: PackageSource::Git(_),
+            ..
+        } if package == "com.example.git"
+    ));
+
+    let embedded_edit = attempt_package_edit(
+        &manifest,
+        "com.example.embedded",
+        "Runtime/Embedded.cs",
+    );
+    assert_eq!(
+        embedded_edit,
+        PackageEditOutcome::Committed {
+            package: "com.example.embedded".to_string(),
+            path: "Runtime/Embedded.cs".to_string(),
+        }
+    );
+
+    let local_edit = attempt_package_edit(
+        &manifest,
+        "com.example.local",
+        "Runtime/Local.cs",
+    );
+    assert_eq!(
+        local_edit,
+        PackageEditOutcome::Committed {
+            package: "com.example.local".to_string(),
+            path: "Runtime/Local.cs".to_string(),
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+fn locally_edited_cached_registry_and_embedded_packages_are_reported_not_committed_and_third_party(
+) -> TestResult {
+    let root = temp_dir("pkg-modifications")?;
+    let manifest = parse_manifest(
+        r#"{
+  "dependencies": {
+    "com.unity.ide.rider": "3.0.28",
+    "com.unity.render-pipelines.universal": { "file": "com.unity.render-pipelines.universal" }
+  }
+}"#,
+    )?;
+    let lock = parse_lock(
+        r#"{
+  "dependencies": {
+    "com.unity.ide.rider": {
+      "version": "3.0.28",
+      "depth": 0,
+      "source": "registry",
+      "hash": "clean-hash-0001"
+    },
+    "com.unity.render-pipelines.universal": {
+      "version": "14.0.10",
+      "depth": 0,
+      "source": "embedded",
+      "hash": "clean-urp-hash"
+    }
+  }
+}"#,
+    )?;
+
+    write_test_file(
+        &root.join("Library/PackageCache/com.unity.ide.rider@3.0.28/package.json"),
+        r#"{"name":"com.unity.ide.rider","version":"3.0.28"}"#,
+    )?;
+    write_test_file(
+        &root.join("Library/PackageCache/com.unity.ide.rider@3.0.28/Editor/RiderScriptEditor.cs"),
+        "// locally edited in cache\npublic class RiderScriptEditor {}\n",
+    )?;
+    write_test_file(
+        &root.join("Packages/com.unity.render-pipelines.universal/package.json"),
+        r#"{"name":"com.unity.render-pipelines.universal","version":"14.0.10-local-edit"}"#,
+    )?;
+    write_test_file(
+        &root.join("Packages/com.unity.render-pipelines.universal/Runtime/UniversalRenderPipeline.cs"),
+        "// modified embedded package\n",
+    )?;
+
+    let findings = detect_package_modifications(&root, &manifest, Some(&lock));
+    assert_eq!(findings.len(), 2, "expected 2 package modification findings: {findings:?}");
+
+    let rider = findings
+        .iter()
+        .find(|f| f.package == "com.unity.ide.rider")
+        .ok_or("missing finding for com.unity.ide.rider")?;
+    assert_eq!(rider.source, PackageSource::Registry);
+    assert!(!rider.committed);
+    assert_eq!(
+        rider.reason,
+        PackageModificationReason::ReadOnlyCacheModified
+    );
+    assert_eq!(
+        rider.classification,
+        PackageAssessmentClassification::ThirdPartyContent
+    );
+    assert!(rider.message.contains("not committed"));
+    assert!(rider.message.contains("com.unity.ide.rider"));
+
+    let urp = findings
+        .iter()
+        .find(|f| f.package == "com.unity.render-pipelines.universal")
+        .ok_or("missing finding for com.unity.render-pipelines.universal")?;
+    assert_eq!(urp.source, PackageSource::Embedded);
+    assert_eq!(
+        urp.reason,
+        PackageModificationReason::EmbeddedDivergesFromRelease
+    );
+    assert_eq!(
+        urp.classification,
+        PackageAssessmentClassification::ThirdPartyContent
+    );
+
+    fs::remove_dir_all(&root)?;
     Ok(())
 }

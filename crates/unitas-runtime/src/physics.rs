@@ -3,6 +3,7 @@ use unitas_physics::matrix::{
     message_is_eligible, route_message, CollisionMatrix, CollisionMessage, MessageDelivery,
     PhysicsObject,
 };
+use unitas_physics::two_d::effector::BuoyancyEffector2D;
 use unitas_physics::two_d::{
     AreaEffector2D, BodyDesc2D, BodyId2D, BodyType2D, ColliderDesc2D, ColliderId2D,
     ContactFilter2D, Effector2D, PlatformEffector2D, PointEffector2D, RaycastHit2D,
@@ -183,6 +184,14 @@ impl PhysicsRuntimeWorld {
         effector: PointEffector2D,
     ) -> bool {
         self.set_effector_2d(collider, Effector2D::Point(effector))
+    }
+
+    pub fn set_buoyancy_effector_2d(
+        &mut self,
+        collider: ColliderId2D,
+        effector: BuoyancyEffector2D,
+    ) -> bool {
+        self.set_effector_2d(collider, Effector2D::Buoyancy(effector))
     }
 
     pub fn inspect_body_2d(&self, id: BodyId2D) -> Option<BodySnapshot2D> {

@@ -2,20 +2,52 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use crate::body::distance;
-use crate::navigation::NavMesh;
+use crate::navigation::mesh::{area_matches_mask, ALL_AREAS_MASK};
+use crate::navigation::{NavMesh, NavMeshLink};
 
-/// The outcome of a path query.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NavMeshHit {
+    pub position: [f64; 3],
+    pub normal: [f64; 3],
+    pub distance: f64,
+    pub mask: u32,
+    pub hit: bool,
+    pub polygon_index: Option<usize>,
+}
+
+impl NavMeshHit {
+    pub fn position(&self) -> [f64; 3] {
+        self.position
+    }
+
+    pub fn normal(&self) -> [f64; 3] {
+        self.normal
+    }
+
+    pub fn distance(&self) -> f64 {
+        self.distance
+    }
+
+    pub fn mask(&self) -> u32 {
+        self.mask
+    }
+
+    pub fn hit(&self) -> bool {
+        self.hit
+    }
+
+    pub fn polygon_index(&self) -> Option<usize> {
+        self.polygon_index
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathQueryStatus {
-    /// The path reaches the destination.
     Complete,
-    /// The path gets as close to the destination as the navmesh allows.
     Partial,
-    /// The query names no usable start or destination.
     Invalid,
 }
 
-/// Why a path query could not reach the destination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnreachableReason {
     StartNotOnNavMesh,
@@ -23,29 +55,32 @@ pub enum UnreachableReason {
     NoRouteToGoal,
 }
 
-/// The corners of a path query and the outcome that produced them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PathLinkTraversal {
+    pub(crate) entry_corner: usize,
+    pub(crate) link: NavMeshLink,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PathQueryResult {
     pub status: PathQueryStatus,
     pub corners: Vec<[f64; 3]>,
     pub unreachable_reason: Option<UnreachableReason>,
+    pub(crate) link_traversals: Vec<PathLinkTraversal>,
 }
 
-/// How one polygon was reached from the previous one.
 #[derive(Clone, Copy, Debug)]
 enum StepKind {
     Adjacent { portal: [f64; 3] },
     Link { link: usize, forward: bool },
 }
 
-/// The polygon a step came from and the way it was taken.
 #[derive(Clone, Copy, Debug)]
 struct PathStep {
     from: usize,
     kind: StepKind,
 }
 
-/// One polygon waiting in the open set of the search.
 #[derive(Clone, Copy, Debug)]
 struct OpenEntry {
     priority: f64,
@@ -78,13 +113,30 @@ impl Ord for OpenEntry {
 }
 
 impl NavMesh {
-    /// Searches the navmesh for the cheapest path from the start to the goal.
     pub fn find_path(&self, start: [f64; 3], goal: [f64; 3]) -> PathQueryResult {
+        self.find_path_with_mask(start, goal, ALL_AREAS_MASK)
+    }
+
+    pub fn find_path_with_mask(
+        &self,
+        start: [f64; 3],
+        goal: [f64; 3],
+        area_mask: u32,
+    ) -> PathQueryResult {
         let Some(start_polygon) = self.polygon_at(start) else {
             return PathQueryResult {
                 status: PathQueryStatus::Invalid,
                 corners: Vec::new(),
                 unreachable_reason: Some(UnreachableReason::StartNotOnNavMesh),
+                link_traversals: Vec::new(),
+            };
+        };
+        if !area_matches_mask(self.polygons[start_polygon].area, area_mask) {
+            return PathQueryResult {
+                status: PathQueryStatus::Invalid,
+                corners: Vec::new(),
+                unreachable_reason: Some(UnreachableReason::StartNotOnNavMesh),
+                link_traversals: Vec::new(),
             };
         };
         let Some(goal_polygon) = self.polygon_at(goal) else {
@@ -92,6 +144,15 @@ impl NavMesh {
                 status: PathQueryStatus::Invalid,
                 corners: Vec::new(),
                 unreachable_reason: Some(UnreachableReason::GoalNotOnNavMesh),
+                link_traversals: Vec::new(),
+            };
+        };
+        if !area_matches_mask(self.polygons[goal_polygon].area, area_mask) {
+            return PathQueryResult {
+                status: PathQueryStatus::Invalid,
+                corners: Vec::new(),
+                unreachable_reason: Some(UnreachableReason::GoalNotOnNavMesh),
+                link_traversals: Vec::new(),
             };
         };
         if start_polygon == goal_polygon {
@@ -99,9 +160,10 @@ impl NavMesh {
                 status: PathQueryStatus::Complete,
                 corners: vec![start, goal],
                 unreachable_reason: None,
+                link_traversals: Vec::new(),
             };
         }
-        self.search(start, goal, start_polygon, goal_polygon)
+        self.search(start, goal, start_polygon, goal_polygon, area_mask)
     }
 
     fn search(
@@ -110,6 +172,7 @@ impl NavMesh {
         goal: [f64; 3],
         start_polygon: usize,
         goal_polygon: usize,
+        area_mask: u32,
     ) -> PathQueryResult {
         let mut cost_so_far = vec![f64::INFINITY; self.polygons.len()];
         let mut came_from: Vec<Option<PathStep>> = vec![None; self.polygons.len()];
@@ -135,10 +198,13 @@ impl NavMesh {
             }
             closed[current] = true;
             if current == goal_polygon {
+                let (corners, link_traversals) =
+                    self.build_corners(start, goal, goal_polygon, &came_from);
                 return PathQueryResult {
                     status: PathQueryStatus::Complete,
-                    corners: self.build_corners(start, goal, goal_polygon, &came_from),
+                    corners,
                     unreachable_reason: None,
+                    link_traversals,
                 };
             }
             let remaining = self.heuristic(current, goal);
@@ -146,7 +212,7 @@ impl NavMesh {
                 closest_distance = remaining;
                 closest = current;
             }
-            for (next, kind) in self.successors(current) {
+            for (next, kind) in self.successors(current, area_mask) {
                 if closed[next] {
                     continue;
                 }
@@ -167,28 +233,36 @@ impl NavMesh {
             }
         }
 
-        let mut corners = self.build_corners(start, goal, closest, &came_from);
+        let (mut corners, link_traversals) = self.build_corners(start, goal, closest, &came_from);
         corners.pop();
         corners.push(self.polygons[closest].centroid);
         PathQueryResult {
             status: PathQueryStatus::Partial,
             corners,
             unreachable_reason: Some(UnreachableReason::NoRouteToGoal),
+            link_traversals,
         }
     }
 
-    fn successors(&self, polygon: usize) -> Vec<(usize, StepKind)> {
+    fn successors(&self, polygon: usize, area_mask: u32) -> Vec<(usize, StepKind)> {
         let mut successors = Vec::new();
         for neighbor in &self.polygons[polygon].neighbors {
-            successors.push((
-                neighbor.polygon,
-                StepKind::Adjacent {
-                    portal: neighbor.portal,
-                },
-            ));
+            if area_matches_mask(self.polygons[neighbor.polygon].area, area_mask) {
+                successors.push((
+                    neighbor.polygon,
+                    StepKind::Adjacent {
+                        portal: neighbor.portal,
+                    },
+                ));
+            }
         }
         for (index, link) in self.links.iter().enumerate() {
-            if link.start_polygon == polygon {
+            if !link.activated || !area_matches_mask(link.area, area_mask) {
+                continue;
+            }
+            if link.start_polygon == polygon
+                && area_matches_mask(self.polygons[link.end_polygon].area, area_mask)
+            {
                 successors.push((
                     link.end_polygon,
                     StepKind::Link {
@@ -197,7 +271,10 @@ impl NavMesh {
                     },
                 ));
             }
-            if link.bidirectional && link.end_polygon == polygon {
+            if link.bidirectional
+                && link.end_polygon == polygon
+                && area_matches_mask(self.polygons[link.start_polygon].area, area_mask)
+            {
                 successors.push((
                     link.start_polygon,
                     StepKind::Link {
@@ -211,10 +288,11 @@ impl NavMesh {
     }
 
     fn step_cost(&self, from: usize, to: usize, kind: &StepKind) -> f64 {
-        let traversal = match kind {
+        match kind {
             StepKind::Adjacent { portal } => {
-                distance(self.polygons[from].centroid, *portal)
-                    + distance(*portal, self.polygons[to].centroid)
+                let traversal = distance(self.polygons[from].centroid, *portal)
+                    + distance(*portal, self.polygons[to].centroid);
+                traversal * self.area_cost(self.polygons[to].area)
             }
             StepKind::Link { link, forward } => {
                 let link = &self.links[*link];
@@ -223,10 +301,16 @@ impl NavMesh {
                 } else {
                     (link.end, link.start)
                 };
-                distance(self.polygons[from].centroid, entry) + distance(entry, exit)
+                let approach =
+                    distance(self.polygons[from].centroid, entry) * self.area_cost(self.polygons[from].area);
+                let link_cost = link
+                    .cost_override
+                    .unwrap_or_else(|| distance(entry, exit) * self.area_cost(link.area));
+                let departure =
+                    distance(exit, self.polygons[to].centroid) * self.area_cost(self.polygons[to].area);
+                approach + link_cost + departure
             }
-        };
-        traversal * self.area_cost(self.polygons[to].area)
+        }
     }
 
     fn heuristic(&self, polygon: usize, goal: [f64; 3]) -> f64 {
@@ -239,7 +323,7 @@ impl NavMesh {
         goal: [f64; 3],
         target: usize,
         came_from: &[Option<PathStep>],
-    ) -> Vec<[f64; 3]> {
+    ) -> (Vec<[f64; 3]>, Vec<PathLinkTraversal>) {
         let mut steps = Vec::new();
         let mut current = target;
         while let Some(step) = came_from[current] {
@@ -249,22 +333,36 @@ impl NavMesh {
         steps.reverse();
 
         let mut corners = vec![start];
+        let mut link_traversals = Vec::new();
         for step in steps {
             match step.kind {
                 StepKind::Adjacent { portal } => corners.push(portal),
                 StepKind::Link { link, forward } => {
-                    let link = &self.links[link];
-                    if forward {
-                        corners.push(link.start);
-                        corners.push(link.end);
+                    let link_data = self.links[link];
+                    let entry_corner = corners.len();
+                    let oriented = if forward {
+                        corners.push(link_data.start);
+                        corners.push(link_data.end);
+                        link_data
                     } else {
-                        corners.push(link.end);
-                        corners.push(link.start);
-                    }
+                        corners.push(link_data.end);
+                        corners.push(link_data.start);
+                        NavMeshLink {
+                            start: link_data.end,
+                            end: link_data.start,
+                            start_polygon: link_data.end_polygon,
+                            end_polygon: link_data.start_polygon,
+                            ..link_data
+                        }
+                    };
+                    link_traversals.push(PathLinkTraversal {
+                        entry_corner,
+                        link: oriented,
+                    });
                 }
             }
         }
         corners.push(goal);
-        corners
+        (corners, link_traversals)
     }
 }

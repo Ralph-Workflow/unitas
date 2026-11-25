@@ -33,6 +33,29 @@ pub enum BodyType2D {
     Static,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CollisionDetectionMode2D {
+    #[default]
+    Discrete,
+    Continuous,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RigidbodySleepMode2D {
+    NeverSleep,
+    #[default]
+    StartAwake,
+    StartAsleep,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RigidbodyInterpolation2D {
+    #[default]
+    None,
+    Interpolate,
+    Extrapolate,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BodyDesc2D {
     pub body_type: BodyType2D,
@@ -46,6 +69,9 @@ pub struct BodyDesc2D {
     pub angular_drag: f32,
     pub simulated: bool,
     pub sleeping: bool,
+    pub collision_detection_mode: CollisionDetectionMode2D,
+    pub sleep_mode: RigidbodySleepMode2D,
+    pub interpolation: RigidbodyInterpolation2D,
     pub use_full_kinematic_contacts: bool,
     pub game_object: EntityId,
     pub layer: u8,
@@ -65,6 +91,9 @@ impl Default for BodyDesc2D {
             angular_drag: 0.05,
             simulated: true,
             sleeping: false,
+            collision_detection_mode: CollisionDetectionMode2D::Discrete,
+            sleep_mode: RigidbodySleepMode2D::StartAwake,
+            interpolation: RigidbodyInterpolation2D::None,
             use_full_kinematic_contacts: false,
             game_object: EntityId::new(0),
             layer: 0,
@@ -132,6 +161,29 @@ impl BodyDesc2D {
         self.simulated = simulated;
         self
     }
+
+    pub fn with_collision_detection_mode(mut self, mode: CollisionDetectionMode2D) -> Self {
+        self.collision_detection_mode = mode;
+        self
+    }
+
+    pub fn with_sleep_mode(mut self, sleep_mode: RigidbodySleepMode2D) -> Self {
+        self.sleep_mode = sleep_mode;
+        match sleep_mode {
+            RigidbodySleepMode2D::NeverSleep | RigidbodySleepMode2D::StartAwake => {
+                self.sleeping = false;
+            }
+            RigidbodySleepMode2D::StartAsleep => {
+                self.sleeping = true;
+            }
+        }
+        self
+    }
+
+    pub fn with_interpolation(mut self, interpolation: RigidbodyInterpolation2D) -> Self {
+        self.interpolation = interpolation;
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -148,6 +200,9 @@ pub struct Rigidbody2D {
     pub angular_drag: f32,
     pub simulated: bool,
     pub sleeping: bool,
+    pub collision_detection_mode: CollisionDetectionMode2D,
+    pub sleep_mode: RigidbodySleepMode2D,
+    pub interpolation: RigidbodyInterpolation2D,
     pub use_full_kinematic_contacts: bool,
     pub game_object: EntityId,
     pub layer: u8,
@@ -155,12 +210,18 @@ pub struct Rigidbody2D {
     pub(crate) accumulated_torque: f32,
     pub(crate) sleep_timer: f32,
     pub(crate) previous_position: [f32; 2],
+    pub(crate) previous_rotation: f32,
     pub(crate) move_target_position: Option<[f32; 2]>,
     pub(crate) move_target_rotation: Option<f32>,
 }
 
 impl Rigidbody2D {
     pub fn from_desc(id: BodyId2D, desc: BodyDesc2D) -> Self {
+        let initial_sleeping = match desc.sleep_mode {
+            RigidbodySleepMode2D::NeverSleep => false,
+            RigidbodySleepMode2D::StartAsleep => true,
+            RigidbodySleepMode2D::StartAwake => desc.sleeping,
+        };
         Self {
             id,
             body_type: desc.body_type,
@@ -173,7 +234,10 @@ impl Rigidbody2D {
             linear_drag: desc.linear_drag,
             angular_drag: desc.angular_drag,
             simulated: desc.simulated,
-            sleeping: desc.sleeping,
+            sleeping: initial_sleeping,
+            collision_detection_mode: desc.collision_detection_mode,
+            sleep_mode: desc.sleep_mode,
+            interpolation: desc.interpolation,
             use_full_kinematic_contacts: desc.use_full_kinematic_contacts,
             game_object: desc.game_object,
             layer: desc.layer,
@@ -181,6 +245,7 @@ impl Rigidbody2D {
             accumulated_torque: 0.0,
             sleep_timer: 0.0,
             previous_position: desc.position,
+            previous_rotation: desc.rotation,
             move_target_position: None,
             move_target_rotation: None,
         }
@@ -202,7 +267,19 @@ impl Rigidbody2D {
         self.sleeping
     }
 
+    pub fn set_sleep_mode(&mut self, sleep_mode: RigidbodySleepMode2D) {
+        self.sleep_mode = sleep_mode;
+        match sleep_mode {
+            RigidbodySleepMode2D::NeverSleep => self.wake_up(),
+            RigidbodySleepMode2D::StartAsleep => self.sleep(),
+            RigidbodySleepMode2D::StartAwake => {}
+        }
+    }
+
     pub fn sleep(&mut self) {
+        if self.sleep_mode == RigidbodySleepMode2D::NeverSleep {
+            return;
+        }
         self.sleeping = true;
         self.linear_velocity = [0.0, 0.0];
         self.angular_velocity = 0.0;
@@ -211,6 +288,30 @@ impl Rigidbody2D {
     pub fn wake_up(&mut self) {
         self.sleeping = false;
         self.sleep_timer = 0.0;
+    }
+
+    pub fn interpolated_pose(&self, alpha: f32, fixed_dt: f32) -> ([f32; 2], f32) {
+        let a = alpha.clamp(0.0, 1.0);
+        match self.interpolation {
+            RigidbodyInterpolation2D::None => (self.position, self.rotation),
+            RigidbodyInterpolation2D::Interpolate => (
+                [
+                    self.previous_position[0] + (self.position[0] - self.previous_position[0]) * a,
+                    self.previous_position[1] + (self.position[1] - self.previous_position[1]) * a,
+                ],
+                self.previous_rotation + (self.rotation - self.previous_rotation) * a,
+            ),
+            RigidbodyInterpolation2D::Extrapolate => {
+                let dt_rem = a * fixed_dt.max(0.0);
+                (
+                    [
+                        self.position[0] + self.linear_velocity[0] * dt_rem,
+                        self.position[1] + self.linear_velocity[1] * dt_rem,
+                    ],
+                    self.rotation + self.angular_velocity * dt_rem,
+                )
+            }
+        }
     }
 
     pub fn add_force(&mut self, force: [f32; 2]) {

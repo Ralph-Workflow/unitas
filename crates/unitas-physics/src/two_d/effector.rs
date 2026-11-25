@@ -236,11 +236,93 @@ impl PointEffector2D {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BuoyancyEffector2D {
+    pub surface_level: f32,
+    pub density: f32,
+    pub linear_drag: f32,
+    pub angular_drag: f32,
+    pub flow_angle: f32,
+    pub flow_magnitude: f32,
+    pub flow_variation: f32,
+    pub collider_mask: u32,
+}
+
+impl Default for BuoyancyEffector2D {
+    fn default() -> Self {
+        Self {
+            surface_level: 0.0,
+            density: 2.0,
+            linear_drag: 5.0,
+            angular_drag: 5.0,
+            flow_angle: 0.0,
+            flow_magnitude: 0.0,
+            flow_variation: 0.0,
+            collider_mask: u32::MAX,
+        }
+    }
+}
+
+impl BuoyancyEffector2D {
+    pub fn new(surface_level: f32, density: f32) -> Self {
+        Self {
+            surface_level,
+            density,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_surface_level(mut self, surface_level: f32) -> Self {
+        self.surface_level = surface_level;
+        self
+    }
+
+    pub fn with_density(mut self, density: f32) -> Self {
+        self.density = density;
+        self
+    }
+
+    pub fn with_drag(mut self, linear_drag: f32, angular_drag: f32) -> Self {
+        self.linear_drag = linear_drag;
+        self.angular_drag = angular_drag;
+        self
+    }
+
+    pub fn with_flow(
+        mut self,
+        flow_angle_degrees: f32,
+        flow_magnitude: f32,
+        flow_variation: f32,
+    ) -> Self {
+        self.flow_angle = flow_angle_degrees;
+        self.flow_magnitude = flow_magnitude;
+        self.flow_variation = flow_variation;
+        self
+    }
+
+    pub fn with_collider_mask(mut self, mask: u32) -> Self {
+        self.collider_mask = mask;
+        self
+    }
+
+    pub fn allows_layer(&self, layer: u8) -> bool {
+        layer < 32 && (self.collider_mask & (1u32 << layer)) != 0
+    }
+
+    pub(crate) fn flow_force_vector(&self, step_phase: f32) -> [f32; 2] {
+        let angle_rad = self.flow_angle.to_radians();
+        let (s, c) = angle_rad.sin_cos();
+        let mag = self.flow_magnitude + self.flow_variation * step_phase.sin();
+        [c * mag, s * mag]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effector2D {
     Platform(PlatformEffector2D),
     Surface(SurfaceEffector2D),
     Area(AreaEffector2D),
     Point(PointEffector2D),
+    Buoyancy(BuoyancyEffector2D),
 }
 
 impl From<PlatformEffector2D> for Effector2D {
@@ -264,5 +346,11 @@ impl From<AreaEffector2D> for Effector2D {
 impl From<PointEffector2D> for Effector2D {
     fn from(effector: PointEffector2D) -> Self {
         Self::Point(effector)
+    }
+}
+
+impl From<BuoyancyEffector2D> for Effector2D {
+    fn from(effector: BuoyancyEffector2D) -> Self {
+        Self::Buoyancy(effector)
     }
 }

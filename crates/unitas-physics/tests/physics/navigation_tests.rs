@@ -276,3 +276,190 @@ fn navigation_a_link_endpoint_off_the_navmesh_is_rejected() -> Result<(), Naviga
     ));
     Ok(())
 }
+
+#[test]
+fn navigation_sample_position_snaps_within_max_distance_and_filters_by_area_mask(
+) -> Result<(), NavigationError> {
+    let mut triangles = cell([0.0, 0.0, 0.0], 2.0, 0);
+    triangles.extend(cell([5.0, 0.0, 0.0], 2.0, 1));
+    let navmesh = NavMesh::build(&triangles, &[])?;
+
+    let hit = navmesh.sample_position([2.5, 0.0, 1.0], 1.0, NavMesh::ALL_AREAS);
+    assert!(hit.is_some());
+    if let Some(hit) = hit {
+        assert!(hit.hit);
+        assert!((hit.position[0] - 2.0).abs() < TOLERANCE);
+        assert!((hit.position[1] - 0.0).abs() < TOLERANCE);
+        assert!((hit.position[2] - 1.0).abs() < TOLERANCE);
+        assert!((hit.distance - 0.5).abs() < TOLERANCE);
+        assert_eq!(hit.mask, 1 << 0);
+        assert!(hit.normal[1].abs() > 0.9);
+        assert_eq!(hit.polygon_index, Some(1));
+    }
+
+    let miss = navmesh.sample_position([3.5, 0.0, 1.0], 1.0, NavMesh::ALL_AREAS);
+    assert!(miss.is_none());
+
+    let masked = navmesh.sample_position([2.5, 0.0, 1.0], 4.0, 1 << 1);
+    assert!(masked.is_some());
+    if let Some(hit) = masked {
+        assert!((hit.position[0] - 5.0).abs() < TOLERANCE);
+        assert!((hit.distance - 2.5).abs() < TOLERANCE);
+        assert_eq!(hit.mask, 1 << 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn navigation_raycast_reports_unblocked_inside_and_blocked_at_boundary_edge(
+) -> Result<(), NavigationError> {
+    let navmesh = NavMesh::build(&row([0.0, 0.0, 0.0], 3, 1.0, 0), &[])?;
+
+    let unblocked = navmesh.raycast([0.5, 0.0, 0.5], [2.5, 0.0, 0.5], NavMesh::ALL_AREAS);
+    assert!(!unblocked.hit);
+    assert!((unblocked.position[0] - 2.5).abs() < TOLERANCE);
+    assert!((unblocked.distance - 2.0).abs() < TOLERANCE);
+
+    let blocked = navmesh.raycast([0.5, 0.0, 0.5], [4.5, 0.0, 0.5], NavMesh::ALL_AREAS);
+    assert!(blocked.hit);
+    assert!((blocked.position[0] - 3.0).abs() < TOLERANCE);
+    assert!((blocked.position[2] - 0.5).abs() < TOLERANCE);
+    assert!((blocked.distance - 2.5).abs() < TOLERANCE);
+    assert!((blocked.normal[0] - 1.0).abs() < TOLERANCE);
+    assert_eq!(blocked.mask, 1 << 0);
+    Ok(())
+}
+
+#[test]
+fn navigation_find_closest_edge_returns_nearest_boundary_point_normal_and_distance(
+) -> Result<(), NavigationError> {
+    let navmesh = NavMesh::build(&row([0.0, 0.0, 0.0], 3, 1.0, 0), &[])?;
+
+    let hit = navmesh.find_closest_edge([1.5, 0.0, 0.2], NavMesh::ALL_AREAS);
+    assert!(hit.is_some());
+    if let Some(hit) = hit {
+        assert!(hit.hit);
+        assert!((hit.position[0] - 1.5).abs() < TOLERANCE);
+        assert!((hit.position[1] - 0.0).abs() < TOLERANCE);
+        assert!((hit.position[2] - 0.0).abs() < TOLERANCE);
+        assert!((hit.distance - 0.2).abs() < TOLERANCE);
+        assert!((hit.normal[2] - (-1.0)).abs() < TOLERANCE);
+        assert_eq!(hit.mask, 1 << 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn navigation_off_mesh_link_manual_and_auto_traversal() -> Result<(), NavigationError> {
+    let mut triangles = row([0.0, 0.0, 0.0], 2, 1.0, 0);
+    triangles.extend(row([6.0, 0.0, 0.0], 2, 1.0, 0));
+    let mut navmesh = NavMesh::build(&triangles, &[])?;
+    navmesh.add_link(NavMeshLink::new([2.0, 0.0, 0.5], [6.0, 0.0, 0.5], true))?;
+
+    let mut manual_agent = NavMeshAgent::new(EntityId::new(1), "Jumper", [1.5, 0.0, 0.5]);
+    manual_agent.speed = 2.0;
+    manual_agent.auto_traverse_off_mesh_link = false;
+    manual_agent.set_destination(&navmesh, [7.5, 0.0, 0.5])?;
+
+    manual_agent.update(0.5);
+    assert!(manual_agent.is_on_off_mesh_link());
+    assert!((manual_agent.position()[0] - 2.0).abs() < TOLERANCE);
+    let current_link = manual_agent.current_off_mesh_link();
+    assert!(current_link.is_some());
+    if let Some(link) = current_link {
+        assert!((link.start[0] - 2.0).abs() < TOLERANCE);
+        assert!((link.end[0] - 6.0).abs() < TOLERANCE);
+    }
+
+    manual_agent.update(1.0);
+    assert!(manual_agent.is_on_off_mesh_link());
+    assert!((manual_agent.position()[0] - 2.0).abs() < TOLERANCE);
+
+    assert!(manual_agent.complete_off_mesh_link());
+    assert!(!manual_agent.is_on_off_mesh_link());
+    assert!(manual_agent.current_off_mesh_link().is_none());
+    assert!((manual_agent.position()[0] - 6.0).abs() < TOLERANCE);
+
+    manual_agent.update(0.5);
+    assert!((manual_agent.position()[0] - 7.0).abs() < TOLERANCE);
+
+    let mut auto_agent = NavMeshAgent::new(EntityId::new(2), "AutoJumper", [1.5, 0.0, 0.5]);
+    auto_agent.speed = 4.0;
+    auto_agent.auto_traverse_off_mesh_link = true;
+    auto_agent.set_destination(&navmesh, [7.5, 0.0, 0.5])?;
+
+    auto_agent.update(0.5);
+    assert!(auto_agent.is_on_off_mesh_link());
+    assert!(auto_agent.position()[0] > 2.0 && auto_agent.position()[0] < 6.0);
+
+    auto_agent.update(1.0);
+    assert!(!auto_agent.is_on_off_mesh_link());
+    assert!(auto_agent.position()[0] > 6.0);
+    Ok(())
+}
+
+#[test]
+fn navigation_agent_update_rotation_and_auto_repath() -> Result<(), NavigationError> {
+    let mut triangles = row([0.0, 0.0, 0.0], 2, 1.0, 0);
+    triangles.extend(row([6.0, 0.0, 0.0], 2, 1.0, 0));
+    let mut navmesh = NavMesh::build(&triangles, &[])?;
+
+    let mut agent = NavMeshAgent::new(EntityId::new(1), "Scout", [0.5, 0.0, 0.5]);
+    agent.speed = 2.0;
+    agent.update_rotation = false;
+    let initial_rotation = agent.rotation();
+    let partial = agent.set_destination(&navmesh, [7.5, 0.0, 0.5])?;
+    assert_eq!(partial.status, PathQueryStatus::Partial);
+
+    agent.update(0.2);
+    assert_eq!(agent.rotation(), initial_rotation);
+
+    agent.update_rotation = true;
+    agent.update(0.2);
+    assert_ne!(agent.rotation(), initial_rotation);
+    let forward = agent.forward();
+    assert!(forward[0] > 0.7);
+    assert!((forward[0] * forward[0] + forward[2] * forward[2] - 1.0).abs() < TOLERANCE);
+
+    navmesh.add_link(NavMeshLink::new([2.0, 0.0, 0.5], [6.0, 0.0, 0.5], true))?;
+    agent.auto_repath = true;
+    agent.step_with_navmesh(&navmesh, 2.0);
+    assert!(agent.position()[0] > 2.0);
+    Ok(())
+}
+
+#[test]
+fn navigation_off_mesh_link_supports_one_way_cost_override_and_activation(
+) -> Result<(), NavigationError> {
+    let mut triangles = row([0.0, 0.0, 0.0], 4, 1.0, 0);
+    triangles.extend(row([10.0, 0.0, 0.0], 2, 1.0, 0));
+    let mut navmesh = NavMesh::build(
+        &triangles,
+        &[NavMeshArea::new(0, 5.0), NavMeshArea::new(2, 1.0)],
+    )?;
+    navmesh.add_link(
+        NavMeshLink::new([0.5, 0.0, 0.5], [3.5, 0.0, 0.5], false)
+            .with_area(2)
+            .with_cost_override(0.1),
+    )?;
+    navmesh.add_link(NavMeshLink::new([3.5, 0.0, 0.5], [10.5, 0.0, 0.5], false))?;
+
+    let forward_shortcut = navmesh.find_path([0.5, 0.0, 0.5], [3.5, 0.0, 0.5]);
+    assert_eq!(forward_shortcut.status, PathQueryStatus::Complete);
+    assert_eq!(forward_shortcut.corners.len(), 4);
+
+    let reverse_walk = navmesh.find_path([3.5, 0.0, 0.5], [0.5, 0.0, 0.5]);
+    assert_eq!(reverse_walk.status, PathQueryStatus::Complete);
+    assert!(reverse_walk.corners.len() > 4);
+
+    let across_gap = navmesh.find_path([0.5, 0.0, 0.5], [10.5, 0.0, 0.5]);
+    assert_eq!(across_gap.status, PathQueryStatus::Complete);
+
+    let reverse_gap = navmesh.find_path([10.5, 0.0, 0.5], [0.5, 0.0, 0.5]);
+    assert_eq!(reverse_gap.status, PathQueryStatus::Partial);
+
+    assert!(navmesh.set_link_activated(1, false));
+    let disabled_gap = navmesh.find_path([0.5, 0.0, 0.5], [10.5, 0.0, 0.5]);
+    assert_eq!(disabled_gap.status, PathQueryStatus::Partial);
+    Ok(())
+}

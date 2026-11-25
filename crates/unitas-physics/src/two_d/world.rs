@@ -4,7 +4,9 @@ use unitas_core::EntityId;
 
 use crate::event::Phase;
 use crate::matrix::{CollisionMatrix, LAYER_COUNT};
-use crate::two_d::body::{BodyDesc2D, BodyId2D, BodyType2D, Rigidbody2D};
+use crate::two_d::body::{
+    BodyDesc2D, BodyId2D, BodyType2D, CollisionDetectionMode2D, Rigidbody2D, RigidbodySleepMode2D,
+};
 use crate::two_d::collider::{
     compute_contact2d, dot2, inverse_transform_point2, length2, normalize2, point_in_shape2d,
     raycast_shape2d, rotate_vec2, shape_to_local_shapes_in_frame, sub2, transform_point2,
@@ -127,6 +129,7 @@ pub struct World2D {
     fixed_timestep: f32,
     max_allowed_timestep: f32,
     accumulator: f32,
+    step_count: u64,
     bodies: BTreeMap<BodyId2D, Rigidbody2D>,
     colliders: BTreeMap<ColliderId2D, Collider2D>,
     composites: BTreeMap<ColliderId2D, CompositeCollider2D>,
@@ -161,6 +164,7 @@ impl World2D {
             fixed_timestep: DEFAULT_FIXED_TIMESTEP_2D,
             max_allowed_timestep: DEFAULT_MAX_TIMESTEP_2D,
             accumulator: 0.0,
+            step_count: 0,
             bodies: BTreeMap::new(),
             colliders: BTreeMap::new(),
             composites: BTreeMap::new(),
@@ -605,10 +609,28 @@ impl World2D {
         steps
     }
 
+    pub fn interpolation_alpha(&self) -> f32 {
+        if self.fixed_timestep > 0.0 {
+            (self.accumulator / self.fixed_timestep).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn presented_pose(&self, id: BodyId2D) -> Option<([f32; 2], f32)> {
+        self.presented_pose_at(id, self.interpolation_alpha())
+    }
+
+    pub fn presented_pose_at(&self, id: BodyId2D, alpha: f32) -> Option<([f32; 2], f32)> {
+        let body = self.bodies.get(&id)?;
+        Some(body.interpolated_pose(alpha, self.fixed_timestep))
+    }
+
     pub fn step(&mut self, dt: f32) {
         if !dt.is_finite() || dt < 0.0 {
             return;
         }
+        self.step_count = self.step_count.wrapping_add(1);
         self.apply_area_and_point_effectors(dt);
         self.integrate_bodies(dt);
         let current_pairs = self.solve_and_collect_contacts(dt);
@@ -835,9 +857,12 @@ impl World2D {
             let Some(eff_list) = self.effectors.get(eff_col_id).cloned() else {
                 continue;
             };
-            let has_area_or_point = eff_list
-                .iter()
-                .any(|e| matches!(e, Effector2D::Area(_) | Effector2D::Point(_)));
+            let has_area_or_point = eff_list.iter().any(|e| {
+                matches!(
+                    e,
+                    Effector2D::Area(_) | Effector2D::Point(_) | Effector2D::Buoyancy(_)
+                )
+            });
             if !has_area_or_point {
                 continue;
             }
@@ -912,6 +937,49 @@ impl World2D {
                                 }
                             }
                         }
+                        Effector2D::Buoyancy(buoyancy) => {
+                            if !buoyancy.allows_layer(other_layer) {
+                                continue;
+                            }
+                            let surface_y = eff_center[1] + buoyancy.surface_level;
+                            let (min_y, max_y, area) =
+                                shape_vertical_bounds_and_area(&other_col.shape, other_center, other_angle);
+                            if min_y >= surface_y || area <= 0.0 {
+                                continue;
+                            }
+                            let height = (max_y - min_y).max(1e-4);
+                            let submerged_fraction = ((surface_y - min_y) / height).clamp(0.0, 1.0);
+                            let displaced_volume = area * submerged_fraction;
+                            let grav_mag = length2(self.gravity);
+                            let effective_g = if grav_mag > 1e-5 { grav_mag } else { 9.81 };
+                            let upward_buoyancy =
+                                buoyancy.density.max(0.0) * displaced_volume * effective_g;
+                            let step_phase =
+                                (self.step_count as f32) * 0.7 + (other_body_id.as_u64() as f32) * 1.3;
+                            let flow = buoyancy.flow_force_vector(step_phase);
+                            let total_force = [
+                                flow[0] * submerged_fraction,
+                                upward_buoyancy + flow[1] * submerged_fraction,
+                            ];
+                            if let Some(body) = self.bodies.get_mut(&other_body_id) {
+                                if body.is_dynamic() && body.simulated {
+                                    body.add_force(total_force);
+                                    if buoyancy.linear_drag > 0.0 {
+                                        let factor = (1.0
+                                            - buoyancy.linear_drag * submerged_fraction * dt)
+                                            .max(0.0);
+                                        body.linear_velocity[0] *= factor;
+                                        body.linear_velocity[1] *= factor;
+                                    }
+                                    if buoyancy.angular_drag > 0.0 {
+                                        let factor = (1.0
+                                            - buoyancy.angular_drag * submerged_fraction * dt)
+                                            .max(0.0);
+                                        body.angular_velocity *= factor;
+                                    }
+                                }
+                            }
+                        }
                         Effector2D::Platform(_) | Effector2D::Surface(_) => {}
                     }
                 }
@@ -920,11 +988,13 @@ impl World2D {
     }
 
     fn integrate_bodies(&mut self, dt: f32) {
+        let mut continuous_ids = Vec::new();
         for body in self.bodies.values_mut() {
             if !body.simulated {
                 continue;
             }
             body.previous_position = body.position;
+            body.previous_rotation = body.rotation;
             match body.body_type {
                 BodyType2D::Dynamic => {
                     if body.sleeping {
@@ -962,6 +1032,9 @@ impl World2D {
                     }
                     body.accumulated_force = [0.0, 0.0];
                     body.accumulated_torque = 0.0;
+                    if body.collision_detection_mode == CollisionDetectionMode2D::Continuous {
+                        continuous_ids.push(body.id);
+                    }
                 }
                 BodyType2D::Kinematic => {
                     if let Some(target_pos) = body.move_target_position.take() {
@@ -975,8 +1048,124 @@ impl World2D {
                     } else {
                         body.rotation += body.angular_velocity * dt;
                     }
+                    if body.collision_detection_mode == CollisionDetectionMode2D::Continuous {
+                        continuous_ids.push(body.id);
+                    }
                 }
                 BodyType2D::Static => {}
+            }
+        }
+        for body_id in continuous_ids {
+            self.clamp_continuous_body_motion(body_id);
+        }
+    }
+
+    fn clamp_continuous_body_motion(&mut self, body_id: BodyId2D) {
+        let Some((prev_pos, curr_pos, rot)) = self
+            .bodies
+            .get(&body_id)
+            .map(|b| (b.previous_position, b.position, b.rotation))
+        else {
+            return;
+        };
+        let motion = sub2(curr_pos, prev_pos);
+        let travel = length2(motion);
+        if travel <= 1e-5 {
+            return;
+        }
+        let Some(dir) = normalize2(motion) else {
+            return;
+        };
+
+        let own_colliders: Vec<Collider2D> = self
+            .colliders
+            .values()
+            .filter(|c| {
+                c.attached_body == Some(body_id) && !c.is_trigger && self.is_collider_simulated(c)
+            })
+            .cloned()
+            .collect();
+        if own_colliders.is_empty() {
+            return;
+        }
+
+        let other_colliders: Vec<Collider2D> = self
+            .colliders
+            .values()
+            .filter(|c| {
+                c.attached_body != Some(body_id) && !c.is_trigger && self.is_collider_simulated(c)
+            })
+            .cloned()
+            .collect();
+
+        let mut earliest_advance: Option<f32> = None;
+
+        for own in &own_colliders {
+            let ep_own = self.endpoint_for(own);
+            let own_start = transform_point2(own.offset, prev_pos, rot);
+            let own_radius = shape_sweep_radius(&own.shape);
+
+            for other in &other_colliders {
+                let pair_key = ordered_pair(own.id, other.id);
+                if self.ignored_pairs.contains(&pair_key)
+                    || self.pass_through_pairs.contains(&pair_key)
+                {
+                    continue;
+                }
+                let ep_other = self.endpoint_for(other);
+                if !self
+                    .collision_matrix
+                    .is_enabled(ep_own.layer as usize, ep_other.layer as usize)
+                {
+                    continue;
+                }
+                let (other_center, other_angle) = self.collider_world_pose(other);
+                if compute_contact2d(
+                    &own.shape,
+                    own_start,
+                    rot + own.rotation,
+                    &other.shape,
+                    other_center,
+                    other_angle,
+                )
+                .is_some()
+                {
+                    continue;
+                }
+                if let Some((hit_dist, _, hit_normal)) = raycast_shape2d(
+                    own_start,
+                    dir,
+                    travel + own_radius,
+                    &other.shape,
+                    other_center,
+                    other_angle,
+                    false,
+                ) {
+                    if let Some(plat) = self.platform_effector_for(other) {
+                        if !plat.allows_layer(ep_own.layer)
+                            || plat.should_pass_through(
+                                other_angle,
+                                hit_normal,
+                                [dir[0] * travel, dir[1] * travel],
+                            )
+                        {
+                            continue;
+                        }
+                    }
+                    let advance = (hit_dist - own_radius * 0.9).clamp(0.0, travel);
+                    if earliest_advance.is_none_or(|best| advance < best) {
+                        earliest_advance = Some(advance);
+                    }
+                }
+            }
+        }
+
+        if let Some(advance) = earliest_advance {
+            if let Some(body) = self.bodies.get_mut(&body_id) {
+                body.position = [
+                    prev_pos[0] + dir[0] * advance,
+                    prev_pos[1] + dir[1] * advance,
+                ];
             }
         }
     }
@@ -1187,6 +1376,9 @@ impl World2D {
                             if let Some(bid_a) = col_a.attached_body {
                                 if let Some(body_a) = self.bodies.get_mut(&bid_a) {
                                     if body_a.is_dynamic() {
+                                        if body_a.is_sleeping() && normal_impulse > 1e-4 {
+                                            body_a.wake_up();
+                                        }
                                         body_a.linear_velocity[0] -=
                                             raw_contact.normal[0] * normal_impulse * inv_a;
                                         body_a.linear_velocity[1] -=
@@ -1197,6 +1389,9 @@ impl World2D {
                             if let Some(bid_b) = col_b.attached_body {
                                 if let Some(body_b) = self.bodies.get_mut(&bid_b) {
                                     if body_b.is_dynamic() {
+                                        if body_b.is_sleeping() && normal_impulse > 1e-4 {
+                                            body_b.wake_up();
+                                        }
                                         body_b.linear_velocity[0] +=
                                             raw_contact.normal[0] * normal_impulse * inv_b;
                                         body_b.linear_velocity[1] +=
@@ -1384,6 +1579,10 @@ impl World2D {
             if !body.simulated || !body.is_dynamic() || body.sleeping {
                 continue;
             }
+            if body.sleep_mode == RigidbodySleepMode2D::NeverSleep {
+                body.sleep_timer = 0.0;
+                continue;
+            }
             let speed_sq = dot2(body.linear_velocity, body.linear_velocity);
             let ang_speed = body.angular_velocity.abs();
             if speed_sq <= SLEEP_LINEAR_THRESHOLD * SLEEP_LINEAR_THRESHOLD
@@ -1396,6 +1595,98 @@ impl World2D {
             } else {
                 body.sleep_timer = 0.0;
             }
+        }
+    }
+}
+
+fn shape_sweep_radius(shape: &Shape2D) -> f32 {
+    match shape {
+        Shape2D::Circle { radius } => radius.max(0.05),
+        Shape2D::Box { half_extents } => half_extents[0].min(half_extents[1]).max(0.05),
+        Shape2D::Edge { .. } => 0.05,
+        Shape2D::Polygon { vertices } => {
+            if vertices.is_empty() {
+                0.05
+            } else {
+                let mut min_dist = f32::INFINITY;
+                for v in vertices {
+                    let d = length2(*v);
+                    if d < min_dist {
+                        min_dist = d;
+                    }
+                }
+                min_dist.max(0.05)
+            }
+        }
+        Shape2D::Composite { shapes } => shapes
+            .iter()
+            .map(shape_sweep_radius)
+            .fold(0.05f32, f32::max),
+    }
+}
+
+fn shape_vertical_bounds_and_area(
+    shape: &Shape2D,
+    center: [f32; 2],
+    angle: f32,
+) -> (f32, f32, f32) {
+    match shape {
+        Shape2D::Circle { radius } => {
+            let r = radius.max(0.0);
+            (
+                center[1] - r,
+                center[1] + r,
+                std::f32::consts::PI * r * r,
+            )
+        }
+        Shape2D::Box { half_extents } => {
+            let hx = half_extents[0].max(0.0);
+            let hy = half_extents[1].max(0.0);
+            let locals = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]];
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for p in &locals {
+                let wp = transform_point2(*p, center, angle);
+                min_y = min_y.min(wp[1]);
+                max_y = max_y.max(wp[1]);
+            }
+            (min_y, max_y, 4.0 * hx * hy)
+        }
+        Shape2D::Edge { start, end } => {
+            let a = transform_point2(*start, center, angle);
+            let b = transform_point2(*end, center, angle);
+            (a[1].min(b[1]), a[1].max(b[1]), 0.0)
+        }
+        Shape2D::Polygon { vertices } => {
+            if vertices.len() < 3 {
+                return (center[1], center[1], 0.0);
+            }
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            let mut signed_twice_area = 0.0f32;
+            for i in 0..vertices.len() {
+                let a = transform_point2(vertices[i], center, angle);
+                let b = transform_point2(vertices[(i + 1) % vertices.len()], center, angle);
+                min_y = min_y.min(a[1]);
+                max_y = max_y.max(a[1]);
+                signed_twice_area += a[0] * b[1] - b[0] * a[1];
+            }
+            (min_y, max_y, 0.5 * signed_twice_area.abs())
+        }
+        Shape2D::Composite { shapes } => {
+            if shapes.is_empty() {
+                return (center[1], center[1], 0.0);
+            }
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            let mut total_area = 0.0f32;
+            for sub in shapes {
+                let (s_min, s_max, s_area) = shape_vertical_bounds_and_area(sub, center, angle);
+                min_y = min_y.min(s_min);
+                max_y = max_y.max(s_max);
+                total_area += s_area;
+            }
+            (min_y, max_y, total_area)
         }
     }
 }

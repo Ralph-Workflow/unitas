@@ -87,11 +87,11 @@ const INTERLEAVED_GLTF: &str = "\
 
 fn make_glb(json: &str, bin: &[u8]) -> Vec<u8> {
     let mut json_chunk = json.as_bytes().to_vec();
-    while json_chunk.len() % 4 != 0 {
+    while !json_chunk.len().is_multiple_of(4) {
         json_chunk.push(b' ');
     }
     let mut bin_chunk = bin.to_vec();
-    while bin_chunk.len() % 4 != 0 {
+    while !bin_chunk.len().is_multiple_of(4) {
         bin_chunk.push(0);
     }
     let total = 12 + 8 + json_chunk.len() + 8 + bin_chunk.len();
@@ -424,9 +424,54 @@ fn import_model_dispatches_on_the_file_name() -> Result<(), String> {
         Err(error) => error,
     };
     match error {
-        ModelImportError::UnsupportedFileType { file_name } => assert_eq!(file_name, "blend"),
+        ModelImportError::UnsupportedFormat { file_name, format } => {
+            assert_eq!(file_name, "scene.blend");
+            assert_eq!(format, "blend");
+        }
         other => return Err(format!("unexpected error: {other:?}")),
     }
+    Ok(())
+}
+
+#[test]
+fn blend_files_report_unsupported_by_name_without_external_conversion() -> Result<(), String> {
+    let blender_header = b"BLENDER-v300REND";
+    let error = match import_model(blender_header, "Assets/Models/character.blend") {
+        Ok(_) => return Err("expected .blend import to be rejected".to_string()),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        ModelImportError::UnsupportedFormat {
+            file_name: "Assets/Models/character.blend".to_string(),
+            format: "blend".to_string(),
+        }
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("Assets/Models/character.blend"),
+        "expected file name in error message: {message}"
+    );
+    assert!(
+        message.contains("blend"),
+        "expected format name in error message: {message}"
+    );
+    assert!(
+        message.to_ascii_lowercase().contains("unsupported"),
+        "expected unsupported status in error message: {message}"
+    );
+
+    let sub_error = match import_model_sub_assets(blender_header, "character.BLEND") {
+        Ok(_) => return Err("expected .BLEND sub-asset import to be rejected".to_string()),
+        Err(error) => error,
+    };
+    assert_eq!(
+        sub_error,
+        ModelImportError::UnsupportedFormat {
+            file_name: "character.BLEND".to_string(),
+            format: "blend".to_string(),
+        }
+    );
     Ok(())
 }
 

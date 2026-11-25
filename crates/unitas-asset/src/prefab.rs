@@ -213,6 +213,68 @@ fn parse_modifications(modification: Option<&Node>) -> Vec<Modification> {
     modifications
 }
 
+pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
+    let mod_items: Vec<Node> = instance
+        .modifications
+        .iter()
+        .map(|m| {
+            Node::Mapping(vec![
+                (
+                    String::from("target"),
+                    Node::Mapping(vec![
+                        (String::from("fileID"), Node::Scalar(m.target_file_id.to_string())),
+                        (String::from("guid"), Node::Scalar(instance.source.guid.clone())),
+                        (String::from("type"), Node::Scalar(String::from("3"))),
+                    ]),
+                ),
+                (String::from("propertyPath"), Node::Scalar(m.property_path.clone())),
+                (String::from("value"), Node::Scalar(m.value.clone())),
+                (
+                    String::from("objectReference"),
+                    Node::Mapping(vec![(String::from("fileID"), Node::Scalar(String::from("0")))]),
+                ),
+            ])
+        })
+        .collect();
+
+    Node::Mapping(vec![(
+        String::from("PrefabInstance"),
+        Node::Mapping(vec![
+            (String::from("m_ObjectHideFlags"), Node::Scalar(String::from("0"))),
+            (String::from("serializedVersion"), Node::Scalar(String::from("2"))),
+            (
+                String::from("m_Modification"),
+                Node::Mapping(vec![
+                    (String::from("serializedVersion"), Node::Scalar(String::from("3"))),
+                    (
+                        String::from("m_TransformParent"),
+                        Node::Mapping(vec![(
+                            String::from("fileID"),
+                            Node::Scalar(instance.transform_parent.to_string()),
+                        )]),
+                    ),
+                    (String::from("m_Modifications"), Node::Sequence(mod_items)),
+                    (String::from("m_RemovedComponents"), Node::Sequence(Vec::new())),
+                    (String::from("m_RemovedGameObjects"), Node::Sequence(Vec::new())),
+                    (String::from("m_AddedGameObjects"), Node::Sequence(Vec::new())),
+                    (String::from("m_AddedComponents"), Node::Sequence(Vec::new())),
+                ]),
+            ),
+            (
+                String::from("m_SourcePrefab"),
+                Node::Mapping(vec![
+                    (
+                        String::from("fileID"),
+                        Node::Scalar(instance.source.file_id.to_string()),
+                    ),
+                    (String::from("guid"), Node::Scalar(instance.source.guid.clone())),
+                    (String::from("type"), Node::Scalar(String::from("3"))),
+                ]),
+            ),
+        ]),
+    )])
+}
+
 fn property(path: &str) -> Option<Property> {
     if path == NAME_PROPERTY {
         return Some(Property::Name);

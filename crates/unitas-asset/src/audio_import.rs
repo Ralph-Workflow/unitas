@@ -566,6 +566,10 @@ fn is_wav(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
 }
 
+fn is_xm(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"Extended Module:")
+}
+
 fn extension_of(file_name: &str) -> &str {
     match file_name.rsplit_once('.') {
         Some((_, extension)) => extension,
@@ -574,11 +578,15 @@ fn extension_of(file_name: &str) -> &str {
 }
 
 fn recognized_unsupported(bytes: &[u8], file_name: &str) -> Option<&'static str> {
+    if is_xm(bytes) {
+        return Some("xm tracker module format is Unsupported (not yet supported)");
+    }
     let extension = extension_of(file_name).to_ascii_lowercase();
     match extension.as_str() {
         "oga" | "ogv" | "opus" => Some("non-Vorbis OGG codec is not yet supported"),
         "mp2" => Some("MP2 import is not yet supported"),
-        "mod" | "it" | "s3m" | "xm" => Some("tracker module import is not yet supported"),
+        "xm" => Some("xm tracker module format is Unsupported (not yet supported)"),
+        "mod" | "it" | "s3m" => Some("tracker module import is not yet supported"),
         "wav" | "wave" => Some("WAV import is not yet supported by the AIFF decoder"),
         _ => {
             if is_wav(bytes) {

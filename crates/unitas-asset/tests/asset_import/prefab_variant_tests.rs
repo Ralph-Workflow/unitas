@@ -1,4 +1,7 @@
 use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_asset::prefab::{Modification, PrefabInstance, PrefabSource};
 use unitas_asset::prefab_variant::{
@@ -6,6 +9,8 @@ use unitas_asset::prefab_variant::{
     PrefabVariantDefinition, PrefabVariantError, ScenePrefabInstance, SourceObjectId,
     TargetedModification, ValueProvenanceEntry,
 };
+use unitas_asset::scene_save::{self, SceneSaveError};
+use unitas_asset::unity_yaml;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -749,5 +754,210 @@ fn removed_source_element_with_lower_overrides_identifies_orphaned_overrides() -
             && orphan.value == "0.55"
     }));
 
+    Ok(())
+}
+
+fn temp_prefab_dir(name: &str) -> std::io::Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "unitas_asset_prefab_variant_{name}_{}_{nanos}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path)?;
+    Ok(path)
+}
+
+#[test]
+fn prefab_variant_and_scene_instance_disk_round_trip_preserves_overrides_identity_and_unedited_documents(
+) -> TestResult {
+    let root = temp_prefab_dir("round_trip")?;
+    let base_path = root.join("BaseVehicle.prefab");
+    let variant_a_path = root.join("ArmoredVehicleVariant.prefab");
+    let variant_b_path = root.join("DesertArmoredVariant.prefab");
+    let scene_path = root.join("DesertLevel.unity");
+
+    let (mut registry, mut instance) = build_vehicle_registry()?;
+    let root_id = SourceObjectId::new(BASE_GUID, ROOT_GO_ID);
+    let child_b_id = SourceObjectId::new(BASE_GUID, CHILD_B_GO_ID);
+
+    let turret_child = PrefabNodeRecord::new(500, "RoofTurret", Some(ROOT_GO_ID))
+        .with_property("m_Caliber", "20mm");
+    let antenna_child = PrefabNodeRecord::new(501, "RadioAntenna", Some(ROOT_GO_ID))
+        .with_property("m_Range", "5000");
+
+    let variant_a_mut = registry
+        .get_mut(VARIANT_A_GUID)
+        .ok_or("missing variant A")?;
+    variant_a_mut.add_child_override(root_id.clone(), turret_child, None)?;
+    variant_a_mut.add_child_override(root_id.clone(), antenna_child, None)?;
+    variant_a_mut.reorder_added_siblings(root_id.clone(), vec![501, 500])?;
+    variant_a_mut.add_component_override(
+        root_id.clone(),
+        PrefabComponentRecord::new(600, "ArmorPlate").with_property("m_Thickness", "50"),
+    );
+
+    let variant_b_mut = registry
+        .get_mut(VARIANT_B_GUID)
+        .ok_or("missing variant B")?;
+    variant_b_mut.remove_child_override(child_b_id);
+    variant_b_mut.record_targeted_override(TargetedModification::new(
+        SourceObjectId::new(VARIANT_A_GUID, 500),
+        "m_Caliber",
+        "30mm",
+    ))?;
+
+    instance.remove_component_override(SourceObjectId::new(BASE_GUID, ROOT_RIGIDBODY_ID));
+    instance.add_child_override(
+        root_id.clone(),
+        PrefabNodeRecord::new(700, "Spotlight", Some(ROOT_GO_ID))
+            .with_property("m_Intensity", "800"),
+        Some(0),
+    );
+    instance.add_component_override(
+        root_id,
+        PrefabComponentRecord::new(710, "Beacon").with_property("m_Frequency", "2.5"),
+    );
+
+    let base_def = registry.get(BASE_GUID).ok_or("missing base")?.clone();
+    let variant_a_def = registry.get(VARIANT_A_GUID).ok_or("missing variant A")?.clone();
+    let variant_b_def = registry.get(VARIANT_B_GUID).ok_or("missing variant B")?.clone();
+
+    scene_save::save_prefab_variant(&base_path, &base_def)?;
+    scene_save::save_prefab_variant(&variant_a_path, &variant_a_def)?;
+    scene_save::save_prefab_variant(&variant_b_path, &variant_b_def)?;
+
+    let initial_scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!29 &1\nOcclusionCullingSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_SceneGUID: 00000000000000000000000000000000\n--- !u!1001 &900100\nPrefabInstance:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_SourcePrefab: {{fileID: {ROOT_GO_ID}, guid: {VARIANT_B_GUID}, type: 3}}\n--- !u!104 &2\nRenderSettings:\n  m_ObjectHideFlags: 0\n  m_Fog: 1\n"
+    );
+    let mut scene_stream = unity_yaml::parse(&initial_scene_yaml)?;
+    let unedited_doc_0 = scene_stream.documents[0].clone();
+    let unedited_doc_2 = scene_stream.documents[2].clone();
+
+    scene_save::save_scene_prefab_instance(&scene_path, &mut scene_stream, &instance, 900100)?;
+
+    let saved_scene_text_1 = fs::read_to_string(&scene_path)?;
+    assert!(saved_scene_text_1.contains("--- !u!1001 &900100\nPrefabInstance:\n"));
+    assert!(saved_scene_text_1.contains("m_Modification:\n"));
+    assert!(saved_scene_text_1.contains("m_Modifications:\n"));
+    assert!(saved_scene_text_1.contains("m_RemovedComponents:\n"));
+    assert!(saved_scene_text_1.contains("m_AddedGameObjects:\n"));
+    assert!(saved_scene_text_1.contains("m_AddedComponents:\n"));
+
+    instance.record_override(Modification::new(ROOT_TRANSFORM_ID, "m_LocalPosition.x", "99"))?;
+    let mut edited_variant_b = PrefabVariantDefinition::load_from_file(
+        &variant_b_path,
+        VARIANT_B_GUID,
+        "DesertArmoredVariant",
+    )?;
+    edited_variant_b.record_override(Modification::new(CHILD_A_GO_ID, "m_Radius", "0.65"))?;
+    scene_save::save_prefab_variant(&variant_b_path, &edited_variant_b)?;
+
+    let mut reloaded_scene_stream = unity_yaml::parse_file(&scene_path)?;
+    scene_save::save_scene_prefab_instance(
+        &scene_path,
+        &mut reloaded_scene_stream,
+        &instance,
+        900100,
+    )?;
+
+    let final_scene_stream = unity_yaml::parse_file(&scene_path)?;
+    assert_eq!(final_scene_stream.documents[0], unedited_doc_0);
+    assert_eq!(final_scene_stream.documents[2], unedited_doc_2);
+
+    let loaded_base =
+        PrefabVariantDefinition::load_from_file(&base_path, BASE_GUID, "BaseVehicle")?;
+    let loaded_variant_a = PrefabVariantDefinition::load_from_file(
+        &variant_a_path,
+        VARIANT_A_GUID,
+        "ArmoredVehicleVariant",
+    )?;
+    let loaded_variant_b = PrefabVariantDefinition::load_from_file(
+        &variant_b_path,
+        VARIANT_B_GUID,
+        "DesertArmoredVariant",
+    )?;
+    let loaded_instance =
+        ScenePrefabInstance::from_stream(&final_scene_stream, "scene_vehicle_1", 900100)
+            .ok_or("failed to load ScenePrefabInstance from stream")?;
+
+    assert_eq!(loaded_base, base_def);
+    assert_eq!(loaded_variant_a, variant_a_def);
+    assert_eq!(loaded_variant_b, edited_variant_b);
+    assert_eq!(loaded_instance, instance);
+
+    registry.register(edited_variant_b);
+    let mut loaded_registry = PrefabRegistry::new();
+    loaded_registry.register(loaded_base);
+    loaded_registry.register(loaded_variant_a);
+    loaded_registry.register(loaded_variant_b);
+
+    let expected_resolved = registry.resolve_instance(&instance)?;
+    let actual_resolved = loaded_registry.resolve_instance(&loaded_instance)?;
+    assert_eq!(actual_resolved, expected_resolved);
+
+    let hierarchy = actual_resolved
+        .as_complete()
+        .ok_or("expected complete resolved hierarchy after reload")?;
+    assert_eq!(
+        hierarchy.effective_property(ROOT_TRANSFORM_ID, "m_LocalPosition.x"),
+        Some("99")
+    );
+    assert_eq!(
+        hierarchy.effective_property(CHILD_A_GO_ID, "m_Radius"),
+        Some("0.65")
+    );
+    assert_eq!(
+        hierarchy.effective_property(500, "m_Caliber"),
+        Some("30mm")
+    );
+    assert_eq!(
+        hierarchy.effective_property(700, "m_Intensity"),
+        Some("800")
+    );
+    assert_eq!(
+        hierarchy.effective_property(710, "m_Frequency"),
+        Some("2.5")
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn failed_prefab_variant_save_leaves_prior_on_disk_file_intact() -> TestResult {
+    let root = temp_prefab_dir("failed_save")?;
+    let variant_path = root.join("ArmoredVehicleVariant.prefab");
+
+    let (mut registry, _) = build_vehicle_registry()?;
+    let variant_a = registry
+        .get_mut(VARIANT_A_GUID)
+        .ok_or("missing variant A")?;
+    variant_a.save_to_file(&variant_path)?;
+    let original_on_disk = fs::read_to_string(&variant_path)?;
+
+    fs::create_dir(root.join("ArmoredVehicleVariant.prefab.tmp"))?;
+    variant_a.record_override(Modification::new(ROOT_RIGIDBODY_ID, "m_Mass", "9999"))?;
+
+    let err = match variant_a.save_to_file(&variant_path) {
+        Ok(()) => return Err("expected prefab save to fail when temp path is a directory".into()),
+        Err(err) => err,
+    };
+    assert!(matches!(err, SceneSaveError::Io { .. }));
+    assert_eq!(fs::read_to_string(&variant_path)?, original_on_disk);
+
+    let reloaded = PrefabVariantDefinition::load_from_file(
+        &variant_path,
+        VARIANT_A_GUID,
+        "ArmoredVehicleVariant",
+    )?;
+    assert!(reloaded
+        .modifications
+        .iter()
+        .any(|m| m.target_file_id == ROOT_RIGIDBODY_ID && m.property_path == "m_Mass" && m.value == "2500"));
+
+    let _ = fs::remove_dir_all(&root);
     Ok(())
 }
