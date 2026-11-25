@@ -3,6 +3,7 @@ using System.Globalization;
 
 namespace UnityEngine
 {
+    [Serializable]
     public struct Vector3 : IEquatable<Vector3>
     {
         public const float kEpsilon = 0.00001f;
