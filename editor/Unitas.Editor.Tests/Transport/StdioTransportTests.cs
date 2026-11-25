@@ -418,14 +418,13 @@ namespace Unitas.Editor.Tests
                         cts.Token).ConfigureAwait(false);
                 }
                 catch (McpProtocolException refusal)
-                    when (refusal.Message.Contains("capture requires the device feature", StringComparison.Ordinal))
                 {
                     // The default-gate player is built without the device feature; the
                     // named refusal is the honest outcome there (GPU capture evidence
                     // lives in the device lane).
                     Check.That(
                         "stdio_production: a player without the device feature refuses the capture and names the requirement",
-                        true);
+                        refusal.Message.Contains("capture requires the device feature", StringComparison.Ordinal));
                 }
 
                 if (captureResult is not null)
