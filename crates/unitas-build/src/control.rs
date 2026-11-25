@@ -65,6 +65,11 @@ enum Request {
         height: u32,
         id_map: bool,
     },
+    ToolsDescribe,
+    ToolInvoke {
+        name: String,
+        arguments: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +79,7 @@ pub enum ProtocolError {
     InvalidStep,
     InvalidInputEvent,
     InvalidCapture,
+    UnknownTool(String),
     NotPlaying,
     CaptureWithoutIdMap,
     #[cfg(not(feature = "device"))]
@@ -92,6 +98,7 @@ impl ProtocolError {
             ProtocolError::InvalidStep => String::from("invalid step request"),
             ProtocolError::InvalidInputEvent => String::from("invalid input event"),
             ProtocolError::InvalidCapture => String::from("invalid capture request"),
+            ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
             #[cfg(not(feature = "device"))]
@@ -172,6 +179,8 @@ impl ControlSession {
                 height,
                 id_map,
             } => self.capture(*width, *height, *id_map),
+            Request::ToolsDescribe => Ok(json!({ "ok": true, "tools": [] })),
+            Request::ToolInvoke { name, .. } => Err(ProtocolError::UnknownTool(name.clone())),
         }
     }
 
@@ -444,6 +453,21 @@ fn parse_request(line: &str) -> Result<Request, ProtocolError> {
                 id_map,
             })
         }
+        "tools_describe" => Ok(Request::ToolsDescribe),
+        "tool_invoke" => {
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let arguments = object
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            Ok(Request::ToolInvoke {
+                name: String::from(name),
+                arguments,
+            })
+        }
         _ => Err(ProtocolError::UnknownCommand),
     }
 }
@@ -552,6 +576,43 @@ mod tests {
                 id_map: true
             })
         );
+    }
+
+    #[test]
+    fn project_tool_commands_parse() {
+        assert_eq!(
+            parse_request("{\"cmd\":\"tools_describe\"}"),
+            Ok(Request::ToolsDescribe)
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"tool_invoke\",\"name\":\"spawn\",\"arguments\":{\"count\":2}}"),
+            Ok(Request::ToolInvoke {
+                name: String::from("spawn"),
+                arguments: json!({"count": 2})
+            })
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"tool_invoke\"}"),
+            Err(ProtocolError::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn tools_describe_returns_an_empty_tool_list() -> Result<(), String> {
+        let mut session = session(31)?;
+        let payload = session
+            .dispatch(&Request::ToolsDescribe)
+            .map_err(|error| error.outcome())?;
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["tools"], json!([]));
+        assert_eq!(
+            session.dispatch(&Request::ToolInvoke {
+                name: String::from("spawn"),
+                arguments: json!({})
+            }),
+            Err(ProtocolError::UnknownTool(String::from("spawn")))
+        );
+        Ok(())
     }
 
     #[test]

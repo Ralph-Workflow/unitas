@@ -33,6 +33,7 @@ pub fn builtin_dispatch_table() -> Result<DispatchTable, AbiError> {
     for scope in Scope::ALL {
         builder = builder.grant(scope);
     }
+    let builder = crate::build_tools::register(builder)?;
     Ok(builder
         .tool(
             descriptor,

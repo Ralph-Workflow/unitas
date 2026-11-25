@@ -12,12 +12,15 @@ namespace Unitas.Editor.Tests
             (string Name, Action Run)[] suites =
             {
                 ("AuditTests", AuditTests.Run),
+                ("BuildToolsTests", BuildToolsTests.Run),
                 ("BuiltinDefaultsTests", BuiltinDefaultsTests.Run),
+                ("ChangeReviewTests", ChangeReviewTests.Run),
                 ("ClockTests", ClockTests.Run),
                 ("HeadlessCliTests", HeadlessCliTests.Run),
                 ("HttpTransportTests", HttpTransportTests.Run),
                 ("NativeToolBridgeTests", NativeToolBridgeTests.Run),
                 ("OperationStoreTests", OperationStoreTests.Run),
+                ("OperationToolsTests", OperationToolsTests.Run),
                 ("PlayAndCaptureTests", PlayAndCaptureTests.Run),
                 ("RegistryTests", RegistryTests.Run),
                 ("ScopeTests", ScopeTests.Run),

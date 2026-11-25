@@ -13,6 +13,7 @@ mod scene_query;
 pub mod scripting;
 pub mod terrain;
 pub mod timeline;
+pub mod ui;
 pub mod window;
 
 pub use abi::*;
