@@ -77,6 +77,7 @@ namespace Unitas.Bridge.Tests
             ResourcesSceneTests.Run();
             IdeGenerationTests.Run();
             UtfRunnerTests.Run();
+            DebuggingTests.Run();
 
             if (Check.FailureCount > 0)
             {

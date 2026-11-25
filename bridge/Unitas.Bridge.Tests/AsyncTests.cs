@@ -124,9 +124,9 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("Awaited continuation resumed on the main thread", mainThreadId, probe.ContinuationThreadId);
                 Check.Equal("Awaited continuation observed the current frame inside Tick", frameBeforeSecondTick + 1, probe.ContinuationFrame);
 
-                int fixedIdx = trace.FindIndex(entry => entry == "FixedUpdate:" + (frameBeforeSecondTick + 1));
-                int contIdx = trace.FindIndex(entry => entry == "Continuation:frame=" + (frameBeforeSecondTick + 1));
-                int updateIdx = trace.FindIndex(entry => entry == "Update:" + (frameBeforeSecondTick + 1));
+                int fixedIdx = trace.IndexOf("FixedUpdate:" + (frameBeforeSecondTick + 1));
+                int contIdx = trace.IndexOf("Continuation:frame=" + (frameBeforeSecondTick + 1));
+                int updateIdx = trace.IndexOf("Update:" + (frameBeforeSecondTick + 1));
                 Check.That(
                     "Awaited continuation executed inside the tick's fixed pump after FixedUpdate and before Update",
                     fixedIdx >= 0 && contIdx > fixedIdx && updateIdx > contIdx);
@@ -148,9 +148,9 @@ namespace Unitas.Bridge.Tests
                 host.Tick(0.005);
 
                 Check.Equal("Frame-pump continuation resumed on main thread", mainThreadId, frameContThreadId);
-                int thirdUpdateIdx = trace.FindIndex(entry => entry == "Update:" + (frameBeforeThirdTick + 1));
-                int thirdLateIdx = trace.FindIndex(entry => entry == "LateUpdate:" + (frameBeforeThirdTick + 1));
-                int thirdContIdx = trace.FindIndex(entry => entry == "FrameContinuation:frame=" + (frameBeforeThirdTick + 1));
+                int thirdUpdateIdx = trace.IndexOf("Update:" + (frameBeforeThirdTick + 1));
+                int thirdLateIdx = trace.IndexOf("LateUpdate:" + (frameBeforeThirdTick + 1));
+                int thirdContIdx = trace.IndexOf("FrameContinuation:frame=" + (frameBeforeThirdTick + 1));
                 Check.That(
                     "Frame-pump continuation executed inside the tick after Update and LateUpdate",
                     thirdUpdateIdx >= 0 && thirdLateIdx > thirdUpdateIdx && thirdContIdx > thirdLateIdx);
