@@ -101,13 +101,13 @@ impl PluginMetadataRecord {
                     self.library_name, target_arch
                 ));
             }
-            if let Some(cpu) = &self.editor_cpu {
-                if !arch_matches(cpu, target_arch) {
-                    return Err(format!(
-                        "plugin '{}' targets architecture '{}' on target 'Editor', which is incompatible with running architecture '{}'",
-                        self.library_name, cpu, target_arch
-                    ));
-                }
+            if let Some(cpu) = &self.editor_cpu
+                && !arch_matches(cpu, target_arch)
+            {
+                return Err(format!(
+                    "plugin '{}' targets architecture '{}' on target 'Editor', which is incompatible with running architecture '{}'",
+                    self.library_name, cpu, target_arch
+                ));
             }
         }
 
@@ -123,27 +123,26 @@ impl PluginMetadataRecord {
                     self.library_name, config.platform, target_arch
                 ));
             }
-            if let Some(cpu) = &config.cpu {
-                if !arch_matches(cpu, target_arch) {
-                    return Err(format!(
-                        "plugin '{}' targets platform '{}' with architecture '{}', which is incompatible with target architecture '{}'",
-                        self.library_name, config.platform, cpu, target_arch
-                    ));
-                }
+            if let Some(cpu) = &config.cpu
+                && !arch_matches(cpu, target_arch)
+            {
+                return Err(format!(
+                    "plugin '{}' targets platform '{}' with architecture '{}', which is incompatible with target architecture '{}'",
+                    self.library_name, config.platform, cpu, target_arch
+                ));
             }
             return Ok(());
         }
 
         for config in &self.platforms {
-            if config.enabled {
-                if let Some(cpu) = &config.cpu {
-                    if !arch_matches(cpu, target_arch) {
-                        return Err(format!(
-                            "plugin '{}' targets platform '{}' with architecture '{}', which is incompatible with target '{}' and architecture '{}'",
-                            self.library_name, config.platform, cpu, target_platform, target_arch
-                        ));
-                    }
-                }
+            if config.enabled
+                && let Some(cpu) = &config.cpu
+                && !arch_matches(cpu, target_arch)
+            {
+                return Err(format!(
+                    "plugin '{}' targets platform '{}' with architecture '{}', which is incompatible with target '{}' and architecture '{}'",
+                    self.library_name, config.platform, cpu, target_platform, target_arch
+                ));
             }
         }
 
@@ -203,7 +202,7 @@ impl ProjectScriptIndex {
                     return Err(ScriptingError::Io {
                         path: meta_path,
                         message: error.to_string(),
-                    })
+                    });
                 }
             };
             let guid = meta::parse_meta_text(&text, &meta_path)?;
@@ -389,7 +388,7 @@ pub fn parse_plugin_meta_file(
             return Err(ScriptingError::Io {
                 path: meta_path.to_path_buf(),
                 message: error.to_string(),
-            })
+            });
         }
     };
     let guid = meta::parse_meta_text(&text, meta_path)?;
@@ -511,37 +510,38 @@ pub fn parse_plugin_meta_text(
             continue;
         }
 
-        if acc.current_platform.is_none() && indent >= 4 && !in_settings {
-            if let Some((key, val)) = split_yaml_kv(trimmed) {
-                if key == "Any" {
-                    acc.current_platform = Some(String::from("Any"));
-                    continue;
-                } else if key != "second"
-                    && key != "enabled"
-                    && key != "settings"
-                    && key != "platformData"
-                    && key != "PluginImporter"
-                    && key != "externalObjects"
-                    && key != "serializedVersion"
-                    && key != "iconMap"
-                    && key != "executionOrder"
-                {
-                    let target = if val.is_empty() { key } else { val };
-                    acc.current_platform = Some(target);
-                    continue;
-                }
+        if acc.current_platform.is_none()
+            && indent >= 4
+            && !in_settings
+            && let Some((key, val)) = split_yaml_kv(trimmed)
+        {
+            if key == "Any" {
+                acc.current_platform = Some(String::from("Any"));
+                continue;
+            } else if key != "second"
+                && key != "enabled"
+                && key != "settings"
+                && key != "platformData"
+                && key != "PluginImporter"
+                && key != "externalObjects"
+                && key != "serializedVersion"
+                && key != "iconMap"
+                && key != "executionOrder"
+            {
+                let target = if val.is_empty() { key } else { val };
+                acc.current_platform = Some(target);
+                continue;
             }
         }
 
-        if let Some(platform_data_key) = trimmed.strip_prefix("- ") {
-            if let Some((key, val)) = split_yaml_kv(platform_data_key) {
-                if key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone") {
-                    acc.flush();
-                    let target = if val.is_empty() { key } else { val };
-                    acc.current_platform = Some(target);
-                    continue;
-                }
-            }
+        if let Some(platform_data_key) = trimmed.strip_prefix("- ")
+            && let Some((key, val)) = split_yaml_kv(platform_data_key)
+            && (key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone"))
+        {
+            acc.flush();
+            let target = if val.is_empty() { key } else { val };
+            acc.current_platform = Some(target);
+            continue;
         }
 
         if trimmed == "settings:" {
@@ -558,18 +558,16 @@ pub fn parse_plugin_meta_text(
                 acc.current_enabled = Some(parse_bool_flag(enabled_str.trim(), false));
                 continue;
             }
-            if in_settings {
-                if let Some((key, val)) = split_yaml_kv(trimmed) {
-                    if key.eq_ignore_ascii_case("CPU") && !val.is_empty() {
-                        if !val.eq_ignore_ascii_case("None") {
-                            acc.current_cpu = Some(val);
-                        }
-                    } else if key.eq_ignore_ascii_case("OS")
-                        && !val.is_empty()
-                        && !val.eq_ignore_ascii_case("None")
-                    {
-                        acc.current_os = Some(val);
+            if in_settings && let Some((key, val)) = split_yaml_kv(trimmed) {
+                if key.eq_ignore_ascii_case("CPU") && !val.is_empty() {
+                    if !val.eq_ignore_ascii_case("None") {
+                        acc.current_cpu = Some(val);
                     }
+                } else if key.eq_ignore_ascii_case("OS")
+                    && !val.is_empty()
+                    && !val.eq_ignore_ascii_case("None")
+                {
+                    acc.current_os = Some(val);
                 }
             }
         }
@@ -585,16 +583,16 @@ pub fn parse_plugin_meta_text(
     }
 
     for p in &acc.platforms {
-        if let Some(cpu) = &p.cpu {
-            if !cpu.eq_ignore_ascii_case("AnyCPU") {
-                is_native = true;
-            }
-        }
-    }
-    if let Some(cpu) = &acc.editor_cpu {
-        if !cpu.eq_ignore_ascii_case("AnyCPU") {
+        if let Some(cpu) = &p.cpu
+            && !cpu.eq_ignore_ascii_case("AnyCPU")
+        {
             is_native = true;
         }
+    }
+    if let Some(cpu) = &acc.editor_cpu
+        && !cpu.eq_ignore_ascii_case("AnyCPU")
+    {
+        is_native = true;
     }
 
     PluginMetadataRecord {
@@ -810,7 +808,7 @@ fn collect_meta_files(
             return Err(ScriptingError::Io {
                 path: directory.to_path_buf(),
                 message: error.to_string(),
-            })
+            });
         }
     };
     for entry in entries {
@@ -820,7 +818,7 @@ fn collect_meta_files(
                 return Err(ScriptingError::Io {
                     path: directory.to_path_buf(),
                     message: error.to_string(),
-                })
+                });
             }
         };
         let path = entry.path();
@@ -935,9 +933,10 @@ mod tests {
             if let Some(p) = plugin {
                 assert!(p.is_native);
                 assert_eq!(p.library_name, "libfastmath");
-                assert!(p
-                    .check_compatibility("StandaloneOSX", "x86_64", true)
-                    .is_ok());
+                assert!(
+                    p.check_compatibility("StandaloneOSX", "x86_64", true)
+                        .is_ok()
+                );
                 let arm_check = p.check_compatibility("StandaloneOSX", "ARM64", true);
                 assert!(arm_check.is_err());
                 if let Err(diag) = arm_check {

@@ -1,4 +1,4 @@
-use unitas_render::{look_at, Camera, Mat4, Mesh, Vec3};
+use unitas_render::{Camera, Mat4, Mesh, Vec3, look_at};
 
 use crate::input::{InputState, KEY_MOUSE_0};
 
@@ -188,11 +188,11 @@ impl Ui {
         let (px, py, _, _) = input.pointer();
         let mut hovered = None;
         for (index, widget) in self.widgets.iter().enumerate().rev() {
-            if let Widget::Button { rect, .. } = widget {
-                if rect.resolve(screen).contains(px, py) {
-                    hovered = Some(index);
-                    break;
-                }
+            if let Widget::Button { rect, .. } = widget
+                && rect.resolve(screen).contains(px, py)
+            {
+                hovered = Some(index);
+                break;
             }
         }
         self.hovered = hovered;
@@ -204,12 +204,11 @@ impl Ui {
             self.active = None;
         }
         if input.is_mouse_button_released(KEY_MOUSE_0) {
-            if let (Some(active), Some(hovered)) = (self.active, hovered) {
-                if active == hovered {
-                    if let Widget::Button { id, .. } = &self.widgets[active] {
-                        events.push(UiEvent::Clicked(id.clone()));
-                    }
-                }
+            if let (Some(active), Some(hovered)) = (self.active, hovered)
+                && active == hovered
+                && let Widget::Button { id, .. } = &self.widgets[active]
+            {
+                events.push(UiEvent::Clicked(id.clone()));
             }
             self.active = None;
         }

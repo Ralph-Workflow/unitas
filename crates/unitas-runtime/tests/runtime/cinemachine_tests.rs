@@ -27,8 +27,8 @@ fn cinemachine_highest_priority_active_camera_is_live() -> Result<(), Box<dyn Er
 }
 
 #[test]
-fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities(
-) -> Result<(), Box<dyn Error>> {
+fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities()
+-> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let first = cameras.add_camera(VirtualCamera::new("First", 5));
     let second = cameras.add_camera(VirtualCamera::new("Second", 5));
@@ -47,8 +47,8 @@ fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities(
 }
 
 #[test]
-fn cin_001_outcome_33_camera_swap_keeps_the_live_camera_and_active_blend_inspectable_during_play(
-) -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_camera_swap_keeps_the_live_camera_and_active_blend_inspectable_during_play()
+-> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let first = cameras.add_camera(VirtualCamera::new("First", 10));
     let second = cameras.add_camera(VirtualCamera::new("Second", 10));
@@ -138,8 +138,8 @@ fn cinemachine_not_live_reason_explains_why_a_camera_is_not_live() -> Result<(),
 }
 
 #[test]
-fn cinemachine_shot_override_makes_the_shot_camera_live_and_releases_it(
-) -> Result<(), Box<dyn Error>> {
+fn cinemachine_shot_override_makes_the_shot_camera_live_and_releases_it()
+-> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let main = cameras.add_camera(VirtualCamera::new("Main", 10));
     cameras.add_camera(VirtualCamera::new("Shot", 1));

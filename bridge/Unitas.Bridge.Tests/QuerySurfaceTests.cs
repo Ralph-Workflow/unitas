@@ -22,6 +22,8 @@ namespace Unitas.Bridge.Tests
             TestBridgeHostLinecastSegment();
             TestBridgeHostTriggerColliderQueryFiltering();
             TestBridgeHostCapsuleColliderSceneRaycast();
+            TestRigidbodyAddForceRouting();
+            TestRigidbodyAddForceNoOps();
         }
 
         private static void TestTriggerInteractionForwardsIncludeTriggers()
@@ -635,6 +637,73 @@ MonoBehaviour:
             }
         }
 
+        private static void TestRigidbodyAddForceRouting()
+        {
+            RecordingPhysicsProvider provider = new RecordingPhysicsProvider();
+            IPhysicsProvider? previous = Physics.Provider;
+            Physics.Provider = provider;
+            try
+            {
+                GameObject go = new GameObject("AddForceRouting");
+                go.AssignNativeEntityId(42UL);
+                Rigidbody body = go.AddComponent<Rigidbody>();
+                Vector3 force = new Vector3(1f, 2f, 3f);
+
+                body.AddForce(force);
+                Check.Equal("AddForce without a mode calls the provider once", 1, provider.AddForceCalls);
+                Check.That("AddForce forwards the entity", provider.LastForceEntity == 42UL);
+                Check.That("AddForce forwards the force", provider.LastForce == force);
+                Check.That("AddForce defaults to ForceMode.Force", provider.LastForceMode == ForceMode.Force);
+
+                body.AddForce(force, ForceMode.VelocityChange);
+                Check.Equal("AddForce with a mode calls the provider again", 2, provider.AddForceCalls);
+                Check.That("AddForce forwards the explicit mode", provider.LastForceMode == ForceMode.VelocityChange);
+            }
+            finally
+            {
+                Physics.Provider = previous;
+            }
+        }
+
+        private static void TestRigidbodyAddForceNoOps()
+        {
+            RecordingPhysicsProvider provider = new RecordingPhysicsProvider();
+            IPhysicsProvider? previous = Physics.Provider;
+            Physics.Provider = provider;
+            try
+            {
+                GameObject kinematicGo = new GameObject("AddForceKinematic");
+                kinematicGo.AssignNativeEntityId(7UL);
+                Rigidbody kinematicBody = kinematicGo.AddComponent<Rigidbody>();
+                kinematicBody.isKinematic = true;
+                kinematicBody.AddForce(Vector3.one);
+                Check.Equal("AddForce on a kinematic body skips the provider", 0, provider.AddForceCalls);
+
+                GameObject destroyedGo = new GameObject("AddForceDestroyed");
+                destroyedGo.AssignNativeEntityId(8UL);
+                Rigidbody destroyedBody = destroyedGo.AddComponent<Rigidbody>();
+                UnityEngine.Object.Destroy(destroyedGo);
+                destroyedBody.AddForce(Vector3.one);
+                Check.Equal("AddForce on a destroyed body skips the provider", 0, provider.AddForceCalls);
+
+                GameObject unassignedGo = new GameObject("AddForceUnassigned");
+                Rigidbody unassignedBody = unassignedGo.AddComponent<Rigidbody>();
+                unassignedBody.AddForce(Vector3.one);
+                Check.Equal("AddForce without a native entity skips the provider", 0, provider.AddForceCalls);
+
+                GameObject plainGo = new GameObject("AddForceNoProvider");
+                plainGo.AssignNativeEntityId(9UL);
+                Rigidbody plainBody = plainGo.AddComponent<Rigidbody>();
+                Physics.Provider = null;
+                plainBody.AddForce(Vector3.one);
+                Check.Equal("AddForce without a provider skips the provider", 0, provider.AddForceCalls);
+            }
+            finally
+            {
+                Physics.Provider = previous;
+            }
+        }
+
         private sealed class RecordingPhysicsProvider : IPhysicsProvider
         {
             public int RaycastCalls { get; private set; }
@@ -727,6 +796,23 @@ MonoBehaviour:
             public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
             {
                 return false;
+            }
+
+            public int AddForceCalls { get; private set; }
+
+            public ulong LastForceEntity { get; private set; }
+
+            public Vector3 LastForce { get; private set; }
+
+            public ForceMode LastForceMode { get; private set; }
+
+            public bool TryAddForce(ulong entity, Vector3 force, ForceMode mode)
+            {
+                AddForceCalls++;
+                LastForceEntity = entity;
+                LastForce = force;
+                LastForceMode = mode;
+                return true;
             }
 
             private void Record(Vector3 origin, Vector3 direction, Vector3 halfExtents, float maxDistance, int layerMask, bool includeTriggers)

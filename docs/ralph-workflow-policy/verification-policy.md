@@ -263,7 +263,23 @@ RALPH-FACT: gate_duration_report_location: the duration line each Make target pr
 RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
-RALPH-FACT: required_verification_profiles: none — every check runs in the default gate
+RALPH-FACT: required_verification_profiles: three named non-default lanes, each failing hard when run: `make verify-samples`, `make verify-device`, and `make verify-perf`
+
+The named non-default profiles, each with the five required fields:
+
+- `make verify-samples` — owner wt-02-simulation; trigger: every milestone
+  touching sample content or the runtime tick; evidence: per-sample pass/fail
+  lines with the sample revision; fails hard when run; last run 2026-11-25,
+  staleness horizon one milestone.
+- `make verify-device` — owner wt-03; trigger: every milestone touching
+  presentation; evidence: lane exit status and captured GPU/audio/input
+  artifacts; fails hard when run; last run not recorded in this tree as of
+  2026-11-25, so wt-03 owes a refresh run before the horizon of one milestone
+  passes.
+- `make verify-perf` — owner wt-02-simulation; trigger: every milestone
+  touching import, scene load, physics, or animation; evidence:
+  per-measurement OK/FAIL lines with value_ms against ceiling_ms; fails hard
+  when run; last run 2026-11-25, staleness horizon one milestone.
 RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; a warm Apple Silicon run on 2026-11-25 took 26.24s wall with the full .NET formatter (21.49s). This is a measurement, not a guarantee under shared-host contention
 RALPH-FACT: verification_cost_floor: full gate floor 3.87s (measured via `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 3.87s (the recorded fast path is the full gate, so it carries the full gate floor, measured via the same `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), and default suite floor 0.67s (measured via `pytest --collect-only -q` at 0.52s and `cargo test --workspace --no-run` at 0.15s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-25
 RALPH-FACT: fast_path_time_budget: make verify enforces the same 30s wall budget and measured 26.24s warm on Apple Silicon on 2026-11-25; standalone make lint measured 27.28s on the same host (`ruff check .` 0.02s, `ruff format --check .` 0.02s, `cargo fmt --all -- --check` 0.87s, `cargo clippy --workspace --all-targets -- -D warnings` 0.20s, and `dotnet format bridge/Unitas.sln --verify-no-changes --no-restore` 25.03s)

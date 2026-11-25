@@ -16,6 +16,15 @@ const MAX_CONVEX_MESH_HULL_TRIANGLES: usize = 255;
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ForceMode {
+    Force = 0,
+    Impulse = 1,
+    Acceleration = 2,
+    VelocityChange = 3,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicsMaterial3D {
     pub friction: f64,
@@ -138,6 +147,7 @@ struct Body {
     sweep_velocity: [f64; 3],
     pending_force: [f64; 3],
     pending_impulse: [f64; 3],
+    pending_acceleration: [f64; 3],
     pending_move_position: Option<[f64; 3]>,
     pending_move_rotation: Option<[f64; 4]>,
     sleeping: bool,
@@ -493,6 +503,7 @@ impl World {
             sweep_velocity: [0.0; 3],
             pending_force: [0.0; 3],
             pending_impulse: [0.0; 3],
+            pending_acceleration: [0.0; 3],
             pending_move_position: None,
             pending_move_rotation: None,
             sleeping: false,
@@ -660,7 +671,12 @@ impl World {
         Ok(())
     }
 
-    pub fn add_force(&mut self, body: EntityId, force: [f64; 3]) -> Result<(), PhysicsError> {
+    pub fn add_force(
+        &mut self,
+        body: EntityId,
+        force: [f64; 3],
+        mode: ForceMode,
+    ) -> Result<(), PhysicsError> {
         let Some(index) = self.indices.get(&body).copied() else {
             return Err(PhysicsError::InvalidBody(body));
         };
@@ -668,14 +684,35 @@ impl World {
             return Err(PhysicsError::InvalidBody(body));
         }
         let slot = &mut self.bodies[index];
-        if slot.role == BodyRole::Dynamic {
-            slot.pending_force[0] += force[0];
-            slot.pending_force[1] += force[1];
-            slot.pending_force[2] += force[2];
-            if force != [0.0; 3] {
-                slot.sleeping = false;
-                slot.sleep_timer = 0.0;
+        if slot.role != BodyRole::Dynamic {
+            return Ok(());
+        }
+        match mode {
+            ForceMode::Force => {
+                slot.pending_force[0] += force[0];
+                slot.pending_force[1] += force[1];
+                slot.pending_force[2] += force[2];
             }
+            ForceMode::Acceleration => {
+                slot.pending_acceleration[0] += force[0];
+                slot.pending_acceleration[1] += force[1];
+                slot.pending_acceleration[2] += force[2];
+            }
+            ForceMode::Impulse => {
+                let inv_mass = slot.inverse_mass();
+                slot.velocity[0] += force[0] * inv_mass;
+                slot.velocity[1] += force[1] * inv_mass;
+                slot.velocity[2] += force[2] * inv_mass;
+            }
+            ForceMode::VelocityChange => {
+                slot.velocity[0] += force[0];
+                slot.velocity[1] += force[1];
+                slot.velocity[2] += force[2];
+            }
+        }
+        if force != [0.0; 3] {
+            slot.sleeping = false;
+            slot.sleep_timer = 0.0;
         }
         Ok(())
     }
@@ -727,6 +764,7 @@ impl World {
         self.bodies[index].velocity = [0.0; 3];
         self.bodies[index].pending_force = [0.0; 3];
         self.bodies[index].pending_impulse = [0.0; 3];
+        self.bodies[index].pending_acceleration = [0.0; 3];
         Ok(())
     }
 
@@ -1094,8 +1132,12 @@ impl World {
                 body.velocity[2] +=
                     (body.pending_force[2] * delta_seconds + body.pending_impulse[2]) * inv_mass;
             }
+            body.velocity[0] += body.pending_acceleration[0] * delta_seconds;
+            body.velocity[1] += body.pending_acceleration[1] * delta_seconds;
+            body.velocity[2] += body.pending_acceleration[2] * delta_seconds;
             body.pending_force = [0.0; 3];
             body.pending_impulse = [0.0; 3];
+            body.pending_acceleration = [0.0; 3];
             if body.use_gravity {
                 body.velocity[0] += self.gravity[0] * delta_seconds;
                 body.velocity[1] += self.gravity[1] * delta_seconds;

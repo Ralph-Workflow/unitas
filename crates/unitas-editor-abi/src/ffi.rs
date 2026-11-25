@@ -9,10 +9,10 @@ macro_rules! ffi_export {
 }
 
 use crate::descriptor::{Scope, ToolDescriptor};
-use crate::dispatch::{error_json, AbiError, DispatchTable};
+use crate::dispatch::{AbiError, DispatchTable, error_json};
 use serde_json::json;
 use std::collections::HashMap;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock, RwLock};
 
 static TABLE: RwLock<Option<DispatchTable>> = RwLock::new(None);
@@ -225,11 +225,10 @@ pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> us
 ffi_export! {
 pub extern "C" fn unitas_editor_string_free(ptr: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if ptr != 0 {
-            if let Ok(mut map) = string_registry().lock() {
+        if ptr != 0
+            && let Ok(mut map) = string_registry().lock() {
                 map.remove(&ptr);
             }
-        }
     }));
 }
 }
@@ -238,7 +237,7 @@ pub extern "C" fn unitas_editor_string_free(ptr: usize) {
 mod tests {
     use super::*;
     use crate::descriptor::{Scope, ToolDescriptor};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     static FFI_LOCK: Mutex<()> = Mutex::new(());
 
@@ -360,8 +359,8 @@ mod tests {
     }
 
     #[test]
-    fn ffi_install_builtin_tools_describes_and_invokes_abi_status(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn ffi_install_builtin_tools_describes_and_invokes_abi_status()
+    -> Result<(), Box<dyn std::error::Error>> {
         let _guard = lock_ffi();
         if let Ok(mut guard) = TABLE.write() {
             *guard = None;
@@ -369,14 +368,15 @@ mod tests {
         assert_eq!(unitas_editor_install_builtin_tools(), 0);
 
         let described = read_and_free(unitas_editor_tools_describe())?;
-        let tools = described["tools"]
+        let status_tool = described["tools"]
             .as_array()
-            .ok_or("describe payload has no tools array")?;
-        let abi_status = tools
-            .iter()
-            .find(|tool| tool["name"] == json!("engine.abi_status"))
-            .ok_or("engine.abi_status is not registered")?;
-        assert_eq!(abi_status["origin"], json!("unitas://native/editor-abi"));
+            .and_then(|tools| {
+                tools
+                    .iter()
+                    .find(|tool| tool["name"] == json!("engine.abi_status"))
+            })
+            .ok_or("engine.abi_status missing from described tools")?;
+        assert_eq!(status_tool["origin"], json!("unitas://native/editor-abi"));
 
         let name = allocate_c_string("engine.abi_status");
         let args = allocate_c_string("{\"probe\":true}");

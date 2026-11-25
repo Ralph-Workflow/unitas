@@ -2,6 +2,7 @@
 
 macro_rules! ffi_export {
     (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        #[unsafe(export_name = stringify!($name))]
         pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
             #[used]
             static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
@@ -16,10 +17,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use unitas_audio::output::DeviceOutput;
-use unitas_core::{rotate_vector, EntityId, Transform};
+use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
-    look_at, render_scene, Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, MeshInstance,
-    RenderError, Renderer, Vec3,
+    Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, MeshInstance, RenderError, Renderer,
+    Vec3, look_at, render_scene,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -28,13 +29,13 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::Runtime;
 use crate::input::{
     InputState, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT,
     KEY_LEFT_ARROW, KEY_LEFT_CONTROL, KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW,
     KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW,
 };
 use crate::runtime::RenderCameraParams;
-use crate::Runtime;
 
 pub const DEFAULT_WINDOW_TITLE: &str = "unitas";
 pub const DEFAULT_WINDOW_WIDTH: u32 = 1280;
@@ -1000,8 +1001,8 @@ pub extern "C" fn unitas_runtime_window_error_message() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{KEY_MOUSE_0, STATE_DOWN, STATE_PRESSED, STATE_RELEASED};
     use crate::RuntimeError;
+    use crate::input::{KEY_MOUSE_0, STATE_DOWN, STATE_PRESSED, STATE_RELEASED};
     use unitas_render::cube;
 
     fn input_state() -> InputState {

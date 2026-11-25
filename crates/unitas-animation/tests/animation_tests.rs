@@ -8,6 +8,8 @@ mod controller_tests;
 mod curve_tests;
 #[path = "animation/humanoid_tests.rs"]
 mod humanoid_tests;
+#[path = "animation/perf_eval.rs"]
+mod perf_eval;
 #[path = "animation/playable_tests.rs"]
 mod playable_tests;
 #[path = "animation/wire_tests.rs"]

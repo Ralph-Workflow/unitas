@@ -6,13 +6,13 @@ use unitas_animation::{
     AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget, FloatCurve,
     Keyframe, StateMotion, WrapMode,
 };
-use unitas_core::{rotate_vector, EntityId, Transform, IDENTITY_ROTATION};
-use unitas_runtime::animation::{
-    solve_look_at_ik, solve_two_bone_ik, AnimatorHookWorld, AnimatorIkPose, AnimatorRootMotion,
-    AnimatorScriptHooks, AvatarIkGoal, AvatarIkHint, IkGoalPose, IkHintPose, LookAtIkConfig,
-    TwoBoneIkChain, TwoBoneIkSkeletonChain,
-};
+use unitas_core::{EntityId, IDENTITY_ROTATION, Transform, rotate_vector};
 use unitas_runtime::AnimationWorld;
+use unitas_runtime::animation::{
+    AnimatorHookWorld, AnimatorIkPose, AnimatorRootMotion, AnimatorScriptHooks, AvatarIkGoal,
+    AvatarIkHint, IkGoalPose, IkHintPose, LookAtIkConfig, TwoBoneIkChain, TwoBoneIkSkeletonChain,
+    solve_look_at_ik, solve_two_bone_ik,
+};
 
 fn vec_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     let dx = a[0] - b[0];
@@ -397,8 +397,8 @@ fn skeleton_animation_clip() -> AnimationClip {
 }
 
 #[test]
-fn animation_world_evaluates_clip_then_on_animator_ik_then_solvers_then_on_animator_move_on_skeleton(
-) -> Result<(), Box<dyn Error>> {
+fn animation_world_evaluates_clip_then_on_animator_ik_then_solvers_then_on_animator_move_on_skeleton()
+-> Result<(), Box<dyn Error>> {
     let mut world = AnimationWorld::new();
     let entity = EntityId::new(42);
     world.ensure_animator(entity, Transform::default());
@@ -508,15 +508,19 @@ fn animation_world_evaluates_clip_then_on_animator_ik_then_solvers_then_on_anima
         .iter()
         .find(|(e, _)| *e == entity)
         .ok_or("missing child bindings for entity")?;
-    assert!(bindings
-        .iter()
-        .any(|b| b.target.object_path == "ArmL_Upper" && b.target.property == "localRotation"));
+    assert!(
+        bindings
+            .iter()
+            .any(|b| b.target.object_path == "ArmL_Upper" && b.target.property == "localRotation")
+    );
     assert!(bindings.iter().any(|b| {
         b.target.object_path == "ArmL_Upper/ArmL_Lower" && b.target.property == "localRotation"
     }));
-    assert!(bindings
-        .iter()
-        .any(|b| b.target.object_path == "Head" && b.target.property == "localRotation"));
+    assert!(
+        bindings
+            .iter()
+            .any(|b| b.target.object_path == "Head" && b.target.property == "localRotation")
+    );
     Ok(())
 }
 

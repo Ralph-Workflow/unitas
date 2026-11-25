@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use unitas_runtime::{
+    AbiCharacterMoveInput, AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
     test_is_persistent_entity, test_read_path_buffer, test_write_path_buffer,
     unitas_runtime_active_scene_index, unitas_runtime_body_position, unitas_runtime_body_velocity,
     unitas_runtime_character_controller_config, unitas_runtime_character_move,
@@ -13,7 +14,6 @@ use unitas_runtime::{
     unitas_runtime_scene_name, unitas_runtime_set_active_scene, unitas_runtime_set_body_position,
     unitas_runtime_set_body_velocity, unitas_runtime_set_callbacks, unitas_runtime_set_time_scale,
     unitas_runtime_tick, unitas_runtime_time_scale, unitas_runtime_unload_scene,
-    AbiCharacterMoveInput, AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
 };
 
 const SCENE_A: &str = "tests/fixtures/scene_with_script.unity";
@@ -55,10 +55,10 @@ fn entity_id_for(path: &str, name: &str) -> Result<u64, Box<dyn Error>> {
         None => return Err(String::from("no scene graph found").into()),
     };
     for id in graph.breadth_first_order() {
-        if let Some(entity) = graph.entity(id) {
-            if entity.name == name {
-                return Ok(id.as_u64());
-            }
+        if let Some(entity) = graph.entity(id)
+            && entity.name == name
+        {
+            return Ok(id.as_u64());
         }
     }
     Err(String::from("entity not found").into())
@@ -214,8 +214,8 @@ fn abi_active_scene_index_is_minus_one_without_a_loaded_scene() -> Result<(), Bo
 }
 
 #[test]
-fn abi_dont_destroy_on_load_keeps_the_entity_persistent_across_a_single_load(
-) -> Result<(), Box<dyn Error>> {
+fn abi_dont_destroy_on_load_keeps_the_entity_persistent_across_a_single_load()
+-> Result<(), Box<dyn Error>> {
     let handle = new_handle()?;
     assert_eq!(load_scene_mode(handle, SCENE_A, 0)?, 0);
     let entity = entity_id_for(SCENE_A, "ScriptedObject")?;
@@ -311,8 +311,8 @@ fn read_nul_terminated_from_path_buffer(
 }
 
 #[test]
-fn abi_project_identity_externs_write_loaded_identity_into_path_buffer(
-) -> Result<(), Box<dyn Error>> {
+fn abi_project_identity_externs_write_loaded_identity_into_path_buffer()
+-> Result<(), Box<dyn Error>> {
     let handle = new_handle()?;
     assert!(unitas_runtime_company_name(handle) < 0);
     assert!(unitas_runtime_product_name(handle) < 0);
@@ -346,8 +346,8 @@ fn abi_project_identity_externs_write_loaded_identity_into_path_buffer(
 }
 
 #[test]
-fn abi_project_identity_externs_return_negative_when_settings_missing_or_handle_invalid(
-) -> Result<(), Box<dyn Error>> {
+fn abi_project_identity_externs_return_negative_when_settings_missing_or_handle_invalid()
+-> Result<(), Box<dyn Error>> {
     assert!(unitas_runtime_company_name(u64::MAX) < 0);
     assert!(unitas_runtime_product_name(u64::MAX) < 0);
     assert!(unitas_runtime_project_version(u64::MAX) < 0);
@@ -401,8 +401,8 @@ fn write_vec3_to_path_buffer(handle: u64, value: [f64; 3]) -> Result<u64, Box<dy
 }
 
 #[test]
-fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
-) -> Result<(), Box<dyn Error>> {
+fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs()
+-> Result<(), Box<dyn Error>> {
     let handle = new_handle()?;
     assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
     let ball = entity_id_for(SCENE_B, "Ball")?;
@@ -464,8 +464,8 @@ fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
 }
 
 #[test]
-fn abi_set_body_velocity_and_position_update_simulation_and_reject_invalid_writes(
-) -> Result<(), Box<dyn Error>> {
+fn abi_set_body_velocity_and_position_update_simulation_and_reject_invalid_writes()
+-> Result<(), Box<dyn Error>> {
     let handle = new_handle()?;
     assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
     let ball = entity_id_for(SCENE_B, "Ball")?;
@@ -570,8 +570,8 @@ fn write_character_scene(temp_dir: &Path) -> Result<std::path::PathBuf, Box<dyn 
 }
 
 #[test]
-fn abi_character_move_resolves_ground_and_wall_collisions_and_excludes_self_collider(
-) -> Result<(), Box<dyn Error>> {
+fn abi_character_move_resolves_ground_and_wall_collisions_and_excludes_self_collider()
+-> Result<(), Box<dyn Error>> {
     let temp_dir =
         std::env::temp_dir().join(format!("unitas_abi_character_move_{}", std::process::id()));
     let scene_path = write_character_scene(&temp_dir)?;

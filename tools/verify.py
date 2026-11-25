@@ -30,6 +30,31 @@ CONFIG_FILES = ("pyproject.toml", "tools/dependency-registry.toml")
 CARGO_LOCKFILE = Path("Cargo.lock")
 NUGET_LOCKFILE_NAME = "packages.lock.json"
 DEPENDENCY_REGISTRY = Path("tools") / "dependency-registry.toml"
+UNSAFE_ZONES_REGISTRY = Path("tools") / "unsafe-zones.toml"
+ZONE_RUST_DENIES = (
+    "warnings",
+    "unnecessary_transmutes",
+    "static_mut_refs",
+    "unsafe_op_in_unsafe_fn",
+    "improper_ctypes",
+    "improper_ctypes_definitions",
+)
+ZONE_CLIPPY_DENIES = (
+    "unwrap_used",
+    "expect_used",
+    "panic",
+    "todo",
+    "unimplemented",
+    "dbg_macro",
+    "undocumented_unsafe_blocks",
+    "missing_safety_doc",
+    "multiple_unsafe_ops_per_block",
+    "ptr_as_ptr",
+    "cast_ptr_alignment",
+    "as_ptr_cast_mut",
+    "borrow_as_ptr",
+    "transmute_ptr_to_ptr",
+)
 REGISTRY_ENTRY_KEYS = ("name", "version", "license", "advisory_reviewed", "note")
 PERMISSIVE_LICENSES = frozenset(
     {
@@ -956,11 +981,82 @@ def check_workspace_cargo_toml(
     return findings, members
 
 
-def check_member_cargo_toml(
+def load_unsafe_zone_paths(root: Path = REPO_ROOT) -> set[str]:
+    registry = root / UNSAFE_ZONES_REGISTRY
+    if not registry.exists():
+        return set()
+    try:
+        parsed = tomllib.loads(registry.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return set()
+    zones = parsed.get("zone", [])
+    if not isinstance(zones, list):
+        return set()
+    return {
+        zone["path"]
+        for zone in zones
+        if isinstance(zone, dict) and isinstance(zone.get("path"), str)
+    }
+
+
+def check_zone_cargo_toml(
     parsed: dict[str, object],
     text: str,
     display: str,
 ) -> list[str]:
+    findings: list[str] = []
+    package = parsed.get("package")
+    edition = package.get("edition") if isinstance(package, dict) else None
+    if edition != "2024":
+        findings.append(f"{display}: zone crate must set package edition = '2024'")
+    lints = parsed.get("lints")
+    if not isinstance(lints, dict) or lints.get("workspace") is True:
+        findings.append(
+            f"{display}: zone crate must declare its own [lints.rust] and [lints.clippy] tables"
+        )
+        return findings
+    rust_lints = lints.get("rust")
+    if not isinstance(rust_lints, dict):
+        findings.append(f"{display}: zone crate declares no [lints.rust] table")
+    else:
+        findings.extend(
+            f"{display}: zone [lints.rust] must set {lint} = 'deny'"
+            for lint in ZONE_RUST_DENIES
+            if rust_lint_level(rust_lints.get(lint)) != "deny"
+        )
+        if rust_lint_level(rust_lints.get("unsafe_code")) == "forbid":
+            findings.append(f"{display}: zone [lints.rust] must not forbid unsafe_code")
+        findings.extend(check_rust_lint_table(rust_lints, text, display, "rust"))
+    clippy_lints = lints.get("clippy")
+    if not isinstance(clippy_lints, dict):
+        findings.append(f"{display}: zone crate declares no [lints.clippy] table")
+    else:
+        for group in ("all", "pedantic"):
+            entry = clippy_lints.get(group)
+            if rust_lint_level(entry) != "deny":
+                findings.append(f"{display}: zone [lints.clippy] must set {group} = 'deny'")
+                continue
+            priority = entry.get("priority") if isinstance(entry, dict) else None
+            if not isinstance(priority, int) or priority != -1:
+                findings.append(f"{display}: zone [lints.clippy] must set {group} priority = -1")
+        findings.extend(
+            f"{display}: zone [lints.clippy] must set {lint} = 'deny'"
+            for lint in ZONE_CLIPPY_DENIES
+            if rust_lint_level(clippy_lints.get(lint)) != "deny"
+        )
+        findings.extend(check_rust_lint_table(clippy_lints, text, display, "clippy"))
+    return findings
+
+
+def check_member_cargo_toml(
+    parsed: dict[str, object],
+    text: str,
+    display: str,
+    zones: set[str] | None = None,
+) -> list[str]:
+    crate_dir = display.rsplit("/", 1)[0] if "/" in display else ""
+    if zones and crate_dir in zones:
+        return check_zone_cargo_toml(parsed, text, display)
     findings: list[str] = []
     lints = parsed.get("lints")
     if lints != {"workspace": True}:
@@ -996,6 +1092,7 @@ def check_rust_tool_configs(root: Path) -> list[str]:
 
 def check_rust_configuration(root: Path = REPO_ROOT) -> list[str]:
     findings: list[str] = []
+    zones = load_unsafe_zone_paths(root)
     cargo_files = sorted(iter_named_files(root, frozenset({"Cargo.toml"})))
     expected_members: set[Path] = set()
     for path in cargo_files:
@@ -1014,7 +1111,7 @@ def check_rust_configuration(root: Path = REPO_ROOT) -> list[str]:
                 (path.parent / member / "Cargo.toml").resolve() for member in members
             )
         if "package" in parsed:
-            findings.extend(check_member_cargo_toml(parsed, text, display))
+            findings.extend(check_member_cargo_toml(parsed, text, display, zones))
     findings.extend(
         f"{display_path(member_manifest, root)}: workspace member Cargo.toml is missing"
         for member_manifest in sorted(expected_members)

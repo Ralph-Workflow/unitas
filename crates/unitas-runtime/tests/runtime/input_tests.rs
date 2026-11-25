@@ -2,6 +2,7 @@ use std::error::Error;
 use std::path::Path;
 
 use unitas_runtime::{
+    AxisConfig, ButtonSource, InputState, Runtime, STATE_DOWN, STATE_PRESSED, STATE_RELEASED,
     default_axis_configs, parse_button_token, test_read_path_buffer, test_write_path_buffer,
     unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_input_axis,
     unitas_runtime_input_axis_raw, unitas_runtime_input_button_state,
@@ -9,8 +10,7 @@ use unitas_runtime::{
     unitas_runtime_input_mouse_button_event, unitas_runtime_input_mouse_state,
     unitas_runtime_input_pointer, unitas_runtime_input_pointer_move, unitas_runtime_input_scroll,
     unitas_runtime_input_scroll_state, unitas_runtime_load_scene, unitas_runtime_new,
-    unitas_runtime_path_buffer, unitas_runtime_tick, AxisConfig, ButtonSource, InputState, Runtime,
-    STATE_DOWN, STATE_PRESSED, STATE_RELEASED,
+    unitas_runtime_path_buffer, unitas_runtime_tick,
 };
 
 #[test]
@@ -335,8 +335,8 @@ fn input_mouse_delta_axes_multiple_same_name_entries_and_reset_clear_all_state()
 }
 
 #[test]
-fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reload(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reload()
+-> Result<(), Box<dyn Error>> {
     let temp_root = std::env::temp_dir().join(format!(
         "unitas_runtime_input_manager_discovery_{}",
         std::process::id()

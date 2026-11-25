@@ -1,7 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::matrix::{
-    message_is_eligible, route_message, CollisionMatrix, CollisionMessage, MessageDelivery,
-    PhysicsObject,
+    CollisionMatrix, CollisionMessage, MessageDelivery, PhysicsObject, message_is_eligible,
+    route_message,
 };
 use unitas_physics::two_d::effector::BuoyancyEffector2D;
 use unitas_physics::two_d::{

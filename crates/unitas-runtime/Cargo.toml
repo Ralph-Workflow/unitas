@@ -2,13 +2,72 @@
 [package]
 name = "unitas-runtime"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
 
-[lints]
-workspace = true
+[lints.rust]
+warnings = "deny"
+unnecessary_transmutes = "deny"
+static_mut_refs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+improper_ctypes = "deny"
+improper_ctypes_definitions = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
+ptr_as_ptr = "deny"
+cast_ptr_alignment = "deny"
+as_ptr_cast_mut = "deny"
+borrow_as_ptr = "deny"
+transmute_ptr_to_ptr = "deny"
+# clean-code-policy.md bans all comments and doc comments in Rust source files
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+# Fires across accessor, constructor, and builder methods on common safe use
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+# Fires on common safe numeric conversions (f64/f32/usize/u32/i32) in 3D math, physics, audio, and rendering
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+cast_lossless = "allow"
+# Fires on domain coordinate/math names, state flags, and cohesive parsers/builders on common safe use
+similar_names = "allow"
+many_single_char_names = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+unreadable_literal = "allow"
+float_cmp = "allow"
+# Fires on common safe control-flow, signature, and string-formatting idioms across the workspace
+manual_let_else = "allow"
+match_same_arms = "allow"
+single_match_else = "allow"
+unnecessary_wraps = "allow"
+redundant_closure_for_method_calls = "allow"
+format_push_string = "allow"
+map_unwrap_or = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+assigning_clones = "allow"
+needless_pass_by_value = "allow"
+manual_midpoint = "allow"
+if_not_else = "allow"
+trivially_copy_pass_by_ref = "allow"
+unused_self = "allow"
+ref_option = "allow"
 
 [features]
 default = []

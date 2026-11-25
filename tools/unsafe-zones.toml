@@ -1,1 +1,13 @@
-zones = []
+[[zone]]
+path = "crates/unitas-editor-abi"
+language = "rust"
+purpose = "C ABI export surface for the editor host; names C symbols with unsafe(export_name) so the linker keeps stable entry points without a hand-maintained alias table"
+invariants = []
+unsafe_blocks = 0
+
+[[zone]]
+path = "crates/unitas-runtime"
+language = "rust"
+purpose = "C ABI export surface for the runtime: names C symbols with unsafe(export_name) so the linker keeps stable entry points without a hand-maintained alias table"
+invariants = []
+unsafe_blocks = 0

@@ -2,24 +2,25 @@ use std::error::Error;
 use std::path::Path;
 
 use unitas_animation::{
-    decode_controller_binary, encode_controller_binary, AnimationClip, AnimatorController,
-    AnimatorState, ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve, Keyframe,
-    ParameterDef, StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
+    AnimationClip, AnimatorController, AnimatorState, ConditionOp, CurveBinding,
+    CurveBindingTarget, FloatCurve, Keyframe, ParameterDef, StateMotion, StateTransition,
+    TransitionCondition, TransitionTarget, WrapMode, decode_controller_binary,
+    encode_controller_binary,
 };
 use unitas_core::EntityId;
 use unitas_runtime::{
-    test_read_error_message, test_read_path_buffer, test_write_path_buffer,
-    unitas_runtime_animator_attach, unitas_runtime_animator_controller_create,
-    unitas_runtime_animator_controller_destroy, unitas_runtime_animator_get_bool,
-    unitas_runtime_animator_get_float, unitas_runtime_animator_get_int,
-    unitas_runtime_animator_get_speed, unitas_runtime_animator_reset_trigger,
-    unitas_runtime_animator_set_bool, unitas_runtime_animator_set_controller,
-    unitas_runtime_animator_set_float, unitas_runtime_animator_set_int,
-    unitas_runtime_animator_set_speed, unitas_runtime_animator_set_trigger,
-    unitas_runtime_animator_state_info, unitas_runtime_animator_state_name, unitas_runtime_destroy,
-    unitas_runtime_error_message, unitas_runtime_new, unitas_runtime_path_buffer,
-    unitas_runtime_set_time_scale, unitas_runtime_tick, AnimationRuntimeDiagnostic, AnimationWorld,
-    Runtime,
+    AnimationRuntimeDiagnostic, AnimationWorld, Runtime, test_read_error_message,
+    test_read_path_buffer, test_write_path_buffer, unitas_runtime_animator_attach,
+    unitas_runtime_animator_controller_create, unitas_runtime_animator_controller_destroy,
+    unitas_runtime_animator_get_bool, unitas_runtime_animator_get_float,
+    unitas_runtime_animator_get_int, unitas_runtime_animator_get_speed,
+    unitas_runtime_animator_reset_trigger, unitas_runtime_animator_set_bool,
+    unitas_runtime_animator_set_controller, unitas_runtime_animator_set_float,
+    unitas_runtime_animator_set_int, unitas_runtime_animator_set_speed,
+    unitas_runtime_animator_set_trigger, unitas_runtime_animator_state_info,
+    unitas_runtime_animator_state_name, unitas_runtime_destroy, unitas_runtime_error_message,
+    unitas_runtime_new, unitas_runtime_path_buffer, unitas_runtime_set_time_scale,
+    unitas_runtime_tick,
 };
 
 const STATE_INFO_SIZE: usize = 80;
@@ -764,8 +765,8 @@ fn position_clip(path: &str) -> AnimationClip {
 }
 
 #[test]
-fn animator_runtime_non_transform_binding_reports_diagnostic_and_keeps_advancing(
-) -> Result<(), Box<dyn Error>> {
+fn animator_runtime_non_transform_binding_reports_diagnostic_and_keeps_advancing()
+-> Result<(), Box<dyn Error>> {
     let clip = AnimationClip::new(
         "Tint",
         2.0,
@@ -1010,8 +1011,8 @@ fn hook_world() -> Result<(unitas_runtime::AnimationWorld, EntityId), Box<dyn Er
 }
 
 #[test]
-fn ani_002_outcome_31_on_animator_ik_alters_the_pose_after_the_layer_pose_is_evaluated(
-) -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_31_on_animator_ik_alters_the_pose_after_the_layer_pose_is_evaluated()
+-> Result<(), Box<dyn Error>> {
     let (mut world, entity) = hook_world()?;
     let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
     let mut hooks = unitas_runtime::animation::AnimatorHookWorld::new();
@@ -1048,8 +1049,8 @@ fn ani_002_outcome_31_on_animator_ik_alters_the_pose_after_the_layer_pose_is_eva
 }
 
 #[test]
-fn ani_002_outcome_31_on_animator_move_alters_the_motion_and_suppresses_the_automatic_root_motion(
-) -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_31_on_animator_move_alters_the_motion_and_suppresses_the_automatic_root_motion()
+-> Result<(), Box<dyn Error>> {
     let (mut world, entity) = hook_world()?;
     let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
     let mut hooks = unitas_runtime::animation::AnimatorHookWorld::new();
@@ -1094,8 +1095,8 @@ fn animation_without_a_move_hook_applies_root_motion_automatically() -> Result<(
 }
 
 #[test]
-fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_and_events(
-) -> Result<(), Box<dyn Error>> {
+fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_and_events()
+-> Result<(), Box<dyn Error>> {
     use unitas_animation::AnimationEvent;
     let clip = AnimationClip::new(
         "ParityClip",
@@ -1129,10 +1130,10 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_
     let mut elapsed = 0.0_f32;
     for dt in frame_deltas {
         let sample = clip.sample(elapsed, elapsed + dt);
-        if let Some(b) = sample.bindings.first() {
-            if let unitas_animation::AnimatedValue::Float(x) = b.value {
-                preview_poses.push(x);
-            }
+        if let Some(b) = sample.bindings.first()
+            && let unitas_animation::AnimatedValue::Float(x) = b.value
+        {
+            preview_poses.push(x);
         }
         for ev in sample.fired_events {
             preview_events.push(ev.function_name);
@@ -1194,8 +1195,8 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_
 }
 
 #[test]
-fn ani_001_outcome_29_disable_and_enable_resets_or_keeps_state_and_preserves_last_written_value(
-) -> Result<(), Box<dyn Error>> {
+fn ani_001_outcome_29_disable_and_enable_resets_or_keeps_state_and_preserves_last_written_value()
+-> Result<(), Box<dyn Error>> {
     let clip_a = AnimationClip::new(
         "A",
         1.0,
@@ -1289,8 +1290,8 @@ fn ani_001_outcome_29_disable_and_enable_resets_or_keeps_state_and_preserves_las
 }
 
 #[test]
-fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_parameters(
-) -> Result<(), Box<dyn Error>> {
+fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_parameters()
+-> Result<(), Box<dyn Error>> {
     use unitas_animation::{
         AnimationEvent, AnimatorCullingMode, AnimatorFrame, AnimatorUpdateMode,
     };
@@ -1430,8 +1431,8 @@ fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_pa
 }
 
 #[test]
-fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_clips(
-) -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_clips()
+-> Result<(), Box<dyn Error>> {
     use unitas_runtime::animation::LegacyAnimationComponent;
 
     let clip_walk = AnimationClip::new(
@@ -1521,8 +1522,8 @@ fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_cl
 }
 
 #[test]
-fn ani_001_outcome_27_preview_play_mode_and_built_player_match_pose_and_events_in_looping_and_reverse(
-) -> Result<(), Box<dyn Error>> {
+fn ani_001_outcome_27_preview_play_mode_and_built_player_match_pose_and_events_in_looping_and_reverse()
+-> Result<(), Box<dyn Error>> {
     use unitas_animation::AnimationEvent;
 
     let clip = AnimationClip::new(
@@ -1557,10 +1558,10 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_match_pose_and_events_i
     for delta in frame_deltas {
         let step = delta as f32;
         let sample = clip.sample(elapsed, elapsed + step);
-        if let Some(binding) = sample.bindings.first() {
-            if let unitas_animation::AnimatedValue::Float(x) = binding.value {
-                preview_poses.push(x);
-            }
+        if let Some(binding) = sample.bindings.first()
+            && let unitas_animation::AnimatedValue::Float(x) = binding.value
+        {
+            preview_poses.push(x);
         }
         for event in sample.fired_events {
             preview_events.push(event.function_name);
@@ -1637,8 +1638,8 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_match_pose_and_events_i
 }
 
 #[test]
-fn ani_001_outcome_28_state_machine_behaviour_callback_order_is_observable_at_runtime(
-) -> Result<(), Box<dyn Error>> {
+fn ani_001_outcome_28_state_machine_behaviour_callback_order_is_observable_at_runtime()
+-> Result<(), Box<dyn Error>> {
     use unitas_animation::StateMachineCallbackKind;
 
     fn names(callbacks: &[unitas_animation::StateMachineCallback]) -> Vec<String> {

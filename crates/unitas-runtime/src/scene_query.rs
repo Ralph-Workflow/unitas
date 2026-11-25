@@ -10,10 +10,10 @@ impl Runtime {
     pub fn find_entity_by_name(&self, name: &str) -> Option<EntityId> {
         let graph = self.scene_graph()?;
         for id in graph.iter_breadth_first() {
-            if let Some(entity) = graph.entity(id) {
-                if entity.name == name {
-                    return Some(id);
-                }
+            if let Some(entity) = graph.entity(id)
+                && entity.name == name
+            {
+                return Some(id);
             }
         }
         None

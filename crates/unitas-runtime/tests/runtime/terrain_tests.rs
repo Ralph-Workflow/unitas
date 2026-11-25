@@ -4,7 +4,8 @@ use unitas_physics::terrain::{
     TreePrototype, WindZone,
 };
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
-use unitas_runtime::terrain::{far_position_impact, TerrainRuntimeError, TerrainWorld};
+use unitas_runtime::Runtime;
+use unitas_runtime::terrain::{TerrainRuntimeError, TerrainWorld, far_position_impact};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -84,39 +85,37 @@ fn set_heights_is_visible_to_every_terrain_using_the_shared_data() -> TestResult
 #[test]
 fn terrain_height_and_normal_agree_with_the_registered_heightfield_collider() -> TestResult {
     let data = flat_data(RESOLUTION, TERRAIN_SIZE, FLAT_HEIGHT)?;
-    let mut terrains = TerrainWorld::new();
+    let mut runtime = Runtime::new()?;
     let terrain_entity = EntityId::new(3);
-    terrains.register_terrain(terrain_entity, &data, [0.0, 0.0, 0.0])?;
+    runtime
+        .terrain_mut()
+        .register_terrain(terrain_entity, &data, [0.0, 0.0, 0.0])?;
 
-    let mut world = World::new();
     let body_entity = EntityId::new(9);
     let radius = 0.5;
-    world.add_body(
+    runtime.physics_mut().world_3d_mut().add_body(
         body_entity,
         sphere_desc([0.0, FLAT_HEIGHT + 0.25, 0.0], radius),
     )?;
-    terrains.register_heightfield(
+    runtime.terrain_mut().register_heightfield(
         terrain_entity,
         TerrainBody::new(body_entity, Shape::Sphere { radius }),
     )?;
 
-    let contacts = terrains.apply_heightfields(&mut world);
+    runtime.tick(0.0)?;
+    runtime.tick(0.0)?;
 
     assert_eq!(
-        contacts.len(),
-        1,
-        "expected one heightfield contact, got {contacts:?}"
+        body_position(runtime.physics_mut().world_3d(), body_entity)?[1],
+        FLAT_HEIGHT + radius
     );
-    assert_eq!(contacts[0].point, [0.0, FLAT_HEIGHT, 0.0]);
-    assert_eq!(contacts[0].normal, [0.0, 1.0, 0.0]);
-    assert_eq!(body_position(&world, body_entity)?[1], FLAT_HEIGHT + radius);
     assert_eq!(
-        terrains.height_at(terrain_entity, [0.0, 0.0, 0.0]),
+        runtime.terrain().height_at(terrain_entity, [0.0, 0.0, 0.0]),
         Some(FLAT_HEIGHT)
     );
     assert_eq!(
-        terrains.normal_at(terrain_entity, [0.0, 0.0, 0.0]),
-        Some(contacts[0].normal)
+        runtime.terrain().normal_at(terrain_entity, [0.0, 0.0, 0.0]),
+        Some([0.0, 1.0, 0.0])
     );
     Ok(())
 }
@@ -125,39 +124,44 @@ fn terrain_height_and_normal_agree_with_the_registered_heightfield_collider() ->
 fn terrain_hole_cell_is_reported_and_blocks_the_heightfield_collider() -> TestResult {
     let data = flat_data(RESOLUTION, TERRAIN_SIZE, FLAT_HEIGHT)?;
     data.set_hole(0, 0, true);
-    let mut terrains = TerrainWorld::new();
+    let mut runtime = Runtime::new()?;
     let terrain_entity = EntityId::new(4);
-    terrains.register_terrain(terrain_entity, &data, [0.0, 0.0, 0.0])?;
+    runtime
+        .terrain_mut()
+        .register_terrain(terrain_entity, &data, [0.0, 0.0, 0.0])?;
 
-    let mut world = World::new();
     let body_entity = EntityId::new(10);
     let solid_entity = EntityId::new(12);
     let radius = 0.5;
     let resting = [HOLE_CELL_CENTRE[0], FLAT_HEIGHT + 0.25, HOLE_CELL_CENTRE[2]];
     let solid = [0.0, FLAT_HEIGHT + 0.25, 0.0];
-    world.add_body(body_entity, sphere_desc(resting, radius))?;
-    world.add_body(solid_entity, sphere_desc(solid, radius))?;
-    terrains.register_heightfield(
+    runtime
+        .physics_mut()
+        .world_3d_mut()
+        .add_body(body_entity, sphere_desc(resting, radius))?;
+    runtime
+        .physics_mut()
+        .world_3d_mut()
+        .add_body(solid_entity, sphere_desc(solid, radius))?;
+    runtime.terrain_mut().register_heightfield(
         terrain_entity,
         TerrainBody::new(body_entity, Shape::Sphere { radius }),
     )?;
-    terrains.register_heightfield(
+    runtime.terrain_mut().register_heightfield(
         terrain_entity,
         TerrainBody::new(solid_entity, Shape::Sphere { radius }),
     )?;
 
-    let contacts = terrains.apply_heightfields(&mut world);
+    runtime.tick(0.0)?;
+    runtime.tick(0.0)?;
 
-    assert!(terrains.is_hole(terrain_entity, HOLE_CELL_CENTRE));
+    assert!(runtime.terrain().is_hole(terrain_entity, HOLE_CELL_CENTRE));
     assert_eq!(
-        contacts.len(),
-        1,
-        "only the solid cell is supported: {contacts:?}"
+        body_position(runtime.physics_mut().world_3d(), body_entity)?,
+        resting
     );
-    assert_eq!(contacts[0].point, [0.0, FLAT_HEIGHT, 0.0]);
-    assert_eq!(body_position(&world, body_entity)?, resting);
     assert_eq!(
-        body_position(&world, solid_entity)?[1],
+        body_position(runtime.physics_mut().world_3d(), solid_entity)?[1],
         FLAT_HEIGHT + radius
     );
     Ok(())
@@ -169,18 +173,24 @@ fn terrain_far_position_helper_names_the_systems_that_must_update_a_distant_obje
 
     assert!(distant.exceeds_threshold);
     assert_eq!(distant.threshold, 100_000.0);
-    assert!(distant
-        .affected_systems
-        .iter()
-        .any(|system| system.contains("physics")));
-    assert!(distant
-        .affected_systems
-        .iter()
-        .any(|system| system.contains("rendering")));
-    assert!(distant
-        .affected_systems
-        .iter()
-        .any(|system| system.contains("navigation")));
+    assert!(
+        distant
+            .affected_systems
+            .iter()
+            .any(|system| system.contains("physics"))
+    );
+    assert!(
+        distant
+            .affected_systems
+            .iter()
+            .any(|system| system.contains("rendering"))
+    );
+    assert!(
+        distant
+            .affected_systems
+            .iter()
+            .any(|system| system.contains("navigation"))
+    );
 
     let near = far_position_impact([10.0, 0.0, 0.0]);
 

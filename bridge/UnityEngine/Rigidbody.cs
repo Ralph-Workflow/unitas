@@ -48,5 +48,18 @@ namespace UnityEngine
                 }
             }
         }
+        public void AddForce(Vector3 force)
+        {
+            AddForce(force, ForceMode.Force);
+        }
+        public void AddForce(Vector3 force, ForceMode mode)
+        {
+            GameObject? owner = gameObject;
+            IPhysicsProvider? provider = Physics.Provider;
+            if (!_isKinematic && owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null)
+            {
+                provider.TryAddForce(owner.NativeEntityId, force, mode);
+            }
+        }
     }
 }

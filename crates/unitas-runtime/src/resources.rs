@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use unitas_asset::meta::{parse_meta_file, MetaError};
+use unitas_asset::meta::{MetaError, parse_meta_file};
 
 const RESOURCES_DIR_LOWER: &str = "resources";
 const META_SUFFIX_LOWER: &str = ".meta";
@@ -332,8 +332,8 @@ mod tests {
     }
 
     #[test]
-    fn scan_discovers_nested_resources_strips_extensions_and_ignores_meta(
-    ) -> Result<(), Box<dyn Error>> {
+    fn scan_discovers_nested_resources_strips_extensions_and_ignores_meta()
+    -> Result<(), Box<dyn Error>> {
         let root = unique_temp_dir("scan")?;
         let res_a = root.join("Assets").join("Resources").join("Config");
         let res_b = root
@@ -388,12 +388,16 @@ mod tests {
 
         assert!(index.load("Missing/Path").is_none());
         assert!(index.load("").is_none());
-        assert!(index
-            .load_with_kind("Config/balance", ResourceKind::Prefab)
-            .is_none());
-        assert!(index
-            .load_with_kind("Config/balance", ResourceKind::Text)
-            .is_some());
+        assert!(
+            index
+                .load_with_kind("Config/balance", ResourceKind::Prefab)
+                .is_none()
+        );
+        assert!(
+            index
+                .load_with_kind("Config/balance", ResourceKind::Text)
+                .is_some()
+        );
 
         let all_in_config = index.load_all("Config");
         assert_eq!(all_in_config.len(), 1);

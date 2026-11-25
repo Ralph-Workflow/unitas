@@ -7,12 +7,12 @@ use std::sync::Mutex;
 mod roll_a_ball_tests;
 
 use unitas_runtime::{
-    test_read_query_buffer, test_write_path_buffer, unitas_runtime_box_cast,
-    unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_fixed_timestep,
-    unitas_runtime_linecast, unitas_runtime_load_scene, unitas_runtime_new,
-    unitas_runtime_overlap_sphere, unitas_runtime_path_buffer, unitas_runtime_query_buffer,
-    unitas_runtime_raycast, unitas_runtime_set_time_scale, unitas_runtime_sphere_cast,
-    unitas_runtime_time_scale, Callbacks, LoadSceneMode, Runtime, RuntimeError,
+    Callbacks, LoadSceneMode, Runtime, RuntimeError, test_read_query_buffer,
+    test_write_path_buffer, unitas_runtime_box_cast, unitas_runtime_destroy,
+    unitas_runtime_error_message, unitas_runtime_fixed_timestep, unitas_runtime_linecast,
+    unitas_runtime_load_scene, unitas_runtime_new, unitas_runtime_overlap_sphere,
+    unitas_runtime_path_buffer, unitas_runtime_query_buffer, unitas_runtime_raycast,
+    unitas_runtime_set_time_scale, unitas_runtime_sphere_cast, unitas_runtime_time_scale,
 };
 
 const FIXTURE_PATH: &str = "tests/fixtures/scene_with_script.unity";
@@ -272,10 +272,10 @@ fn entity_id_for(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
         None => return Err(String::from("no scene graph found").into()),
     };
     for id in graph.breadth_first_order() {
-        if let Some(entity) = graph.entity(id) {
-            if entity.name == name {
-                return Ok(id.as_u64());
-            }
+        if let Some(entity) = graph.entity(id)
+            && entity.name == name
+        {
+            return Ok(id.as_u64());
         }
     }
     Err(String::from("entity not found").into())
@@ -417,9 +417,11 @@ fn runtime_abi_layer_mask_selects_only_the_requested_layer() -> Result<(), Box<d
     runtime.load_scene(Path::new(QUERY_FIXTURE_PATH))?;
     let target = entity_id_for(&runtime, "QueryTarget")?;
     assert_eq!(decode_record(&bytes, 0)?.entity, target);
-    assert!(runtime
-        .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 4, false)
-        .is_empty());
+    assert!(
+        runtime
+            .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 4, false)
+            .is_empty()
+    );
     assert_eq!(
         runtime
             .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 32, false)
@@ -727,8 +729,8 @@ fn runtime_load_scene_applies_project_settings_timestep_and_gravity() -> Result<
 }
 
 #[test]
-fn runtime_load_scene_without_or_with_malformed_project_settings_uses_defaults(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_load_scene_without_or_with_malformed_project_settings_uses_defaults()
+-> Result<(), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
     runtime.load_scene(Path::new(TRIGGER_FIXTURE_PATH))?;
     assert_eq!(runtime.fixed_timestep(), 0.02);
@@ -789,8 +791,8 @@ fn runtime_load_scene_without_or_with_malformed_project_settings_uses_defaults(
 }
 
 #[test]
-fn runtime_abi_fixed_timestep_returns_configured_value_and_sets_error_on_invalid_handle(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_abi_fixed_timestep_returns_configured_value_and_sets_error_on_invalid_handle()
+-> Result<(), Box<dyn Error>> {
     let handle = runtime_handle_for(SETTINGS_FIXTURE_PATH)?;
     let step = unitas_runtime_fixed_timestep(handle);
     assert_eq!(step, 0.03333333333333333);
@@ -1267,8 +1269,8 @@ fn runtime_failed_load_leaves_the_scene_set_and_world_unchanged() -> Result<(), 
 }
 
 #[test]
-fn runtime_loads_capsule_collider_and_supports_raycast_and_overlap_queries(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_loads_capsule_collider_and_supports_raycast_and_overlap_queries()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_capsule_query_{}",
         std::process::id()
@@ -1304,8 +1306,8 @@ fn runtime_loads_capsule_collider_and_supports_raycast_and_overlap_queries(
 }
 
 #[test]
-fn runtime_maps_capsule_collider_direction_rotation_center_and_simulates_dynamic_fall(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_maps_capsule_collider_direction_rotation_center_and_simulates_dynamic_fall()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_capsule_direction_sim_{}",
         std::process::id()
@@ -1439,8 +1441,8 @@ fn build_test_wav(
 }
 
 #[test]
-fn runtime_audio_scene_play_on_awake_ticks_to_completed_and_teardown_stops_source(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_audio_scene_play_on_awake_ticks_to_completed_and_teardown_stops_source()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_audio_play_on_awake_{}",
         std::process::id()
@@ -1516,8 +1518,8 @@ fn runtime_audio_scene_play_on_awake_ticks_to_completed_and_teardown_stops_sourc
 }
 
 #[test]
-fn runtime_audio_time_scale_and_application_pause_control_audio_advancement(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_audio_time_scale_and_application_pause_control_audio_advancement()
+-> Result<(), Box<dyn Error>> {
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
     let path_addr = unitas_runtime_path_buffer(handle, 256);
@@ -1576,8 +1578,8 @@ fn runtime_audio_time_scale_and_application_pause_control_audio_advancement(
 }
 
 #[test]
-fn runtime_audio_unsupported_or_invalid_clip_emits_diagnostic_and_fails_source(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_audio_unsupported_or_invalid_clip_emits_diagnostic_and_fails_source()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_audio_diagnostics_{}",
         std::process::id()

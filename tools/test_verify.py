@@ -330,6 +330,58 @@ def test_bypass_audit_flags_unopted_member_crate_and_missing_warnings_deny(
     assert any("warnings = 'deny'" in finding for finding in findings)
 
 
+def test_bypass_audit_accepts_registered_unsafe_zone_with_own_lints(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    _write_clean_rust_workspace(tmp_path)
+    zone_manifest = tmp_path / "crates" / "alpha" / "Cargo.toml"
+    zone_manifest.write_text(
+        "[package]\n"
+        'name = "alpha"\n'
+        'version = "0.1.0"\n'
+        'edition = "2024"\n'
+        "[lints.rust]\n"
+        'warnings = "deny"\n'
+        'unnecessary_transmutes = "deny"\n'
+        'static_mut_refs = "deny"\n'
+        'unsafe_op_in_unsafe_fn = "deny"\n'
+        'improper_ctypes = "deny"\n'
+        'improper_ctypes_definitions = "deny"\n'
+        "[lints.clippy]\n"
+        'all = { level = "deny", priority = -1 }\n'
+        'pedantic = { level = "deny", priority = -1 }\n'
+        'unwrap_used = "deny"\n'
+        'expect_used = "deny"\n'
+        'panic = "deny"\n'
+        'todo = "deny"\n'
+        'unimplemented = "deny"\n'
+        'dbg_macro = "deny"\n'
+        'undocumented_unsafe_blocks = "deny"\n'
+        'missing_safety_doc = "deny"\n'
+        'multiple_unsafe_ops_per_block = "deny"\n'
+        'ptr_as_ptr = "deny"\n'
+        'cast_ptr_alignment = "deny"\n'
+        'as_ptr_cast_mut = "deny"\n'
+        'borrow_as_ptr = "deny"\n'
+        'transmute_ptr_to_ptr = "deny"\n',
+        encoding="utf-8",
+    )
+    findings = verify.check_bypass(tmp_path)
+    assert any("member crate must set [lints] workspace = true" in finding for finding in findings)
+    (tmp_path / "tools").mkdir(exist_ok=True)
+    (tmp_path / "tools" / "unsafe-zones.toml").write_text(
+        '[[zone]]\npath = "crates/alpha"\nlanguage = "rust"\npurpose = "ffi"\n'
+        "invariants = []\nunsafe_blocks = 0\n",
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+    zone_manifest.write_text(
+        zone_manifest.read_text(encoding="utf-8").replace('unsafe_op_in_unsafe_fn = "deny"\n', ""),
+        encoding="utf-8",
+    )
+    findings = verify.check_bypass(tmp_path)
+    assert any("unsafe_op_in_unsafe_fn" in finding for finding in findings)
+
+
 def test_bypass_audit_flags_missing_member_manifest(tmp_path: Path) -> None:
     _write_clean_pyproject(tmp_path)
     _write_clean_rust_workspace(tmp_path)

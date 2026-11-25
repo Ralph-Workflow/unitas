@@ -292,8 +292,8 @@ fn cin_001_outcome_33_timeline_signal_fires_once_per_crossing() -> Result<(), Bo
 }
 
 #[test]
-fn cin_001_outcome_33_timeline_signal_fires_again_when_pingpong_crosses_it_backwards(
-) -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_timeline_signal_fires_again_when_pingpong_crosses_it_backwards()
+-> Result<(), Box<dyn Error>> {
     let (mut world, player) = timeline_of(
         vec![
             audio_track("music", 0.0, 4.0, 1.0),
@@ -357,11 +357,13 @@ fn timeline_activation_track_activates_and_deactivates_its_target() -> Result<()
     world.register_entity(entity);
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 0.5)?;
-    assert!(world
-        .player(player)
-        .ok_or("player missing")?
-        .active_activation_clips()
-        .is_empty());
+    assert!(
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .active_activation_clips()
+            .is_empty()
+    );
     world.update(player, 1.0)?;
     assert_eq!(
         world
@@ -371,11 +373,13 @@ fn timeline_activation_track_activates_and_deactivates_its_target() -> Result<()
         vec![(entity, false)]
     );
     world.update(player, 1.0)?;
-    assert!(world
-        .player(player)
-        .ok_or("player missing")?
-        .active_activation_clips()
-        .is_empty());
+    assert!(
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .active_activation_clips()
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -395,11 +399,13 @@ fn timeline_audio_track_reports_the_playing_clip_and_volume() -> Result<(), Box<
     assert_eq!(audio[0].clip, "ambience");
     assert_eq!(audio[0].volume, 0.5);
     world.update(player, 2.0)?;
-    assert!(world
-        .player(player)
-        .ok_or("player missing")?
-        .active_audio_clips()
-        .is_empty());
+    assert!(
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .active_audio_clips()
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -511,8 +517,8 @@ fn timeline_unknown_sequence_and_player_are_rejected() -> Result<(), Box<dyn Err
 }
 
 #[test]
-fn cin_001_outcome_33_combined_five_track_timeline_plays_pauses_seeks_completes_under_hold_loop_none_and_inspects_camera_blend(
-) -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_combined_five_track_timeline_plays_pauses_seeks_completes_under_hold_loop_none_and_inspects_camera_blend()
+-> Result<(), Box<dyn Error>> {
     use unitas_runtime::cinemachine::BlendStyle;
 
     let anim_entity = EntityId::new(101);

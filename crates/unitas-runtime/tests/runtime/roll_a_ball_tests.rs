@@ -89,11 +89,7 @@ fn crate_root() -> PathBuf {
 
 fn sample_scene_path() -> Option<PathBuf> {
     let path = crate_root().join(SAMPLE_SCENE_RELATIVE);
-    if path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.is_file() { Some(path) } else { None }
 }
 
 fn trigger_fixture_path() -> PathBuf {
@@ -556,8 +552,8 @@ fn roll_a_ball_fixture_harness_collects_the_trigger_zone_once() -> Result<(), Bo
 }
 
 #[test]
-fn roll_a_ball_scenario_collects_each_pickup_exactly_once_at_every_frame_rate(
-) -> Result<(), Box<dyn Error>> {
+fn roll_a_ball_scenario_collects_each_pickup_exactly_once_at_every_frame_rate()
+-> Result<(), Box<dyn Error>> {
     let _guard = lock_scenario()?;
     let yaml = arena_scene_yaml();
     let path = write_temp_scene("scenario", &yaml)?;

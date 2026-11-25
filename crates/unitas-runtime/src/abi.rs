@@ -1,5 +1,6 @@
 macro_rules! ffi_export {
     (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        #[unsafe(export_name = stringify!($name))]
         pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
             #[used]
             static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
@@ -2729,10 +2730,10 @@ fn with_runtime_state<T>(
     if let Some(result) = ACTIVE_STATES.with(|cell| {
         let mut stack = cell.borrow_mut();
         for (active_handle, state) in stack.iter_mut().rev() {
-            if *active_handle == handle {
-                if let Some(f) = action_opt.take() {
-                    return Some(f(state));
-                }
+            if *active_handle == handle
+                && let Some(f) = action_opt.take()
+            {
+                return Some(f(state));
             }
         }
         None
@@ -2756,10 +2757,10 @@ fn with_runtime_state_err<T>(
     if let Some(result) = ACTIVE_STATES.with(|cell| {
         let mut stack = cell.borrow_mut();
         for (active_handle, state) in stack.iter_mut().rev() {
-            if *active_handle == handle {
-                if let Some(f) = action_opt.take() {
-                    return Some(f(state));
-                }
+            if *active_handle == handle
+                && let Some(f) = action_opt.take()
+            {
+                return Some(f(state));
             }
         }
         None

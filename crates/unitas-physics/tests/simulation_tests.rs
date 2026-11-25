@@ -15,10 +15,15 @@ mod two_d_tests;
 mod articulation_tests;
 #[path = "simulation/cloth_tests.rs"]
 mod cloth_tests;
+#[path = "simulation/force_mode_tests.rs"]
+mod force_mode_tests;
 #[path = "simulation/particles_2d_tests.rs"]
 mod particles_2d_tests;
 #[path = "simulation/sim_control_tests.rs"]
 mod sim_control_tests;
+
+#[path = "simulation/perf_step.rs"]
+mod perf_step;
 
 #[path = "physics/character_tests.rs"]
 mod character_tests;

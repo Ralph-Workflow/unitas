@@ -259,6 +259,9 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_set_body_velocity(ulong runtime, ulong entity, IntPtr inBuffer);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_add_body_force(ulong runtime, ulong entity, IntPtr inBuffer);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct AbiCharacterMoveInput
         {

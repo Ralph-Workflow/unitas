@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use unitas_core::EntityId;
 
@@ -411,7 +410,7 @@ impl TerrainHeightData {
 
 #[derive(Clone, Debug)]
 pub struct TerrainData {
-    inner: Rc<RefCell<TerrainHeightData>>,
+    inner: Arc<Mutex<TerrainHeightData>>,
 }
 
 impl TerrainData {
@@ -429,7 +428,7 @@ impl TerrainData {
         }
         let cells = heightmap_resolution * heightmap_resolution;
         Ok(Self {
-            inner: Rc::new(RefCell::new(TerrainHeightData {
+            inner: Arc::new(Mutex::new(TerrainHeightData {
                 heightmap_resolution,
                 size,
                 heights: vec![0.0; cells],
@@ -446,29 +445,33 @@ impl TerrainData {
         })
     }
 
+    fn lock(&self) -> MutexGuard<'_, TerrainHeightData> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn heightmap_resolution(&self) -> usize {
-        self.inner.borrow().heightmap_resolution
+        self.lock().heightmap_resolution
     }
 
     pub fn size(&self) -> [f64; 3] {
-        self.inner.borrow().size
+        self.lock().size
     }
 
     pub fn height_at(&self, column: usize, row: usize) -> f64 {
-        let inner = self.inner.borrow();
+        let inner = self.lock();
         let (column, row) = inner.clamp_indices(column, row);
         inner.heights[inner.index(column, row)]
     }
 
     pub fn set_height(&self, column: usize, row: usize, height: f64) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         let (column, row) = inner.clamp_indices(column, row);
         let index = inner.index(column, row);
         inner.heights[index] = height;
     }
 
     pub fn set_heights(&self, updates: &[([usize; 2], f64)]) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         for (position, height) in updates {
             let (column, row) = inner.clamp_indices(position[0], position[1]);
             let index = inner.index(column, row);
@@ -478,7 +481,7 @@ impl TerrainData {
     }
 
     pub fn set_heights_delay_lod(&self, updates: &[([usize; 2], f64)]) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         let mut buffer = inner
             .delayed_heights
             .take()
@@ -492,31 +495,31 @@ impl TerrainData {
     }
 
     pub fn sync_heightmap(&self) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         if let Some(delayed) = inner.delayed_heights.take() {
             inner.heights = delayed;
         }
     }
 
     pub fn heights(&self) -> Vec<f64> {
-        self.inner.borrow().heights.clone()
+        self.lock().heights.clone()
     }
 
     pub fn hole_at(&self, column: usize, row: usize) -> bool {
-        let inner = self.inner.borrow();
+        let inner = self.lock();
         let (column, row) = inner.clamp_indices(column, row);
         inner.holes[inner.index(column, row)]
     }
 
     pub fn set_hole(&self, column: usize, row: usize, is_hole: bool) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         let (column, row) = inner.clamp_indices(column, row);
         let index = inner.index(column, row);
         inner.holes[index] = is_hole;
     }
 
     pub fn add_terrain_layer(&self, layer: TerrainLayer) -> usize {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         let cells = inner.heightmap_resolution * inner.heightmap_resolution;
         let is_first = inner.layers.is_empty();
         inner.layers.push(layer);
@@ -530,11 +533,11 @@ impl TerrainData {
     }
 
     pub fn terrain_layers(&self) -> Vec<TerrainLayer> {
-        self.inner.borrow().layers.clone()
+        self.lock().layers.clone()
     }
 
     pub fn set_alphamap_weights(&self, column: usize, row: usize, weights: &[f64]) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         if inner.layers.is_empty() {
             return;
         }
@@ -561,7 +564,7 @@ impl TerrainData {
     }
 
     pub fn alphamap_weights(&self, column: usize, row: usize) -> Vec<f64> {
-        let inner = self.inner.borrow();
+        let inner = self.lock();
         if inner.alphamaps.is_empty() {
             return Vec::new();
         }
@@ -570,52 +573,51 @@ impl TerrainData {
     }
 
     pub fn add_tree_prototype(&self, prototype: TreePrototype) -> usize {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         inner.tree_prototypes.push(prototype);
         inner.tree_prototypes.len() - 1
     }
 
     pub fn tree_prototypes(&self) -> Vec<TreePrototype> {
-        self.inner.borrow().tree_prototypes.clone()
+        self.lock().tree_prototypes.clone()
     }
 
     pub fn set_tree_instances(&self, instances: &[TreeInstance]) {
-        self.inner.borrow_mut().tree_instances = instances.to_vec();
+        self.lock().tree_instances = instances.to_vec();
     }
 
     pub fn tree_instances(&self) -> Vec<TreeInstance> {
-        self.inner.borrow().tree_instances.clone()
+        self.lock().tree_instances.clone()
     }
 
     pub fn add_detail_prototype(&self, prototype: DetailPrototype) -> usize {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock();
         inner.detail_prototypes.push(prototype);
         inner.detail_prototypes.len() - 1
     }
 
     pub fn detail_prototypes(&self) -> Vec<DetailPrototype> {
-        self.inner.borrow().detail_prototypes.clone()
+        self.lock().detail_prototypes.clone()
     }
 
     pub fn set_detail_instances(&self, instances: &[DetailInstance]) {
-        self.inner.borrow_mut().detail_instances = instances.to_vec();
+        self.lock().detail_instances = instances.to_vec();
     }
 
     pub fn detail_instances(&self) -> Vec<DetailInstance> {
-        self.inner.borrow().detail_instances.clone()
+        self.lock().detail_instances.clone()
     }
 
     pub fn set_grass_wind_settings(&self, settings: GrassWindSettings) {
-        self.inner.borrow_mut().grass_wind = settings;
+        self.lock().grass_wind = settings;
     }
 
     pub fn grass_wind_settings(&self) -> GrassWindSettings {
-        self.inner.borrow().grass_wind
+        self.lock().grass_wind
     }
 
     pub fn wind_excluded_prototypes(&self) -> Vec<usize> {
-        self.inner
-            .borrow()
+        self.lock()
             .tree_prototypes
             .iter()
             .enumerate()
@@ -702,7 +704,7 @@ impl Terrain {
 
     pub fn bounds(&self) -> TerrainBounds {
         let size = self.data.size();
-        let inner = self.data.inner.borrow();
+        let inner = self.data.lock();
         let mut lowest = f64::INFINITY;
         let mut highest = f64::NEG_INFINITY;
         for height in &inner.heights {
@@ -1269,7 +1271,7 @@ impl Terrain {
     }
 
     fn interpolated_height(&self, grid_x: f64, grid_z: f64) -> f64 {
-        let inner = self.data.inner.borrow();
+        let inner = self.data.lock();
         let resolution = inner.heightmap_resolution;
         let last = (resolution - 1) as f64;
         let grid_x = grid_x.clamp(0.0, last);

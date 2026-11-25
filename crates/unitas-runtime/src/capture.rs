@@ -1,10 +1,10 @@
 #![cfg(feature = "device")]
 
-use unitas_render::capture::{CaptureFrame, CaptureInstance};
 use unitas_render::RenderError;
+use unitas_render::capture::{CaptureFrame, CaptureInstance};
 
 use crate::runtime::Runtime;
-use crate::window::{transform_to_mat4, GpuFramePresenter};
+use crate::window::{GpuFramePresenter, transform_to_mat4};
 
 const UNNAMED_OBJECT: &str = "object";
 
@@ -131,8 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn capture_of_a_standalone_mesh_uses_the_unnamed_object_name(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn capture_of_a_standalone_mesh_uses_the_unnamed_object_name()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut presenter = match presenter_or_skip() {
             Some(presenter) => presenter,
             None => return Ok(()),

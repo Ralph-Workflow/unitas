@@ -5,8 +5,8 @@ use unitas_asset::project::{MigrationStatus, Project};
 use unitas_asset::trust::TrustStore;
 use unitas_asset::{parse_dynamics_manager, parse_time_manager};
 use unitas_core::{EntityId, SceneGraph};
-use unitas_runtime::scripting::ProjectScriptIndex;
 use unitas_runtime::Runtime;
+use unitas_runtime::scripting::ProjectScriptIndex;
 
 type TestResult = Result<(), Box<dyn Error>>;
 

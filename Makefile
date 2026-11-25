@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-samples test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -115,3 +115,11 @@ verify-device:
 	@echo "evidence: lane exit status and captured GPU/audio/input artifacts"
 	@echo "review: when the player gains a new platform"
 	@python3 tools/verify_device.py
+
+verify-perf:
+	@echo "owner: wt-02-simulation"
+	@echo "trigger: every milestone touching import, scene load, physics, or animation"
+	@echo "lane: make verify-perf"
+	@echo "evidence: per-measurement OK/FAIL lines with value_ms against ceiling_ms"
+	@echo "review: when a perf measurement is added or a ceiling moves"
+	@python3 tools/verify_perf.py

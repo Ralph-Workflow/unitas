@@ -3,7 +3,7 @@ use std::path::Path;
 
 use unitas_render::cube;
 use unitas_runtime::{
-    test_read_error_message, test_read_path_buffer, test_read_render_buffer,
+    Runtime, test_read_error_message, test_read_path_buffer, test_read_render_buffer,
     test_write_path_buffer, unitas_runtime_load_scene, unitas_runtime_new,
     unitas_runtime_path_buffer, unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
     unitas_runtime_render_camera_screen_point_to_ray, unitas_runtime_render_camera_update,
@@ -11,7 +11,7 @@ use unitas_runtime::{
     unitas_runtime_render_light_create, unitas_runtime_render_light_update,
     unitas_runtime_render_material_create, unitas_runtime_render_material_set_color,
     unitas_runtime_render_mesh_create, unitas_runtime_render_mesh_destroy,
-    unitas_runtime_render_renderer_create, unitas_runtime_render_renderer_set_enabled, Runtime,
+    unitas_runtime_render_renderer_create, unitas_runtime_render_renderer_set_enabled,
 };
 
 const RENDER_SCENE: &str = "%YAML 1.1
@@ -138,10 +138,10 @@ fn entity_id_for(path: &str, name: &str) -> Result<u64, Box<dyn Error>> {
         None => return Err(String::from("no scene graph found").into()),
     };
     for id in graph.breadth_first_order() {
-        if let Some(entity) = graph.entity(id) {
-            if entity.name == name {
-                return Ok(id.as_u64());
-            }
+        if let Some(entity) = graph.entity(id)
+            && entity.name == name
+        {
+            return Ok(id.as_u64());
         }
     }
     Err(String::from("named entity not found in scene").into())

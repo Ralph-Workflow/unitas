@@ -96,8 +96,8 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
 }
 
 #[test]
-fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collision_action_matrix(
-) -> Result<(), PhysicsError> {
+fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collision_action_matrix()
+-> Result<(), PhysicsError> {
     let mut runtime_physics = PhysicsRuntimeWorld::new();
     let floor = EntityId::new(1);
     let trigger_zone = EntityId::new(2);
@@ -194,7 +194,11 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
     dynamic_obj.has_rigidbody = true;
     assert!(
         !runtime_physics
-            .route_3d_message(CollisionMessage::OnCollisionEnter, &static_obj, &dynamic_obj)
+            .route_3d_message(
+                CollisionMessage::OnCollisionEnter,
+                &static_obj,
+                &dynamic_obj
+            )
             .is_empty(),
         "PHY-001: the subsystem entry message surface must route the collision pair that carries a Rigidbody"
     );
@@ -220,8 +224,10 @@ fn subsystem_entry_physics_2d_steps_and_enforces_one_way_platform_effector() {
     let mut platform_collider_desc = ColliderDesc2D::box_collider(platform_entity, [2.0, 0.2]);
     platform_collider_desc.attached_body = Some(platform_body);
     let platform_collider = runtime_physics.add_collider_2d(platform_collider_desc);
-    assert!(runtime_physics
-        .set_platform_effector_2d(platform_collider, PlatformEffector2D::new(180.0),));
+    assert!(
+        runtime_physics
+            .set_platform_effector_2d(platform_collider, PlatformEffector2D::new(180.0),)
+    );
 
     let mut upward_actor = BodyDesc2D::dynamic(actor_entity, [0.0, -0.5]);
     upward_actor.linear_velocity = [0.0, 8.0];
@@ -318,8 +324,8 @@ fn subsystem_entry_particles_control_systems_and_collide_with_3d_world() -> Resu
 }
 
 #[test]
-fn subsystem_entry_teleports_a_dynamic_body_and_syncs_its_transform(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn subsystem_entry_teleports_a_dynamic_body_and_syncs_its_transform()
+-> Result<(), Box<dyn std::error::Error>> {
     const FIXTURE: &str = "tests/fixtures/scene_physics_collision_no_script.unity";
     let mut runtime = unitas_runtime::Runtime::new()?;
     runtime.load_scene(std::path::Path::new(FIXTURE))?;
@@ -344,8 +350,8 @@ fn subsystem_entry_teleports_a_dynamic_body_and_syncs_its_transform(
 }
 
 #[test]
-fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_runtime_world(
-) -> Result<(), PhysicsError> {
+fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_runtime_world()
+-> Result<(), PhysicsError> {
     let mut physics = PhysicsRuntimeWorld::new();
     let trigger_zone = EntityId::new(77);
     physics.add_body_3d(
@@ -523,8 +529,8 @@ fn subsystem_entry_dynamic_sphere(position: [f64; 3], radius: f64) -> BodyDesc {
 }
 
 #[test]
-fn subsystem_entry_runtime_tick_steps_2d_physics_and_dispatches_the_collision_callback(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn subsystem_entry_runtime_tick_steps_2d_physics_and_dispatches_the_collision_callback()
+-> Result<(), Box<dyn std::error::Error>> {
     if let Ok(mut events) = SUBSYSTEM_ENTRY_COLLISIONS.lock() {
         events.clear();
     }
@@ -588,8 +594,8 @@ fn subsystem_entry_runtime_tick_steps_2d_physics_and_dispatches_the_collision_ca
 }
 
 #[test]
-fn subsystem_entry_runtime_tick_ages_and_retires_emitted_particles(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn subsystem_entry_runtime_tick_ages_and_retires_emitted_particles()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let emitter = EntityId::new(41);
     let emitter_2d = EntityId::new(42);
@@ -669,8 +675,8 @@ fn subsystem_entry_runtime_tick_ages_and_retires_emitted_particles(
 }
 
 #[test]
-fn subsystem_entry_runtime_tick_advances_a_nav_agent_along_its_path(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn subsystem_entry_runtime_tick_advances_a_nav_agent_along_its_path()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let agent_entity = EntityId::new(51);
     runtime
@@ -699,8 +705,8 @@ fn subsystem_entry_runtime_tick_advances_a_nav_agent_along_its_path(
 }
 
 #[test]
-fn subsystem_entry_runtime_tick_with_time_scale_zero_freezes_2d_physics_and_particles_exactly_as_3d(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn subsystem_entry_runtime_tick_with_time_scale_zero_freezes_2d_physics_and_particles_exactly_as_3d()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let ball_entity = EntityId::new(61);
     let body_entity = EntityId::new(62);

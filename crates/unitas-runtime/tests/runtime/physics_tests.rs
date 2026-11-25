@@ -127,10 +127,10 @@ fn entity_handle(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
         None => return Err(String::from("no scene graph loaded").into()),
     };
     for id in graph.breadth_first_order() {
-        if let Some(entity) = graph.entity(id) {
-            if entity.name == name {
-                return Ok(entity.id.as_u64());
-            }
+        if let Some(entity) = graph.entity(id)
+            && entity.name == name
+        {
+            return Ok(entity.id.as_u64());
         }
     }
     Err(String::from("entity not found in scene graph").into())
@@ -319,9 +319,11 @@ fn runtime_dispatches_ball_crate_trigger_phases() -> Result<(), Box<dyn Error>> 
         "no trigger events were dispatched"
     );
     assert_eq!(trigger_events[0].2, PHASE_ENTER);
-    assert!(trigger_events
-        .iter()
-        .any(|(_, _, phase)| *phase == PHASE_STAY));
+    assert!(
+        trigger_events
+            .iter()
+            .any(|(_, _, phase)| *phase == PHASE_STAY)
+    );
     assert_eq!(trigger_events[trigger_events.len() - 1].2, PHASE_EXIT);
     for (a, b, _) in &trigger_events {
         assert_eq!(*a, ball);
@@ -366,8 +368,8 @@ fn runtime_scene_without_physics_dispatches_no_collisions() -> Result<(), Box<dy
 }
 
 #[test]
-fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_graph(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_graph()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_resting_sphere_{}",
         std::process::id()
@@ -434,8 +436,8 @@ fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_
 }
 
 #[test]
-fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_kinematic_role_{}",
         std::process::id()
@@ -475,8 +477,8 @@ fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity(
 }
 
 #[test]
-fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_offset(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_offset()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_parented_dynamic_{}",
         std::process::id()
@@ -533,8 +535,8 @@ fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_off
 }
 
 #[test]
-fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynamic_body(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynamic_body()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_kinematic_carry_{}",
         std::process::id()
@@ -587,8 +589,8 @@ fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynam
 }
 
 #[test]
-fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diagnostics(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diagnostics()
+-> Result<(), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
         "unitas_runtime_physic_material_{}",
         std::process::id()
@@ -638,10 +640,10 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
     let mut max_rebound_velocity = 0.0_f64;
     for _ in 0..35 {
         bouncy_runtime.tick(TICK_DELTA)?;
-        if let Some(vel) = bouncy_runtime.body_velocity(bouncy_ball) {
-            if vel[1] > max_rebound_velocity {
-                max_rebound_velocity = vel[1];
-            }
+        if let Some(vel) = bouncy_runtime.body_velocity(bouncy_ball)
+            && vel[1] > max_rebound_velocity
+        {
+            max_rebound_velocity = vel[1];
         }
     }
     assert!(
@@ -662,10 +664,10 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
     let mut unresolved_max_rebound = 0.0_f64;
     for _ in 0..35 {
         unresolved_runtime.tick(TICK_DELTA)?;
-        if let Some(vel) = unresolved_runtime.body_velocity(unresolved_ball) {
-            if vel[1] > unresolved_max_rebound {
-                unresolved_max_rebound = vel[1];
-            }
+        if let Some(vel) = unresolved_runtime.body_velocity(unresolved_ball)
+            && vel[1] > unresolved_max_rebound
+        {
+            unresolved_max_rebound = vel[1];
         }
     }
     assert!(
@@ -676,8 +678,8 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
 }
 
 #[test]
-fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchange_messages(
-) -> Result<(), Box<dyn Error>> {
+fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchange_messages()
+-> Result<(), Box<dyn Error>> {
     use unitas_physics::{BodyDesc, BodyRole, Shape};
     use unitas_runtime::physics::PhysicsRuntimeWorld;
 
@@ -771,8 +773,8 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
 }
 
 #[test]
-fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_objects_and_honors_action_matrix(
-) {
+fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_objects_and_honors_action_matrix()
+ {
     use unitas_physics::matrix::{CollisionMessage, PhysicsObject};
     use unitas_runtime::physics::PhysicsRuntimeWorld;
 
@@ -799,11 +801,13 @@ fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_ob
     collision_receivers.sort_unstable();
     assert_eq!(
         collision_receivers,
-        vec![100, 201, 200].into_iter().fold(Vec::new(), |mut acc, x| {
-            acc.push(x);
-            acc.sort_unstable();
-            acc
-        }),
+        vec![100, 201, 200]
+            .into_iter()
+            .fold(Vec::new(), |mut acc, x| {
+                acc.push(x);
+                acc.sort_unstable();
+                acc
+            }),
         "PHY-001 story 13: route_3d_message must deliver OnCollisionEnter to kinematic body and both child collider and parent Rigidbody GameObjects"
     );
 

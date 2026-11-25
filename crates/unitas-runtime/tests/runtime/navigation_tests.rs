@@ -45,8 +45,8 @@ fn navigation_runtime_binds_the_navmesh_to_entities() -> Result<(), NavigationRu
 }
 
 #[test]
-fn navigation_runtime_steps_the_agents_towards_their_destination(
-) -> Result<(), NavigationRuntimeError> {
+fn navigation_runtime_steps_the_agents_towards_their_destination()
+-> Result<(), NavigationRuntimeError> {
     let mut world = NavigationRuntimeWorld::new(floor()?);
     world.add_agent(EntityId::new(1), "Walker", [0.5, 0.0, 0.5])?;
 
@@ -63,8 +63,8 @@ fn navigation_runtime_steps_the_agents_towards_their_destination(
 }
 
 #[test]
-fn navigation_runtime_keeps_the_transform_when_update_position_is_off(
-) -> Result<(), NavigationRuntimeError> {
+fn navigation_runtime_keeps_the_transform_when_update_position_is_off()
+-> Result<(), NavigationRuntimeError> {
     let mut world = NavigationRuntimeWorld::new(floor()?);
     world.add_agent(EntityId::new(1), "Walker", [0.5, 0.0, 0.5])?;
     let agent = world
@@ -96,8 +96,8 @@ fn navigation_runtime_moves_an_agent_with_a_warp() -> Result<(), NavigationRunti
 }
 
 #[test]
-fn navigation_runtime_names_the_agent_of_an_off_mesh_destination(
-) -> Result<(), NavigationRuntimeError> {
+fn navigation_runtime_names_the_agent_of_an_off_mesh_destination()
+-> Result<(), NavigationRuntimeError> {
     let mut world = NavigationRuntimeWorld::new(floor()?);
     world.add_agent(EntityId::new(2), "Scout", [0.5, 0.0, 0.5])?;
     world.warp(EntityId::new(2), [0.5, 4.0, 0.5])?;
@@ -151,8 +151,8 @@ fn navigation_runtime_rejects_an_invalid_delta_time() -> Result<(), NavigationRu
 }
 
 #[test]
-fn nav_001_story_9_10_15_runtime_surface_rebuild_carving_link_and_reciprocal_avoidance(
-) -> Result<(), NavigationRuntimeError> {
+fn nav_001_story_9_10_15_runtime_surface_rebuild_carving_link_and_reciprocal_avoidance()
+-> Result<(), NavigationRuntimeError> {
     let mut surface = NavMeshSurface::new();
     surface.set_geometry(row([0.0, 0.0, 0.0], 2, 1.0, 0));
     surface.set_areas(vec![NavMeshArea::new(0, 1.0), NavMeshArea::new(1, 5.0)]);

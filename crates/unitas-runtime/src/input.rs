@@ -62,19 +62,19 @@ impl AxisEntry {
         if let Some(src) = parse_button_token(&config.positive_button) {
             positive_sources.push(src);
         }
-        if let Some(src) = parse_button_token(&config.alt_positive_button) {
-            if !positive_sources.contains(&src) {
-                positive_sources.push(src);
-            }
+        if let Some(src) = parse_button_token(&config.alt_positive_button)
+            && !positive_sources.contains(&src)
+        {
+            positive_sources.push(src);
         }
         let mut negative_sources = Vec::new();
         if let Some(src) = parse_button_token(&config.negative_button) {
             negative_sources.push(src);
         }
-        if let Some(src) = parse_button_token(&config.alt_negative_button) {
-            if !negative_sources.contains(&src) {
-                negative_sources.push(src);
-            }
+        if let Some(src) = parse_button_token(&config.alt_negative_button)
+            && !negative_sources.contains(&src)
+        {
+            negative_sources.push(src);
         }
         Self {
             config,

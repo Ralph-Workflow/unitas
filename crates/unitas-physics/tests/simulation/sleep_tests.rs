@@ -298,7 +298,11 @@ fn phy_001_story_1_dynamic_box_on_static_floor_receives_enter_once_stay_while_re
         "PHY-001 story 1: resting box position {resting_pos:?} must agree with floor top within allowed floating-point variation"
     );
 
-    world.add_force(box_body, [0.0, 480.0, 0.0])?;
+    world.add_force(
+        box_body,
+        [0.0, 480.0, 0.0],
+        unitas_physics::ForceMode::Force,
+    )?;
     assert!(
         !world.is_sleeping(box_body),
         "PHY-001 story 1: applying a force must wake the sleeping dynamic box"

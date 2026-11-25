@@ -2,31 +2,32 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use unitas_animation::SampledBinding;
 use unitas_asset::scene::{
-    assemble_scene_file_bundle, AudioSourceComponent, CharacterControllerComponent, PhysicsBinding,
-    RenderBinding, ScriptBinding,
+    AudioSourceComponent, CharacterControllerComponent, PhysicsBinding, RenderBinding,
+    ScriptBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::{
-    parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
-    InputAxis, ProjectIdentity, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
+    DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY, InputAxis, ProjectIdentity, parse_dynamics_manager,
+    parse_input_manager, parse_player_settings, parse_time_manager,
 };
 use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{
-    normalize_rotation, rotate_vector, EntityId, SceneGraph, Transform, IDENTITY_ROTATION,
+    EntityId, IDENTITY_ROTATION, SceneGraph, Transform, normalize_rotation, rotate_vector,
 };
 use unitas_physics::navigation::NavMesh;
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
 };
 use unitas_render::{
-    look_at, render_scene, Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3,
+    Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, look_at, render_scene,
 };
 
-use crate::animation::{apply_transform_property, AnimationRuntimeDiagnostic, AnimationWorld};
+use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
 use crate::error::{RenderError, RuntimeError};
-use crate::input::{default_axis_configs, AxisConfig, InputState};
+use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::PhysicsRuntimeWorld;
+use crate::terrain::TerrainWorld;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -224,6 +225,7 @@ pub struct Runtime {
     particles: ParticleRuntimeWorld,
     particles_2d: ParticleRuntimeWorld2D,
     navigation: NavigationRuntimeWorld,
+    terrain: TerrainWorld,
     audio: AudioWorld,
     animation: AnimationWorld,
     input: InputState,
@@ -256,6 +258,7 @@ impl Runtime {
             particles: ParticleRuntimeWorld::new(),
             particles_2d: ParticleRuntimeWorld2D::new(),
             navigation: NavigationRuntimeWorld::new(NavMesh::default()),
+            terrain: TerrainWorld::new(),
             audio: AudioWorld::new(),
             animation: AnimationWorld::new(),
             input: InputState::with_default_axes(),
@@ -721,6 +724,14 @@ impl Runtime {
         &mut self.navigation
     }
 
+    pub fn terrain(&self) -> &TerrainWorld {
+        &self.terrain
+    }
+
+    pub fn terrain_mut(&mut self) -> &mut TerrainWorld {
+        &mut self.terrain
+    }
+
     pub fn ensure_animator(&mut self, entity: u64) -> EntityId {
         let id = if entity == 0 {
             let allocated = self.next_entity_base();
@@ -776,11 +787,11 @@ impl Runtime {
     fn step_animators(&mut self, scaled_delta: f64) {
         for scene in &self.scenes {
             for entity in &scene.animators {
-                if let Some(graph_transform) = scene.graph.transform(*entity) {
-                    if let Some(entry) = self.animation.entry_mut(*entity) {
-                        entry.transform.parent = graph_transform.parent;
-                        entry.transform.children = graph_transform.children.clone();
-                    }
+                if let Some(graph_transform) = scene.graph.transform(*entity)
+                    && let Some(entry) = self.animation.entry_mut(*entity)
+                {
+                    entry.transform.parent = graph_transform.parent;
+                    entry.transform.children = graph_transform.children.clone();
                 }
             }
         }
@@ -824,11 +835,10 @@ impl Runtime {
                 }
                 if let Some(child_id) =
                     resolve_child_path_in_graph(&scene.graph, entity, &binding.target.object_path)
+                    && let Some(child_transform) = scene.graph.transform_mut(child_id)
                 {
-                    if let Some(child_transform) = scene.graph.transform_mut(child_id) {
-                        apply_transform_property(child_transform, prop, ch, binding.value);
-                        applied = true;
-                    }
+                    apply_transform_property(child_transform, prop, ch, binding.value);
+                    applied = true;
                 }
                 break;
             }
@@ -1093,6 +1103,7 @@ impl Runtime {
         if scaled_delta >= 0.0 {
             let _ = self.navigation.step(scaled_delta);
         }
+        self.terrain.apply_heightfields(self.physics.world_3d_mut());
         self.sync_audio_source_positions();
         self.audio.tick(delta_seconds, self.time_scale);
         Ok(())
@@ -1817,15 +1828,15 @@ fn collect_material_diagnostics(
     let mut diagnostics = Vec::new();
     for binding in bindings {
         let entity = EntityId::new(entity_base + binding.entity.as_u64());
-        if let Some(sphere) = &binding.sphere_collider {
-            if let Some(diag) = &sphere.material_diagnostic {
-                diagnostics.push((entity, diag.clone()));
-            }
+        if let Some(sphere) = &binding.sphere_collider
+            && let Some(diag) = &sphere.material_diagnostic
+        {
+            diagnostics.push((entity, diag.clone()));
         }
-        if let Some(collider) = &binding.box_collider {
-            if let Some(diag) = &collider.material_diagnostic {
-                diagnostics.push((entity, diag.clone()));
-            }
+        if let Some(collider) = &binding.box_collider
+            && let Some(diag) = &collider.material_diagnostic
+        {
+            diagnostics.push((entity, diag.clone()));
         }
         if let Some(capsule) = &binding.capsule_collider {
             if let Some(diag) = &capsule.material_diagnostic {
@@ -1998,20 +2009,16 @@ fn resolve_child_path_in_graph(
         }
         let mut next = None;
         for child_id in graph.children(current) {
-            if let Some(entity) = graph.entity(*child_id) {
-                if entity.name == trimmed {
-                    next = Some(*child_id);
-                    break;
-                }
+            if let Some(entity) = graph.entity(*child_id)
+                && entity.name == trimmed
+            {
+                next = Some(*child_id);
+                break;
             }
         }
         current = next?;
     }
-    if current == root {
-        None
-    } else {
-        Some(current)
-    }
+    if current == root { None } else { Some(current) }
 }
 
 fn toward_light_direction(rotation: [f32; 4], travel: [f32; 3]) -> [f32; 3] {
@@ -2423,7 +2430,7 @@ impl Runtime {
             None => {
                 return Err(RenderError::InvalidArgument(
                     "camera entity is not in a loaded scene".to_string(),
-                ))
+                ));
             }
         };
         let projection = projection_for(&state.params, width as f32 / height as f32);
@@ -2459,7 +2466,7 @@ impl Runtime {
             None => {
                 return Err(RenderError::InvalidArgument(
                     "camera has no rendered frame".to_string(),
-                ))
+                ));
             }
         };
         let basis = match self.camera_basis(state.entity) {
@@ -2467,7 +2474,7 @@ impl Runtime {
             None => {
                 return Err(RenderError::InvalidArgument(
                     "camera entity is not in a loaded scene".to_string(),
-                ))
+                ));
             }
         };
         let projection = projection_for(&state.params, width as f32 / height as f32);
@@ -2499,7 +2506,7 @@ impl Runtime {
             None => {
                 return Err(RenderError::InvalidArgument(
                     "camera has no rendered frame".to_string(),
-                ))
+                ));
             }
         };
         let basis = match self.camera_basis(state.entity) {
@@ -2507,7 +2514,7 @@ impl Runtime {
             None => {
                 return Err(RenderError::InvalidArgument(
                     "camera entity is not in a loaded scene".to_string(),
-                ))
+                ));
             }
         };
         let aspect = width as f32 / height as f32;

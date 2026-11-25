@@ -119,6 +119,41 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    if bytes.starts_with(b"OggS") {
+        return decode_pcm_clip(unitas_asset::audio_import::decode_ogg_vorbis(bytes));
+    }
+    if bytes.starts_with(b"FORM") {
+        return decode_pcm_clip(unitas_asset::audio_import::decode_aiff(bytes));
+    }
+    if bytes.starts_with(b"ID3")
+        || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+    {
+        return decode_pcm_clip(unitas_asset::audio_import::decode_mp3(bytes));
+    }
+    if bytes.starts_with(b"RIFF") {
+        return parse_wav(bytes);
+    }
+    Err(AudioError::UnsupportedFormat(
+        "unrecognized audio container".to_string(),
+    ))
+}
+
+fn decode_pcm_clip(
+    decoded: Result<
+        unitas_asset::audio_import::PcmClip,
+        unitas_asset::audio_import::AudioImportError,
+    >,
+) -> Result<AudioClip, AudioError> {
+    let pcm = decoded.map_err(|error| AudioError::UnsupportedFormat(error.to_string()))?;
+    let samples = pcm
+        .samples
+        .iter()
+        .map(|sample| f32::from(*sample) / 32768.0)
+        .collect();
+    Ok(AudioClip::new(pcm.channels, pcm.sample_rate, samples))
+}
+
 pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     if bytes.starts_with(b"OggS") {
         return Err(AudioError::UnsupportedFormat("OGG container".to_string()));

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use unitas_core::EntityId;
+use unitas_physics::World;
 use unitas_physics::particles::{
     Curve, CustomParticleDataStream, EmitParams, Particle, ParticleCollisionEvent,
     ParticleCollisionEvent2D, ParticlePropertyCurves, ParticleShape, ParticleSystem,
@@ -8,7 +9,6 @@ use unitas_physics::particles::{
     ParticleTriggerEvent2D, StopAction,
 };
 use unitas_physics::two_d::World2D;
-use unitas_physics::World;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleSystemSnapshot {

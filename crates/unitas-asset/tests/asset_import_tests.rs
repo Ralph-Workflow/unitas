@@ -20,6 +20,8 @@ mod model_tests;
 mod packages_tests;
 #[path = "asset_import/perf_import.rs"]
 mod perf_import;
+#[path = "asset_import/perf_scene_load.rs"]
+mod perf_scene_load;
 #[path = "asset_import/prefab_variant_tests.rs"]
 mod prefab_variant_tests;
 #[path = "asset_import/primitive_tests.rs"]

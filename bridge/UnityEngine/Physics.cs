@@ -21,6 +21,7 @@ namespace UnityEngine
         bool TrySetBodyPosition(ulong entity, Vector3 position);
 
         bool TrySetBodyVelocity(ulong entity, Vector3 velocity);
+        bool TryAddForce(ulong entity, Vector3 force, ForceMode mode);
     }
 
     public static class Physics

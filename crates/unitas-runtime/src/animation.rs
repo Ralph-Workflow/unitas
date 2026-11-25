@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
 use unitas_animation::{
-    blend_sampled_bindings, AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationError,
-    AnimationEvent, Animator, AnimatorController, AnimatorCullingMode, AnimatorFrame,
-    AnimatorStateInfo, AnimatorUpdateMode, CurveBindingTarget, SampledBinding,
-    StateMachineCallback, StateMachineCallbackKind, TransformChannel, TransformProperty, WrapMode,
+    AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationError, AnimationEvent, Animator,
+    AnimatorController, AnimatorCullingMode, AnimatorFrame, AnimatorStateInfo, AnimatorUpdateMode,
+    CurveBindingTarget, SampledBinding, StateMachineCallback, StateMachineCallbackKind,
+    TransformChannel, TransformProperty, WrapMode, blend_sampled_bindings,
 };
-use unitas_core::{compose_world, normalize_rotation, EntityId, Transform};
+use unitas_core::{EntityId, Transform, compose_world, normalize_rotation};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnimationRuntimeDiagnostic {

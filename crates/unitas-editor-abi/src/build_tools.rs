@@ -1,13 +1,13 @@
 use crate::descriptor::{Scope, ToolDescriptor};
 use crate::dispatch::{AbiError, DispatchTableBuilder};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use unitas_build::licensing::{licensing_record, LicensingRecord};
+use unitas_build::licensing::{LicensingRecord, licensing_record};
 use unitas_build::{
-    execute_build_for_host, BuildConfiguration, BuildTarget, BUILD_REPORT_FILENAME,
+    BUILD_REPORT_FILENAME, BuildConfiguration, BuildTarget, execute_build_for_host,
 };
 
 pub const LICENSING_RECORD_FILENAME: &str = "licensing-record.json";
@@ -248,8 +248,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_table_registers_build_player_with_the_build_scope(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn builtin_table_registers_build_player_with_the_build_scope()
+    -> Result<(), Box<dyn std::error::Error>> {
         let table = crate::builtin_dispatch_table()?;
         let manifest = table.manifest();
         let Some(descriptor) = manifest
@@ -269,8 +269,8 @@ mod tests {
     }
 
     #[test]
-    fn build_player_stages_a_bundle_and_writes_the_licensing_record(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn build_player_stages_a_bundle_and_writes_the_licensing_record()
+    -> Result<(), Box<dyn std::error::Error>> {
         let project = project_with_scene("player-ok")?;
         let result = build_player(&json!({
             "projectPath": project.to_string_lossy(),
@@ -304,8 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn build_player_names_a_missing_project_an_unknown_target_and_an_empty_project(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn build_player_names_a_missing_project_an_unknown_target_and_an_empty_project()
+    -> Result<(), Box<dyn std::error::Error>> {
         let missing = temp_dir("player-missing")?;
         let missing_error = failure_of(build_player(&json!({
             "projectPath": missing.join("absent").to_string_lossy(),

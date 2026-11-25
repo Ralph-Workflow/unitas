@@ -19,4 +19,4 @@ pub use character::{CharacterController, CollisionFlags, MoveResult};
 pub use error::PhysicsError;
 pub use event::{CollisionEvent, Phase, TriggerEvent};
 pub use query::QueryHit;
-pub use world::World;
+pub use world::{ForceMode, World};
