@@ -770,7 +770,7 @@ namespace Unitas.Bridge
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
             double tickDeltaSeconds = Time.captureFramerate > 0 ? Time.unscaledDeltaTime : deltaSeconds;
-            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, tickDeltaSeconds * Time.timeScale);
+            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, tickDeltaSeconds);
             if (result != 0)
             {
                 string? error = GetErrorMessage();

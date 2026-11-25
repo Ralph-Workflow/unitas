@@ -129,6 +129,8 @@ pub struct ScriptInstance {
 
 pub const DEFAULT_MATERIAL_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
+pub const DEFAULT_MAXIMUM_DELTA_TIME: f64 = 1.0 / 3.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderCameraParams {
     pub orthographic: bool,
@@ -233,6 +235,7 @@ pub struct Runtime {
     project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
+    maximum_delta_time: f64,
     time_scale: f64,
     accumulator: f64,
     first_tick: bool,
@@ -266,6 +269,7 @@ impl Runtime {
             project_identity: ProjectIdentity::default(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
+            maximum_delta_time: DEFAULT_MAXIMUM_DELTA_TIME,
             time_scale: 1.0,
             accumulator: 0.0,
             first_tick: true,
@@ -1028,6 +1032,9 @@ impl Runtime {
         let scaled_delta = delta_seconds * self.time_scale;
         self.input.begin_frame(scaled_delta);
         self.accumulator += scaled_delta;
+        if self.accumulator > self.maximum_delta_time {
+            self.accumulator = self.maximum_delta_time;
+        }
         let fixed_step = self.fixed_timestep;
         let mut contacts_2d = Vec::new();
         while self.accumulator >= fixed_step - EPSILON {
@@ -1050,6 +1057,7 @@ impl Runtime {
         }
         let events = self.physics.world_3d_mut().drain_events();
         let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
+        let mut handles = Vec::new();
         if let Some(callbacks) = self.callbacks {
             for event in events {
                 let a = event.a.as_u64();
@@ -1081,17 +1089,11 @@ impl Runtime {
                     });
                 }
             }
-            let handles = self.all_script_handles();
+            handles = self.all_script_handles();
             for handle in &handles {
                 let h = *handle;
                 hook(self, &mut || {
                     (callbacks.update)(h, scaled_delta);
-                });
-            }
-            for handle in &handles {
-                let h = *handle;
-                hook(self, &mut || {
-                    (callbacks.late_update)(h, scaled_delta);
                 });
             }
         }
@@ -1106,6 +1108,14 @@ impl Runtime {
         self.terrain.apply_heightfields(self.physics.world_3d_mut());
         self.sync_audio_source_positions();
         self.audio.tick(delta_seconds, self.time_scale);
+        if let Some(callbacks) = self.callbacks {
+            for handle in &handles {
+                let h = *handle;
+                hook(self, &mut || {
+                    (callbacks.late_update)(h, scaled_delta);
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1318,6 +1328,18 @@ impl Runtime {
 
     pub fn set_time_scale(&mut self, time_scale: f64) {
         self.time_scale = time_scale;
+    }
+
+    pub fn maximum_delta_time(&self) -> f64 {
+        self.maximum_delta_time
+    }
+
+    pub fn set_maximum_delta_time(&mut self, seconds: f64) {
+        self.maximum_delta_time = if seconds.is_finite() && seconds > 0.0 {
+            seconds
+        } else {
+            DEFAULT_MAXIMUM_DELTA_TIME
+        };
     }
 
     pub fn body_position(&self, entity: EntityId) -> Option<[f64; 3]> {

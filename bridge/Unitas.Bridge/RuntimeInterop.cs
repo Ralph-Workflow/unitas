@@ -63,12 +63,22 @@ namespace Unitas.Bridge
 
         private sealed class TimeScaleHost : UnityEngine.ITimeScaleHost
         {
+            // A fresh runtime clamps fixed-step catch-up at 1/3 s, so the default is never pushed again.
+            private const double NativeDefaultMaximumDeltaTime = 1.0 / 3.0;
+
             private ulong _liveRuntime;
             private double _appliedScale = 1.0;
+            private float _requestedMaximumDeltaTime = UnityEngine.Time.DefaultMaximumDeltaTime;
+            private double _appliedMaximumDeltaTime = NativeDefaultMaximumDeltaTime;
 
             public void Attach(ulong runtime)
             {
                 _liveRuntime = runtime;
+                _appliedMaximumDeltaTime = NativeDefaultMaximumDeltaTime;
+                if (_requestedMaximumDeltaTime != UnityEngine.Time.DefaultMaximumDeltaTime)
+                {
+                    ApplyMaximumDeltaTime(_requestedMaximumDeltaTime);
+                }
             }
 
             public void Detach(ulong runtime)
@@ -107,6 +117,41 @@ namespace Unitas.Bridge
                 timeScale = (float)nativeScale;
                 return true;
             }
+
+            public void ApplyMaximumDeltaTime(float maximumDeltaTime)
+            {
+                _requestedMaximumDeltaTime = maximumDeltaTime;
+                if (_liveRuntime == 0)
+                {
+                    return;
+                }
+                if (maximumDeltaTime == _appliedMaximumDeltaTime)
+                {
+                    return;
+                }
+                if (unitas_runtime_set_maximum_delta_time(_liveRuntime, maximumDeltaTime) != 0)
+                {
+                    _liveRuntime = 0;
+                    return;
+                }
+                _appliedMaximumDeltaTime = maximumDeltaTime;
+            }
+
+            public bool TryGetMaximumDeltaTime(out float maximumDeltaTime)
+            {
+                maximumDeltaTime = 0f;
+                if (_liveRuntime == 0)
+                {
+                    return false;
+                }
+                double nativeMaximumDeltaTime = unitas_runtime_maximum_delta_time(_liveRuntime);
+                if (nativeMaximumDeltaTime != _appliedMaximumDeltaTime)
+                {
+                    return false;
+                }
+                maximumDeltaTime = (float)nativeMaximumDeltaTime;
+                return true;
+            }
         }
 
         private static readonly TimeScaleHost TimeScaleHostImpl = new TimeScaleHost();
@@ -143,18 +188,9 @@ namespace Unitas.Bridge
             CollisionCallback collision,
             TriggerCallback trigger);
 
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_tick")]
-        private static extern int unitas_runtime_tick_native(ulong runtime, double deltaSeconds);
-
-        public static int unitas_runtime_tick(ulong runtime, double scaledDeltaSeconds)
-        {
-            double nativeScale = unitas_runtime_time_scale(runtime);
-            double appliedScale = UnityEngine.Time.timeScale;
-            double realDeltaSeconds = nativeScale == appliedScale && appliedScale != 0.0
-                ? scaledDeltaSeconds / appliedScale
-                : scaledDeltaSeconds;
-            return unitas_runtime_tick_native(runtime, realDeltaSeconds);
-        }
+        // deltaSeconds is the unscaled wall delta; the runtime applies its own time scale.
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_tick(ulong runtime, double deltaSeconds);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_raycast(
@@ -246,6 +282,12 @@ namespace Unitas.Bridge
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern double unitas_runtime_time_scale(ulong runtime);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_maximum_delta_time(ulong runtime, double seconds);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double unitas_runtime_maximum_delta_time(ulong runtime);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_body_position(ulong runtime, ulong entity, IntPtr outBuffer);

@@ -4,7 +4,11 @@ namespace UnityEngine
     {
         void ApplyTimeScale(float timeScale);
 
+        void ApplyMaximumDeltaTime(float maximumDeltaTime);
+
         bool TryGetTimeScale(out float timeScale);
+
+        bool TryGetMaximumDeltaTime(out float maximumDeltaTime);
     }
 
     public static class Time
@@ -12,7 +16,10 @@ namespace UnityEngine
         private const float DefaultFixedStep = 0.02f;
         private const float SmoothAlpha = 0.1f;
 
+        public const float DefaultMaximumDeltaTime = 1f / 3f;
+
         private static float _fixedDeltaTime = DefaultFixedStep;
+        private static float _maximumDeltaTime = DefaultMaximumDeltaTime;
         private static float _deltaTime;
         private static float _unscaledDeltaTime;
         private static float _timeScale = 1f;
@@ -62,6 +69,29 @@ namespace UnityEngine
         public static void PushTimeScaleToHost()
         {
             TimeScaleHost?.ApplyTimeScale(_timeScale);
+        }
+
+        public static float maximumDeltaTime
+        {
+            get
+            {
+                if (TimeScaleHost != null && TimeScaleHost.TryGetMaximumDeltaTime(out float maximumDeltaTime))
+                {
+                    return maximumDeltaTime;
+                }
+                return _maximumDeltaTime;
+            }
+            set
+            {
+                float next = value > 0f && float.IsFinite(value) ? value : DefaultMaximumDeltaTime;
+                if (next == _maximumDeltaTime)
+                {
+                    // Writing the current value changes nothing, so the runtime is not told.
+                    return;
+                }
+                _maximumDeltaTime = next;
+                TimeScaleHost?.ApplyMaximumDeltaTime(next);
+            }
         }
 
         public static float time => _time;
@@ -119,6 +149,7 @@ namespace UnityEngine
             _unscaledDeltaTime = 0f;
             _timeScale = 1f;
             TimeScaleHost?.ApplyTimeScale(1f);
+            maximumDeltaTime = DefaultMaximumDeltaTime;
             _time = 0f;
             _unscaledTime = 0f;
             _frameCount = 0;

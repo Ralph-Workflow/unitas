@@ -552,6 +552,28 @@ pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_set_maximum_delta_time(handle: u64, seconds: f64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.set_maximum_delta_time(seconds);
+        state.clear_error();
+    }) {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_maximum_delta_time(handle: u64) -> f64 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.maximum_delta_time()
+    })
+    .unwrap_or(0.0)
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_body_position(handle: u64, entity: u64, out_buffer: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if out_buffer == 0

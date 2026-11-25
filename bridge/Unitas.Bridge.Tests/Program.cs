@@ -33,8 +33,14 @@ namespace Unitas.Bridge.Tests
             101, 100, 2, 0, 0, 0, 63,
         };
 
-        public static int Main()
+        public static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--perf")
+            {
+                ScriptingPerfTests.Run();
+                return Check.FailureCount > 0 ? 1 : 0;
+            }
+
             TestVector3();
             TestGameObjectAndTransform();
             TestMonoBehaviourLifecycleOrder();
@@ -50,6 +56,7 @@ namespace Unitas.Bridge.Tests
             RandomTests.Run();
             IntegrationTests.Run();
             CoroutineTests.Run();
+            TimeSemanticsTests.Run();
             LifetimeTests.Run();
             CloneTests.Run();
             ActivationTests.Run();

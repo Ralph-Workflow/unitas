@@ -20,4 +20,6 @@ pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};
 pub use error::RuntimeError;
 pub use input::*;
-pub use runtime::{Callbacks, LoadSceneMode, LoadedScene, Runtime, ScriptInstance};
+pub use runtime::{
+    Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
+};
