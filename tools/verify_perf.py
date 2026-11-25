@@ -23,7 +23,7 @@ PLAYERLOOP_FRAME_ALLOCATIONS = "playerloop_frame_allocations"
 BRIDGE_TESTS = "bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests"
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
-    ("owner", "wt-02-simulation"),
+    ("owner", "content and simulation"),
     ("trigger", "every milestone touching import, scene load, physics, or animation"),
     ("lane", "make verify-perf"),
     ("evidence", "per-measurement OK/FAIL lines with value_ms against ceiling_ms"),

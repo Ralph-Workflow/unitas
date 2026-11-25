@@ -105,7 +105,7 @@ dotnet-test-run:
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 verify-unsafe:
-	@echo "owner: wt-04-linting"
+	@echo "owner: editor and engine proof"
 	@echo "trigger: every change that touches a registered unsafe zone"
 	@echo "lane: make verify-unsafe (non-default)"
 	@echo "evidence: per-stage exit statuses below; sanitizer, Loom, fuzz, and Kani stages are declared but not yet wired"
@@ -120,7 +120,7 @@ verify-unsafe:
 	@cargo test -p unitas-editor-abi
 
 verify-device:
-	@echo "owner: wt-03"
+	@echo "owner: presentation and player"
 	@echo "trigger: every milestone touching presentation"
 	@echo "lane: make verify-device"
 	@echo "evidence: lane exit status and captured GPU/audio/input artifacts"
@@ -128,14 +128,14 @@ verify-device:
 	@python3 tools/verify_device.py
 
 verify-perf:
-	@echo "owner: wt-02-simulation"
+	@echo "owner: content and simulation"
 	@echo "trigger: every milestone touching import, scene load, physics, or animation"
 	@echo "lane: make verify-perf"
 	@echo "evidence: per-measurement OK/FAIL lines with value_ms against ceiling_ms"
 	@echo "review: when a perf measurement is added or a ceiling moves"
 	@python3 tools/verify_perf.py
 verify-samples:
-	@echo "owner: wt-01 scripting"
+	@echo "owner: editor and engine proof"
 	@echo "trigger: changes to bridge script compilation/play pipeline or samples/"
 	@echo "lane: make verify-samples"
 	@echo "evidence: scenario report JSON and lane exit status"

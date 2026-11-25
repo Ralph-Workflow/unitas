@@ -52,7 +52,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
 )
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
-    ("owner", "wt-01 scripting"),
+    ("owner", "editor and engine proof"),
     ("trigger", "changes to bridge script compilation/play pipeline or samples/"),
     ("lane", "make verify-samples"),
     ("evidence", "per-scenario report JSONs under target/samples-lane/ and lane exit status"),

@@ -48,7 +48,7 @@ DEVICE_PACKAGES: tuple[str, ...] = (
 )
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
-    ("owner", "wt-03"),
+    ("owner", "presentation and player"),
     ("trigger", "every milestone touching presentation"),
     ("lane", "make verify-device"),
     ("evidence", "lane exit status and captured GPU/audio/input artifacts"),
