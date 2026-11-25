@@ -20,6 +20,10 @@ parity with the breadth, customization, or polish of the Unity Editor's
 authoring surfaces; a Unity Editor workflow that this document does not name is
 not promised by it.
 
+The editor is itself a unitas project: it is built by unitas and runs as a
+unitas engine instance on the unitas player, not as a separate native
+application.
+
 The visual editor has no built-in code editor. Script source is edited in the
 developer's external editor, IDE, or agent, as defined in
 [Scripts and external code editors](#scripts-and-external-code-editors) and in

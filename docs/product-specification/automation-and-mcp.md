@@ -18,6 +18,10 @@ the editor's other front ends. None of them keeps its own copy of the project
 state or its own implementation of an operation. A player contains no MCP
 interface.
 
+The MCP host is part of the editor's scripting—the editor's own scripts and a
+support assembly—and is not engine code. It is never present in a player
+build.
+
 Automation is also the completeness bar. A product capability is complete only
 when an authorized agent can use it through MCP with the same behavior,
 compatibility state, results, and failure reporting that a person observes. A
