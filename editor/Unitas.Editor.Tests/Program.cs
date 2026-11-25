@@ -1,5 +1,6 @@
 using System;
 using Unitas.Editor.Tests.Core;
+using Unitas.Editor.Tests.Play;
 
 namespace Unitas.Editor.Tests
 {
@@ -13,8 +14,11 @@ namespace Unitas.Editor.Tests
                 ("AuditTests", AuditTests.Run),
                 ("BuiltinDefaultsTests", BuiltinDefaultsTests.Run),
                 ("ClockTests", ClockTests.Run),
+                ("HeadlessCliTests", HeadlessCliTests.Run),
                 ("HttpTransportTests", HttpTransportTests.Run),
+                ("NativeToolBridgeTests", NativeToolBridgeTests.Run),
                 ("OperationStoreTests", OperationStoreTests.Run),
+                ("PlayAndCaptureTests", PlayAndCaptureTests.Run),
                 ("RegistryTests", RegistryTests.Run),
                 ("ScopeTests", ScopeTests.Run),
                 ("SessionTests", SessionTests.Run),

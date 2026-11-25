@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Nodes;
 
@@ -24,6 +25,28 @@ namespace Unitas.Editor.Mcp
                 default: return kind.ToString();
             }
         }
+
+        public static bool TryParse(string name, out AuditTargetKind kind)
+        {
+            switch (name)
+            {
+                case "tool":
+                    kind = AuditTargetKind.Tool;
+                    return true;
+                case "resource":
+                    kind = AuditTargetKind.Resource;
+                    return true;
+                case "grant":
+                    kind = AuditTargetKind.Grant;
+                    return true;
+                case "operation":
+                    kind = AuditTargetKind.Operation;
+                    return true;
+                default:
+                    kind = default;
+                    return false;
+            }
+        }
     }
 
     public abstract record AuditOutcome
@@ -33,6 +56,42 @@ namespace Unitas.Editor.Mcp
         }
 
         public abstract string StatusString { get; }
+
+        public static AuditOutcome FromJson(string status, string detail)
+        {
+            ArgumentNullException.ThrowIfNull(status);
+            ArgumentNullException.ThrowIfNull(detail);
+            switch (status)
+            {
+                case "allowed":
+                    return new Allowed();
+                case "refused-missing-scope":
+                    return new RefusedMissingScope(ParseScopeFromDetail(detail, "refused: missing scope "));
+                case "refused-self-widening":
+                    return new RefusedSelfWidening(ParseScopeFromDetail(detail, "refused: self-widening scope "));
+                case "failed":
+                    const string failedPrefix = "failed: ";
+                    string reason = detail.StartsWith(failedPrefix, StringComparison.Ordinal)
+                        ? detail.Substring(failedPrefix.Length)
+                        : detail;
+                    return new Failed(reason);
+                default:
+                    throw new McpError.ParseError("unknown audit outcome " + status);
+            }
+        }
+
+        private static Scope ParseScopeFromDetail(string detail, string prefix)
+        {
+            string scopeName = detail.StartsWith(prefix, StringComparison.Ordinal)
+                ? detail.Substring(prefix.Length)
+                : detail;
+            if (Scopes.TryParse(scopeName, out Scope parsed))
+            {
+                return parsed;
+            }
+
+            return Scope.ReadProject;
+        }
 
         public sealed record Allowed : AuditOutcome
         {
@@ -84,6 +143,72 @@ namespace Unitas.Editor.Mcp
         AuditOutcome Outcome,
         IReadOnlyList<string> AffectedIdentities)
     {
+        public static AuditRecord FromJson(JsonObject obj)
+        {
+            ArgumentNullException.ThrowIfNull(obj);
+            long sequence = obj["sequence"]?.GetValue<long>()
+                ?? throw new McpError.ParseError("audit record missing sequence");
+            long timestampMs = obj["timestamp_ms"]?.GetValue<long>()
+                ?? throw new McpError.ParseError("audit record missing timestamp_ms");
+            string sessionId = obj["session_id"]?.GetValue<string>()
+                ?? throw new McpError.ParseError("audit record missing session_id");
+
+            if (!(obj["identity"] is JsonObject identityObj))
+            {
+                throw new McpError.ParseError("audit record missing identity");
+            }
+
+            string agent = identityObj["agent"]?.GetValue<string>() ?? string.Empty;
+            string client = identityObj["client"]?.GetValue<string>() ?? string.Empty;
+            string authorizedBy = identityObj["authorized_by"]?.GetValue<string>() ?? string.Empty;
+            SessionIdentity identity = new SessionIdentity(agent, client, authorizedBy);
+
+            string targetKindStr = obj["target_kind"]?.GetValue<string>()
+                ?? throw new McpError.ParseError("audit record missing target_kind");
+            if (!AuditTargetKinds.TryParse(targetKindStr, out AuditTargetKind targetKind))
+            {
+                throw new McpError.ParseError("unknown audit target_kind " + targetKindStr);
+            }
+
+            string target = obj["target"]?.GetValue<string>()
+                ?? throw new McpError.ParseError("audit record missing target");
+            string scopeStr = obj["scope"]?.GetValue<string>()
+                ?? throw new McpError.ParseError("audit record missing scope");
+            if (!Scopes.TryParse(scopeStr, out Scope scope))
+            {
+                throw new McpError.ParseError("unknown audit scope " + scopeStr);
+            }
+
+            string outcomeStr = obj["outcome"]?.GetValue<string>()
+                ?? throw new McpError.ParseError("audit record missing outcome");
+            string outcomeDetail = obj["outcome_detail"]?.GetValue<string>() ?? outcomeStr;
+            AuditOutcome outcome = AuditOutcome.FromJson(outcomeStr, outcomeDetail);
+
+            List<string> affected = new List<string>();
+            if (obj["affected_identities"] is JsonArray affectedArray)
+            {
+                foreach (JsonNode? item in affectedArray)
+                {
+                    string? value = item?.GetValue<string>();
+                    if (value != null)
+                    {
+                        affected.Add(value);
+                    }
+                }
+            }
+
+            return new AuditRecord(
+                sequence,
+                timestampMs,
+                sessionId,
+                identity,
+                targetKind,
+                target,
+                scope,
+                outcome,
+                affected);
+        }
+
         public JsonObject ToValue()
         {
             JsonArray affected = new JsonArray();
@@ -116,9 +241,30 @@ namespace Unitas.Editor.Mcp
     public sealed class AuditLog
     {
         private readonly List<AuditRecord> _records = new List<AuditRecord>();
+        private readonly AuditStore? _store;
+
+        public AuditLog()
+            : this(null)
+        {
+        }
+
+        public AuditLog(AuditStore? store)
+        {
+            _store = store;
+            if (_store != null)
+            {
+                foreach (AuditRecord existing in _store.LoadAll())
+                {
+                    _records.Add(existing);
+                }
+            }
+        }
+
+        public AuditStore? Store => _store;
 
         public AuditRecord Record(AuditEntry entry)
         {
+            ArgumentNullException.ThrowIfNull(entry);
             AuditRecord record = new AuditRecord(
                 _records.Count + 1,
                 entry.TimestampMs,
@@ -130,6 +276,7 @@ namespace Unitas.Editor.Mcp
                 entry.Outcome,
                 entry.AffectedIdentities);
             _records.Add(record);
+            _store?.Append(record);
             return record;
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using Unitas.Editor.Mcp;
 
@@ -14,6 +15,7 @@ namespace Unitas.Editor.Tests.Core
             StandingGrantFromASessionIsRefused();
             StandingGrantAuthorizesAMatchingAgent();
             MissingScopeRefusalNamesTheScope();
+            PersonCredentialRefusesStdioAndMissingOrWrongTokenAndAllowsInteractivePerson();
         }
 
         private static SessionIdentity Identity()
@@ -129,6 +131,99 @@ namespace Unitas.Editor.Tests.Core
             Check.That(
                 "missing_scope_refusal_names_the_scope: error carries the scope",
                 error != null && error.Scope == Scope.ExternalNetwork);
+        }
+
+        private static void PersonCredentialRefusesStdioAndMissingOrWrongTokenAndAllowsInteractivePerson()
+        {
+            PersonCredential fromCli = PersonCredential.FromStartup(
+                new[] { PersonCredential.CliFlagName, "secret-token-123" });
+            Check.That(
+                "person_credential_from_startup: reads CLI token",
+                fromCli.IsPresent && fromCli.Verify("secret-token-123", "http"));
+
+            using StringReader promptReader = new StringReader("prompt-token-456\n");
+            PersonCredential fromPrompt = PersonCredential.FromStartup(Array.Empty<string>(), promptReader);
+            Check.That(
+                "person_credential_from_startup: reads interactive prompt token",
+                fromPrompt.IsPresent && fromPrompt.Verify("prompt-token-456", "http"));
+
+            Check.That(
+                "person_credential_verify: stdio is never treated as a person even with matching token",
+                !fromCli.Verify("secret-token-123", "stdio"));
+            Check.That(
+                "person_credential_verify: cli transport is never treated as a person",
+                !fromCli.Verify("secret-token-123", "cli"));
+
+            Authorizer authorizer = new Authorizer();
+            string stdioSession = authorizer.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+            string httpSession = authorizer.CreateSession(new SessionIdentity("agent-2", "http", "http-local"));
+
+            bool refusedOverStdio = false;
+            try
+            {
+                authorizer.GrantScopeWithCredential(
+                    stdioSession,
+                    Scope.ExecuteProjectCode,
+                    fromCli,
+                    "secret-token-123",
+                    "stdio");
+            }
+            catch (McpError.PersonCredentialRequired)
+            {
+                refusedOverStdio = true;
+            }
+
+            Check.That(
+                "person_credential_grant: refuses grant over stdio transport (AUT-007)",
+                refusedOverStdio && !authorizer.GetSession(stdioSession).Holds(Scope.ExecuteProjectCode));
+
+            bool refusedWhenNoPersonPresent = false;
+            try
+            {
+                authorizer.GrantScopeWithCredential(
+                    httpSession,
+                    Scope.ExecuteProjectCode,
+                    PersonCredential.Absent,
+                    "secret-token-123",
+                    "http");
+            }
+            catch (McpError.NoPersonPresent)
+            {
+                refusedWhenNoPersonPresent = true;
+            }
+
+            Check.That(
+                "person_credential_grant: refuses grant when no person credential was configured at startup",
+                refusedWhenNoPersonPresent && !authorizer.GetSession(httpSession).Holds(Scope.ExecuteProjectCode));
+
+            bool refusedWithWrongToken = false;
+            try
+            {
+                authorizer.GrantScopeWithCredential(
+                    httpSession,
+                    Scope.ExecuteProjectCode,
+                    fromCli,
+                    "wrong-token",
+                    "http");
+            }
+            catch (McpError.PersonCredentialRequired)
+            {
+                refusedWithWrongToken = true;
+            }
+
+            Check.That(
+                "person_credential_grant: refuses grant when candidate token does not match",
+                refusedWithWrongToken && !authorizer.GetSession(httpSession).Holds(Scope.ExecuteProjectCode));
+
+            authorizer.GrantScopeWithCredential(
+                httpSession,
+                Scope.ExecuteProjectCode,
+                fromCli,
+                "secret-token-123",
+                "http");
+            Check.That(
+                "person_credential_grant: allows grant over interactive transport with valid token",
+                authorizer.GetSession(httpSession).Holds(Scope.ExecuteProjectCode));
         }
     }
 }

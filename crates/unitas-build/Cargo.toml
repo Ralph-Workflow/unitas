@@ -12,6 +12,7 @@ default = []
 device = ["unitas-runtime/device", "unitas-render/device", "unitas-audio/device"]
 
 [dependencies]
+serde_json = "1"
 unitas-asset = { path = "../unitas-asset" }
 unitas-audio = { path = "../unitas-audio" }
 unitas-core = { path = "../unitas-core" }

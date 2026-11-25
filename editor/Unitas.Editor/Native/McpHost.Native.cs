@@ -20,5 +20,15 @@ namespace Unitas.Editor.Mcp
                     arguments => ToolOutput.Untrusted(tool.Origin, dispatch(tool.Name, arguments)));
             }
         }
+
+        public NativeLoadOutcome TryRegisterNativeLibrary(string? libraryPath = null)
+        {
+            return NativeToolBridge.TryRegisterFromNativeLibrary(this, libraryPath);
+        }
+
+        public NativeLoadOutcome RegisterNativeSource(INativeLibrarySource source)
+        {
+            return NativeToolBridge.RegisterFromSource(this, source);
+        }
     }
 }

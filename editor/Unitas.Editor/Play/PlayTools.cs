@@ -1,0 +1,432 @@
+using System;
+using System.Text.Json.Nodes;
+
+namespace Unitas.Editor.Mcp
+{
+    public static class PlayTools
+    {
+        public const string PlaySessionOrigin = "unitas://play/session";
+        public const string PermissionGrantOrigin = "unitas://permissions/grant";
+
+        public static PlaySessionManager Register(McpHost host, PlaySessionManager? manager = null)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            PlaySessionManager sessionManager = manager ?? new PlaySessionManager();
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.enter",
+                    "Start an isolated play-mode worker session",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["bundleDirectory"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                    },
+                    Scope.ExecuteProjectCode),
+                arguments => HandleEnter(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.pause",
+                    "Pause an active play-mode worker session",
+                    PlaySessionSchema(),
+                    Scope.ExecuteProjectCode),
+                arguments => HandlePause(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.step",
+                    "Advance a play-mode worker session by a deterministic frame count",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["playSessionId"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["frames"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                        },
+                    },
+                    Scope.ExecuteProjectCode),
+                arguments => HandleStep(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.inject_input",
+                    "Inject deterministic input events into a play-mode worker session",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["playSessionId"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["events"] = new JsonObject
+                            {
+                                ["type"] = "array",
+                            },
+                        },
+                        ["required"] = new JsonArray("events"),
+                    },
+                    Scope.ExecuteProjectCode),
+                arguments => HandleInjectInput(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.state",
+                    "Query current state of a play-mode worker session",
+                    PlaySessionSchema(),
+                    Scope.ReadProject),
+                arguments => HandleState(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "play.exit",
+                    "Stop and dispose a play-mode worker session",
+                    PlaySessionSchema(),
+                    Scope.ExecuteProjectCode),
+                arguments => HandleExit(host, sessionManager, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "permissions.request_grant",
+                    "Discover and request a person-only permission scope grant without performing it",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["scope"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["reason"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("scope"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandleRequestGrant(host, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "permissions.person_grant",
+                    "Perform a person-only scope grant using an out-of-band person credential",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["sessionId"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["scope"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["personCredential"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("scope", "personCredential"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandlePersonGrant(host, arguments));
+
+            return sessionManager;
+        }
+
+        private static ToolOutput HandleEnter(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            string callerSessionId = RequireCallerSession(host);
+            string? bundleDirectory = ExtractOptionalString(arguments, "bundleDirectory");
+            string operationId = host.StartOperation(callerSessionId, "play.session", Scope.ExecuteProjectCode);
+            host.Operations.UpdateStage(operationId, "starting");
+
+            PlaySession session;
+            try
+            {
+                session = manager.StartSession(callerSessionId, operationId, bundleDirectory);
+            }
+            catch (McpError error)
+            {
+                host.FailOperation(operationId, error.Message);
+                throw;
+            }
+
+            host.Operations.UpdateStage(operationId, PlaySession.StatePlaying);
+            JsonObject payload = session.QueryState();
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(operationId);
+        }
+
+        private static ToolOutput HandlePause(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            PlaySession session = ResolveSession(host, manager, arguments);
+            JsonObject payload = ExecuteSessionAction(host, session, () => session.Pause());
+            UpdateOperationIfPending(host, session.OperationId, session.State);
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(session.OperationId);
+        }
+
+        private static ToolOutput HandleStep(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            PlaySession session = ResolveSession(host, manager, arguments);
+            long frames = ExtractOptionalLong(arguments, "frames", 1L);
+            JsonObject payload = ExecuteSessionAction(host, session, () => session.Step(frames));
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(session.OperationId);
+        }
+
+        private static ToolOutput HandleInjectInput(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            PlaySession session = ResolveSession(host, manager, arguments);
+            JsonArray? events = (arguments as JsonObject)?["events"] as JsonArray;
+            if (events == null)
+            {
+                throw new McpError.InvalidParams("play.inject_input requires an 'events' array");
+            }
+
+            JsonObject payload = ExecuteSessionAction(host, session, () => session.InjectInput(events));
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(session.OperationId);
+        }
+
+        private static ToolOutput HandleState(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            PlaySession session = ResolveSession(host, manager, arguments);
+            JsonObject payload = session.QueryState();
+            if (session.Crashed)
+            {
+                FailOperationIfPending(host, session.OperationId, "worker process exited");
+            }
+
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(session.OperationId);
+        }
+
+        private static ToolOutput HandleExit(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            PlaySession session = ResolveSession(host, manager, arguments);
+            JsonObject payload = session.Stop();
+            CompleteOperationIfPending(host, session.OperationId, PlaySessionOrigin, payload);
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload)
+                .WithAffectedIdentities(session.PlaySessionId)
+                .WithOperation(session.OperationId);
+        }
+
+        private static ToolOutput HandleRequestGrant(McpHost host, JsonNode arguments)
+        {
+            string callerSessionId = RequireCallerSession(host);
+            Scope requestedScope = RequireScopeArgument(arguments);
+            string? reason = ExtractOptionalString(arguments, "reason");
+
+            JsonObject payload = new JsonObject
+            {
+                ["sessionId"] = callerSessionId,
+                ["requestedScope"] = Scopes.AsString(requestedScope),
+                ["status"] = "requested-person-action",
+                ["personOnly"] = true,
+                ["granted"] = false,
+                ["reason"] = reason ?? "agent requested person-only scope grant",
+            };
+
+            return ToolOutput.Untrusted(PermissionGrantOrigin, payload)
+                .WithAffectedIdentities(callerSessionId);
+        }
+
+        private static ToolOutput HandlePersonGrant(McpHost host, JsonNode arguments)
+        {
+            string callerSessionId = RequireCallerSession(host);
+            SessionIdentity callerIdentity = host.GetSessionIdentity(callerSessionId);
+            string targetSessionId = ExtractOptionalString(arguments, "sessionId") ?? callerSessionId;
+            Scope scope = RequireScopeArgument(arguments);
+            string? token = ExtractOptionalString(arguments, "personCredential");
+
+            host.GrantScopeWithCredential(
+                targetSessionId,
+                scope,
+                token,
+                callerIdentity.Client);
+
+            JsonObject payload = new JsonObject
+            {
+                ["sessionId"] = targetSessionId,
+                ["grantedScope"] = Scopes.AsString(scope),
+                ["status"] = "granted",
+                ["authorizedBy"] = "person",
+            };
+
+            return ToolOutput.Untrusted(PermissionGrantOrigin, payload)
+                .WithAffectedIdentities(targetSessionId);
+        }
+
+        private static PlaySession ResolveSession(
+            McpHost host,
+            PlaySessionManager manager,
+            JsonNode arguments)
+        {
+            string? playSessionId = ExtractOptionalString(arguments, "playSessionId");
+            return manager.GetSession(playSessionId, host.CurrentSessionId);
+        }
+
+        private static JsonObject ExecuteSessionAction(
+            McpHost host,
+            PlaySession session,
+            Func<JsonObject> action)
+        {
+            try
+            {
+                return action();
+            }
+            catch (McpError error)
+            {
+                if (session.Crashed)
+                {
+                    FailOperationIfPending(host, session.OperationId, error.Message);
+                }
+
+                throw;
+            }
+        }
+
+        private static void UpdateOperationIfPending(McpHost host, string operationId, string stage)
+        {
+            OperationHandle handle = host.GetOperation(operationId);
+            if (handle.State.IsPending)
+            {
+                host.Operations.UpdateStage(operationId, stage);
+            }
+        }
+
+        private static void CompleteOperationIfPending(
+            McpHost host,
+            string operationId,
+            string origin,
+            JsonNode result)
+        {
+            OperationHandle handle = host.GetOperation(operationId);
+            if (handle.State.IsPending)
+            {
+                host.CompleteOperation(operationId, origin, result);
+            }
+        }
+
+        private static void FailOperationIfPending(McpHost host, string operationId, string error)
+        {
+            OperationHandle handle = host.GetOperation(operationId);
+            if (handle.State.IsPending)
+            {
+                host.FailOperation(operationId, error);
+            }
+        }
+
+        private static string RequireCallerSession(McpHost host)
+        {
+            string? sessionId = host.CurrentSessionId;
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                throw new McpError.InvalidRequest("tool invocation requires an active MCP session");
+            }
+
+            return sessionId!;
+        }
+
+        private static Scope RequireScopeArgument(JsonNode arguments)
+        {
+            string? rawScope = ExtractOptionalString(arguments, "scope");
+            if (string.IsNullOrWhiteSpace(rawScope) || !Scopes.TryParse(rawScope!, out Scope parsed))
+            {
+                throw new McpError.InvalidParams("valid 'scope' argument is required");
+            }
+
+            return parsed;
+        }
+
+        private static string? ExtractOptionalString(JsonNode arguments, string propertyName)
+        {
+            if (arguments is JsonObject obj
+                && obj[propertyName] is JsonValue value
+                && value.TryGetValue(out string? text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            return null;
+        }
+
+        private static long ExtractOptionalLong(JsonNode arguments, string propertyName, long defaultValue)
+        {
+            if (arguments is JsonObject obj && obj[propertyName] is JsonValue value)
+            {
+                if (value.TryGetValue(out long longValue))
+                {
+                    return longValue;
+                }
+
+                if (value.TryGetValue(out int intValue))
+                {
+                    return intValue;
+                }
+            }
+
+            return defaultValue;
+        }
+
+        private static JsonObject PlaySessionSchema()
+        {
+            return new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["playSessionId"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                    },
+                },
+            };
+        }
+    }
+}

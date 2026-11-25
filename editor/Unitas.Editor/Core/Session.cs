@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Unitas.Editor.Mcp
@@ -75,6 +76,22 @@ namespace Unitas.Editor.Mcp
             GetSession(id).Grant(scope);
         }
 
+        public void GrantScopeWithCredential(
+            string id,
+            Scope scope,
+            IPersonCredential credential,
+            string? candidateToken,
+            string? transportName = null)
+        {
+            ArgumentNullException.ThrowIfNull(credential);
+            Session session = GetSession(id);
+            string effectiveTransport = string.IsNullOrEmpty(transportName)
+                ? session.Identity.Client
+                : transportName;
+            credential.RequirePerson(candidateToken, effectiveTransport, "grant:" + Scopes.AsString(scope));
+            session.Grant(scope);
+        }
+
         public void GrantStanding(string agent, Scope scope, GrantAuthority authority)
         {
             if (authority == GrantAuthority.SessionInherited)
@@ -89,6 +106,18 @@ namespace Unitas.Editor.Mcp
             }
 
             scopes.Add(scope);
+        }
+
+        public void GrantStandingWithCredential(
+            string agent,
+            Scope scope,
+            IPersonCredential credential,
+            string? candidateToken,
+            string? transportName = null)
+        {
+            ArgumentNullException.ThrowIfNull(credential);
+            credential.RequirePerson(candidateToken, transportName, "standing-grant:" + Scopes.AsString(scope));
+            GrantStanding(agent, scope, GrantAuthority.Person);
         }
 
         public void Authorize(string id, Scope scope)

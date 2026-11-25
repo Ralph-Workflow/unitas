@@ -49,9 +49,22 @@ namespace Unitas.Editor.Mcp
                 });
         }
 
+        public static void RegisterAll(McpHost host)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            Register(host);
+            AuditTools.Register(host);
+            PlaySessionManager playSessionManager = PlayTools.Register(host);
+            CaptureTool.Register(host, playSessionManager);
+            host.TryRegisterNativeLibrary();
+        }
+
         public static McpHost CreateHostWithDefaults()
         {
-            McpHost host = new McpHost();
+            McpHost host = new McpHost(
+                new SystemClock(),
+                PersonCredential.FromStartup(null),
+                new AuditLog());
             Register(host);
             return host;
         }
@@ -60,6 +73,16 @@ namespace Unitas.Editor.Mcp
         {
             McpHost host = new McpHost(clock);
             Register(host);
+            return host;
+        }
+
+        public static McpHost CreateStartupHost(string[]? args = null)
+        {
+            McpHost host = new McpHost(
+                new SystemClock(),
+                PersonCredential.FromStartup(args),
+                new AuditLog());
+            RegisterAll(host);
             return host;
         }
     }

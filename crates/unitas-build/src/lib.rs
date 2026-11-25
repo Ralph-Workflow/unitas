@@ -1,5 +1,8 @@
 pub mod bundle;
 pub mod config;
+pub mod control;
+pub mod licensing;
+pub mod package;
 pub mod player;
 pub mod report;
 pub mod sample;

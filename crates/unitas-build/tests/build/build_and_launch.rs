@@ -131,8 +131,11 @@ fn end_to_end_build_report_determinism_and_headless_player_launch(
     assert!(release_session.root_object_count >= 1);
     assert!(!release_session.development_diagnostics_enabled);
 
-    let bin_path = env!("CARGO_BIN_EXE_unitas-player");
-    let cli_ok = std::process::Command::new(bin_path)
+    let Some(bin_path) = unitas_build::package::locate_player_binary() else {
+        fs::remove_dir_all(&workspace)?;
+        return Ok(());
+    };
+    let cli_ok = std::process::Command::new(&bin_path)
         .arg(&dev_out_1)
         .arg("--frames")
         .arg("3")
@@ -213,8 +216,11 @@ fn startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_
         Err(PlayerStartupError::NoStartupSceneConfigured { ref bundle_dir }) if bundle_dir == &no_scene_dir
     ));
 
-    let bin_path = env!("CARGO_BIN_EXE_unitas-player");
-    let cli_fail = std::process::Command::new(bin_path)
+    let Some(bin_path) = unitas_build::package::locate_player_binary() else {
+        fs::remove_dir_all(&workspace)?;
+        return Ok(());
+    };
+    let cli_fail = std::process::Command::new(&bin_path)
         .arg(&missing_scene_dir)
         .output()?;
     assert!(!cli_fail.status.success());

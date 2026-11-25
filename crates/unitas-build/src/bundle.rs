@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
-use crate::targets::BuildTarget;
+use crate::licensing;
+use crate::package::{self, PackagedApp};
+use crate::targets::{BuildTarget, TargetOs};
 
 pub const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME: &str = "development_diagnostics.marker";
@@ -437,6 +439,7 @@ pub struct StagedBundle {
     pub output_dir: PathBuf,
     pub manifest_path: PathBuf,
     pub launch_artifact_path: PathBuf,
+    pub application_bundle_path: Option<PathBuf>,
     pub diagnostics_marker_path: Option<PathBuf>,
     pub manifest: BundleManifest,
 }
@@ -639,41 +642,86 @@ pub fn stage_bundle_for_host(
         message: error.to_string(),
     })?;
 
-    let launch_artifact_path = output_dir.join(config.target.executable_name(&config.product_name));
-    let launcher_descriptor = format!(
-        "unitas_player_launcher=v1\n\
-         company_name={}\n\
-         product_name={}\n\
-         application_identifier={}\n\
-         version={}\n\
-         target={}\n\
-         mode={}\n\
-         development_diagnostics={}\n\
-         manifest={BUNDLE_MANIFEST_FILENAME}\n\
-         manifest_hash={}\n\
-         startup_scene={}\n",
-        manifest.company_name,
-        manifest.product_name,
-        manifest.application_identifier,
-        manifest.version,
-        manifest.target.identifier(),
-        manifest.mode.as_str(),
-        manifest.development_diagnostics,
-        manifest.manifest_hash,
-        manifest.startup_scene_staged_path
-    );
-    fs::write(&launch_artifact_path, launcher_descriptor).map_err(|error| BundleError::Io {
-        path: launch_artifact_path.clone(),
-        message: error.to_string(),
-    })?;
+    let mut application_bundle_path = None;
+    let launch_artifact_path = match macos_application(&manifest, output_dir)? {
+        Some(application) => {
+            application_bundle_path = Some(application.app_path);
+            application.executable_path
+        }
+        None => {
+            let path = output_dir.join(config.target.executable_name(&config.product_name));
+            let launcher_descriptor = format!(
+                "unitas_player_launcher=v1\n\
+                 company_name={}\n\
+                 product_name={}\n\
+                 application_identifier={}\n\
+                 version={}\n\
+                 target={}\n\
+                 mode={}\n\
+                 development_diagnostics={}\n\
+                 manifest={BUNDLE_MANIFEST_FILENAME}\n\
+                 manifest_hash={}\n\
+                 startup_scene={}\n",
+                manifest.company_name,
+                manifest.product_name,
+                manifest.application_identifier,
+                manifest.version,
+                manifest.target.identifier(),
+                manifest.mode.as_str(),
+                manifest.development_diagnostics,
+                manifest.manifest_hash,
+                manifest.startup_scene_staged_path
+            );
+            fs::write(&path, launcher_descriptor).map_err(|error| BundleError::Io {
+                path: path.clone(),
+                message: error.to_string(),
+            })?;
+            path
+        }
+    };
 
     Ok(StagedBundle {
         output_dir: output_dir.to_path_buf(),
         manifest_path,
         launch_artifact_path,
+        application_bundle_path,
         diagnostics_marker_path,
         manifest,
     })
+}
+
+/// The macOS application bundle a staged bundle is packaged as, when the
+/// target is macOS and a unitas player binary has been built.
+fn macos_application(
+    manifest: &BundleManifest,
+    output_dir: &Path,
+) -> Result<Option<PackagedApp>, BundleError> {
+    if manifest.target.os != TargetOs::MacOs {
+        return Ok(None);
+    }
+    let Some(player_binary) = package::locate_player_binary() else {
+        return Ok(None);
+    };
+    let app_path = output_dir.join(format!(
+        "{}.{}",
+        package::bundle_name(&manifest.product_name),
+        package::APP_BUNDLE_EXTENSION
+    ));
+    let licensing = licensing::licensing_record(&manifest.application_identifier);
+    let license_text = licensing::workspace_root().map(|root| root.join("LICENSE"));
+    let application = package::package_macos_app(
+        manifest,
+        output_dir,
+        &app_path,
+        &player_binary,
+        &licensing,
+        license_text.as_deref(),
+    )
+    .map_err(|error| BundleError::Io {
+        path: app_path.clone(),
+        message: error.to_string(),
+    })?;
+    Ok(Some(application))
 }
 
 fn normalize_scene_source_path(scene_path: &Path, fallback_name: &str) -> String {

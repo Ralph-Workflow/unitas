@@ -1,4 +1,6 @@
+use crate::descriptor::{Scope, ToolDescriptor};
 use crate::dispatch::{error_json, AbiError, DispatchTable};
+use serde_json::json;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock, RwLock};
@@ -8,9 +10,43 @@ static STRINGS: OnceLock<Mutex<HashMap<usize, Box<[u8]>>>> = OnceLock::new();
 
 const PANIC_MESSAGE: &str = "internal panic in unitas-editor-abi";
 
+pub fn builtin_dispatch_table() -> Result<DispatchTable, AbiError> {
+    let descriptor = ToolDescriptor {
+        name: "engine.abi_status".to_string(),
+        description: "Inspect unitas-editor-abi native tool registration status".to_string(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        required_scope: Scope::ReadProject,
+        origin: "unitas://native/editor-abi".to_string(),
+    };
+    let mut builder = DispatchTable::builder();
+    for scope in Scope::ALL {
+        builder = builder.grant(scope);
+    }
+    Ok(builder
+        .tool(
+            descriptor,
+            Box::new(|args| {
+                Ok(json!({
+                    "abi": "unitas-editor-abi",
+                    "status": "ready",
+                    "echo": args,
+                }))
+            }),
+        )?
+        .build())
+}
+
 pub fn install_dispatch_table(table: DispatchTable) -> Result<(), AbiError> {
     let mut guard = TABLE.write().map_err(|_| AbiError::Poisoned)?;
     *guard = Some(table);
+    Ok(())
+}
+
+pub fn ensure_default_dispatch_table() -> Result<(), AbiError> {
+    let mut guard = TABLE.write().map_err(|_| AbiError::Poisoned)?;
+    if guard.is_none() {
+        *guard = Some(builtin_dispatch_table()?);
+    }
     Ok(())
 }
 
@@ -96,6 +132,14 @@ fn invoke_json(name_addr: usize, args_addr: usize) -> String {
             error_json("unknown-tool", Some(&name), &format!("unknown tool {name}")).to_string()
         }
     })
+}
+
+pub extern "C" fn unitas_editor_install_builtin_tools() -> i32 {
+    catch_unwind(|| match ensure_default_dispatch_table() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    })
+    .unwrap_or(-1)
 }
 
 pub extern "C" fn unitas_editor_tools_describe() -> usize {
@@ -246,6 +290,32 @@ mod tests {
         let result = read_and_free(unitas_editor_tool_invoke(name, 0))?;
         unitas_editor_string_free(name);
         assert_eq!(result["error"]["kind"], json!("internal"));
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_install_builtin_tools_describes_and_invokes_abi_status(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = lock_ffi();
+        if let Ok(mut guard) = TABLE.write() {
+            *guard = None;
+        }
+        assert_eq!(unitas_editor_install_builtin_tools(), 0);
+
+        let described = read_and_free(unitas_editor_tools_describe())?;
+        assert_eq!(described["tools"][0]["name"], json!("engine.abi_status"));
+        assert_eq!(
+            described["tools"][0]["origin"],
+            json!("unitas://native/editor-abi")
+        );
+
+        let name = allocate_c_string("engine.abi_status");
+        let args = allocate_c_string("{\"probe\":true}");
+        let invoked = read_and_free(unitas_editor_tool_invoke(name, args))?;
+        unitas_editor_string_free(name);
+        unitas_editor_string_free(args);
+        assert_eq!(invoked["status"], json!("ready"));
+        assert_eq!(invoked["echo"]["probe"], json!(true));
         Ok(())
     }
 }

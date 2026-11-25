@@ -1,13 +1,22 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use unitas_build::control;
+#[cfg(feature = "device")]
 use unitas_build::{
-    capture_sample_reference_bmp, launch_bundle, launch_bundle_windowed, run_device_verification,
-    stage_roll_a_ball_bundle, WindowedLaunchOptions, DEFAULT_DEVICE_VERIFY_HEIGHT,
-    DEFAULT_DEVICE_VERIFY_WIDTH,
+    capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,
+    DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
 };
+use unitas_build::{
+    launch_bundle, load_and_validate_bundle_manifest, stage_roll_a_ball_bundle,
+    WindowedLaunchOptions,
+};
+
+const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio]";
 
 #[derive(Debug, Clone, PartialEq)]
 struct CliOptions {
@@ -21,6 +30,7 @@ struct CliOptions {
     capture_reference: Option<PathBuf>,
     verify_device: Option<PathBuf>,
     demo_input: bool,
+    control_stdio: bool,
 }
 
 fn parse_cli_args<I>(args: I) -> Result<CliOptions, String>
@@ -38,6 +48,7 @@ where
     let mut capture_reference: Option<PathBuf> = None;
     let mut verify_device: Option<PathBuf> = None;
     let mut demo_input = false;
+    let mut control_stdio = false;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -98,6 +109,9 @@ where
             "--demo-input" => {
                 demo_input = true;
             }
+            "--control-stdio" => {
+                control_stdio = true;
+            }
             "--capture-reference" => {
                 let raw = iter
                     .next()
@@ -124,10 +138,13 @@ where
         }
     }
 
-    if bundle_dir.is_none() && !sample && capture_reference.is_none() && verify_device.is_none() {
-        return Err(String::from(
-            "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>]",
-        ));
+    if bundle_dir.is_none()
+        && !sample
+        && capture_reference.is_none()
+        && verify_device.is_none()
+        && !control_stdio
+    {
+        return Err(String::from(USAGE));
     }
 
     Ok(CliOptions {
@@ -141,6 +158,7 @@ where
         capture_reference,
         verify_device,
         demo_input,
+        control_stdio,
     })
 }
 
@@ -154,62 +172,16 @@ fn main() -> ExitCode {
         }
     };
 
+    if cli.control_stdio {
+        return run_control_stdio(&cli);
+    }
+
     if let Some(ref reference_out) = cli.capture_reference {
-        let cap_w = if cli.width == 1280 {
-            DEFAULT_DEVICE_VERIFY_WIDTH
-        } else {
-            cli.width
-        };
-        let cap_h = if cli.height == 720 {
-            DEFAULT_DEVICE_VERIFY_HEIGHT
-        } else {
-            cli.height
-        };
-        return match capture_sample_reference_bmp(reference_out, cap_w, cap_h) {
-            Ok(image) => {
-                println!(
-                    "captured_reference={} width={} height={}",
-                    reference_out.display(),
-                    image.width,
-                    image.height
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("unitas-player startup failed: {error}");
-                ExitCode::from(1)
-            }
-        };
+        return run_capture_reference(reference_out, cli.width, cli.height);
     }
 
     if let Some(ref reference_path) = cli.verify_device {
-        let verify_frames = cli.frames.unwrap_or(12) as u64;
-        return match run_device_verification(reference_path, verify_frames) {
-            Ok(report) => {
-                println!(
-                    "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}",
-                    report.reference_path.display(),
-                    report.width,
-                    report.height,
-                    report.frames_presented,
-                    report.mean_channel_error,
-                    report.tolerance,
-                    report.audio_device_active,
-                    report.audio_device_status,
-                    report.audio_frames_pushed,
-                    report.ball_moved,
-                    report.final_ball_position[0],
-                    report.final_ball_position[1],
-                    report.final_ball_position[2],
-                    report.score
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("unitas-player startup failed: {error}");
-                ExitCode::from(1)
-            }
-        };
+        return run_verify_device(reference_path, cli.frames.unwrap_or(12) as u64);
     }
 
     let mut temp_sample_dir: Option<PathBuf> = None;
@@ -236,42 +208,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let run_headless = !cli.windowed && cli.frames.is_some();
+    let run_headless =
+        !cli.windowed && (cli.frames.is_some() || (!cli.sample && cli.bundle_dir.is_some()));
 
-    let exit_code = if !run_headless {
-        let options = WindowedLaunchOptions {
-            width: cli.width,
-            height: cli.height,
-            max_frames: cli.frames.map(|n| n as u64),
-            fixed_delta_seconds: Some(cli.delta_seconds),
-            capture_last_frame: false,
-            start_audio_device: true,
-            inject_demo_input: cli.demo_input,
-        };
-        match launch_bundle_windowed(&resolved_bundle_dir, &options) {
-            Ok(result) => {
-                println!(
-                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{}",
-                    result.launch.manifest.product_name,
-                    result.launch.startup_scene_path.display(),
-                    result.launch.loaded_scene_count,
-                    result.launch.root_object_count,
-                    result.launch.frames_stepped,
-                    result.launch.development_diagnostics_enabled,
-                    result.frames_presented,
-                    result.audio_device_status,
-                    result.audio_frames_pushed,
-                    result.score,
-                    result.total_pickups
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("unitas-player startup failed: {error}");
-                ExitCode::from(1)
-            }
-        }
-    } else {
+    let exit_code = if run_headless {
         let frames = cli.frames.unwrap_or(1);
         match launch_bundle(&resolved_bundle_dir, frames, cli.delta_seconds) {
             Ok(result) => {
@@ -291,10 +231,210 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         }
+    } else {
+        let options = WindowedLaunchOptions {
+            width: cli.width,
+            height: cli.height,
+            max_frames: cli.frames.map(|n| n as u64),
+            fixed_delta_seconds: Some(cli.delta_seconds),
+            capture_last_frame: false,
+            start_audio_device: true,
+            inject_demo_input: cli.demo_input,
+        };
+        run_windowed(&resolved_bundle_dir, &options)
     };
 
     if let Some(dir) = temp_sample_dir {
         let _ = fs::remove_dir_all(dir);
     }
     exit_code
+}
+
+#[cfg(feature = "device")]
+fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode {
+    match launch_bundle_windowed(bundle_dir, options) {
+        Ok(result) => {
+            println!(
+                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{}",
+                result.launch.manifest.product_name,
+                result.launch.startup_scene_path.display(),
+                result.launch.loaded_scene_count,
+                result.launch.root_object_count,
+                result.launch.frames_stepped,
+                result.launch.development_diagnostics_enabled,
+                result.frames_presented,
+                result.audio_device_status,
+                result.audio_frames_pushed,
+                result.score,
+                result.total_pickups
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("unitas-player startup failed: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn run_windowed(bundle_dir: &Path, _options: &WindowedLaunchOptions) -> ExitCode {
+    if let Err(error) = load_and_validate_bundle_manifest(bundle_dir) {
+        eprintln!("unitas-player startup failed: {error}");
+        return ExitCode::from(1);
+    }
+    eprintln!("unitas-player: the windowed player requires the device feature");
+    ExitCode::from(2)
+}
+
+#[cfg(feature = "device")]
+fn run_capture_reference(reference_out: &Path, width: u32, height: u32) -> ExitCode {
+    let cap_w = if width == 1280 {
+        DEFAULT_DEVICE_VERIFY_WIDTH
+    } else {
+        width
+    };
+    let cap_h = if height == 720 {
+        DEFAULT_DEVICE_VERIFY_HEIGHT
+    } else {
+        height
+    };
+    match capture_sample_reference_bmp(reference_out, cap_w, cap_h) {
+        Ok(image) => {
+            println!(
+                "captured_reference={} width={} height={}",
+                reference_out.display(),
+                image.width,
+                image.height
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("unitas-player startup failed: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn run_capture_reference(_reference_out: &Path, _width: u32, _height: u32) -> ExitCode {
+    eprintln!("unitas-player: '--capture-reference' requires the device feature");
+    ExitCode::from(2)
+}
+
+#[cfg(feature = "device")]
+fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
+    match run_device_verification(reference_path, frames) {
+        Ok(report) => {
+            println!(
+                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}",
+                report.reference_path.display(),
+                report.width,
+                report.height,
+                report.frames_presented,
+                report.mean_channel_error,
+                report.tolerance,
+                report.audio_device_active,
+                report.audio_device_status,
+                report.audio_frames_pushed,
+                report.ball_moved,
+                report.final_ball_position[0],
+                report.final_ball_position[1],
+                report.final_ball_position[2],
+                report.score
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("unitas-player startup failed: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn run_verify_device(_reference_path: &Path, _frames: u64) -> ExitCode {
+    eprintln!("unitas-player: '--verify-device' requires the device feature");
+    ExitCode::from(2)
+}
+
+fn run_control_stdio(cli: &CliOptions) -> ExitCode {
+    let (scene_path, staged_dir) = match resolve_control_scene(cli) {
+        Ok(resolved) => resolved,
+        Err(message) => {
+            eprintln!("unitas-player startup failed: {message}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let mut session =
+        match control::ControlSession::start(&scene_path, cli.delta_seconds, control_seed()) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!("unitas-player startup failed: {}", error.outcome());
+                return ExitCode::from(1);
+            }
+        };
+
+    let exit_code = serve_control_lines(&mut session);
+
+    if let Some(dir) = staged_dir {
+        let _ = fs::remove_dir_all(dir);
+    }
+    exit_code
+}
+
+fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>), String> {
+    match cli.bundle_dir {
+        Some(ref dir) => {
+            let (_manifest, startup_scene_path) =
+                load_and_validate_bundle_manifest(dir).map_err(|error| error.to_string())?;
+            Ok((startup_scene_path, None))
+        }
+        None => {
+            let staged_dir = env::temp_dir().join(format!(
+                "unitas_player_control_bundle_{}",
+                std::process::id()
+            ));
+            let staged =
+                stage_roll_a_ball_bundle(&staged_dir).map_err(|error| error.to_string())?;
+            let scene_path = staged_dir.join(&staged.manifest.startup_scene_staged_path);
+            Ok((scene_path, Some(staged_dir)))
+        }
+    }
+}
+
+fn serve_control_lines(session: &mut control::ControlSession) -> ExitCode {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                eprintln!("unitas-player control read failed: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = control::handle_line(session, &line);
+        if let Err(error) = writeln!(stdout, "{response}") {
+            eprintln!("unitas-player control write failed: {error}");
+            return ExitCode::from(1);
+        }
+        if let Err(error) = stdout.flush() {
+            eprintln!("unitas-player control flush failed: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn control_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or_default();
+    nanos ^ (u64::from(std::process::id()) << 32)
 }

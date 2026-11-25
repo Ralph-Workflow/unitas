@@ -76,7 +76,7 @@ deps:
 	@python3 tools/verify.py timed deps $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py deps
 
 runtime-build:
-	@python3 tools/verify.py timed runtime-build $(VERIFY_BUDGET_SECONDS) cargo build -p unitas-runtime
+	@python3 tools/verify.py timed runtime-build $(VERIFY_BUDGET_SECONDS) cargo build -p unitas-runtime -p unitas-editor-abi
 
 dotnet-build: runtime-build
 	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND)

@@ -24,6 +24,7 @@ DEVICE_FRAMES = 12
 COMPARE_ARG_COUNT = 3
 COMPARE_WITH_TOLERANCE_ARG_COUNT = 5
 ACTUAL_ARG_COUNT = 2
+MIN_SUSTAINED_FPS = 30.0
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
@@ -52,6 +53,8 @@ DEVICE_REPORT_FIELDS: tuple[tuple[str, str], ...] = (
     ("audio_frames", r"audio_frames=(\d+)"),
     ("ball_moved", r"ball_moved=(true|false)"),
 )
+
+SUSTAINED_FPS_PATTERN = re.compile(r"^sustained_fps=([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
 
 
 def help_text() -> str:
@@ -210,6 +213,29 @@ def parse_device_report(output: str) -> dict[str, str] | None:
     return report
 
 
+def parse_sustained_fps(output: str) -> float | None:
+    match = SUSTAINED_FPS_PATTERN.search(output)
+    if match is None:
+        return None
+    return float(match.group(1))
+
+
+def sustained_fps_below_floor_reason(sustained_fps: float) -> str | None:
+    if sustained_fps < MIN_SUSTAINED_FPS:
+        return (
+            f"sustained {sustained_fps:.1f} FPS is below the interactive floor "
+            f"{MIN_SUSTAINED_FPS:.1f}"
+        )
+    return None
+
+
+def sustained_fps_measurement(output: str) -> tuple[str, str | None]:
+    sustained_fps = parse_sustained_fps(output)
+    if sustained_fps is None:
+        return "unknown", "the window reported no sustained FPS measurement"
+    return f"{sustained_fps:.1f}", sustained_fps_below_floor_reason(sustained_fps)
+
+
 def device_failure_reason(report: dict[str, str] | None) -> str | None:
     if report is None:
         return "the player reported no device verification line"
@@ -343,13 +369,17 @@ def run_device_lane(
     if rc != 0:
         return rc
     reason = device_failure_reason(parse_device_report(output))
+    sustained_fps_text, fps_reason = sustained_fps_measurement(output)
+    if reason is None:
+        reason = fps_reason
     if reason is not None:
         sys.stderr.write(f"FAIL verify-device (device-verify): {reason} ({POLICY_CITATION})\n")
         return 1
     sys.stdout.write(
         "OK verify-device device-verify: the window presented frames, the GPU frame matched "
         "the approved reference within tolerance, the default audio device played the tone, "
-        "and the synthetic input events moved the sample scene\n"
+        "and the synthetic input events moved the sample scene. Sustained frame rate: "
+        f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f})\n"
     )
 
     rc = run_package_device_gates(budget_seconds)

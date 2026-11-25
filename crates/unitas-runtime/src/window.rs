@@ -627,6 +627,19 @@ impl Runtime {
     }
 }
 
+pub fn sustained_frames_per_second(frames: u64, elapsed_seconds: f64) -> f64 {
+    if frames > 0 && elapsed_seconds > 0.0 {
+        frames as f64 / elapsed_seconds
+    } else {
+        0.0
+    }
+}
+
+pub fn sustained_fps_report_line(frames: u64, elapsed_seconds: f64) -> String {
+    let fps = sustained_frames_per_second(frames, elapsed_seconds);
+    format!("sustained_fps={fps:.1} frames={frames} elapsed_seconds={elapsed_seconds:.3}")
+}
+
 pub fn run_windowed(
     runtime: &mut Runtime,
     config: &WindowConfig,
@@ -642,6 +655,9 @@ pub fn run_windowed(
     event_loop
         .run_app(&mut app)
         .map_err(|error| WindowError::EventLoop(error.to_string()))?;
+    if let Some(line) = app.sustained_fps_line() {
+        println!("{line}");
+    }
     match app.error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -668,6 +684,9 @@ struct WindowApp<'a> {
     last_frame: Option<Instant>,
     frame_index: u64,
     error: Option<WindowError>,
+    presented_frames: u64,
+    presenting_started: Option<Instant>,
+    presenting_finished: Option<Instant>,
 }
 
 impl<'a> WindowApp<'a> {
@@ -684,7 +703,24 @@ impl<'a> WindowApp<'a> {
             last_frame: None,
             frame_index: 0,
             error: None,
+            presented_frames: 0,
+            presenting_started: None,
+            presenting_finished: None,
         }
+    }
+
+    fn sustained_fps_line(&self) -> Option<String> {
+        if self.presented_frames == 0 {
+            return None;
+        }
+        let elapsed_seconds = match (self.presenting_started, self.presenting_finished) {
+            (Some(started), Some(finished)) => finished.duration_since(started).as_secs_f64(),
+            _ => 0.0,
+        };
+        Some(sustained_fps_report_line(
+            self.presented_frames,
+            elapsed_seconds,
+        ))
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
@@ -724,7 +760,12 @@ impl<'a> WindowApp<'a> {
         let Some(window) = &self.window else {
             return;
         };
+        if self.presenting_started.is_none() {
+            self.presenting_started = Some(Instant::now());
+        }
         self.presenter.present(window, self.runtime, &frame);
+        self.presented_frames += 1;
+        self.presenting_finished = Some(Instant::now());
         window.request_redraw();
         if let Some(limit) = self.config.effective_max_frames() {
             if self.frame_index >= limit {
@@ -1129,6 +1170,27 @@ mod tests {
 
         let view = view_matrix_from_transform(&transform);
         assert_eq!(view.get(3, 3), 1.0);
+    }
+
+    #[test]
+    fn sustained_frames_per_second_divides_presented_frames_by_elapsed_time() {
+        let fps = sustained_frames_per_second(60, 1.0);
+        assert!((fps - 60.0).abs() < 1e-9);
+        assert_eq!(sustained_frames_per_second(0, 1.0), 0.0);
+        assert_eq!(sustained_frames_per_second(60, 0.0), 0.0);
+        assert_eq!(sustained_frames_per_second(60, -1.0), 0.0);
+    }
+
+    #[test]
+    fn sustained_fps_report_line_uses_the_device_lane_greppable_format() {
+        assert_eq!(
+            sustained_fps_report_line(12, 0.2),
+            String::from("sustained_fps=60.0 frames=12 elapsed_seconds=0.200")
+        );
+        assert_eq!(
+            sustained_fps_report_line(0, 0.0),
+            String::from("sustained_fps=0.0 frames=0 elapsed_seconds=0.000")
+        );
     }
 
     #[test]

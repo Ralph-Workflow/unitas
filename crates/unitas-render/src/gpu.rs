@@ -1,7 +1,8 @@
 use std::sync::{Mutex, MutexGuard};
 
 use crate::camera::Camera;
-use crate::image::Image;
+use crate::capture::{CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds};
+use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
 use crate::raster::{DirectionalLight, MeshInstance};
@@ -11,8 +12,10 @@ const VERTEX_STRIDE: u64 = 24;
 const UNIFORM_SLOT: u64 = 256;
 const GLOBAL_FLOATS: usize = 24;
 const INSTANCE_FLOATS: usize = 24;
+const SLOT_FLOATS: usize = (UNIFORM_SLOT / 4) as usize;
 const COPY_ROW_ALIGNMENT: u64 = 256;
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
@@ -51,18 +54,47 @@ fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> 
     return out;
 }
 
-@fragment
-fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    let len = length(vs_out.normal);
-    let normal = select(vec3<f32>(0.0, 0.0, 0.0), vs_out.normal / len, len > 1e-8);
+fn lit_color(surface_normal: vec3<f32>, color: vec3<f32>) -> vec4<f32> {
+    let len = length(surface_normal);
+    let normal = select(vec3<f32>(0.0, 0.0, 0.0), surface_normal / len, len > 1e-8);
     let lambert = max(dot(normal, globals.light_dir.xyz), 0.0);
     let shade = globals.light_color.w + globals.light_color.rgb * (lambert * globals.light_dir.w);
-    return vec4<f32>(vs_out.color * shade, 1.0);
+    return vec4<f32>(color * shade, 1.0);
+}
+
+fn unlit_color(color: vec3<f32>) -> vec4<f32> {
+    return vec4<f32>(color, 1.0);
+}
+
+@fragment
+fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
+    return lit_color(vs_out.normal, vs_out.color);
 }
 
 @fragment
 fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(vs_out.color, 1.0);
+    return unlit_color(vs_out.color);
+}
+
+struct CaptureOut {
+    @location(0) color: vec4<f32>,
+    @location(1) id: u32,
+};
+
+@fragment
+fn fs_capture_lit(vs_out: VertexOut) -> CaptureOut {
+    var out: CaptureOut;
+    out.color = lit_color(vs_out.normal, vs_out.color);
+    out.id = u32(round(inst.flags.x));
+    return out;
+}
+
+@fragment
+fn fs_capture_unlit(vs_out: VertexOut) -> CaptureOut {
+    var out: CaptureOut;
+    out.color = unlit_color(vs_out.color);
+    out.id = u32(round(inst.flags.x));
+    return out;
 }
 ";
 
@@ -186,6 +218,7 @@ pub struct Renderer {
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     offscreen_pipelines: Pipelines,
+    capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
     surface: Mutex<Option<SurfaceState>>,
 }
@@ -201,11 +234,57 @@ fn align_up(value: u64, alignment: u64) -> u64 {
     value.div_ceil(alignment) * alignment
 }
 
+fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState::REPLACE),
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
+fn id_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
 fn create_pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
+) -> Pipelines {
+    let targets = [Some(color_target(format))];
+    build_pipelines(device, layout, shader, "fs_lit", "fs_unlit", &targets)
+}
+
+fn create_capture_pipelines(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    color_format: wgpu::TextureFormat,
+    id_format: wgpu::TextureFormat,
+) -> Pipelines {
+    let targets = [Some(color_target(color_format)), Some(id_target(id_format))];
+    build_pipelines(
+        device,
+        layout,
+        shader,
+        "fs_capture_lit",
+        "fs_capture_unlit",
+        &targets,
+    )
+}
+
+fn build_pipelines(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    lit_entry_point: &str,
+    unlit_entry_point: &str,
+    targets: &[Option<wgpu::ColorTargetState>],
 ) -> Pipelines {
     let depth_stencil = wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
@@ -228,13 +307,9 @@ fn create_pipelines(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_lit"),
+            entry_point: Some(lit_entry_point),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets,
         }),
         multiview_mask: None,
         cache: None,
@@ -253,13 +328,9 @@ fn create_pipelines(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_unlit"),
+            entry_point: Some(unlit_entry_point),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets,
         }),
         multiview_mask: None,
         cache: None,
@@ -322,6 +393,13 @@ impl Renderer {
         });
         let offscreen_pipelines =
             create_pipelines(&device, &pipeline_layout, &shader, OFFSCREEN_FORMAT);
+        let capture_pipelines = create_capture_pipelines(
+            &device,
+            &pipeline_layout,
+            &shader,
+            OFFSCREEN_FORMAT,
+            ID_FORMAT,
+        );
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         Ok(Renderer {
             instance,
@@ -333,6 +411,7 @@ impl Renderer {
             pipeline_layout,
             shader,
             offscreen_pipelines,
+            capture_pipelines,
             uniforms: Mutex::new(uniforms),
             surface: Mutex::new(None),
         })
@@ -414,6 +493,7 @@ impl Renderer {
         let depth_texture = self.create_depth_texture(width, height);
         let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let items = plain_draw_items(instances);
 
         let mut encoder = self
             .device
@@ -447,7 +527,7 @@ impl Renderer {
             self.draw_scene(
                 &mut pass,
                 &self.offscreen_pipelines,
-                instances,
+                &items,
                 camera,
                 view,
                 light,
@@ -485,6 +565,175 @@ impl Renderer {
         self.queue.submit(Some(encoder.finish()));
         let data = self.read_buffer(&readback)?;
         Ok(image_from_rgba(&data, width, height, bytes_per_row))
+    }
+
+    pub fn render_offscreen_with_ids(
+        &self,
+        instances: &[CaptureInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+        size: (u32, u32),
+    ) -> Result<CaptureFrame, RenderError> {
+        let (width, height) = size;
+        if width == 0 || height == 0 {
+            return Ok(CaptureFrame {
+                image: Rgba8::new(width, height),
+                id_map: Vec::new(),
+                objects: Vec::new(),
+            });
+        }
+        let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture-color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OFFSCREEN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let id_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture-ids"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: ID_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let depth_texture = self.create_depth_texture(width, height);
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let id_view = id_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let items = capture_draw_items(instances);
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("capture"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("capture"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(background_color(background)),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &id_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_scene(
+                &mut pass,
+                &self.capture_pipelines,
+                &items,
+                camera,
+                view,
+                light,
+            )?;
+        }
+
+        let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
+        let color_readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture-color-readback"),
+            size: bytes_per_row * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let id_readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture-id-readback"),
+            size: bytes_per_row * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &color_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &color_readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &id_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &id_readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let color_data = self.read_buffer(&color_readback)?;
+        let id_data = self.read_buffer(&id_readback)?;
+        Ok(capture_frame_from_readback(
+            &color_data,
+            &id_data,
+            bytes_per_row,
+            width,
+            height,
+            instances,
+        ))
     }
 
     pub fn configure_surface(
@@ -618,7 +867,7 @@ impl Renderer {
             self.draw_scene(
                 &mut pass,
                 &surface_state.pipelines,
-                instances,
+                &plain_draw_items(instances),
                 &camera,
                 view,
                 light,
@@ -689,20 +938,20 @@ impl Renderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         pipelines: &Pipelines,
-        instances: &[GpuInstance<'_>],
+        items: &[DrawItem<'_>],
         camera: &Camera,
         view: Mat4,
         light: &DirectionalLight,
     ) -> Result<(), RenderError> {
         let view_proj = camera.projection_matrix() * view;
-        let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(instances.len());
-        for instance in instances {
-            meshes.push(self.upload_mesh(instance.mesh)?);
+        let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(items.len());
+        for item in items {
+            meshes.push(self.upload_mesh(item.instance.mesh)?);
         }
 
         let mut state = lock(&self.uniforms);
-        if state.capacity < instances.len() {
-            let capacity = instances.len().max(state.capacity * 2).max(1);
+        if state.capacity < items.len() {
+            let capacity = items.len().max(state.capacity * 2).max(1);
             *state = create_uniforms(
                 &self.device,
                 &self.global_layout,
@@ -725,17 +974,39 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
-        let mut instance_data: Vec<f32> = Vec::with_capacity(instances.len() * INSTANCE_FLOATS);
-        for instance in instances {
-            instance_data.extend_from_slice(instance.model.as_array());
-            instance_data.extend_from_slice(&[
-                instance.color[0],
-                instance.color[1],
-                instance.color[2],
-                1.0,
-            ]);
-            instance_data.extend_from_slice(&[if instance.lit { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
-        }
+        let instance_data = if items.iter().any(|item| item.object_id != 0) {
+            let mut slotted: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
+            for (index, item) in items.iter().enumerate() {
+                let start = index * SLOT_FLOATS;
+                slotted[start..start + 16].copy_from_slice(item.instance.model.as_array());
+                slotted[start + 16..start + 20].copy_from_slice(&[
+                    item.instance.color[0],
+                    item.instance.color[1],
+                    item.instance.color[2],
+                    1.0,
+                ]);
+                slotted[start + 20] = item.object_id as f32;
+            }
+            slotted
+        } else {
+            let mut packed: Vec<f32> = Vec::with_capacity(items.len() * INSTANCE_FLOATS);
+            for item in items {
+                packed.extend_from_slice(item.instance.model.as_array());
+                packed.extend_from_slice(&[
+                    item.instance.color[0],
+                    item.instance.color[1],
+                    item.instance.color[2],
+                    1.0,
+                ]);
+                packed.extend_from_slice(&[
+                    if item.instance.lit { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                    0.0,
+                ]);
+            }
+            packed
+        };
         if !instance_data.is_empty() {
             self.queue.write_buffer(
                 &state.buffer,
@@ -745,7 +1016,7 @@ impl Renderer {
         }
 
         pass.set_bind_group(0, &state.global_bind_group, &[]);
-        for (index, instance) in instances.iter().enumerate() {
+        for (index, item) in items.iter().enumerate() {
             let mesh = match &meshes[index] {
                 Some(mesh) => mesh,
                 None => continue,
@@ -755,7 +1026,7 @@ impl Renderer {
                 &state.instance_bind_group,
                 &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
             );
-            if instance.lit {
+            if item.instance.lit {
                 pass.set_pipeline(&pipelines.lit);
             } else {
                 pass.set_pipeline(&pipelines.unlit);
@@ -794,6 +1065,37 @@ struct MeshBuffers {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+}
+
+struct DrawItem<'a> {
+    instance: GpuInstance<'a>,
+    object_id: u32,
+}
+
+fn plain_draw_items<'a>(instances: &[GpuInstance<'a>]) -> Vec<DrawItem<'a>> {
+    instances
+        .iter()
+        .map(|instance| DrawItem {
+            instance: *instance,
+            object_id: 0,
+        })
+        .collect()
+}
+
+fn capture_draw_items<'a>(instances: &[CaptureInstance<'a>]) -> Vec<DrawItem<'a>> {
+    instances
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| DrawItem {
+            instance: GpuInstance {
+                mesh: instance.mesh,
+                model: instance.model,
+                color: instance.color,
+                lit: instance.lit,
+            },
+            object_id: (index + 1) as u32,
+        })
+        .collect()
 }
 
 fn create_uniforms(
@@ -865,6 +1167,91 @@ fn image_from_rgba(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> 
         }
     }
     image
+}
+
+fn capture_frame_from_readback(
+    color_data: &[u8],
+    id_data: &[u8],
+    bytes_per_row: u64,
+    width: u32,
+    height: u32,
+    instances: &[CaptureInstance<'_>],
+) -> CaptureFrame {
+    let row_bytes = (width as usize) * 4;
+    let bytes_per_row = bytes_per_row as usize;
+    let mut image = Rgba8::new(width, height);
+    let mut id_map = Vec::with_capacity((width as usize) * (height as usize));
+    for y in 0..height as usize {
+        let row_start = y * bytes_per_row;
+        let color_end = row_start + row_bytes;
+        if color_end <= color_data.len() {
+            image.pixels[y * row_bytes..(y + 1) * row_bytes]
+                .copy_from_slice(&color_data[row_start..color_end]);
+        }
+        for x in 0..width as usize {
+            let offset = row_start + x * 4;
+            let value = if offset + 3 < id_data.len() {
+                u32::from_le_bytes([
+                    id_data[offset],
+                    id_data[offset + 1],
+                    id_data[offset + 2],
+                    id_data[offset + 3],
+                ])
+            } else {
+                0
+            };
+            id_map.push(value);
+        }
+    }
+    let objects = capture_objects(&id_map, width, instances);
+    CaptureFrame {
+        image,
+        id_map,
+        objects,
+    }
+}
+
+fn capture_objects(
+    id_map: &[u32],
+    width: u32,
+    instances: &[CaptureInstance<'_>],
+) -> Vec<CaptureObject> {
+    let mut extents: Vec<Option<(u32, u32, u32, u32)>> = vec![None; instances.len() + 1];
+    for (index, id) in id_map.iter().enumerate() {
+        if *id == 0 || *id as usize > extents.len() - 1 {
+            continue;
+        }
+        let x = (index % width as usize) as u32;
+        let y = (index / width as usize) as u32;
+        extents[*id as usize] = Some(match extents[*id as usize] {
+            Some((min_x, min_y, max_x, max_y)) => {
+                (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+            }
+            None => (x, y, x, y),
+        });
+    }
+    let mut objects = Vec::new();
+    for (id, extent) in extents.iter().enumerate() {
+        let extent = match extent {
+            Some(extent) => extent,
+            None => continue,
+        };
+        let name = match id.checked_sub(1).and_then(|index| instances.get(index)) {
+            Some(instance) => instance.name,
+            None => "",
+        };
+        objects.push(CaptureObject {
+            id: id as u32,
+            name: name.to_string(),
+            bounds: ScreenBounds {
+                x: extent.0,
+                y: extent.1,
+                width: extent.2 - extent.0 + 1,
+                height: extent.3 - extent.1 + 1,
+            },
+        });
+    }
+    objects
 }
 
 #[cfg(all(test, feature = "device"))]

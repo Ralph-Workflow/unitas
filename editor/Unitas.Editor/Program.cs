@@ -16,6 +16,12 @@ namespace Unitas.Editor
                 return 0;
             }
 
+            if (HeadlessCli.IsCliInvocation(args))
+            {
+                McpHost cliHost = BuiltinDefaults.CreateStartupHost(args);
+                return HeadlessCli.Run(cliHost, args);
+            }
+
             if (args.Length == 1 && string.Equals(args[0], "--stdio", StringComparison.Ordinal))
             {
                 await StdioTransportHost.WithDefaults().RunConsoleAsync().ConfigureAwait(false);
@@ -43,7 +49,7 @@ namespace Unitas.Editor
                     return 2;
                 }
 
-                McpHost host = BuiltinDefaults.CreateHostWithDefaults();
+                McpHost host = BuiltinDefaults.CreateStartupHost(args);
                 HttpTransportHost transportHost = new HttpTransportHost(host, port);
                 try
                 {

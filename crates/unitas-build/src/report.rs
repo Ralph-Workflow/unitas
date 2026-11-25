@@ -10,6 +10,7 @@ use crate::bundle::{
     ContentBuildMode, ContentBuildResult, ContentRejectionReason, RejectedContentBundle,
 };
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
+use crate::licensing::{licensing_record, LicensingRecord, ThirdPartyNotice};
 use crate::targets::{BuildTarget, TargetArch, TargetOs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -326,6 +327,7 @@ pub struct BuildReport {
     pub development_diagnostics_included: bool,
     pub unsupported_behaviors: Vec<String>,
     pub compatibility_findings: Vec<CompatibilityFinding>,
+    pub licensing: Option<LicensingRecord>,
 }
 
 impl BuildReport {
@@ -370,6 +372,7 @@ impl BuildReport {
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
+            licensing: Some(licensing_record(&config.application_identifier)),
         }
     }
 
@@ -403,6 +406,7 @@ impl BuildReport {
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
+            licensing: None,
         }
     }
 
@@ -444,6 +448,7 @@ impl BuildReport {
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
+            licensing: None,
         }
     }
 
@@ -540,8 +545,9 @@ impl BuildReport {
             2,
             "compatibility_findings",
             &self.compatibility_findings,
-            false,
+            true,
         );
+        push_kv_licensing(&mut out, 2, "licensing", self.licensing.as_ref(), false);
         out.push_str("}\n");
         out
     }
@@ -582,6 +588,7 @@ impl BuildReport {
         let unsupported_behaviors = get_required_string_list(obj, "unsupported_behaviors")?;
         let compatibility_findings =
             get_required_compatibility_findings(obj, "compatibility_findings")?;
+        let licensing = get_optional_licensing(obj)?;
 
         Ok(Self {
             target,
@@ -604,6 +611,7 @@ impl BuildReport {
             development_diagnostics_included,
             unsupported_behaviors,
             compatibility_findings,
+            licensing,
         })
     }
 
@@ -896,8 +904,136 @@ fn push_kv_contributors(
     push_trailing(out, trailing_comma);
 }
 
+fn push_kv_licensing(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    licensing: Option<&LicensingRecord>,
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    let Some(record) = licensing else {
+        out.push_str(": null");
+        push_trailing(out, trailing_comma);
+        return;
+    };
+    out.push_str(": {\n");
+    push_kv_str(
+        out,
+        indent + 2,
+        "application_identifier",
+        &record.application_identifier,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "governing_license",
+        &record.governing_license,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "governing_license_name",
+        &record.governing_license_name,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "conveyance_statement",
+        &record.conveyance_statement,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "corresponding_source_obligation",
+        &record.corresponding_source_obligation,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "corresponding_source_availability",
+        &record.corresponding_source_availability,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "linking_exception_statement",
+        &record.linking_exception_statement,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "commercial_license_statement",
+        &record.commercial_license_statement,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 2,
+        "not_legal_advice_statement",
+        &record.not_legal_advice_statement,
+        true,
+    );
+    push_kv_string_array(
+        out,
+        indent + 2,
+        "license_texts",
+        &record.license_texts,
+        true,
+    );
+    push_kv_notices(
+        out,
+        indent + 2,
+        "third_party_notices",
+        &record.third_party_notices,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_notices(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[ThirdPartyNotice],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "ecosystem", &item.ecosystem, true);
+        push_kv_str(out, indent + 4, "component", &item.component, true);
+        push_kv_str(out, indent + 4, "version", &item.version, true);
+        push_kv_str(out, indent + 4, "license", &item.license, false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum JsonValue {
+pub(crate) enum JsonValue {
     Null,
     Bool(bool),
     Number(u64),
@@ -907,7 +1043,10 @@ enum JsonValue {
 }
 
 impl JsonValue {
-    fn as_object(&self, context: &str) -> Result<&BTreeMap<String, JsonValue>, ReportParseError> {
+    pub(crate) fn as_object(
+        &self,
+        context: &str,
+    ) -> Result<&BTreeMap<String, JsonValue>, ReportParseError> {
         match self {
             JsonValue::Object(map) => Ok(map),
             _ => Err(ReportParseError::new(format!(
@@ -916,7 +1055,7 @@ impl JsonValue {
         }
     }
 
-    fn as_array(&self, context: &str) -> Result<&[JsonValue], ReportParseError> {
+    pub(crate) fn as_array(&self, context: &str) -> Result<&[JsonValue], ReportParseError> {
         match self {
             JsonValue::Array(items) => Ok(items.as_slice()),
             _ => Err(ReportParseError::new(format!(
@@ -925,7 +1064,7 @@ impl JsonValue {
         }
     }
 
-    fn as_str(&self, context: &str) -> Result<&str, ReportParseError> {
+    pub(crate) fn as_str(&self, context: &str) -> Result<&str, ReportParseError> {
         match self {
             JsonValue::String(text) => Ok(text.as_str()),
             _ => Err(ReportParseError::new(format!(
@@ -956,6 +1095,11 @@ impl JsonValue {
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
+}
+
+/// Parses a JSON document into the report's JSON value model.
+pub(crate) fn parse_json_document(input: &str) -> Result<JsonValue, ReportParseError> {
+    JsonParser::parse(input)
 }
 
 impl<'a> JsonParser<'a> {
@@ -1348,6 +1492,67 @@ fn get_required_contributors(
     Ok(list)
 }
 
+fn get_optional_licensing(
+    obj: &BTreeMap<String, JsonValue>,
+) -> Result<Option<LicensingRecord>, ReportParseError> {
+    match obj.get("licensing") {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(value) => {
+            let record = value.as_object("licensing")?;
+            Ok(Some(LicensingRecord {
+                application_identifier: get_required_str(record, "application_identifier")?
+                    .to_string(),
+                governing_license: get_required_str(record, "governing_license")?.to_string(),
+                governing_license_name: get_required_str(record, "governing_license_name")?
+                    .to_string(),
+                conveyance_statement: get_required_str(record, "conveyance_statement")?.to_string(),
+                corresponding_source_obligation: get_required_str(
+                    record,
+                    "corresponding_source_obligation",
+                )?
+                .to_string(),
+                corresponding_source_availability: get_required_str(
+                    record,
+                    "corresponding_source_availability",
+                )?
+                .to_string(),
+                linking_exception_statement: get_required_str(
+                    record,
+                    "linking_exception_statement",
+                )?
+                .to_string(),
+                commercial_license_statement: get_required_str(
+                    record,
+                    "commercial_license_statement",
+                )?
+                .to_string(),
+                not_legal_advice_statement: get_required_str(record, "not_legal_advice_statement")?
+                    .to_string(),
+                license_texts: get_required_string_list(record, "license_texts")?,
+                third_party_notices: get_required_notices(record, "third_party_notices")?,
+            }))
+        }
+    }
+}
+
+fn get_required_notices(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<ThirdPartyNotice>, ReportParseError> {
+    let array = get_field(obj, key)?.as_array(key)?;
+    let mut notices = Vec::with_capacity(array.len());
+    for item in array {
+        let entry = item.as_object(key)?;
+        notices.push(ThirdPartyNotice {
+            ecosystem: get_required_str(entry, "ecosystem")?.to_string(),
+            component: get_required_str(entry, "component")?.to_string(),
+            version: get_required_str(entry, "version")?.to_string(),
+            license: get_required_str(entry, "license")?.to_string(),
+        });
+    }
+    Ok(notices)
+}
+
 fn parse_target_arch(raw: &str) -> Result<TargetArch, ReportParseError> {
     match raw.to_ascii_lowercase().as_str() {
         "x86_64" | "x86-64" => Ok(TargetArch::X86_64),
@@ -1660,6 +1865,48 @@ mod tests {
             "1.4.2",
             BuildTarget::MACOS_ARM64,
         )
+    }
+
+    #[test]
+    fn succeeded_report_records_the_licensing_record() -> Result<(), Box<dyn std::error::Error>> {
+        let config = sample_config();
+        let report = BuildReport::succeeded(
+            &config,
+            10,
+            PathBuf::from("/tmp/unitas-builds/SpaceRunner"),
+            PathBuf::from(
+                "/tmp/unitas-builds/SpaceRunner/SpaceRunner.app/Contents/MacOS/SpaceRunner",
+            ),
+            1024,
+            Vec::new(),
+            Vec::new(),
+        );
+        let licensing = report
+            .licensing
+            .as_ref()
+            .ok_or("a succeeded report records the governing license")?;
+        assert_eq!(
+            licensing.application_identifier,
+            config.application_identifier
+        );
+        assert_eq!(licensing.governing_license, "GPL-3.0-only");
+        assert!(licensing.conveyance_statement.contains("GPLv3"));
+        assert!(licensing
+            .corresponding_source_obligation
+            .contains("whole conveyed work"));
+        assert!(licensing
+            .linking_exception_statement
+            .contains("no linking exception"));
+        assert!(licensing
+            .not_legal_advice_statement
+            .contains("not legal advice"));
+        assert!(!licensing.third_party_notices.is_empty());
+
+        let json = report.to_json();
+        assert!(json.contains("\"licensing\""));
+        let parsed = BuildReport::from_json(&json)?;
+        assert_eq!(parsed, report);
+        Ok(())
     }
 
     #[test]

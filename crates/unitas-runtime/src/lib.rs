@@ -1,5 +1,6 @@
 mod abi;
 pub mod animation;
+pub mod capture;
 pub mod cinemachine;
 mod error;
 pub mod input;

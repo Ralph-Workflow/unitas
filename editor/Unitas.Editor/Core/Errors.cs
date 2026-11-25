@@ -165,5 +165,30 @@ namespace Unitas.Editor.Mcp
             {
             }
         }
+
+        public sealed class PersonCredentialRequired : McpError
+        {
+            public PersonCredentialRequired(string actionName, string reason)
+                : base("person-only action " + actionName + " refused: " + reason)
+            {
+                ActionName = actionName;
+                Reason = reason;
+            }
+
+            public string ActionName { get; }
+
+            public string Reason { get; }
+        }
+
+        public sealed class NoPersonPresent : McpError
+        {
+            public NoPersonPresent(string actionName)
+                : base("no person is present to authorize " + actionName)
+            {
+                ActionName = actionName;
+            }
+
+            public string ActionName { get; }
+        }
     }
 }

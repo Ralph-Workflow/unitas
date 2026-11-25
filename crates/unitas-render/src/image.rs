@@ -3,6 +3,42 @@ use std::io;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rgba8 {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+impl Rgba8 {
+    pub fn new(width: u32, height: u32) -> Self {
+        let count = (width as usize) * (height as usize);
+        Self {
+            width,
+            height,
+            pixels: vec![0; count * 4],
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    pub fn get_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        if x < self.width && y < self.height {
+            let offset = ((y as usize) * (self.width as usize) + (x as usize)) * 4;
+            [
+                self.pixels[offset],
+                self.pixels[offset + 1],
+                self.pixels[offset + 2],
+                self.pixels[offset + 3],
+            ]
+        } else {
+            [0, 0, 0, 0]
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
