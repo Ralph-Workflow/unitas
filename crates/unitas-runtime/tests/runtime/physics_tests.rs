@@ -372,7 +372,7 @@ fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_
     ));
     std::fs::create_dir_all(&temp_dir)?;
     let temp_scene = temp_dir.join("resting_sphere.unity");
-    let yaml = include_str!("fixtures/scene_physics_collision.unity").replace(
+    let yaml = include_str!("../fixtures/scene_physics_collision.unity").replace(
         "  m_LocalPosition: {x: 0.9999999, y: 0.499, z: 0}",
         "  m_LocalPosition: {x: 0, y: 1.5, z: 0}",
     );
@@ -440,7 +440,7 @@ fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity(
     ));
     std::fs::create_dir_all(&temp_dir)?;
     let temp_scene = temp_dir.join("kinematic_role.unity");
-    let yaml = include_str!("fixtures/scene_physics_collision.unity").replace(
+    let yaml = include_str!("../fixtures/scene_physics_collision.unity").replace(
         "  m_Mass: 1\n  m_UseGravity: 1",
         "  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 1",
     );
@@ -481,7 +481,7 @@ fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_off
     ));
     std::fs::create_dir_all(&temp_dir)?;
     let temp_scene = temp_dir.join("parented_dynamic.unity");
-    let yaml = include_str!("fixtures/scene_physics_rotated_nested.unity").replace(
+    let yaml = include_str!("../fixtures/scene_physics_rotated_nested.unity").replace(
         "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}",
         "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}\n  - component: {fileID: 1311639365}",
     )

@@ -23,6 +23,8 @@ mod packages_tests;
 mod prefab_variant_tests;
 #[path = "asset_import/primitive_tests.rs"]
 mod primitive_tests;
+#[path = "asset_import/scene_save_tests.rs"]
+mod scene_save_tests;
 #[path = "asset_import/texture_tests.rs"]
 mod texture_tests;
 #[path = "asset_import/trust_tests.rs"]

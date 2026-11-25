@@ -12,6 +12,7 @@ pub mod prefab_variant;
 pub mod primitive;
 pub mod project_settings;
 pub mod scene;
+pub mod scene_save;
 pub mod texture;
 pub mod trust;
 pub mod unity_yaml;

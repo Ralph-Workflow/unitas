@@ -1,6 +1,10 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, SampledBinding, WrapMode};
 use crate::curve::AnimatedValue;
+
+static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectorUpdateMode {
@@ -63,11 +67,13 @@ impl std::error::Error for PlayableError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlayableHandle {
     index: usize,
+    graph_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlayableOutputHandle {
     index: usize,
+    graph_id: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +184,7 @@ struct PlayableOutput {
 
 pub struct PlayableGraph {
     name: String,
+    id: u64,
     nodes: Vec<PlayableNode>,
     outputs: Vec<PlayableOutput>,
     state: PlayState,
@@ -190,6 +197,7 @@ impl PlayableGraph {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
             nodes: Vec::new(),
             outputs: Vec::new(),
             state: PlayState::Paused,
@@ -254,7 +262,7 @@ impl PlayableGraph {
         if self.destroyed {
             return Err(PlayableError::GraphDestroyed);
         }
-        if source.index >= self.nodes.len() || destination.index >= self.nodes.len() {
+        if self.node(source).is_none() || self.node(destination).is_none() {
             return Err(PlayableError::UnknownPlayable);
         }
         if source_port != 0 {
@@ -264,7 +272,7 @@ impl PlayableGraph {
             return Err(PlayableError::CyclicConnection);
         }
         let weight = sanitize_weight(weight);
-        let Some(node) = self.nodes.get_mut(destination.index) else {
+        let Some(node) = self.node_mut(destination) else {
             return Err(PlayableError::UnknownPlayable);
         };
         match node {
@@ -298,7 +306,7 @@ impl PlayableGraph {
             return Err(PlayableError::GraphDestroyed);
         }
         let weight = sanitize_weight(weight);
-        let Some(node) = self.nodes.get_mut(destination.index) else {
+        let Some(node) = self.node_mut(destination) else {
             return Err(PlayableError::UnknownPlayable);
         };
         match node {
@@ -321,7 +329,7 @@ impl PlayableGraph {
     }
 
     pub fn input_weight(&self, destination: PlayableHandle, destination_port: u32) -> Option<f32> {
-        match self.nodes.get(destination.index)? {
+        match self.node(destination)? {
             PlayableNode::Mixer { inputs, .. } => inputs
                 .get(destination_port as usize)
                 .map(|input| input.weight),
@@ -340,7 +348,7 @@ impl PlayableGraph {
         if self.destroyed {
             return Err(PlayableError::GraphDestroyed);
         }
-        if source.index >= self.nodes.len() {
+        if self.node(source).is_none() {
             return Err(PlayableError::UnknownPlayable);
         }
         self.outputs.push(PlayableOutput {
@@ -350,18 +358,17 @@ impl PlayableGraph {
         });
         Ok(PlayableOutputHandle {
             index: self.outputs.len() - 1,
+            graph_id: self.id,
         })
     }
 
     pub fn output_name(&self, output: PlayableOutputHandle) -> Option<&str> {
-        self.outputs
-            .get(output.index)
+        self.output(output)
             .map(|entry| entry.name.as_str())
     }
 
     pub fn output_pose(&self, output: PlayableOutputHandle) -> &[SampledBinding] {
-        self.outputs
-            .get(output.index)
+        self.output(output)
             .map(|entry| entry.pose.as_slice())
             .unwrap_or(&[])
     }
@@ -462,7 +469,7 @@ impl PlayableGraph {
     }
 
     pub fn playable_time(&self, handle: PlayableHandle) -> Option<f64> {
-        self.nodes.get(handle.index).map(|node| node.state().time)
+        self.node(handle).map(|node| node.state().time)
     }
 
     pub fn set_playable_time(
@@ -470,7 +477,7 @@ impl PlayableGraph {
         handle: PlayableHandle,
         time: f64,
     ) -> Result<(), PlayableError> {
-        let Some(node) = self.nodes.get_mut(handle.index) else {
+        let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };
         let time = if time.is_finite() { time.max(0.0) } else { 0.0 };
@@ -479,7 +486,7 @@ impl PlayableGraph {
     }
 
     pub fn playable_speed(&self, handle: PlayableHandle) -> Option<f64> {
-        self.nodes.get(handle.index).map(|node| node.state().speed)
+        self.node(handle).map(|node| node.state().speed)
     }
 
     pub fn set_playable_speed(
@@ -487,7 +494,7 @@ impl PlayableGraph {
         handle: PlayableHandle,
         speed: f64,
     ) -> Result<(), PlayableError> {
-        let Some(node) = self.nodes.get_mut(handle.index) else {
+        let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };
         node.state_mut().speed = if speed.is_finite() { speed } else { 1.0 };
@@ -495,7 +502,7 @@ impl PlayableGraph {
     }
 
     pub fn playable_duration(&self, handle: PlayableHandle) -> Option<f64> {
-        self.nodes.get(handle.index).map(|node| node.state().duration)
+        self.node(handle).map(|node| node.state().duration)
     }
 
     pub fn set_playable_duration(
@@ -503,7 +510,7 @@ impl PlayableGraph {
         handle: PlayableHandle,
         duration: f64,
     ) -> Result<(), PlayableError> {
-        let Some(node) = self.nodes.get_mut(handle.index) else {
+        let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };
         node.state_mut().duration = if duration.is_finite() {
@@ -515,15 +522,35 @@ impl PlayableGraph {
     }
 
     pub fn playable_is_done(&self, handle: PlayableHandle) -> Option<bool> {
-        self.nodes
-            .get(handle.index)
-            .map(|node| self.node_is_done_handle(node))
+        self.node(handle).map(|node| self.node_is_done_handle(node))
+    }
+
+    fn node(&self, handle: PlayableHandle) -> Option<&PlayableNode> {
+        if handle.graph_id != self.id {
+            return None;
+        }
+        self.nodes.get(handle.index)
+    }
+
+    fn node_mut(&mut self, handle: PlayableHandle) -> Option<&mut PlayableNode> {
+        if handle.graph_id != self.id {
+            return None;
+        }
+        self.nodes.get_mut(handle.index)
+    }
+
+    fn output(&self, handle: PlayableOutputHandle) -> Option<&PlayableOutput> {
+        if handle.graph_id != self.id {
+            return None;
+        }
+        self.outputs.get(handle.index)
     }
 
     fn add_node(&mut self, node: PlayableNode) -> PlayableHandle {
         self.nodes.push(node);
         PlayableHandle {
             index: self.nodes.len() - 1,
+            graph_id: self.id,
         }
     }
 
@@ -536,7 +563,7 @@ impl PlayableGraph {
         if self.destroyed {
             return Err(PlayableError::GraphDestroyed);
         }
-        let Some(node) = self.nodes.get_mut(layer.index) else {
+        let Some(node) = self.node_mut(layer) else {
             return Err(PlayableError::UnknownPlayable);
         };
         let PlayableNode::LayerMixer { layers, .. } = node else {

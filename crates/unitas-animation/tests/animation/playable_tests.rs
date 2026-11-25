@@ -358,3 +358,39 @@ fn invalid_connections_and_masks_are_rejected() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
+
+#[test]
+fn a_handle_from_another_graph_is_not_usable_in_this_graph() -> Result<(), Box<dyn Error>> {
+    let mut graph = PlayableGraph::new("Owner");
+    let mixer = AnimationMixerPlayable::create(&mut graph, 1);
+    let mut other = PlayableGraph::new("Other");
+    let foreign = AnimationClipPlayable::create(&mut other, constant_position_clip("Foreign", 1.0));
+
+    assert_eq!(graph.set_input_weight(mixer.handle(), 0, 1.0), Ok(()));
+    assert_eq!(
+        graph.set_input_weight(foreign.handle(), 0, 1.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_playable_time(foreign.handle(), 0.5),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_playable_speed(foreign.handle(), 2.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_playable_duration(foreign.handle(), 1.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.create_output("Foreign", foreign.handle()),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(graph.playable_time(foreign.handle()), None);
+    assert_eq!(graph.playable_speed(foreign.handle()), None);
+    assert_eq!(graph.playable_duration(foreign.handle()), None);
+    assert_eq!(graph.playable_is_done(foreign.handle()), None);
+    assert_eq!(graph.input_weight(foreign.handle(), 0), None);
+    Ok(())
+}
