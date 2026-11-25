@@ -1021,6 +1021,7 @@ def test_secret_scan_excludes_build_output_but_not_sources() -> None:
         "obj/Debug/app.dll",
         "bridge/UnityEngine/bin/Release/netstandard2.1/UnityEngine.dll",
         "bridge/UnityEngine/obj/Release/netstandard2.1/project.assets.json",
+        "tools/__pycache__/verify.cpython-314.pyc",
     )
     for path in build_output:
         assert any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
@@ -1031,6 +1032,38 @@ def test_secret_scan_excludes_build_output_but_not_sources() -> None:
     )
     for path in sources:
         assert not any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
+
+
+def test_secret_scan_skips_generated_player_bundles(tmp_path: Path) -> None:
+    bundle = tmp_path / "roll-a-ball"
+    bundle.mkdir()
+    (bundle / verify.PLAYER_BUNDLE_MANIFEST_FILENAME).write_text("{}\n", encoding="utf-8")
+    (bundle / "RollABall.app").mkdir()
+    (bundle / "RollABall.app" / "Resources").mkdir()
+    (bundle / "RollABall.app" / "Resources" / "bundle.manifest").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    source_dir = tmp_path / "crates"
+    source_dir.mkdir()
+    (source_dir / "lib.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+    files = verify.secret_scan_files(tmp_path)
+
+    assert "crates/lib.rs" in files
+    assert not any(path.startswith("roll-a-ball/") for path in files)
+
+
+def test_secret_scan_keeps_first_party_directories_that_hold_a_bundle_manifest(
+    tmp_path: Path,
+) -> None:
+    fixture = tmp_path / "crates" / "fixture"
+    fixture.mkdir(parents=True)
+    (fixture / verify.PLAYER_BUNDLE_MANIFEST_FILENAME).write_text("{}\n", encoding="utf-8")
+    (fixture / "scene.unity").write_text("%YAML 1.1\n", encoding="utf-8")
+
+    files = verify.secret_scan_files(tmp_path)
+
+    assert "crates/fixture/scene.unity" in files
 
 
 def test_dotnet_format_files_skip_build_output_but_keep_sources(tmp_path: Path) -> None:

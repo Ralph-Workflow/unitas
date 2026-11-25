@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_build::control;
+use unitas_build::player::STARTUP_FAILURE_EXIT_CODE;
 #[cfg(feature = "device")]
 use unitas_build::{
     capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,
@@ -189,7 +190,7 @@ fn main() -> ExitCode {
         Some(ref dir) if cli.sample && !dir.exists() => {
             if let Err(error) = stage_roll_a_ball_bundle(dir) {
                 eprintln!("unitas-player startup failed: {error}");
-                return ExitCode::from(1);
+                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
             }
             dir.clone()
         }
@@ -201,7 +202,7 @@ fn main() -> ExitCode {
             ));
             if let Err(error) = stage_roll_a_ball_bundle(&temp_dir) {
                 eprintln!("unitas-player startup failed: {error}");
-                return ExitCode::from(1);
+                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
             }
             temp_sample_dir = Some(temp_dir.clone());
             temp_dir
@@ -231,7 +232,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("unitas-player startup failed: {error}");
-                ExitCode::from(1)
+                ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
             }
         }
     } else {
@@ -277,7 +278,7 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
         }
         Err(error) => {
             eprintln!("unitas-player startup failed: {error}");
-            ExitCode::from(1)
+            ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
         }
     }
 }
@@ -286,7 +287,7 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
 fn run_windowed(bundle_dir: &Path, _options: &WindowedLaunchOptions) -> ExitCode {
     if let Err(error) = load_and_validate_bundle_manifest(bundle_dir) {
         eprintln!("unitas-player startup failed: {error}");
-        return ExitCode::from(1);
+        return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
     }
     eprintln!("unitas-player: the windowed player requires the device feature");
     ExitCode::from(2)
@@ -316,7 +317,7 @@ fn run_capture_reference(reference_out: &Path, width: u32, height: u32) -> ExitC
         }
         Err(error) => {
             eprintln!("unitas-player startup failed: {error}");
-            ExitCode::from(1)
+            ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
         }
     }
 }
@@ -355,7 +356,7 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
         }
         Err(error) => {
             eprintln!("unitas-player startup failed: {error}");
-            ExitCode::from(1)
+            ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
         }
     }
 }
@@ -371,7 +372,7 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
         Ok(resolved) => resolved,
         Err(message) => {
             eprintln!("unitas-player startup failed: {message}");
-            return ExitCode::from(1);
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
         }
     };
 
@@ -380,7 +381,7 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
             Ok(session) => session,
             Err(error) => {
                 eprintln!("unitas-player startup failed: {}", error.outcome());
-                return ExitCode::from(1);
+                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
             }
         };
 

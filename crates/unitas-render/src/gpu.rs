@@ -1597,6 +1597,45 @@ mod tests {
         Ok(())
     }
 
+    struct OverlayInk {
+        changed: usize,
+        min_x: u32,
+        max_x: u32,
+        min_y: u32,
+        max_y: u32,
+        columns: Vec<bool>,
+    }
+
+    fn overlay_ink(without: &Image, with: &Image, size: (u32, u32)) -> OverlayInk {
+        let (width, height) = size;
+        let mut ink = OverlayInk {
+            changed: 0,
+            min_x: width,
+            max_x: 0,
+            min_y: height,
+            max_y: 0,
+            columns: vec![false; width as usize],
+        };
+        for y in 0..height {
+            for x in 0..width {
+                if without.get_pixel(x, y) != with.get_pixel(x, y) {
+                    ink.changed += 1;
+                    ink.min_x = ink.min_x.min(x);
+                    ink.max_x = ink.max_x.max(x);
+                    ink.min_y = ink.min_y.min(y);
+                    ink.max_y = ink.max_y.max(y);
+                    ink.columns[x as usize] = true;
+                }
+            }
+        }
+        ink
+    }
+
+    fn ink_coverage(ink: &OverlayInk) -> f32 {
+        let area = ((ink.max_x - ink.min_x + 1) * (ink.max_y - ink.min_y + 1)) as f32;
+        ink.changed as f32 / area
+    }
+
     #[test]
     fn text_overlay_changes_pixels_inside_text_bounds_only(
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1605,8 +1644,7 @@ mod tests {
             None => return Ok(()),
         };
         if !renderer.has_overlay_fonts() {
-            eprintln!("skipping text overlay test, no fonts available");
-            return Ok(());
+            return Err("the renderer loaded no fonts, so the overlay cannot be verified".into());
         }
         let overlay = vec![TextOverlayItem {
             text: "Ag".to_string(),
@@ -1651,9 +1689,63 @@ mod tests {
             }
         }
         assert!(changed > 0, "overlay produced no changed pixels");
+        let ink = overlay_ink(&without, &with, (WIDTH, HEIGHT));
+        let coverage = ink_coverage(&ink);
+        assert!(
+            coverage < 0.7,
+            "overlay fills {coverage} of its bounds, which means solid blocks instead of letterforms"
+        );
         assert_eq!(
             without.get_pixel(WIDTH - 1, HEIGHT - 1),
             with.get_pixel(WIDTH - 1, HEIGHT - 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn text_overlay_renders_letterforms_not_solid_blocks() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        if !renderer.has_overlay_fonts() {
+            return Err(
+                "the renderer loaded no fonts, so the HUD phrase cannot be verified".into(),
+            );
+        }
+        let size = (256u32, 96u32);
+        let overlay = vec![TextOverlayItem {
+            text: "Score: 0/4".to_string(),
+            x: 16.0,
+            y: 16.0,
+            size_px: 28.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }];
+        let without =
+            renderer.render_offscreen(&[], &camera(), view(), &light(), BACKGROUND, size)?;
+        let scene = RenderScene {
+            camera: &camera(),
+            view: view(),
+            light: &light(),
+            background: BACKGROUND,
+        };
+        let with = renderer.render_offscreen_with_overlay(&[], scene, size, &overlay)?;
+        let ink = overlay_ink(&without, &with, size);
+        assert!(ink.changed > 0, "the HUD phrase produced no changed pixels");
+        let coverage = ink_coverage(&ink);
+        assert!(
+            coverage < 0.7,
+            "the HUD phrase fills {coverage} of its bounds, which means solid blocks instead of letterforms"
+        );
+        let columns = &ink.columns[ink.min_x as usize..=ink.max_x as usize];
+        assert!(
+            columns.iter().any(|column| *column),
+            "no text column carries ink"
+        );
+        assert!(
+            columns.iter().any(|column| !*column),
+            "every text column carries ink, which means solid blocks instead of letterforms"
         );
         Ok(())
     }

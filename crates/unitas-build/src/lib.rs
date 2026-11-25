@@ -25,10 +25,10 @@ pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIde
 pub use player::{
     apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,
     diagnostics_from_bundle_error, execute_build, execute_build_for_host, launch_bundle,
-    load_and_validate_bundle_manifest, mean_image_channel_error, BuildOutcomeBundle,
-    DeviceVerifyReport, PlayerLaunchResult, PlayerSession, PlayerStartupError,
+    load_and_validate_bundle_manifest, mean_image_channel_error, render_failure, window_failure,
+    BuildOutcomeBundle, DeviceVerifyReport, PlayerLaunchResult, PlayerSession, PlayerStartupError,
     WindowedLaunchOptions, WindowedPlayerResult, BUILD_REPORT_FILENAME,
-    DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
+    DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH, STARTUP_FAILURE_EXIT_CODE,
 };
 #[cfg(feature = "device")]
 pub use player::{capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification};

@@ -371,7 +371,8 @@ fn vs_main(vertex: VertexIn) -> VertexOut {
 @fragment
 fn fs_main(fs_in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(atlas, atlas_sampler, fs_in.texcoord);
-    return vec4<f32>(fs_in.color.rgb * texel.rgb, texel.a * fs_in.color.a);
+    let alpha = texel.a * fs_in.color.a;
+    return vec4<f32>(fs_in.color.rgb * texel.rgb * alpha, alpha);
 }
 ";
 
@@ -944,6 +945,70 @@ mod tests {
             .ok_or("the atlas holds no region for the rasterized glyph")?;
         assert!(region.width > 0 && region.height > 0);
         assert!(atlas.image.pixels.chunks_exact(4).any(|px| px[3] > 0));
+        Ok(())
+    }
+
+    #[test]
+    fn rasterized_phrase_coverage_is_letterform_like() -> Result<(), Box<dyn std::error::Error>> {
+        let mut fonts = FontLibrary::new();
+        if !fonts.load_system_fonts() {
+            return Err("no system fonts are available to rasterize the HUD phrase".into());
+        }
+        let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
+        let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
+        let mut cache = SwashCache::new();
+        let mut atlas = GlyphAtlas::new(1024, 1024);
+        let quads = rasterize(&mut fonts, &mut cache, &mut atlas, &layout);
+        assert!(!quads.is_empty(), "the phrase produced no glyph quads");
+        let columns = layout.width.ceil() as usize;
+        let mut inked_columns = vec![false; columns];
+        let mut inked = 0usize;
+        let mut blank = 0usize;
+        let mut partial = 0usize;
+        for quad in &quads {
+            let region_x = (quad.uv[0] * atlas.image.width as f32).round() as u32;
+            let region_y = (quad.uv[1] * atlas.image.height as f32).round() as u32;
+            let region_width =
+                ((quad.uv[2] - quad.uv[0]) * atlas.image.width as f32).round() as u32;
+            let region_height =
+                ((quad.uv[3] - quad.uv[1]) * atlas.image.height as f32).round() as u32;
+            for row in 0..region_height {
+                for col in 0..region_width {
+                    let alpha = atlas.image.get_pixel(region_x + col, region_y + row)[3];
+                    let column = (quad.x + col as f32).floor() as usize;
+                    if column >= inked_columns.len() {
+                        continue;
+                    }
+                    if alpha == 0 {
+                        blank += 1;
+                    } else {
+                        inked_columns[column] = true;
+                        if alpha == 255 {
+                            inked += 1;
+                        } else {
+                            partial += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(inked + partial > 0, "the rasterized phrase carries no ink");
+        assert!(
+            blank > 0,
+            "the rasterized phrase fills every glyph pixel, which means solid blocks"
+        );
+        assert!(
+            partial > 0,
+            "the rasterized mask is uniformly opaque, which means solid blocks"
+        );
+        assert!(
+            inked_columns.iter().any(|column| *column),
+            "no text column carries ink"
+        );
+        assert!(
+            inked_columns.iter().any(|column| !*column),
+            "every text column carries ink, which means solid blocks"
+        );
         Ok(())
     }
 

@@ -33,6 +33,7 @@ use crate::targets::BuildTarget;
 pub const BUILD_REPORT_FILENAME: &str = "build-report.json";
 pub const DEFAULT_DEVICE_VERIFY_WIDTH: u32 = 320;
 pub const DEFAULT_DEVICE_VERIFY_HEIGHT: u32 = 240;
+pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerStartupError {
@@ -128,6 +129,18 @@ impl fmt::Display for PlayerStartupError {
 }
 
 impl std::error::Error for PlayerStartupError {}
+
+pub fn window_failure<E: fmt::Display>(error: E) -> PlayerStartupError {
+    PlayerStartupError::WindowFailed {
+        message: error.to_string(),
+    }
+}
+
+pub fn render_failure<E: fmt::Display>(error: E) -> PlayerStartupError {
+    PlayerStartupError::RenderFailed {
+        message: error.to_string(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerLaunchResult {
@@ -505,11 +518,7 @@ pub fn launch_bundle_windowed(
         }
     })?;
 
-    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
-        PlayerStartupError::RenderFailed {
-            message: error.to_string(),
-        }
-    })?;
+    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
 
     let (audio_device_active, audio_device_status) = if options.start_audio_device {
         match presenter.start_default_audio_output() {
@@ -557,9 +566,7 @@ pub fn launch_bundle_windowed(
         &mut controller,
         options.inject_demo_input,
     )
-    .map_err(|error| PlayerStartupError::WindowFailed {
-        message: error.to_string(),
-    })?;
+    .map_err(window_failure)?;
 
     let frames_presented = presenter.frames_presented();
 
@@ -567,9 +574,7 @@ pub fn launch_bundle_windowed(
         Some(
             presenter
                 .render_offscreen(&runtime, width, height)
-                .map_err(|error| PlayerStartupError::RenderFailed {
-                    message: error.to_string(),
-                })?,
+                .map_err(render_failure)?,
         )
     } else {
         None
@@ -771,11 +776,7 @@ pub fn capture_sample_reference_bmp(
             message: error.to_string(),
         }
     })?;
-    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
-        PlayerStartupError::RenderFailed {
-            message: error.to_string(),
-        }
-    })?;
+    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
     let mut controller =
         RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(|error| {
             PlayerStartupError::AudioFailed {
@@ -803,9 +804,7 @@ pub fn capture_sample_reference_bmp(
 
     let image = presenter
         .render_offscreen(&runtime, width.max(1), height.max(1))
-        .map_err(|error| PlayerStartupError::RenderFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(render_failure)?;
     if let Some(parent) = reference_bmp_path.parent() {
         fs::create_dir_all(parent).map_err(|error| PlayerStartupError::VerificationFailed {
             message: format!(
@@ -875,11 +874,7 @@ pub fn run_device_verification(
         }
     })?;
 
-    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
-        PlayerStartupError::RenderFailed {
-            message: error.to_string(),
-        }
-    })?;
+    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
     let mut controller =
         RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(|error| {
             PlayerStartupError::AudioFailed {
@@ -908,9 +903,7 @@ pub fn run_device_verification(
 
     let first_gpu_frame = presenter
         .render_offscreen(&runtime, width, height)
-        .map_err(|error| PlayerStartupError::RenderFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(render_failure)?;
     let mean_channel_error = mean_image_channel_error(&first_gpu_frame, &reference_image)
         .map_err(|message| PlayerStartupError::VerificationFailed { message })?;
 

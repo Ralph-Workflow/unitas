@@ -378,6 +378,17 @@ SECRET_SCAN_EXCLUDES = (
     r"^checkpoint\.json$",
     r"(^|/)bin/",
     r"(^|/)obj/",
+    r"(^|/)__pycache__/",
+)
+PLAYER_BUNDLE_MANIFEST_FILENAME = "bundle.manifest"
+FIRST_PARTY_SOURCE_ROOTS = (
+    "bridge",
+    "crates",
+    "docs",
+    "editor",
+    "samples",
+    "scripts",
+    "tools",
 )
 
 
@@ -1951,6 +1962,16 @@ def secret_scan_files(root: Path = REPO_ROOT) -> list[str]:
     for walk_root, dirnames, filenames in os.walk(root):
         rel_dir = os.path.relpath(walk_root, root)
         prefix = "" if rel_dir == "." else rel_dir + "/"
+        if (
+            rel_dir != "."
+            and PLAYER_BUNDLE_MANIFEST_FILENAME in filenames
+            and not any(
+                rel_dir == root or rel_dir.startswith(root + "/")
+                for root in FIRST_PARTY_SOURCE_ROOTS
+            )
+        ):
+            dirnames[:] = []
+            continue
         dirnames[:] = [
             name
             for name in sorted(dirnames)

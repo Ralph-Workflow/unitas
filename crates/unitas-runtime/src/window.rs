@@ -527,11 +527,11 @@ impl<'a> GpuFramePresenter<'a> {
             .unwrap_or(DEFAULT_AUDIO_SAMPLE_RATE);
         let frames = ((dt * f64::from(sample_rate)).round() as usize).clamp(1, 4096);
         let samples = runtime.audio_mut().mix(frames);
-        if !self.audio_paused {
-            if let Some(output) = &self.audio_output {
-                let report = output.push_mixed(&samples);
-                self.total_audio_frames_pushed += report.accepted_frames;
-            }
+        if !self.audio_paused
+            && let Some(output) = &self.audio_output
+        {
+            let report = output.push_mixed(&samples);
+            self.total_audio_frames_pushed += report.accepted_frames;
         }
         self.last_mixed_samples = samples;
     }
@@ -899,10 +899,10 @@ impl<'a> WindowApp<'a> {
         self.presented_frames += 1;
         self.presenting_finished = Some(Instant::now());
         window.request_redraw();
-        if let Some(limit) = self.config.effective_max_frames() {
-            if self.frame_index >= limit {
-                event_loop.exit();
-            }
+        if let Some(limit) = self.config.effective_max_frames()
+            && self.frame_index >= limit
+        {
+            event_loop.exit();
         }
     }
 }
