@@ -10,7 +10,7 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2] [--frame-rates 30,60,144,240]");
                 return 1;
             }
 

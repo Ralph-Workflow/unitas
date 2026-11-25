@@ -40,8 +40,9 @@ namespace Unitas.Bridge
         private ISceneBackend _sceneBackend;
         private int _nextSceneHandle = 1;
         private ulong _nextScriptHandle = 1;
-        private int _fixedUpdateCallsInStep;
-        private int _lateUpdateCallsInTick;
+        private readonly List<ulong> _fixedUpdatePhaseHandles = new List<ulong>();
+        private readonly List<ulong> _updatePhaseHandles = new List<ulong>();
+        private readonly List<ulong> _lateUpdatePhaseHandles = new List<ulong>();
         private bool _isDisposed;
         private bool _isQuitting;
         private bool _isFocused = true;
@@ -132,6 +133,12 @@ namespace Unitas.Bridge
             Input.Provider = this;
             SceneManager.Host = this;
             Application.Host = this;
+            // Lets headless scenario runs share PlayerPrefs state across processes (SAV-001).
+            string? persistentDataPathOverride = Environment.GetEnvironmentVariable("UNITAS_PERSISTENT_DATA_PATH");
+            if (!string.IsNullOrEmpty(persistentDataPathOverride))
+            {
+                Application.PersistentDataPathOverride = persistentDataPathOverride;
+            }
             AudioSource.Provider = this;
             Animator.Provider = _animationProvider;
             Camera.Provider = _renderProvider;
@@ -622,8 +629,9 @@ namespace Unitas.Bridge
 
         private void DropReplacedScripts()
         {
-            _fixedUpdateCallsInStep = 0;
-            _lateUpdateCallsInTick = 0;
+            _fixedUpdatePhaseHandles.Clear();
+            _updatePhaseHandles.Clear();
+            _lateUpdatePhaseHandles.Clear();
             List<ulong> dropped = new List<ulong>();
             foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
             {
@@ -755,8 +763,10 @@ namespace Unitas.Bridge
                     }
                 }
             }
-            _fixedUpdateCallsInStep = 0;
-            _lateUpdateCallsInTick = 0;
+            WarnOnLeftoverPhaseHandles();
+            _fixedUpdatePhaseHandles.Clear();
+            _updatePhaseHandles.Clear();
+            _lateUpdatePhaseHandles.Clear();
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
             double tickDeltaSeconds = Time.captureFramerate > 0 ? Time.unscaledDeltaTime : deltaSeconds;
@@ -808,8 +818,9 @@ namespace Unitas.Bridge
                 DispatchApplicationCallback(script => script.OnApplicationQuit());
                 _isDisposed = true;
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
-                _fixedUpdateCallsInStep = 0;
-                _lateUpdateCallsInTick = 0;
+                _fixedUpdatePhaseHandles.Clear();
+                _updatePhaseHandles.Clear();
+                _lateUpdatePhaseHandles.Clear();
                 _scripts.Clear();
                 _entityScripts.Clear();
                 _entityGameObjects.Clear();
@@ -2229,14 +2240,11 @@ namespace Unitas.Bridge
         private void OnFixedUpdate(ulong scriptHandle, double fixedDeltaSeconds)
         {
             SyncSimulatedTransforms();
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
+            _fixedUpdatePhaseHandles.Add(scriptHandle);
+            if (_scripts.Count > 0 && _fixedUpdatePhaseHandles.Count >= _scripts.Count)
             {
-                InvokeWithOrigin(script!, script!.FixedUpdate);
-            }
-            _fixedUpdateCallsInStep++;
-            if (_scripts.Count > 0 && _fixedUpdateCallsInStep >= _scripts.Count)
-            {
-                _fixedUpdateCallsInStep = 0;
+                DispatchPhaseInExecutionOrder(_fixedUpdatePhaseHandles, script => script.FixedUpdate());
+                _fixedUpdatePhaseHandles.Clear();
                 PumpFixedSafely();
             }
         }
@@ -2244,24 +2252,66 @@ namespace Unitas.Bridge
         private void OnUpdate(ulong scriptHandle, double deltaSeconds)
         {
             SyncSimulatedTransforms();
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
+            _updatePhaseHandles.Add(scriptHandle);
+            if (_scripts.Count > 0 && _updatePhaseHandles.Count >= _scripts.Count)
             {
-                InvokeWithOrigin(script!, script!.Update);
+                DispatchPhaseInExecutionOrder(_updatePhaseHandles, script => script.Update());
+                _updatePhaseHandles.Clear();
             }
         }
 
         private void OnLateUpdate(ulong scriptHandle, double deltaSeconds)
         {
             SyncSimulatedTransforms();
-            if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
+            _lateUpdatePhaseHandles.Add(scriptHandle);
+            if (_scripts.Count > 0 && _lateUpdatePhaseHandles.Count >= _scripts.Count)
             {
-                InvokeWithOrigin(script!, script!.LateUpdate);
-            }
-            _lateUpdateCallsInTick++;
-            if (_scripts.Count > 0 && _lateUpdateCallsInTick >= _scripts.Count)
-            {
-                _lateUpdateCallsInTick = 0;
+                DispatchPhaseInExecutionOrder(_lateUpdatePhaseHandles, script => script.LateUpdate());
+                _lateUpdatePhaseHandles.Clear();
                 PumpFrameSafely();
+            }
+        }
+
+        // Native dispatch (crates/unitas-runtime/src/runtime.rs tick_with_hook) calls
+        // these callbacks once per handle in scene insertion order; managed execution
+        // order is applied here by buffering one phase and flushing it sorted by
+        // GetEffectiveExecutionOrder, stable on arrival index.
+        private void DispatchPhaseInExecutionOrder(List<ulong> phaseHandles, Action<MonoBehaviour> callback)
+        {
+            List<(MonoBehaviour Script, int Order, int Index)> pending =
+                new List<(MonoBehaviour Script, int Order, int Index)>(phaseHandles.Count);
+            for (int i = 0; i < phaseHandles.Count; i++)
+            {
+                if (_scripts.TryGetValue(phaseHandles[i], out MonoBehaviour? script) && IsEligible(script))
+                {
+                    pending.Add((script!, MonoBehaviour.GetEffectiveExecutionOrder(script!), i));
+                }
+            }
+            pending.Sort((left, right) =>
+            {
+                int cmp = left.Order.CompareTo(right.Order);
+                return cmp != 0 ? cmp : left.Index.CompareTo(right.Index);
+            });
+            for (int i = 0; i < pending.Count; i++)
+            {
+                MonoBehaviour script = pending[i].Script;
+                // Re-check at invoke time: an earlier callback in this flush may have
+                // destroyed a later script.
+                if (!IsEligible(script))
+                {
+                    continue;
+                }
+                InvokeWithOrigin(script, () => callback(script));
+            }
+        }
+
+        private void WarnOnLeftoverPhaseHandles()
+        {
+            // A non-empty buffer at tick start means phase completion was miscounted
+            // (the script set changed mid-phase); the leftovers are dropped, not run.
+            if (_fixedUpdatePhaseHandles.Count + _updatePhaseHandles.Count + _lateUpdatePhaseHandles.Count > 0)
+            {
+                Debug.LogWarning("BridgeHost: dropping incomplete script phase from the previous tick");
             }
         }
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,18 +15,35 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_ROOT = REPO_ROOT / "samples" / "roll-a-ball"
-SCENARIO_PATH = SAMPLE_ROOT / "Scenarios" / "collect_all.json"
+SCENARIO_DIR = SAMPLE_ROOT / "Scenarios"
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
-REPORT_PATH = REPO_ROOT / "target" / "samples-lane" / "collect_all_report.json"
+REPORT_DIR = REPO_ROOT / "target" / "samples-lane"
 BUILD_BUDGET_SECONDS = 600.0
 RUN_BUDGET_SECONDS = 300.0
+
+SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
+    ("collect_all", "collect_all.json", ("--repeat", "2"), False),
+    ("retry_clean", "retry_clean.json", ("--repeat", "2"), False),
+    ("combo_multiplier", "combo_multiplier.json", ("--repeat", "2"), False),
+    ("gold_window", "gold_window.json", ("--repeat", "2"), False),
+    ("gold_collect", "gold_collect.json", ("--repeat", "2"), False),
+    ("dash_cooldown", "dash_cooldown.json", ("--repeat", "2"), False),
+    (
+        "frame_independence",
+        "frame_independence.json",
+        ("--frame-rates", "30,60,144,240", "--repeat", "2"),
+        False,
+    ),
+    ("persist_write", "persist_write.json", (), True),
+    ("persist_read", "persist_read.json", (), True),
+)
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
     ("owner", "wt-01 scripting"),
     ("trigger", "changes to bridge script compilation/play pipeline or samples/"),
     ("lane", "make verify-samples"),
-    ("evidence", "scenario report JSON and lane exit status"),
+    ("evidence", "per-scenario report JSONs under target/samples-lane/ and lane exit status"),
     ("review", "when a second sample game gains real scripts"),
 )
 
@@ -74,36 +93,69 @@ def run_step(
     return completed.returncode
 
 
-def check_report() -> int:
-    if not REPORT_PATH.is_file():
-        emit(f"scenario report missing at {REPORT_PATH}")
+def check_report(report_path: Path, captured_path: Path | None = None) -> int:
+    if not report_path.is_file():
+        emit(f"scenario report missing at {report_path}")
         return 1
     report_status = None
-    report_text = REPORT_PATH.read_text(encoding="utf-8")
-    start = report_text.find("{")
-    if start >= 0:
+    report_text = report_path.read_text(encoding="utf-8")
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"^\{", report_text, re.MULTILINE):
         try:
-            parsed = json.loads(report_text[start:])
+            parsed, _ = decoder.raw_decode(report_text[match.start() :])
         except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            report_status = parsed.get("status")
+            continue
+        if isinstance(parsed, dict) and "status" in parsed:
+            report_status = parsed["status"]
     emit(f"scenario report status: {report_status}")
     if report_status != "passed":
-        emit("verify-samples failed: scenario status is not passed")
         return 1
-    emit("verify-samples passed")
+    if captured_path is not None:
+        captured = captured_path.read_text(encoding="utf-8") if captured_path.is_file() else ""
+        if "sweep: pass" not in captured:
+            emit(f"sweep verdict missing in {captured_path}")
+            return 1
     return 0
+
+
+def run_scenario(
+    name: str,
+    scenario_file: str,
+    extra_args: tuple[str, ...],
+    env: dict[str, str],
+) -> int:
+    report_path = REPORT_DIR / f"{name}_report.json"
+    command = [
+        "dotnet",
+        "run",
+        "--project",
+        str(SCRIPTING_PROJECT),
+        "--configuration",
+        "Release",
+        "--no-build",
+        "--",
+        "scenario",
+        str(SAMPLE_ROOT),
+        str(SCENARIO_DIR / scenario_file),
+        *extra_args,
+    ]
+    rc = run_step(
+        (f"scenario-{name}", command, RUN_BUDGET_SECONDS, report_path, SAMPLE_ROOT),
+        env,
+    )
+    if rc != 0:
+        return rc
+    captured_path = report_path if "--frame-rates" in extra_args else None
+    return check_report(report_path, captured_path)
 
 
 def run_lane() -> int:
     emit(metadata_text())
-    if not SCENARIO_PATH.is_file():
-        emit(f"scenario document missing at {SCENARIO_PATH}")
-        return 1
     env = dict(os.environ)
     env["UNITAS_RUNTIME_LIBRARY"] = str(RUNTIME_LIBRARY)
-    steps: list[tuple[str, list[str], float, Path | None, Path]] = [
+    env.pop("UNITAS_PERSISTENT_DATA_PATH", None)
+
+    build_steps: list[tuple[str, list[str], float, Path | None, Path]] = [
         (
             "runtime-build",
             ["cargo", "build", "-p", "unitas-runtime"],
@@ -118,34 +170,33 @@ def run_lane() -> int:
             None,
             REPO_ROOT,
         ),
-        (
-            "scenario",
-            [
-                "dotnet",
-                "run",
-                "--project",
-                str(SCRIPTING_PROJECT),
-                "--configuration",
-                "Release",
-                "--no-build",
-                "--",
-                "scenario",
-                str(SAMPLE_ROOT),
-                str(SCENARIO_PATH),
-                "--repeat",
-                "2",
-            ],
-            RUN_BUDGET_SECONDS,
-            REPORT_PATH,
-            SAMPLE_ROOT,
-        ),
     ]
-    for step in steps:
+    for step in build_steps:
         rc = run_step(step, env)
         if rc != 0:
             emit(f"verify-samples failed at step {step[0]} (exit {rc})")
             return 1
-    return check_report()
+
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    persist_dir = Path(tempfile.mkdtemp(prefix="prefs-", dir=REPO_ROOT / "target" / "samples-lane"))
+    persist_env = dict(env)
+    persist_env["UNITAS_PERSISTENT_DATA_PATH"] = str(persist_dir)
+
+    results: list[tuple[str, int]] = []
+    for name, scenario_file, extra_args, needs_persist in SCENARIOS:
+        scenario_env = persist_env if needs_persist else env
+        rc = run_scenario(name, scenario_file, extra_args, scenario_env)
+        results.append((name, rc))
+
+    emit("scenario summary:")
+    for name, rc in results:
+        emit(f"  {name}: {'passed' if rc == 0 else f'FAILED (exit {rc})'}")
+    failed = [name for name, rc in results if rc != 0]
+    if failed:
+        emit(f"verify-samples failed: {len(failed)} scenario(s) failed: {', '.join(failed)}")
+        return 1
+    emit("verify-samples passed")
+    return 0
 
 
 def main(argv: Sequence[str]) -> int:

@@ -44,6 +44,17 @@ namespace Unitas.Scripting
                 return 1;
             }
 
+            if (!ScenarioFrameRateSweep.TryGetFrameRates(out double[]? frameRates, out string? frameRatesError))
+            {
+                Console.Error.WriteLine(frameRatesError);
+                return 1;
+            }
+
+            if (frameRates != null)
+            {
+                return ScenarioFrameRateSweep.Run(scenario, frameRates, repeat);
+            }
+
             ScenarioRunner runner = new ScenarioRunner();
             ScenarioResult first = runner.Run(scenario, () => new BridgeHost());
 

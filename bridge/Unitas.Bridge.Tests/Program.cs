@@ -97,6 +97,8 @@ namespace Unitas.Bridge.Tests
             DapSteppingTests.Run();
             EditorMenuTests.Run();
             LifecycleMessageTests.Run();
+            ExecutionOrderDispatchTests.Run();
+            FixedStepDeterminismTests.Run();
             SaveMigrationTests.Run();
 
             if (Check.FailureCount > 0)

@@ -1,0 +1,140 @@
+{
+  "name": "retry_clean",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 12,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 3,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "multiplier_raised_to_x3",
+      "after_step": 12,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x3"
+    },
+    {
+      "id": "retry_contract_log",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12 multiplier x1"
+    },
+    {
+      "id": "player_back_at_start",
+      "after_step": 18,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.2
+    }
+  ]
+}

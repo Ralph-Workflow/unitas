@@ -1,0 +1,25 @@
+{
+  "name": "persist_write",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "records_saved",
+      "after_step": 1,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Records saved medals 1"
+    }
+  ]
+}

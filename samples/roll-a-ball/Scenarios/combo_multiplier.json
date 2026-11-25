@@ -1,0 +1,216 @@
+{
+  "name": "combo_multiplier",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 12,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 130,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "multiplier_x1",
+      "after_step": 7,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x1"
+    },
+    {
+      "id": "award_1",
+      "after_step": 7,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +1 total 1"
+    },
+    {
+      "id": "multiplier_x2",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x2"
+    },
+    {
+      "id": "award_2",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +2 total 3"
+    },
+    {
+      "id": "multiplier_x3",
+      "after_step": 12,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x3"
+    },
+    {
+      "id": "award_3",
+      "after_step": 12,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +3 total 6"
+    },
+    {
+      "id": "multiplier_x4",
+      "after_step": 13,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x4"
+    },
+    {
+      "id": "award_4",
+      "after_step": 13,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +4 total 10"
+    },
+    {
+      "id": "multiplier_x5",
+      "after_step": 16,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo multiplier x5"
+    },
+    {
+      "id": "award_5",
+      "after_step": 16,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +5 total 15"
+    },
+    {
+      "id": "combo_expired_after_gap",
+      "after_step": 17,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Combo expired"
+    },
+    {
+      "id": "return_to_x1_award",
+      "after_step": 19,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Score +1 total 16"
+    }
+  ]
+}
