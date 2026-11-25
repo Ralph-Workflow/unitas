@@ -41,7 +41,9 @@ fn angle_between_vectors(a: [f32; 3], b: [f32; 3]) -> f32 {
 }
 
 fn quat_angle_difference(a: [f32; 4], b: [f32; 4]) -> f32 {
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]).abs().clamp(0.0, 1.0);
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
+        .abs()
+        .clamp(0.0, 1.0);
     2.0 * dot.acos()
 }
 
@@ -52,8 +54,18 @@ fn forward_kinematics_from_result(
     solved_root_rot: [f32; 4],
     solved_mid_rot: [f32; 4],
 ) -> ([f32; 3], [f32; 3]) {
-    let inv_root = [-root_rotation[0], -root_rotation[1], -root_rotation[2], root_rotation[3]];
-    let inv_mid = [-mid_rotation[0], -mid_rotation[1], -mid_rotation[2], mid_rotation[3]];
+    let inv_root = [
+        -root_rotation[0],
+        -root_rotation[1],
+        -root_rotation[2],
+        root_rotation[3],
+    ];
+    let inv_mid = [
+        -mid_rotation[0],
+        -mid_rotation[1],
+        -mid_rotation[2],
+        mid_rotation[3],
+    ];
     let upper_world = [
         chain.mid_position[0] - chain.root_position[0],
         chain.mid_position[1] - chain.root_position[1],
@@ -354,24 +366,15 @@ fn skeleton_animation_clip() -> AnimationClip {
         vec![
             CurveBinding::float(
                 CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.0),
-                    Keyframe::linear(1.0, 2.0),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 2.0)]),
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("ArmL_Upper", "Transform", "localPosition.y"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 1.4),
-                    Keyframe::linear(1.0, 1.4),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.4), Keyframe::linear(1.0, 1.4)]),
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("ArmL_Upper/ArmL_Lower", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.4),
-                    Keyframe::linear(1.0, 0.4),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.4), Keyframe::linear(1.0, 0.4)]),
             ),
             CurveBinding::float(
                 CurveBindingTarget::new(
@@ -386,10 +389,7 @@ fn skeleton_animation_clip() -> AnimationClip {
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("Head", "Transform", "localPosition.y"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 1.6),
-                    Keyframe::linear(1.0, 1.6),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.6), Keyframe::linear(1.0, 1.6)]),
             ),
         ],
         Vec::new(),

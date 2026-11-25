@@ -1897,7 +1897,10 @@ fn compare_findings(left: &Finding, right: &Finding) -> Ordering {
         .then_with(|| left.behavior.cmp(&right.behavior))
         .then_with(|| left.state.cmp(&right.state))
         .then_with(|| tier_rank(left.tier).cmp(&tier_rank(right.tier)))
-        .then_with(|| left.observable_consequence.cmp(&right.observable_consequence))
+        .then_with(|| {
+            left.observable_consequence
+                .cmp(&right.observable_consequence)
+        })
         .then_with(|| {
             left.relied_upon_unity_differences
                 .cmp(&right.relied_upon_unity_differences)
@@ -1955,17 +1958,20 @@ pub fn merge_findings(
     report: &CompatibilityReport,
     external_findings: &[Finding],
 ) -> Result<CompatibilityReport, FindingRejection> {
-    let inputs = external_findings.iter().cloned().map(|finding| FindingInput {
-        feature_id: finding.feature_id,
-        tier: finding.tier,
-        state: finding.state,
-        content: finding.content,
-        behavior: finding.behavior,
-        relied_upon_unity_differences: finding.relied_upon_unity_differences,
-        observable_consequence: finding.observable_consequence,
-        conditions: finding.conditions,
-        related_findings: finding.related_findings,
-    });
+    let inputs = external_findings
+        .iter()
+        .cloned()
+        .map(|finding| FindingInput {
+            feature_id: finding.feature_id,
+            tier: finding.tier,
+            state: finding.state,
+            content: finding.content,
+            behavior: finding.behavior,
+            relied_upon_unity_differences: finding.relied_upon_unity_differences,
+            observable_consequence: finding.observable_consequence,
+            conditions: finding.conditions,
+            related_findings: finding.related_findings,
+        });
     submit_findings(report, inputs)
 }
 
@@ -2039,7 +2045,10 @@ impl std::fmt::Display for CanonicalReportParseError {
                 write!(formatter, "invalid escape sequence in '{value}'")
             }
             Self::UnexpectedSectionLine { line_number, line } => {
-                write!(formatter, "unexpected line {line_number} outside section: '{line}'")
+                write!(
+                    formatter,
+                    "unexpected line {line_number} outside section: '{line}'"
+                )
             }
         }
     }
@@ -2148,10 +2157,8 @@ fn parse_optional_str(value: &str) -> Result<Option<String>, CanonicalReportPars
 }
 
 pub fn render_canonical(report: &CompatibilityReport) -> String {
-    let canonical = build_canonical_report(
-        &report.produced_by_unitas_version,
-        report.findings.clone(),
-    );
+    let canonical =
+        build_canonical_report(&report.produced_by_unitas_version, report.findings.clone());
     let summary = canonical.summary();
     let mut out = String::new();
     out.push_str("UNITAS_COMPAT_REPORT v1\n");
@@ -2176,7 +2183,10 @@ pub fn render_canonical(report: &CompatibilityReport) -> String {
         summary.platform_limited_count
     ));
     out.push_str(&format!("unknown_count: {}\n", summary.unknown_count));
-    out.push_str(&format!("unsupported_count: {}\n", summary.unsupported_count));
+    out.push_str(&format!(
+        "unsupported_count: {}\n",
+        summary.unsupported_count
+    ));
     out.push_str(&format!(
         "externally_unavailable_count: {}\n",
         summary.externally_unavailable_count
@@ -2190,7 +2200,10 @@ pub fn render_canonical(report: &CompatibilityReport) -> String {
         ));
         out.push_str(&format!("state: {}\n", format_state(package.state)));
         for feature_id in &package.feature_ids {
-            out.push_str(&format!("feature_id: {}\n", escape_canonical_str(feature_id)));
+            out.push_str(&format!(
+                "feature_id: {}\n",
+                escape_canonical_str(feature_id)
+            ));
         }
     }
     out.push_str(&format!("findings_count: {}\n", canonical.findings.len()));
@@ -2458,4 +2471,3 @@ pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalRepor
 
     Ok(build_canonical_report(&version, findings))
 }
-

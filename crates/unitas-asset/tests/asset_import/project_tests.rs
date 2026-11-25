@@ -680,9 +680,7 @@ fn project_2021_3_edit_on_save_migrates_only_edited_asset_and_preserves_unedited
     }
 
     let references = guid_references(&project_root);
-    assert!(references
-        .iter()
-        .any(|(guid, _)| guid == MATERIAL_GUID));
+    assert!(references.iter().any(|(guid, _)| guid == MATERIAL_GUID));
     assert_eq!(
         target_of(&report_after.inventory, MATERIAL_GUID),
         Some(String::from("Assets/Materials/Brick.mat"))
@@ -734,9 +732,7 @@ fn meta_unrecognized_fields_builtin_resource_and_missing_sub_asset_reference_rou
         Some("preserved")
     );
     assert_eq!(
-        importer_node
-            .get("userData")
-            .and_then(Node::as_str),
+        importer_node.get("userData").and_then(Node::as_str),
         Some("updated_user_payload")
     );
 
@@ -824,7 +820,9 @@ fn prj001_ser005_unity_2020_3_and_2021_3_migration_preview_first_save_notice_bui
                 assert!(preview
                     .assets
                     .contains(&String::from("Assets/Materials/Brick.mat")));
-                assert!(preview.settings.contains(&String::from("TimeManager.asset")));
+                assert!(preview
+                    .settings
+                    .contains(&String::from("TimeManager.asset")));
                 assert!(preview
                     .packages
                     .contains(&String::from("com.unity.ide.rider")));
@@ -910,7 +908,9 @@ fn prj001_ser005_unity_2020_3_and_2021_3_migration_preview_first_save_notice_bui
 
     assert!(tracked_paths.contains(&review_policy_rel));
     assert!(tracked_paths.contains(&unitas_version_rel));
-    assert!(!tracked_paths.iter().any(|p| p.starts_with("per_user_state")));
+    assert!(!tracked_paths
+        .iter()
+        .any(|p| p.starts_with("per_user_state")));
     assert!(!tracked_paths.contains(&PathBuf::from("project_2021.sln")));
     assert!(!tracked_paths.contains(&PathBuf::from("Assembly-CSharp.csproj")));
 
@@ -926,7 +926,10 @@ fn prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similar
     build_project(&project_root, &format!("{BASELINE_UNITY_VERSION}.16f1"))?;
 
     let sibling_mat_guid = "66666666666666666666666666666666";
-    write_file(&project_root.join("Assets/Materials/Brick_Copy.mat"), MATERIAL)?;
+    write_file(
+        &project_root.join("Assets/Materials/Brick_Copy.mat"),
+        MATERIAL,
+    )?;
     write_file(
         &project_root.join("Assets/Materials/Brick_Copy.mat.meta"),
         &meta(sibling_mat_guid, "NativeFormatImporter:"),
@@ -944,7 +947,10 @@ fn prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similar
     let store = TrustStore::new(root.join("trust.json"));
     let (mut project, report) = Project::open(&project_root, &store)?;
 
-    assert_eq!(report.inventory.lookup(missing_mat_guid), GuidLookup::Missing);
+    assert_eq!(
+        report.inventory.lookup(missing_mat_guid),
+        GuidLookup::Missing
+    );
     match report.inventory.lookup(sibling_mat_guid) {
         GuidLookup::Asset(entry) => {
             assert_eq!(entry.path, PathBuf::from("Assets/Materials/Brick_Copy.mat"));

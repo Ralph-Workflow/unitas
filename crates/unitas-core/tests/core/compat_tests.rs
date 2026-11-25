@@ -932,10 +932,12 @@ fn compat_submit_finding_rejects_invalid_feature_tier_content_message_and_duplic
     .with_unity_difference("contact points are emitted in manifold index order");
     assert_eq!(
         submit_finding(&base_report, supported_with_unity_diff),
-        Err(FindingSubmissionError::SupportedFindingClaimsUnityDifference {
-            feature_id: "PHY-001".to_string(),
-            tier: Tier::Semantic,
-        })
+        Err(
+            FindingSubmissionError::SupportedFindingClaimsUnityDifference {
+                feature_id: "PHY-001".to_string(),
+                tier: Tier::Semantic,
+            }
+        )
     );
 
     let familiar_without_diff_on_partial = FindingInput::new(
@@ -1074,7 +1076,10 @@ fn compat_canonical_rendering_is_byte_identical_across_insertion_orders_and_roun
             assert!(merged.is_ok());
             if let Ok(merged_report) = merged {
                 assert_eq!(merged_report.findings.len(), 2);
-                assert_eq!(merged_report.summary().overall_state, CompatibilityState::Unsupported);
+                assert_eq!(
+                    merged_report.summary().overall_state,
+                    CompatibilityState::Unsupported
+                );
             }
         }
     }
@@ -1097,7 +1102,9 @@ fn compat_canonical_parser_rejects_malformed_text_and_escapes_special_characters
         Err(CanonicalReportParseError::MissingVersion)
     );
     assert_eq!(
-        CompatibilityReport::from_canonical_text("UNITAS_COMPAT_REPORT v1\nmalformed_line_no_colon\n"),
+        CompatibilityReport::from_canonical_text(
+            "UNITAS_COMPAT_REPORT v1\nmalformed_line_no_colon\n"
+        ),
         Err(CanonicalReportParseError::MalformedLine {
             line_number: 2,
             line: "malformed_line_no_colon".to_string(),
@@ -1142,5 +1149,3 @@ fn compat_canonical_parser_rejects_malformed_text_and_escapes_special_characters
         assert_eq!(parsed, Ok(report));
     }
 }
-
-

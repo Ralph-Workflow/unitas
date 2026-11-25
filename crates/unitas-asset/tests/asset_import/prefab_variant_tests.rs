@@ -1039,7 +1039,11 @@ fn unchanged_prefab_save_byte_identity_and_nested_prefab_plus_broken_base_disk_r
         PrefabInstance::new(
             PrefabSource::new(VARIANT_A_GUID, ROOT_GO_ID),
             0,
-            vec![Modification::new(ROOT_TRANSFORM_ID, "m_LocalPosition.y", "15")],
+            vec![Modification::new(
+                ROOT_TRANSFORM_ID,
+                "m_LocalPosition.y",
+                "15",
+            )],
         ),
     );
     let mut scene_stream = scene_instance.to_stream(800100);

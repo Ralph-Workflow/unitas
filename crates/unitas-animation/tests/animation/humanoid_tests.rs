@@ -21,16 +21,25 @@ fn build_proportioned_avatar(
 ) -> HumanoidAvatar {
     HumanoidAvatar::new(name)
         .with_bone(
-            HumanBoneMapping::new(HumanBone::Hips, "Root/Hips")
-                .with_bind_translation([0.0, 1.0 * height_scale, 0.0]),
+            HumanBoneMapping::new(HumanBone::Hips, "Root/Hips").with_bind_translation([
+                0.0,
+                1.0 * height_scale,
+                0.0,
+            ]),
         )
         .with_bone(
-            HumanBoneMapping::new(HumanBone::Spine, "Root/Hips/Spine")
-                .with_bind_translation([0.0, 0.45 * height_scale, 0.0]),
+            HumanBoneMapping::new(HumanBone::Spine, "Root/Hips/Spine").with_bind_translation([
+                0.0,
+                0.45 * height_scale,
+                0.0,
+            ]),
         )
         .with_bone(
-            HumanBoneMapping::new(HumanBone::Head, "Root/Hips/Spine/Head")
-                .with_bind_translation([0.0, 0.35 * height_scale, 0.0]),
+            HumanBoneMapping::new(HumanBone::Head, "Root/Hips/Spine/Head").with_bind_translation([
+                0.0,
+                0.35 * height_scale,
+                0.0,
+            ]),
         )
         .with_bone(
             HumanBoneMapping::new(HumanBone::LeftUpperArm, "Root/Hips/Spine/LeftArm")
@@ -71,17 +80,11 @@ fn build_humanoid_clip() -> AnimationClip {
         vec![
             CurveBinding::float(
                 CurveBindingTarget::new("", "Animator", "SpineFrontBack"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.0),
-                    Keyframe::linear(1.0, 0.5),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.5)]),
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("", "Animator", "LeftArmDownUp"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.0),
-                    Keyframe::linear(1.0, 0.8),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.8)]),
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("", "Animator", "LeftLegFrontBack"),
@@ -92,10 +95,7 @@ fn build_humanoid_clip() -> AnimationClip {
             ),
             CurveBinding::float(
                 CurveBindingTarget::new("", "Animator", "RootT.y"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 1.0),
-                    Keyframe::linear(1.0, 1.2),
-                ]),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 1.2)]),
             ),
         ],
         Vec::new(),
@@ -280,9 +280,10 @@ fn avatar_mask_restricts_humanoid_layer_by_body_part_and_transform_path(
     assert!(!filtered
         .iter()
         .any(|b| b.target.object_path == "Root/Hips/LeftLeg"));
-    assert!(filtered
-        .iter()
-        .all(|b| matches!(b.value, AnimatedValue::Quaternion(_) | AnimatedValue::Vector3(_))));
+    assert!(filtered.iter().all(|b| matches!(
+        b.value,
+        AnimatedValue::Quaternion(_) | AnimatedValue::Vector3(_)
+    )));
     Ok(())
 }
 
@@ -292,9 +293,10 @@ fn invalid_avatar_definition_reports_missing_required_bones_and_duplicate_paths(
         .with_bone(HumanBoneMapping::new(HumanBone::Hips, "Root/Hips"))
         .with_bone(HumanBoneMapping::new(HumanBone::Spine, "Root/Hips"));
     let issues = incomplete.validate();
-    assert!(issues
-        .iter()
-        .any(|issue| matches!(issue, AvatarValidationIssue::MissingRequiredBone(HumanBone::Head))));
+    assert!(issues.iter().any(|issue| matches!(
+        issue,
+        AvatarValidationIssue::MissingRequiredBone(HumanBone::Head)
+    )));
     assert!(issues.iter().any(|issue| matches!(
         issue,
         AvatarValidationIssue::DuplicateTransformPath { path, .. } if path == "Root/Hips"
@@ -366,7 +368,8 @@ fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avata
 
     let base_pose = HumanoidPose::default();
     let mask = AvatarMask::new("UpperOnly").with_path("Root/Hips/Spine");
-    let layered = apply_layered_humanoid_pose(&target_avatar, &base_pose, &retargeted_pose, 1.0, &mask);
+    let layered =
+        apply_layered_humanoid_pose(&target_avatar, &base_pose, &retargeted_pose, 1.0, &mask);
     let blended = blend_humanoid_layer(&target_avatar, &base_pose, &retargeted_pose, 1.0, &mask);
     assert_eq!(layered, blended);
     assert!(

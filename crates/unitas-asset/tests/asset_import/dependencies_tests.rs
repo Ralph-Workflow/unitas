@@ -299,8 +299,8 @@ fn replace_guid_in_node(node: &mut Node, old_guid: &str, new_guid: &str) -> bool
 }
 
 #[test]
-fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited_save(
-) -> TestResult {
+fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited_save() -> TestResult
+{
     let root = temp_dir("dependencies-round-trip")?;
     let project_root = root.join("project");
 
@@ -309,13 +309,19 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
         &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
     )?;
 
-    write_file(&project_root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo.png"),
+        "png-bytes",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/Albedo.png.meta"),
         &meta(TEXTURE_GUID, "TextureImporter:"),
     )?;
 
-    write_file(&project_root.join("Assets/Textures/AltAlbedo.png"), "png-bytes-2")?;
+    write_file(
+        &project_root.join("Assets/Textures/AltAlbedo.png"),
+        "png-bytes-2",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/AltAlbedo.png.meta"),
         &meta(LEAF_GUID, "TextureImporter:"),
@@ -334,7 +340,10 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
     let prefab_yaml = format!(
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Pillar\n--- !u!23 &2300000\nMeshRenderer:\n  m_Materials:\n  - {{fileID: 2100000, guid: {MATERIAL_GUID}, type: 2}}\n"
     );
-    write_file(&project_root.join("Assets/Prefabs/Pillar.prefab"), &prefab_yaml)?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Pillar.prefab"),
+        &prefab_yaml,
+    )?;
     write_file(
         &project_root.join("Assets/Prefabs/Pillar.prefab.meta"),
         &meta(PREFAB_GUID, "NativeFormatImporter:"),
@@ -370,7 +379,10 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
     let (project, _) = Project::open(&project_root, &store)?;
     let graph_initial = DependencyGraph::build(&project)?;
 
-    assert_eq!(graph_initial.dependencies_of(MATERIAL_GUID), vec![TEXTURE_GUID]);
+    assert_eq!(
+        graph_initial.dependencies_of(MATERIAL_GUID),
+        vec![TEXTURE_GUID]
+    );
     assert_eq!(
         graph_initial.reverse_dependencies_of(TEXTURE_GUID, false),
         vec![MATERIAL_GUID]
@@ -379,8 +391,12 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
         graph_initial.reverse_dependencies_of(TEXTURE_GUID, true),
         vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
     );
-    assert!(graph_initial.reverse_dependencies_of(LEAF_GUID, false).is_empty());
-    assert!(graph_initial.reverse_dependencies_of(LEAF_GUID, true).is_empty());
+    assert!(graph_initial
+        .reverse_dependencies_of(LEAF_GUID, false)
+        .is_empty());
+    assert!(graph_initial
+        .reverse_dependencies_of(LEAF_GUID, true)
+        .is_empty());
     assert_eq!(
         graph_initial.cycles(),
         vec![vec![CYCLE_A_GUID.to_string(), CYCLE_B_GUID.to_string()]]
@@ -415,9 +431,16 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
     let (reopened_project, _) = Project::open(&project_root, &store)?;
     let graph_after_edit = DependencyGraph::build(&reopened_project)?;
 
-    assert_eq!(graph_after_edit.dependencies_of(MATERIAL_GUID), vec![LEAF_GUID]);
-    assert!(graph_after_edit.reverse_dependencies_of(TEXTURE_GUID, false).is_empty());
-    assert!(graph_after_edit.reverse_dependencies_of(TEXTURE_GUID, true).is_empty());
+    assert_eq!(
+        graph_after_edit.dependencies_of(MATERIAL_GUID),
+        vec![LEAF_GUID]
+    );
+    assert!(graph_after_edit
+        .reverse_dependencies_of(TEXTURE_GUID, false)
+        .is_empty());
+    assert!(graph_after_edit
+        .reverse_dependencies_of(TEXTURE_GUID, true)
+        .is_empty());
     assert_eq!(
         graph_after_edit.reverse_dependencies_of(LEAF_GUID, false),
         vec![MATERIAL_GUID]
@@ -426,8 +449,14 @@ fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited
         graph_after_edit.reverse_dependencies_of(LEAF_GUID, true),
         vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
     );
-    assert_eq!(graph_after_edit.dependencies_of(PREFAB_GUID), vec![MATERIAL_GUID]);
-    assert_eq!(graph_after_edit.dependencies_of(SCENE_GUID), vec![PREFAB_GUID]);
+    assert_eq!(
+        graph_after_edit.dependencies_of(PREFAB_GUID),
+        vec![MATERIAL_GUID]
+    );
+    assert_eq!(
+        graph_after_edit.dependencies_of(SCENE_GUID),
+        vec![PREFAB_GUID]
+    );
     assert_eq!(
         graph_after_edit.cycles(),
         vec![vec![CYCLE_A_GUID.to_string(), CYCLE_B_GUID.to_string()]]
@@ -448,14 +477,20 @@ fn prj005_outcome7_pre_delete_reverse_dependency_inspection_missing_reference_re
         &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
     )?;
 
-    write_file(&project_root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo.png"),
+        "png-bytes",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/Albedo.png.meta"),
         &meta(TEXTURE_GUID, "TextureImporter:"),
     )?;
 
     let sibling_guid = "99999999999999999999999999999999";
-    write_file(&project_root.join("Assets/Textures/Albedo_Backup.png"), "png-sibling")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo_Backup.png"),
+        "png-sibling",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/Albedo_Backup.png.meta"),
         &meta(sibling_guid, "TextureImporter:"),
@@ -474,7 +509,10 @@ fn prj005_outcome7_pre_delete_reverse_dependency_inspection_missing_reference_re
     let prefab_yaml = format!(
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Pillar\n--- !u!23 &2300000\nMeshRenderer:\n  m_Materials:\n  - {{fileID: 2100000, guid: {MATERIAL_GUID}, type: 2}}\n"
     );
-    write_file(&project_root.join("Assets/Prefabs/Pillar.prefab"), &prefab_yaml)?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Pillar.prefab"),
+        &prefab_yaml,
+    )?;
     write_file(
         &project_root.join("Assets/Prefabs/Pillar.prefab.meta"),
         &meta(PREFAB_GUID, "NativeFormatImporter:"),
