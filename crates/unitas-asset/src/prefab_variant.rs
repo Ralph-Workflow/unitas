@@ -1,0 +1,1717 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+
+use crate::prefab::{Modification, PrefabInstance, PrefabSource};
+
+const UNRECORDABLE_PROPERTIES: [(&str, &str); 8] = [
+    ("m_ObjectHideFlags", "immutable object hide flags"),
+    ("fileID", "immutable local file identifier"),
+    ("m_Script", "immutable script asset binding"),
+    ("m_CorrespondingSourceObject", "immutable prefab source correspondence"),
+    ("m_PrefabInstance", "immutable prefab instance link"),
+    ("m_PrefabAsset", "immutable prefab asset link"),
+    ("m_GameObject", "immutable component owner reference"),
+    ("m_Father", "structural transform parent cannot be recorded as a property override"),
+];
+
+const UNRECORDABLE_PREFIXES: [(&str, &str); 3] = [
+    ("m_Children", "source child ordering cannot be overridden in an instance or variant"),
+    ("m_Component", "component table cannot be mutated via property override"),
+    ("cross_prefab_ref:", "cross-prefab non-serializable reference"),
+];
+
+const CROSS_SCENE_TOKEN: &str = "cross_scene:";
+const NON_SERIALIZABLE_TOKEN: &str = "non_serializable:";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceObjectId {
+    pub source_guid: String,
+    pub target_file_id: i64,
+}
+
+impl SourceObjectId {
+    pub fn new(source_guid: impl Into<String>, target_file_id: i64) -> Self {
+        Self {
+            source_guid: source_guid.into(),
+            target_file_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefabComponentRecord {
+    pub file_id: i64,
+    pub class_name: String,
+    pub properties: BTreeMap<String, String>,
+}
+
+impl PrefabComponentRecord {
+    pub fn new(file_id: i64, class_name: impl Into<String>) -> Self {
+        Self {
+            file_id,
+            class_name: class_name.into(),
+            properties: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_property(
+        mut self,
+        property_path: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.properties.insert(property_path.into(), value.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefabNodeRecord {
+    pub file_id: i64,
+    pub name: String,
+    pub parent_file_id: Option<i64>,
+    pub children: Vec<i64>,
+    pub properties: BTreeMap<String, String>,
+    pub components: Vec<PrefabComponentRecord>,
+}
+
+impl PrefabNodeRecord {
+    pub fn new(file_id: i64, name: impl Into<String>, parent_file_id: Option<i64>) -> Self {
+        let name_str = name.into();
+        let mut properties = BTreeMap::new();
+        properties.insert(String::from("m_Name"), name_str.clone());
+        Self {
+            file_id,
+            name: name_str,
+            parent_file_id,
+            children: Vec::new(),
+            properties,
+            components: Vec::new(),
+        }
+    }
+
+    pub fn with_children(mut self, children: Vec<i64>) -> Self {
+        self.children = children;
+        self
+    }
+
+    pub fn with_property(
+        mut self,
+        property_path: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let key = property_path.into();
+        let val = value.into();
+        if key == "m_Name" {
+            self.name = val.clone();
+        }
+        self.properties.insert(key, val);
+        self
+    }
+
+    pub fn with_component(mut self, component: PrefabComponentRecord) -> Self {
+        self.components.push(component);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedChildOverride {
+    pub parent_target: SourceObjectId,
+    pub child: PrefabNodeRecord,
+    pub sibling_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedComponentOverride {
+    pub owner_target: SourceObjectId,
+    pub component: PrefabComponentRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedPrefabReference {
+    pub instance_file_id: i64,
+    pub parent_target_file_id: i64,
+    pub source: PrefabSource,
+    pub modifications: Vec<Modification>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StructuralOverrides {
+    pub added_children: Vec<AddedChildOverride>,
+    pub removed_children: Vec<SourceObjectId>,
+    pub added_components: Vec<AddedComponentOverride>,
+    pub removed_components: Vec<SourceObjectId>,
+    pub added_sibling_order: BTreeMap<SourceObjectId, Vec<i64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetedModification {
+    pub target: SourceObjectId,
+    pub property_path: String,
+    pub value: String,
+}
+
+impl TargetedModification {
+    pub fn new(
+        target: SourceObjectId,
+        property_path: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            target,
+            property_path: property_path.into(),
+            value: value.into(),
+        }
+    }
+
+    pub fn from_modification(source_guid: impl Into<String>, modification: &Modification) -> Self {
+        Self {
+            target: SourceObjectId::new(source_guid, modification.target_file_id),
+            property_path: modification.property_path.clone(),
+            value: modification.value.clone(),
+        }
+    }
+
+    pub fn to_modification(&self) -> Modification {
+        Modification {
+            target_file_id: self.target.target_file_id,
+            property_path: self.property_path.clone(),
+            value: self.value.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefabVariantDefinition {
+    pub guid: String,
+    pub name: String,
+    pub base: Option<PrefabSource>,
+    pub root_file_id: i64,
+    pub nodes: Vec<PrefabNodeRecord>,
+    pub modifications: Vec<Modification>,
+    pub targeted_modifications: Vec<TargetedModification>,
+    pub structural_overrides: StructuralOverrides,
+    pub nested_prefabs: Vec<NestedPrefabReference>,
+}
+
+impl PrefabVariantDefinition {
+    pub fn base_prefab(
+        guid: impl Into<String>,
+        name: impl Into<String>,
+        root_file_id: i64,
+        nodes: Vec<PrefabNodeRecord>,
+    ) -> Self {
+        Self {
+            guid: guid.into(),
+            name: name.into(),
+            base: None,
+            root_file_id,
+            nodes,
+            modifications: Vec::new(),
+            targeted_modifications: Vec::new(),
+            structural_overrides: StructuralOverrides::default(),
+            nested_prefabs: Vec::new(),
+        }
+    }
+
+    pub fn variant(
+        guid: impl Into<String>,
+        name: impl Into<String>,
+        base: PrefabSource,
+    ) -> Self {
+        Self {
+            guid: guid.into(),
+            name: name.into(),
+            base: Some(base),
+            root_file_id: 0,
+            nodes: Vec::new(),
+            modifications: Vec::new(),
+            targeted_modifications: Vec::new(),
+            structural_overrides: StructuralOverrides::default(),
+            nested_prefabs: Vec::new(),
+        }
+    }
+
+    pub fn record_override(
+        &mut self,
+        modification: Modification,
+    ) -> Result<(), PrefabVariantError> {
+        validate_override(&modification.property_path, &modification.value, modification.target_file_id)?;
+        let default_source_guid = match &self.base {
+            Some(base) => base.guid.clone(),
+            None => self.guid.clone(),
+        };
+        self.upsert_raw_modification(modification.clone());
+        self.upsert_targeted_modification(TargetedModification::from_modification(
+            default_source_guid,
+            &modification,
+        ));
+        Ok(())
+    }
+
+    pub fn record_targeted_override(
+        &mut self,
+        modification: TargetedModification,
+    ) -> Result<(), PrefabVariantError> {
+        validate_override(
+            &modification.property_path,
+            &modification.value,
+            modification.target.target_file_id,
+        )?;
+        self.upsert_raw_modification(modification.to_modification());
+        self.upsert_targeted_modification(modification);
+        Ok(())
+    }
+
+    pub fn add_child_override(
+        &mut self,
+        parent_target: SourceObjectId,
+        mut child: PrefabNodeRecord,
+        sibling_index: Option<usize>,
+    ) -> Result<(), PrefabVariantError> {
+        child.parent_file_id = Some(parent_target.target_file_id);
+        self.structural_overrides.added_children.push(AddedChildOverride {
+            parent_target,
+            child,
+            sibling_index,
+        });
+        Ok(())
+    }
+
+    pub fn remove_child_override(&mut self, target: SourceObjectId) {
+        if !self.structural_overrides.removed_children.contains(&target) {
+            self.structural_overrides.removed_children.push(target);
+        }
+    }
+
+    pub fn add_component_override(
+        &mut self,
+        owner_target: SourceObjectId,
+        component: PrefabComponentRecord,
+    ) {
+        self.structural_overrides
+            .added_components
+            .push(AddedComponentOverride {
+                owner_target,
+                component,
+            });
+    }
+
+    pub fn remove_component_override(&mut self, target: SourceObjectId) {
+        if !self.structural_overrides.removed_components.contains(&target) {
+            self.structural_overrides.removed_components.push(target);
+        }
+    }
+
+    pub fn reorder_added_siblings(
+        &mut self,
+        parent_target: SourceObjectId,
+        added_child_file_ids: Vec<i64>,
+    ) -> Result<(), PrefabVariantError> {
+        let known_added: HashSet<i64> = self
+            .structural_overrides
+            .added_children
+            .iter()
+            .filter(|added| added.parent_target == parent_target)
+            .map(|added| added.child.file_id)
+            .collect();
+        for file_id in &added_child_file_ids {
+            if !known_added.contains(file_id) {
+                return Err(PrefabVariantError::UnrecordableOverride {
+                    target_file_id: *file_id,
+                    property_path: String::from("m_Children"),
+                    reason: String::from(
+                        "source children cannot be reordered in a variant or instance; only added children can be ordered",
+                    ),
+                });
+            }
+        }
+        self.structural_overrides
+            .added_sibling_order
+            .insert(parent_target, added_child_file_ids);
+        Ok(())
+    }
+
+    pub fn reject_source_child_reorder(&self, parent_file_id: i64) -> Result<(), PrefabVariantError> {
+        Err(PrefabVariantError::UnrecordableOverride {
+            target_file_id: parent_file_id,
+            property_path: String::from("m_Children"),
+            reason: String::from("reordering source children inside an instance or variant is not recordable by Unity"),
+        })
+    }
+
+    pub fn set_base_property(
+        &mut self,
+        target_file_id: i64,
+        property_path: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), PrefabVariantError> {
+        let prop = property_path.into();
+        let val = value.into();
+        validate_override(&prop, &val, target_file_id)?;
+        for node in &mut self.nodes {
+            if node.file_id == target_file_id {
+                if prop == "m_Name" {
+                    node.name = val.clone();
+                }
+                node.properties.insert(prop, val);
+                return Ok(());
+            }
+            for component in &mut node.components {
+                if component.file_id == target_file_id {
+                    component.properties.insert(prop, val);
+                    return Ok(());
+                }
+            }
+        }
+        Err(PrefabVariantError::TargetNotFound { target_file_id })
+    }
+
+    pub fn reorder_source_children(
+        &mut self,
+        parent_file_id: i64,
+        new_children_order: Vec<i64>,
+    ) -> Result<(), PrefabVariantError> {
+        for node in &mut self.nodes {
+            if node.file_id == parent_file_id {
+                node.children = new_children_order;
+                return Ok(());
+            }
+        }
+        Err(PrefabVariantError::TargetNotFound {
+            target_file_id: parent_file_id,
+        })
+    }
+
+    fn upsert_raw_modification(&mut self, modification: Modification) {
+        if let Some(existing) = self.modifications.iter_mut().find(|item| {
+            item.target_file_id == modification.target_file_id
+                && item.property_path == modification.property_path
+        }) {
+            existing.value = modification.value;
+        } else {
+            self.modifications.push(modification);
+        }
+    }
+
+    fn upsert_targeted_modification(&mut self, modification: TargetedModification) {
+        if let Some(existing) = self.targeted_modifications.iter_mut().find(|item| {
+            item.target.target_file_id == modification.target.target_file_id
+                && item.property_path == modification.property_path
+        }) {
+            existing.target = modification.target;
+            existing.value = modification.value;
+        } else {
+            self.targeted_modifications.push(modification);
+        }
+    }
+
+    fn remove_modification(&mut self, target_file_id: i64, property_path: &str) -> Option<String> {
+        let mut removed_value = None;
+        self.modifications.retain(|item| {
+            let matches =
+                item.target_file_id == target_file_id && item.property_path == property_path;
+            if matches {
+                removed_value = Some(item.value.clone());
+            }
+            !matches
+        });
+        self.targeted_modifications.retain(|item| {
+            let matches = item.target.target_file_id == target_file_id
+                && item.property_path == property_path;
+            if matches && removed_value.is_none() {
+                removed_value = Some(item.value.clone());
+            }
+            !matches
+        });
+        removed_value
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenePrefabInstance {
+    pub instance_id: String,
+    pub instance: PrefabInstance,
+    pub targeted_modifications: Vec<TargetedModification>,
+    pub structural_overrides: StructuralOverrides,
+}
+
+impl ScenePrefabInstance {
+    pub fn new(instance_id: impl Into<String>, instance: PrefabInstance) -> Self {
+        let source_guid = instance.source.guid.clone();
+        let targeted_modifications = instance
+            .modifications
+            .iter()
+            .map(|modification| TargetedModification::from_modification(&source_guid, modification))
+            .collect();
+        Self {
+            instance_id: instance_id.into(),
+            instance,
+            targeted_modifications,
+            structural_overrides: StructuralOverrides::default(),
+        }
+    }
+
+    pub fn record_override(
+        &mut self,
+        modification: Modification,
+    ) -> Result<(), PrefabVariantError> {
+        validate_override(
+            &modification.property_path,
+            &modification.value,
+            modification.target_file_id,
+        )?;
+        let source_guid = self.instance.source.guid.clone();
+        if let Some(existing) = self.instance.modifications.iter_mut().find(|item| {
+            item.target_file_id == modification.target_file_id
+                && item.property_path == modification.property_path
+        }) {
+            existing.value = modification.value.clone();
+        } else {
+            self.instance.modifications.push(modification.clone());
+        }
+        let targeted = TargetedModification::from_modification(source_guid, &modification);
+        if let Some(existing) = self.targeted_modifications.iter_mut().find(|item| {
+            item.target.target_file_id == targeted.target.target_file_id
+                && item.property_path == targeted.property_path
+        }) {
+            existing.value = targeted.value;
+        } else {
+            self.targeted_modifications.push(targeted);
+        }
+        Ok(())
+    }
+
+    pub fn add_child_override(
+        &mut self,
+        parent_target: SourceObjectId,
+        mut child: PrefabNodeRecord,
+        sibling_index: Option<usize>,
+    ) {
+        child.parent_file_id = Some(parent_target.target_file_id);
+        self.structural_overrides.added_children.push(AddedChildOverride {
+            parent_target,
+            child,
+            sibling_index,
+        });
+    }
+
+    pub fn remove_child_override(&mut self, target: SourceObjectId) {
+        if !self.structural_overrides.removed_children.contains(&target) {
+            self.structural_overrides.removed_children.push(target);
+        }
+    }
+
+    pub fn add_component_override(
+        &mut self,
+        owner_target: SourceObjectId,
+        component: PrefabComponentRecord,
+    ) {
+        self.structural_overrides
+            .added_components
+            .push(AddedComponentOverride {
+                owner_target,
+                component,
+            });
+    }
+
+    pub fn remove_component_override(&mut self, target: SourceObjectId) {
+        if !self.structural_overrides.removed_components.contains(&target) {
+            self.structural_overrides.removed_components.push(target);
+        }
+    }
+
+    fn remove_modification(&mut self, target_file_id: i64, property_path: &str) -> Option<String> {
+        let mut removed_value = None;
+        self.instance.modifications.retain(|item| {
+            let matches =
+                item.target_file_id == target_file_id && item.property_path == property_path;
+            if matches {
+                removed_value = Some(item.value.clone());
+            }
+            !matches
+        });
+        self.targeted_modifications.retain(|item| {
+            let matches = item.target.target_file_id == target_file_id
+                && item.property_path == property_path;
+            if matches && removed_value.is_none() {
+                removed_value = Some(item.value.clone());
+            }
+            !matches
+        });
+        removed_value
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverrideLevel {
+    Prefab(String),
+    SceneInstance(String),
+}
+
+impl OverrideLevel {
+    pub fn as_id(&self) -> &str {
+        match self {
+            OverrideLevel::Prefab(guid) => guid.as_str(),
+            OverrideLevel::SceneInstance(id) => id.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueProvenanceEntry {
+    pub level: OverrideLevel,
+    pub value: String,
+    pub is_effective: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedComponent {
+    pub identity: SourceObjectId,
+    pub defined_at: OverrideLevel,
+    pub class_name: String,
+    pub properties: BTreeMap<String, String>,
+    pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNode {
+    pub identity: SourceObjectId,
+    pub defined_at: OverrideLevel,
+    pub name: String,
+    pub parent: Option<SourceObjectId>,
+    pub children: Vec<SourceObjectId>,
+    pub properties: BTreeMap<String, String>,
+    pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
+    pub components: Vec<ResolvedComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanedOverride {
+    pub level: OverrideLevel,
+    pub target_file_id: i64,
+    pub property_path: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedHierarchy {
+    pub chain: Vec<OverrideLevel>,
+    pub base_guid: String,
+    pub root: Option<SourceObjectId>,
+    pub nodes: BTreeMap<SourceObjectId, ResolvedNode>,
+    pub ordered_nodes: Vec<SourceObjectId>,
+    pub orphaned_overrides: Vec<OrphanedOverride>,
+}
+
+impl ResolvedHierarchy {
+    pub fn node_by_file_id(&self, target_file_id: i64) -> Option<&ResolvedNode> {
+        self.nodes
+            .values()
+            .find(|node| node.identity.target_file_id == target_file_id)
+    }
+
+    pub fn node(&self, id: &SourceObjectId) -> Option<&ResolvedNode> {
+        self.nodes.get(id)
+    }
+
+    pub fn effective_property(
+        &self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<&str> {
+        for node in self.nodes.values() {
+            if node.identity.target_file_id == target_file_id {
+                return node.properties.get(property_path).map(String::as_str);
+            }
+            for component in &node.components {
+                if component.identity.target_file_id == target_file_id {
+                    return component.properties.get(property_path).map(String::as_str);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn property_inheritance_path(
+        &self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<&[ValueProvenanceEntry]> {
+        for node in self.nodes.values() {
+            if node.identity.target_file_id == target_file_id {
+                return node.provenance.get(property_path).map(Vec::as_slice);
+            }
+            for component in &node.components {
+                if component.identity.target_file_id == target_file_id {
+                    return component.provenance.get(property_path).map(Vec::as_slice);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn effective_owner(
+        &self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<&OverrideLevel> {
+        let entries = self.property_inheritance_path(target_file_id, property_path)?;
+        entries
+            .iter()
+            .find(|entry| entry.is_effective)
+            .map(|entry| &entry.level)
+    }
+
+    pub fn eligible_apply_targets(&self, from_level: &OverrideLevel) -> Vec<OverrideLevel> {
+        let pos = self.chain.iter().position(|lvl| lvl == from_level);
+        match pos {
+            Some(idx) => self.chain[..idx].to_vec(),
+            None => Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokenPrefabState {
+    pub missing_guid: String,
+    pub broken_at_level: OverrideLevel,
+    pub chain_before_break: Vec<OverrideLevel>,
+    pub retained_modifications: Vec<(OverrideLevel, Modification)>,
+    pub retained_structural_overrides: Vec<(OverrideLevel, StructuralOverrides)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedPrefab {
+    Complete(ResolvedHierarchy),
+    BrokenBase(BrokenPrefabState),
+}
+
+impl ResolvedPrefab {
+    pub fn as_complete(&self) -> Option<&ResolvedHierarchy> {
+        match self {
+            ResolvedPrefab::Complete(hierarchy) => Some(hierarchy),
+            ResolvedPrefab::BrokenBase(_) => None,
+        }
+    }
+
+    pub fn as_broken(&self) -> Option<&BrokenPrefabState> {
+        match self {
+            ResolvedPrefab::Complete(_) => None,
+            ResolvedPrefab::BrokenBase(broken) => Some(broken),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrefabVariantError {
+    InheritanceCycle {
+        chain: Vec<String>,
+    },
+    NestingCycle {
+        chain: Vec<String>,
+    },
+    MissingBasePrefab {
+        missing_guid: String,
+        dependent_guid: String,
+    },
+    UnrecordableOverride {
+        target_file_id: i64,
+        property_path: String,
+        reason: String,
+    },
+    InvalidTargetLevel {
+        from_level: String,
+        target_level: String,
+        reason: String,
+    },
+    OverrideNotFound {
+        level: String,
+        target_file_id: i64,
+        property_path: String,
+    },
+    TargetNotFound {
+        target_file_id: i64,
+    },
+}
+
+impl fmt::Display for PrefabVariantError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrefabVariantError::InheritanceCycle { chain } => {
+                write!(
+                    formatter,
+                    "prefab variant inheritance cycle detected: {}",
+                    chain.join(" -> ")
+                )
+            }
+            PrefabVariantError::NestingCycle { chain } => {
+                write!(
+                    formatter,
+                    "prefab nesting cycle detected: {}",
+                    chain.join(" -> ")
+                )
+            }
+            PrefabVariantError::MissingBasePrefab {
+                missing_guid,
+                dependent_guid,
+            } => {
+                write!(
+                    formatter,
+                    "prefab {dependent_guid} references missing base prefab {missing_guid}"
+                )
+            }
+            PrefabVariantError::UnrecordableOverride {
+                target_file_id,
+                property_path,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "unrecordable override on target {target_file_id} path '{property_path}': {reason}"
+                )
+            }
+            PrefabVariantError::InvalidTargetLevel {
+                from_level,
+                target_level,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "cannot apply override from {from_level} to {target_level}: {reason}"
+                )
+            }
+            PrefabVariantError::OverrideNotFound {
+                level,
+                target_file_id,
+                property_path,
+            } => {
+                write!(
+                    formatter,
+                    "override on target {target_file_id} path '{property_path}' not found at level {level}"
+                )
+            }
+            PrefabVariantError::TargetNotFound { target_file_id } => {
+                write!(formatter, "target fileID {target_file_id} not found")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PrefabVariantError {}
+
+pub fn validate_override(
+    property_path: &str,
+    value: &str,
+    target_file_id: i64,
+) -> Result<(), PrefabVariantError> {
+    let trimmed = property_path.trim();
+    if trimmed.is_empty() {
+        return Err(PrefabVariantError::UnrecordableOverride {
+            target_file_id,
+            property_path: property_path.to_string(),
+            reason: String::from("property path cannot be empty"),
+        });
+    }
+    for (forbidden, reason) in UNRECORDABLE_PROPERTIES {
+        if trimmed == forbidden || trimmed.starts_with(&format!("{forbidden}.")) {
+            return Err(PrefabVariantError::UnrecordableOverride {
+                target_file_id,
+                property_path: property_path.to_string(),
+                reason: String::from(reason),
+            });
+        }
+    }
+    for (prefix, reason) in UNRECORDABLE_PREFIXES {
+        if trimmed == prefix || trimmed.starts_with(prefix) {
+            return Err(PrefabVariantError::UnrecordableOverride {
+                target_file_id,
+                property_path: property_path.to_string(),
+                reason: String::from(reason),
+            });
+        }
+    }
+    if value.contains(CROSS_SCENE_TOKEN) {
+        return Err(PrefabVariantError::UnrecordableOverride {
+            target_file_id,
+            property_path: property_path.to_string(),
+            reason: String::from("persistent cross-scene references cannot be recorded in prefab overrides"),
+        });
+    }
+    if value.contains(NON_SERIALIZABLE_TOKEN) || value.starts_with("cross_prefab_ref:") {
+        return Err(PrefabVariantError::UnrecordableOverride {
+            target_file_id,
+            property_path: property_path.to_string(),
+            reason: String::from("cross-prefab non-serializable reference cannot be recorded"),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PrefabRegistry {
+    prefabs: HashMap<String, PrefabVariantDefinition>,
+}
+
+impl PrefabRegistry {
+    pub fn new() -> Self {
+        Self {
+            prefabs: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, definition: PrefabVariantDefinition) {
+        self.prefabs.insert(definition.guid.clone(), definition);
+    }
+
+    pub fn remove(&mut self, guid: &str) -> Option<PrefabVariantDefinition> {
+        self.prefabs.remove(guid)
+    }
+
+    pub fn get(&self, guid: &str) -> Option<&PrefabVariantDefinition> {
+        self.prefabs.get(guid)
+    }
+
+    pub fn get_mut(&mut self, guid: &str) -> Option<&mut PrefabVariantDefinition> {
+        self.prefabs.get_mut(guid)
+    }
+
+    pub fn inheritance_chain(&self, leaf_guid: &str) -> Result<Vec<String>, PrefabVariantError> {
+        let mut chain_from_leaf = Vec::new();
+        let mut visited = Vec::new();
+        let mut current = leaf_guid.to_string();
+        loop {
+            if visited.contains(&current) {
+                visited.push(current);
+                return Err(PrefabVariantError::InheritanceCycle { chain: visited });
+            }
+            visited.push(current.clone());
+            chain_from_leaf.push(current.clone());
+            let def = match self.prefabs.get(&current) {
+                Some(def) => def,
+                None => break,
+            };
+            match &def.base {
+                Some(base) => {
+                    current = base.guid.clone();
+                }
+                None => break,
+            }
+        }
+        chain_from_leaf.reverse();
+        Ok(chain_from_leaf)
+    }
+
+    pub fn validate_no_cycles(&self, start_guid: &str) -> Result<(), PrefabVariantError> {
+        let _ = self.inheritance_chain(start_guid)?;
+        let mut stack = Vec::new();
+        self.check_nesting_recursive(start_guid, &mut stack)
+    }
+
+    fn check_nesting_recursive(
+        &self,
+        guid: &str,
+        stack: &mut Vec<String>,
+    ) -> Result<(), PrefabVariantError> {
+        if stack.contains(&guid.to_string()) {
+            let mut cycle = stack.clone();
+            cycle.push(guid.to_string());
+            return Err(PrefabVariantError::NestingCycle { chain: cycle });
+        }
+        let chain = self.inheritance_chain(guid)?;
+        stack.push(guid.to_string());
+        for ancestor_guid in &chain {
+            if let Some(def) = self.prefabs.get(ancestor_guid) {
+                for nested in &def.nested_prefabs {
+                    self.check_nesting_recursive(&nested.source.guid, stack)?;
+                }
+            }
+        }
+        stack.pop();
+        Ok(())
+    }
+
+    pub fn resolve_prefab(&self, guid: &str) -> Result<ResolvedPrefab, PrefabVariantError> {
+        self.resolve_internal(guid, None)
+    }
+
+    pub fn resolve_instance(
+        &self,
+        instance: &ScenePrefabInstance,
+    ) -> Result<ResolvedPrefab, PrefabVariantError> {
+        self.resolve_internal(&instance.instance.source.guid, Some(instance))
+    }
+
+    fn resolve_internal(
+        &self,
+        leaf_prefab_guid: &str,
+        scene_instance: Option<&ScenePrefabInstance>,
+    ) -> Result<ResolvedPrefab, PrefabVariantError> {
+        let mut raw_chain_from_leaf = Vec::new();
+        let mut visited = Vec::new();
+        let mut current = leaf_prefab_guid.to_string();
+        let mut missing_guid: Option<(String, OverrideLevel)> = None;
+
+        loop {
+            if visited.contains(&current) {
+                visited.push(current);
+                return Err(PrefabVariantError::InheritanceCycle { chain: visited });
+            }
+            visited.push(current.clone());
+            match self.prefabs.get(&current) {
+                Some(def) => {
+                    for mod_item in &def.modifications {
+                        validate_override(
+                            &mod_item.property_path,
+                            &mod_item.value,
+                            mod_item.target_file_id,
+                        )?;
+                    }
+                    raw_chain_from_leaf.push(current.clone());
+                    match &def.base {
+                        Some(base) => {
+                            current = base.guid.clone();
+                        }
+                        None => break,
+                    }
+                }
+                None => {
+                    let broken_at = match raw_chain_from_leaf.last() {
+                        Some(prev) => OverrideLevel::Prefab(prev.clone()),
+                        None => match scene_instance {
+                            Some(inst) => OverrideLevel::SceneInstance(inst.instance_id.clone()),
+                            None => OverrideLevel::Prefab(current.clone()),
+                        },
+                    };
+                    missing_guid = Some((current.clone(), broken_at));
+                    break;
+                }
+            }
+        }
+
+        if let Some(inst) = scene_instance {
+            for mod_item in &inst.instance.modifications {
+                validate_override(
+                    &mod_item.property_path,
+                    &mod_item.value,
+                    mod_item.target_file_id,
+                )?;
+            }
+        }
+
+        if let Some((missing, broken_at_level)) = missing_guid {
+            raw_chain_from_leaf.reverse();
+            let mut chain_before_break: Vec<OverrideLevel> = raw_chain_from_leaf
+                .iter()
+                .map(|g| OverrideLevel::Prefab(g.clone()))
+                .collect();
+            let mut retained_modifications = Vec::new();
+            let mut retained_structural = Vec::new();
+
+            for g in &raw_chain_from_leaf {
+                if let Some(def) = self.prefabs.get(g) {
+                    let lvl = OverrideLevel::Prefab(g.clone());
+                    for m in &def.modifications {
+                        retained_modifications.push((lvl.clone(), m.clone()));
+                    }
+                    retained_structural.push((lvl, def.structural_overrides.clone()));
+                }
+            }
+            if let Some(inst) = scene_instance {
+                let lvl = OverrideLevel::SceneInstance(inst.instance_id.clone());
+                chain_before_break.push(lvl.clone());
+                for m in &inst.instance.modifications {
+                    retained_modifications.push((lvl.clone(), m.clone()));
+                }
+                retained_structural.push((lvl, inst.structural_overrides.clone()));
+            }
+
+            return Ok(ResolvedPrefab::BrokenBase(BrokenPrefabState {
+                missing_guid: missing,
+                broken_at_level,
+                chain_before_break,
+                retained_modifications,
+                retained_structural_overrides: retained_structural,
+            }));
+        }
+
+        self.validate_no_cycles(leaf_prefab_guid)?;
+
+        raw_chain_from_leaf.reverse();
+        let base_guid = match raw_chain_from_leaf.first() {
+            Some(g) => g.clone(),
+            None => leaf_prefab_guid.to_string(),
+        };
+
+        let base_def = match self.prefabs.get(&base_guid) {
+            Some(def) => def,
+            None => {
+                return Err(PrefabVariantError::MissingBasePrefab {
+                    missing_guid: base_guid.clone(),
+                    dependent_guid: leaf_prefab_guid.to_string(),
+                })
+            }
+        };
+
+        let mut chain_levels: Vec<OverrideLevel> = raw_chain_from_leaf
+            .iter()
+            .map(|g| OverrideLevel::Prefab(g.clone()))
+            .collect();
+        if let Some(inst) = scene_instance {
+            chain_levels.push(OverrideLevel::SceneInstance(inst.instance_id.clone()));
+        }
+
+        let base_level = OverrideLevel::Prefab(base_guid.clone());
+        let mut nodes: BTreeMap<SourceObjectId, ResolvedNode> = BTreeMap::new();
+        let mut file_id_to_source: HashMap<i64, SourceObjectId> = HashMap::new();
+
+        for node_rec in &base_def.nodes {
+            let identity = SourceObjectId::new(&base_guid, node_rec.file_id);
+            file_id_to_source.insert(node_rec.file_id, identity.clone());
+            let parent = node_rec
+                .parent_file_id
+                .map(|pid| SourceObjectId::new(&base_guid, pid));
+            let children = node_rec
+                .children
+                .iter()
+                .map(|cid| SourceObjectId::new(&base_guid, *cid))
+                .collect();
+
+            let mut provenance: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
+            for (k, v) in &node_rec.properties {
+                provenance.insert(
+                    k.clone(),
+                    vec![ValueProvenanceEntry {
+                        level: base_level.clone(),
+                        value: v.clone(),
+                        is_effective: true,
+                    }],
+                );
+            }
+
+            let mut components = Vec::new();
+            for comp_rec in &node_rec.components {
+                let comp_id = SourceObjectId::new(&base_guid, comp_rec.file_id);
+                file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
+                let mut comp_prov: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
+                for (k, v) in &comp_rec.properties {
+                    comp_prov.insert(
+                        k.clone(),
+                        vec![ValueProvenanceEntry {
+                            level: base_level.clone(),
+                            value: v.clone(),
+                            is_effective: true,
+                        }],
+                    );
+                }
+                components.push(ResolvedComponent {
+                    identity: comp_id,
+                    defined_at: base_level.clone(),
+                    class_name: comp_rec.class_name.clone(),
+                    properties: comp_rec.properties.clone(),
+                    provenance: comp_prov,
+                });
+            }
+
+            nodes.insert(
+                identity.clone(),
+                ResolvedNode {
+                    identity,
+                    defined_at: base_level.clone(),
+                    name: node_rec.name.clone(),
+                    parent,
+                    children,
+                    properties: node_rec.properties.clone(),
+                    provenance,
+                    components,
+                },
+            );
+        }
+
+        let mut orphaned_overrides = Vec::new();
+
+        for variant_guid in raw_chain_from_leaf.iter().skip(1) {
+            if let Some(var_def) = self.prefabs.get(variant_guid) {
+                let level = OverrideLevel::Prefab(variant_guid.clone());
+                apply_level_overrides(
+                    &level,
+                    variant_guid,
+                    &var_def.structural_overrides,
+                    &var_def.modifications,
+                    &mut nodes,
+                    &mut file_id_to_source,
+                    &mut orphaned_overrides,
+                );
+            }
+        }
+
+        if let Some(inst) = scene_instance {
+            let level = OverrideLevel::SceneInstance(inst.instance_id.clone());
+            apply_level_overrides(
+                &level,
+                &inst.instance_id,
+                &inst.structural_overrides,
+                &inst.instance.modifications,
+                &mut nodes,
+                &mut file_id_to_source,
+                &mut orphaned_overrides,
+            );
+        }
+
+        let root_id = if base_def.root_file_id != 0 {
+            file_id_to_source.get(&base_def.root_file_id).cloned()
+        } else {
+            nodes
+                .values()
+                .find(|n| n.parent.is_none())
+                .map(|n| n.identity.clone())
+        };
+
+        let mut ordered_nodes = Vec::new();
+        if let Some(root) = &root_id {
+            collect_depth_first(root, &nodes, &mut ordered_nodes);
+        }
+        for id in nodes.keys() {
+            if !ordered_nodes.contains(id) {
+                ordered_nodes.push(id.clone());
+            }
+        }
+
+        Ok(ResolvedPrefab::Complete(ResolvedHierarchy {
+            chain: chain_levels,
+            base_guid,
+            root: root_id,
+            nodes,
+            ordered_nodes,
+            orphaned_overrides,
+        }))
+    }
+
+    pub fn apply_override_to_level(
+        &mut self,
+        scene_instance: Option<&mut ScenePrefabInstance>,
+        from_level: &OverrideLevel,
+        target_level: &OverrideLevel,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Result<(), PrefabVariantError> {
+        let leaf_guid = match &scene_instance {
+            Some(inst) => inst.instance.source.guid.clone(),
+            None => match from_level {
+                OverrideLevel::Prefab(guid) => guid.clone(),
+                OverrideLevel::SceneInstance(id) => {
+                    return Err(PrefabVariantError::InvalidTargetLevel {
+                        from_level: id.clone(),
+                        target_level: target_level.as_id().to_string(),
+                        reason: String::from("scene instance not provided"),
+                    })
+                }
+            },
+        };
+
+        let prefab_chain = self.inheritance_chain(&leaf_guid)?;
+        let mut full_chain: Vec<OverrideLevel> = prefab_chain
+            .iter()
+            .map(|g| OverrideLevel::Prefab(g.clone()))
+            .collect();
+        if let Some(inst) = &scene_instance {
+            full_chain.push(OverrideLevel::SceneInstance(inst.instance_id.clone()));
+        }
+
+        let from_idx = match full_chain.iter().position(|lvl| lvl == from_level) {
+            Some(idx) => idx,
+            None => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id().to_string(),
+                    target_level: target_level.as_id().to_string(),
+                    reason: String::from("source level is not in the inheritance chain"),
+                })
+            }
+        };
+        let target_idx = match full_chain.iter().position(|lvl| lvl == target_level) {
+            Some(idx) => idx,
+            None => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id().to_string(),
+                    target_level: target_level.as_id().to_string(),
+                    reason: String::from("target level is not in the inheritance chain"),
+                })
+            }
+        };
+
+        if target_idx >= from_idx {
+            return Err(PrefabVariantError::InvalidTargetLevel {
+                from_level: from_level.as_id().to_string(),
+                target_level: target_level.as_id().to_string(),
+                reason: String::from("target level must be an ancestor of source level"),
+            });
+        }
+
+        let override_value = match from_level {
+            OverrideLevel::SceneInstance(_) => {
+                let inst = match scene_instance {
+                    Some(inst) => inst,
+                    None => {
+                        return Err(PrefabVariantError::InvalidTargetLevel {
+                            from_level: from_level.as_id().to_string(),
+                            target_level: target_level.as_id().to_string(),
+                            reason: String::from("scene instance is required"),
+                        })
+                    }
+                };
+                match inst.remove_modification(target_file_id, property_path) {
+                    Some(val) => val,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: from_level.as_id().to_string(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                }
+            }
+            OverrideLevel::Prefab(guid) => {
+                let def = match self.prefabs.get_mut(guid) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: guid.clone(),
+                            dependent_guid: leaf_guid,
+                        })
+                    }
+                };
+                match def.remove_modification(target_file_id, property_path) {
+                    Some(val) => val,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: from_level.as_id().to_string(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                }
+            }
+        };
+
+        for level_entry in full_chain.iter().take(from_idx).skip(target_idx + 1) {
+            if let OverrideLevel::Prefab(inter_guid) = level_entry {
+                if let Some(inter_def) = self.prefabs.get_mut(inter_guid) {
+                    let _ = inter_def.remove_modification(target_file_id, property_path);
+                }
+            }
+        }
+
+        match target_level {
+            OverrideLevel::Prefab(target_guid) => {
+                let target_def = match self.prefabs.get_mut(target_guid) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: target_guid.clone(),
+                            dependent_guid: leaf_guid,
+                        })
+                    }
+                };
+                if target_def.base.is_none() {
+                    target_def.set_base_property(target_file_id, property_path, override_value)?;
+                } else {
+                    target_def.record_override(Modification::new(
+                        target_file_id,
+                        property_path,
+                        override_value,
+                    ))?;
+                }
+            }
+            OverrideLevel::SceneInstance(_) => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id().to_string(),
+                    target_level: target_level.as_id().to_string(),
+                    reason: String::from("cannot apply override downward to a scene instance"),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_all_to_level(
+        &mut self,
+        mut scene_instance: Option<&mut ScenePrefabInstance>,
+        from_level: &OverrideLevel,
+        target_level: &OverrideLevel,
+    ) -> Result<(), PrefabVariantError> {
+        let keys: Vec<(i64, String)> = match from_level {
+            OverrideLevel::SceneInstance(_) => match &scene_instance {
+                Some(inst) => inst
+                    .instance
+                    .modifications
+                    .iter()
+                    .map(|m| (m.target_file_id, m.property_path.clone()))
+                    .collect(),
+                None => Vec::new(),
+            },
+            OverrideLevel::Prefab(guid) => match self.prefabs.get(guid) {
+                Some(def) => def
+                    .modifications
+                    .iter()
+                    .map(|m| (m.target_file_id, m.property_path.clone()))
+                    .collect(),
+                None => Vec::new(),
+            },
+        };
+
+        for (target_file_id, property_path) in keys {
+            let inst_ref = scene_instance.as_deref_mut();
+            self.apply_override_to_level(
+                inst_ref,
+                from_level,
+                target_level,
+                target_file_id,
+                &property_path,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn revert_override_at_level(
+        &mut self,
+        scene_instance: Option<&mut ScenePrefabInstance>,
+        level: &OverrideLevel,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Result<(), PrefabVariantError> {
+        match level {
+            OverrideLevel::SceneInstance(_) => {
+                let inst = match scene_instance {
+                    Some(inst) => inst,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: level.as_id().to_string(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                };
+                if inst.remove_modification(target_file_id, property_path).is_none() {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: level.as_id().to_string(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    });
+                }
+                Ok(())
+            }
+            OverrideLevel::Prefab(guid) => {
+                let def = match self.prefabs.get_mut(guid) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: guid.clone(),
+                            dependent_guid: guid.clone(),
+                        })
+                    }
+                };
+                if def.remove_modification(target_file_id, property_path).is_none() {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: level.as_id().to_string(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn revert_all_at_level(
+        &mut self,
+        scene_instance: Option<&mut ScenePrefabInstance>,
+        level: &OverrideLevel,
+    ) -> Result<(), PrefabVariantError> {
+        match level {
+            OverrideLevel::SceneInstance(_) => {
+                let inst = match scene_instance {
+                    Some(inst) => inst,
+                    None => {
+                        return Err(PrefabVariantError::InvalidTargetLevel {
+                            from_level: level.as_id().to_string(),
+                            target_level: level.as_id().to_string(),
+                            reason: String::from("scene instance not provided"),
+                        })
+                    }
+                };
+                inst.instance.modifications.clear();
+                inst.targeted_modifications.clear();
+                inst.structural_overrides = StructuralOverrides::default();
+                Ok(())
+            }
+            OverrideLevel::Prefab(guid) => {
+                let def = match self.prefabs.get_mut(guid) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: guid.clone(),
+                            dependent_guid: guid.clone(),
+                        })
+                    }
+                };
+                def.modifications.clear();
+                def.targeted_modifications.clear();
+                def.structural_overrides = StructuralOverrides::default();
+                Ok(())
+            }
+        }
+    }
+}
+
+fn apply_level_overrides(
+    level: &OverrideLevel,
+    level_source_id: &str,
+    structural: &StructuralOverrides,
+    modifications: &[Modification],
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+    orphaned_overrides: &mut Vec<OrphanedOverride>,
+) {
+    for removed_child in &structural.removed_children {
+        let resolved_id = file_id_to_source
+            .get(&removed_child.target_file_id)
+            .cloned()
+            .unwrap_or_else(|| removed_child.clone());
+        remove_node_recursive(&resolved_id, nodes, file_id_to_source);
+    }
+
+    for removed_comp in &structural.removed_components {
+        file_id_to_source.remove(&removed_comp.target_file_id);
+        for node in nodes.values_mut() {
+            node.components
+                .retain(|c| c.identity.target_file_id != removed_comp.target_file_id);
+        }
+    }
+
+    for added_child in &structural.added_children {
+        let parent_id = file_id_to_source
+            .get(&added_child.parent_target.target_file_id)
+            .cloned()
+            .unwrap_or_else(|| added_child.parent_target.clone());
+        if !nodes.contains_key(&parent_id) {
+            continue;
+        }
+        let child_id = SourceObjectId::new(level_source_id, added_child.child.file_id);
+        file_id_to_source.insert(added_child.child.file_id, child_id.clone());
+
+        let mut provenance = BTreeMap::new();
+        for (k, v) in &added_child.child.properties {
+            provenance.insert(
+                k.clone(),
+                vec![ValueProvenanceEntry {
+                    level: level.clone(),
+                    value: v.clone(),
+                    is_effective: true,
+                }],
+            );
+        }
+
+        let mut components = Vec::new();
+        for comp_rec in &added_child.child.components {
+            let comp_id = SourceObjectId::new(level_source_id, comp_rec.file_id);
+            file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
+            let mut comp_prov = BTreeMap::new();
+            for (k, v) in &comp_rec.properties {
+                comp_prov.insert(
+                    k.clone(),
+                    vec![ValueProvenanceEntry {
+                        level: level.clone(),
+                        value: v.clone(),
+                        is_effective: true,
+                    }],
+                );
+            }
+            components.push(ResolvedComponent {
+                identity: comp_id,
+                defined_at: level.clone(),
+                class_name: comp_rec.class_name.clone(),
+                properties: comp_rec.properties.clone(),
+                provenance: comp_prov,
+            });
+        }
+
+        let resolved_child = ResolvedNode {
+            identity: child_id.clone(),
+            defined_at: level.clone(),
+            name: added_child.child.name.clone(),
+            parent: Some(parent_id.clone()),
+            children: Vec::new(),
+            properties: added_child.child.properties.clone(),
+            provenance,
+            components,
+        };
+        nodes.insert(child_id.clone(), resolved_child);
+
+        if let Some(parent_node) = nodes.get_mut(&parent_id) {
+            if !parent_node.children.contains(&child_id) {
+                match added_child.sibling_index {
+                    Some(idx) if idx <= parent_node.children.len() => {
+                        parent_node.children.insert(idx, child_id);
+                    }
+                    _ => parent_node.children.push(child_id),
+                }
+            }
+        }
+    }
+
+    for (parent_target, ordered_added_ids) in &structural.added_sibling_order {
+        let parent_id = file_id_to_source
+            .get(&parent_target.target_file_id)
+            .cloned()
+            .unwrap_or_else(|| parent_target.clone());
+        if let Some(parent_node) = nodes.get_mut(&parent_id) {
+            let added_set: HashSet<i64> = ordered_added_ids.iter().copied().collect();
+            let mut reordered: Vec<SourceObjectId> = parent_node
+                .children
+                .iter()
+                .filter(|cid| !added_set.contains(&cid.target_file_id))
+                .cloned()
+                .collect();
+            for file_id in ordered_added_ids {
+                if let Some(cid) = file_id_to_source.get(file_id) {
+                    if parent_node.children.contains(cid) && !reordered.contains(cid) {
+                        reordered.push(cid.clone());
+                    }
+                }
+            }
+            parent_node.children = reordered;
+        }
+    }
+
+    for added_comp in &structural.added_components {
+        let owner_id = file_id_to_source
+            .get(&added_comp.owner_target.target_file_id)
+            .cloned()
+            .unwrap_or_else(|| added_comp.owner_target.clone());
+        if let Some(owner_node) = nodes.get_mut(&owner_id) {
+            let comp_id = SourceObjectId::new(level_source_id, added_comp.component.file_id);
+            file_id_to_source.insert(added_comp.component.file_id, comp_id.clone());
+            let mut comp_prov = BTreeMap::new();
+            for (k, v) in &added_comp.component.properties {
+                comp_prov.insert(
+                    k.clone(),
+                    vec![ValueProvenanceEntry {
+                        level: level.clone(),
+                        value: v.clone(),
+                        is_effective: true,
+                    }],
+                );
+            }
+            owner_node.components.push(ResolvedComponent {
+                identity: comp_id,
+                defined_at: level.clone(),
+                class_name: added_comp.component.class_name.clone(),
+                properties: added_comp.component.properties.clone(),
+                provenance: comp_prov,
+            });
+        }
+    }
+
+    for modification in modifications {
+        let mut matched = false;
+        if let Some(target_id) = file_id_to_source.get(&modification.target_file_id).cloned() {
+            if let Some(node) = nodes.get_mut(&target_id) {
+                matched = true;
+                if modification.property_path == "m_Name" {
+                    node.name = modification.value.clone();
+                }
+                node.properties
+                    .insert(modification.property_path.clone(), modification.value.clone());
+                let entries = node
+                    .provenance
+                    .entry(modification.property_path.clone())
+                    .or_default();
+                for entry in entries.iter_mut() {
+                    entry.is_effective = false;
+                }
+                entries.push(ValueProvenanceEntry {
+                    level: level.clone(),
+                    value: modification.value.clone(),
+                    is_effective: true,
+                });
+            }
+        }
+        if !matched {
+            for node in nodes.values_mut() {
+                for comp in &mut node.components {
+                    if comp.identity.target_file_id == modification.target_file_id {
+                        matched = true;
+                        comp.properties.insert(
+                            modification.property_path.clone(),
+                            modification.value.clone(),
+                        );
+                        let entries = comp
+                            .provenance
+                            .entry(modification.property_path.clone())
+                            .or_default();
+                        for entry in entries.iter_mut() {
+                            entry.is_effective = false;
+                        }
+                        entries.push(ValueProvenanceEntry {
+                            level: level.clone(),
+                            value: modification.value.clone(),
+                            is_effective: true,
+                        });
+                        break;
+                    }
+                }
+                if matched {
+                    break;
+                }
+            }
+        }
+        if !matched {
+            orphaned_overrides.push(OrphanedOverride {
+                level: level.clone(),
+                target_file_id: modification.target_file_id,
+                property_path: modification.property_path.clone(),
+                value: modification.value.clone(),
+            });
+        }
+    }
+}
+
+fn remove_node_recursive(
+    target_id: &SourceObjectId,
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
+    let removed = match nodes.remove(target_id) {
+        Some(node) => node,
+        None => return,
+    };
+    file_id_to_source.remove(&removed.identity.target_file_id);
+    for comp in &removed.components {
+        file_id_to_source.remove(&comp.identity.target_file_id);
+    }
+    if let Some(parent_id) = &removed.parent {
+        if let Some(parent_node) = nodes.get_mut(parent_id) {
+            parent_node.children.retain(|cid| cid != target_id);
+        }
+    }
+    for child_id in &removed.children {
+        remove_node_recursive(child_id, nodes, file_id_to_source);
+    }
+}
+
+fn collect_depth_first(
+    current: &SourceObjectId,
+    nodes: &BTreeMap<SourceObjectId, ResolvedNode>,
+    out: &mut Vec<SourceObjectId>,
+) {
+    if out.contains(current) {
+        return;
+    }
+    if let Some(node) = nodes.get(current) {
+        out.push(current.clone());
+        for child in &node.children {
+            collect_depth_first(child, nodes, out);
+        }
+    }
+}

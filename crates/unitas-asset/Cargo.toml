@@ -2,28 +2,6 @@
 name = "unitas-asset"
 version = "0.1.0"
 edition = "2021"
-autotests = false
 
 [dependencies]
 unitas-core = { path = "../unitas-core" }
-
-[[test]]
-name = "material_tests"
-path = "tests/material_tests.rs"
-
-[[test]]
-name = "meta_tests"
-path = "tests/meta_tests.rs"
-
-[[test]]
-name = "project_settings"
-path = "tests/project_settings.rs"
-
-[[test]]
-name = "scene_tests"
-path = "tests/scene_tests.rs"
-
-[[test]]
-name = "unity_yaml_tests"
-path = "tests/unity_yaml_tests.rs"
-

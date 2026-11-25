@@ -14,7 +14,7 @@ const SCALE_PROPERTY: &str = "m_LocalScale";
 const PROJECT_SETTINGS_DIR: &str = "ProjectSettings";
 const ASSETS_DIR: &str = "Assets";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrefabSource {
     pub guid: String,
     pub file_id: i64,
@@ -27,11 +27,48 @@ pub struct Modification {
     pub value: String,
 }
 
+impl Modification {
+    pub fn new(
+        target_file_id: i64,
+        property_path: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_file_id,
+            property_path: property_path.into(),
+            value: value.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefabInstance {
     pub source: PrefabSource,
     pub transform_parent: i64,
     pub modifications: Vec<Modification>,
+}
+
+impl PrefabSource {
+    pub fn new(guid: impl Into<String>, file_id: i64) -> Self {
+        Self {
+            guid: guid.into(),
+            file_id,
+        }
+    }
+}
+
+impl PrefabInstance {
+    pub fn new(
+        source: PrefabSource,
+        transform_parent: i64,
+        modifications: Vec<Modification>,
+    ) -> Self {
+        Self {
+            source,
+            transform_parent,
+            modifications,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

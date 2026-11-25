@@ -5,6 +5,7 @@ use unitas_core::EntityId;
 use crate::body::{BodyDesc, BodyRole, Shape, IDENTITY_ROTATION};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
+use crate::matrix::CollisionMatrix;
 use crate::query::{cast_against, normalize, CastShape, QueryHit};
 
 const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
@@ -56,6 +57,7 @@ pub struct World {
     overlapping_triggers: BTreeSet<(EntityId, EntityId)>,
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
+    collision_matrix: CollisionMatrix,
 }
 
 impl Default for World {
@@ -79,11 +81,22 @@ impl World {
             overlapping_triggers: BTreeSet::new(),
             events: Vec::new(),
             trigger_events: Vec::new(),
+            collision_matrix: CollisionMatrix::new(),
         }
     }
 
     pub fn gravity(&self) -> [f64; 3] {
         self.gravity
+    }
+
+    /// Replaces the layer collision matrix.
+    pub fn set_collision_matrix(&mut self, matrix: CollisionMatrix) {
+        self.collision_matrix = matrix;
+    }
+
+    /// The layer collision matrix that gates the collision and trigger callbacks.
+    pub fn collision_matrix(&self) -> &CollisionMatrix {
+        &self.collision_matrix
     }
 
     pub fn add_body(&mut self, entity: EntityId, desc: BodyDesc) -> Result<(), PhysicsError> {
@@ -586,8 +599,20 @@ impl World {
         (pairs, trigger_pairs)
     }
 
+    fn layer_pair_enabled(&self, pair: &(EntityId, EntityId)) -> bool {
+        let (Some(first), Some(second)) = (self.indices.get(&pair.0), self.indices.get(&pair.1))
+        else {
+            return false;
+        };
+        self.collision_matrix
+            .is_enabled(self.bodies[*first].layer as usize, self.bodies[*second].layer as usize)
+    }
+
     fn emit_events(&mut self, overlapping: &BTreeSet<(EntityId, EntityId)>) {
         for pair in overlapping.difference(&self.overlapping) {
+            if !self.layer_pair_enabled(pair) {
+                continue;
+            }
             self.events.push(CollisionEvent {
                 a: pair.0,
                 b: pair.1,
@@ -595,7 +620,7 @@ impl World {
             });
         }
         for pair in &self.overlapping {
-            if overlapping.contains(pair) {
+            if overlapping.contains(pair) && self.layer_pair_enabled(pair) {
                 self.events.push(CollisionEvent {
                     a: pair.0,
                     b: pair.1,
@@ -604,6 +629,9 @@ impl World {
             }
         }
         for pair in self.overlapping.difference(overlapping) {
+            if !self.layer_pair_enabled(pair) {
+                continue;
+            }
             self.events.push(CollisionEvent {
                 a: pair.0,
                 b: pair.1,
@@ -614,6 +642,9 @@ impl World {
 
     fn emit_trigger_events(&mut self, overlapping_triggers: &BTreeSet<(EntityId, EntityId)>) {
         for pair in overlapping_triggers.difference(&self.overlapping_triggers) {
+            if !self.layer_pair_enabled(pair) {
+                continue;
+            }
             self.trigger_events.push(TriggerEvent {
                 a: pair.0,
                 b: pair.1,
@@ -621,7 +652,7 @@ impl World {
             });
         }
         for pair in &self.overlapping_triggers {
-            if overlapping_triggers.contains(pair) {
+            if overlapping_triggers.contains(pair) && self.layer_pair_enabled(pair) {
                 self.trigger_events.push(TriggerEvent {
                     a: pair.0,
                     b: pair.1,
@@ -630,6 +661,9 @@ impl World {
             }
         }
         for pair in self.overlapping_triggers.difference(overlapping_triggers) {
+            if !self.layer_pair_enabled(pair) {
+                continue;
+            }
             self.trigger_events.push(TriggerEvent {
                 a: pair.0,
                 b: pair.1,

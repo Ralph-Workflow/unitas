@@ -2,6 +2,8 @@ mod abi;
 pub mod animation;
 mod error;
 pub mod input;
+pub mod particles;
+pub mod physics;
 mod runtime;
 
 pub use abi::*;

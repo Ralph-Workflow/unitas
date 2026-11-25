@@ -1,8 +1,18 @@
+pub mod audio_import;
+pub mod binary_ser;
+pub mod inflate;
+pub mod json;
 pub mod material;
 pub mod meta;
+pub mod model;
+pub mod packages;
 pub mod prefab;
+pub mod prefab_variant;
+pub mod primitive;
 pub mod project_settings;
 pub mod scene;
+pub mod texture;
+pub mod trust;
 pub mod unity_yaml;
 
 pub use material::{

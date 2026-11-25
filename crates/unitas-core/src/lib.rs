@@ -1,3 +1,4 @@
+pub mod compat;
 mod entity;
 mod error;
 mod scene_graph;
