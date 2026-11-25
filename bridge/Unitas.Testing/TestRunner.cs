@@ -33,11 +33,11 @@ namespace Unitas.Testing
             RegexOptions.Compiled);
 
         private static readonly Regex ClassSourceRegex = new Regex(
-            @"((?:\s*\[[^\]]+\]\s*)*)(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)",
+            @"((?:\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)*)(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)",
             RegexOptions.Compiled);
 
         private static readonly Regex MethodSourceRegex = new Regex(
-            @"((?:\s*\[[^\]]+\]\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+            @"((?:\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
             RegexOptions.Compiled);
 
         private static readonly Regex RetryAttrRegex = new Regex(
@@ -49,7 +49,7 @@ namespace Unitas.Testing
             RegexOptions.Compiled);
 
         private static readonly Regex UnityPlatformAttrRegex = new Regex(
-            @"\bUnityPlatform(?:Attribute)?\s*(?:\(([^]]*)\))?",
+            @"\bUnityPlatform(?:Attribute)?\s*(?:\(((?:[^\[\]]|\[[^\[\]]*\])*)\))?",
             RegexOptions.Compiled);
 
         private static readonly Regex PrebuildSetupAttrRegex = new Regex(

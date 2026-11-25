@@ -16,11 +16,11 @@ namespace Unitas.Testing
             RegexOptions.Compiled);
 
         private static readonly Regex ClassHeaderRegex = new Regex(
-            @"((?:\s*\[[^\]]+\]\s*)*)(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)",
+            @"((?:\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)*)(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)",
             RegexOptions.Compiled);
 
         private static readonly Regex MethodHeaderRegex = new Regex(
-            @"((?:\s*\[[^\]]+\]\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+            @"((?:\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
             RegexOptions.Compiled);
 
         private static readonly Regex CategoryAttrRegex = new Regex(
