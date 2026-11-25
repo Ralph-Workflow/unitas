@@ -98,6 +98,20 @@ pub fn builtin_primitive_by_file_id(file_id: i64) -> Option<BuiltinPrimitive> {
         .map(|(entry, _, _)| *entry)
 }
 
+/// The primitive whose identity pair matches both `file_id` and `guid`.
+///
+/// A file id alone identifies every built-in in the table, so the GUID is
+/// checked as well: a caller holding a resolved identity only accepts the
+/// primitive when both halves agree.
+pub fn builtin_primitive_by_identity(file_id: i64, guid: &str) -> Option<BuiltinPrimitive> {
+    let primitive = builtin_primitive_by_file_id(file_id)?;
+    if builtin_guid(primitive).eq_ignore_ascii_case(guid) {
+        Some(primitive)
+    } else {
+        None
+    }
+}
+
 /// The mesh of a built-in primitive, identical on every call.
 pub fn primitive_mesh(p: BuiltinPrimitive) -> MeshData {
     let mut mesh = match p {

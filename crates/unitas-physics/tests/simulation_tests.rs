@@ -9,6 +9,10 @@
 mod matrix_tests;
 #[path = "simulation/particles_tests.rs"]
 mod particles_tests;
+#[path = "simulation/sleep_tests.rs"]
+mod sleep_tests;
+#[path = "simulation/teleport_tests.rs"]
+mod teleport_tests;
 #[path = "simulation/two_d_effector_tests.rs"]
 mod two_d_effector_tests;
 #[path = "simulation/two_d_tests.rs"]

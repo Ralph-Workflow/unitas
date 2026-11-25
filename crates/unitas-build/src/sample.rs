@@ -800,7 +800,7 @@ impl RollABallController {
         camera_binding: &mut GpuCameraBinding,
     ) {
         if let Some(player) = self.player_entity {
-            let _ = runtime.set_body_position(player, PLAYER_START_POSITION);
+            let _ = runtime.teleport_body_position(player, PLAYER_START_POSITION);
             let _ = runtime.set_body_velocity(player, [0.0, 0.0, 0.0]);
         }
         for slot in &mut self.pickups {
@@ -933,7 +933,7 @@ mod tests {
         assert!(moved_pos[0] > initial_pos[0] || moved_pos[2] > initial_pos[2]);
         assert!(controller.camera_yaw_radians > 0.0);
 
-        runtime.set_body_position(player, PICKUP_POSITIONS[0])?;
+        runtime.teleport_body_position(player, PICKUP_POSITIONS[0])?;
         controller.step(&mut runtime, &mut presenter, 1.0 / 60.0);
         assert_eq!(controller.score, 1);
         assert!(controller.pickups[0].collected);
@@ -947,6 +947,10 @@ mod tests {
         assert_eq!(controller.restart_count, 1);
         assert!(!controller.pickups[0].collected);
         assert!(presenter.meshes()[pickup_mesh_idx].enabled);
+        let reset_pos = runtime
+            .body_position(player)
+            .ok_or("missing PlayerBall physics body after reset")?;
+        assert_eq!(reset_pos, PLAYER_START_POSITION);
 
         fs::remove_dir_all(&workspace)?;
         Ok(())

@@ -1265,6 +1265,18 @@ impl Runtime {
         Ok(())
     }
 
+    /// Teleports a body of any role, including a dynamic body whose simulated
+    /// position the simulation otherwise owns. The body's velocity is unchanged.
+    pub fn teleport_body_position(
+        &mut self,
+        entity: EntityId,
+        position: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        self.world.teleport_position(entity, position)?;
+        self.write_back_body_transform(entity, position);
+        Ok(())
+    }
+
     pub fn set_body_velocity(
         &mut self,
         entity: EntityId,

@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use unitas_asset::primitive::{
-    builtin_file_id, builtin_guid, builtin_primitive_by_file_id, builtin_primitive_by_name,
-    primitive_mesh, BuiltinPrimitive, MeshData, BUILTIN_EXTRA_GUID,
+    builtin_file_id, builtin_guid, builtin_primitive_by_file_id, builtin_primitive_by_identity,
+    builtin_primitive_by_name, primitive_mesh, BuiltinPrimitive, MeshData, BUILTIN_EXTRA_GUID,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -279,6 +279,24 @@ fn lookups_resolve_known_names_and_file_ids() -> TestResult {
     assert_eq!(builtin_primitive_by_name(""), None);
     assert_eq!(builtin_primitive_by_file_id(10203), None);
     assert_eq!(builtin_primitive_by_file_id(0), None);
+    Ok(())
+}
+
+#[test]
+fn an_identity_pair_resolves_only_when_the_file_id_and_guid_agree() -> TestResult {
+    for (primitive, file_id) in EXPECTED_IDENTITY {
+        let guid = builtin_guid(primitive);
+        assert_eq!(builtin_primitive_by_identity(file_id, guid), Some(primitive));
+        assert_eq!(
+            builtin_primitive_by_identity(file_id, &guid.to_uppercase()),
+            Some(primitive)
+        );
+        assert_eq!(
+            builtin_primitive_by_identity(file_id, "00000000000000000000000000000000"),
+            None
+        );
+    }
+    assert_eq!(builtin_primitive_by_identity(10203, BUILTIN_EXTRA_GUID), None);
     Ok(())
 }
 

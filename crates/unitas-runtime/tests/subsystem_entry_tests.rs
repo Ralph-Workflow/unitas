@@ -203,3 +203,29 @@ fn subsystem_entry_particles_control_systems_and_collide_with_3d_world() -> Resu
     assert_eq!(particles.system_count(), 0);
     Ok(())
 }
+
+#[test]
+fn subsystem_entry_teleports_a_dynamic_body_and_syncs_its_transform(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const FIXTURE: &str = "tests/fixtures/scene_physics_collision_no_script.unity";
+    let mut runtime = unitas_runtime::Runtime::new()?;
+    runtime.load_scene(std::path::Path::new(FIXTURE))?;
+    let ball = runtime
+        .find_entity_by_name("Ball")
+        .ok_or("missing Ball entity")?;
+    let before = runtime
+        .body_position(ball)
+        .ok_or("missing Ball physics body")?;
+    let target = [before[0] + 3.0, before[1] + 2.0, before[2] - 1.0];
+
+    runtime.teleport_body_position(ball, target)?;
+    assert_eq!(runtime.body_position(ball), Some(target));
+
+    let transform = runtime
+        .world_transform_of(ball)
+        .ok_or("missing Ball transform")?;
+    assert!((f64::from(transform.translation[0]) - target[0]).abs() < 1e-4);
+    assert!((f64::from(transform.translation[1]) - target[1]).abs() < 1e-4);
+    assert!((f64::from(transform.translation[2]) - target[2]).abs() < 1e-4);
+    Ok(())
+}

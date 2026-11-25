@@ -10,8 +10,17 @@ use crate::query::{cast_against, normalize, CastShape, QueryHit};
 
 const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
 const SOLVER_ITERATIONS: usize = 4;
+const DEFAULT_SLEEP_THRESHOLD: f64 = 0.05;
+const DEFAULT_TIME_TO_SLEEP: f64 = 0.5;
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
+
+fn speed_of(body: &Body) -> f64 {
+    let sum = body.velocity[0] * body.velocity[0]
+        + body.velocity[1] * body.velocity[1]
+        + body.velocity[2] * body.velocity[2];
+    sum.sqrt()
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Body {
@@ -29,6 +38,8 @@ struct Body {
     restitution: f64,
     previous_position: [f64; 3],
     sweep_velocity: [f64; 3],
+    sleeping: bool,
+    sleep_timer: f64,
 }
 
 impl Body {
@@ -58,6 +69,8 @@ pub struct World {
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
     collision_matrix: CollisionMatrix,
+    sleep_threshold: f64,
+    time_to_sleep: f64,
 }
 
 impl Default for World {
@@ -82,6 +95,8 @@ impl World {
             events: Vec::new(),
             trigger_events: Vec::new(),
             collision_matrix: CollisionMatrix::new(),
+            sleep_threshold: DEFAULT_SLEEP_THRESHOLD,
+            time_to_sleep: DEFAULT_TIME_TO_SLEEP,
         }
     }
 
@@ -122,6 +137,8 @@ impl World {
             restitution: desc.restitution,
             previous_position: desc.position,
             sweep_velocity: [0.0; 3],
+            sleeping: false,
+            sleep_timer: 0.0,
         });
         self.indices.insert(entity, index);
         Ok(())
@@ -135,6 +152,7 @@ impl World {
         self.update_sweep_velocities(delta_seconds);
         let (mut overlapping, mut overlapping_triggers) = self.overlapping_pairs();
         let resolved = self.resolve_contacts();
+        self.update_sleeping(delta_seconds);
         let (post_overlapping, post_triggers) = self.overlapping_pairs();
         overlapping.extend(post_overlapping);
         overlapping_triggers.extend(post_triggers);
@@ -192,6 +210,26 @@ impl World {
         })
     }
 
+    /// Teleports a body of any role to `p` without sweeping, as writing
+    /// `Rigidbody.position` does. Unlike `set_position`, a dynamic body may be
+    /// moved; its velocity is unchanged and the next step does not read the
+    /// teleport as swept motion.
+    pub fn teleport_position(&mut self, body: EntityId, p: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !p.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let slot = &mut self.bodies[index];
+        slot.position = p;
+        slot.previous_position = p;
+        slot.sweep_velocity = [0.0; 3];
+        slot.sleeping = false;
+        slot.sleep_timer = 0.0;
+        Ok(())
+    }
+
     pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
         self.indices
             .get(&entity)
@@ -206,7 +244,42 @@ impl World {
             return Err(PhysicsError::InvalidBody(body));
         }
         self.bodies[index].velocity = v;
+        self.wake_up(body);
         Ok(())
+    }
+
+    /// Puts a dynamic body to sleep; it stops simulating until it is woken.
+    pub fn sleep(&mut self, body: EntityId) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        self.bodies[index].sleeping = true;
+        self.bodies[index].sleep_timer = 0.0;
+        self.bodies[index].velocity = [0.0; 3];
+        Ok(())
+    }
+
+    /// Wakes a sleeping body so the simulation moves it again.
+    pub fn wake_up(&mut self, body: EntityId) {
+        if let Some(index) = self.indices.get(&body).copied() {
+            self.bodies[index].sleeping = false;
+            self.bodies[index].sleep_timer = 0.0;
+        }
+    }
+
+    /// Whether the body is currently asleep.
+    pub fn is_sleeping(&self, body: EntityId) -> bool {
+        self.indices
+            .get(&body)
+            .map(|index| self.bodies[*index].sleeping)
+            .unwrap_or(false)
+    }
+
+    /// Replaces the speed below which a body may fall asleep and the time it
+    /// must stay below that speed first.
+    pub fn set_sleep_threshold(&mut self, speed_threshold: f64, time_to_sleep: f64) {
+        self.sleep_threshold = speed_threshold.max(0.0);
+        self.time_to_sleep = time_to_sleep.max(0.0);
     }
 
     pub fn set_position(&mut self, body: EntityId, p: [f64; 3]) -> Result<(), PhysicsError> {
@@ -433,7 +506,7 @@ impl World {
 
     fn integrate(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
-            if body.role != BodyRole::Dynamic {
+            if body.role != BodyRole::Dynamic || body.sleeping {
                 continue;
             }
             if body.use_gravity {
@@ -470,6 +543,45 @@ impl World {
         }
     }
 
+    /// Wakes a sleeping body that a moving dynamic body reaches.
+    fn wake_on_contact(&mut self, first_index: usize, second_index: usize) {
+        let threshold = self.sleep_threshold;
+        let (first_speed, second_speed) = {
+            let first = &self.bodies[first_index];
+            let second = &self.bodies[second_index];
+            (speed_of(first), speed_of(second))
+        };
+        if self.bodies[first_index].sleeping && second_speed > threshold {
+            self.bodies[first_index].sleeping = false;
+            self.bodies[first_index].sleep_timer = 0.0;
+        }
+        if self.bodies[second_index].sleeping && first_speed > threshold {
+            self.bodies[second_index].sleeping = false;
+            self.bodies[second_index].sleep_timer = 0.0;
+        }
+    }
+
+    /// Falls a dynamic body asleep once it has stayed below the sleep
+    /// threshold long enough.
+    fn update_sleeping(&mut self, delta_seconds: f64) {
+        let threshold = self.sleep_threshold;
+        let time_to_sleep = self.time_to_sleep;
+        for body in &mut self.bodies {
+            if body.role != BodyRole::Dynamic || body.sleeping {
+                continue;
+            }
+            if speed_of(body) <= threshold {
+                body.sleep_timer += delta_seconds;
+                if body.sleep_timer >= time_to_sleep {
+                    body.sleeping = true;
+                    body.velocity = [0.0; 3];
+                }
+            } else {
+                body.sleep_timer = 0.0;
+            }
+        }
+    }
+
     fn resolve_contacts(&mut self) -> PairSet {
         let mut resolved = BTreeSet::new();
         let count = self.bodies.len();
@@ -496,6 +608,7 @@ impl World {
                     ) else {
                         continue;
                     };
+                    self.wake_on_contact(first_index, second_index);
                     let move_a = contact.depth * (inv_a / inv_sum);
                     let move_b = contact.depth * (inv_b / inv_sum);
                     self.bodies[first_index].position[0] -= contact.normal[0] * move_a;
