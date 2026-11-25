@@ -2,18 +2,127 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using Unitas.Bridge;
 using Unitas.Scripting;
 using UnityEngine;
 
 namespace Unitas.PlayerHost.Tests
 {
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int PlayerInitDelegate(ulong runtimeHandle, IntPtr bundleRoot, IntPtr persistRoot);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int PlayerTickDelegate(double deltaSeconds);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int PlayerShutdownDelegate();
+
     public static class Program
     {
         public static int Main()
         {
             PlayerHostBootTests.Run();
+            PlayerHostArtifactTests.Run();
             return Check.FailureCount > 0 ? 1 : 0;
+        }
+    }
+
+    /// <summary>
+    /// Loads the built host folder the way hostfxr does: the host assembly and
+    /// every managed dependency come from that one folder, nothing else.
+    /// </summary>
+    public sealed class HostFolderLoadContext : AssemblyLoadContext
+    {
+        private readonly string _folder;
+
+        public HostFolderLoadContext(string folder)
+            : base("UnitasPlayerHostArtifact", isCollectible: false)
+        {
+            _folder = folder;
+            Resolving += (context, assemblyName) =>
+            {
+                string? simpleName = assemblyName.Name;
+                if (simpleName == null)
+                {
+                    return null;
+                }
+
+                string candidate = Path.Combine(_folder, simpleName + ".dll");
+                return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
+            };
+        }
+    }
+
+    public static class PlayerHostArtifactTests
+    {
+        private static readonly string[] RequiredArtifacts =
+        {
+            "Unitas.PlayerHost.dll",
+            "Unitas.PlayerHost.deps.json",
+            "Unitas.PlayerHost.runtimeconfig.json",
+            "Unitas.Bridge.dll",
+            "Unitas.Scripting.dll",
+            "UnityEngine.dll",
+        };
+
+        public static void Run()
+        {
+            string artifactFolder = Path.Combine(
+                PlayerHostBootTests.FindRepoRoot(),
+                "bridge",
+                "Unitas.PlayerHost",
+                "bin",
+                FindConfiguration(),
+                "net8.0");
+            foreach (string artifact in RequiredArtifacts)
+            {
+                Check.That(
+                    "host folder carries " + artifact,
+                    File.Exists(Path.Combine(artifactFolder, artifact)));
+            }
+
+            string assemblyPath = Path.Combine(artifactFolder, "Unitas.PlayerHost.dll");
+            if (!File.Exists(assemblyPath))
+            {
+                return;
+            }
+
+            var context = new HostFolderLoadContext(artifactFolder);
+            var assembly = context.LoadFromAssemblyPath(assemblyPath);
+            Type entry = assembly.GetType("Unitas.PlayerHost.PlayerHostEntry", throwOnError: true)
+                ?? throw new InvalidOperationException("PlayerHostEntry type not found");
+
+            PlayerInitDelegate init = GetEntry<PlayerInitDelegate>(entry, "UnitasPlayerInit");
+            PlayerTickDelegate tick = GetEntry<PlayerTickDelegate>(entry, "UnitasPlayerTick");
+            PlayerShutdownDelegate shutdown = GetEntry<PlayerShutdownDelegate>(entry, "UnitasPlayerShutdown");
+
+            int invalidInit = init(0UL, IntPtr.Zero, IntPtr.Zero);
+
+            Check.Equal("isolated host rejects an invalid runtime handle", 1, invalidInit);
+            Check.Equal("isolated host reports NotInitialized before boot", 7, tick(0.02));
+            Check.Equal("isolated host reports NotInitialized before boot on shutdown", 7, shutdown());
+        }
+
+        private static T GetEntry<T>(Type entryType, string name)
+            where T : Delegate
+        {
+            var method = entryType.GetMethod(name)
+                ?? throw new InvalidOperationException("Entry point not found: " + name);
+            return Marshal.GetDelegateForFunctionPointer<T>(method.MethodHandle.GetFunctionPointer());
+        }
+
+        private static string FindConfiguration()
+        {
+            DirectoryInfo? current = new DirectoryInfo(AppContext.BaseDirectory);
+            string configuration = "Release";
+            while (current != null && !string.Equals(current.Name, "bin", StringComparison.Ordinal))
+            {
+                configuration = current.Name;
+                current = current.Parent;
+            }
+
+            return configuration;
         }
     }
 
@@ -159,7 +268,7 @@ namespace Unitas.PlayerHost.Tests
             }
         }
 
-        private static string FindRepoRoot()
+        public static string FindRepoRoot()
         {
             string? current = AppContext.BaseDirectory;
             while (!string.IsNullOrEmpty(current))

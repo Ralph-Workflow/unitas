@@ -70,6 +70,22 @@ pub enum PlayerStartupError {
     VerificationFailed {
         message: String,
     },
+    RuntimeLibraryUnavailable {
+        path: PathBuf,
+    },
+    ScriptHostBootFailed {
+        message: String,
+    },
+    ScriptHostInitFailed {
+        stage: i32,
+    },
+    ScriptHostTickFailed {
+        frame: usize,
+        stage: i32,
+    },
+    ScriptHostShutdownFailed {
+        stage: i32,
+    },
 }
 
 impl fmt::Display for PlayerStartupError {
@@ -124,6 +140,34 @@ impl fmt::Display for PlayerStartupError {
             PlayerStartupError::VerificationFailed { message } => {
                 write!(formatter, "device verification failed: {message}")
             }
+            PlayerStartupError::RuntimeLibraryUnavailable { path } => {
+                write!(
+                    formatter,
+                    "the runtime library does not exist at '{}'",
+                    path.display()
+                )
+            }
+            PlayerStartupError::ScriptHostBootFailed { message } => {
+                write!(formatter, "the script host failed to boot: {message}")
+            }
+            PlayerStartupError::ScriptHostInitFailed { stage } => {
+                write!(
+                    formatter,
+                    "the script host failed to initialize: stage {stage}"
+                )
+            }
+            PlayerStartupError::ScriptHostTickFailed { frame, stage } => {
+                write!(
+                    formatter,
+                    "the script host failed to tick frame {frame}: stage {stage}"
+                )
+            }
+            PlayerStartupError::ScriptHostShutdownFailed { stage } => {
+                write!(
+                    formatter,
+                    "the script host failed to shut down: stage {stage}"
+                )
+            }
         }
     }
 }
@@ -142,6 +186,21 @@ pub fn render_failure<E: fmt::Display>(error: E) -> PlayerStartupError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptHost {
+    CoreClr,
+    None,
+}
+
+impl ScriptHost {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreClr => "coreclr",
+            Self::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerLaunchResult {
     pub manifest: BundleManifest,
@@ -150,9 +209,7 @@ pub struct PlayerLaunchResult {
     pub root_object_count: usize,
     pub frames_stepped: usize,
     pub development_diagnostics_enabled: bool,
-    pub score: u32,
-    pub total: u32,
-    pub won: bool,
+    pub script_host: ScriptHost,
 }
 
 pub type PlayerSession = PlayerLaunchResult;
@@ -332,21 +389,51 @@ pub fn launch_bundle(
     delta_seconds: f64,
 ) -> Result<PlayerLaunchResult, PlayerStartupError> {
     let (manifest, startup_scene_path) = load_and_validate_bundle_manifest(bundle_dir)?;
+    let development_diagnostics_enabled = manifest.development_diagnostics;
 
+    if let Some(scripted) = crate::scripted::launch_scripted(bundle_dir, frames, delta_seconds)? {
+        return Ok(PlayerLaunchResult {
+            manifest,
+            startup_scene_path,
+            loaded_scene_count: scripted.loaded_scene_count,
+            root_object_count: scripted.root_object_count,
+            frames_stepped: scripted.frames_stepped,
+            development_diagnostics_enabled,
+            script_host: ScriptHost::CoreClr,
+        });
+    }
+
+    let native = launch_native_scene(&startup_scene_path, frames, delta_seconds)?;
+    Ok(PlayerLaunchResult {
+        manifest,
+        startup_scene_path,
+        loaded_scene_count: native.loaded_scene_count,
+        root_object_count: native.root_object_count,
+        frames_stepped: native.frames_stepped,
+        development_diagnostics_enabled,
+        script_host: ScriptHost::None,
+    })
+}
+
+struct NativeSceneLaunch {
+    loaded_scene_count: usize,
+    root_object_count: usize,
+    frames_stepped: usize,
+}
+
+fn launch_native_scene(
+    startup_scene_path: &Path,
+    frames: usize,
+    delta_seconds: f64,
+) -> Result<NativeSceneLaunch, PlayerStartupError> {
     let mut runtime =
         unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
             message: error.to_string(),
         })?;
 
-    runtime.load_scene(&startup_scene_path).map_err(|error| {
+    runtime.load_scene(startup_scene_path).map_err(|error| {
         PlayerStartupError::SceneLoadFailed {
-            scene_path: startup_scene_path.clone(),
-            message: error.to_string(),
-        }
-    })?;
-
-    let mut controller = bind_roll_a_ball_controller_headless(&mut runtime).map_err(|error| {
-        PlayerStartupError::AudioFailed {
+            scene_path: startup_scene_path.to_path_buf(),
             message: error.to_string(),
         }
     })?;
@@ -358,40 +445,16 @@ pub fn launch_bundle(
                 frame,
                 message: error.to_string(),
             })?;
-        if let Some(controller) = controller.as_mut() {
-            controller
-                .step_world(&mut runtime, delta_seconds)
-                .map_err(|error| PlayerStartupError::FrameTickFailed {
-                    frame,
-                    message: error.to_string(),
-                })?;
-        }
     }
-
-    let (score, total, won) = controller
-        .as_ref()
-        .map(|controller| {
-            let hud = controller.hud_snapshot();
-            (hud.score, hud.total, hud.won)
-        })
-        .unwrap_or((0, 0, false));
 
     let loaded_scene_count = runtime.scene_count();
     let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
-    let development_diagnostics_enabled = manifest.development_diagnostics;
-
     let _ = runtime.shutdown();
 
-    Ok(PlayerLaunchResult {
-        manifest,
-        startup_scene_path,
+    Ok(NativeSceneLaunch {
         loaded_scene_count,
         root_object_count,
         frames_stepped: frames,
-        development_diagnostics_enabled,
-        score,
-        total,
-        won,
     })
 }
 
@@ -604,9 +667,7 @@ pub fn launch_bundle_windowed(
             root_object_count,
             frames_stepped: frames_presented as usize,
             development_diagnostics_enabled,
-            score,
-            total: total_pickups,
-            won,
+            script_host: ScriptHost::None,
         },
         frames_presented,
         audio_device_active,
@@ -1144,11 +1205,39 @@ pub fn diagnostics_from_bundle_error(error: &BundleError) -> Vec<BuildDiagnostic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundle::stage_bundle_for_host;
+    use crate::config::BuildConfiguration;
     use crate::sample::stage_roll_a_ball_bundle;
 
     #[test]
-    fn launch_bundle_steps_roll_a_ball_gameplay_headless() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn headless_launch_of_a_bundle_without_a_managed_payload_runs_the_native_loop(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = std::env::temp_dir().join(format!(
+            "unitas_player_native_loop_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+        let scene_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("scene_alpha.unity");
+        let config = BuildConfiguration::for_host(vec![scene_path], "NativeLoopGame");
+        stage_bundle_for_host(&config, &workspace, None)?;
+
+        let result = launch_bundle(&workspace, 4, 1.0 / 60.0)?;
+        assert_eq!(result.frames_stepped, 4);
+        assert_eq!(result.script_host, ScriptHost::None);
+        assert_eq!(result.loaded_scene_count, 1);
+        assert!(result.root_object_count >= 1);
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn roll_a_ball_shim_controller_steps_the_gameplay_headless(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let workspace = std::env::temp_dir().join(format!(
             "unitas_player_headless_gameplay_{}_{}",
             std::process::id(),
@@ -1157,11 +1246,6 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
         let staged = stage_roll_a_ball_bundle(&workspace)?;
         let scene_path = workspace.join(&staged.manifest.startup_scene_staged_path);
-
-        let result = launch_bundle(&workspace, 4, 1.0 / 60.0)?;
-        assert_eq!(result.score, 0);
-        assert_eq!(result.total, 4);
-        assert!(!result.won);
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;

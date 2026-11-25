@@ -1269,29 +1269,14 @@ namespace Unitas.Bridge
                 || TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_teleport_body_position, position);
         }
 
-        public bool TrySetBodyRotation(ulong entity, Quaternion rotation)
-        {
-            if (_isDisposed || entity == 0)
-            {
-                return false;
-            }
-            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32);
-            if (buffer == IntPtr.Zero)
-            {
-                return false;
-            }
-            byte[] bytes = new byte[32];
-            BitConverter.GetBytes((double)rotation.x).CopyTo(bytes, 0);
-            BitConverter.GetBytes((double)rotation.y).CopyTo(bytes, 8);
-            BitConverter.GetBytes((double)rotation.z).CopyTo(bytes, 16);
-            BitConverter.GetBytes((double)rotation.w).CopyTo(bytes, 24);
-            Marshal.Copy(bytes, 0, buffer, bytes.Length);
-            return RuntimeInterop.unitas_runtime_set_body_rotation(_runtimeHandle, entity, buffer) == 0;
-        }
-
         public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
         {
             return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_velocity, velocity);
+        }
+
+        public bool TrySetBodyRotation(ulong entity, Quaternion rotation)
+        {
+            return TryWriteBodyQuaternion(entity, RuntimeInterop.unitas_runtime_set_body_rotation, rotation);
         }
 
         public bool TrySetBodyCollisionDetectionMode(ulong entity, CollisionDetectionMode mode)
@@ -1456,6 +1441,26 @@ namespace Unitas.Bridge
             BitConverter.GetBytes((double)value.x).CopyTo(bytes, 0);
             BitConverter.GetBytes((double)value.y).CopyTo(bytes, 8);
             BitConverter.GetBytes((double)value.z).CopyTo(bytes, 16);
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+            return setter(_runtimeHandle, entity, buffer) == 0;
+        }
+
+        private bool TryWriteBodyQuaternion(ulong entity, Func<ulong, ulong, IntPtr, int> setter, Quaternion value)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[32];
+            BitConverter.GetBytes((double)value.x).CopyTo(bytes, 0);
+            BitConverter.GetBytes((double)value.y).CopyTo(bytes, 8);
+            BitConverter.GetBytes((double)value.z).CopyTo(bytes, 16);
+            BitConverter.GetBytes((double)value.w).CopyTo(bytes, 24);
             Marshal.Copy(bytes, 0, buffer, bytes.Length);
             return setter(_runtimeHandle, entity, buffer) == 0;
         }

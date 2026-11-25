@@ -252,6 +252,24 @@ pub extern "C" fn unitas_runtime_scene_count(handle: u64) -> i32 {
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_root_count(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let roots = state.runtime.scene_graph().map_or(0, |graph| graph.roots().len());
+        match i32::try_from(roots) {
+            Ok(count) => count,
+            Err(_) => {
+                state.set_error("root object count exceeds supported range");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_scene_name(handle: u64, index: u32) -> i32 {
     match with_runtime_state(handle, |state| {
         let name = match state.runtime.scene_name(index as usize) {

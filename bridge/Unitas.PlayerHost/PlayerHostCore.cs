@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Unitas.Bridge;
 using Unitas.Bridge.Scripting;
@@ -57,6 +58,7 @@ namespace Unitas.PlayerHost
                 try
                 {
                     string fullBundleRoot = Path.GetFullPath(bundleRoot);
+                    BindRuntimeLibrary(fullBundleRoot);
                     string managedDir = Path.Combine(fullBundleRoot, "Managed");
                     if (!Directory.Exists(managedDir))
                     {
@@ -156,6 +158,36 @@ namespace Unitas.PlayerHost
                     return (int)PlayerHostStage.ShutdownFailed;
                 }
             }
+        }
+
+        private static void BindRuntimeLibrary(string bundleRoot)
+        {
+            string? configured = Environment.GetEnvironmentVariable("UNITAS_RUNTIME_LIBRARY");
+            if (!string.IsNullOrEmpty(configured))
+            {
+                return;
+            }
+
+            string candidate = Path.Combine(bundleRoot, RuntimeLibraryFileName());
+            if (File.Exists(candidate))
+            {
+                Environment.SetEnvironmentVariable("UNITAS_RUNTIME_LIBRARY", candidate);
+            }
+        }
+
+        private static string RuntimeLibraryFileName()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return "unitas_runtime.dll";
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return "libunitas_runtime.dylib";
+            }
+
+            return "libunitas_runtime.so";
         }
 
         private static bool IsAlreadyLoaded(string simpleName)

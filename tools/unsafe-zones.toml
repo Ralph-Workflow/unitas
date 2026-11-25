@@ -16,7 +16,21 @@ language = "rust"
 purpose = "Stable C ABI of the unitas runtime invoked from C# through P/Invoke; the 109 extern \"C\" exports are named with #[unsafe(export_name = ...)] at their definition site so the ABI survives compiler changes"
 invariants = [
   "C symbols are named only with #[unsafe(export_name = ...)] inside the ffi_export! macro; no linker-level symbol aliasing of mangled names",
-  "the crate contains zero unsafe blocks; the only unsafe constructs are the export-name attributes on the extern \"C\" surface",
+  "the crate contains two unsafe blocks: the two libloading calls in the runtime dylib loader, which are the only way to obtain a host-owned function pointer from a shared library",
   "exported symbol names are part of the cross-language ABI consumed by bridge/ and editor/ DllImports and must not drift",
 ]
-unsafe_block_count = 0
+unsafe_block_count = 2
+
+[[zones]]
+path = "crates/unitas-dotnet"
+language = "rust"
+purpose = "In-process CoreCLR host: loads the hostfxr runtime through libloading and resolves the managed entry point the native player calls, so the crate's unsafe code is exactly the hostfxr FFI surface and the pointer-to-function-pointer conversion that surface needs"
+invariants = [
+  "the crate's unsafe code is limited to the hostfxr initialization, delegate lookup, and entry-point calls, to the hostfxr library load, and to the symbol lookup",
+  "every pointer passed to hostfxr stays valid for the duration of the call: the runtime config path, the assembly path, the type name, and the method name are CStrings that outlive the call, and the out parameters point to locals the runtime writes into",
+  "the unsafe blocks hold only calls and pointer conversions that cannot panic, and the hostfxr status code is checked after every call and returned as a typed DotnetHostError, so no panic unwinds across the boundary",
+  "the hostfxr library handle is owned by the DotnetHost and stays loaded for the host's whole lifetime, so every symbol pointer stays valid, and load_function rejects a delegate type whose size or alignment does not match a function pointer before it converts the resolved entry point",
+  "the crate's public API is safe: boot, boot_with_search_paths, and load_function take and return owned Rust values, and no raw pointer crosses the zone boundary",
+]
+unsafe_block_count = 7
+

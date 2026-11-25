@@ -5,11 +5,14 @@
     <LangVersion>9.0</LangVersion>
     <AssemblyName>Unitas.PlayerHost</AssemblyName>
     <RootNamespace>Unitas.PlayerHost</RootNamespace>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <RollForward>LatestMinor</RollForward>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Unitas.Bridge\Unitas.Bridge.csproj" />
+    <ProjectReference Include="..\Unitas.Scripting\Unitas.Scripting.csproj" />
+    <ProjectReference Include="..\UnityEngine\UnityEngine.csproj" />
   </ItemGroup>
 
 </Project>

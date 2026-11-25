@@ -16,11 +16,24 @@ pub const BUNDLE_MANIFEST_FORMAT_VERSION: u32 = 1;
 pub const MANAGED_DIR_NAME: &str = "Managed";
 pub const MANAGED_GAME_ASSEMBLY_FILENAME: &str = "Assembly-CSharp.dll";
 pub const PLAYER_HOST_ASSEMBLY_FILENAME: &str = "Unitas.PlayerHost.dll";
-const PLAYER_HOST_PAYLOAD_FILENAMES: [&str; 3] = [
+pub const PLAYER_HOST_RUNTIME_CONFIG_FILENAME: &str = "Unitas.PlayerHost.runtimeconfig.json";
+pub const PLAYER_HOST_PAYLOAD_FILENAMES: [&str; 8] = [
     "Unitas.PlayerHost.dll",
     "Unitas.PlayerHost.deps.json",
     "Unitas.PlayerHost.runtimeconfig.json",
+    "Unitas.Bridge.dll",
+    "Unitas.Scripting.dll",
+    "UnityEngine.dll",
+    "Microsoft.CodeAnalysis.dll",
+    "Microsoft.CodeAnalysis.CSharp.dll",
 ];
+
+#[cfg(target_os = "windows")]
+pub const RUNTIME_LIBRARY_FILENAME: &str = "unitas_runtime.dll";
+#[cfg(target_os = "macos")]
+pub const RUNTIME_LIBRARY_FILENAME: &str = "libunitas_runtime.dylib";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub const RUNTIME_LIBRARY_FILENAME: &str = "libunitas_runtime.so";
 
 const SHA256_INITIAL_STATE: [u32; 8] = [
     0x6a09_e667,
@@ -628,6 +641,12 @@ pub fn stage_bundle_for_host(
         // Only projects that actually carry scripts get a Managed/ payload;
         // scene-only fixture projects stage content alone.
         if project_has_scripts(&project_root) {
+            stage_runtime_library(
+                output_dir,
+                &mut entries,
+                &mut total_content_bytes,
+                &mut diagnostics,
+            );
             stage_managed_payload(
                 &project_root,
                 output_dir,
@@ -777,6 +796,73 @@ fn project_has_scripts(project_root: &Path) -> bool {
         })
     }
     dir_contains_cs(&project_root.join("Assets"), 8)
+}
+
+/// Stages the runtime library the player loads in process so the managed
+/// player host and the native launcher bind the same file. The bundle stays
+/// self-contained: the library travels with the content it hosts.
+fn stage_runtime_library(
+    output_dir: &Path,
+    entries: &mut Vec<BundleManifestEntry>,
+    total_content_bytes: &mut u64,
+    diagnostics: &mut Vec<String>,
+) {
+    let Some(source) = locate_runtime_library() else {
+        diagnostics.push(format!(
+            "the runtime library '{RUNTIME_LIBRARY_FILENAME}' was not found; the packaged \
+             player cannot host scripts without it"
+        ));
+        return;
+    };
+    let bytes = match fs::read(&source) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            diagnostics.push(format!(
+                "the runtime library '{}' could not be read: {error}",
+                source.display()
+            ));
+            return;
+        }
+    };
+    let destination = output_dir.join(RUNTIME_LIBRARY_FILENAME);
+    if let Err(error) = fs::write(&destination, &bytes) {
+        diagnostics.push(format!(
+            "the runtime library could not be staged at '{}': {error}",
+            destination.display()
+        ));
+        return;
+    }
+    *total_content_bytes = total_content_bytes.saturating_add(bytes.len() as u64);
+    entries.push(BundleManifestEntry {
+        index: entries.len(),
+        source_path: source.to_string_lossy().replace('\\', "/"),
+        staged_path: RUNTIME_LIBRARY_FILENAME.to_string(),
+        content_hash: content_hash_hex(&bytes),
+        size_bytes: bytes.len() as u64,
+        root_object_count: 0,
+    });
+}
+
+/// The runtime library of the local build: next to the running binary, in the
+/// build dependency directory, or in the workspace target directory.
+fn locate_runtime_library() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            candidates.push(directory.join(RUNTIME_LIBRARY_FILENAME));
+            candidates.push(directory.join("deps").join(RUNTIME_LIBRARY_FILENAME));
+        }
+    }
+    if let Some(root) = licensing::workspace_root() {
+        for profile in ["debug", "release"] {
+            candidates.push(
+                root.join("target")
+                    .join(profile)
+                    .join(RUNTIME_LIBRARY_FILENAME),
+            );
+        }
+    }
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 /// Stages the `Managed/` payload for a project: the game assembly compiled

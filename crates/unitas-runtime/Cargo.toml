@@ -79,6 +79,7 @@ default = []
 device = ["dep:winit", "unitas-render/device", "unitas-audio/device"]
 
 [dependencies]
+libloading = "0.8"
 unitas-animation = { path = "../unitas-animation" }
 unitas-asset = { path = "../unitas-asset" }
 unitas-audio = { path = "../unitas-audio" }

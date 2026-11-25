@@ -217,16 +217,14 @@ fn main() -> ExitCode {
         match launch_bundle(&resolved_bundle_dir, frames, cli.delta_seconds) {
             Ok(result) => {
                 println!(
-                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} score={}/{} won={} hud=false",
+                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} hud=false",
                     result.manifest.product_name,
                     result.startup_scene_path.display(),
                     result.loaded_scene_count,
                     result.root_object_count,
                     result.frames_stepped,
                     result.development_diagnostics_enabled,
-                    result.score,
-                    result.total,
-                    result.won
+                    result.script_host.as_str()
                 );
                 ExitCode::SUCCESS
             }

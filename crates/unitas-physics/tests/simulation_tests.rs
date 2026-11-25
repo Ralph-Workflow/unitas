@@ -29,6 +29,8 @@ mod perf_step;
 mod character_tests;
 #[path = "physics/collision_tests.rs"]
 mod collision_tests;
+#[path = "physics/kinematic_rotation_tests.rs"]
+mod kinematic_rotation_tests;
 #[path = "physics/navigation_tests.rs"]
 mod navigation_tests;
 #[path = "physics/query_tests.rs"]

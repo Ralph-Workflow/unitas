@@ -1406,6 +1406,10 @@ impl Runtime {
         self.physics.world_3d().body_role(entity)
     }
 
+    pub fn body_is_dynamic(&self, entity: EntityId) -> bool {
+        self.physics.world_3d().body_role(entity) == Some(BodyRole::Dynamic)
+    }
+
     pub fn character_controller_config(
         &self,
         entity: EntityId,

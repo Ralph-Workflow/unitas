@@ -2569,6 +2569,7 @@ dependencies = [
  "unitas-asset",
  "unitas-audio",
  "unitas-core",
+ "unitas-dotnet",
  "unitas-render",
  "unitas-runtime",
 ]
@@ -2576,6 +2577,13 @@ dependencies = [
 [[package]]
 name = "unitas-core"
 version = "0.1.0"
+
+[[package]]
+name = "unitas-dotnet"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+]
 
 [[package]]
 name = "unitas-editor-abi"
@@ -2610,6 +2618,7 @@ dependencies = [
 name = "unitas-runtime"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "unitas-animation",
  "unitas-asset",
  "unitas-audio",

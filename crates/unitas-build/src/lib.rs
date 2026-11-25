@@ -6,6 +6,7 @@ pub mod package;
 pub mod player;
 pub mod report;
 pub mod sample;
+pub mod scripted;
 pub mod targets;
 
 pub use bundle::{
@@ -27,7 +28,7 @@ pub use player::{
     diagnostics_from_bundle_error, execute_build, execute_build_for_host, launch_bundle,
     load_and_validate_bundle_manifest, mean_image_channel_error, render_failure, window_failure,
     BuildOutcomeBundle, DeviceVerifyReport, PlayerLaunchResult, PlayerSession, PlayerStartupError,
-    WindowedLaunchOptions, WindowedPlayerResult, BUILD_REPORT_FILENAME,
+    ScriptHost, WindowedLaunchOptions, WindowedPlayerResult, BUILD_REPORT_FILENAME,
     DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH, STARTUP_FAILURE_EXIT_CODE,
 };
 #[cfg(feature = "device")]

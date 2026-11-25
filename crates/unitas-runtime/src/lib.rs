@@ -2,6 +2,7 @@ mod abi;
 pub mod animation;
 pub mod capture;
 pub mod cinemachine;
+pub mod dylib;
 mod error;
 pub mod input;
 pub mod navigation;
@@ -18,6 +19,7 @@ pub mod window;
 
 pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};
+pub use dylib::{RuntimeDylib, RuntimeDylibError};
 pub use error::RuntimeError;
 pub use input::*;
 pub use runtime::{

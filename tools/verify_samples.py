@@ -186,6 +186,45 @@ def run_scenario(
     return check_report(report_path, captured_path)
 
 
+def native_scripted_launch(env: dict[str, str]) -> int:
+    name = "native-scripted-launch"
+    command = [
+        str(REPO_ROOT / "target" / "debug" / "unitas-player"),
+        "--sample",
+        "--frames",
+        "120",
+    ]
+    emit(f"step {name}: {' '.join(command)}")
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            timeout=RUN_BUDGET_SECONDS,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        emit(f"step {name}: exceeded {RUN_BUDGET_SECONDS:.0f}s budget")
+        return 1
+    elapsed = time.monotonic() - started
+    output = completed.stdout or ""
+    emit(output)
+    emit(f"step {name}: exit {completed.returncode} in {elapsed:.1f}s")
+    if completed.returncode != 0:
+        return completed.returncode
+    if "script_host=coreclr" not in output:
+        emit(f"step {name}: the player did not report script_host=coreclr")
+        return 1
+    if "frames_stepped=120" not in output:
+        emit(f"step {name}: the player did not report frames_stepped=120")
+        return 1
+    return 0
+
+
 def run_lane() -> int:
     emit(metadata_text())
     env = dict(os.environ)
@@ -203,6 +242,13 @@ def run_lane() -> int:
         (
             "bridge-build",
             ["dotnet", "build", "bridge/Unitas.sln", "--configuration", "Release"],
+            BUILD_BUDGET_SECONDS,
+            None,
+            REPO_ROOT,
+        ),
+        (
+            "player-build",
+            ["cargo", "build", "-p", "unitas-build", "--bin", "unitas-player"],
             BUILD_BUDGET_SECONDS,
             None,
             REPO_ROOT,
@@ -225,6 +271,7 @@ def run_lane() -> int:
         rc = run_scenario(name, scenario_file, extra_args, scenario_env)
         results.append((name, rc))
     results.extend((step[0], run_step(step, env)) for step in editor_scenario_steps())
+    results.append(("native-scripted-launch", native_scripted_launch(env)))
 
     emit("scenario summary:")
     for name, rc in results:

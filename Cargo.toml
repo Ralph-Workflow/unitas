@@ -7,6 +7,7 @@ members = [
     "crates/unitas-audio",
     "crates/unitas-build",
     "crates/unitas-core",
+    "crates/unitas-dotnet",
     "crates/unitas-editor-abi",
     "crates/unitas-physics",
     "crates/unitas-render",
