@@ -592,7 +592,8 @@ and multi-tap), processors, and control schemes.
   A desktop HID device with no dedicated layout receives a layout generated
   from its HID report descriptor. Controller-specific outputs, such as the
   DualShock and DualSense light bar and motors, apply wherever the controller
-  is connected. Sensor devices (accelerometer, gyroscope, gravity, attitude,
+  is connected. On the web target, they apply where the browser offers HID or
+  gamepad-effect access, and each output reports whether it is available. Sensor devices (accelerometer, gyroscope, gravity, attitude,
   linear acceleration, magnetic field, light, pressure, proximity, humidity,
   ambient temperature, and step counter) report values after
   `InputSystem.EnableDevice` on devices that have the sensor, at the

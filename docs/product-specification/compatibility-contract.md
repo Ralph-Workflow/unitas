@@ -422,6 +422,9 @@ Each release declares:
   for the editor, the command line, and headless operation;
 * for each target, the minimum target operating system version and, where the
   target has one, the minimum API level;
+* for the web target, the minimum version of each supported browser (Chrome,
+  Edge, Firefox, and Safari, on desktop and mobile) for WebGPU and for WebGL 2,
+  and the browser features each optional capability needs;
 * for each target with a store, the store submission requirements that the
   release meets, such as the Android target API level and the minimum Xcode and
   platform SDK versions used for Apple targets.

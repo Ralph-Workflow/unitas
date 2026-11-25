@@ -687,8 +687,11 @@ on the target reports the command, the script location, and the target.
 * **Compute shaders:** `ComputeShader` assets, kernels, `Dispatch`,
   `ComputeBuffer` and `GraphicsBuffer` data, and random-write textures are
   Supported on every device that can run compute work, on desktop, mobile,
-  console, and browser targets. On a device whose hardware cannot run compute
-  work, `SystemInfo.supportsComputeShaders` returns false, compute usage is
+  console, and browser targets. On WebGL 2, which has no compute stage, compute
+  work runs through an equivalent non-compute path, as the "Web target" section of
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)
+  defines. On a device whose hardware cannot run compute work,
+  `SystemInfo.supportsComputeShaders` returns false, compute usage is
   reported as Platform-limited with the asset and device named, and dispatch
   fails with an error instead of silently doing nothing.
 * **SRP Batcher and batching:** whether the SRP Batcher, static batching, or

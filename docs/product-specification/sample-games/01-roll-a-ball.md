@@ -21,8 +21,16 @@ document owns this game's acceptance under SMP-001.
 
 ## Targets and Input Modes
 
-* **Targets:** macOS, Windows, and Linux desktop players, plus the editor's play
-  mode and the headless editor.
+* **Targets:** macOS, Windows, and Linux desktop players, and the web player
+  (WebAssembly with WebGPU, and WebGL 2 as the fallback) in current Chrome, Edge,
+  Firefox, and Safari on desktop and mobile. Also the editor's play mode and the
+  headless editor.
+* **Web budgets:** the web build meets the engine web budgets in the "Web target"
+  section of [Builds, platforms, XR, and networking](../build-platforms-xr-networking.md).
+  That means at most 15 MB compressed transfer, a first interactive frame within
+  3 s on a cold cache and within 1 s on a warm cache, and 60 fps at 1080p on the
+  reference laptop and phone. Every scenario that runs in a packaged player also
+  runs in the web player.
 * **Render pipelines:** the project ships in two variants that are otherwise
   identical, one on the Built-in Render Pipeline and one on URP 14.x (Forward).
   Both variants are accepted.
