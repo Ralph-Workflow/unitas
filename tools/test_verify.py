@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from itertools import product
 from typing import TYPE_CHECKING
 
 from tools import verify
@@ -77,18 +78,26 @@ def _write_clean_pyproject(root: Path) -> Path:
     return path
 
 
-def _write_clean_rust_workspace(root: Path) -> None:
-    (root / "Cargo.toml").write_text(
+def _write_clean_rust_workspace(root: Path) -> Path:
+    manifest = root / "Cargo.toml"
+    manifest.write_text(
         "# Governed by docs/ralph-workflow-policy/linting-policy.md\n"
         "[workspace]\n"
         'members = ["crates/alpha"]\n'
         "[workspace.lints.rust]\n"
         'warnings = "deny"\n'
         'unsafe_code = "forbid"\n'
+        'unnecessary_transmutes = "deny"\n'
+        'static_mut_refs = "deny"\n'
         "[workspace.lints.clippy]\n"
         'all = { level = "deny", priority = -1 }\n'
         'pedantic = { level = "deny", priority = -1 }\n'
         'unwrap_used = "deny"\n'
+        'expect_used = "deny"\n'
+        'panic = "deny"\n'
+        'todo = "deny"\n'
+        'unimplemented = "deny"\n'
+        'dbg_macro = "deny"\n'
         "# clean-code-policy.md bans doc comments\n"
         'missing_errors_doc = "allow"\n',
         encoding="utf-8",
@@ -104,6 +113,7 @@ def _write_clean_rust_workspace(root: Path) -> None:
         "workspace = true\n",
         encoding="utf-8",
     )
+    return manifest
 
 
 def _write_clean_csharp_configs(root: Path) -> None:
@@ -158,6 +168,43 @@ def test_bypass_audit_flags_ruff_select_without_all_and_ignore_without_reason(
     assert any("COM812" in finding and "lacks a reason comment" in finding for finding in findings)
 
 
+def test_bypass_audit_requires_reasons_for_single_quoted_ruff_ignores(tmp_path: Path) -> None:
+    cases = (
+        ("ignore = ['COM812']", 3),
+        ("ignore = [\n    'COM812',\n]", 4),
+        ("ignore = [\n    'COM812', 'D203',\n]", 4),
+        ("ignore = ['COM812',\n]", 3),
+        ("ignore = [\n    'COM812']", 4),
+    )
+    for index, (ignore, line) in enumerate(cases):
+        root = tmp_path / str(index)
+        root.mkdir()
+        path = root / "pyproject.toml"
+        text = f"[tool.ruff.lint]\nselect = ['ALL']\n{ignore}\n"
+        lines = text.splitlines(keepends=True)
+        lines[line - 1] = lines[line - 1].rstrip() + " # formatter conflict\n"
+        path.write_text("".join(lines), encoding="utf-8")
+        assert verify.check_bypass(root) == [], repr(ignore)
+        path.write_text(text, encoding="utf-8")
+        rules = ("COM812", "D203") if "D203" in ignore else ("COM812",)
+        assert verify.check_bypass(root) == [
+            f"pyproject.toml:{line}: ruff ignore entry {rule!r} lacks a reason comment"
+            for rule in rules
+        ], repr(ignore)
+
+
+def test_bypass_audit_requires_reasons_for_quoted_ruff_ignore_keys(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    for key in ('"ignore"', "'ignore'"):
+        text = f"[tool.ruff.lint]\nselect = ['ALL']\n{key} = ['COM812']"
+        path.write_text(f"{text} # formatter conflict\n", encoding="utf-8")
+        assert verify.check_bypass(tmp_path) == [], key
+        path.write_text(f"{text}\n", encoding="utf-8")
+        assert verify.check_bypass(tmp_path) == [
+            "pyproject.toml:3: ruff ignore entry 'COM812' lacks a reason comment"
+        ], key
+
+
 def test_bypass_audit_flags_unopted_member_crate_and_missing_warnings_deny(
     tmp_path: Path,
 ) -> None:
@@ -170,37 +217,84 @@ def test_bypass_audit_flags_unopted_member_crate_and_missing_warnings_deny(
     )
     findings = verify.check_bypass(tmp_path)
     assert any("member crate must set [lints] workspace = true" in finding for finding in findings)
-    _write_clean_rust_workspace(tmp_path)
-    (tmp_path / "Cargo.toml").write_text(
-        "[workspace]\n"
-        'members = ["crates/alpha"]\n'
-        "[workspace.lints.rust]\n"
-        'unsafe_code = "forbid"\n'
-        "[workspace.lints.clippy]\n"
-        'all = "deny"\n'
-        'pedantic = "deny"\n',
-        encoding="utf-8",
-    )
+    manifest = _write_clean_rust_workspace(tmp_path)
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(text.replace('warnings = "deny"\n', ""), encoding="utf-8")
     findings = verify.check_bypass(tmp_path)
     assert any("warnings = 'deny'" in finding for finding in findings)
 
 
-def test_bypass_audit_flags_allow_or_warn_for_catalog_banned_lint(tmp_path: Path) -> None:
+def test_bypass_audit_flags_missing_member_manifest(tmp_path: Path) -> None:
     _write_clean_pyproject(tmp_path)
     _write_clean_rust_workspace(tmp_path)
     assert verify.check_bypass(tmp_path) == []
-    (tmp_path / "Cargo.toml").write_text(
-        "[workspace]\n"
-        'members = ["crates/alpha"]\n'
-        "[workspace.lints.rust]\n"
-        'warnings = "deny"\n'
-        'unsafe_code = "forbid"\n'
-        "[workspace.lints.clippy]\n"
-        'all = "deny"\n'
-        'pedantic = "deny"\n'
-        "# tried to weaken unwrap_used\n"
-        'unwrap_used = "warn"\n',
-        encoding="utf-8",
+    member = tmp_path / "crates" / "alpha" / "Cargo.toml"
+    member.unlink()
+    assert verify.check_bypass(tmp_path) == [
+        f"{member.relative_to(tmp_path)}: workspace member Cargo.toml is missing"
+    ]
+
+
+def test_bypass_audit_checks_lint_inheritance_for_root_package(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    manifest = _write_clean_rust_workspace(tmp_path)
+    text = manifest.read_text(encoding="utf-8") + '\n[package]\nname = "root"\nversion = "0.1.0"\n'
+    manifest.write_text(text + "\n[lints]\nworkspace = true\n", encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == []
+    manifest.write_text(text, encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == [
+        "Cargo.toml: member crate must set [lints] workspace = true"
+    ]
+
+
+def test_bypass_audit_requires_explicit_rust_catalog_denies(tmp_path: Path) -> None:
+    cases = (
+        ("rust", "unnecessary_transmutes"),
+        ("rust", "static_mut_refs"),
+        ("clippy", "unwrap_used"),
+        ("clippy", "expect_used"),
+        ("clippy", "panic"),
+        ("clippy", "todo"),
+        ("clippy", "unimplemented"),
+        ("clippy", "dbg_macro"),
+    )
+    for table, lint in cases:
+        root = tmp_path / lint
+        root.mkdir()
+        _write_clean_pyproject(root)
+        manifest = _write_clean_rust_workspace(root)
+        assert verify.check_bypass(root) == [], lint
+        text = manifest.read_text(encoding="utf-8")
+        manifest.write_text(text.replace(f'{lint} = "deny"\n', ""), encoding="utf-8")
+        assert verify.check_bypass(root) == [
+            f"Cargo.toml: [workspace.lints.{table}] must set {lint} = 'deny'"
+        ], lint
+
+
+def test_bypass_audit_requires_clippy_group_priority(tmp_path: Path) -> None:
+    groups = ("all", "pedantic")
+    entries = ('"deny"', '{ level = "deny", priority = 0 }', '{ level = "deny", priority = -1.0 }')
+    for index, (group, entry) in enumerate(product(groups, entries)):
+        root = tmp_path / str(index)
+        root.mkdir()
+        _write_clean_pyproject(root)
+        manifest = _write_clean_rust_workspace(root)
+        assert verify.check_bypass(root) == [], (group, entry)
+        text = manifest.read_text(encoding="utf-8")
+        original = f'{group} = {{ level = "deny", priority = -1 }}'
+        manifest.write_text(text.replace(original, f"{group} = {entry}"), encoding="utf-8")
+        assert verify.check_bypass(root) == [
+            f"Cargo.toml: [workspace.lints.clippy] must set {group} priority = -1"
+        ], (group, entry)
+
+
+def test_bypass_audit_flags_allow_or_warn_for_catalog_banned_lint(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    manifest = _write_clean_rust_workspace(tmp_path)
+    assert verify.check_bypass(tmp_path) == []
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(
+        text.replace('unwrap_used = "deny"', 'unwrap_used = "warn"'), encoding="utf-8"
     )
     findings = verify.check_bypass(tmp_path)
     assert any("catalog-banned lint 'unwrap_used'" in finding for finding in findings)
@@ -236,6 +330,26 @@ def test_bypass_audit_flags_msbuild_warning_weakenings(tmp_path: Path) -> None:
     assert any("TreatWarningsAsErrors set to false" in finding for finding in findings)
     assert any("NoWarn" in finding for finding in findings)
     assert any("WarningsNotAsErrors" in finding for finding in findings)
+
+
+def test_bypass_audit_flags_conditional_msbuild_warnings_as_errors_false(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    _write_clean_csharp_configs(tmp_path)
+    csproj = tmp_path / "bridge" / "Sample" / "Sample.csproj"
+    text = (
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        "  <PropertyGroup>\n"
+        "    <TreatWarningsAsErrors Condition=\"'$(Configuration)' == 'Debug'\">true"
+        "</TreatWarningsAsErrors>\n"
+        "  </PropertyGroup>\n"
+        "</Project>\n"
+    )
+    csproj.write_text(text, encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == []
+    csproj.write_text(text.replace(">true<", ">false<"), encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == [
+        "bridge/Sample/Sample.csproj:3: TreatWarningsAsErrors set to false configuration bypass"
+    ]
 
 
 def test_bypass_audit_flags_suppress_message_global_suppressions_and_rust_expect(
@@ -292,23 +406,46 @@ def test_bypass_audit_flags_analyzer_severity_downgrade_without_reason(tmp_path:
     )
 
 
+def test_bypass_audit_requires_reasons_for_bulk_analyzer_severity(tmp_path: Path) -> None:
+    cases = (
+        (".editorconfig", "[*.cs]", "dotnet_analyzer_diagnostic.category-Performance", "none"),
+        (".globalconfig", "is_global = true", "dotnet_analyzer_diagnostic", "silent"),
+    )
+    for index, (filename, header, key, severity) in enumerate(cases):
+        root = tmp_path / str(index)
+        member = root / "bridge"
+        member.mkdir(parents=True)
+        _write_clean_pyproject(root)
+        config = member / filename
+        setting = f"{key}.severity = {severity}\n"
+        config.write_text(f"{header}\n# reason for the downgrade\n{setting}", encoding="utf-8")
+        assert verify.check_bypass(root) == [], filename
+        config.write_text(f"{header}\n{setting}", encoding="utf-8")
+        path = config.relative_to(root)
+        assert verify.check_bypass(root) == [
+            f"{path}:2: analyzer severity downgrade to {severity!r} lacks a reason comment"
+        ], filename
+
+
 def test_bypass_audit_scans_clippy_toml_and_rustfmt_toml(tmp_path: Path) -> None:
-    _write_clean_pyproject(tmp_path)
-    _write_clean_rust_workspace(tmp_path)
-    (tmp_path / "clippy.toml").write_text("cognitive-complexity-threshold = 25\n", encoding="utf-8")
-    (tmp_path / "rustfmt.toml").write_text("max_width = 100\n", encoding="utf-8")
-    assert verify.check_bypass(tmp_path) == []
-    (tmp_path / "clippy.toml").write_text("allow-unwrap-in-tests = true\n", encoding="utf-8")
-    (tmp_path / "rustfmt.toml").write_text("disable_all_formatting = true\n", encoding="utf-8")
-    findings = verify.check_bypass(tmp_path)
-    assert any(
-        "clippy.toml" in finding and "allow-unwrap-in-tests bypass is forbidden" in finding
-        for finding in findings
-    )
-    assert any(
-        "rustfmt.toml" in finding and "disable_all_formatting bypass is forbidden" in finding
-        for finding in findings
-    )
+    cases = ((".", ""), ("crates/alpha", "."))
+    for index, (directory, prefix) in enumerate(cases):
+        root = tmp_path / str(index)
+        root.mkdir()
+        _write_clean_pyproject(root)
+        _write_clean_rust_workspace(root)
+        member = root / directory
+        clippy = member / f"{prefix}clippy.toml"
+        rustfmt = member / f"{prefix}rustfmt.toml"
+        clippy.write_text("cognitive-complexity-threshold = 25\n", encoding="utf-8")
+        rustfmt.write_text("max_width = 100\n", encoding="utf-8")
+        assert verify.check_bypass(root) == [], directory
+        clippy.write_text("allow-unwrap-in-tests = true\n", encoding="utf-8")
+        rustfmt.write_text("disable_all_formatting = true\n", encoding="utf-8")
+        assert verify.check_bypass(root) == [
+            f"{clippy.relative_to(root)}: allow-unwrap-in-tests bypass is forbidden",
+            f"{rustfmt.relative_to(root)}: disable_all_formatting bypass is forbidden",
+        ], directory
 
 
 def test_comment_audit_allows_config_comments_and_flags_source_and_makefile_comments(

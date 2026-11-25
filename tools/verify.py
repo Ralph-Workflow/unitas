@@ -227,7 +227,7 @@ CATALOG_BANNED_RUST_LINTS = frozenset(
     }
 )
 FORBIDDEN_CLIPPY_GROUPS = frozenset({"nursery", "restriction"})
-RUFF_IGNORE_ITEM_RE = re.compile(r'^\s*"([A-Za-z0-9]+)"\s*,?\s*(?:#\s*(.*))?$')
+RUFF_IGNORE_ITEM_RE = re.compile(r"""(["'])([A-Za-z0-9]+)\1""")
 TOML_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=")
 REQUIRED_DIRECTORY_BUILD_PROPS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Nullable=enable", re.compile(r"<Nullable>\s*enable\s*</Nullable>")),
@@ -245,7 +245,11 @@ REQUIRED_DIRECTORY_BUILD_PROPS: tuple[tuple[str, re.Pattern[str]], ...] = (
 MSBUILD_WEAKENING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "TreatWarningsAsErrors set to false",
-        re.compile(r"<TreatWarningsAsErrors>\s*false\s*</TreatWarningsAsErrors>", re.IGNORECASE),
+        re.compile(
+            r"""<TreatWarningsAsErrors(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*)?>"""
+            r"\s*false\s*</TreatWarningsAsErrors>",
+            re.IGNORECASE,
+        ),
     ),
     ("NoWarn", re.compile(r"<NoWarn\b")),
     ("WarningsNotAsErrors", re.compile(r"<WarningsNotAsErrors\b")),
@@ -269,7 +273,8 @@ MSBUILD_WEAKENING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 COMPILE_REMOVE_RE = re.compile(r'<Compile\s+Remove\s*=\s*"([^"]+)"')
 EDITORCONFIG_DOWNGRADE_RE = re.compile(
-    r"^\s*(?:dotnet_(?:analyzer_)?diagnostic\.[A-Za-z0-9_.-]+\.severity\s*=\s*(none|silent|suggestion)"
+    r"^\s*(?:(?:dotnet_diagnostic\.[A-Za-z0-9_.-]+|dotnet_analyzer_diagnostic"
+    r"(?:\.[A-Za-z0-9_.-]+)?)\.severity\s*=\s*(none|silent|suggestion)"
     r"|[A-Za-z0-9_.]+\s*=\s*[^#\n]*:\s*(none|silent|suggestion))\s*(?:#\s*(.*))?$",
     re.IGNORECASE,
 )
@@ -668,37 +673,19 @@ def check_ruff_ignore_reasons(text: str, display: str) -> list[str]:
     lines = text.splitlines()
     in_ignore = False
     for index, raw_line in enumerate(lines):
-        stripped = raw_line.strip()
+        code, _, comment = raw_line.strip().partition("#")
         if not in_ignore:
-            if re.match(r"^ignore\s*=\s*\[", stripped):
-                in_ignore = True
-                if "]" in stripped:
-                    in_ignore = False
-                    inner = stripped.split("[", 1)[1]
-                    code_part, _, comment_part = inner.partition("#")
-                    rules = re.findall(r'"([A-Za-z0-9]+)"', code_part)
-                    has_reason = bool(comment_part.strip()) or has_preceding_reason_comment(
-                        lines, index
-                    )
-                    if rules and not has_reason:
-                        findings.append(
-                            f"{display}:{index + 1}: ruff ignore entry {rules[0]!r} "
-                            "lacks a reason comment"
-                        )
-            continue
-        if stripped.startswith("]"):
-            in_ignore = False
-            continue
-        if not stripped or stripped.startswith("#"):
-            continue
-        match = RUFF_IGNORE_ITEM_RE.match(raw_line)
-        if match is None:
-            continue
-        rule = match.group(1)
-        inline_reason = (match.group(2) or "").strip()
-        if not inline_reason and not has_preceding_reason_comment(lines, index):
-            findings.append(
-                f"{display}:{index + 1}: ruff ignore entry {rule!r} lacks a reason comment"
+            start = re.match(r"""^(?:ignore|"ignore"|'ignore')\s*=\s*\[""", code)
+            if start is None:
+                continue
+            code = code[start.end() :]
+        items, close, _ = code.partition("]")
+        in_ignore = not close
+        if not comment.strip() and not has_preceding_reason_comment(lines, index):
+            findings.extend(
+                f"{display}:{index + 1}: ruff ignore entry {match.group(2)!r} "
+                "lacks a reason comment"
+                for match in RUFF_IGNORE_ITEM_RE.finditer(items)
             )
     return findings
 
@@ -843,8 +830,11 @@ def check_workspace_cargo_toml(
     if not isinstance(rust_lints, dict):
         findings.append(f"{display}: workspace declares no [workspace.lints.rust] table")
     else:
-        if rust_lint_level(rust_lints.get("warnings")) != "deny":
-            findings.append(f"{display}: [workspace.lints.rust] must set warnings = 'deny'")
+        findings.extend(
+            f"{display}: [workspace.lints.rust] must set {lint} = 'deny'"
+            for lint in ("warnings", "unnecessary_transmutes", "static_mut_refs")
+            if rust_lint_level(rust_lints.get(lint)) != "deny"
+        )
         if rust_lint_level(rust_lints.get("unsafe_code")) != "forbid":
             findings.append(f"{display}: [workspace.lints.rust] must set unsafe_code = 'forbid'")
         findings.extend(check_rust_lint_table(rust_lints, text, display, "rust"))
@@ -852,10 +842,22 @@ def check_workspace_cargo_toml(
     if not isinstance(clippy_lints, dict):
         findings.append(f"{display}: workspace declares no [workspace.lints.clippy] table")
     else:
-        if rust_lint_level(clippy_lints.get("all")) != "deny":
-            findings.append(f"{display}: [workspace.lints.clippy] must set all = 'deny'")
-        if rust_lint_level(clippy_lints.get("pedantic")) != "deny":
-            findings.append(f"{display}: [workspace.lints.clippy] must set pedantic = 'deny'")
+        for group in ("all", "pedantic"):
+            entry = clippy_lints.get(group)
+            if rust_lint_level(entry) != "deny":
+                findings.append(f"{display}: [workspace.lints.clippy] must set {group} = 'deny'")
+                continue
+            priority = entry.get("priority") if isinstance(entry, dict) else None
+            if not isinstance(priority, int) or priority != -1:
+                findings.append(
+                    f"{display}: [workspace.lints.clippy] must set {group} priority = -1"
+                )
+        denies = ("unwrap_used", "expect_used", "panic", "todo", "unimplemented", "dbg_macro")
+        findings.extend(
+            f"{display}: [workspace.lints.clippy] must set {lint} = 'deny'"
+            for lint in denies
+            if rust_lint_level(clippy_lints.get(lint)) != "deny"
+        )
         findings.extend(check_rust_lint_table(clippy_lints, text, display, "clippy"))
     return findings, members
 
@@ -879,7 +881,8 @@ def check_member_cargo_toml(
 
 def check_rust_tool_configs(root: Path) -> list[str]:
     findings: list[str] = []
-    for config_path in sorted(iter_named_files(root, frozenset({"clippy.toml", "rustfmt.toml"}))):
+    config_names = frozenset({"clippy.toml", ".clippy.toml", "rustfmt.toml", ".rustfmt.toml"})
+    for config_path in sorted(iter_named_files(root, config_names)):
         display = display_path(config_path, root)
         text = config_path.read_text(encoding="utf-8")
         try:
@@ -916,9 +919,7 @@ def check_rust_configuration(root: Path = REPO_ROOT) -> list[str]:
             expected_members.update(
                 (path.parent / member / "Cargo.toml").resolve() for member in members
             )
-        if "package" in parsed and (
-            path.resolve() in expected_members or "workspace" not in parsed
-        ):
+        if "package" in parsed:
             findings.extend(check_member_cargo_toml(parsed, text, display))
     findings.extend(
         f"{display_path(member_manifest, root)}: workspace member Cargo.toml is missing"
