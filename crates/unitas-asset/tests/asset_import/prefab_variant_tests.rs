@@ -961,3 +961,127 @@ fn failed_prefab_variant_save_leaves_prior_on_disk_file_intact() -> TestResult {
     let _ = fs::remove_dir_all(&root);
     Ok(())
 }
+
+#[test]
+fn unchanged_prefab_save_byte_identity_and_nested_prefab_plus_broken_base_disk_round_trip(
+) -> TestResult {
+    let root = temp_prefab_dir("unchanged_nested_broken")?;
+    let base_with_nested_path = root.join("OuterWithNested.prefab");
+    let broken_variant_path = root.join("BrokenBaseVariant.prefab");
+    let scene_path = root.join("SceneWithInstances.unity");
+
+    let mut base_with_nested = PrefabVariantDefinition::base_prefab(
+        BASE_GUID,
+        "OuterWithNested",
+        ROOT_GO_ID,
+        vec![PrefabNodeRecord::new(ROOT_GO_ID, "OuterWithNested", None)
+            .with_property("m_Layer", "2")
+            .with_component(
+                PrefabComponentRecord::new(ROOT_TRANSFORM_ID, "Transform")
+                    .with_property("m_LocalPosition.x", "0"),
+            )],
+    );
+    base_with_nested.nested_prefabs.push(NestedPrefabReference {
+        instance_file_id: 900500,
+        parent_target_file_id: ROOT_TRANSFORM_ID,
+        source: PrefabSource::new(NESTED_GUID, 400),
+        modifications: vec![Modification::new(400, "m_Name", "NestedTurretSub")],
+    });
+
+    scene_save::save_prefab_variant(&base_with_nested_path, &base_with_nested)?;
+    let base_bytes_1 = fs::read(&base_with_nested_path)?;
+
+    let loaded_base_unchanged = PrefabVariantDefinition::load_from_file(
+        &base_with_nested_path,
+        BASE_GUID,
+        "OuterWithNested",
+    )?;
+    assert_eq!(loaded_base_unchanged, base_with_nested);
+    scene_save::save_prefab_variant(&base_with_nested_path, &loaded_base_unchanged)?;
+    let base_bytes_2 = fs::read(&base_with_nested_path)?;
+    assert_eq!(base_bytes_2, base_bytes_1);
+
+    let missing_base_guid = "99999999999999999999999999999999";
+    let mut broken_variant = PrefabVariantDefinition::variant(
+        VARIANT_A_GUID,
+        "BrokenBaseVariant",
+        PrefabSource::new(missing_base_guid, ROOT_GO_ID),
+    );
+    broken_variant.record_override(Modification::new(ROOT_GO_ID, "m_Name", "OrphanedVariant"))?;
+    broken_variant.record_override(Modification::new(ROOT_RIGIDBODY_ID, "m_Mass", "3200"))?;
+    broken_variant.nested_prefabs.push(NestedPrefabReference {
+        instance_file_id: 900600,
+        parent_target_file_id: ROOT_TRANSFORM_ID,
+        source: PrefabSource::new(NESTED_GUID, 400),
+        modifications: vec![Modification::new(400, "m_TagString", "NestedInVariant")],
+    });
+
+    scene_save::save_prefab_variant(&broken_variant_path, &broken_variant)?;
+    let broken_bytes_1 = fs::read(&broken_variant_path)?;
+
+    let loaded_broken_variant = PrefabVariantDefinition::load_from_file(
+        &broken_variant_path,
+        VARIANT_A_GUID,
+        "BrokenBaseVariant",
+    )?;
+    assert_eq!(loaded_broken_variant, broken_variant);
+    scene_save::save_prefab_variant(&broken_variant_path, &loaded_broken_variant)?;
+    assert_eq!(fs::read(&broken_variant_path)?, broken_bytes_1);
+
+    let scene_instance = ScenePrefabInstance::new(
+        "broken_scene_inst",
+        PrefabInstance::new(
+            PrefabSource::new(VARIANT_A_GUID, ROOT_GO_ID),
+            0,
+            vec![Modification::new(ROOT_TRANSFORM_ID, "m_LocalPosition.y", "15")],
+        ),
+    );
+    let mut scene_stream = scene_instance.to_stream(800100);
+    scene_save::save_scene_prefab_instance(
+        &scene_path,
+        &mut scene_stream,
+        &scene_instance,
+        800100,
+    )?;
+    let scene_bytes_1 = fs::read(&scene_path)?;
+
+    let loaded_scene_instance =
+        ScenePrefabInstance::load_from_file(&scene_path, "broken_scene_inst", 800100)?;
+    assert_eq!(loaded_scene_instance, scene_instance);
+    let mut reloaded_scene_stream = unity_yaml::parse_file(&scene_path)?;
+    scene_save::save_scene_prefab_instance(
+        &scene_path,
+        &mut reloaded_scene_stream,
+        &loaded_scene_instance,
+        800100,
+    )?;
+    assert_eq!(fs::read(&scene_path)?, scene_bytes_1);
+
+    let mut registry = PrefabRegistry::new();
+    registry.register(loaded_broken_variant);
+
+    let resolved = registry.resolve_instance(&loaded_scene_instance)?;
+    let broken_state = resolved
+        .as_broken()
+        .ok_or("expected BrokenBase after disk reload")?;
+    assert_eq!(broken_state.missing_guid, missing_base_guid);
+    assert_eq!(
+        broken_state.broken_at_level,
+        OverrideLevel::Prefab(VARIANT_A_GUID.to_string())
+    );
+    assert!(broken_state.retained_modifications.iter().any(|(lvl, m)| {
+        *lvl == OverrideLevel::Prefab(VARIANT_A_GUID.to_string())
+            && m.target_file_id == ROOT_RIGIDBODY_ID
+            && m.property_path == "m_Mass"
+            && m.value == "3200"
+    }));
+    assert!(broken_state.retained_modifications.iter().any(|(lvl, m)| {
+        *lvl == OverrideLevel::SceneInstance(String::from("broken_scene_inst"))
+            && m.target_file_id == ROOT_TRANSFORM_ID
+            && m.property_path == "m_LocalPosition.y"
+            && m.value == "15"
+    }));
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}

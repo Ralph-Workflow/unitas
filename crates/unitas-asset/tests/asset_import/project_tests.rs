@@ -4,11 +4,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use unitas_asset::meta;
+use unitas_asset::primitive::{
+    builtin_primitive_by_identity, BuiltinPrimitive, BUILTIN_EXTRA_GUID,
+};
 use unitas_asset::project::{
     AssetInventory, AssetKind, GuidLookup, MigrationStatus, Project, ASSESSED_ON_EDIT,
     BASELINE_UNITY_VERSION,
 };
+use unitas_asset::scene_save;
 use unitas_asset::trust::{TrustOrigin, TrustOutcome, TrustRefusal, TrustStore};
+use unitas_asset::unity_yaml::{self, Node};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -480,6 +486,566 @@ fn duplicate_guids_are_reported_not_resolved() -> TestResult {
         }
         other => return Err(format!("expected the texture asset, got {other:?}").into()),
     }
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+fn set_yaml_scalar(node: &mut Node, keys: &[&str], value: &str) -> bool {
+    let (key, rest) = match keys.split_first() {
+        Some(parts) => parts,
+        None => return false,
+    };
+    match node {
+        Node::Mapping(entries) => {
+            for (entry_key, entry_value) in entries.iter_mut() {
+                if entry_key != key {
+                    continue;
+                }
+                if rest.is_empty() {
+                    *entry_value = Node::Scalar(value.to_string());
+                    return true;
+                }
+                return set_yaml_scalar(entry_value, rest, value);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn remove_yaml_key(node: &mut Node, keys: &[&str]) -> bool {
+    let (key, rest) = match keys.split_first() {
+        Some(parts) => parts,
+        None => return false,
+    };
+    match node {
+        Node::Mapping(entries) => {
+            if rest.is_empty() {
+                let len_before = entries.len();
+                entries.retain(|(k, _)| k != key);
+                return entries.len() != len_before;
+            }
+            for (entry_key, entry_value) in entries.iter_mut() {
+                if entry_key == key {
+                    return remove_yaml_key(entry_value, rest);
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn project_round_trip_without_library_preserves_unedited_files_and_writes_no_generated_folders(
+) -> TestResult {
+    let root = temp_dir("project-no-library-round-trip")?;
+    let project_root = root.join("project");
+    build_project(&project_root, &format!("{BASELINE_UNITY_VERSION}.16f1"))?;
+    let store = TrustStore::new(root.join("trust.json"));
+
+    let generated_folders = ["Library", "Temp", "Logs", "obj", "UserSettings"];
+    for folder in generated_folders {
+        assert!(!project_root.join(folder).exists());
+    }
+
+    let (_, initial_report) = Project::open(&project_root, &store)?;
+    let mat_path = project_root.join("Assets/Materials/Brick.mat");
+    let scene_path = project_root.join("Assets/Scenes/Main.unity");
+    let tex_path = project_root.join("Assets/Textures/Tile.png");
+    let tex_meta_path = project_root.join("Assets/Textures/Tile.png.meta");
+    let version_path = project_root.join("ProjectSettings/ProjectVersion.txt");
+
+    let mat_original = fs::read(&mat_path)?;
+    let scene_original = fs::read(&scene_path)?;
+    let tex_original = fs::read(&tex_path)?;
+    let tex_meta_original = fs::read(&tex_meta_path)?;
+    let version_original = fs::read(&version_path)?;
+
+    let mut mat_stream = unity_yaml::parse_file(&mat_path)?;
+    scene_save::save_stream(&mat_path, &mat_stream)?;
+    assert_eq!(fs::read(&mat_path)?, mat_original);
+
+    assert!(set_yaml_scalar(
+        &mut mat_stream.documents[0].root,
+        &["Material", "m_Name"],
+        "BrickPolished"
+    ));
+    scene_save::save_stream(&mat_path, &mat_stream)?;
+
+    let (_, reopened_report) = Project::open(&project_root, &store)?;
+    for folder in generated_folders {
+        assert!(
+            !project_root.join(folder).exists(),
+            "generated folder {folder} was created"
+        );
+    }
+
+    assert_eq!(fs::read(&scene_path)?, scene_original);
+    assert_eq!(fs::read(&tex_path)?, tex_original);
+    assert_eq!(fs::read(&tex_meta_path)?, tex_meta_original);
+    assert_eq!(fs::read(&version_path)?, version_original);
+    assert_eq!(reopened_report.inventory, initial_report.inventory);
+
+    let sub_entries: Vec<_> = reopened_report
+        .inventory
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == AssetKind::Sub && entry.guid == TEXTURE_GUID)
+        .collect();
+    assert_eq!(sub_entries.len(), 2);
+
+    let reloaded_mat = unity_yaml::parse_file(&mat_path)?;
+    assert_eq!(
+        reloaded_mat.documents[0]
+            .root
+            .get("Material")
+            .and_then(|n| n.get("m_Name"))
+            .and_then(Node::as_str),
+        Some("BrickPolished")
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn project_2021_3_edit_on_save_migrates_only_edited_asset_and_preserves_unedited_files(
+) -> TestResult {
+    let root = temp_dir("project-2021-3-edit-on-save")?;
+    let project_root = root.join("project");
+    build_project(&project_root, "2021.3.16f1")?;
+    let second_mat_path = project_root.join("Assets/Materials/Mortar.mat");
+    let second_mat_guid = "55555555555555555555555555555555";
+    let second_mat_content = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  serializedVersion: 6\n  m_Name: Mortar\n";
+    write_file(&second_mat_path, second_mat_content)?;
+    write_file(
+        &project_root.join("Assets/Materials/Mortar.mat.meta"),
+        &meta(second_mat_guid, "NativeFormatImporter:"),
+    )?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let snapshot_before_open = snapshot(&project_root)?;
+    let (_, report_before) = Project::open(&project_root, &store)?;
+    assert_eq!(snapshot(&project_root)?, snapshot_before_open);
+
+    match &report_before.migration {
+        MigrationStatus::RequiresUpgrade(preview) => {
+            assert!(preview
+                .assets
+                .contains(&String::from("Assets/Materials/Brick.mat")));
+            assert!(preview
+                .assets
+                .contains(&String::from("Assets/Materials/Mortar.mat")));
+        }
+        other => return Err(format!("expected RequiresUpgrade, got {other:?}").into()),
+    }
+
+    let brick_path = project_root.join("Assets/Materials/Brick.mat");
+    let scene_path = project_root.join("Assets/Scenes/Main.unity");
+    let version_path = project_root.join("ProjectSettings/ProjectVersion.txt");
+    let mortar_bytes_before = fs::read(&second_mat_path)?;
+    let scene_bytes_before = fs::read(&scene_path)?;
+    let version_bytes_before = fs::read(&version_path)?;
+
+    let mut brick_stream = unity_yaml::parse_file(&brick_path)?;
+    assert!(set_yaml_scalar(
+        &mut brick_stream.documents[0].root,
+        &["Material", "m_Name"],
+        "Brick2022"
+    ));
+    assert!(remove_yaml_key(
+        &mut brick_stream.documents[0].root,
+        &["Material", "serializedVersion"]
+    ));
+    scene_save::save_stream(&brick_path, &brick_stream)?;
+
+    assert_eq!(fs::read(&second_mat_path)?, mortar_bytes_before);
+    assert_eq!(fs::read(&scene_path)?, scene_bytes_before);
+    assert_eq!(fs::read(&version_path)?, version_bytes_before);
+
+    let (_, report_after) = Project::open(&project_root, &store)?;
+    assert_eq!(report_after.inventory, report_before.inventory);
+    match &report_after.migration {
+        MigrationStatus::RequiresUpgrade(preview) => {
+            assert!(!preview
+                .assets
+                .contains(&String::from("Assets/Materials/Brick.mat")));
+            assert!(preview
+                .assets
+                .contains(&String::from("Assets/Materials/Mortar.mat")));
+        }
+        other => return Err(format!("expected RequiresUpgrade, got {other:?}").into()),
+    }
+
+    let references = guid_references(&project_root);
+    assert!(references
+        .iter()
+        .any(|(guid, _)| guid == MATERIAL_GUID));
+    assert_eq!(
+        target_of(&report_after.inventory, MATERIAL_GUID),
+        Some(String::from("Assets/Materials/Brick.mat"))
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn meta_unrecognized_fields_builtin_resource_and_missing_sub_asset_reference_round_trip(
+) -> TestResult {
+    let root = temp_dir("project-meta-builtin-subasset")?;
+    let meta_path = root.join("CustomAsset.mat.meta");
+    let meta_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1001 &1\nfileFormatVersion: 2\nguid: {MATERIAL_GUID}\nCustomExperimentalImporter:\n  serializedVersion: 9\n  customFlag: enabled\n  nestedConfig:\n    alpha: 42\n    beta: preserved\n  userData: custom_user_payload\n  assetBundleName: bundle_main\n"
+    );
+    write_file(&meta_path, &meta_yaml)?;
+
+    let parsed_meta_stream = unity_yaml::parse_file(&meta_path)?;
+    assert_eq!(scene_save::emit_stream(&parsed_meta_stream), meta_yaml);
+    scene_save::save_stream(&meta_path, &parsed_meta_stream)?;
+    assert_eq!(fs::read_to_string(&meta_path)?, meta_yaml);
+    assert_eq!(meta::parse_meta_file(&meta_path)?, MATERIAL_GUID);
+
+    let mut edited_meta_stream = parsed_meta_stream;
+    assert!(set_yaml_scalar(
+        &mut edited_meta_stream.documents[0].root,
+        &["CustomExperimentalImporter", "userData"],
+        "updated_user_payload"
+    ));
+    scene_save::save_stream(&meta_path, &edited_meta_stream)?;
+    assert_eq!(meta::parse_meta_file(&meta_path)?, MATERIAL_GUID);
+
+    let reloaded_meta = unity_yaml::parse_file(&meta_path)?;
+    let importer_node = reloaded_meta.documents[0]
+        .root
+        .get("CustomExperimentalImporter")
+        .ok_or("missing CustomExperimentalImporter")?;
+    assert_eq!(
+        importer_node.get("customFlag").and_then(Node::as_str),
+        Some("enabled")
+    );
+    assert_eq!(
+        importer_node
+            .get("nestedConfig")
+            .and_then(|n| n.get("beta"))
+            .and_then(Node::as_str),
+        Some("preserved")
+    );
+    assert_eq!(
+        importer_node
+            .get("userData")
+            .and_then(Node::as_str),
+        Some("updated_user_payload")
+    );
+
+    let scene_path = root.join("BuiltinAndMissingSubAsset.unity");
+    let missing_sub_asset_file_id: i64 = 21300999;
+    let scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: BuiltinCubeHolder\n--- !u!33 &330\nMeshFilter:\n  m_GameObject: {{fileID: 100}}\n  m_Mesh: {{fileID: 10202, guid: {BUILTIN_EXTRA_GUID}, type: 0}}\n--- !u!212 &2120\nSpriteRenderer:\n  m_GameObject: {{fileID: 100}}\n  m_Sprite: {{fileID: {missing_sub_asset_file_id}, guid: {TEXTURE_GUID}, type: 3}}\n"
+    );
+    write_file(&scene_path, &scene_yaml)?;
+
+    let mut scene_stream = unity_yaml::parse_file(&scene_path)?;
+    assert_eq!(scene_save::emit_stream(&scene_stream), scene_yaml);
+    assert!(set_yaml_scalar(
+        &mut scene_stream.documents[0].root,
+        &["GameObject", "m_Name"],
+        "BuiltinCubeHolderEdited"
+    ));
+    scene_save::save_stream(&scene_path, &scene_stream)?;
+
+    let reloaded_scene = unity_yaml::parse_file(&scene_path)?;
+    let mesh_ref = reloaded_scene.documents[1]
+        .root
+        .get("MeshFilter")
+        .and_then(|n| n.get("m_Mesh"))
+        .ok_or("missing m_Mesh")?;
+    let mesh_file_id = mesh_ref
+        .get("fileID")
+        .and_then(Node::as_i64)
+        .ok_or("missing mesh fileID")?;
+    let mesh_guid = mesh_ref
+        .get("guid")
+        .and_then(Node::as_str)
+        .ok_or("missing mesh guid")?;
+    assert_eq!(mesh_file_id, 10202);
+    assert_eq!(mesh_guid, BUILTIN_EXTRA_GUID);
+    assert_eq!(
+        builtin_primitive_by_identity(mesh_file_id, mesh_guid),
+        Some(BuiltinPrimitive::Cube)
+    );
+
+    let sprite_ref = reloaded_scene.documents[2]
+        .root
+        .get("SpriteRenderer")
+        .and_then(|n| n.get("m_Sprite"))
+        .ok_or("missing m_Sprite")?;
+    assert_eq!(
+        sprite_ref.get("fileID").and_then(Node::as_i64),
+        Some(missing_sub_asset_file_id)
+    );
+    assert_eq!(
+        sprite_ref.get("guid").and_then(Node::as_str),
+        Some(TEXTURE_GUID)
+    );
+    assert_eq!(sprite_ref.get("type").and_then(Node::as_i64), Some(3));
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj001_ser005_unity_2020_3_and_2021_3_migration_preview_first_save_notice_build_and_gitignore_footprint(
+) -> TestResult {
+    let root = temp_dir("project-2020-2021-footprint")?;
+    let project_2020 = root.join("project_2020");
+    let project_2021 = root.join("project_2021");
+    build_project(&project_2020, "2020.3.48f1")?;
+    build_project(&project_2021, "2021.3.16f1")?;
+
+    let per_user_dir = root.join("per_user_state");
+    fs::create_dir_all(&per_user_dir)?;
+    let store = TrustStore::new(per_user_dir.join("trust.json"));
+
+    for (proj_dir, expected_ver) in [
+        (&project_2020, "2020.3.48f1"),
+        (&project_2021, "2021.3.16f1"),
+    ] {
+        let snap_before = snapshot(proj_dir)?;
+        let (_, report) = Project::open(proj_dir, &store)?;
+        assert_eq!(report.declared_version.as_deref(), Some(expected_ver));
+        assert_eq!(snapshot(proj_dir)?, snap_before);
+        assert!(!proj_dir.join("ProjectSettings/UnitasVersion.txt").exists());
+
+        match &report.migration {
+            MigrationStatus::RequiresUpgrade(preview) => {
+                assert!(preview
+                    .assets
+                    .contains(&String::from("Assets/Materials/Brick.mat")));
+                assert!(preview.settings.contains(&String::from("TimeManager.asset")));
+                assert!(preview
+                    .packages
+                    .contains(&String::from("com.unity.ide.rider")));
+            }
+            other => return Err(format!("expected RequiresUpgrade, got {other:?}").into()),
+        }
+    }
+
+    let first_save_notice = match &Project::open(&project_2021, &store)?.1.migration {
+        MigrationStatus::RequiresUpgrade(preview) => format!(
+            "Saving upgraded assets {:?} in Unity {} form; these assets will require Unity {} LTS to open in Unity.",
+            preview.assets, BASELINE_UNITY_VERSION, BASELINE_UNITY_VERSION
+        ),
+        _ => String::new(),
+    };
+    assert!(first_save_notice.contains("Assets/Materials/Brick.mat"));
+    assert!(first_save_notice.contains("2022.3"));
+
+    store.trust_project(&project_2021.to_string_lossy(), TrustOrigin::Person)?;
+    let cache_file = per_user_dir.join("import_cache.bin");
+    write_file(&cache_file, "cached_import_payload")?;
+
+    let (_, report_with_cache) = Project::open(&project_2021, &store)?;
+    fs::remove_file(&cache_file)?;
+    let (_, report_after_cache_delete) = Project::open(&project_2021, &store)?;
+    assert_eq!(
+        report_with_cache.inventory,
+        report_after_cache_delete.inventory
+    );
+
+    let sln_path = project_2021.join("project_2021.sln");
+    let csproj_path = project_2021.join("Assembly-CSharp.csproj");
+    let build_out_dir = root.join("Builds/Standalone");
+    write_file(&sln_path, "Microsoft Visual Studio Solution File")?;
+    write_file(&csproj_path, "<Project Sdk=\"Microsoft.NET.Sdk\" />")?;
+    write_file(&build_out_dir.join("SamplePlayer.app"), "player_binary")?;
+
+    for generated in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
+        assert!(!project_2021.join(generated).exists());
+    }
+    assert!(sln_path.is_file());
+    assert!(csproj_path.is_file());
+    assert!(build_out_dir.join("SamplePlayer.app").is_file());
+
+    let review_policy_rel = PathBuf::from("ProjectSettings/UnitasReviewPolicy.json");
+    let unitas_version_rel = PathBuf::from("ProjectSettings/UnitasVersion.txt");
+    write_file(
+        &project_2021.join(&review_policy_rel),
+        "{\"requireApproval\":true}\n",
+    )?;
+    write_file(
+        &project_2021.join(&unitas_version_rel),
+        "unitas_version: 0.1.0\n",
+    )?;
+
+    let unity_gitignore_prefixes = [
+        "Library/",
+        "Temp/",
+        "Obj/",
+        "obj/",
+        "Build/",
+        "Builds/",
+        "Logs/",
+        "UserSettings/",
+        ".unitas/",
+    ];
+    let is_git_tracked = |rel: &Path| -> bool {
+        let s = rel.to_string_lossy();
+        if s.ends_with(".csproj") || s.ends_with(".sln") {
+            return false;
+        }
+        !unity_gitignore_prefixes
+            .iter()
+            .any(|prefix| s.starts_with(prefix))
+    };
+
+    let all_project_files = snapshot(&project_2021)?;
+    let tracked_paths: Vec<PathBuf> = all_project_files
+        .into_iter()
+        .map(|(rel, _)| rel)
+        .filter(|rel| is_git_tracked(rel))
+        .collect();
+
+    assert!(tracked_paths.contains(&review_policy_rel));
+    assert!(tracked_paths.contains(&unitas_version_rel));
+    assert!(!tracked_paths.iter().any(|p| p.starts_with("per_user_state")));
+    assert!(!tracked_paths.contains(&PathBuf::from("project_2021.sln")));
+    assert!(!tracked_paths.contains(&PathBuf::from("Assembly-CSharp.csproj")));
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similarly_named_siblings_and_duplicate_local_file_ids_are_rejected(
+) -> TestResult {
+    let root = temp_dir("project-missing-identity-dup-local-id")?;
+    let project_root = root.join("project");
+    build_project(&project_root, &format!("{BASELINE_UNITY_VERSION}.16f1"))?;
+
+    let sibling_mat_guid = "66666666666666666666666666666666";
+    write_file(&project_root.join("Assets/Materials/Brick_Copy.mat"), MATERIAL)?;
+    write_file(
+        &project_root.join("Assets/Materials/Brick_Copy.mat.meta"),
+        &meta(sibling_mat_guid, "NativeFormatImporter:"),
+    )?;
+
+    let missing_mat_guid = "dead0000dead0000dead0000dead0000";
+    let missing_mat_file_id: i64 = 2100000;
+    let missing_sprite_file_id: i64 = 21300888;
+    let scene_path = project_root.join("Assets/Scenes/Main.unity");
+    let scene_with_missing = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!29 &1\nScene:\n  m_Name: Main\n--- !u!1 &1000\nGameObject:\n  m_Name: BrickHolder\n  m_Material: {{fileID: {missing_mat_file_id}, guid: {missing_mat_guid}, type: 2}}\n  m_Sprite: {{fileID: {missing_sprite_file_id}, guid: {TEXTURE_GUID}, type: 3}}\n"
+    );
+    write_file(&scene_path, &scene_with_missing)?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (mut project, report) = Project::open(&project_root, &store)?;
+
+    assert_eq!(report.inventory.lookup(missing_mat_guid), GuidLookup::Missing);
+    match report.inventory.lookup(sibling_mat_guid) {
+        GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Materials/Brick_Copy.mat"));
+        }
+        other => return Err(format!("expected sibling asset, got {other:?}").into()),
+    }
+
+    let mut scene_stream = unity_yaml::parse_file(&scene_path)?;
+    assert!(set_yaml_scalar(
+        &mut scene_stream.documents[1].root,
+        &["GameObject", "m_Name"],
+        "BrickHolderRenamed"
+    ));
+    scene_save::save_stream(&scene_path, &scene_stream)?;
+
+    let reloaded_scene = unity_yaml::parse_file(&scene_path)?;
+    let go_node = reloaded_scene.documents[1]
+        .root
+        .get("GameObject")
+        .ok_or("missing GameObject")?;
+    let mat_ref = go_node.get("m_Material").ok_or("missing m_Material")?;
+    assert_eq!(
+        mat_ref.get("guid").and_then(Node::as_str),
+        Some(missing_mat_guid)
+    );
+    assert_eq!(
+        mat_ref.get("fileID").and_then(Node::as_i64),
+        Some(missing_mat_file_id)
+    );
+    assert_ne!(
+        mat_ref.get("guid").and_then(Node::as_str),
+        Some(sibling_mat_guid)
+    );
+
+    let sprite_ref = go_node.get("m_Sprite").ok_or("missing m_Sprite")?;
+    assert_eq!(
+        sprite_ref.get("guid").and_then(Node::as_str),
+        Some(TEXTURE_GUID)
+    );
+    assert_eq!(
+        sprite_ref.get("fileID").and_then(Node::as_i64),
+        Some(missing_sprite_file_id)
+    );
+
+    project.move_asset(
+        Path::new("Assets/Materials/Brick.mat"),
+        Path::new("Assets/Materials/MovedBrick.mat"),
+    )?;
+    match project.inventory().lookup(MATERIAL_GUID) {
+        GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Materials/MovedBrick.mat"));
+        }
+        other => return Err(format!("expected moved Brick.mat, got {other:?}").into()),
+    }
+
+    let dup_local_id_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &777\nGameObject:\n  m_Name: FirstWith777\n--- !u!1 &777\nGameObject:\n  m_Name: SecondWith777\n";
+    let merge_err = unitas_asset::merge::merge_bytes(
+        dup_local_id_yaml.as_bytes(),
+        dup_local_id_yaml.as_bytes(),
+        dup_local_id_yaml.as_bytes(),
+    )
+    .err()
+    .ok_or("expected duplicate local fileID error")?;
+    assert!(merge_err
+        .to_string()
+        .contains("file id 777 is used by more than one object"));
+
+    let dup_transform_owner_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: DuplicateOwnerNode\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_Children: []\n--- !u!4 &202\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_Children: []\n";
+    let dup_stream = unity_yaml::parse(dup_transform_owner_yaml)?;
+    let scene_err = unitas_asset::scene::assemble_scene(&dup_stream)
+        .err()
+        .ok_or("expected DuplicateTransformOwner error")?;
+    assert!(matches!(
+        scene_err,
+        unitas_asset::SceneError::DuplicateTransformOwner {
+            game_object_file_id: 100
+        }
+    ));
+
+    let obj_v1 = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nv 2 0 1\nv 0 2 1\ng HeroMesh\nusemtl ArmorMat\nf 1 2 3\ng ShieldMesh\nusemtl MetalMat\nf 4 5 6\n";
+    let obj_v2_reimported = b"v 0 0 0\nv 3 0 0\nv 0 3 0\nv 0 0 1\nv 2 0 1\nv 0 2 1\ng HeroMesh\nusemtl ArmorMat\nf 1 2 3\ng ShieldMesh\nusemtl MetalMat\nf 4 5 6\n";
+    let combined_v1 = unitas_asset::model::import_model(obj_v1, "Hero.obj")?;
+    let combined_v2 = unitas_asset::model::import_model(obj_v2_reimported, "Hero.obj")?;
+    let sub_ids_v1: Vec<String> = combined_v1
+        .sub_meshes
+        .iter()
+        .map(|s| s.sub_asset_id.clone())
+        .collect();
+    let sub_ids_v2: Vec<String> = combined_v2
+        .sub_meshes
+        .iter()
+        .map(|s| s.sub_asset_id.clone())
+        .collect();
+    assert_eq!(
+        sub_ids_v1,
+        vec![
+            String::from("HeroMesh/ArmorMat"),
+            String::from("ShieldMesh/MetalMat"),
+        ]
+    );
+    assert_eq!(sub_ids_v1, sub_ids_v2);
 
     fs::remove_dir_all(&root)?;
     Ok(())

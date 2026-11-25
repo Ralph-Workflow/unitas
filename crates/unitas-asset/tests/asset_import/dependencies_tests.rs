@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unitas_asset::binary_ser::{Endianness, SUPPORTED_VERSION};
 use unitas_asset::dependencies::DependencyGraph;
 use unitas_asset::project::{Project, BASELINE_UNITY_VERSION};
+use unitas_asset::scene_save;
 use unitas_asset::trust::TrustStore;
+use unitas_asset::unity_yaml::{self, Node};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -244,6 +246,289 @@ fn dependency_cycle_is_displayed_without_failure() -> TestResult {
     assert_eq!(
         graph.reverse_dependencies_of(LEAF_GUID, true),
         vec![CYCLE_A_GUID, CYCLE_B_GUID, CYCLE_C_GUID]
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+fn replace_guid_in_node(node: &mut Node, old_guid: &str, new_guid: &str) -> bool {
+    match node {
+        Node::Mapping(entries) => {
+            let mut changed = false;
+            for (key, val) in entries.iter_mut() {
+                if key == "guid" {
+                    if let Node::Scalar(current) = val {
+                        if current == old_guid {
+                            *current = new_guid.to_string();
+                            changed = true;
+                        }
+                    }
+                } else if replace_guid_in_node(val, old_guid, new_guid) {
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Node::Sequence(items) => {
+            let mut changed = false;
+            for item in items.iter_mut() {
+                if replace_guid_in_node(item, old_guid, new_guid) {
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Node::Scalar(_) => false,
+    }
+}
+
+#[test]
+fn dependency_and_reverse_dependency_round_trip_across_unchanged_save_and_edited_save(
+) -> TestResult {
+    let root = temp_dir("dependencies-round-trip")?;
+    let project_root = root.join("project");
+
+    write_file(
+        &project_root.join("ProjectSettings/ProjectVersion.txt"),
+        &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
+    )?;
+
+    write_file(&project_root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo.png.meta"),
+        &meta(TEXTURE_GUID, "TextureImporter:"),
+    )?;
+
+    write_file(&project_root.join("Assets/Textures/AltAlbedo.png"), "png-bytes-2")?;
+    write_file(
+        &project_root.join("Assets/Textures/AltAlbedo.png.meta"),
+        &meta(LEAF_GUID, "TextureImporter:"),
+    )?;
+
+    let material_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: Stone\n  m_SavedProperties:\n    m_TexEnvs:\n    - _MainTex:\n        m_Texture: {{fileID: 2800000, guid: {TEXTURE_GUID}, type: 3}}\n"
+    );
+    let material_path = project_root.join("Assets/Materials/Stone.mat");
+    write_file(&material_path, &material_yaml)?;
+    write_file(
+        &project_root.join("Assets/Materials/Stone.mat.meta"),
+        &meta(MATERIAL_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let prefab_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Pillar\n--- !u!23 &2300000\nMeshRenderer:\n  m_Materials:\n  - {{fileID: 2100000, guid: {MATERIAL_GUID}, type: 2}}\n"
+    );
+    write_file(&project_root.join("Assets/Prefabs/Pillar.prefab"), &prefab_yaml)?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Pillar.prefab.meta"),
+        &meta(PREFAB_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1001 &100100000\nPrefabInstance:\n  m_SourcePrefab: {{fileID: 100100000, guid: {PREFAB_GUID}, type: 3}}\n"
+    );
+    write_file(&project_root.join("Assets/Scenes/Level.unity"), &scene_yaml)?;
+    write_file(
+        &project_root.join("Assets/Scenes/Level.unity.meta"),
+        &meta(SCENE_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let cycle_a = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: NodeA\n  next: {{fileID: 11400000, guid: {CYCLE_B_GUID}, type: 2}}\n"
+    );
+    let cycle_b = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: NodeB\n  next: {{fileID: 11400000, guid: {CYCLE_A_GUID}, type: 2}}\n"
+    );
+    write_file(&project_root.join("Assets/Data/NodeA.asset"), &cycle_a)?;
+    write_file(
+        &project_root.join("Assets/Data/NodeA.asset.meta"),
+        &meta(CYCLE_A_GUID, "NativeFormatImporter:"),
+    )?;
+    write_file(&project_root.join("Assets/Data/NodeB.asset"), &cycle_b)?;
+    write_file(
+        &project_root.join("Assets/Data/NodeB.asset.meta"),
+        &meta(CYCLE_B_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (project, _) = Project::open(&project_root, &store)?;
+    let graph_initial = DependencyGraph::build(&project)?;
+
+    assert_eq!(graph_initial.dependencies_of(MATERIAL_GUID), vec![TEXTURE_GUID]);
+    assert_eq!(
+        graph_initial.reverse_dependencies_of(TEXTURE_GUID, false),
+        vec![MATERIAL_GUID]
+    );
+    assert_eq!(
+        graph_initial.reverse_dependencies_of(TEXTURE_GUID, true),
+        vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
+    );
+    assert!(graph_initial.reverse_dependencies_of(LEAF_GUID, false).is_empty());
+    assert!(graph_initial.reverse_dependencies_of(LEAF_GUID, true).is_empty());
+    assert_eq!(
+        graph_initial.cycles(),
+        vec![vec![CYCLE_A_GUID.to_string(), CYCLE_B_GUID.to_string()]]
+    );
+
+    let mut material_stream = unity_yaml::parse_file(&material_path)?;
+    scene_save::save_stream(&material_path, &material_stream)?;
+    assert_eq!(fs::read_to_string(&material_path)?, material_yaml);
+
+    let graph_after_unchanged = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_after_unchanged.dependencies_of(MATERIAL_GUID),
+        graph_initial.dependencies_of(MATERIAL_GUID)
+    );
+    assert_eq!(
+        graph_after_unchanged.reverse_dependencies_of(TEXTURE_GUID, false),
+        graph_initial.reverse_dependencies_of(TEXTURE_GUID, false)
+    );
+    assert_eq!(
+        graph_after_unchanged.reverse_dependencies_of(TEXTURE_GUID, true),
+        graph_initial.reverse_dependencies_of(TEXTURE_GUID, true)
+    );
+    assert_eq!(graph_after_unchanged.cycles(), graph_initial.cycles());
+
+    assert!(replace_guid_in_node(
+        &mut material_stream.documents[0].root,
+        TEXTURE_GUID,
+        LEAF_GUID
+    ));
+    scene_save::save_stream(&material_path, &material_stream)?;
+
+    let (reopened_project, _) = Project::open(&project_root, &store)?;
+    let graph_after_edit = DependencyGraph::build(&reopened_project)?;
+
+    assert_eq!(graph_after_edit.dependencies_of(MATERIAL_GUID), vec![LEAF_GUID]);
+    assert!(graph_after_edit.reverse_dependencies_of(TEXTURE_GUID, false).is_empty());
+    assert!(graph_after_edit.reverse_dependencies_of(TEXTURE_GUID, true).is_empty());
+    assert_eq!(
+        graph_after_edit.reverse_dependencies_of(LEAF_GUID, false),
+        vec![MATERIAL_GUID]
+    );
+    assert_eq!(
+        graph_after_edit.reverse_dependencies_of(LEAF_GUID, true),
+        vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
+    );
+    assert_eq!(graph_after_edit.dependencies_of(PREFAB_GUID), vec![MATERIAL_GUID]);
+    assert_eq!(graph_after_edit.dependencies_of(SCENE_GUID), vec![PREFAB_GUID]);
+    assert_eq!(
+        graph_after_edit.cycles(),
+        vec![vec![CYCLE_A_GUID.to_string(), CYCLE_B_GUID.to_string()]]
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj005_outcome7_pre_delete_reverse_dependency_inspection_missing_reference_retention_and_restore_round_trip(
+) -> TestResult {
+    let root = temp_dir("dependencies-delete-restore")?;
+    let project_root = root.join("project");
+
+    write_file(
+        &project_root.join("ProjectSettings/ProjectVersion.txt"),
+        &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
+    )?;
+
+    write_file(&project_root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo.png.meta"),
+        &meta(TEXTURE_GUID, "TextureImporter:"),
+    )?;
+
+    let sibling_guid = "99999999999999999999999999999999";
+    write_file(&project_root.join("Assets/Textures/Albedo_Backup.png"), "png-sibling")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo_Backup.png.meta"),
+        &meta(sibling_guid, "TextureImporter:"),
+    )?;
+
+    let material_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: Stone\n  m_SavedProperties:\n    m_TexEnvs:\n    - _MainTex:\n        m_Texture: {{fileID: 2800000, guid: {TEXTURE_GUID}, type: 3}}\n"
+    );
+    let material_path = project_root.join("Assets/Materials/Stone.mat");
+    write_file(&material_path, &material_yaml)?;
+    write_file(
+        &project_root.join("Assets/Materials/Stone.mat.meta"),
+        &meta(MATERIAL_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let prefab_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Pillar\n--- !u!23 &2300000\nMeshRenderer:\n  m_Materials:\n  - {{fileID: 2100000, guid: {MATERIAL_GUID}, type: 2}}\n"
+    );
+    write_file(&project_root.join("Assets/Prefabs/Pillar.prefab"), &prefab_yaml)?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Pillar.prefab.meta"),
+        &meta(PREFAB_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1001 &100100000\nPrefabInstance:\n  m_SourcePrefab: {{fileID: 100100000, guid: {PREFAB_GUID}, type: 3}}\n"
+    );
+    write_file(&project_root.join("Assets/Scenes/Level.unity"), &scene_yaml)?;
+    write_file(
+        &project_root.join("Assets/Scenes/Level.unity.meta"),
+        &meta(SCENE_GUID, "NativeFormatImporter:"),
+    )?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (mut project, _) = Project::open(&project_root, &store)?;
+
+    let pre_delete_graph = DependencyGraph::build(&project)?;
+    let direct_dependents = pre_delete_graph.reverse_dependencies_of(TEXTURE_GUID, false);
+    let transitive_dependents = pre_delete_graph.reverse_dependencies_of(TEXTURE_GUID, true);
+    assert_eq!(direct_dependents, vec![MATERIAL_GUID]);
+    assert_eq!(
+        transitive_dependents,
+        vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
+    );
+
+    project.delete_asset(Path::new("Assets/Textures/Albedo.png"))?;
+    assert_eq!(
+        project.inventory().lookup(TEXTURE_GUID),
+        unitas_asset::project::GuidLookup::Missing
+    );
+
+    let graph_while_deleted = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_while_deleted.dependencies_of(MATERIAL_GUID),
+        vec![TEXTURE_GUID]
+    );
+    assert_eq!(
+        graph_while_deleted.reverse_dependencies_of(TEXTURE_GUID, false),
+        vec![MATERIAL_GUID]
+    );
+    assert_eq!(
+        graph_while_deleted.reverse_dependencies_of(TEXTURE_GUID, true),
+        vec![MATERIAL_GUID, PREFAB_GUID, SCENE_GUID]
+    );
+    assert!(graph_while_deleted
+        .reverse_dependencies_of(sibling_guid, true)
+        .is_empty());
+
+    let mat_stream_while_deleted = unity_yaml::parse_file(&material_path)?;
+    scene_save::save_stream(&material_path, &mat_stream_while_deleted)?;
+    assert_eq!(fs::read_to_string(&material_path)?, material_yaml);
+
+    project.restore_asset(Path::new("Assets/Textures/Albedo.png"))?;
+    match project.inventory().lookup(TEXTURE_GUID) {
+        unitas_asset::project::GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Textures/Albedo.png"));
+        }
+        other => return Err(format!("expected restored Albedo.png, got {other:?}").into()),
+    }
+
+    let graph_after_restore = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_after_restore.reverse_dependencies_of(TEXTURE_GUID, false),
+        direct_dependents
+    );
+    assert_eq!(
+        graph_after_restore.reverse_dependencies_of(TEXTURE_GUID, true),
+        transitive_dependents
     );
 
     fs::remove_dir_all(&root)?;

@@ -1025,3 +1025,1437 @@ fn push_unique(list: &mut Vec<String>, item: &str) {
         list.push(item.to_string());
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CatalogFeatureEntry {
+    pub feature_id: &'static str,
+    pub tier: Tier,
+    pub owning_spec: &'static str,
+}
+
+pub const FEATURE_CATALOG: &[CatalogFeatureEntry] = &[
+    CatalogFeatureEntry {
+        feature_id: "PRJ-001",
+        tier: Tier::Exact,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-002",
+        tier: Tier::Native,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-003",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-004",
+        tier: Tier::Semantic,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-005",
+        tier: Tier::Exact,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-006",
+        tier: Tier::Semantic,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-007",
+        tier: Tier::Exact,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRJ-008",
+        tier: Tier::Native,
+        owning_spec: "project-and-assets.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SER-001",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SER-002",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SER-003",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SER-004",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SER-005",
+        tier: Tier::Exact,
+        owning_spec: "serialization-and-prefabs.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-001",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-002",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-003",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-004",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-005",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-006",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-007",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "EDT-008",
+        tier: Tier::Native,
+        owning_spec: "editor-and-authoring.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-001",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-002",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-003",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-004",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-005",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-006",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-007",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-008",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-009",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-010",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "RUN-011",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-001",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-002",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-003",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-004",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-005",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-006",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-007",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-008",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-009",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-010",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SCR-011",
+        tier: Tier::Semantic,
+        owning_spec: "scripting-runtime.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PHY-001",
+        tier: Tier::Semantic,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PHY-002",
+        tier: Tier::Semantic,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PHY-003",
+        tier: Tier::Semantic,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PHY-004",
+        tier: Tier::Familiar,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "NAV-001",
+        tier: Tier::Familiar,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "ENV-001",
+        tier: Tier::Familiar,
+        owning_spec: "physics-navigation-terrain.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-001",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-002",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-003",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-004",
+        tier: Tier::Familiar,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-005",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-006",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "REN-007",
+        tier: Tier::Native,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "ANI-001",
+        tier: Tier::Familiar,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "ANI-002",
+        tier: Tier::Familiar,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CIN-001",
+        tier: Tier::Familiar,
+        owning_spec: "rendering-and-animation.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "UI-001",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "UI-002",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "TXT-001",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "INP-001",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "INP-002",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUD-001",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "MED-001",
+        tier: Tier::Familiar,
+        owning_spec: "ui-audio-input.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "BLD-001",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "BLD-002",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "BLD-003",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "BLD-004",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "BLD-005",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PLT-001",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "XR-001",
+        tier: Tier::Familiar,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "NET-001",
+        tier: Tier::Familiar,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "LIC-001",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRD-001",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRD-002",
+        tier: Tier::Native,
+        owning_spec: "build-platforms-xr-networking.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "LOC-001",
+        tier: Tier::Familiar,
+        owning_spec: "accessibility-localization-persistence.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "ACC-001",
+        tier: Tier::Native,
+        owning_spec: "accessibility-localization-persistence.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SAV-001",
+        tier: Tier::Semantic,
+        owning_spec: "accessibility-localization-persistence.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "DIA-001",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "DIA-002",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "DIA-003",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRF-001",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "PRF-002",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "TST-001",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "TST-002",
+        tier: Tier::Native,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "TST-003",
+        tier: Tier::Semantic,
+        owning_spec: "diagnostics-profiling-playtesting.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "SMP-001",
+        tier: Tier::Native,
+        owning_spec: "sample-games.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CMP-001",
+        tier: Tier::Native,
+        owning_spec: "sample-games.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CMP-002",
+        tier: Tier::Native,
+        owning_spec: "compatibility-contract.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CMP-003",
+        tier: Tier::Native,
+        owning_spec: "compatibility-contract.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CMP-004",
+        tier: Tier::Native,
+        owning_spec: "compatibility-contract.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "CMP-005",
+        tier: Tier::Native,
+        owning_spec: "compatibility-contract.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-001",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-002",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-003",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-004",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-005",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-006",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-007",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+    CatalogFeatureEntry {
+        feature_id: "AUT-008",
+        tier: Tier::Native,
+        owning_spec: "automation-and-mcp.md",
+    },
+];
+
+pub fn lookup_catalog_feature(feature_id: &str) -> Option<&'static CatalogFeatureEntry> {
+    FEATURE_CATALOG
+        .iter()
+        .find(|entry| entry.feature_id == feature_id)
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CompatibilitySummary {
+    pub overall_state: CompatibilityState,
+    pub total_findings: usize,
+    pub present_findings: usize,
+    pub absent_findings: usize,
+    pub supported_count: usize,
+    pub partially_supported_count: usize,
+    pub platform_limited_count: usize,
+    pub unknown_count: usize,
+    pub unsupported_count: usize,
+    pub externally_unavailable_count: usize,
+}
+
+pub fn summarize_report(report: &CompatibilityReport) -> CompatibilitySummary {
+    let mut present_findings = 0;
+    let mut absent_findings = 0;
+    let mut supported_count = 0;
+    let mut partially_supported_count = 0;
+    let mut platform_limited_count = 0;
+    let mut unknown_count = 0;
+    let mut unsupported_count = 0;
+    let mut externally_unavailable_count = 0;
+    let mut effective_states: Vec<CompatibilityState> = Vec::new();
+
+    for finding in &report.findings {
+        if is_present(finding) {
+            present_findings += 1;
+            effective_states.push(finding.state);
+            match finding.state {
+                CompatibilityState::Supported => supported_count += 1,
+                CompatibilityState::PartiallySupported => partially_supported_count += 1,
+                CompatibilityState::PlatformLimited => platform_limited_count += 1,
+                CompatibilityState::Unknown => unknown_count += 1,
+                CompatibilityState::Unsupported => unsupported_count += 1,
+                CompatibilityState::ExternallyUnavailable => externally_unavailable_count += 1,
+            }
+        } else {
+            absent_findings += 1;
+            unknown_count += 1;
+            effective_states.push(CompatibilityState::Unknown);
+        }
+    }
+
+    CompatibilitySummary {
+        overall_state: least_supported_state(&effective_states),
+        total_findings: report.findings.len(),
+        present_findings,
+        absent_findings,
+        supported_count,
+        partially_supported_count,
+        platform_limited_count,
+        unknown_count,
+        unsupported_count,
+        externally_unavailable_count,
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FindingInput {
+    pub feature_id: String,
+    pub tier: Tier,
+    pub state: CompatibilityState,
+    pub content: ContentIdentity,
+    pub behavior: String,
+    pub relied_upon_unity_differences: Vec<String>,
+    pub observable_consequence: String,
+    pub conditions: Vec<String>,
+    pub related_findings: Vec<String>,
+}
+
+impl FindingInput {
+    pub fn new(
+        feature_id: impl Into<String>,
+        tier: Tier,
+        state: CompatibilityState,
+        content: ContentIdentity,
+        behavior: impl Into<String>,
+        observable_consequence: impl Into<String>,
+    ) -> Self {
+        Self {
+            feature_id: feature_id.into(),
+            tier,
+            state,
+            content,
+            behavior: behavior.into(),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: observable_consequence.into(),
+            conditions: Vec::new(),
+            related_findings: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_unity_difference(mut self, difference: impl Into<String>) -> Self {
+        self.relied_upon_unity_differences.push(difference.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_condition(mut self, condition: impl Into<String>) -> Self {
+        self.conditions.push(condition.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_related_finding(mut self, related: impl Into<String>) -> Self {
+        self.related_findings.push(related.into());
+        self
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FindingSubmissionError {
+    EmptyFeatureId,
+    UnknownCatalogFeatureId {
+        feature_id: String,
+    },
+    CatalogTierMismatch {
+        feature_id: String,
+        expected: Tier,
+        submitted: Tier,
+    },
+    MissingContentIdentity,
+    EmptyBehavior,
+    EmptyObservableConsequence,
+    SupportedFindingClaimsUnityDifference {
+        feature_id: String,
+        tier: Tier,
+    },
+    MissingReliedUponUnityDifference {
+        feature_id: String,
+        tier: Tier,
+        state: CompatibilityState,
+    },
+    DuplicateFindingIdentity {
+        feature_id: String,
+        content: Box<ContentIdentity>,
+    },
+}
+
+impl std::fmt::Display for FindingSubmissionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyFeatureId => write!(formatter, "finding feature_id must not be empty"),
+            Self::UnknownCatalogFeatureId { feature_id } => {
+                write!(formatter, "unknown catalog feature_id '{feature_id}'")
+            }
+            Self::CatalogTierMismatch {
+                feature_id,
+                expected,
+                submitted,
+            } => write!(
+                formatter,
+                "catalog tier mismatch for '{feature_id}': expected {expected:?}, got {submitted:?}"
+            ),
+            Self::MissingContentIdentity => {
+                write!(formatter, "finding content identity must name at least one non-empty field")
+            }
+            Self::EmptyBehavior => write!(formatter, "finding behavior must not be empty"),
+            Self::EmptyObservableConsequence => {
+                write!(formatter, "finding observable_consequence must not be empty")
+            }
+            Self::SupportedFindingClaimsUnityDifference { feature_id, tier } => write!(
+                formatter,
+                "finding for '{feature_id}' ({tier:?}) cannot claim Supported while listing a Unity difference"
+            ),
+            Self::MissingReliedUponUnityDifference {
+                feature_id,
+                tier,
+                state,
+            } => write!(
+                formatter,
+                "finding for '{feature_id}' ({tier:?}) with state {state:?} must list at least one relied-upon Unity difference"
+            ),
+            Self::DuplicateFindingIdentity {
+                feature_id,
+                content,
+            } => write!(
+                formatter,
+                "duplicate finding identity for feature '{feature_id}' and content {content:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FindingSubmissionError {}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FindingRejection {
+    pub index: usize,
+    pub error: FindingSubmissionError,
+}
+
+impl std::fmt::Display for FindingRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "finding submission rejected at index {}: {}",
+            self.index, self.error
+        )
+    }
+}
+
+impl std::error::Error for FindingRejection {}
+
+fn sanitize_optional_field(field: Option<&str>) -> Option<String> {
+    field
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn sanitize_content_identity(content: &ContentIdentity) -> ContentIdentity {
+    ContentIdentity {
+        guid: sanitize_optional_field(content.guid.as_deref()),
+        asset_path: sanitize_optional_field(content.asset_path.as_deref()),
+        sub_asset_id: sanitize_optional_field(content.sub_asset_id.as_deref()),
+        object_name: sanitize_optional_field(content.object_name.as_deref()),
+    }
+}
+
+fn validate_finding_input(
+    input: FindingInput,
+    existing: &[Finding],
+) -> Result<Finding, FindingSubmissionError> {
+    let feature_id = input.feature_id.trim().to_string();
+    if feature_id.is_empty() {
+        return Err(FindingSubmissionError::EmptyFeatureId);
+    }
+    let Some(catalog_entry) = lookup_catalog_feature(&feature_id) else {
+        return Err(FindingSubmissionError::UnknownCatalogFeatureId { feature_id });
+    };
+    if catalog_entry.tier != input.tier {
+        return Err(FindingSubmissionError::CatalogTierMismatch {
+            feature_id,
+            expected: catalog_entry.tier,
+            submitted: input.tier,
+        });
+    }
+    let content = sanitize_content_identity(&input.content);
+    if !content.names_content() {
+        return Err(FindingSubmissionError::MissingContentIdentity);
+    }
+    let behavior = input.behavior.trim().to_string();
+    if behavior.is_empty() {
+        return Err(FindingSubmissionError::EmptyBehavior);
+    }
+    let observable_consequence = input.observable_consequence.trim().to_string();
+    if observable_consequence.is_empty() {
+        return Err(FindingSubmissionError::EmptyObservableConsequence);
+    }
+    let relied_upon_unity_differences: Vec<String> = input
+        .relied_upon_unity_differences
+        .into_iter()
+        .map(|diff| diff.trim().to_string())
+        .filter(|diff| !diff.is_empty())
+        .collect();
+    if matches!(input.tier, Tier::Exact | Tier::Semantic)
+        && input.state == CompatibilityState::Supported
+        && !relied_upon_unity_differences.is_empty()
+    {
+        return Err(
+            FindingSubmissionError::SupportedFindingClaimsUnityDifference {
+                feature_id,
+                tier: input.tier,
+            },
+        );
+    }
+    if input.tier == Tier::Familiar
+        && matches!(
+            input.state,
+            CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
+        )
+        && relied_upon_unity_differences.is_empty()
+    {
+        return Err(FindingSubmissionError::MissingReliedUponUnityDifference {
+            feature_id,
+            tier: input.tier,
+            state: input.state,
+        });
+    }
+    let is_duplicate = existing.iter().any(|item| {
+        item.feature_id == feature_id && sanitize_content_identity(&item.content) == content
+    });
+    if is_duplicate {
+        return Err(FindingSubmissionError::DuplicateFindingIdentity {
+            feature_id,
+            content: Box::new(content),
+        });
+    }
+    Ok(Finding {
+        feature_id,
+        tier: input.tier,
+        state: input.state,
+        content,
+        behavior,
+        relied_upon_unity_differences,
+        observable_consequence,
+        conditions: input.conditions,
+        related_findings: input.related_findings,
+    })
+}
+
+fn compare_content_identity(left: &ContentIdentity, right: &ContentIdentity) -> Ordering {
+    left.asset_path
+        .as_deref()
+        .unwrap_or("")
+        .cmp(right.asset_path.as_deref().unwrap_or(""))
+        .then_with(|| {
+            left.guid
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.guid.as_deref().unwrap_or(""))
+        })
+        .then_with(|| {
+            left.sub_asset_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.sub_asset_id.as_deref().unwrap_or(""))
+        })
+        .then_with(|| {
+            left.object_name
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.object_name.as_deref().unwrap_or(""))
+        })
+}
+
+fn tier_rank(tier: Tier) -> u8 {
+    match tier {
+        Tier::Exact => 0,
+        Tier::Semantic => 1,
+        Tier::Familiar => 2,
+        Tier::Native => 3,
+    }
+}
+
+fn compare_findings(left: &Finding, right: &Finding) -> Ordering {
+    left.feature_id
+        .cmp(&right.feature_id)
+        .then_with(|| compare_content_identity(&left.content, &right.content))
+        .then_with(|| left.behavior.cmp(&right.behavior))
+        .then_with(|| left.state.cmp(&right.state))
+        .then_with(|| tier_rank(left.tier).cmp(&tier_rank(right.tier)))
+        .then_with(|| left.observable_consequence.cmp(&right.observable_consequence))
+        .then_with(|| {
+            left.relied_upon_unity_differences
+                .cmp(&right.relied_upon_unity_differences)
+        })
+        .then_with(|| left.conditions.cmp(&right.conditions))
+        .then_with(|| left.related_findings.cmp(&right.related_findings))
+}
+
+fn build_canonical_report(unitas_version: &str, mut findings: Vec<Finding>) -> CompatibilityReport {
+    findings.sort_by(compare_findings);
+    let mut report = build_report(unitas_version, findings);
+    for package in &mut report.packages {
+        package.feature_ids.sort();
+    }
+    report
+        .packages
+        .sort_by(|left, right| left.package_name.cmp(&right.package_name));
+    report
+}
+
+pub fn submit_finding(
+    report: &CompatibilityReport,
+    input: FindingInput,
+) -> Result<CompatibilityReport, FindingSubmissionError> {
+    let validated = validate_finding_input(input, &report.findings)?;
+    let mut findings = report.findings.clone();
+    findings.push(validated);
+    Ok(build_canonical_report(
+        &report.produced_by_unitas_version,
+        findings,
+    ))
+}
+
+pub fn submit_findings<I>(
+    report: &CompatibilityReport,
+    inputs: I,
+) -> Result<CompatibilityReport, FindingRejection>
+where
+    I: IntoIterator<Item = FindingInput>,
+{
+    let mut findings = report.findings.clone();
+    for (index, input) in inputs.into_iter().enumerate() {
+        match validate_finding_input(input, &findings) {
+            Ok(validated) => findings.push(validated),
+            Err(error) => return Err(FindingRejection { index, error }),
+        }
+    }
+    Ok(build_canonical_report(
+        &report.produced_by_unitas_version,
+        findings,
+    ))
+}
+
+pub fn merge_findings(
+    report: &CompatibilityReport,
+    external_findings: &[Finding],
+) -> Result<CompatibilityReport, FindingRejection> {
+    let inputs = external_findings.iter().cloned().map(|finding| FindingInput {
+        feature_id: finding.feature_id,
+        tier: finding.tier,
+        state: finding.state,
+        content: finding.content,
+        behavior: finding.behavior,
+        relied_upon_unity_differences: finding.relied_upon_unity_differences,
+        observable_consequence: finding.observable_consequence,
+        conditions: finding.conditions,
+        related_findings: finding.related_findings,
+    });
+    submit_findings(report, inputs)
+}
+
+impl CompatibilityReport {
+    pub fn summary(&self) -> CompatibilitySummary {
+        summarize_report(self)
+    }
+
+    pub fn submit_finding(
+        &self,
+        input: FindingInput,
+    ) -> Result<CompatibilityReport, FindingSubmissionError> {
+        submit_finding(self, input)
+    }
+
+    pub fn submit_findings<I>(&self, inputs: I) -> Result<CompatibilityReport, FindingRejection>
+    where
+        I: IntoIterator<Item = FindingInput>,
+    {
+        submit_findings(self, inputs)
+    }
+
+    pub fn merge_findings(
+        &self,
+        external_findings: &[Finding],
+    ) -> Result<CompatibilityReport, FindingRejection> {
+        merge_findings(self, external_findings)
+    }
+
+    pub fn render_canonical(&self) -> String {
+        render_canonical(self)
+    }
+
+    pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalReportParseError> {
+        parse_canonical(text)
+    }
+
+    pub fn to_canonical_text(&self) -> String {
+        render_canonical(self)
+    }
+
+    pub fn from_canonical_text(
+        text: &str,
+    ) -> Result<CompatibilityReport, CanonicalReportParseError> {
+        parse_canonical(text)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CanonicalReportParseError {
+    MissingHeader,
+    MissingVersion,
+    MalformedLine { line_number: usize, line: String },
+    InvalidTier(String),
+    InvalidState(String),
+    InvalidEscapeSequence(String),
+    UnexpectedSectionLine { line_number: usize, line: String },
+}
+
+impl std::fmt::Display for CanonicalReportParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingHeader => write!(formatter, "missing UNITAS_COMPAT_REPORT v1 header"),
+            Self::MissingVersion => write!(formatter, "missing unitas_version field"),
+            Self::MalformedLine { line_number, line } => {
+                write!(formatter, "malformed line {line_number}: '{line}'")
+            }
+            Self::InvalidTier(value) => write!(formatter, "invalid compatibility tier '{value}'"),
+            Self::InvalidState(value) => write!(formatter, "invalid compatibility state '{value}'"),
+            Self::InvalidEscapeSequence(value) => {
+                write!(formatter, "invalid escape sequence in '{value}'")
+            }
+            Self::UnexpectedSectionLine { line_number, line } => {
+                write!(formatter, "unexpected line {line_number} outside section: '{line}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CanonicalReportParseError {}
+
+fn format_tier(tier: Tier) -> &'static str {
+    match tier {
+        Tier::Exact => "Exact",
+        Tier::Semantic => "Semantic",
+        Tier::Familiar => "Familiar",
+        Tier::Native => "Native",
+    }
+}
+
+fn parse_tier(value: &str) -> Result<Tier, CanonicalReportParseError> {
+    match value {
+        "Exact" => Ok(Tier::Exact),
+        "Semantic" => Ok(Tier::Semantic),
+        "Familiar" => Ok(Tier::Familiar),
+        "Native" => Ok(Tier::Native),
+        other => Err(CanonicalReportParseError::InvalidTier(other.to_string())),
+    }
+}
+
+fn format_state(state: CompatibilityState) -> &'static str {
+    match state {
+        CompatibilityState::Supported => "Supported",
+        CompatibilityState::PartiallySupported => "PartiallySupported",
+        CompatibilityState::PlatformLimited => "PlatformLimited",
+        CompatibilityState::Unknown => "Unknown",
+        CompatibilityState::Unsupported => "Unsupported",
+        CompatibilityState::ExternallyUnavailable => "ExternallyUnavailable",
+    }
+}
+
+fn parse_state(value: &str) -> Result<CompatibilityState, CanonicalReportParseError> {
+    match value {
+        "Supported" => Ok(CompatibilityState::Supported),
+        "PartiallySupported" => Ok(CompatibilityState::PartiallySupported),
+        "PlatformLimited" => Ok(CompatibilityState::PlatformLimited),
+        "Unknown" => Ok(CompatibilityState::Unknown),
+        "Unsupported" => Ok(CompatibilityState::Unsupported),
+        "ExternallyUnavailable" => Ok(CompatibilityState::ExternallyUnavailable),
+        other => Err(CanonicalReportParseError::InvalidState(other.to_string())),
+    }
+}
+
+fn escape_canonical_str(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn unescape_canonical_str(value: &str) -> Result<String, CanonicalReportParseError> {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                _ => {
+                    return Err(CanonicalReportParseError::InvalidEscapeSequence(
+                        value.to_string(),
+                    ))
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(out)
+}
+
+fn format_optional_str(value: Option<&str>) -> String {
+    match value {
+        Some(inner) => format!("Some({})", escape_canonical_str(inner)),
+        None => "None".to_string(),
+    }
+}
+
+fn parse_optional_str(value: &str) -> Result<Option<String>, CanonicalReportParseError> {
+    if value == "None" {
+        return Ok(None);
+    }
+    if let Some(rest) = value.strip_prefix("Some(") {
+        if let Some(inner) = rest.strip_suffix(')') {
+            return Ok(Some(unescape_canonical_str(inner)?));
+        }
+    }
+    Err(CanonicalReportParseError::InvalidEscapeSequence(
+        value.to_string(),
+    ))
+}
+
+pub fn render_canonical(report: &CompatibilityReport) -> String {
+    let canonical = build_canonical_report(
+        &report.produced_by_unitas_version,
+        report.findings.clone(),
+    );
+    let summary = canonical.summary();
+    let mut out = String::new();
+    out.push_str("UNITAS_COMPAT_REPORT v1\n");
+    out.push_str(&format!(
+        "unitas_version: {}\n",
+        escape_canonical_str(&canonical.produced_by_unitas_version)
+    ));
+    out.push_str(&format!(
+        "overall_state: {}\n",
+        format_state(summary.overall_state)
+    ));
+    out.push_str(&format!("total_findings: {}\n", summary.total_findings));
+    out.push_str(&format!("present_findings: {}\n", summary.present_findings));
+    out.push_str(&format!("absent_findings: {}\n", summary.absent_findings));
+    out.push_str(&format!("supported_count: {}\n", summary.supported_count));
+    out.push_str(&format!(
+        "partially_supported_count: {}\n",
+        summary.partially_supported_count
+    ));
+    out.push_str(&format!(
+        "platform_limited_count: {}\n",
+        summary.platform_limited_count
+    ));
+    out.push_str(&format!("unknown_count: {}\n", summary.unknown_count));
+    out.push_str(&format!("unsupported_count: {}\n", summary.unsupported_count));
+    out.push_str(&format!(
+        "externally_unavailable_count: {}\n",
+        summary.externally_unavailable_count
+    ));
+    out.push_str(&format!("packages_count: {}\n", canonical.packages.len()));
+    for package in &canonical.packages {
+        out.push_str("[package]\n");
+        out.push_str(&format!(
+            "package_name: {}\n",
+            escape_canonical_str(&package.package_name)
+        ));
+        out.push_str(&format!("state: {}\n", format_state(package.state)));
+        for feature_id in &package.feature_ids {
+            out.push_str(&format!("feature_id: {}\n", escape_canonical_str(feature_id)));
+        }
+    }
+    out.push_str(&format!("findings_count: {}\n", canonical.findings.len()));
+    for finding in &canonical.findings {
+        out.push_str("[finding]\n");
+        out.push_str(&format!(
+            "feature_id: {}\n",
+            escape_canonical_str(&finding.feature_id)
+        ));
+        out.push_str(&format!("tier: {}\n", format_tier(finding.tier)));
+        out.push_str(&format!("state: {}\n", format_state(finding.state)));
+        out.push_str(&format!(
+            "content.guid: {}\n",
+            format_optional_str(finding.content.guid.as_deref())
+        ));
+        out.push_str(&format!(
+            "content.asset_path: {}\n",
+            format_optional_str(finding.content.asset_path.as_deref())
+        ));
+        out.push_str(&format!(
+            "content.sub_asset_id: {}\n",
+            format_optional_str(finding.content.sub_asset_id.as_deref())
+        ));
+        out.push_str(&format!(
+            "content.object_name: {}\n",
+            format_optional_str(finding.content.object_name.as_deref())
+        ));
+        out.push_str(&format!(
+            "behavior: {}\n",
+            escape_canonical_str(&finding.behavior)
+        ));
+        out.push_str(&format!(
+            "observable_consequence: {}\n",
+            escape_canonical_str(&finding.observable_consequence)
+        ));
+        for difference in &finding.relied_upon_unity_differences {
+            out.push_str(&format!(
+                "unity_difference: {}\n",
+                escape_canonical_str(difference)
+            ));
+        }
+        for condition in &finding.conditions {
+            out.push_str(&format!("condition: {}\n", escape_canonical_str(condition)));
+        }
+        for related in &finding.related_findings {
+            out.push_str(&format!(
+                "related_finding: {}\n",
+                escape_canonical_str(related)
+            ));
+        }
+    }
+    out
+}
+
+struct PendingFinding {
+    feature_id: Option<String>,
+    tier: Option<Tier>,
+    state: Option<CompatibilityState>,
+    guid: Option<String>,
+    asset_path: Option<String>,
+    sub_asset_id: Option<String>,
+    object_name: Option<String>,
+    behavior: Option<String>,
+    observable_consequence: Option<String>,
+    relied_upon_unity_differences: Vec<String>,
+    conditions: Vec<String>,
+    related_findings: Vec<String>,
+}
+
+impl PendingFinding {
+    fn new() -> Self {
+        Self {
+            feature_id: None,
+            tier: None,
+            state: None,
+            guid: None,
+            asset_path: None,
+            sub_asset_id: None,
+            object_name: None,
+            behavior: None,
+            observable_consequence: None,
+            relied_upon_unity_differences: Vec::new(),
+            conditions: Vec::new(),
+            related_findings: Vec::new(),
+        }
+    }
+
+    fn finish(self, line_number: usize) -> Result<Finding, CanonicalReportParseError> {
+        let Some(feature_id) = self.feature_id else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: "missing feature_id in [finding]".to_string(),
+            });
+        };
+        let Some(tier) = self.tier else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: "missing tier in [finding]".to_string(),
+            });
+        };
+        let Some(state) = self.state else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: "missing state in [finding]".to_string(),
+            });
+        };
+        let Some(behavior) = self.behavior else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: "missing behavior in [finding]".to_string(),
+            });
+        };
+        let Some(observable_consequence) = self.observable_consequence else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: "missing observable_consequence in [finding]".to_string(),
+            });
+        };
+        Ok(Finding {
+            feature_id,
+            tier,
+            state,
+            content: ContentIdentity {
+                guid: self.guid,
+                asset_path: self.asset_path,
+                sub_asset_id: self.sub_asset_id,
+                object_name: self.object_name,
+            },
+            behavior,
+            relied_upon_unity_differences: self.relied_upon_unity_differences,
+            observable_consequence,
+            conditions: self.conditions,
+            related_findings: self.related_findings,
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParseSection {
+    Header,
+    Package,
+    Finding,
+}
+
+pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalReportParseError> {
+    let mut lines = text.lines().enumerate();
+    let Some((_, first_line)) = lines.next() else {
+        return Err(CanonicalReportParseError::MissingHeader);
+    };
+    if first_line.trim() != "UNITAS_COMPAT_REPORT v1" {
+        return Err(CanonicalReportParseError::MissingHeader);
+    }
+
+    let mut unitas_version: Option<String> = None;
+    let mut section = ParseSection::Header;
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut current_finding: Option<PendingFinding> = None;
+
+    for (zero_index, raw_line) in lines {
+        let line_number = zero_index + 1;
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "[package]" {
+            if let Some(pending) = current_finding.take() {
+                findings.push(pending.finish(line_number)?);
+            }
+            section = ParseSection::Package;
+            continue;
+        }
+        if trimmed == "[finding]" {
+            if let Some(pending) = current_finding.take() {
+                findings.push(pending.finish(line_number)?);
+            }
+            section = ParseSection::Finding;
+            current_finding = Some(PendingFinding::new());
+            continue;
+        }
+        let Some((key, raw_value)) = raw_line.split_once(": ") else {
+            return Err(CanonicalReportParseError::MalformedLine {
+                line_number,
+                line: raw_line.to_string(),
+            });
+        };
+        let key = key.trim();
+        if key == "findings_count" || key == "packages_count" {
+            continue;
+        }
+        match section {
+            ParseSection::Header => match key {
+                "unitas_version" => {
+                    unitas_version = Some(unescape_canonical_str(raw_value)?);
+                }
+                "overall_state"
+                | "total_findings"
+                | "present_findings"
+                | "absent_findings"
+                | "supported_count"
+                | "partially_supported_count"
+                | "platform_limited_count"
+                | "unknown_count"
+                | "unsupported_count"
+                | "externally_unavailable_count" => {}
+                _ => {
+                    return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                        line_number,
+                        line: raw_line.to_string(),
+                    });
+                }
+            },
+            ParseSection::Package => match key {
+                "package_name" | "state" | "feature_id" => {}
+                _ => {
+                    return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                        line_number,
+                        line: raw_line.to_string(),
+                    });
+                }
+            },
+            ParseSection::Finding => {
+                let Some(pending) = current_finding.as_mut() else {
+                    return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                        line_number,
+                        line: raw_line.to_string(),
+                    });
+                };
+                match key {
+                    "feature_id" => pending.feature_id = Some(unescape_canonical_str(raw_value)?),
+                    "tier" => pending.tier = Some(parse_tier(raw_value)?),
+                    "state" => pending.state = Some(parse_state(raw_value)?),
+                    "content.guid" => pending.guid = parse_optional_str(raw_value)?,
+                    "content.asset_path" => pending.asset_path = parse_optional_str(raw_value)?,
+                    "content.sub_asset_id" => pending.sub_asset_id = parse_optional_str(raw_value)?,
+                    "content.object_name" => pending.object_name = parse_optional_str(raw_value)?,
+                    "behavior" => pending.behavior = Some(unescape_canonical_str(raw_value)?),
+                    "observable_consequence" => {
+                        pending.observable_consequence = Some(unescape_canonical_str(raw_value)?);
+                    }
+                    "unity_difference" => pending
+                        .relied_upon_unity_differences
+                        .push(unescape_canonical_str(raw_value)?),
+                    "condition" => pending.conditions.push(unescape_canonical_str(raw_value)?),
+                    "related_finding" => pending
+                        .related_findings
+                        .push(unescape_canonical_str(raw_value)?),
+                    _ => {
+                        return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                            line_number,
+                            line: raw_line.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(pending) = current_finding.take() {
+        findings.push(pending.finish(text.lines().count())?);
+    }
+
+    let Some(version) = unitas_version else {
+        return Err(CanonicalReportParseError::MissingVersion);
+    };
+
+    Ok(build_canonical_report(&version, findings))
+}
+

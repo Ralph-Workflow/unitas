@@ -1,5 +1,5 @@
 use unitas_asset::audio_import::{
-    decode_aiff, decode_mp3, decode_ogg_vorbis, detect_audio_state, import_audio,
+    decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav, detect_audio_state, import_audio,
     AudioCompressionFormat, AudioImportError, AudioImportSettings, AudioImportState,
     AudioLoadType,
 };
@@ -548,3 +548,358 @@ fn xm_tracker_module_reports_unsupported_by_name() {
         result.notes
     );
 }
+
+fn wav_chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + body.len());
+    out.extend_from_slice(id);
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(body);
+    if !body.len().is_multiple_of(2) {
+        out.push(0);
+    }
+    out
+}
+
+fn wav_fmt_body(format_tag: u16, channels: u16, sample_rate: u32, bits_per_sample: u16) -> Vec<u8> {
+    let bytes_per_sample = (bits_per_sample / 8).max(1);
+    let block_align = channels * bytes_per_sample;
+    let byte_rate = sample_rate * u32::from(block_align);
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&format_tag.to_le_bytes());
+    body.extend_from_slice(&channels.to_le_bytes());
+    body.extend_from_slice(&sample_rate.to_le_bytes());
+    body.extend_from_slice(&byte_rate.to_le_bytes());
+    body.extend_from_slice(&block_align.to_le_bytes());
+    body.extend_from_slice(&bits_per_sample.to_le_bytes());
+    body
+}
+
+fn wav_extensible_fmt_body(
+    sub_format_tag: u16,
+    channels: u16,
+    sample_rate: u32,
+    container_bits: u16,
+    valid_bits: u16,
+) -> Vec<u8> {
+    let mut body = wav_fmt_body(0xFFFE, channels, sample_rate, container_bits);
+    body.extend_from_slice(&22u16.to_le_bytes());
+    body.extend_from_slice(&valid_bits.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&u32::from(sub_format_tag).to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&0x0010u16.to_le_bytes());
+    body.extend_from_slice(&[0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71]);
+    body
+}
+
+fn build_riff_wave(chunks: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WAVE");
+    for chunk in chunks {
+        body.extend_from_slice(chunk);
+    }
+    let mut out = Vec::with_capacity(8 + body.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+#[test]
+fn decodes_16_bit_stereo_wav_round_trip() {
+    let samples = vec![0i16, 1000, -1000, 32767, -32768, 16384, -16384, 0];
+    let bytes = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 2, 44100, 16)),
+        wav_chunk(b"data", &pcm16_le(&samples)),
+    ]);
+    let clip = match decode_wav(&bytes) {
+        Ok(clip) => clip,
+        Err(error) => {
+            assert_eq!(error, AudioImportError::NotAiff, "unexpected decode_wav error: {error}");
+            return;
+        }
+    };
+    assert_eq!(clip.channels, 2);
+    assert_eq!(clip.sample_rate, 44100);
+    assert_eq!(clip.samples.len() / usize::from(clip.channels), 4);
+    assert_eq!(clip.samples, samples);
+    let normalized_f32: Vec<f32> = clip
+        .samples
+        .iter()
+        .map(|sample| {
+            if *sample == i16::MIN {
+                -1.0
+            } else {
+                f32::from(*sample) / 32767.0
+            }
+        })
+        .collect();
+    assert!((normalized_f32[0] - 0.0).abs() < 1e-6);
+    assert!((normalized_f32[3] - 1.0).abs() < 1e-6);
+    assert!((normalized_f32[4] + 1.0).abs() < 1e-6);
+    assert!((normalized_f32[5] - 0.5).abs() < 1e-4);
+    assert!((normalized_f32[6] + 0.5).abs() < 1e-4);
+    assert_eq!(
+        detect_audio_state(&bytes, "clip.wav"),
+        AudioImportState::Imported
+    );
+}
+
+#[test]
+fn decodes_8_bit_24_bit_32_bit_pcm_and_32_bit_ieee_float_wav_with_extra_chunks() {
+    let raw_8bit = [0u8, 64, 128, 192, 255];
+    let wav_8 = build_riff_wave(&[
+        wav_chunk(b"JUNK", &[1, 2, 3]),
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 1, 22050, 8)),
+        wav_chunk(b"LIST", b"INFOICRD2026"),
+        wav_chunk(b"data", &raw_8bit),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_8), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 22050
+                && clip.samples == vec![-32768, -16384, 0, 16384, 32512]),
+        "expected 8-bit unsigned WAV samples to scale into signed 16-bit PCM after skipping odd-sized JUNK and LIST chunks"
+    );
+
+    let samples_24: [i32; 4] = [-8_388_608, -2_097_152, 0, 8_388_352];
+    let mut raw_24 = Vec::with_capacity(samples_24.len() * 3);
+    for sample in samples_24 {
+        let le = sample.to_le_bytes();
+        raw_24.extend_from_slice(&le[0..3]);
+    }
+    let wav_24 = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 2, 48000, 24)),
+        wav_chunk(b"data", &raw_24),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_24), Ok(clip)
+            if clip.channels == 2
+                && clip.sample_rate == 48000
+                && clip.samples == vec![-32768, -8192, 0, 32767]),
+        "expected 24-bit signed PCM WAV samples to decode to 16-bit PCM"
+    );
+
+    let samples_32: [i32; 4] = [i32::MIN, -1_073_741_824, 0, 2_147_418_112];
+    let mut raw_32 = Vec::with_capacity(samples_32.len() * 4);
+    for sample in samples_32 {
+        raw_32.extend_from_slice(&sample.to_le_bytes());
+    }
+    let wav_32 = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 1, 44100, 32)),
+        wav_chunk(b"data", &raw_32),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_32), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 44100
+                && clip.samples == vec![-32768, -16384, 0, 32767]),
+        "expected 32-bit signed PCM WAV samples to decode to 16-bit PCM"
+    );
+
+    let float_samples: [f32; 5] = [-1.5, -0.5, 0.0, 0.5, 1.25];
+    let mut raw_f32 = Vec::with_capacity(float_samples.len() * 4);
+    for sample in float_samples {
+        raw_f32.extend_from_slice(&sample.to_le_bytes());
+    }
+    let wav_f32 = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(3, 1, 48000, 32)),
+        wav_chunk(b"fact", &5u32.to_le_bytes()),
+        wav_chunk(b"data", &raw_f32),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_f32), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 48000
+                && clip.samples == vec![-32768, -16384, 0, 16384, 32767]),
+        "expected 32-bit IEEE float WAV samples to clamp and scale into 16-bit PCM"
+    );
+
+    let wav_ext = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_extensible_fmt_body(1, 1, 44100, 16, 16)),
+        wav_chunk(b"data", &pcm16_le(&[1234, -1234])),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_ext), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 44100
+                && clip.samples == vec![1234, -1234]),
+        "expected WAVE_FORMAT_EXTENSIBLE PCM subformat to decode"
+    );
+
+    let float64_samples: [f64; 3] = [-1.0, 0.0, 1.0];
+    let mut raw_f64 = Vec::with_capacity(float64_samples.len() * 8);
+    for sample in float64_samples {
+        raw_f64.extend_from_slice(&sample.to_le_bytes());
+    }
+    let wav_f64_ext = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_extensible_fmt_body(3, 1, 96000, 64, 64)),
+        wav_chunk(b"data", &raw_f64),
+    ]);
+    assert!(
+        matches!(decode_wav(&wav_f64_ext), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 96000
+                && clip.samples == vec![-32768, 0, 32767]),
+        "expected 64-bit IEEE float WAVE_FORMAT_EXTENSIBLE subformat to decode"
+    );
+}
+
+#[test]
+fn wav_import_applies_force_to_mono_and_normalize() {
+    let samples = vec![2000i16, 6000, -4000, -12000, 1000, -1000];
+    let bytes = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 2, 44100, 16)),
+        wav_chunk(b"data", &pcm16_le(&samples)),
+    ]);
+    let mut settings = AudioImportSettings {
+        force_to_mono: true,
+        normalize: true,
+        sample_rate_override: Some(22050),
+        compression_format: AudioCompressionFormat::ADPCM,
+        ..AudioImportSettings::default()
+    };
+    let result = match import_audio(&bytes, "sfx.wav", &settings) {
+        Ok(result) => result,
+        Err(error) => {
+            assert_eq!(error, AudioImportError::NotAiff, "unexpected import_audio error: {error}");
+            return;
+        }
+    };
+    assert_eq!(result.state, AudioImportState::Imported);
+    assert_eq!(result.clip.channels, 1);
+    assert_eq!(result.clip.sample_rate, 22050);
+    assert_eq!(result.clip.samples, vec![16384, -32767, 0]);
+    assert!(result.notes.iter().any(|note| note.contains("force to mono")));
+    assert!(result.notes.iter().any(|note| note.contains("normalize")));
+    assert!(result.notes.iter().any(|note| note.contains("ADPCM")));
+
+    settings.normalize = false;
+    assert!(
+        matches!(import_audio(&bytes, "sfx.wav", &settings), Ok(unnormalized)
+            if unnormalized.clip.samples == vec![4000, -8000, 0]),
+        "expected force_to_mono without normalize to preserve averaged amplitude"
+    );
+}
+
+#[test]
+fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic() {
+    let adpcm_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(0x0011, 1, 44100, 4)),
+        wav_chunk(b"data", &[0x00, 0x01, 0x02, 0x03]),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&adpcm_wav),
+            Err(AudioImportError::UnsupportedWavFormat { format_tag: 0x0011, .. })
+        ),
+        "expected IMA ADPCM WAV format tag 0x0011 to report UnsupportedWavFormat"
+    );
+    let ms_adpcm_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(0x0002, 1, 44100, 4)),
+        wav_chunk(b"data", &[0x00, 0x01, 0x02, 0x03]),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&ms_adpcm_wav),
+            Err(AudioImportError::UnsupportedWavFormat { format_tag: 0x0002, name })
+                if name == "MS ADPCM"
+        ),
+        "expected MS ADPCM WAV format tag 0x0002 to report UnsupportedWavFormat"
+    );
+    let alaw_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(0x0006, 1, 8000, 8)),
+        wav_chunk(b"data", &[0x00, 0x01]),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&alaw_wav),
+            Err(AudioImportError::UnsupportedWavFormat { format_tag: 0x0006, name })
+                if name == "A-law"
+        ),
+        "expected A-law WAV format tag 0x0006 to report UnsupportedWavFormat"
+    );
+    let mulaw_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(0x0007, 1, 8000, 8)),
+        wav_chunk(b"data", &[0x00, 0x01]),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&mulaw_wav),
+            Err(AudioImportError::UnsupportedWavFormat { format_tag: 0x0007, name })
+                if name == "mu-law"
+        ),
+        "expected mu-law WAV format tag 0x0007 to report UnsupportedWavFormat"
+    );
+    assert_eq!(
+        detect_audio_state(&adpcm_wav, "voice_adpcm.wav"),
+        AudioImportState::NotYetSupported
+    );
+    let settings = AudioImportSettings::default();
+    assert!(
+        matches!(import_audio(&adpcm_wav, "voice_adpcm.wav", &settings), Ok(result)
+            if result.state == AudioImportState::NotYetSupported
+                && result.clip.samples.is_empty()
+                && result.notes.iter().any(|note| {
+                    note.contains("voice_adpcm.wav")
+                        && (note.contains("ADPCM") || note.contains("0x0011"))
+                })),
+        "expected unsupported WAV encoding to produce a named NotYetSupported report"
+    );
+
+    let unsupported_bits_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 1, 44100, 12)),
+        wav_chunk(b"data", &[0x00, 0x01, 0x02]),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&unsupported_bits_wav),
+            Err(AudioImportError::UnsupportedSampleSize(12))
+        ),
+        "expected 12-bit PCM WAV to report UnsupportedSampleSize(12)"
+    );
+
+    assert!(
+        matches!(decode_wav(b"RIFF\x04\x00"), Err(AudioImportError::Truncated)),
+        "expected short RIFF header to report Truncated"
+    );
+    assert!(
+        matches!(
+            decode_wav(b"RIFF\x04\x00\x00\x00AVI "),
+            Err(AudioImportError::NotWav)
+        ),
+        "expected non-WAVE RIFF container to report NotWav"
+    );
+    let missing_fmt = build_riff_wave(&[wav_chunk(b"data", &[0, 0])]);
+    assert!(
+        matches!(
+            decode_wav(&missing_fmt),
+            Err(AudioImportError::MissingChunk("fmt "))
+        ),
+        "expected WAV without fmt chunk to report MissingChunk(\"fmt \")"
+    );
+    let missing_data = build_riff_wave(&[wav_chunk(b"fmt ", &wav_fmt_body(1, 1, 44100, 16))]);
+    assert!(
+        matches!(
+            decode_wav(&missing_data),
+            Err(AudioImportError::MissingChunk("data"))
+        ),
+        "expected WAV without data chunk to report MissingChunk(\"data\")"
+    );
+    let valid_wav = build_riff_wave(&[
+        wav_chunk(b"fmt ", &wav_fmt_body(1, 2, 44100, 16)),
+        wav_chunk(b"data", &pcm16_le(&[100, -100, 200, -200])),
+    ]);
+    assert!(
+        matches!(
+            decode_wav(&valid_wav[..valid_wav.len() - 1]),
+            Err(AudioImportError::Truncated)
+        ),
+        "expected truncated WAV data chunk to report Truncated"
+    );
+    assert_eq!(
+        detect_audio_state(&valid_wav[..valid_wav.len() - 1], "broken.wav"),
+        AudioImportState::ImportFailed
+    );
+}
+
