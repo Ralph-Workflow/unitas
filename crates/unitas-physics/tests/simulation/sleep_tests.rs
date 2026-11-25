@@ -1,4 +1,5 @@
 use unitas_core::EntityId;
+use unitas_physics::two_d::{BodyDesc2D, ColliderDesc2D, World2D};
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
 fn static_floor() -> BodyDesc {
@@ -112,4 +113,89 @@ fn sleep_and_wake_report_unknown_bodies_without_panicking() -> Result<(), Physic
     assert!(!world.is_sleeping(absent));
     world.wake_up(absent);
     Ok(())
+}
+
+#[test]
+fn a_2d_box_dropped_onto_a_floor_falls_asleep_and_wakes_when_a_force_is_applied() {
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let floor_go = EntityId::new(101);
+    let box_go = EntityId::new(102);
+
+    let floor_body = world.add_body(BodyDesc2D::static_body(floor_go, [0.0, 0.0]));
+    world.add_collider(
+        ColliderDesc2D::box_collider(floor_go, [5.0, 0.5]).with_attached_body(floor_body),
+    );
+    let box_body = world.add_body(BodyDesc2D::dynamic(box_go, [0.0, 3.0]));
+    world.add_collider(ColliderDesc2D::circle_collider(box_go, 0.5).with_attached_body(box_body));
+
+    let mut asleep = false;
+    for _ in 0..600 {
+        world.step(1.0 / 120.0);
+        if world.body(box_body).map(|body| body.is_sleeping()) == Some(true) {
+            asleep = true;
+            break;
+        }
+    }
+    assert!(asleep, "a resting 2D box must fall asleep");
+    assert_eq!(
+        world.body(box_body).map(|body| body.linear_velocity),
+        Some([0.0, 0.0])
+    );
+
+    let resting = world.body(box_body).map(|body| body.position);
+    world.step(1.0 / 120.0);
+    assert_eq!(world.body(box_body).map(|body| body.position), resting);
+
+    if let Some(body) = world.body_mut(box_body) {
+        body.add_force([10.0, 0.0]);
+    }
+    assert_eq!(
+        world.body(box_body).map(|body| body.is_sleeping()),
+        Some(false)
+    );
+
+    world.step(1.0 / 120.0);
+    assert!(
+        world.body(box_body).map_or(0.0, |body| body.position[0])
+            > resting.map_or(0.0, |position| position[0])
+    );
+}
+
+#[test]
+fn a_2d_body_put_to_sleep_stops_moving_until_it_is_woken() {
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let go = EntityId::new(103);
+    let body = world.add_body(BodyDesc2D::dynamic(go, [0.0, 5.0]));
+    world.add_collider(ColliderDesc2D::circle_collider(go, 0.5).with_attached_body(body));
+
+    world.step(0.02);
+    assert_eq!(world.body(body).map(|body| body.is_sleeping()), Some(false));
+
+    if let Some(body) = world.body_mut(body) {
+        body.sleep();
+    }
+    assert_eq!(world.body(body).map(|body| body.is_sleeping()), Some(true));
+    assert_eq!(
+        world.body(body).map(|body| body.linear_velocity),
+        Some([0.0, 0.0])
+    );
+
+    let resting = world.body(body).map(|body| body.position);
+    world.step(0.5);
+    assert_eq!(
+        world.body(body).map(|body| body.position),
+        resting,
+        "a sleeping 2D body must not move under gravity"
+    );
+
+    if let Some(body) = world.body_mut(body) {
+        body.wake_up();
+    }
+    assert_eq!(world.body(body).map(|body| body.is_sleeping()), Some(false));
+
+    world.step(0.02);
+    assert!(
+        world.body(body).map_or(0.0, |body| body.position[1])
+            < resting.map_or(0.0, |position| position[1])
+    );
 }

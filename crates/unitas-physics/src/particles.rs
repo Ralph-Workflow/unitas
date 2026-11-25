@@ -20,6 +20,8 @@ use std::f32::consts::FRAC_PI_2;
 
 use unitas_core::{rotate_vector, EntityId};
 
+use crate::two_d::collider::transform_point2;
+use crate::two_d::{Collider2D, ContactFilter2D, World2D};
 use crate::world::World;
 
 const DEFAULT_DURATION: f32 = 5.0;
@@ -756,5 +758,143 @@ impl std::fmt::Debug for ParticleSystem {
             .field("disabled", &self.disabled)
             .field("destroyed", &self.destroyed)
             .finish()
+    }
+}
+
+/// A particle contact with a two-dimensional collider.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleCollisionEvent2D {
+    pub particle_index: usize,
+    pub entity: EntityId,
+    pub position: [f32; 2],
+    pub normal: [f32; 2],
+}
+
+/// A particle entering a two-dimensional trigger collider.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleTriggerEvent2D {
+    pub particle_index: usize,
+    pub entity: EntityId,
+    pub position: [f32; 2],
+}
+
+/// A particle system that reports its contacts against a two-dimensional physics world.
+pub struct ParticleSystem2D {
+    system: ParticleSystem,
+    collision_events: Vec<ParticleCollisionEvent2D>,
+    trigger_events: Vec<ParticleTriggerEvent2D>,
+}
+
+impl ParticleSystem2D {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            system: ParticleSystem::new(seed),
+            collision_events: Vec::new(),
+            trigger_events: Vec::new(),
+        }
+    }
+
+    pub fn system(&self) -> &ParticleSystem {
+        &self.system
+    }
+
+    /// The particle data, emission and simulation shared with the three-dimensional system.
+    pub fn system_mut(&mut self) -> &mut ParticleSystem {
+        &mut self.system
+    }
+
+    pub fn set_collision_layer_mask(&mut self, layer_mask: u32) {
+        self.system.set_collision_layer_mask(layer_mask);
+    }
+
+    pub fn collision_layer_mask(&self) -> u32 {
+        self.system.collision_layer_mask()
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.system.is_disabled()
+    }
+
+    pub fn is_destroyed(&self) -> bool {
+        self.system.is_destroyed()
+    }
+
+    /// Refreshes the collision and trigger events against the two-dimensional physics world.
+    pub fn update_collisions(&mut self, world: &World2D) {
+        self.collision_events.clear();
+        self.trigger_events.clear();
+        if self.system.is_disabled() || self.system.is_destroyed() {
+            return;
+        }
+        let filter = ContactFilter2D::default().with_layer_mask(self.system.collision_layer_mask());
+        for index in 0..self.system.get_particles().len() {
+            let particle = self.system.get_particles()[index];
+            let radius = particle.size * 0.5;
+            if radius.is_nan() || radius <= 0.0 {
+                continue;
+            }
+            let center = [particle.position[0], particle.position[1]];
+            for collider_id in world.overlap_circle(center, radius, filter) {
+                let Some(collider) = world.collider(collider_id) else {
+                    continue;
+                };
+                if collider.is_trigger {
+                    self.trigger_events.push(ParticleTriggerEvent2D {
+                        particle_index: index,
+                        entity: collider.game_object,
+                        position: center,
+                    });
+                } else {
+                    self.collision_events.push(ParticleCollisionEvent2D {
+                        particle_index: index,
+                        entity: collider.game_object,
+                        position: center,
+                        normal: contact_normal_2d(world, collider, center),
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn get_collision_events(&self) -> &[ParticleCollisionEvent2D] {
+        &self.collision_events
+    }
+
+    pub fn get_trigger_events(&self) -> &[ParticleTriggerEvent2D] {
+        &self.trigger_events
+    }
+}
+
+impl std::fmt::Debug for ParticleSystem2D {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ParticleSystem2D")
+            .field("seed", &self.system.seed())
+            .field("collision_layer_mask", &self.system.collision_layer_mask())
+            .field("particle_count", &self.system.get_particles().len())
+            .field("collision_event_count", &self.collision_events.len())
+            .field("trigger_event_count", &self.trigger_events.len())
+            .finish()
+    }
+}
+
+fn collider_center_2d(world: &World2D, collider: &Collider2D) -> [f32; 2] {
+    match collider.attached_body.and_then(|body| world.body(body)) {
+        Some(body) => transform_point2(collider.offset, body.position, body.rotation),
+        None => collider.offset,
+    }
+}
+
+fn contact_normal_2d(world: &World2D, collider: &Collider2D, center: [f32; 2]) -> [f32; 2] {
+    let collider_center = collider_center_2d(world, collider);
+    let offset = [
+        center[0] - collider_center[0],
+        center[1] - collider_center[1],
+    ];
+    let length = (offset[0] * offset[0] + offset[1] * offset[1]).sqrt();
+    if length > 0.0 {
+        [offset[0] / length, offset[1] / length]
+    } else {
+        [0.0, 1.0]
     }
 }

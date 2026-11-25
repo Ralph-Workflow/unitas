@@ -1,7 +1,9 @@
+pub mod avatar_mask;
 pub mod clip;
 pub mod controller;
 pub mod curve;
 pub mod error;
+pub mod playable;
 pub mod wire;
 
 pub use clip::{

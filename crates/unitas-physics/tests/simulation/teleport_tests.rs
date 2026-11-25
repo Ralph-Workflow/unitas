@@ -1,4 +1,5 @@
 use unitas_core::EntityId;
+use unitas_physics::two_d::{BodyDesc2D, ColliderDesc2D, MessageKind2D, World2D};
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
 fn dynamic_ball(position: [f64; 3]) -> BodyDesc {
@@ -86,4 +87,74 @@ fn teleport_rejects_unknown_bodies_and_non_finite_positions() -> Result<(), Phys
     );
     assert_eq!(world.position(ball), Some([0.0, 0.0, 0.0]));
     Ok(())
+}
+
+#[test]
+fn a_2d_teleport_moves_a_dynamic_body_immediately_and_keeps_its_velocity() {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let go = EntityId::new(201);
+    let body = world.add_body(BodyDesc2D::dynamic(go, [0.0, 1.0]).with_velocity([3.0, 0.0]));
+    world.add_collider(ColliderDesc2D::circle_collider(go, 0.5).with_attached_body(body));
+
+    if let Some(body) = world.body_mut(body) {
+        body.position = [5.0, 2.0];
+    }
+    assert_eq!(world.body(body).map(|body| body.position), Some([5.0, 2.0]));
+    assert_eq!(
+        world.body(body).map(|body| body.linear_velocity),
+        Some([3.0, 0.0])
+    );
+
+    world.step(0.5);
+    assert_eq!(
+        world.body(body).map(|body| body.position),
+        Some([6.5, 2.0]),
+        "a 2D teleport is not swept motion"
+    );
+}
+
+#[test]
+fn a_2d_move_position_applies_at_the_next_step_and_not_before() {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let go = EntityId::new(202);
+    let body = world.add_body(BodyDesc2D::dynamic(go, [0.0, 1.0]));
+    world.add_collider(ColliderDesc2D::circle_collider(go, 0.5).with_attached_body(body));
+
+    if let Some(body) = world.body_mut(body) {
+        body.move_position([5.0, 2.0]);
+    }
+    assert_eq!(world.body(body).map(|body| body.position), Some([0.0, 1.0]));
+
+    world.step(0.02);
+    assert_eq!(world.body(body).map(|body| body.position), Some([5.0, 2.0]));
+}
+
+#[test]
+fn a_2d_teleport_out_of_a_trigger_reports_the_trigger_exit() {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let trigger_go = EntityId::new(203);
+    let mover_go = EntityId::new(204);
+
+    world.add_collider(ColliderDesc2D::box_collider(trigger_go, [1.0, 1.0]).with_trigger(true));
+    let mover_body = world.add_body(BodyDesc2D::dynamic(mover_go, [0.0, 0.0]));
+    world.add_collider(
+        ColliderDesc2D::circle_collider(mover_go, 0.5).with_attached_body(mover_body),
+    );
+
+    world.step(0.02);
+    let enter_messages = world.drain_messages();
+    assert!(!enter_messages.is_empty());
+    assert!(enter_messages
+        .iter()
+        .all(|message| message.kind == MessageKind2D::TriggerEnter2D));
+
+    if let Some(body) = world.body_mut(mover_body) {
+        body.position = [5.0, 0.0];
+    }
+    world.step(0.02);
+    let exit_messages = world.drain_messages();
+    assert!(!exit_messages.is_empty());
+    assert!(exit_messages
+        .iter()
+        .all(|message| message.kind == MessageKind2D::TriggerExit2D));
 }

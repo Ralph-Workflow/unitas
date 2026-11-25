@@ -17,3 +17,12 @@ mod teleport_tests;
 mod two_d_effector_tests;
 #[path = "simulation/two_d_tests.rs"]
 mod two_d_tests;
+
+#[path = "simulation/sim_control_tests.rs"]
+mod sim_control_tests;
+#[path = "simulation/particles_2d_tests.rs"]
+mod particles_2d_tests;
+#[path = "simulation/articulation_tests.rs"]
+mod articulation_tests;
+#[path = "simulation/cloth_tests.rs"]
+mod cloth_tests;

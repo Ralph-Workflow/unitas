@@ -930,3 +930,143 @@ fn animator_runtime_unresolved_child_path_records_diagnostic() -> Result<(), Box
     );
     Ok(())
 }
+
+#[derive(Default)]
+struct HookState {
+    moves: Vec<unitas_runtime::animation::AnimatorRootMotion>,
+    ik_layers: Vec<u32>,
+}
+
+struct HookRecorder {
+    state: std::rc::Rc<std::cell::RefCell<HookState>>,
+    ik_body_position: Option<[f32; 3]>,
+    handles_move: bool,
+}
+
+impl unitas_runtime::animation::AnimatorScriptHooks for HookRecorder {
+    fn on_animator_ik(
+        &mut self,
+        _entity: EntityId,
+        layer_index: u32,
+        pose: &mut unitas_runtime::animation::AnimatorIkPose,
+    ) {
+        self.state.borrow_mut().ik_layers.push(layer_index);
+        pose.body_position = self.ik_body_position;
+    }
+
+    fn on_animator_move(
+        &mut self,
+        _entity: EntityId,
+        motion: &mut unitas_runtime::animation::AnimatorRootMotion,
+    ) -> bool {
+        self.state.borrow_mut().moves.push(*motion);
+        if self.handles_move {
+            motion.delta_position = [0.0; 3];
+        }
+        self.handles_move
+    }
+}
+
+fn hook_position_clip() -> AnimationClip {
+    AnimationClip::new(
+        "HookMove",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 1.0),
+            ]),
+        )],
+        Vec::new(),
+    )
+}
+
+fn hook_controller() -> AnimatorController {
+    AnimatorController::new(
+        "Hook",
+        Vec::new(),
+        vec![AnimatorState::new("Move", StateMotion::Clip(hook_position_clip()))],
+        0,
+        Vec::new(),
+    )
+}
+
+fn hook_world() -> Result<(unitas_runtime::AnimationWorld, EntityId), Box<dyn Error>> {
+    let mut world = unitas_runtime::AnimationWorld::new();
+    let entity = EntityId::new(11);
+    world.ensure_animator(entity, unitas_core::Transform::default());
+    let controller_handle = world.register_controller(hook_controller());
+    world
+        .set_controller(entity, controller_handle)
+        .map_err(|message| -> Box<dyn Error> { message.into() })?;
+    Ok((world, entity))
+}
+
+#[test]
+fn animation_ik_hook_alters_the_pose_after_the_layer_pose_is_evaluated(
+) -> Result<(), Box<dyn Error>> {
+    let (mut world, entity) = hook_world()?;
+    let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
+    let mut hooks = unitas_runtime::animation::AnimatorHookWorld::new();
+    hooks.attach(
+        entity,
+        Box::new(HookRecorder {
+            state: state.clone(),
+            ik_body_position: Some([1.0, 2.0, 3.0]),
+            handles_move: false,
+        }),
+    );
+    hooks.set_ik_layers(entity, vec![0]);
+    assert!(hooks.is_attached(entity));
+    assert_eq!(hooks.ik_layers(entity), &[0]);
+
+    world.tick_with_hooks(0.5, &mut hooks);
+
+    assert_eq!(state.borrow().ik_layers, vec![0]);
+    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    assert_eq!(transform.translation, [1.0, 2.0, 3.0]);
+    assert!(hooks.detach(entity));
+    assert!(!hooks.is_attached(entity));
+    Ok(())
+}
+
+#[test]
+fn animation_move_hook_receives_root_motion_and_suppresses_the_automatic_application(
+) -> Result<(), Box<dyn Error>> {
+    let (mut world, entity) = hook_world()?;
+    let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
+    let mut hooks = unitas_runtime::animation::AnimatorHookWorld::new();
+    hooks.attach(
+        entity,
+        Box::new(HookRecorder {
+            state: state.clone(),
+            ik_body_position: None,
+            handles_move: true,
+        }),
+    );
+
+    world.tick_with_hooks(0.5, &mut hooks);
+
+    let moves = state.borrow().moves.clone();
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].delta_position, [0.5, 0.0, 0.0]);
+    assert_eq!(moves[0].delta_rotation, [0.0, 0.0, 0.0, 1.0]);
+    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    assert_eq!(transform.translation, [0.0, 0.0, 0.0]);
+    Ok(())
+}
+
+#[test]
+fn animation_without_a_move_hook_applies_root_motion_automatically() -> Result<(), Box<dyn Error>> {
+    let (mut world, entity) = hook_world()?;
+    let mut hooks = unitas_runtime::animation::AnimatorHookWorld::new();
+
+    world.tick_with_hooks(0.5, &mut hooks);
+
+    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    assert_eq!(transform.translation, [0.5, 0.0, 0.0]);
+    Ok(())
+}

@@ -77,6 +77,11 @@ namespace Unitas.Testing
             TestRunOptions effectiveOptions = options ?? new TestRunOptions();
             Stopwatch runStopwatch = Stopwatch.StartNew();
 
+            // A run starts from a clean log-assertion state: leftovers from an
+            // earlier host test would otherwise be attributed to the first case.
+            LogAssert.Reset();
+            LogRecorder.Clear();
+
             List<DiscoveredTestAssembly> testAssemblies = TestDiscoveryAndGlueGenerator.DiscoverTestAssemblies(
                 fullProjectRoot,
                 out Dictionary<string, List<string>> _,
@@ -585,9 +590,15 @@ namespace Unitas.Testing
             }
 
             IReadOnlyList<string> logProblems = LogAssert.Verify();
-            if (string.IsNullOrEmpty(failureMessage) && logProblems.Count > 0)
+            string logProblemText = logProblems.Count > 0 ? string.Join("; ", logProblems) : string.Empty;
+            if (string.IsNullOrEmpty(failureMessage))
             {
-                failureMessage = string.Join("; ", logProblems);
+                failureMessage = logProblemText;
+            }
+            else if (logProblemText.Length > 0)
+            {
+                // Keep the log-assertion verdict even when the body already failed.
+                failureMessage = failureMessage + "; " + logProblemText;
             }
 
             LogAssert.Reset();

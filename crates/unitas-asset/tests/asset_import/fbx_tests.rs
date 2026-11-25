@@ -428,3 +428,33 @@ fn reports_invalid_signature() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn geometry_nodes_keep_their_own_mesh_identity() -> TestResult {
+    let hull = geometry_node(
+        "Hull",
+        vec![prop_double_array(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])],
+        vec![prop_int_array(&[0, 1, -2])],
+        vec![],
+    );
+    let turret = geometry_node(
+        "Turret",
+        vec![prop_double_array(&[
+            0.0, 0.0, 2.0, 1.0, 0.0, 2.0, 1.0, 1.0, 2.0, 0.0, 1.0, 2.0,
+        ])],
+        vec![prop_int_array(&[0, 1, 2, -3])],
+        vec![],
+    );
+    let bytes = fbx_file(&objects_root(vec![hull, turret]), FBX_VERSION_64);
+    let meshes = import_fbx(&bytes)?;
+    assert_eq!(meshes.len(), 2, "each geometry node stays its own mesh");
+    assert_eq!(meshes[0].name, "Hull");
+    assert_eq!(meshes[0].positions.len(), 3);
+    assert_eq!(meshes[0].indices, vec![0, 1, 2]);
+    assert_eq!(meshes[0].sub_meshes[0].sub_asset_id, "Hull");
+    assert_eq!(meshes[1].name, "Turret");
+    assert_eq!(meshes[1].positions.len(), 4);
+    assert_eq!(meshes[1].indices, vec![0, 1, 2, 0, 2, 3]);
+    assert_eq!(meshes[1].sub_meshes[0].sub_asset_id, "Turret");
+    Ok(())
+}

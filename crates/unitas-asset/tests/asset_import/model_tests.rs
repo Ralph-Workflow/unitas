@@ -1,6 +1,7 @@
 use unitas_asset::model::fbx::FbxImportError;
 use unitas_asset::model::{
-    import_fbx, import_gltf, import_model, import_obj, import_obj_bytes, ModelImportError,
+    import_fbx, import_gltf, import_model, import_model_sub_assets, import_obj, import_obj_bytes,
+    ModelImportError,
 };
 
 const CUBE_OBJ: &str = "\
@@ -644,5 +645,109 @@ fn import_model_maps_fbx_rig_and_animation_rejection_and_malformed_errors() -> R
         ModelImportError::Fbx(FbxImportError::MissingGeometry) => {}
         other => return Err(format!("unexpected error for missing geometry: {other:?}")),
     }
+    Ok(())
+}
+
+fn sub_asset_ids(meshes: &[unitas_asset::primitive::MeshData]) -> Vec<String> {
+    meshes
+        .iter()
+        .flat_map(|mesh| {
+            mesh.sub_meshes
+                .iter()
+                .map(|sub| sub.sub_asset_id.clone())
+                .collect::<Vec<String>>()
+        })
+        .collect()
+}
+
+fn two_mesh_fbx_bytes() -> Vec<u8> {
+    let hull = make_fbx_geometry(
+        "Hull",
+        &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        &[0, 1, -2],
+    );
+    let turret = make_fbx_geometry(
+        "Turret",
+        &[0.0, 0.0, 2.0, 1.0, 0.0, 2.0, 1.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+        &[0, 1, 2, -3],
+    );
+    make_fbx(&[hull, turret])
+}
+
+#[test]
+fn import_model_sub_assets_keeps_every_fbx_mesh_identity() -> Result<(), String> {
+    let fbx_bytes = two_mesh_fbx_bytes();
+
+    let meshes = match import_model_sub_assets(&fbx_bytes, "tank.fbx") {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("import failed: {error:?}")),
+    };
+    assert_eq!(meshes.len(), 2, "each source mesh keeps its own identity");
+    assert_eq!(meshes[0].name, "Hull");
+    assert_eq!(meshes[0].positions.len(), 3);
+    assert_eq!(meshes[0].indices, vec![0, 1, 2]);
+    assert_eq!(meshes[0].sub_meshes.len(), 1);
+    assert_eq!(meshes[0].sub_meshes[0].sub_asset_id, "Hull");
+    assert_eq!(meshes[1].name, "Turret");
+    assert_eq!(meshes[1].positions.len(), 4);
+    assert_eq!(meshes[1].indices, vec![0, 1, 2, 0, 2, 3]);
+    assert_eq!(meshes[1].sub_meshes[0].sub_asset_id, "Turret");
+
+    let combined = match import_model(&fbx_bytes, "tank.fbx") {
+        Ok(mesh) => mesh,
+        Err(error) => return Err(format!("import failed: {error:?}")),
+    };
+    assert_eq!(
+        combined.positions.len(),
+        7,
+        "the combined convenience path still merges the meshes"
+    );
+    assert_eq!(combined.sub_meshes.len(), 2);
+    assert_eq!(combined.sub_meshes[1].sub_asset_id, "Turret");
+    Ok(())
+}
+
+#[test]
+fn import_model_sub_assets_identities_survive_reimport() -> Result<(), String> {
+    let fbx_bytes = two_mesh_fbx_bytes();
+    let first = match import_model_sub_assets(&fbx_bytes, "tank.fbx") {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("first import failed: {error:?}")),
+    };
+    let second = match import_model_sub_assets(&fbx_bytes, "tank.fbx") {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("second import failed: {error:?}")),
+    };
+    assert_eq!(
+        sub_asset_ids(&first),
+        vec!["Hull".to_string(), "Turret".to_string()]
+    );
+    assert_eq!(
+        sub_asset_ids(&second),
+        sub_asset_ids(&first),
+        "reimporting the same bytes keeps the sub-asset identities"
+    );
+    Ok(())
+}
+
+#[test]
+fn import_model_sub_assets_returns_one_mesh_for_obj_and_gltf() -> Result<(), String> {
+    let meshes = match import_model_sub_assets(CUBE_OBJ.as_bytes(), "cube.obj") {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("import failed: {error:?}")),
+    };
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(meshes[0].name, "cube");
+    assert_eq!(
+        sub_asset_ids(&meshes),
+        vec!["Front/Red".to_string(), "Back/Red".to_string()]
+    );
+
+    let meshes = match import_model_sub_assets(&make_glb(TRIANGLE_GLTF, TRIANGLE_BIN), "tri.glb") {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("import failed: {error:?}")),
+    };
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(sub_asset_ids(&meshes), vec!["TriNode#0".to_string()]);
     Ok(())
 }

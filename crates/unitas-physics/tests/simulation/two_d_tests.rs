@@ -101,6 +101,63 @@ fn layer_collision_matrix_gates_callbacks_and_default_mask_queries() {
 }
 
 #[test]
+fn the_2d_layer_collision_matrix_decides_which_layer_pairs_collide() {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+
+    let one_go = EntityId::new(400);
+    let two_go = EntityId::new(401);
+    let three_go = EntityId::new(402);
+
+    let one_body = world.add_body(BodyDesc2D::static_body(one_go, [0.0, 0.0]).with_layer(1));
+    let one_col = world.add_collider(
+        ColliderDesc2D::circle_collider(one_go, 1.0)
+            .with_attached_body(one_body)
+            .with_layer(1),
+    );
+    let two_body = world.add_body(BodyDesc2D::static_body(two_go, [0.0, 0.0]).with_layer(2));
+    let two_col = world.add_collider(
+        ColliderDesc2D::box_collider(two_go, [1.0, 1.0])
+            .with_attached_body(two_body)
+            .with_layer(2),
+    );
+    let three_body = world.add_body(BodyDesc2D::static_body(three_go, [0.0, 0.0]).with_layer(3));
+    let three_col = world.add_collider(
+        ColliderDesc2D::circle_collider(three_go, 0.75)
+            .with_attached_body(three_body)
+            .with_layer(3),
+    );
+
+    world.step(0.02);
+    assert!(world.is_touching(one_col, two_col));
+    assert!(world.is_touching(two_col, three_col));
+    assert!(world.is_touching(one_col, three_col));
+
+    world.ignore_layer_collision(1, 2, true);
+    world.ignore_layer_collision(2, 3, true);
+    world.step(0.02);
+    assert!(!world.is_touching(one_col, two_col));
+    assert!(!world.is_touching(two_col, three_col));
+    assert!(world.is_touching(one_col, three_col));
+
+    assert!(world.get_ignore_layer_collision(1, 2));
+    assert!(world.get_ignore_layer_collision(2, 1));
+    assert!(world.get_ignore_layer_collision(2, 3));
+    assert!(world.get_ignore_layer_collision(3, 2));
+    assert!(!world.get_ignore_layer_collision(1, 3));
+
+    assert_eq!(world.layer_mask_for_layer(1) & (1 << 2), 0);
+    assert_eq!(world.layer_mask_for_layer(1) & (1 << 3), 1 << 3);
+    assert_eq!(world.layer_mask_for_layer(2) & (1 << 1), 0);
+    assert_eq!(world.layer_mask_for_layer(2) & (1 << 3), 0);
+    assert_eq!(world.layer_mask_for_layer(3) & (1 << 1), 1 << 1);
+
+    world.ignore_layer_collision(1, 2, false);
+    world.step(0.02);
+    assert!(world.is_touching(one_col, two_col));
+    assert!(!world.is_touching(two_col, three_col));
+}
+
+#[test]
 fn message_routing_follows_action_matrix_and_child_collider_game_objects() {
     let mut world = World2D::with_gravity([0.0, 0.0]);
 

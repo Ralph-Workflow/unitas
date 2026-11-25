@@ -512,3 +512,138 @@ pub fn apply_transform_property(
         _ => {}
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AnimatorRootMotion {
+    pub delta_position: [f32; 3],
+    pub delta_rotation: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AnimatorIkPose {
+    pub body_position: Option<[f32; 3]>,
+}
+
+pub trait AnimatorScriptHooks {
+    fn on_animator_ik(&mut self, _entity: EntityId, _layer_index: u32, _pose: &mut AnimatorIkPose) {}
+    fn on_animator_move(&mut self, _entity: EntityId, _motion: &mut AnimatorRootMotion) -> bool {
+        false
+    }
+}
+
+struct AnimatorHookEntry {
+    ik_layers: Vec<u32>,
+    script: Option<Box<dyn AnimatorScriptHooks>>,
+}
+
+#[derive(Default)]
+pub struct AnimatorHookWorld {
+    entries: BTreeMap<EntityId, AnimatorHookEntry>,
+}
+
+impl AnimatorHookWorld {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn attach(&mut self, entity: EntityId, script: Box<dyn AnimatorScriptHooks>) {
+        let entry = self.entry_mut(entity);
+        entry.script = Some(script);
+    }
+
+    pub fn detach(&mut self, entity: EntityId) -> bool {
+        self.entries.remove(&entity).is_some()
+    }
+
+    pub fn is_attached(&self, entity: EntityId) -> bool {
+        self.entries.contains_key(&entity)
+    }
+
+    pub fn set_ik_layers(&mut self, entity: EntityId, layers: Vec<u32>) {
+        let entry = self.entry_mut(entity);
+        entry.ik_layers = layers;
+    }
+
+    pub fn ik_layers(&self, entity: EntityId) -> &[u32] {
+        self.entries
+            .get(&entity)
+            .map(|entry| entry.ik_layers.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn entry_mut(&mut self, entity: EntityId) -> &mut AnimatorHookEntry {
+        self.entries.entry(entity).or_insert_with(|| AnimatorHookEntry {
+            ik_layers: Vec::new(),
+            script: None,
+        })
+    }
+}
+
+impl AnimationWorld {
+    pub fn tick_with_hooks(
+        &mut self,
+        scaled_delta_seconds: f64,
+        hooks: &mut AnimatorHookWorld,
+    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
+        let previous: Vec<(EntityId, Transform)> = self
+            .entries
+            .iter()
+            .map(|(entity, entry)| (*entity, entry.transform.clone()))
+            .collect();
+        let child_bindings = self.tick(scaled_delta_seconds);
+        for (entity, previous_transform) in previous {
+            let Some(entry) = self.entries.get_mut(&entity) else {
+                continue;
+            };
+            let Some(hook_entry) = hooks.entries.get_mut(&entity) else {
+                continue;
+            };
+            let Some(script) = hook_entry.script.as_mut() else {
+                continue;
+            };
+            let ik_layers = hook_entry.ik_layers.clone();
+            let mut motion = AnimatorRootMotion {
+                delta_position: subtract_vectors(
+                    entry.transform.translation,
+                    previous_transform.translation,
+                ),
+                delta_rotation: rotation_delta(
+                    previous_transform.rotation,
+                    entry.transform.rotation,
+                ),
+            };
+            if script.on_animator_move(entity, &mut motion) {
+                entry.transform.translation =
+                    add_vectors(previous_transform.translation, motion.delta_position);
+                entry.transform.rotation = unitas_core::multiply_rotation(
+                    motion.delta_rotation,
+                    previous_transform.rotation,
+                );
+            }
+            for layer_index in ik_layers {
+                let mut pose = AnimatorIkPose::default();
+                script.on_animator_ik(entity, layer_index, &mut pose);
+                if let Some(body_position) = pose.body_position {
+                    entry.transform.translation = body_position;
+                }
+            }
+        }
+        child_bindings
+    }
+}
+
+fn subtract_vectors(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn add_vectors(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn conjugate_rotation(rotation: [f32; 4]) -> [f32; 4] {
+    [-rotation[0], -rotation[1], -rotation[2], rotation[3]]
+}
+
+fn rotation_delta(previous: [f32; 4], current: [f32; 4]) -> [f32; 4] {
+    unitas_core::multiply_rotation(current, conjugate_rotation(previous))
+}

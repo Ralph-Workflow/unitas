@@ -111,6 +111,19 @@ impl std::error::Error for ModelImportError {}
 
 /// Imports a model source, choosing the reader from the file extension.
 pub fn import_model(bytes: &[u8], file_name: &str) -> Result<MeshData, ModelImportError> {
+    let meshes = import_model_sub_assets(bytes, file_name)?;
+    Ok(combine_meshes(meshes, file_name))
+}
+
+/// Imports a model source, keeping every source mesh as its own sub-asset.
+///
+/// A model file can carry several meshes; this path returns them one by one so
+/// each keeps its own name, vertex data, and sub-asset ids instead of being
+/// merged into a single mesh.
+pub fn import_model_sub_assets(
+    bytes: &[u8],
+    file_name: &str,
+) -> Result<Vec<MeshData>, ModelImportError> {
     let extension = match file_name.rsplit('.').next() {
         Some(extension) => extension.to_ascii_lowercase(),
         None => String::new(),
@@ -119,18 +132,15 @@ pub fn import_model(bytes: &[u8], file_name: &str) -> Result<MeshData, ModelImpo
         "obj" => {
             let mut mesh = obj::import_obj_bytes(bytes)?;
             mesh.name = file_stem(file_name);
-            Ok(mesh)
+            Ok(vec![mesh])
         }
-        "gltf" | "glb" => gltf::import_gltf(bytes),
-        "fbx" => {
-            let meshes = fbx::import_fbx(bytes)?;
-            Ok(combine_fbx_meshes(meshes, file_name))
-        }
+        "gltf" | "glb" => Ok(vec![gltf::import_gltf(bytes)?]),
+        "fbx" => Ok(fbx::import_fbx(bytes)?),
         _ => Err(ModelImportError::UnsupportedFileType { file_name: extension }),
     }
 }
 
-fn combine_fbx_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
+fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
     if meshes.len() == 1 {
         if let Some(mut single) = meshes.pop() {
             if single.name.is_empty() {

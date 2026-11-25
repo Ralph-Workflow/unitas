@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use unitas_core::compat::{
+    CompatibilityReport, CompatibilityState, Finding, Tier, RECOGNIZED_UNSUPPORTED_FAMILIES,
+};
+
 use crate::bundle::{
     ContentBuildMode, ContentBuildResult, ContentRejectionReason, RejectedContentBundle,
 };
@@ -140,6 +144,107 @@ impl From<&BuildValidationError> for BuildDiagnostic {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityFinding {
+    pub feature_id: String,
+    pub tier: Tier,
+    pub state: CompatibilityState,
+    pub guid: Option<String>,
+    pub asset_path: Option<String>,
+    pub sub_asset_id: Option<String>,
+    pub object_name: Option<String>,
+    pub behavior: String,
+    pub relied_upon_unity_differences: Vec<String>,
+    pub observable_consequence: String,
+    pub conditions: Vec<String>,
+    pub related_findings: Vec<String>,
+}
+
+impl CompatibilityFinding {
+    pub fn from_finding(finding: &Finding) -> Self {
+        Self {
+            feature_id: finding.feature_id.clone(),
+            tier: finding.tier,
+            state: finding.state,
+            guid: finding.content.guid.clone(),
+            asset_path: finding.content.asset_path.clone(),
+            sub_asset_id: finding.content.sub_asset_id.clone(),
+            object_name: finding.content.object_name.clone(),
+            behavior: finding.behavior.clone(),
+            relied_upon_unity_differences: finding.relied_upon_unity_differences.clone(),
+            observable_consequence: finding.observable_consequence.clone(),
+            conditions: finding.conditions.clone(),
+            related_findings: finding.related_findings.clone(),
+        }
+    }
+
+    pub fn unity_built_content(content: &str) -> Option<Self> {
+        let family = RECOGNIZED_UNSUPPORTED_FAMILIES
+            .iter()
+            .find(|entry| entry.owning_feature_id == "BLD-005")?;
+        Some(Self {
+            feature_id: family.owning_feature_id.to_string(),
+            tier: Tier::Native,
+            state: family.state,
+            guid: None,
+            asset_path: Some(content.to_string()),
+            sub_asset_id: None,
+            object_name: None,
+            behavior: family.recognized_form.to_string(),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: family.observable_consequence.to_string(),
+            conditions: Vec::new(),
+            related_findings: Vec::new(),
+        })
+    }
+}
+
+fn tier_name(tier: Tier) -> &'static str {
+    match tier {
+        Tier::Exact => "exact",
+        Tier::Semantic => "semantic",
+        Tier::Familiar => "familiar",
+        Tier::Native => "native",
+    }
+}
+
+fn parse_tier(raw: &str) -> Result<Tier, ReportParseError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "exact" => Ok(Tier::Exact),
+        "semantic" => Ok(Tier::Semantic),
+        "familiar" => Ok(Tier::Familiar),
+        "native" => Ok(Tier::Native),
+        other => Err(ReportParseError::new(format!(
+            "unrecognized compatibility tier '{other}'"
+        ))),
+    }
+}
+
+fn state_name(state: CompatibilityState) -> &'static str {
+    match state {
+        CompatibilityState::Supported => "supported",
+        CompatibilityState::PartiallySupported => "partially_supported",
+        CompatibilityState::Unsupported => "unsupported",
+        CompatibilityState::Unknown => "unknown",
+        CompatibilityState::PlatformLimited => "platform_limited",
+        CompatibilityState::ExternallyUnavailable => "externally_unavailable",
+    }
+}
+
+fn parse_state(raw: &str) -> Result<CompatibilityState, ReportParseError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "supported" => Ok(CompatibilityState::Supported),
+        "partially_supported" => Ok(CompatibilityState::PartiallySupported),
+        "unsupported" => Ok(CompatibilityState::Unsupported),
+        "unknown" => Ok(CompatibilityState::Unknown),
+        "platform_limited" => Ok(CompatibilityState::PlatformLimited),
+        "externally_unavailable" => Ok(CompatibilityState::ExternallyUnavailable),
+        other => Err(ReportParseError::new(format!(
+            "unrecognized compatibility state '{other}'"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizeCategoryEntry {
     pub category: String,
     pub size_bytes: u64,
@@ -220,6 +325,7 @@ pub struct BuildReport {
     pub major_contributors: Vec<SizeContributor>,
     pub development_diagnostics_included: bool,
     pub unsupported_behaviors: Vec<String>,
+    pub compatibility_findings: Vec<CompatibilityFinding>,
 }
 
 impl BuildReport {
@@ -263,6 +369,7 @@ impl BuildReport {
             major_contributors: sorted_contributors,
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
+            compatibility_findings: Vec::new(),
         }
     }
 
@@ -295,6 +402,7 @@ impl BuildReport {
             major_contributors: Vec::new(),
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
+            compatibility_findings: Vec::new(),
         }
     }
 
@@ -335,6 +443,7 @@ impl BuildReport {
             major_contributors: Vec::new(),
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
+            compatibility_findings: Vec::new(),
         }
     }
 
@@ -345,6 +454,15 @@ impl BuildReport {
 
     pub fn with_unsupported_behaviors(mut self, behaviors: Vec<String>) -> Self {
         self.unsupported_behaviors = behaviors;
+        self
+    }
+
+    pub fn with_compatibility_report(mut self, report: &CompatibilityReport) -> Self {
+        self.compatibility_findings = report
+            .findings
+            .iter()
+            .map(CompatibilityFinding::from_finding)
+            .collect();
         self
     }
 
@@ -403,6 +521,13 @@ impl BuildReport {
             2,
             "unsupported_behaviors",
             &self.unsupported_behaviors,
+            true,
+        );
+        push_kv_compatibility_findings(
+            &mut out,
+            2,
+            "compatibility_findings",
+            &self.compatibility_findings,
             false,
         );
         out.push_str("}\n");
@@ -443,6 +568,8 @@ impl BuildReport {
         let development_diagnostics_included =
             get_required_bool(obj, "development_diagnostics_included")?;
         let unsupported_behaviors = get_required_string_list(obj, "unsupported_behaviors")?;
+        let compatibility_findings =
+            get_required_compatibility_findings(obj, "compatibility_findings")?;
 
         Ok(Self {
             target,
@@ -464,6 +591,7 @@ impl BuildReport {
             major_contributors,
             development_diagnostics_included,
             unsupported_behaviors,
+            compatibility_findings,
         })
     }
 
@@ -612,6 +740,69 @@ fn push_kv_diagnostics(
         push_kv_str(out, indent + 4, "message", &item.message, true);
         push_kv_opt_str(out, indent + 4, "source", item.source.as_deref(), true);
         push_kv_opt_str(out, indent + 4, "remedy", item.remedy.as_deref(), false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_compatibility_findings(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[CompatibilityFinding],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "feature_id", &item.feature_id, true);
+        push_kv_str(out, indent + 4, "tier", tier_name(item.tier), true);
+        push_kv_str(out, indent + 4, "state", state_name(item.state), true);
+        push_kv_opt_str(out, indent + 4, "guid", item.guid.as_deref(), true);
+        push_kv_opt_str(out, indent + 4, "asset_path", item.asset_path.as_deref(), true);
+        push_kv_opt_str(
+            out,
+            indent + 4,
+            "sub_asset_id",
+            item.sub_asset_id.as_deref(),
+            true,
+        );
+        push_kv_opt_str(out, indent + 4, "object_name", item.object_name.as_deref(), true);
+        push_kv_str(out, indent + 4, "behavior", &item.behavior, true);
+        push_kv_string_array(
+            out,
+            indent + 4,
+            "relied_upon_unity_differences",
+            &item.relied_upon_unity_differences,
+            true,
+        );
+        push_kv_str(
+            out,
+            indent + 4,
+            "observable_consequence",
+            &item.observable_consequence,
+            true,
+        );
+        push_kv_string_array(out, indent + 4, "conditions", &item.conditions, true);
+        push_kv_string_array(
+            out,
+            indent + 4,
+            "related_findings",
+            &item.related_findings,
+            false,
+        );
         push_indent(out, indent + 2);
         out.push('}');
         push_trailing(out, index + 1 < items.len());
@@ -1056,6 +1247,46 @@ fn get_required_diagnostics(
     Ok(list)
 }
 
+fn get_required_compatibility_findings(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<CompatibilityFinding>, ReportParseError> {
+    let arr = get_field(obj, key)?.as_array(key)?;
+    let mut list = Vec::with_capacity(arr.len());
+    for item in arr {
+        let entry_obj = item.as_object(key)?;
+        let feature_id = get_required_str(entry_obj, "feature_id")?.to_string();
+        let tier = parse_tier(get_required_str(entry_obj, "tier")?)?;
+        let state = parse_state(get_required_str(entry_obj, "state")?)?;
+        let guid = get_optional_string(entry_obj, "guid")?;
+        let asset_path = get_optional_string(entry_obj, "asset_path")?;
+        let sub_asset_id = get_optional_string(entry_obj, "sub_asset_id")?;
+        let object_name = get_optional_string(entry_obj, "object_name")?;
+        let behavior = get_required_str(entry_obj, "behavior")?.to_string();
+        let relied_upon_unity_differences =
+            get_required_string_list(entry_obj, "relied_upon_unity_differences")?;
+        let observable_consequence =
+            get_required_str(entry_obj, "observable_consequence")?.to_string();
+        let conditions = get_required_string_list(entry_obj, "conditions")?;
+        let related_findings = get_required_string_list(entry_obj, "related_findings")?;
+        list.push(CompatibilityFinding {
+            feature_id,
+            tier,
+            state,
+            guid,
+            asset_path,
+            sub_asset_id,
+            object_name,
+            behavior,
+            relied_upon_unity_differences,
+            observable_consequence,
+            conditions,
+            related_findings,
+        });
+    }
+    Ok(list)
+}
+
 fn get_required_category_sizes(
     obj: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1172,6 +1403,7 @@ pub struct ContentBuildReport {
     pub unchanged_bundles: Vec<String>,
     pub rejected_bundles: Vec<RejectedBundleReportEntry>,
     pub errors: Vec<BuildDiagnostic>,
+    pub compatibility_findings: Vec<CompatibilityFinding>,
 }
 
 impl ContentBuildReport {
@@ -1200,6 +1432,15 @@ impl ContentBuildReport {
             .iter()
             .map(BuildDiagnostic::from_rejected_content_bundle)
             .collect();
+        let mut compatibility_findings = Vec::new();
+        for rejected in &result.rejected_bundles {
+            if matches!(&rejected.reason, ContentRejectionReason::UnityBuiltArchive { .. }) {
+                let source_path = rejected.source_path.to_string_lossy().into_owned();
+                if let Some(finding) = CompatibilityFinding::unity_built_content(&source_path) {
+                    compatibility_findings.push(finding);
+                }
+            }
+        }
 
         Self {
             mode,
@@ -1215,6 +1456,7 @@ impl ContentBuildReport {
             unchanged_bundles: result.unchanged_bundles.clone(),
             rejected_bundles,
             errors,
+            compatibility_findings,
         }
     }
 
@@ -1256,7 +1498,14 @@ impl ContentBuildReport {
             &self.rejected_bundles,
             true,
         );
-        push_kv_diagnostics(&mut out, 2, "errors", &self.errors, false);
+        push_kv_diagnostics(&mut out, 2, "errors", &self.errors, true);
+        push_kv_compatibility_findings(
+            &mut out,
+            2,
+            "compatibility_findings",
+            &self.compatibility_findings,
+            false,
+        );
         out.push_str("}\n");
         out
     }
@@ -1287,6 +1536,8 @@ impl ContentBuildReport {
         let unchanged_bundles = get_required_string_list(obj, "unchanged_bundles")?;
         let rejected_bundles = get_required_rejected_bundles(obj, "rejected_bundles")?;
         let errors = get_required_diagnostics(obj, "errors")?;
+        let compatibility_findings =
+            get_required_compatibility_findings(obj, "compatibility_findings")?;
 
         Ok(Self {
             mode,
@@ -1302,6 +1553,7 @@ impl ContentBuildReport {
             unchanged_bundles,
             rejected_bundles,
             errors,
+            compatibility_findings,
         })
     }
 }
