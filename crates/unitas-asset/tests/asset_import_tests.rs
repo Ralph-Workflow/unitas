@@ -9,6 +9,10 @@
 mod audio_import_tests;
 #[path = "asset_import/binary_ser_tests.rs"]
 mod binary_ser_tests;
+#[path = "asset_import/database_tests.rs"]
+mod database_tests;
+#[path = "asset_import/dependencies_tests.rs"]
+mod dependencies_tests;
 #[path = "asset_import/fbx_tests.rs"]
 mod fbx_tests;
 #[path = "asset_import/inflate_tests.rs"]
@@ -23,6 +27,8 @@ mod packages_tests;
 mod prefab_variant_tests;
 #[path = "asset_import/primitive_tests.rs"]
 mod primitive_tests;
+#[path = "asset_import/project_tests.rs"]
+mod project_tests;
 #[path = "asset_import/scene_save_tests.rs"]
 mod scene_save_tests;
 #[path = "asset_import/texture_tests.rs"]

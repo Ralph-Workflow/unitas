@@ -536,3 +536,106 @@ fn set_position_moves_kinematic_and_static_bodies() -> Result<(), PhysicsError> 
     assert_eq!(world.position(static_body), Some([6.0, 0.0, 0.0]));
     Ok(())
 }
+
+#[test]
+fn set_rotation_and_query_rotation_round_trip_with_auto_sync() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let kinematic = EntityId::new(1);
+    let static_body = EntityId::new(2);
+    let dynamic_body = EntityId::new(3);
+    world.add_body(
+        kinematic,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            ..sphere([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        static_body,
+        BodyDesc {
+            mass: 0.0,
+            role: BodyRole::Static,
+            ..sphere([2.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(dynamic_body, sphere([4.0, 0.0, 0.0]))?;
+
+    let half_sqrt_two = std::f64::consts::FRAC_1_SQRT_2;
+    let rot_y_90 = [0.0, half_sqrt_two, 0.0, half_sqrt_two];
+    let rot_z_90 = [0.0, 0.0, half_sqrt_two, half_sqrt_two];
+
+    assert_eq!(world.set_rotation(kinematic, rot_y_90), Ok(()));
+    assert_eq!(world.rotation(kinematic), Some(rot_y_90));
+    assert_eq!(world.query_rotation(kinematic), Some(rot_y_90));
+
+    world.set_auto_sync_transforms(false);
+    assert_eq!(world.set_rotation(static_body, rot_z_90), Ok(()));
+    assert_eq!(world.rotation(static_body), Some(rot_z_90));
+    assert_eq!(world.query_rotation(static_body), Some([0.0, 0.0, 0.0, 1.0]));
+
+    world.sync_transforms();
+    assert_eq!(world.query_rotation(static_body), Some(rot_z_90));
+
+    assert_eq!(
+        world.set_rotation(dynamic_body, rot_y_90),
+        Err(PhysicsError::InvalidBody(dynamic_body))
+    );
+    Ok(())
+}
+
+#[test]
+fn raycast_and_overlap_sphere_default_layer_honor_collision_matrix() -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let layer_zero = EntityId::new(1);
+    let layer_two = EntityId::new(2);
+    let trigger_zero = EntityId::new(3);
+    world.add_body(
+        layer_zero,
+        BodyDesc {
+            layer: 0,
+            role: BodyRole::Static,
+            mass: 0.0,
+            ..sphere([0.0, 0.0, 3.0])
+        },
+    )?;
+    world.add_body(
+        layer_two,
+        BodyDesc {
+            layer: 2,
+            role: BodyRole::Static,
+            mass: 0.0,
+            ..sphere([0.0, 0.0, 5.0])
+        },
+    )?;
+    world.add_body(
+        trigger_zero,
+        BodyDesc {
+            layer: 0,
+            is_trigger: true,
+            role: BodyRole::Static,
+            mass: 0.0,
+            ..sphere([0.0, 0.0, 2.0])
+        },
+    )?;
+
+    let initial_hits = world.raycast_default_layer([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, 1);
+    assert_eq!(
+        initial_hits.iter().map(|hit| hit.entity).collect::<Vec<_>>(),
+        vec![layer_zero, layer_two]
+    );
+
+    let initial_overlap = world.overlap_sphere_default_layer([0.0, 0.0, 4.0], 2.0, 1);
+    assert_eq!(initial_overlap, vec![layer_zero, layer_two]);
+
+    world.ignore_layer_collision(1, 2, true);
+
+    let filtered_hits = world.raycast_default_layer([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, 1);
+    assert_eq!(
+        filtered_hits.iter().map(|hit| hit.entity).collect::<Vec<_>>(),
+        vec![layer_zero]
+    );
+
+    let filtered_overlap = world.overlap_sphere_default_layer([0.0, 0.0, 4.0], 2.0, 1);
+    assert_eq!(filtered_overlap, vec![layer_zero]);
+    Ok(())
+}

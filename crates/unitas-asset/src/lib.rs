@@ -1,5 +1,7 @@
 pub mod audio_import;
 pub mod binary_ser;
+pub mod database;
+pub mod dependencies;
 pub mod inflate;
 pub mod json;
 pub mod material;
@@ -10,6 +12,7 @@ pub mod packages;
 pub mod prefab;
 pub mod prefab_variant;
 pub mod primitive;
+pub mod project;
 pub mod project_settings;
 pub mod scene;
 pub mod scene_save;

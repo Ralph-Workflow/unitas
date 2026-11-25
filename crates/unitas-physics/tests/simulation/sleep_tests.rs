@@ -58,12 +58,10 @@ fn a_box_dropped_onto_a_floor_falls_asleep_and_wakes_when_motion_is_applied(
     assert!(asleep, "a resting box must fall asleep");
     assert_eq!(world.velocity(box_body), Some([0.0, 0.0, 0.0]));
 
-    // The body stays where it rested while it sleeps.
     let resting = world.position(box_body);
     world.step(1.0 / 120.0)?;
     assert_eq!(world.position(box_body), resting);
 
-    // Applying motion wakes it again.
     world.set_velocity(box_body, [1.0, 0.0, 0.0])?;
     assert!(!world.is_sleeping(box_body));
     world.step(1.0 / 120.0)?;
@@ -198,4 +196,43 @@ fn a_2d_body_put_to_sleep_stops_moving_until_it_is_woken() {
         world.body(body).map_or(0.0, |body| body.position[1])
             < resting.map_or(0.0, |position| position[1])
     );
+}
+
+#[test]
+fn configurable_sleep_threshold_controls_when_a_slow_body_falls_asleep() -> Result<(), PhysicsError>
+{
+    let mut default_world = World::with_gravity([0.0, 0.0, 0.0]);
+    let body = EntityId::new(1);
+    default_world.add_body(
+        body,
+        BodyDesc {
+            velocity: [0.2, 0.0, 0.0],
+            use_gravity: false,
+            ..dynamic_box([0.0, 0.0, 0.0])
+        },
+    )?;
+    for _ in 0..10 {
+        default_world.step(0.1)?;
+    }
+    assert!(!default_world.is_sleeping(body));
+
+    let mut configured_world = World::with_gravity([0.0, 0.0, 0.0]);
+    configured_world.set_sleep_threshold(0.25, 0.3);
+    configured_world.add_body(
+        body,
+        BodyDesc {
+            velocity: [0.2, 0.0, 0.0],
+            use_gravity: false,
+            ..dynamic_box([0.0, 0.0, 0.0])
+        },
+    )?;
+
+    configured_world.step(0.1)?;
+    assert!(!configured_world.is_sleeping(body));
+    configured_world.step(0.1)?;
+    assert!(!configured_world.is_sleeping(body));
+    configured_world.step(0.1)?;
+    assert!(configured_world.is_sleeping(body));
+    assert_eq!(configured_world.velocity(body), Some([0.0, 0.0, 0.0]));
+    Ok(())
 }

@@ -446,3 +446,201 @@ fn a_handle_from_another_graph_is_not_usable_in_this_graph() -> Result<(), Box<d
     assert_eq!(graph.input_weight(foreign.handle(), 0), None);
     Ok(())
 }
+
+#[test]
+fn playable_time_update_mode_round_trips_and_controls_stepping() -> Result<(), Box<dyn Error>> {
+    let mut graph = PlayableGraph::new("UpdateMode");
+    assert_eq!(graph.time_update_mode(), DirectorUpdateMode::GameTime);
+
+    for mode in [
+        DirectorUpdateMode::GameTime,
+        DirectorUpdateMode::UnscaledGameTime,
+        DirectorUpdateMode::DspClock,
+        DirectorUpdateMode::Manual,
+    ] {
+        graph.set_time_update_mode(mode);
+        assert_eq!(graph.time_update_mode(), mode);
+    }
+
+    let clip = AnimationClipPlayable::create(
+        &mut graph,
+        AnimationClip::new(
+            "Ramp",
+            1.0,
+            60.0,
+            WrapMode::Once,
+            vec![CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, 0.0),
+                    Keyframe::linear(1.0, 10.0),
+                ]),
+            )],
+            Vec::new(),
+        ),
+    );
+    let output = graph.create_output("Animation", clip.handle())?;
+
+    graph.evaluate(0.25);
+    assert_eq!(graph.time(), 0.0);
+    assert_eq!(graph.playable_time(clip.handle()), Some(0.0));
+    assert_eq!(
+        binding_value(graph.output_pose(output), ""),
+        Some(AnimatedValue::Float(0.0))
+    );
+
+    graph.set_time(0.4);
+    graph.evaluate(0.0);
+    assert_eq!(graph.time(), 0.4);
+    assert_eq!(graph.playable_time(clip.handle()), Some(0.4));
+    let AnimatedValue::Float(manual_value) =
+        binding_value(graph.output_pose(output), "").ok_or("missing root binding")?
+    else {
+        return Err(String::from("root binding is not a float").into());
+    };
+    assert!(
+        (manual_value - 4.0).abs() < 1e-5,
+        "manual pose was {manual_value}"
+    );
+
+    graph.set_time_update_mode(DirectorUpdateMode::GameTime);
+    graph.play();
+    graph.evaluate(0.2);
+    let time = graph
+        .playable_time(clip.handle())
+        .ok_or("missing playable time")?;
+    assert!((time - 0.6).abs() < 1e-6, "playable time was {time}");
+    let AnimatedValue::Float(stepped_value) =
+        binding_value(graph.output_pose(output), "").ok_or("missing root binding")?
+    else {
+        return Err(String::from("root binding is not a float").into());
+    };
+    assert!(
+        (stepped_value - 6.0).abs() < 1e-5,
+        "stepped pose was {stepped_value}"
+    );
+    Ok(())
+}
+
+#[test]
+fn playable_speed_scales_evaluated_time() -> Result<(), Box<dyn Error>> {
+    let make_ramp_clip = |name: &str| {
+        AnimationClip::new(
+            name,
+            2.0,
+            60.0,
+            WrapMode::Once,
+            vec![CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, 0.0),
+                    Keyframe::linear(2.0, 20.0),
+                ]),
+            )],
+            Vec::new(),
+        )
+    };
+
+    let mut graph = PlayableGraph::new("Speed");
+    let half = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Half"));
+    let normal = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Normal"));
+    let double = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Double"));
+
+    graph.set_playable_speed(half.handle(), 0.5)?;
+    graph.set_playable_speed(normal.handle(), 1.0)?;
+    graph.set_playable_speed(double.handle(), 2.0)?;
+
+    assert_eq!(graph.playable_speed(half.handle()), Some(0.5));
+    assert_eq!(graph.playable_speed(normal.handle()), Some(1.0));
+    assert_eq!(graph.playable_speed(double.handle()), Some(2.0));
+
+    let half_output = graph.create_output("HalfOutput", half.handle())?;
+    let normal_output = graph.create_output("NormalOutput", normal.handle())?;
+    let double_output = graph.create_output("DoubleOutput", double.handle())?;
+
+    graph.play();
+    graph.evaluate(0.4);
+
+    let half_time = graph
+        .playable_time(half.handle())
+        .ok_or("missing half time")?;
+    let normal_time = graph
+        .playable_time(normal.handle())
+        .ok_or("missing normal time")?;
+    let double_time = graph
+        .playable_time(double.handle())
+        .ok_or("missing double time")?;
+
+    assert!((half_time - 0.2).abs() < 1e-6, "half time was {half_time}");
+    assert!(
+        (normal_time - 0.4).abs() < 1e-6,
+        "normal time was {normal_time}"
+    );
+    assert!(
+        (double_time - 0.8).abs() < 1e-6,
+        "double time was {double_time}"
+    );
+
+    let AnimatedValue::Float(half_pose) =
+        binding_value(graph.output_pose(half_output), "").ok_or("missing half binding")?
+    else {
+        return Err(String::from("half binding is not a float").into());
+    };
+    let AnimatedValue::Float(normal_pose) =
+        binding_value(graph.output_pose(normal_output), "").ok_or("missing normal binding")?
+    else {
+        return Err(String::from("normal binding is not a float").into());
+    };
+    let AnimatedValue::Float(double_pose) =
+        binding_value(graph.output_pose(double_output), "").ok_or("missing double binding")?
+    else {
+        return Err(String::from("double binding is not a float").into());
+    };
+
+    assert!((half_pose - 2.0).abs() < 1e-5, "half pose was {half_pose}");
+    assert!(
+        (normal_pose - 4.0).abs() < 1e-5,
+        "normal pose was {normal_pose}"
+    );
+    assert!(
+        (double_pose - 8.0).abs() < 1e-5,
+        "double pose was {double_pose}"
+    );
+    Ok(())
+}
+
+#[test]
+fn playable_output_has_inspectable_name() -> Result<(), Box<dyn Error>> {
+    let mut graph = PlayableGraph::new("Outputs");
+    let primary_clip =
+        AnimationClipPlayable::create(&mut graph, constant_position_clip("PrimaryClip", 3.5));
+    let secondary_clip =
+        AnimationClipPlayable::create(&mut graph, constant_position_clip("SecondaryClip", 7.25));
+
+    let primary_output = graph.create_output("PrimaryPose", primary_clip.handle())?;
+    let secondary_output = graph.create_output("SecondaryPose", secondary_clip.handle())?;
+
+    assert_eq!(graph.output_count(), 2);
+    assert_eq!(graph.output_name(primary_output), Some("PrimaryPose"));
+    assert_eq!(graph.output_name(secondary_output), Some("SecondaryPose"));
+
+    let mut foreign_graph = PlayableGraph::new("Foreign");
+    let foreign_clip =
+        AnimationClipPlayable::create(&mut foreign_graph, constant_position_clip("Foreign", 1.0));
+    let foreign_output = foreign_graph.create_output("ForeignPose", foreign_clip.handle())?;
+    assert_eq!(graph.output_name(foreign_output), None);
+    assert!(graph.output_pose(foreign_output).is_empty());
+
+    graph.play();
+    graph.evaluate(0.1);
+
+    assert_eq!(
+        binding_value(graph.output_pose(primary_output), ""),
+        Some(AnimatedValue::Float(3.5))
+    );
+    assert_eq!(
+        binding_value(graph.output_pose(secondary_output), ""),
+        Some(AnimatedValue::Float(7.25))
+    );
+    Ok(())
+}

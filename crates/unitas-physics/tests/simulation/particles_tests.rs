@@ -370,3 +370,55 @@ fn the_emission_shapes_place_particles_inside_their_bounds() {
         assert!(planar <= particle.position[1] * half_angle.tan() + 1e-3);
     }
 }
+
+#[test]
+fn clear_empties_live_particles_and_completes_pending_stop_action_incrementing_stopped_count() {
+    let mut system = ParticleSystem::new(30);
+    assert!(system.is_emitting());
+    assert_eq!(system.stopped_count(), 0);
+
+    system.set_emit_params(emit_params(5.0));
+    system.emit(4);
+    assert_eq!(system.get_particles().len(), 4);
+
+    system.stop(StopAction::Callback);
+    assert!(!system.is_emitting());
+    assert_eq!(system.stopped_count(), 0);
+    assert_eq!(system.get_particles().len(), 4);
+
+    system.clear();
+    assert_eq!(system.get_particles().len(), 0);
+    assert_eq!(system.stopped_count(), 1);
+
+    system.play();
+    assert!(system.is_emitting());
+    system.emit(2);
+    system.stop(StopAction::Callback);
+    assert!(!system.is_emitting());
+    assert_eq!(system.stopped_count(), 1);
+    system.clear();
+    assert_eq!(system.get_particles().len(), 0);
+    assert_eq!(system.stopped_count(), 2);
+}
+
+#[test]
+fn set_emit_position_and_set_emit_rotation_transform_spawn_pose_and_velocity() {
+    let mut system = ParticleSystem::new(31);
+    system.set_shape(ParticleShape::Point);
+    system.set_emit_params(EmitParams {
+        start_speed: 4.0,
+        start_lifetime: 2.0,
+        ..EmitParams::default()
+    });
+    system.set_emit_position([3.0, -2.0, 5.0]);
+    let half_sqrt_two = std::f32::consts::FRAC_1_SQRT_2;
+    system.set_emit_rotation([0.0, half_sqrt_two, 0.0, half_sqrt_two]);
+
+    system.emit(1);
+    let particles = system.get_particles();
+    assert_eq!(particles.len(), 1);
+    assert_eq!(particles[0].position, [3.0, -2.0, 5.0]);
+    assert!((particles[0].velocity[0] - 4.0).abs() < 1e-5);
+    assert!(particles[0].velocity[1].abs() < 1e-5);
+    assert!(particles[0].velocity[2].abs() < 1e-5);
+}

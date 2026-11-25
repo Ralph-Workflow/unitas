@@ -194,3 +194,43 @@ fn articulation_rejects_a_cycle_between_links() {
         Err(ArticulationError::InvalidJoint)
     ));
 }
+
+#[test]
+fn joint_state_reports_stepped_value_and_velocity_and_none_out_of_bounds(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut world = arm_world()?;
+    let mut articulation =
+        ArticulationBody::new(vec![shoulder(THIRD_PI), slide(FOREARM_SLIDE)])?;
+
+    assert_eq!(
+        articulation.joint_state(0),
+        Some(unitas_physics::articulation::JointState {
+            value: 0.0,
+            velocity: 0.0,
+        })
+    );
+    assert_eq!(
+        articulation.joint_state(1),
+        Some(unitas_physics::articulation::JointState {
+            value: 0.0,
+            velocity: 0.0,
+        })
+    );
+    assert_eq!(articulation.joint_state(2), None);
+
+    articulation.step(&mut world, TIMESTEP)?;
+
+    let expected_shoulder_vel = 100.0 * THIRD_PI * TIMESTEP;
+    let expected_shoulder_val = expected_shoulder_vel * TIMESTEP;
+    let shoulder_after_one = articulation.joint_state(0).ok_or("missing shoulder state")?;
+    assert!((shoulder_after_one.velocity - expected_shoulder_vel).abs() < 1e-12);
+    assert!((shoulder_after_one.value - expected_shoulder_val).abs() < 1e-12);
+
+    let expected_slide_vel = 100.0 * FOREARM_SLIDE * TIMESTEP;
+    let expected_slide_val = expected_slide_vel * TIMESTEP;
+    let slide_after_one = articulation.joint_state(1).ok_or("missing slide state")?;
+    assert!((slide_after_one.velocity - expected_slide_vel).abs() < 1e-12);
+    assert!((slide_after_one.value - expected_slide_val).abs() < 1e-12);
+
+    Ok(())
+}

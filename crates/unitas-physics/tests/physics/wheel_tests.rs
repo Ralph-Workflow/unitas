@@ -8,8 +8,11 @@ const ALL_LAYERS: u32 = 1;
 const GROUND: EntityId = EntityId::new(1);
 const STEP: f64 = 1.0 / 120.0;
 const WHEEL_RADIUS: f64 = 0.35;
+const WHEEL_MASS: f64 = 30.0;
 const SUSPENSION_DISTANCE: f64 = 0.3;
 const SETTLE_STEPS: usize = 240;
+const MOTOR_TORQUE: f64 = 100.0;
+const SPIN_STEPS: usize = 120;
 
 fn ground_body(position: [f64; 3], half_extents: [f64; 3]) -> BodyDesc {
     BodyDesc {
@@ -377,6 +380,58 @@ fn vehicle_step_is_deterministic() -> Result<(), WheelError> {
     assert_eq!(first.0, second.0);
     assert_eq!(first.1, second.1);
     assert_eq!(first.2, second.2);
+    Ok(())
+}
+
+fn free_wheel_vehicle(motor_torque: f64) -> Result<Vehicle, WheelError> {
+    let desc = WheelDesc::new(WHEEL_RADIUS, SUSPENSION_DISTANCE)?
+        .with_mass(WHEEL_MASS)
+        .with_motor_torque(motor_torque);
+    let wheel = WheelCollider::new(desc, [0.0, 0.0, 0.0])?;
+    Vehicle::new(1000.0, vec![wheel])
+}
+
+fn free_wheel_angular_velocity(motor_torque: f64) -> Result<f64, WheelError> {
+    let world = World::new();
+    let mut vehicle = free_wheel_vehicle(motor_torque)?;
+    for _ in 0..SPIN_STEPS {
+        vehicle.step(&world, STEP)?;
+    }
+    let wheel = vehicle.wheel(0).ok_or(WheelError::InvalidVehicle)?;
+    Ok(wheel.angular_velocity())
+}
+
+#[test]
+fn wheel_reports_rpm_and_angular_velocity_under_torque() -> Result<(), WheelError> {
+    let world = World::new();
+    let mut vehicle = free_wheel_vehicle(MOTOR_TORQUE)?;
+    for _ in 0..SPIN_STEPS {
+        vehicle.step(&world, STEP)?;
+    }
+
+    let wheel = vehicle.wheel(0).ok_or(WheelError::InvalidVehicle)?;
+    assert!(!wheel.is_grounded(), "the wheel has no ground under it");
+
+    let inertia = WHEEL_MASS * WHEEL_RADIUS * WHEEL_RADIUS;
+    let expected_angular_velocity = MOTOR_TORQUE / inertia * STEP * SPIN_STEPS as f64;
+    assert!(
+        (wheel.angular_velocity() - expected_angular_velocity).abs() < 1e-9,
+        "angular velocity {} did not match the torque driven {expected_angular_velocity}",
+        wheel.angular_velocity()
+    );
+
+    let expected_rpm = expected_angular_velocity * 60.0 / std::f64::consts::TAU;
+    assert!(
+        (wheel.rpm() - expected_rpm).abs() < 1e-6,
+        "rpm {} did not match the angular velocity {expected_angular_velocity}",
+        wheel.rpm()
+    );
+
+    let doubled = free_wheel_angular_velocity(MOTOR_TORQUE * 2.0)?;
+    assert!(
+        (doubled - 2.0 * wheel.angular_velocity()).abs() < 1e-9,
+        "the doubled torque produced {doubled} instead of twice the angular velocity"
+    );
     Ok(())
 }
 
