@@ -115,6 +115,11 @@ the project maintains and can statically check them.
 * Untyped third-party values MUST be contained by typed adapters, protocols,
   validation, or stubs sufficient to prevent unchecked values escaping into
   checked first-party code. Blanket global silencing is forbidden.
+* Unsafe code MUST express its safety invariants as types wherever a type can
+  carry them, as `clean-code-policy.md` "Unsafe code zones" requires. This means
+  wrapped pointers with lifetimes, derived layout traits, typed generational
+  handles, typestate, `unmanaged` constraints, and ref-safety. What remains in an
+  `unsafe` block is only what no type can express.
 
 ## Guard inventory
 

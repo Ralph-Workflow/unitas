@@ -109,9 +109,12 @@ Zone registration:
     `clippy::multiple_unsafe_ops_per_block`, and the pointer-cast lints
     (`clippy::ptr_as_ptr`, `clippy::cast_ptr_alignment`,
     `clippy::as_ptr_cast_mut`, and `clippy::borrow_as_ptr`) are denied.
-* A C# zone sets `AllowUnsafeBlocks` in its own project file only. It uses
-  `LibraryImport` with blittable signatures, `SafeHandle` for every owned
-  native resource, and `Span<T>` in place of pointers wherever the API allows.
+  * `improper_ctypes`, `improper_ctypes_definitions`, and
+    `clippy::transmute_ptr_to_ptr` are denied.
+* A C# zone sets `AllowUnsafeBlocks` in its own project file only. It applies
+  `[assembly: DisableRuntimeMarshalling]`. It uses `LibraryImport` with blittable
+  signatures, `SafeHandle` for every owned native resource, and `Span<T>` in place
+  of pointers wherever the API allows.
 
 Boundary design:
 
@@ -125,6 +128,66 @@ Boundary design:
 * Native collections and job memory carry safety handles in development
   builds that detect concurrent conflicting access, in the manner of Unity's
   job-safety system.
+
+Type-level safety:
+
+The type checker is the first line of defense. Every safety rule that a type can
+express is expressed as a type, so the code that only a tool or a reviewer can
+check is as small as possible.
+
+* **Minimal unsafe bodies.** An `unsafe` block performs one primitive operation
+  whose preconditions the surrounding types already guarantee. Validation,
+  branching, and arithmetic happen in safe code before the block.
+* **Raw pointers are wrapped.** A raw pointer appears only in the generated C ABI
+  surface and in the private fields of a wrapper type. The wrapper uses
+  `NonNull<T>`. It ties the pointer's lifetime to its owner through lifetimes or
+  `PhantomData`. Its constructor is the only place that establishes the
+  invariant, and its fields are private. A slice or view over native memory
+  borrows from its owner and is never `'static`.
+* **Initialization through types.** Uninitialized memory exists only as
+  `MaybeUninit<T>`. `mem::zeroed` is used only on types that derive
+  `zerocopy::FromZeros`.
+* **Byte reinterpretation through derives.** Bytes are reinterpreted only through
+  `zerocopy` (`FromBytes`, `IntoBytes`, `KnownLayout`, `Immutable`) or
+  `bytemuck::Pod` derives, which reject padding, invalid bit patterns, and
+  mismatched layout at compile time. A pointer cast between distinct types is
+  banned.
+* **Checked boundary types.**
+  * Every type that crosses the C ABI is `#[repr(C)]` or `#[repr(transparent)]`.
+    Its size and alignment are fixed by compile-time assertions.
+  * The `improper_ctypes` and `improper_ctypes_definitions` lints are denied.
+  * Enums and booleans cross as fixed-width integers and are converted with
+    `TryFrom` on entry. A value from foreign code is never trusted to be a
+    valid Rust enum discriminant or `bool`.
+* **Typed handles.** Each object kind has its own handle type, such as
+  `Handle<Mesh>`, carrying an index and a generation. The binding generator
+  emits a distinct C# `readonly struct` for each kind. No public API in either
+  language takes an untyped integer handle.
+* **Typestate for ordered protocols.** An API whose calls must happen in order
+  (hosting, mapping, recording, submission) encodes its states as types, such as
+  `Buffer<Mapped>` and `Buffer<Unmapped>`, so an out-of-order call does not
+  compile.
+* **Thread-safety promises are rare and proven.** `unsafe impl Send` and
+  `unsafe impl Sync` appear only on wrapper types whose registered invariants
+  justify them, and each one has a Loom model. A type that holds a raw pointer is
+  neither `Send` nor `Sync` by any other route.
+* **Sealed unsafe traits.** An `unsafe trait` is sealed and is implemented only
+  inside zones.
+* **C# boundary rules.**
+  * C# zones apply `[assembly: DisableRuntimeMarshalling]`, so a non-blittable
+    interop signature is a compile error. Native collections constrain their
+    element type with `where T : unmanaged`.
+  * Spans over native memory are used through `ref struct` and `scoped`, and
+    are never stored in a class field.
+  * A pointer exists only inside a `fixed` or local scope.
+  * Native-to-managed callbacks are static `[UnmanagedCallersOnly]` methods
+    reached through function pointers, never delegates that the garbage
+    collector can move or collect.
+  * A `GCHandle` is owned by a `SafeHandle` or a `using` scope.
+* **Layout agreement is tested.** For every type that crosses the boundary, the
+  binding generator emits a test on each side. Rust checks `size_of`,
+  `align_of`, and `offset_of!`, and C# checks `Unsafe.SizeOf` and
+  `Marshal.OffsetOf`, both against the same expected values.
 
 Documentation inside a zone:
 
@@ -144,6 +207,12 @@ Verification:
     registry diff)
   * a symbol is aliased at link time
   * a safety comment is missing or misplaced
+  * a raw pointer type appears in a public signature outside the generated C
+    ABI surface
+  * a boundary type lacks its `repr` attribute or its size and alignment
+    assertions
+  * a public API takes an untyped integer handle
+* The generated cross-language layout tests run in the default lane.
 * `make verify-unsafe` runs in a declared non-default lane and is required for
   every change that touches a zone:
   * every zone's tests under Miri where the code does not call into foreign
@@ -154,6 +223,9 @@ Verification:
     primitives
   * a time-bounded fuzzing run of every exported entry point with random
     handles, lengths, and call orders
+  * Kani proofs, for all inputs up to a stated bound, of the handle tables,
+    allocators, ring buffers, and the index and length arithmetic that every
+    `unsafe` block depends on
 * Every change to a zone is reviewed against the zone's registered invariants
   by an agent other than its author. That review checks that each invariant is
   upheld, that no safe API can reach undefined behavior, and that a Miri,
@@ -256,7 +328,8 @@ this rule is deleted or reduced to current facts.
 | Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree | the zone gate reports zero findings | advisory: the zone gate is built in the change that registers the first zone, and until then the ban gate forbids unsafe code everywhere; review: in the change that registers the first zone | when the linter alone enforces zone containment |
-| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, and fuzz checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: the lane is built in the change that registers the first zone; review: at every change that touches a zone | when no unsafe zone remains |
+| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: the lane is built in the change that registers the first zone; review: at every change that touches a zone | when no unsafe zone remains |
+| Unsafe boundary layout agreement | Clean-code owner | Rust and C# agree on the size, alignment, and field offsets of every type that crosses the C ABI | the generated layout tests pass on both sides | the generated layout tests pass | advisory: the layout tests are generated in the change that registers the first zone; review: in the change that registers the first zone | when no type crosses the C ABI |
 
 ## Project facts to resolve
 
@@ -391,6 +464,16 @@ This policy MUST be reviewed in the same workflow as any of:
 * publisher: Microsoft
   title: "Native interoperability best practices (.NET)"
   http: https://learn.microsoft.com/en-us/dotnet/standard/native-interop/best-practices
+  review date: 2026-11-25
+
+* publisher: Google and contributors
+  title: "zerocopy: zero-cost memory manipulation"
+  http: https://docs.rs/zerocopy/latest/zerocopy/
+  review date: 2026-11-25
+
+* publisher: Model Checking (AWS)
+  title: "The Kani Rust Verifier"
+  http: https://model-checking.github.io/kani/
   review date: 2026-11-25
 
 ## Portfolio ownership
