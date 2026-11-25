@@ -168,9 +168,7 @@ def _write_registry(
 def _write_nuget_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:
     path = root / "editor" / "Unitas.Editor" / "packages.lock.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    locked = {
-        name: {"type": "Transitive", "resolved": version} for name, version in packages
-    }
+    locked = {name: {"type": "Transitive", "resolved": version} for name, version in packages}
     path.write_text(
         json.dumps({"version": 1, "dependencies": {"net8.0": locked}}), encoding="utf-8"
     )
