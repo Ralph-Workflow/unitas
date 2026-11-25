@@ -49,10 +49,9 @@ test:
 	@python3 tools/verify.py timed test-suite $(SUITE_BUDGET_SECONDS) $(MAKE) --no-print-directory test-steps
 
 test-steps:
-	@rc=0; \
-	python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
+	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
 	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace & p2=$$!; \
-	wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
+	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
@@ -97,8 +96,9 @@ dotnet-test: runtime-build
 	@$(MAKE) --no-print-directory dotnet-test-run
 
 dotnet-test-run:
-	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests
-	@python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
+	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
+	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
+	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 verify-device:
 	@echo "owner: wt-03"

@@ -10,6 +10,9 @@ namespace Unitas.Bridge.Tests
 {
     public static class UtfRunnerTests
     {
+        private static readonly string ProcessSuffix =
+            Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "_";
+
         public static void Run()
         {
             TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml();
@@ -603,7 +606,10 @@ namespace Unitas.Bridge.Tests
         {
             // One directory per group lets the repeated runs reuse the compiled
             // test assemblies instead of recompiling the same sources every run.
-            string root = Path.Combine(Path.GetTempPath(), "unitas_utf_test_" + label);
+            // The process id keeps concurrent gate runs from sibling worktrees
+            // (which share the machine temp dir) from deleting this run's
+            // project mid-compile.
+            string root = Path.Combine(Path.GetTempPath(), "unitas_utf_test_" + ProcessSuffix + label);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, true);
