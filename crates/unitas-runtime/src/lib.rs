@@ -5,6 +5,7 @@ pub mod input;
 pub mod particles;
 pub mod physics;
 mod runtime;
+mod scene_query;
 pub mod window;
 pub mod resources;
 pub mod scripting;

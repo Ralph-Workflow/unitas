@@ -1,11 +1,13 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "device")]
 use std::sync::{Arc, Mutex};
 
 use unitas_render::Image;
 #[cfg(feature = "device")]
 use unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE;
+#[cfg(feature = "device")]
 use unitas_runtime::KEY_RIGHT_ARROW;
 #[cfg(feature = "device")]
 use unitas_runtime::window::{
@@ -357,7 +359,12 @@ pub fn launch_bundle_windowed(
                     frame: frame_idx as usize,
                     message: error.to_string(),
                 })?;
-            controller.step(&mut runtime, &mut presenter, dt);
+            controller
+                .step(&mut runtime, &mut presenter, dt)
+                .map_err(|error| PlayerStartupError::FrameTickFailed {
+                    frame: frame_idx as usize,
+                    message: error.to_string(),
+                })?;
             let frame_info = unitas_runtime::window::FrameInfo {
                 frame_index: frame_idx + 1,
                 width,
@@ -449,7 +456,8 @@ fn run_windowed_with_controller(
             cb_meshes.lock(),
             cb_camera.lock(),
         ) {
-            ctrl.step_on_bindings(rt, &mut meshes, &mut cam, frame.delta_seconds);
+            ctrl.step_on_bindings(rt, &mut meshes, &mut cam, frame.delta_seconds)
+                .map_err(|error| unitas_runtime::window::WindowError::Runtime(error.to_string()))?;
         }
         Ok(())
     });
@@ -580,7 +588,12 @@ pub fn capture_sample_reference_bmp(
             frame: 0,
             message: error.to_string(),
         })?;
-    controller.step(&mut runtime, &mut presenter, 1.0 / 60.0);
+    controller
+        .step(&mut runtime, &mut presenter, 1.0 / 60.0)
+        .map_err(|error| PlayerStartupError::FrameTickFailed {
+            frame: 0,
+            message: error.to_string(),
+        })?;
 
     let image = presenter
         .render_offscreen(&runtime, width.max(1), height.max(1))
@@ -678,7 +691,12 @@ pub fn run_device_verification(
             frame: 0,
             message: error.to_string(),
         })?;
-    controller.step(&mut runtime, &mut presenter, 1.0 / 60.0);
+    controller
+        .step(&mut runtime, &mut presenter, 1.0 / 60.0)
+        .map_err(|error| PlayerStartupError::FrameTickFailed {
+            frame: 0,
+            message: error.to_string(),
+        })?;
 
     let first_gpu_frame = presenter
         .render_offscreen(&runtime, width, height)

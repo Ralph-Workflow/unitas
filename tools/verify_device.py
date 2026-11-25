@@ -225,7 +225,16 @@ def run_device_lane(
     sys.stdout.write(metadata_text() + "\n")
     rc, _ = run_step(
         "build-player",
-        ("cargo", "build", "-p", "unitas-build", "--bin", "unitas-player"),
+        (
+            "cargo",
+            "build",
+            "-p",
+            "unitas-build",
+            "--bin",
+            "unitas-player",
+            "--features",
+            "device",
+        ),
         BUILD_BUDGET_SECONDS,
     )
     if rc != 0:
@@ -278,10 +287,38 @@ def run_device_lane(
         ("render-device", "unitas-render"),
         ("audio-device", "unitas-audio"),
         ("runtime-device", "unitas-runtime"),
+        ("build-device", "unitas-build"),
     ):
         rc, _ = run_step(
             label,
             ("cargo", "test", "-p", package, "--features", "device"),
+            budget_seconds,
+        )
+        if rc != 0:
+            return rc
+
+    for label, package in (
+        ("render-clippy", "unitas-render"),
+        ("audio-clippy", "unitas-audio"),
+        ("runtime-clippy", "unitas-runtime"),
+        ("build-clippy", "unitas-build"),
+    ):
+        rc, _ = run_step(
+            label,
+            (
+                "cargo",
+                "clippy",
+                "-p",
+                package,
+                "--features",
+                "device",
+                "--all-targets",
+                "--",
+                "-D",
+                "clippy::correctness",
+                "-D",
+                "clippy::suspicious",
+            ),
             budget_seconds,
         )
         if rc != 0:

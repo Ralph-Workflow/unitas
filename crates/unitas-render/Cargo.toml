@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["device"]
+default = []
 device = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]

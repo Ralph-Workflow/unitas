@@ -4,9 +4,13 @@ use std::path::Path;
 
 use unitas_audio::{parse_wav, AudioClip, AudioClipId, AudioError};
 use unitas_core::EntityId;
-use unitas_render::{cube, look_at, uv_sphere, Camera, DirectionalLight, Mat4, Mesh, Vec3};
+#[cfg(feature = "device")]
+use unitas_render::{cube, look_at, uv_sphere, Camera, DirectionalLight, Mat4};
+use unitas_render::{Mesh, Vec3};
+#[cfg(feature = "device")]
 use unitas_runtime::{
-    Runtime, KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_RIGHT_ARROW, KEY_SPACE, KEY_UP_ARROW,
+    CharacterMoveRequest, Runtime, RuntimeError, KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_RIGHT_ARROW,
+    KEY_SPACE, KEY_UP_ARROW,
 };
 
 #[cfg(feature = "device")]
@@ -37,6 +41,14 @@ pub const PICKUP_COLLECT_RADIUS: f64 = 1.15;
 pub const PLAYER_MOVE_SPEED: f64 = 7.5;
 pub const PLAYER_BOOST_MULTIPLIER: f64 = 1.65;
 pub const PLAYER_JUMP_IMPULSE_Y: f64 = 4.2;
+pub const PLAYER_GRAVITY_Y: f64 = -9.81;
+pub const PLAYER_CHARACTER_RADIUS: f64 = 0.5;
+pub const PLAYER_CHARACTER_HEIGHT: f64 = 1.0;
+pub const PLAYER_CHARACTER_CENTER: [f64; 3] = [0.0, 0.05, 0.0];
+pub const PLAYER_CHARACTER_SLOPE_LIMIT: f64 = 45.0;
+pub const PLAYER_CHARACTER_STEP_OFFSET: f64 = 0.25;
+pub const PLAYER_CHARACTER_SKIN_WIDTH: f64 = 0.05;
+pub const PLAYER_CHARACTER_MIN_MOVE_DISTANCE: f64 = 0.002;
 pub const CAMERA_OFFSET: [f32; 3] = [0.0, 9.5, -11.5];
 
 pub fn roll_a_ball_scene_yaml() -> &'static str {
@@ -196,7 +208,7 @@ Rigidbody:
   m_GameObject: {fileID: 3000}
   m_Mass: 1
   m_UseGravity: 1
-  m_IsKinematic: 0
+  m_IsKinematic: 1
   m_IsTrigger: 0
 --- !u!135 &3003
 SphereCollider:
@@ -204,6 +216,17 @@ SphereCollider:
   m_IsTrigger: 0
   m_Radius: 0.5
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!143 &3004
+CharacterController:
+  m_GameObject: {fileID: 3000}
+  m_Enabled: 1
+  m_Radius: 0.5
+  m_Height: 1
+  m_Center: {x: 0, y: 0.05, z: 0}
+  m_SlopeLimit: 45
+  m_StepOffset: 0.25
+  m_SkinWidth: 0.05
+  m_MinMoveDistance: 0.002
 --- !u!1 &4100
 GameObject:
   m_Name: Pickup_1
@@ -429,6 +452,8 @@ pub struct RollABallController {
     pub camera_yaw_radians: f32,
     pub elapsed_seconds: f64,
     pub restart_count: u32,
+    pub vertical_velocity: f64,
+    pub grounded: bool,
 }
 
 impl RollABallController {
@@ -610,6 +635,8 @@ impl RollABallController {
             camera_yaw_radians: 0.0,
             elapsed_seconds: 0.0,
             restart_count: 0,
+            vertical_velocity: 0.0,
+            grounded: false,
         })
     }
 
@@ -619,12 +646,13 @@ impl RollABallController {
         runtime: &mut Runtime,
         presenter: &mut GpuFramePresenter<'_>,
         dt: f64,
-    ) {
+    ) -> Result<(), RuntimeError> {
         let mut meshes = presenter.meshes().to_vec();
         let mut camera_binding = *presenter.camera_binding();
-        self.step_on_bindings(runtime, &mut meshes, &mut camera_binding, dt);
+        self.step_on_bindings(runtime, &mut meshes, &mut camera_binding, dt)?;
         presenter.set_meshes(meshes);
         presenter.set_camera_binding(camera_binding);
+        Ok(())
     }
 
     #[cfg(feature = "device")]
@@ -634,7 +662,7 @@ impl RollABallController {
         meshes: &mut [GpuMeshBinding],
         camera_binding: &mut GpuCameraBinding,
         dt: f64,
-    ) {
+    ) -> Result<(), RuntimeError> {
         let step_dt = if dt.is_finite() && dt > 0.0 {
             dt
         } else {
@@ -643,8 +671,8 @@ impl RollABallController {
         self.elapsed_seconds += step_dt;
 
         if runtime.input().is_key_pressed(u32::from(b'r')) {
-            self.reset_on_bindings(runtime, meshes, camera_binding);
-            return;
+            self.reset_on_bindings(runtime, meshes, camera_binding)?;
+            return Ok(());
         }
 
         let (_, _, pointer_dx, _) = runtime.input().pointer();
@@ -689,22 +717,7 @@ impl RollABallController {
         let world_dir_z = move_z * cos_yaw - move_x * sin_yaw;
 
         if let Some(player) = self.player_entity {
-            let current_vel = runtime.body_velocity(player).unwrap_or([0.0, 0.0, 0.0]);
-            let mut target_vel = current_vel;
-            let has_horizontal_input = world_dir_x.abs() > 1e-4 || world_dir_z.abs() > 1e-4;
-            if has_horizontal_input {
-                target_vel[0] = world_dir_x * PLAYER_MOVE_SPEED * boost;
-                target_vel[2] = world_dir_z * PLAYER_MOVE_SPEED * boost;
-            } else {
-                target_vel[0] *= 0.9;
-                target_vel[2] *= 0.9;
-            }
-            if runtime.input().is_key_pressed(KEY_SPACE) {
-                target_vel[1] = PLAYER_JUMP_IMPULSE_Y;
-            }
-            let _ = runtime.set_body_velocity(player, target_vel);
-
-            let player_pos = runtime
+            let current_pos = runtime
                 .body_position(player)
                 .or_else(|| {
                     runtime.world_transform_of(player).map(|t| {
@@ -717,8 +730,66 @@ impl RollABallController {
                 })
                 .unwrap_or(PLAYER_START_POSITION);
 
-            self.check_pickups_on_bindings(player_pos, runtime, meshes);
-            self.update_camera_follow_on_binding(player_pos, camera_binding);
+            let speed = PLAYER_MOVE_SPEED * boost;
+            let motion = [
+                world_dir_x * speed * step_dt,
+                self.vertical_motion(runtime, step_dt),
+                world_dir_z * speed * step_dt,
+            ];
+
+            let request =
+                self.character_move_request(runtime, player, current_pos, motion, step_dt);
+            let result = runtime.character_move(request)?;
+            self.grounded = result.is_grounded;
+            runtime.set_body_position(player, result.position)?;
+
+            self.check_pickups_on_bindings(result.position, runtime, meshes);
+            self.update_camera_follow_on_binding(result.position, camera_binding);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "device")]
+    fn vertical_motion(&mut self, runtime: &Runtime, step_dt: f64) -> f64 {
+        if self.grounded {
+            self.vertical_velocity = if runtime.input().is_key_pressed(KEY_SPACE) {
+                PLAYER_JUMP_IMPULSE_Y
+            } else {
+                0.0
+            };
+        } else {
+            self.vertical_velocity += PLAYER_GRAVITY_Y * step_dt;
+        }
+        self.vertical_velocity * step_dt
+    }
+
+    #[cfg(feature = "device")]
+    fn character_move_request(
+        &self,
+        runtime: &Runtime,
+        entity: EntityId,
+        position: [f64; 3],
+        motion: [f64; 3],
+        step_dt: f64,
+    ) -> CharacterMoveRequest {
+        let config = runtime.character_controller_config(entity);
+        CharacterMoveRequest {
+            entity: Some(entity),
+            position,
+            motion,
+            radius: config.map_or(PLAYER_CHARACTER_RADIUS, |value| value.radius),
+            height: config.map_or(PLAYER_CHARACTER_HEIGHT, |value| value.height),
+            center: config.map_or(PLAYER_CHARACTER_CENTER, |value| value.center),
+            slope_limit_deg: config
+                .map_or(PLAYER_CHARACTER_SLOPE_LIMIT, |value| value.slope_limit),
+            step_offset: config.map_or(PLAYER_CHARACTER_STEP_OFFSET, |value| value.step_offset),
+            skin_width: config.map_or(PLAYER_CHARACTER_SKIN_WIDTH, |value| value.skin_width),
+            min_move_distance: config.map_or(PLAYER_CHARACTER_MIN_MOVE_DISTANCE, |value| {
+                value.min_move_distance
+            }),
+            layer_mask: u32::MAX,
+            enabled: config.is_none_or(|value| value.enabled),
+            delta_seconds: step_dt,
         }
     }
 
@@ -784,12 +855,13 @@ impl RollABallController {
         &mut self,
         runtime: &mut Runtime,
         presenter: &mut GpuFramePresenter<'_>,
-    ) {
+    ) -> Result<(), RuntimeError> {
         let mut meshes = presenter.meshes().to_vec();
         let mut camera_binding = *presenter.camera_binding();
-        self.reset_on_bindings(runtime, &mut meshes, &mut camera_binding);
+        self.reset_on_bindings(runtime, &mut meshes, &mut camera_binding)?;
         presenter.set_meshes(meshes);
         presenter.set_camera_binding(camera_binding);
+        Ok(())
     }
 
     #[cfg(feature = "device")]
@@ -798,11 +870,8 @@ impl RollABallController {
         runtime: &mut Runtime,
         meshes: &mut [GpuMeshBinding],
         camera_binding: &mut GpuCameraBinding,
-    ) {
-        if let Some(player) = self.player_entity {
-            let _ = runtime.teleport_body_position(player, PLAYER_START_POSITION);
-            let _ = runtime.set_body_velocity(player, [0.0, 0.0, 0.0]);
-        }
+    ) -> Result<(), RuntimeError> {
+        self.teleport_player(runtime, PLAYER_START_POSITION)?;
         for slot in &mut self.pickups {
             slot.collected = false;
             if let Some(binding) = meshes.get_mut(slot.mesh_index) {
@@ -818,6 +887,23 @@ impl RollABallController {
         runtime.audio_mut().set_looping(self.audio_entity, true);
         runtime.audio_mut().play(self.audio_entity, false);
         self.update_camera_follow_on_binding(PLAYER_START_POSITION, camera_binding);
+        Ok(())
+    }
+
+    #[cfg(feature = "device")]
+    pub fn teleport_player(
+        &mut self,
+        runtime: &mut Runtime,
+        position: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        let Some(player) = self.player_entity else {
+            return Ok(());
+        };
+        let target = runtime.character_teleport(Some(player), position)?;
+        runtime.set_body_position(player, target)?;
+        self.vertical_velocity = 0.0;
+        self.grounded = false;
+        Ok(())
     }
 }
 
@@ -826,6 +912,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use unitas_runtime::Runtime;
 
     static SAMPLE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -924,7 +1011,7 @@ mod tests {
 
         for _ in 0..8 {
             runtime.tick(1.0 / 50.0)?;
-            controller.step(&mut runtime, &mut presenter, 1.0 / 50.0);
+            controller.step(&mut runtime, &mut presenter, 1.0 / 50.0)?;
         }
 
         let moved_pos = runtime
@@ -933,8 +1020,8 @@ mod tests {
         assert!(moved_pos[0] > initial_pos[0] || moved_pos[2] > initial_pos[2]);
         assert!(controller.camera_yaw_radians > 0.0);
 
-        runtime.teleport_body_position(player, PICKUP_POSITIONS[0])?;
-        controller.step(&mut runtime, &mut presenter, 1.0 / 60.0);
+        controller.teleport_player(&mut runtime, PICKUP_POSITIONS[0])?;
+        controller.step(&mut runtime, &mut presenter, 1.0 / 60.0)?;
         assert_eq!(controller.score, 1);
         assert!(controller.pickups[0].collected);
         let pickup_mesh_idx = controller.pickups[0].mesh_index;
@@ -942,7 +1029,7 @@ mod tests {
 
         runtime.input_mut().inject_key(u32::from(b'r'), true);
         runtime.tick(1.0 / 60.0)?;
-        controller.step(&mut runtime, &mut presenter, 1.0 / 60.0);
+        controller.step(&mut runtime, &mut presenter, 1.0 / 60.0)?;
         assert_eq!(controller.score, 0);
         assert_eq!(controller.restart_count, 1);
         assert!(!controller.pickups[0].collected);
