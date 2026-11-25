@@ -141,7 +141,9 @@ or notarization service unless that service reported acceptance.
 ## Headless command-line operation and continuous integration
 
 unitas runs every project operation from the command line on a machine with no
-display, no visual editor, and no interactive session. A single invocation can:
+display, no visual editor, and no interactive session. The command line drives
+the headless editor defined in [Automation and MCP](automation-and-mcp.md) and
+performs the same editor operations; it is not a second implementation. A single invocation can:
 
 * open a project and import or reimport its assets;
 * compile project scripts and report diagnostics;
@@ -525,8 +527,8 @@ accept those terms.
 ## Product data flows, telemetry, and privacy
 
 A player contains no telemetry, analytics, or network connection that the game
-itself did not request. The editor, the command line, and the MCP server send
-project content only to MCP clients and external tools that a person authorized
+itself did not request. The editor, including its MCP interface, and the command line
+send project content only to MCP clients and external tools that a person authorized
 (AUT-004, AUT-007 in [Automation and MCP](automation-and-mcp.md)) and to
 devices and services that a person directed, such as deployment targets,
 package registries, and crash-report destinations. unitas never sends project
@@ -625,7 +627,7 @@ included unitas components.
     incompatible player version or by Unity is reported by bundle name and
     reason and is not loaded partially. (BLD-005, RUN-006)
 26. A player built from a project that makes no network requests opens no
-    network connection, the editor and MCP server send project content only to
+    network connection, the editor and its MCP interface send project content only to
     authorized MCP clients and to destinations a person directed, unitas crash
     reporting stays off until a person enables it, and an iOS
     build includes a privacy manifest for the included unitas components.

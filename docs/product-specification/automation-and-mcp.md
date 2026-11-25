@@ -1,12 +1,22 @@
 # Automation and MCP
 
-## Primary Interface
+## Agents Work Through the Editor
 
-Automation through the Model Context Protocol (MCP) is the primary product
-interface of unitas. The visual editor described in
-[Editor and authoring](editor-and-authoring.md) and the command line described
-by BLD-002 in [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)
-present and operate the same project model that MCP exposes.
+An agent works on a unitas project the way a developer does: through the
+editor. The **editor** is the unitas IDE, described in
+[Editor and authoring](editor-and-authoring.md). It owns the open project's
+model and every operation a developer performs on it, and it runs either with a
+window (the **visual editor**) or without one (the **headless editor**).
+
+The Model Context Protocol (MCP) interface is the editor's interface for
+agents. It exposes every operation a developer can perform in the editor, as
+tools and resources over the same project model, through the same
+implementation of each operation. The visual editor and the command line
+described by BLD-002 in
+[Builds, platforms, XR, and networking](build-platforms-xr-networking.md) are
+the editor's other front ends. None of them keeps its own copy of the project
+state or its own implementation of an operation. A player contains no MCP
+interface.
 
 Automation is also the completeness bar. A product capability is complete only
 when an authorized agent can use it through MCP with the same behavior,
@@ -239,25 +249,28 @@ This is the only definition of these terms in the specification:
 
 * An **agent session** is one authorized MCP connection together with its
   identity, granted scopes, and change sets.
-* A **play session** is one running instance of the game in play mode, in the
-  visual editor, in a headless session, or in a player. An agent session can
-  start several play sessions.
-* A **headless session** is a period during which the MCP server or a
-  command-line invocation (BLD-002 in
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
-  has a project open with no visual editor attached.
+* A **play session** is one running instance of the game: in play mode in the
+  editor, visual or headless, or in a development player that the editor
+  launched and connected to. Agents reach a connected player only through the
+  editor's MCP interface. An agent session can start several play sessions.
+* A **headless session** is a period during which the headless editor has a
+  project open, serving agent sessions through MCP or a command-line invocation
+  (BLD-002 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)).
 
-All processes on one machine that open the same project location—the visual
-editor, the MCP server, and command-line invocations—attach to one shared
-project state as separate actors, unless an invocation requests isolated state.
-A process that cannot attach reports that the project is in use and names the
+On one machine, one editor process holds the state of a project location. Agent
+sessions, command-line invocations, and the person using the visual editor act
+on that one state as separate actors, unless an invocation requests isolated
+state. An MCP client or command-line invocation that targets a project location
+attaches to the editor already holding it, or starts a headless editor. A
+process that cannot attach reports that the project is in use and names the
 process holding it. Opening the visual editor on a project in a headless session
-ends that headless session without taking over its agent sessions or play
-sessions. (AUT-004)
+attaches a window to the running editor: the headless session ends, and its
+agent sessions and play sessions continue. (AUT-004)
 
 ### Headless operation
 
-The MCP server operates on a project in a headless session, without a display.
+The headless editor operates on a project without a display.
 Every tool and resource behaves the same in a headless session as with the
 editor open, except that requests which need a person (for example confirming an
 action or approving a change set) return an outcome stating that no person is
@@ -266,7 +279,7 @@ sessions. (AUT-004)
 
 ### Transports and authentication
 
-The MCP server offers the standard input/output transport and the MCP HTTP
+The editor's MCP interface offers the standard input/output transport and the MCP HTTP
 transport. It negotiates the MCP protocol revision with each client and reports
 the revisions it supports; a client requesting no supported revision is refused
 with that list. (AUT-004)
@@ -332,8 +345,8 @@ managed stack, and can be interrupted. A crash in project code or in a native
 plugin ends only the affected play session or operation and is reported with
 crash evidence as defined by DIA-003 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
-The MCP server, the visual editor, and other agent sessions continue.
-(AUT-004)
+Project code runs outside the editor process, so the editor, its MCP
+interface, and the other agent sessions and play sessions continue. (AUT-004)
 
 ### Lifecycle, limits, and cancellation
 

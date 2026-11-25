@@ -36,15 +36,18 @@ behavior.
 
 unitas is agent-first:
 
-* Every product capability is available to authorized agents through
-  structured automation and the Model Context Protocol (MCP). A capability
+* An agent works on a project the way a developer does: through the editor,
+  the unitas IDE. The editor's Model Context Protocol (MCP) interface exposes
+  every operation a developer can perform in the editor, so every product
+  capability is available to authorized agents through MCP. A capability
   that a person can use but an agent cannot is incomplete. The person-only
   actions enumerated by AUT-007 (trust, grants, approvals, confirmations, and
   similar consent decisions) are the only exceptions; agents can discover and
   request them. The detailed contract is owned by
   [Automation and MCP](automation-and-mcp.md).
-* The visual editor presents and edits the same project model the agents
-  use. Its purpose is to make project and runtime state clear, to support
+* The visual editor is the editor with its window. It presents and edits
+  the same project model, through the same operations, that agents use
+  through MCP. Its purpose is to make project and runtime state clear, to support
   direct authoring of scenes and content, and to let a developer review,
   approve, and reverse agent changes. It does not aim for parity with the
   breadth or polish of the Unity Editor's authoring surfaces.
@@ -52,8 +55,9 @@ unitas is agent-first:
   IDE, or agent. unitas provides the compilation, diagnostics, project files,
   and debugging connection that those tools need; it does not provide a
   built-in code editor.
-* Every capability that runs inside the visual editor also runs headless, so
-  agents and continuous integration can use the product without a display.
+* Every capability that runs inside the visual editor also runs in the
+  headless editor, so agents and continuous integration can use the product
+  without a display.
 
 ## Product Boundaries
 

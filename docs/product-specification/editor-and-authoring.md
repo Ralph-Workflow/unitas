@@ -7,11 +7,15 @@ and runtime state, direct authoring of scenes and content, play mode, undo and
 recovery, commands, source-control-aware editing and semantic merge, and the
 review, approval, and reversal of changes made by agents.
 
-The visual editor is a focused companion to the agent interface defined in
-[Automation and MCP](automation-and-mcp.md). It presents and edits the same
-project model that agents use. Its purposes are to make project and runtime
-state clear, to support direct authoring of scenes and content, and to let a
-developer review, approve, and reverse agent changes. It does not aim for
+The editor is the unitas IDE. It owns the open project's model and every
+operation a developer performs on it, and it runs with a window (the visual
+editor, described here) or headless. Agents are developers who use the editor
+through its MCP interface, defined in [Automation and MCP](automation-and-mcp.md),
+which exposes every editor operation. People use the same operations, on the
+same project model, through the visual editor. The visual editor's purposes
+are to make project and runtime state clear, to support direct authoring of
+scenes and content, and to let a developer review, approve, and reverse agent
+changes. It does not aim for
 parity with the breadth, customization, or polish of the Unity Editor's
 authoring surfaces; a Unity Editor workflow that this document does not name is
 not promised by it.
