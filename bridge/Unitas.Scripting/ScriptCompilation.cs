@@ -900,7 +900,7 @@ namespace Unitas.Scripting
                 specificDiagnosticOptions: specificDiagnosticOptions,
                 concurrentBuild: false,
                 deterministic: true,
-                nullableContextOptions: NullableContextOptions.Disable);
+                nullableContextOptions: NullableContextOptions.Annotations);
 
             return CSharpCompilation.Create(
                 assemblyName,
@@ -1223,7 +1223,7 @@ namespace Unitas.Scripting
                 specificDiagnosticOptions: specificDiagnosticOptions,
                 concurrentBuild: false,
                 deterministic: true,
-                nullableContextOptions: NullableContextOptions.Disable);
+                nullableContextOptions: NullableContextOptions.Annotations);
 
             CSharpCompilation compilation = CSharpCompilation.Create(
                 assemblyName,

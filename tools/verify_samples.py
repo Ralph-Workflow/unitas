@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import hashlib
+import json
+import os
 import subprocess
 import sys
 import time
@@ -11,107 +12,155 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
-SAMPLE_BUDGET_SECONDS = 300.0
-TEST_COMMAND: tuple[str, ...] = (
-    "cargo",
-    "test",
-    "-p",
-    "unitas-runtime",
-    "--test",
-    "runtime_tests",
-    "roll_a_ball",
-)
+SAMPLE_ROOT = REPO_ROOT / "samples" / "roll-a-ball"
+SCENARIO_PATH = SAMPLE_ROOT / "Scenarios" / "collect_all.json"
+SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
+RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
+REPORT_PATH = REPO_ROOT / "target" / "samples-lane" / "collect_all_report.json"
+BUILD_BUDGET_SECONDS = 600.0
+RUN_BUDGET_SECONDS = 300.0
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
-    ("owner", "wt-02-simulation"),
-    ("trigger", "every milestone touching sample content or the runtime tick"),
+    ("owner", "wt-01 scripting"),
+    ("trigger", "changes to bridge script compilation/play pipeline or samples/"),
     ("lane", "make verify-samples"),
-    ("evidence", "per-sample pass/fail lines with the sample revision"),
-    ("review", "when a sample is added to or removed from the sample matrix"),
+    ("evidence", "scenario report JSON and lane exit status"),
+    ("review", "when a second sample game gains real scripts"),
 )
 
-SAMPLES: tuple[tuple[str, str], ...] = (
-    ("RollABall", "samples/RollABall/Assets/Scenes/Main.unity"),
-)
+
+def emit(text: str) -> None:
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+
+
+def metadata_text() -> str:
+    return "\n".join(f"{key}: {value}" for key, value in LANE_METADATA)
 
 
 def help_text() -> str:
-    return (
-        "usage: verify_samples.py [--metadata]\n"
-        "Runs every sample's headless scenario tests through the real runtime tick\n"
-        "and prints one pass/fail line per sample with the sample revision.\n"
-    )
+    usage = "usage: verify_samples.py [--help] [--metadata]"
+    return f"{usage}\nlane metadata:\n{metadata_text()}"
 
 
-def sample_revision(scene: Path) -> str:
-    if not scene.is_file():
-        return "absent"
-    return hashlib.sha256(scene.read_bytes()).hexdigest()[:12]
-
-
-def run_samples(root: Path = REPO_ROOT) -> int:
+def run_step(
+    step: tuple[str, list[str], float, Path | None, Path],
+    env: dict[str, str],
+) -> int:
+    name, command, budget, capture_path, cwd = step
     started = time.monotonic()
-    completed = subprocess.run(
-        TEST_COMMAND,
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    emit(f"step {name}: {' '.join(command)}")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            timeout=budget,
+            check=False,
+            stdout=subprocess.PIPE if capture_path is not None else None,
+            stderr=subprocess.STDOUT if capture_path is not None else None,
+            text=capture_path is not None,
+        )
+    except subprocess.TimeoutExpired:
+        emit(f"step {name}: exceeded {budget:.0f}s budget")
+        return 1
     elapsed = time.monotonic() - started
-    output = completed.stdout + completed.stderr
-    failures = 0
-    for name, scene_relative in SAMPLES:
-        revision = sample_revision(root / scene_relative)
-        scenario = f"{name} scene scenario"
-        scenario_ok = "roll_a_ball_sample_scene_runs_the_scenario_headless ... ok" in output
-        suite_ok = completed.returncode == 0
-        if revision == "absent":
-            sys.stdout.write(
-                f"FAIL verify-samples ({name}): sample scene is absent at "
-                f"{scene_relative} ({POLICY_CITATION})\n"
-            )
-            failures += 1
-            continue
-        if not scenario_ok or not suite_ok:
-            sys.stdout.write(
-                f"FAIL verify-samples ({name}@{revision}): {scenario} did not pass "
-                f"(cargo exit {completed.returncode}) ({POLICY_CITATION})\n"
-            )
-            failures += 1
-            continue
-        sys.stdout.write(f"OK verify-samples ({name}@{revision}): {scenario} passed\n")
-    if failures:
-        sys.stdout.write(output)
-        sys.stderr.write(
-            f"FAIL verify-samples: {failures} sample(s) failed in {elapsed:.2f}s "
-            f"({POLICY_CITATION})\n"
-        )
+    if capture_path is not None:
+        output = completed.stdout or ""
+        emit(output)
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_path.write_text(output, encoding="utf-8")
+    emit(f"step {name}: exit {completed.returncode} in {elapsed:.1f}s")
+    return completed.returncode
+
+
+def check_report() -> int:
+    if not REPORT_PATH.is_file():
+        emit(f"scenario report missing at {REPORT_PATH}")
         return 1
-    if elapsed > SAMPLE_BUDGET_SECONDS:
-        sys.stderr.write(
-            f"FAIL verify-samples: took {elapsed:.2f}s over the "
-            f"{SAMPLE_BUDGET_SECONDS:.0f}s budget ({POLICY_CITATION})\n"
-        )
+    report_status = None
+    report_text = REPORT_PATH.read_text(encoding="utf-8")
+    start = report_text.find("{")
+    if start >= 0:
+        try:
+            parsed = json.loads(report_text[start:])
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            report_status = parsed.get("status")
+    emit(f"scenario report status: {report_status}")
+    if report_status != "passed":
+        emit("verify-samples failed: scenario status is not passed")
         return 1
-    sys.stdout.write(f"OK verify-samples: all samples passed in {elapsed:.2f}s\n")
+    emit("verify-samples passed")
     return 0
 
 
+def run_lane() -> int:
+    emit(metadata_text())
+    if not SCENARIO_PATH.is_file():
+        emit(f"scenario document missing at {SCENARIO_PATH}")
+        return 1
+    env = dict(os.environ)
+    env["UNITAS_RUNTIME_LIBRARY"] = str(RUNTIME_LIBRARY)
+    steps: list[tuple[str, list[str], float, Path | None, Path]] = [
+        (
+            "runtime-build",
+            ["cargo", "build", "-p", "unitas-runtime"],
+            BUILD_BUDGET_SECONDS,
+            None,
+            REPO_ROOT,
+        ),
+        (
+            "bridge-build",
+            ["dotnet", "build", "bridge/Unitas.sln", "--configuration", "Release"],
+            BUILD_BUDGET_SECONDS,
+            None,
+            REPO_ROOT,
+        ),
+        (
+            "scenario",
+            [
+                "dotnet",
+                "run",
+                "--project",
+                str(SCRIPTING_PROJECT),
+                "--configuration",
+                "Release",
+                "--no-build",
+                "--",
+                "scenario",
+                str(SAMPLE_ROOT),
+                str(SCENARIO_PATH),
+                "--repeat",
+                "2",
+            ],
+            RUN_BUDGET_SECONDS,
+            REPORT_PATH,
+            SAMPLE_ROOT,
+        ),
+    ]
+    for step in steps:
+        rc = run_step(step, env)
+        if rc != 0:
+            emit(f"verify-samples failed at step {step[0]} (exit {rc})")
+            return 1
+    return check_report()
+
+
 def main(argv: Sequence[str]) -> int:
-    if len(argv) > 1 and argv[1] == "--help":
-        sys.stdout.write(help_text())
+    args = list(argv)
+    if "--help" in args:
+        emit(help_text())
         return 0
-    if len(argv) > 1 and argv[1] == "--metadata":
-        for key, value in LANE_METADATA:
-            sys.stdout.write(f"{key}: {value}\n")
+    if "--metadata" in args:
+        emit(metadata_text())
         return 0
-    if len(argv) > 1:
-        sys.stderr.write(help_text())
+    if args:
+        emit(help_text())
         return 2
-    return run_samples()
+    return run_lane()
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main(sys.argv[1:]))

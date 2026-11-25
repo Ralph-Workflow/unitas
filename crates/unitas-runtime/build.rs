@@ -156,6 +156,7 @@ fn main() {
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_set_callbacks");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_set_time_scale");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_sphere_cast");
+    println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_teleport_body_position");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_tick");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_time_scale");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_unload_scene");

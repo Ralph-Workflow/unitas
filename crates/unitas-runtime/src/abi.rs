@@ -634,6 +634,37 @@ pub extern "C" fn unitas_runtime_set_body_position(
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_teleport_body_position(
+    handle: u64,
+    entity: u64,
+    in_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(vector) = read_vec3_from_path_buffer(state, in_buffer) else {
+            state.set_error("buffer address mismatch");
+            return -2;
+        };
+        match state
+            .runtime
+            .teleport_body_position(EntityId::new(entity), vector)
+        {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_body_velocity(
     handle: u64,
     entity: u64,

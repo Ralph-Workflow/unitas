@@ -64,7 +64,7 @@ namespace UnityEngine
                     _localPosition = value;
                 }
                 MarkChanged();
-                PushKinematicPositionToNative();
+                PushPositionToNative();
                 NotifyCharacterControllerTeleported();
             }
         }
@@ -706,15 +706,16 @@ namespace UnityEngine
             }
         }
 
-        private void PushKinematicPositionToNative()
+        private void PushPositionToNative()
         {
             GameObject? owner = gameObject;
             if (owner == null || owner.IsDestroyed || owner.NativeEntityId == 0)
             {
                 return;
             }
+            // Unity teleports the rigidbody on any transform.position write, not only kinematic ones.
             Rigidbody? body = owner.GetComponent<Rigidbody>();
-            if (body == null || !body.isKinematic)
+            if (body == null)
             {
                 return;
             }

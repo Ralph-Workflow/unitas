@@ -100,14 +100,6 @@ dotnet-test-run:
 	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
-verify-samples:
-	@echo "owner: wt-02-simulation"
-	@echo "trigger: every milestone touching sample content or the runtime tick"
-	@echo "lane: make verify-samples"
-	@echo "evidence: per-sample pass/fail lines with the sample revision"
-	@echo "review: when a sample is added to or removed from the sample matrix"
-	@python3 tools/verify_samples.py
-
 verify-device:
 	@echo "owner: wt-03"
 	@echo "trigger: every milestone touching presentation"
@@ -123,3 +115,10 @@ verify-perf:
 	@echo "evidence: per-measurement OK/FAIL lines with value_ms against ceiling_ms"
 	@echo "review: when a perf measurement is added or a ceiling moves"
 	@python3 tools/verify_perf.py
+verify-samples:
+	@echo "owner: wt-01 scripting"
+	@echo "trigger: changes to bridge script compilation/play pipeline or samples/"
+	@echo "lane: make verify-samples"
+	@echo "evidence: scenario report JSON and lane exit status"
+	@echo "review: when a second sample game gains real scripts"
+	@python3 tools/verify_samples.py

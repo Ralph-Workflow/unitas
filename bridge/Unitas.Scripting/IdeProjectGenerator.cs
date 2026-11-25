@@ -536,7 +536,7 @@ namespace Unitas.Scripting
             }
 
             sb.AppendLine("    <LangVersion>9.0</LangVersion>");
-            sb.AppendLine("    <Nullable>disable</Nullable>");
+            sb.AppendLine("    <Nullable>annotations</Nullable>");
             sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
             sb.AppendLine("    <EnableDefaultItems>false</EnableDefaultItems>");
             sb.AppendLine("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>");

@@ -368,15 +368,15 @@ mod tests {
         assert_eq!(unitas_editor_install_builtin_tools(), 0);
 
         let described = read_and_free(unitas_editor_tools_describe())?;
-        let status_tool = described["tools"]
+        let abi_status = described["tools"]
             .as_array()
             .and_then(|tools| {
                 tools
                     .iter()
                     .find(|tool| tool["name"] == json!("engine.abi_status"))
             })
-            .ok_or("engine.abi_status missing from described tools")?;
-        assert_eq!(status_tool["origin"], json!("unitas://native/editor-abi"));
+            .ok_or("engine.abi_status is not described")?;
+        assert_eq!(abi_status["origin"], json!("unitas://native/editor-abi"));
 
         let name = allocate_c_string("engine.abi_status");
         let args = allocate_c_string("{\"probe\":true}");

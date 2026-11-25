@@ -135,3 +135,4 @@ $RECYCLE.BIN/
 .pytest_cache/
 .ruff_cache/
 editor/**/obj/
+**/Library/UnitasScriptAssemblies/.unitas_compile_state.txt

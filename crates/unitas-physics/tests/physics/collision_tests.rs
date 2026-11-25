@@ -1104,3 +1104,75 @@ fn kinematic_capsule_pushes_dynamic_capsule() -> Result<(), PhysicsError> {
     );
     Ok(())
 }
+
+#[test]
+fn kinematic_trigger_and_static_trigger_pair_emits_trigger_events() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let sensor = EntityId::new(1);
+    let pickup = EntityId::new(2);
+    world.add_body(
+        sensor,
+        BodyDesc {
+            is_trigger: true,
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            friction: 0.6,
+            restitution: 0.0,
+            ..sphere([0.0, 0.0, 0.0], [0.0; 3])
+        },
+    )?;
+    world.add_body(
+        pickup,
+        BodyDesc {
+            is_trigger: true,
+            mass: 0.0,
+            friction: 0.6,
+            restitution: 0.0,
+            ..box_body([0.5, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.02)?;
+    assert!(world.drain_events().is_empty());
+    assert_eq!(
+        world.drain_trigger_events(),
+        vec![TriggerEvent {
+            a: sensor,
+            b: pickup,
+            phase: Phase::Enter,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn two_static_triggers_exchange_no_trigger_events() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let left = EntityId::new(1);
+    let right = EntityId::new(2);
+    world.add_body(
+        left,
+        BodyDesc {
+            is_trigger: true,
+            mass: 0.0,
+            friction: 0.6,
+            restitution: 0.0,
+            ..box_body([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        right,
+        BodyDesc {
+            is_trigger: true,
+            mass: 0.0,
+            friction: 0.6,
+            restitution: 0.0,
+            ..box_body([0.5, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.02)?;
+    assert!(world.drain_events().is_empty());
+    assert!(world.drain_trigger_events().is_empty());
+    Ok(())
+}

@@ -1038,6 +1038,12 @@ namespace Unitas.Scripting
                         }
                     }
 
+                    // Expression-bodied members ("public int Score => _score;") are properties, not fields.
+                    if (candidateLine.Contains("=>", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     Match m = FieldDeclRegex.Match(candidateLine);
                     if (!m.Success)
                     {

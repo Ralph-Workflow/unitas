@@ -1,0 +1,157 @@
+{
+  "name": "collect_all",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 52,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 52,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 52,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 45,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "all_pickups_logged",
+      "after_step": 17,
+      "kind": "log",
+      "severity": "log",
+      "contains": "All 4 pickups collected, press R to play again."
+    },
+    {
+      "id": "restart_resets_player",
+      "after_step": 21,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.1
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 21,
+      "kind": "frame_count",
+      "expected": 265
+    }
+  ]
+}

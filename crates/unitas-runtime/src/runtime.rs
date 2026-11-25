@@ -1739,9 +1739,14 @@ fn body_descs(
     graph: &SceneGraph,
     bindings: &[PhysicsBinding],
 ) -> Vec<(EntityId, BodyDesc, [f32; 3])> {
+    let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
+        .iter()
+        .filter(|binding| binding.rigidbody.is_some())
+        .map(|binding| binding.entity)
+        .collect();
     let mut descs = Vec::new();
     for binding in bindings {
-        let (desc, offset) = match body_desc(graph, binding) {
+        let (desc, offset) = match body_desc(graph, binding, &rigid_entities) {
             Some(pair) => pair,
             None => continue,
         };
@@ -1850,7 +1855,26 @@ fn collect_material_diagnostics(
     diagnostics
 }
 
-fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, [f32; 3])> {
+fn has_rigidbody_ancestor(
+    graph: &SceneGraph,
+    entity: EntityId,
+    rigid_entities: &std::collections::BTreeSet<EntityId>,
+) -> bool {
+    let mut current = graph.parent(entity);
+    while let Some(ancestor) = current {
+        if rigid_entities.contains(&ancestor) {
+            return true;
+        }
+        current = graph.parent(ancestor);
+    }
+    false
+}
+
+fn body_desc(
+    graph: &SceneGraph,
+    binding: &PhysicsBinding,
+    rigid_entities: &std::collections::BTreeSet<EntityId>,
+) -> Option<(BodyDesc, [f32; 3])> {
     let (shape, center, collider_trigger, material) = match (
         &binding.sphere_collider,
         &binding.box_collider,
@@ -1913,6 +1937,9 @@ fn body_desc(graph: &SceneGraph, binding: &PhysicsBinding) -> Option<(BodyDesc, 
             rigidbody.is_trigger,
             BodyRole::Dynamic,
         ),
+        None if has_rigidbody_ancestor(graph, binding.entity, rigid_entities) => {
+            (0.0, false, false, BodyRole::Kinematic)
+        }
         None => (0.0, false, false, BodyRole::Static),
     };
     Some((

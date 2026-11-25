@@ -116,14 +116,17 @@ fn speed_of(body: &Body) -> f64 {
     sum.sqrt()
 }
 
-fn pair_exchanges_messages(first_role: BodyRole, second_role: BodyRole) -> bool {
-    if first_role == BodyRole::Kinematic && second_role != BodyRole::Dynamic {
+fn pair_exchanges_messages(first: &Body, second: &Body) -> bool {
+    if first.is_trigger || second.is_trigger {
+        return first.role != BodyRole::Static || second.role != BodyRole::Static;
+    }
+    if first.role == BodyRole::Kinematic && second.role != BodyRole::Dynamic {
         return false;
     }
-    if second_role == BodyRole::Kinematic && first_role != BodyRole::Dynamic {
+    if second.role == BodyRole::Kinematic && first.role != BodyRole::Dynamic {
         return false;
     }
-    first_role != BodyRole::Static || second_role != BodyRole::Static
+    first.role != BodyRole::Static || second.role != BodyRole::Static
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1330,7 +1333,7 @@ impl World {
                 if !second.simulated {
                     continue;
                 }
-                if !pair_exchanges_messages(first.role, second.role) {
+                if !pair_exchanges_messages(first, second) {
                     continue;
                 }
                 if first.shape.in_contact(

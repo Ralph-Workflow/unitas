@@ -10,7 +10,7 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2]");
                 return 1;
             }
 
@@ -23,6 +23,7 @@ namespace Unitas.Scripting
             bool isAttachComponent = string.Equals(command, "attach-component", StringComparison.OrdinalIgnoreCase);
             bool isPlay = string.Equals(command, "play", StringComparison.OrdinalIgnoreCase);
             bool isLoop = string.Equals(command, "loop", StringComparison.OrdinalIgnoreCase);
+            bool isScenario = string.Equals(command, "scenario", StringComparison.OrdinalIgnoreCase);
 
             if (!isCompile
                 && !isGenerateIde
@@ -31,9 +32,10 @@ namespace Unitas.Scripting
                 && !isUsages
                 && !isAttachComponent
                 && !isPlay
-                && !isLoop)
+                && !isLoop
+                && !isScenario)
             {
-                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', 'usages', 'attach-component', 'play', or 'loop'.");
+                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', 'usages', 'attach-component', 'play', 'loop', or 'scenario'.");
                 return 1;
             }
 
@@ -44,6 +46,32 @@ namespace Unitas.Scripting
             }
 
             string projectRoot = args[1];
+
+            if (isScenario)
+            {
+                if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]))
+                {
+                    Console.Error.WriteLine("Missing <scenario.json> argument for 'scenario'.");
+                    return 1;
+                }
+
+                int repeat = 1;
+                for (int i = 3; i < args.Length; i++)
+                {
+                    if (string.Equals(args[i], "--repeat", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    {
+                        i++;
+                        if (!int.TryParse(args[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out repeat) || repeat < 1)
+                        {
+                            Console.Error.WriteLine("Invalid --repeat value '" + args[i] + "' for 'scenario'.");
+                            return 1;
+                        }
+                    }
+                }
+
+                return ScenarioCommand.Run(projectRoot, args[2], repeat);
+            }
+
             ScriptCompilationOptions options = new ScriptCompilationOptions();
             string? typeFilter = null;
             string? scriptTarget = null;

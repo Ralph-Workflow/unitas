@@ -104,6 +104,39 @@ impl AudioClip {
     }
 }
 
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    use unitas_asset::audio_import as import;
+    let pcm =
+        if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
+            import::decode_wav(bytes)
+        } else if bytes.starts_with(b"FORM") {
+            import::decode_aiff(bytes)
+        } else if bytes.starts_with(b"OggS") {
+            import::decode_ogg_vorbis(bytes)
+        } else if bytes.starts_with(b"ID3")
+            || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+        {
+            import::decode_mp3(bytes)
+        } else {
+            return Err(AudioError::UnsupportedFormat(
+                "unrecognized audio container".to_string(),
+            ));
+        }
+        .map_err(|error| AudioError::UnsupportedFormat(error.to_string()))?;
+    if pcm.channels == 0 || pcm.channels > 2 {
+        return Err(AudioError::UnsupportedFormat(format!(
+            "{} audio channels are not supported",
+            pcm.channels
+        )));
+    }
+    let samples = pcm
+        .samples
+        .iter()
+        .map(|sample| f32::from(*sample) / 32768.0)
+        .collect();
+    Ok(AudioClip::new(pcm.channels, pcm.sample_rate, samples))
+}
+
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
     let slice = bytes.get(offset..offset + 2)?;
     Some(u16::from_le_bytes([slice[0], slice[1]]))

@@ -24,6 +24,7 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, GameObject> _entityGameObjects = new Dictionary<ulong, GameObject>();
         private readonly Dictionary<ulong, string> _sceneObjectNames = new Dictionary<ulong, string>();
+        private readonly Dictionary<ulong, ulong> _sceneParentEntities = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, SceneRigidbodyMetadata> _sceneRigidbodies = new Dictionary<ulong, SceneRigidbodyMetadata>();
         private readonly Dictionary<ulong, SceneSphereColliderMetadata> _sceneSphereColliders = new Dictionary<ulong, SceneSphereColliderMetadata>();
         private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
@@ -813,6 +814,7 @@ namespace Unitas.Bridge
                 _entityScripts.Clear();
                 _entityGameObjects.Clear();
                 _sceneObjectNames.Clear();
+                _sceneParentEntities.Clear();
                 _sceneRigidbodies.Clear();
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
@@ -1245,7 +1247,9 @@ namespace Unitas.Bridge
 
         public bool TrySetBodyPosition(ulong entity, Vector3 position)
         {
-            return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_position, position);
+            // Dynamic bodies reject set_body_position; a transform write teleports them instead.
+            return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_position, position)
+                || TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_teleport_body_position, position);
         }
 
         public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
@@ -2062,6 +2066,37 @@ namespace Unitas.Bridge
             return handle;
         }
 
+        private void WireSceneParent(ulong entity, GameObject owner)
+        {
+            ulong current = entity;
+            GameObject currentObject = owner;
+            while (_sceneParentEntities.TryGetValue(current, out ulong parentEntity))
+            {
+                GameObject parentObject = EnsureSceneGameObject(parentEntity);
+                if (currentObject.transform.parent == null)
+                {
+                    currentObject.transform.SetParent(parentObject.transform, false);
+                }
+                current = parentEntity;
+                currentObject = parentObject;
+            }
+        }
+
+        private GameObject EnsureSceneGameObject(ulong entity)
+        {
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? existing) && existing != null && !existing.IsDestroyed)
+            {
+                return existing;
+            }
+            string name = _sceneObjectNames.TryGetValue(entity, out string? parsedName) && !string.IsNullOrEmpty(parsedName)
+                ? parsedName
+                : "GameObject";
+            GameObject created = new GameObject(name);
+            created.AssignNativeEntityId(entity);
+            _entityGameObjects[entity] = created;
+            return created;
+        }
+
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
             if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
@@ -2087,6 +2122,7 @@ namespace Unitas.Bridge
             }
             _entityGameObjects[entity] = owner;
             owner.AssignNativeEntityId(entity);
+            WireSceneParent(entity, owner);
             if (_sceneRigidbodies.TryGetValue(entity, out SceneRigidbodyMetadata metadata))
             {
                 Rigidbody body = owner.GetComponent<Rigidbody>() ?? owner.AddComponent<Rigidbody>();
@@ -2373,12 +2409,18 @@ namespace Unitas.Bridge
             List<ParsedSphereColliderRecord> sphereColliders = new List<ParsedSphereColliderRecord>();
             List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
+            List<ParsedTransformRecord> transforms = new List<ParsedTransformRecord>();
+            string currentFatherFileId = string.Empty;
 
             for (int index = 0; index < lines.Length; index++)
             {
                 string line = lines[index].Trim();
                 if (line.StartsWith("--- !u!", StringComparison.Ordinal))
                 {
+                    if (currentClassId == 4 && currentFileId.Length > 0)
+                    {
+                        transforms.Add(new ParsedTransformRecord(currentFileId, currentGameObjectFileId, currentFatherFileId));
+                    }
                     FlushDocument(
                         currentClassId,
                         currentFileId,
@@ -2413,6 +2455,7 @@ namespace Unitas.Bridge
                     currentIsTrigger = false;
                     currentCenter = Vector3.zero;
                     currentSize = new Vector3(1f, 1f, 1f);
+                    currentFatherFileId = string.Empty;
                     continue;
                 }
 
@@ -2421,6 +2464,17 @@ namespace Unitas.Bridge
                     if (line.StartsWith("m_Name:", StringComparison.Ordinal))
                     {
                         currentName = ParseStringValue(line);
+                    }
+                }
+                else if (currentClassId == 4)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_Father:", StringComparison.Ordinal))
+                    {
+                        currentFatherFileId = ExtractFileId(line);
                     }
                 }
                 else if (currentClassId == 54)
@@ -2475,6 +2529,10 @@ namespace Unitas.Bridge
                 }
             }
 
+            if (currentClassId == 4 && currentFileId.Length > 0)
+            {
+                transforms.Add(new ParsedTransformRecord(currentFileId, currentGameObjectFileId, currentFatherFileId));
+            }
             FlushDocument(
                 currentClassId,
                 currentFileId,
@@ -2558,6 +2616,30 @@ namespace Unitas.Bridge
                         record.Center,
                         record.IsTrigger);
                 }
+            }
+
+            Dictionary<string, string> transformGameObjects = new Dictionary<string, string>(StringComparer.Ordinal);
+            for (int index = 0; index < transforms.Count; index++)
+            {
+                transformGameObjects[transforms[index].TransformFileId] = transforms[index].GameObjectFileId;
+            }
+            for (int index = 0; index < transforms.Count; index++)
+            {
+                ParsedTransformRecord record = transforms[index];
+                if (record.FatherFileId.Length == 0 || record.FatherFileId == "0")
+                {
+                    continue;
+                }
+                if (!transformGameObjects.TryGetValue(record.FatherFileId, out string? parentGameObjectFileId))
+                {
+                    continue;
+                }
+                if (!gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong childLocal)
+                    || !gameObjectEntities.TryGetValue(parentGameObjectFileId, out ulong parentLocal))
+                {
+                    continue;
+                }
+                _sceneParentEntities[_nextSceneEntityBase + childLocal] = _nextSceneEntityBase + parentLocal;
             }
 
             _nextSceneEntityBase += localEntityIndex;
@@ -2793,6 +2875,22 @@ namespace Unitas.Bridge
             public Vector3 Center { get; }
 
             public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedTransformRecord
+        {
+            public ParsedTransformRecord(string transformFileId, string gameObjectFileId, string fatherFileId)
+            {
+                TransformFileId = transformFileId;
+                GameObjectFileId = gameObjectFileId;
+                FatherFileId = fatherFileId;
+            }
+
+            public string TransformFileId { get; }
+
+            public string GameObjectFileId { get; }
+
+            public string FatherFileId { get; }
         }
 
         private readonly struct ParsedRigidbodyRecord
