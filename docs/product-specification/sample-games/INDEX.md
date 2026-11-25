@@ -60,6 +60,15 @@ a display. A scenario that requires human judgment states that requirement, and
 its headless run reports the checkpoint as awaiting human review rather than as
 passed.
 
+"Headless through MCP" always means the editor. An agent, or a
+continuous-integration job, connects to the headless editor's MCP interface,
+opens the sample project, and works on it the way a developer does. It builds
+and edits the game, starts play sessions in the editor's worker process,
+injects input, reads state, captures evidence, and stops play. The game itself,
+the engine, and every packaged player contain no MCP. Scenarios in a packaged
+player run from replayed input and the player's own logs and captures, and the
+editor collects their results.
+
 Every scenario result records the sample revision, the unitas version, the
 target, and whether it ran headless.
 
