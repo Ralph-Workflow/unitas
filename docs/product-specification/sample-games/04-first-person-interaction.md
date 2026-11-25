@@ -195,7 +195,7 @@ Framework 1.x.
 | PRF-001 | Profiles on the benchmark path at every quality level | S15 |
 | ACC-001 | Captions, reduced motion, rebinding, hints | S4, S12 |
 | BLD-001 | Packaged players for each variant | S16 |
-| BLD-002, TST-002, AUT-002 | Headless runs, scenarios, references, input replay, MCP control | all |
+| BLD-002, TST-002, AUT-002 | Headless runs, scenarios, references, input replay, play control through the editor's MCP interface | all |
 | EDT-004 | Play and stop with edit-state restoration | S16 |
 
 ## Engine Behavior This Game Depends On
@@ -295,7 +295,7 @@ Framework 1.x.
 * Prompts name the target ("Grab Crate", "Press Switch") on the frame it is
   targeted. Captions show the speaker and the radio's line.
 * Each variant builds desktop players with a build report.
-* Through MCP an agent can set the seed, teleport to a room, read the current
+* Through the editor's MCP interface an agent can set the seed, teleport to a room, read the current
   target and its priority, joint angles, plate states, digits found, and
   cursor state, and capture frames, audio, and profiles.
 
@@ -318,7 +318,7 @@ Framework 1.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, for each of the four variants, unless it says otherwise.
+through the editor's MCP interface, for each of the four variants, unless it says otherwise.
 
 * **S1. Open and inspect.** No cache exists. Open each variant. Expected: no
   import errors; the URP 12.x and 10.x variants are reported migrated with

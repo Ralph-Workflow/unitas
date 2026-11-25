@@ -385,7 +385,7 @@ Unity Test Framework 1.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in packaged players, and headless
-through MCP, unless it says otherwise. A scenario with several participants
+through the editor's MCP interface, unless it says otherwise. A scenario with several participants
 names each one. Its checkpoints are tagged as **rule** (evaluated on the
 server's authoritative state), **synchronization** (a remote observation on a
 named client within the profile's bound), or **transport** (a connection
@@ -490,7 +490,7 @@ outcome or timeout).
     failed checkpoint and the participant, keeps later evidence, and shows each
     participant's log lines around the failure under its tag.
   * (NET-001, TST-002, DIA-001)
-* **S13. Local multi-instance testing through MCP.** Headless only. One agent
+* **S13. Local multi-instance testing through the editor's MCP interface.** Headless only. One agent
   session starts a development Linux server player and four isolated play
   sessions in the headless editor, connects them over the loopback interface,
   injects input into each, and stops one client mid-match.

@@ -267,7 +267,7 @@ TextMeshPro 3.0.x.
 * Its persistent storage keeps high scores across page reloads, and a quota
   failure is reported to the game.
 * Agents inject timestamped presses, read song time, judgments, combo, Fever,
-  and video time, and capture audio and frames through MCP.
+  and video time, and capture audio and frames through the editor's MCP interface.
 
 ## Presentation and Performance
 
@@ -284,7 +284,7 @@ TextMeshPro 3.0.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise. "Player" includes the desktop and
+through the editor's MCP interface, unless it says otherwise. "Player" includes the desktop and
 browser players.
 
 * **S1. Open and inspect.** Precondition: no cache. Open the project.

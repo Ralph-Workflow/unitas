@@ -212,7 +212,7 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 | BLD-002 | Headless runs of every scenario | all |
 | TST-002 | Scenarios, checkpoints, approved references, input replay | all |
 | EDT-004 | Play, pause, step, and stop with edit-state restoration in the editor | S9 |
-| AUT-002 | Agents play, inspect, and capture the game through MCP | all |
+| AUT-002 | Agents play, inspect, and capture the game in editor play sessions through the editor's MCP interface | all |
 | ACC-001 | Reduced motion, camera-shake toggle, keyboard-only play | S7, S16 |
 
 ## Engine Behavior This Game Depends On
@@ -299,7 +299,7 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 
 * The game plays in editor play mode. Stopping play restores every edited scene
   value.
-* An agent can do all of the following through MCP: open the project, start
+* An agent can do all of the following through the editor's MCP interface: open the project, start
   play, send input, read score, multiplier, and timer state, capture frames, and
   stop play.
 
@@ -322,7 +322,7 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise.
+through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** Precondition: no import cache exists. Open the
   project.

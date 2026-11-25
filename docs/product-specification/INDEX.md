@@ -59,6 +59,10 @@ unitas is agent-first:
 * Every capability that runs inside the visual editor also runs in the
   headless editor, so agents and continuous integration can use the product
   without a display.
+* MCP belongs to the editor only. The engine, the runtime, games made with
+  unitas, and every packaged player contain no MCP interface. An agent reaches
+  a running game only through an editor play session, or through the editor's
+  connection to a development player.
 
 ## Product Boundaries
 

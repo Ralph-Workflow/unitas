@@ -15,7 +15,7 @@ strategy game or any Unity sample.
 
 The game is the suite's demonstration of the PRF-002 scale floor for scenes:
 its battlefield scene holds at least 100,000 GameObjects and stays editable in
-the visual editor and through MCP. The game reports the PRF-002 measurements it
+the visual editor and through the editor's MCP interface. The game reports the PRF-002 measurements it
 takes separately from its own project-declared expectations.
 
 Compatibility tiers follow the [Feature catalog](../feature-catalog.md). This
@@ -298,7 +298,7 @@ Rally Horn charges, by setting the charges to zero.
 | EDT-001 | Hierarchy search, selection, and parenting at scale | S14 |
 | EDT-002 | Inspector multi-editing at scale and ScriptableObject edits | S14, S15 |
 | EDT-005 | Undo and redo of large edits | S14 |
-| AUT-002 | Paginated MCP queries, edits, play control, and captures | all |
+| AUT-002 | Paginated queries, edits, play control, and captures through the editor's MCP interface | all |
 | DIA-001 | Job safety exceptions naming job and container, leak reports | S4 |
 | ACC-001 | Keyboard-only play, color-blind palette, UI scale | S8 |
 
@@ -400,12 +400,12 @@ Rally Horn charges, by setting the charges to zero.
 
 ### Editor and automation
 
-* `Battlefield.unity` stays operable in the visual editor and through MCP as
+* `Battlefield.unity` stays operable in the visual editor and through the editor's MCP interface as
   PRF-002 defines: hierarchy and asset queries, search, selection, property
-  edits, undo, and save. MCP queries return paginated results.
+  edits, undo, and save. Queries through the editor's MCP interface return paginated results.
 * An agent can start a match from a saved state, issue orders, read unit and
   structure state in pages, capture frames, and start and read profiling
-  captures through MCP.
+  captures through the editor's MCP interface.
 * The project's editor tools draw and work in the unitas editor:
   * The custom `UnitDefinition` Inspector shows a counter preview: damage per
     second against each unit type with the counter, rear, and high-ground
@@ -439,7 +439,7 @@ Rally Horn charges, by setting the charges to zero.
     under 8 seconds.
 * **PRF-002 scale-floor measurements**, reported in their own section of the
   performance report and never as sample expectations. On `Battlefield.unity`,
-  in the visual editor and through MCP in a headless session, the game measures:
+  in the visual editor and through the editor's MCP interface in a headless session, the game measures:
   * opening the scene, cold and warm
   * the first page of a hierarchy query with a page size of 1,000, and a full
     traversal by cursor
@@ -457,7 +457,7 @@ Rally Horn charges, by setting the charges to zero.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise.
+through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** Precondition: no import cache exists. Open the
   project, then `Battlefield.unity`.
@@ -582,7 +582,7 @@ through MCP, unless it says otherwise.
     targets whose storage documentation says replacement is atomic.
   * (SAV-001, RUN-009)
 * **S14. Scale-floor editing.** Precondition: `Battlefield.unity` with at least
-  100,000 GameObjects. In the visual editor and, separately, through MCP in a
+  100,000 GameObjects. In the visual editor and, separately, through the editor's MCP interface in a
   headless session: query the hierarchy in pages of 1,000, search for "Rock_"
   and for `LODGroup`, select 10,000 props, set their static flags, undo, redo,
   reparent 100 props under a new group object, and save.
@@ -593,7 +593,7 @@ through MCP, unless it says otherwise.
     recorded as a PRF-002 measurement, in its own report section.
   * (PRF-002, EDT-001, EDT-002, EDT-005, AUT-002, PRJ-003)
 * **S15. Unit data.** During play, change the Ranger `UnitDefinition` speed from
-  6 to 9 m/s in the Inspector, then change its range through MCP. Stop play.
+  6 to 9 m/s in the Inspector, then change its range through the editor's MCP interface. Stop play.
   * Expected: every Ranger of that faction moves at 9 m/s from the next tick, and
     the new range applies to the next attack. The custom Inspector's counter
     preview redraws with the new values on the same frame. The asset keeps both
@@ -699,7 +699,7 @@ its real compatibility state.
 * Speed controls and pause scale the simulation through `Time.timeScale`
   without breaking camera control or queued orders. (SMP-001, RUN-004)
 * The 100,000-GameObject battlefield scene stays editable in the visual editor
-  and through MCP, and its PRF-002 measurements are reported apart from the
+  and through the editor's MCP interface, and its PRF-002 measurements are reported apart from the
   sample's own expectations. (SMP-001, PRF-002, EDT-001, EDT-002, AUT-002)
 * Profiling captures show the game's jobs on worker threads and its rendering
   cost. (SMP-001, PRF-001)

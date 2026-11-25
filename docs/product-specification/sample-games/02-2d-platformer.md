@@ -292,7 +292,7 @@ TextMeshPro 3.0.x.
 ### Editor and automation
 
 * Stopping play restores edited scene values, including bridge tiles removed
-  at runtime. Through MCP an agent reads Wick's position, velocity, grounded
+  at runtime. Through the editor's MCP interface an agent reads Wick's position, velocity, grounded
   state, hearts, embers, chain, glow score, medal, and checkpoint, and any
   renderer's effective sort order.
 
@@ -313,7 +313,7 @@ TextMeshPro 3.0.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged desktop player, in the
-browser player, and headless through MCP, unless it says otherwise.
+browser player, and headless through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** No cache exists. Open the project.
   * Expected: all assets import with no errors, every package is reported

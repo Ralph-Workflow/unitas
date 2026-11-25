@@ -36,7 +36,7 @@ document owns this game's acceptance under SMP-001.
   interface.
 * **Input modes:** pointer (mouse), keyboard, gamepad, and touch, all through
   one Input System 1.x action asset and `InputSystemUIInputModule`; and
-  authorized automation through MCP on every target. Touch is offered on the
+  authorized automation through the editor's MCP interface on every target. Touch is offered on the
   mobile targets and on desktop and browser hosts that report a touchscreen.
   The capability report states which modes each target offers, and a mode a
   target does not offer is reported not applicable, never as passed.
@@ -300,7 +300,7 @@ Addressables 1.x line it depends on), Input System 1.x, and URP 14.x.
 
 * An agent can select a locale, read every visible string with its table, key,
   and resolved font, read accessible names and roles, read the focus path, and
-  capture frames through MCP. Locale preview in the editor leaves saved
+  capture frames through the editor's MCP interface. Locale preview in the editor leaves saved
   content unchanged.
 
 ## Presentation and Performance
@@ -322,7 +322,7 @@ Addressables 1.x line it depends on), Input System 1.x, and URP 14.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player on each declared
-target, and headless through MCP, unless it says otherwise.
+target, and headless through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** No import cache exists. Open the project.
   * Expected: all assets import with no errors; every package is reported

@@ -195,7 +195,7 @@ uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 | TST-003 | EditMode and PlayMode tests through the Unity Test Framework | S15 |
 | PRF-002 | Peak-load expectations reported apart from the engine budgets | S3 |
 | ACC-001 | Keyboard-only aiming, auto-fire, shake slider, reduced motion | S16 |
-| BLD-001, BLD-002, TST-002, AUT-002 | Desktop players, headless runs, replay, captures, MCP | all |
+| BLD-001, BLD-002, TST-002, AUT-002 | Desktop players, headless editor runs, replay, captures, the editor's MCP interface | all |
 
 ## Engine Behavior This Game Depends On
 
@@ -225,11 +225,11 @@ uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test Framework 1.x.
   a DPS preview, a projectile-pattern preview, and a synergy warning. The Wave
   Designer `EditorWindow` draws a timeline of spawn groups that can be dragged
   to change their delays. Both are built with IMGUI (`EditorGUILayout`), and
-  each control in them can be operated by an agent through MCP.
+  each control in them can be operated by an agent through the editor's MCP interface.
 * The commands `Arena/Waves/Validate All Waves`, `Arena/Waves/New Wave From
   Template`, and `Arena/Waves/Preview Wave`, and the context menus `Sort Spawn
   Groups By Delay` and `Double All Counts`, run from the command palette and
-  through MCP with the same content effect as in Unity.
+  through the editor's MCP interface with the same content effect as in Unity.
 * `OnValidate` clamps group counts to 1 to 300 and delays to 0 or more, and
   warns when a wave's peak live enemy count exceeds 300.
 * Changing a ScriptableObject during editor play persists after play and shows
@@ -280,7 +280,7 @@ uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 
 * The local server fixture listens on `http://127.0.0.1:8090` and can answer
   normally, with HTTP 500, with malformed JSON, after 8 seconds, or not at all.
-* Project tests run in the editor, headless, and through MCP, with NUnit 3
+* Project tests run in the editor, headless, and through the editor's MCP interface, with NUnit 3
   XML results.
 
 ## Presentation and Performance
@@ -300,7 +300,7 @@ uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise.
+through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** Precondition: no cache. Open the project.
   Expected: assets import without errors, the custom inspector and the Wave
@@ -357,7 +357,7 @@ through MCP, unless it says otherwise.
   320-enemy wave by name, sorting reorders the groups, and undo restores them.
   Then open the Wave Designer window, drag a spawn group from 4 s to 6 s, and
   change a weapon's fire rate in the custom inspector, once as a person and once
-  as an agent through MCP. Expected: both edits apply, their previews update,
+  as an agent through the editor's MCP interface. Expected: both edits apply, their previews update,
   and undo reverts each. Editor and headless only. (RUN-010, SER-001, EDT-002)
 * **S12. Debug overlay.** Open the overlay, drag it, toggle God Mode, set time
   scale 0.5, and click Spawn 50 Swarmers over the arena. Expected: the window
@@ -378,7 +378,7 @@ through MCP, unless it says otherwise.
 * **S15. Project tests.** Run all EditMode and PlayMode tests headless.
   Expected: wave validation, seeded arena hashes, JSON round-trips, combo
   rules, pool caps, single death per enemy, and leaderboard handling pass.
-  Results come as NUnit 3 XML and through MCP. (TST-003)
+  Results come as NUnit 3 XML and through the editor's MCP interface. (TST-003)
 * **S16. Loss, restart, and package.** Build each desktop player. Lose all
   lives on wave 3 using keyboard only, then Retry Same Seed. Expected:
   results show no medal. Retry regenerates the
@@ -451,7 +451,7 @@ reported with its real compatibility state, as a defect to fix.
   blocking play. (SMP-001, RUN-009, SAV-001)
 * Wave and weapon ScriptableObjects drive play, editor commands validate them,
   and the custom inspector and the Wave Designer window draw and edit them for a
-  person in the visual editor and for an agent through MCP. (SMP-001, SER-001,
+  person in the visual editor and for an agent through the editor's MCP interface. (SMP-001, SER-001,
   RUN-010, EDT-002)
 * The IMGUI overlay controls the game and consumes its own clicks. (SMP-001,
   UI-002)

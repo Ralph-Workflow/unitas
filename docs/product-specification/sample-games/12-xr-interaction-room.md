@@ -30,7 +30,7 @@ document owns this game's acceptance under SMP-001.
   hardware. It is the active OpenXR runtime on Windows x86-64 and Linux x86-64
   test hosts. Scenario steps drive its head and controller poses, buttons, and
   session state from recorded tracks. It runs in editor play mode, in packaged
-  players, and headless through MCP. Every result records the runtime's name and
+  players, and headless through the editor's MCP interface. Every result records the runtime's name and
   version.
 * **Capability-reported targets:** Windows x86-64 and Linux x86-64 desktop
   players with an OpenXR runtime and a physical headset. Each session writes a
@@ -240,7 +240,7 @@ support.
 | BLD-002 | Headless runs on the simulation runtime | all except S13 |
 | TST-002 | Scenarios, pose tracks, unevaluable checkpoints, approved references | all, S11 |
 | PRF-001 | Frame timing captures on the simulation runtime and on headsets | S13 |
-| AUT-002 | Play control, track playback, and captures through MCP | all except S13 |
+| AUT-002 | Play control, track playback, and captures through the editor's MCP interface | all except S13 |
 | ACC-001 | Seated mode, comfort options, keyboard menus, subtitles | S5, S14 |
 
 ## Engine Behavior This Game Depends On
@@ -328,7 +328,7 @@ support.
 
 * An agent can start the game on the simulation runtime, play pose and button
   tracks, read interactor and interactable state, read the capability report,
-  and capture each eye's view through MCP.
+  and capture each eye's view through the editor's MCP interface.
 
 ## Presentation and Performance
 
@@ -357,7 +357,7 @@ support.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in packaged players, and headless
-through MCP on the simulation runtime, unless it says otherwise. A checkpoint
+through the editor's MCP interface on the simulation runtime, unless it says otherwise. A checkpoint
 that needs a capability the active device does not expose is reported as
 unevaluable, naming the capability and the device. It is never reported as
 passed, and a run with an unevaluable checkpoint is never reported as a full

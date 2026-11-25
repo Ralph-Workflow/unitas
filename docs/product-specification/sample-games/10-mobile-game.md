@@ -210,7 +210,7 @@ Newtonsoft Json 3.x.
 | PRD-002 | No network connection or telemetry, privacy manifest, local-only microphone use | S8, S15 |
 | AUT-007 | Pairing and scopes for development-player connections | S13 |
 | TST-002 | Scenarios, checkpoints, approved references, input replay | all |
-| AUT-002 | Agents play, inspect, and capture the game through MCP | all |
+| AUT-002 | Agents play, inspect, and capture the game in editor play sessions through the editor's MCP interface | all |
 
 ## Engine Behavior This Game Depends On
 
@@ -289,7 +289,7 @@ Newtonsoft Json 3.x.
 
 * An agent can list devices, deploy, launch, read board state, send touches,
   rotate the simulated device, trigger backgrounding, capture frames, read
-  device logs, and remove the app through MCP.
+  device logs, and remove the app through the editor's MCP interface.
 
 ## Presentation and Performance
 
@@ -308,7 +308,7 @@ Newtonsoft Json 3.x.
 ## Acceptance Scenarios
 
 Every scenario runs on the iOS Simulator and the Android emulator profiles,
-and headless through MCP against them, unless it says otherwise. S2, S3, S9,
+and headless through the editor's MCP interface against them, unless it says otherwise. S2, S3, S9,
 and S10 also run in editor play mode with the synthetic touchscreen.
 
 * **S1. Open and inspect.** No import cache exists. Open the project.
@@ -395,7 +395,7 @@ and S10 also run in editor play mode with the synthetic touchscreen.
     naming the stripped type and member and the preservation mechanisms; with
     it the save round-trips.
   * (BLD-003, RUN-009, SAV-001)
-* **S13. Deployment, connection, and profiling.** Through MCP, list devices,
+* **S13. Deployment, connection, and profiling.** Through the editor's MCP interface, list devices,
   deploy a development player, launch it, connect the profiler and log stream,
   capture 600 frames on board 13, and remove the app. Repeat the connection
   without the pairing credential.

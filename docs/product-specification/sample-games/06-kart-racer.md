@@ -192,7 +192,7 @@ Addressables 1.x, uGUI 1.0.x, and TextMeshPro 3.0.x.
 | SAV-001 | Settings, best laps, medals, ghosts, corrupt-ghost handling | S10 |
 | ACC-001 | Keyboard-only play, rebinding, reduced motion, automatic throttle | S16 |
 | BLD-001, BLD-005 | Desktop players; a content update with only changed bundles | S8, S16 |
-| BLD-002, TST-002, AUT-002 | Headless runs, replayed input, captures, MCP race state | all |
+| BLD-002, TST-002, AUT-002 | Headless runs, replayed input, captures, race state read through the editor's MCP interface | all |
 
 ## Engine Behavior This Game Depends On
 
@@ -271,7 +271,7 @@ Addressables 1.x, uGUI 1.0.x, and TextMeshPro 3.0.x.
 * A local content server fixture on `http://127.0.0.1:8088` serves remote
   content and can switch to offline, slow, or truncated responses.
 * Agents join synthetic players, send per-player input, read positions, laps,
-  wheel slip, items, and live cameras, and capture each viewport through MCP.
+  wheel slip, items, and live cameras, and capture each viewport through the editor's MCP interface.
 
 ## Presentation and Performance
 
@@ -288,7 +288,7 @@ Addressables 1.x, uGUI 1.0.x, and TextMeshPro 3.0.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise.
+through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** Precondition: no cache. Open the project.
   Expected: every asset imports without errors, each package is reported

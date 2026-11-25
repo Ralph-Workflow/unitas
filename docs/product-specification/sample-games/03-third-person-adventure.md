@@ -175,7 +175,7 @@ TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 | SAV-001 | Settings, slots, records, corruption, migration | S8, S14, S17 |
 | ACC-001 | Subtitles, reduced motion, run toggle | S9, S11 |
 | BLD-001, BLD-005 | Packaged players and unitas-built Addressables content | S7, S16 |
-| BLD-002, TST-002, AUT-002 | Headless runs, scenarios, references, input replay, MCP control | all |
+| BLD-002, TST-002, AUT-002 | Headless runs, scenarios, references, input replay, play control through the editor's MCP interface | all |
 | EDT-004 | Play and stop with edit-state restoration | S16 |
 
 ## Engine Behavior This Game Depends On
@@ -195,7 +195,7 @@ TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 * `Companion.fbx` resolves `HeroAvatar` by reference, and the `Anim_*.fbx`
   clips play on all three avatars. An invalid avatar is reported with its bones.
 * Lightmaps, shadowmasks, light probes, and reflection captures are baked in
-  the unitas editor, interactively or headless through MCP, and load with their
+  the unitas editor, interactively or headless through the editor's MCP interface, and load with their
   renderer assignments. Lighting baked earlier by Unity 2022.3 LTS loads the same
   way. Moving a static renderer in the editor marks the bake stale and names the
   renderer. Rebaking replaces the stale data, and the result is still readable by
@@ -269,7 +269,7 @@ TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 * The player loads Addressables content built by unitas, and the same content
   built by Unity 2022.3 LTS (BLD-005). A corrupt bundle is reported by name and
   is never loaded partially.
-* Through MCP an agent can skip or seek a cutscene, load a slot, switch locale,
+* Through the editor's MCP interface an agent can skip or seek a cutscene, load a slot, switch locale,
   teleport to a checkpoint, read hearts, shards, medals, active scene, handles,
   and path states, and capture frames and audio.
 
@@ -291,7 +291,7 @@ TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 ## Acceptance Scenarios
 
 Every scenario runs in editor play mode, in a packaged player, and headless
-through MCP, unless it says otherwise.
+through the editor's MCP interface, unless it says otherwise.
 
 * **S1. Open and inspect.** No cache exists. Open the project. Expected: no
   import errors; the three avatars validate; `Companion.fbx` references
