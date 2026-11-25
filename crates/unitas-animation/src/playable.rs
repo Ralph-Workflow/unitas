@@ -4,6 +4,7 @@ use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, SampledBinding, WrapMode};
 use crate::curve::AnimatedValue;
 
+/// Graph identity is part of every handle so a foreign handle can never alias a local node.
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

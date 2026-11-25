@@ -36,7 +36,11 @@ namespace Unitas.Bridge.Tests
             {
                 DapClient client = new DapClient(pair.Client);
                 Check.That("dap stepping: initialize succeeds", ReadBool(client.Request("initialize")["success"]));
-                Check.That("dap stepping: launch succeeds", ReadBool(client.Request("launch")["success"]));
+                JsonObject launchResponse = client.Request("launch");
+                Check.That("dap stepping: launch succeeds", ReadBool(launchResponse["success"]));
+                Check.That(
+                    "dap stepping: launch reports that the adapter attaches to an existing play session",
+                    ReadString(launchResponse["body"]!["message"]).Contains("does not start a play session", StringComparison.Ordinal));
                 Check.That("dap stepping: session marks launched", session.IsLaunched && session.IsAttached);
 
                 JsonObject setResponse = client.Request("setBreakpoints", new JsonObject

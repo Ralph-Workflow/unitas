@@ -321,6 +321,58 @@ fn connecting_a_playable_to_itself_is_rejected() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn a_handle_from_another_graph_is_never_accepted() -> Result<(), Box<dyn Error>> {
+    let mut graph = PlayableGraph::new("Owner");
+    let mixer = AnimationMixerPlayable::create(&mut graph, 1);
+    let mut other = PlayableGraph::new("Foreign");
+    let foreign = AnimationClipPlayable::create(&mut other, constant_position_clip("Foreign", 1.0));
+
+    // Both graphs mint their first node at index 0, so only graph identity can
+    // tell the foreign handle apart from the local mixer.
+    assert_ne!(foreign.handle(), mixer.handle());
+    assert_eq!(
+        graph.connect(foreign.handle(), 0, mixer.handle(), 0, 1.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_playable_time(foreign.handle(), 0.5),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_input_weight(foreign.handle(), 0, 1.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.create_output("Foreign", foreign.handle()),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(graph.playable_time(foreign.handle()), None);
+    assert_eq!(graph.playable_speed(foreign.handle()), None);
+    assert_eq!(graph.playable_duration(foreign.handle()), None);
+    assert_eq!(graph.playable_is_done(foreign.handle()), None);
+    assert_eq!(graph.input_weight(foreign.handle(), 0), None);
+    assert_eq!(
+        graph.set_playable_speed(foreign.handle(), 2.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        graph.set_playable_duration(foreign.handle(), 1.0),
+        Err(PlayableError::UnknownPlayable)
+    );
+
+    let foreign_output = other.create_output("Foreign", foreign.handle())?;
+    assert_eq!(graph.output_name(foreign_output), None);
+    assert!(graph.output_pose(foreign_output).is_empty());
+
+    let foreign_layers = AnimationLayerMixerPlayable::create(&mut other, 1);
+    assert_eq!(
+        foreign_layers.set_layer_mask(&mut graph, 0, AvatarMask::new("Arm")),
+        Err(PlayableError::UnknownPlayable)
+    );
+    Ok(())
+}
+
+#[test]
 fn invalid_connections_and_masks_are_rejected() -> Result<(), Box<dyn Error>> {
     let mut graph = PlayableGraph::new("Invalid");
     let mixer = AnimationMixerPlayable::create(&mut graph, 1);

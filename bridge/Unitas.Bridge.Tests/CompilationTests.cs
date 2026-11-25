@@ -31,6 +31,7 @@ namespace Unitas.Bridge.Tests
         {
             TestStory6AssembliesAsmrefDefinesAndVersionDefines();
             TestStory6ReferenceCycleDiagnostic();
+            TestStory6OverrideReferencesHonorsPrecompiledReferences();
             TestStory7TargetDefinesEditorAndPlayers();
             TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile();
             TestStory10IncompatibleNativePluginDllImportDiagnostic();
@@ -136,6 +137,109 @@ namespace Unitas.Bridge.Tests
                 DeleteDirectoryIfExists(tempProject);
             }
         }
+
+        private static void TestStory6OverrideReferencesHonorsPrecompiledReferences()
+        {
+            string withReference = CreateEmptyTempProject("story6_precompiled_ok");
+            string withoutReference = CreateEmptyTempProject("story6_precompiled_missing");
+            try
+            {
+                WritePrecompiledReferenceProject(withReference, "Unitas.Debugging.dll");
+                WritePrecompiledReferenceProject(withoutReference, null);
+
+                ScriptCompilationResult referenced = ScriptCompilation.CompileProject(withReference);
+                Check.Equal("Story 6 overrideReferences honours precompiledReferences", true, referenced.Succeeded);
+                CompiledAssemblyRecord? record = referenced.FindAssembly("Precompiled");
+                Check.Equal(
+                    "Story 6 precompiled plugin is in the resolved reference list",
+                    true,
+                    record != null && ContainsFileName(record.References, "Unitas.Debugging.dll"));
+
+                ScriptCompilationResult missing = ScriptCompilation.CompileProject(withoutReference);
+                Check.Equal("Story 6 compile without the precompiled reference fails", false, missing.Succeeded);
+                bool foundMissingReference = false;
+                for (int i = 0; i < missing.Diagnostics.Count; i++)
+                {
+                    ScriptDiagnostic d = missing.Diagnostics[i];
+                    if (d.Severity == ScriptDiagnosticSeverity.Error
+                        && string.Equals(d.Id, "CS0234", StringComparison.OrdinalIgnoreCase)
+                        && d.Message.Contains("Debugging", StringComparison.Ordinal)
+                        && d.File.Contains("PrecompiledUser.cs", StringComparison.Ordinal))
+                    {
+                        foundMissingReference = true;
+                        break;
+                    }
+                }
+
+                Check.Equal(
+                    "Story 6 missing precompiled reference reports CS0234 for the using script",
+                    true,
+                    foundMissingReference);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(withReference);
+                DeleteDirectoryIfExists(withoutReference);
+            }
+        }
+
+        private static void WritePrecompiledReferenceProject(string projectRoot, string? precompiledReference)
+        {
+            string pluginDir = Path.Combine(projectRoot, "Assets", "Plugins");
+            Directory.CreateDirectory(pluginDir);
+            string pluginPath = Path.Combine(pluginDir, "Unitas.Debugging.dll");
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "Unitas.Debugging.dll"), pluginPath, true);
+            File.WriteAllText(pluginPath + ".meta", ManagedPluginMeta);
+
+            string assemblyDir = Path.Combine(projectRoot, "Assets", "Precompiled");
+            Directory.CreateDirectory(assemblyDir);
+            File.WriteAllText(Path.Combine(assemblyDir, "Precompiled.asmdef"), PrecompiledAsmDef(precompiledReference));
+            File.WriteAllText(
+                Path.Combine(assemblyDir, "PrecompiledUser.cs"),
+                "using UnityEngine;\n"
+                    + "public class PrecompiledUser : MonoBehaviour\n"
+                    + "{\n"
+                    + "    public Unitas.Debugging.DebugFrame Frame;\n"
+                    + "}\n");
+            File.WriteAllText(
+                Path.Combine(assemblyDir, "PrecompiledUser.cs.meta"),
+                "fileFormatVersion: 2\nguid: 40000000000000000000000000000002\nMonoImporter:\n  serializedVersion: 2\n");
+        }
+
+        private static string PrecompiledAsmDef(string? precompiledReference)
+        {
+            string references = precompiledReference == null
+                ? "[]"
+                : "[ \"" + precompiledReference + "\" ]";
+            return "{\n"
+                + "  \"name\": \"Precompiled\",\n"
+                + "  \"rootNamespace\": \"Precompiled\",\n"
+                + "  \"references\": [],\n"
+                + "  \"overrideReferences\": true,\n"
+                + "  \"precompiledReferences\": " + references + ",\n"
+                + "  \"autoReferenced\": true,\n"
+                + "  \"noEngineReferences\": false\n"
+                + "}\n";
+        }
+
+        private const string ManagedPluginMeta = "fileFormatVersion: 2\n"
+            + "guid: 40000000000000000000000000000001\n"
+            + "PluginImporter:\n"
+            + "  serializedVersion: 2\n"
+            + "  isPreloaded: 0\n"
+            + "  autoReferenced: 1\n"
+            + "  validateReferences: 1\n"
+            + "  platformData:\n"
+            + "  - first:\n"
+            + "      Any:\n"
+            + "    second:\n"
+            + "      enabled: 1\n"
+            + "      settings: {}\n"
+            + "  - first:\n"
+            + "      Editor: Editor\n"
+            + "    second:\n"
+            + "      enabled: 0\n"
+            + "      settings: {}\n";
 
         private static void TestStory7TargetDefinesEditorAndPlayers()
         {
@@ -458,6 +562,19 @@ namespace Unitas.Bridge.Tests
                 if (string.Equals(d.Id, expectedId, StringComparison.OrdinalIgnoreCase)
                     && d.Line == expectedLine
                     && string.Equals(d.Assembly, expectedAssembly, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool ContainsFileName(IReadOnlyList<string> paths, string fileName)
+        {
+            for (int i = 0; i < paths.Count; i++)
+            {
+                if (string.Equals(Path.GetFileName(paths[i]), fileName, StringComparison.Ordinal))
                 {
                     return true;
                 }
