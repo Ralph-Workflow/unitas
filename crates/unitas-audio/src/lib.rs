@@ -104,39 +104,6 @@ impl AudioClip {
     }
 }
 
-pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
-    use unitas_asset::audio_import as import;
-    let pcm =
-        if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
-            import::decode_wav(bytes)
-        } else if bytes.starts_with(b"FORM") {
-            import::decode_aiff(bytes)
-        } else if bytes.starts_with(b"OggS") {
-            import::decode_ogg_vorbis(bytes)
-        } else if bytes.starts_with(b"ID3")
-            || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
-        {
-            import::decode_mp3(bytes)
-        } else {
-            return Err(AudioError::UnsupportedFormat(
-                "unrecognized audio container".to_string(),
-            ));
-        }
-        .map_err(|error| AudioError::UnsupportedFormat(error.to_string()))?;
-    if pcm.channels == 0 || pcm.channels > 2 {
-        return Err(AudioError::UnsupportedFormat(format!(
-            "{} audio channels are not supported",
-            pcm.channels
-        )));
-    }
-    let samples = pcm
-        .samples
-        .iter()
-        .map(|sample| f32::from(*sample) / 32768.0)
-        .collect();
-    Ok(AudioClip::new(pcm.channels, pcm.sample_rate, samples))
-}
-
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
     let slice = bytes.get(offset..offset + 2)?;
     Some(u16::from_le_bytes([slice[0], slice[1]]))
@@ -280,6 +247,245 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         samples.push((f32::from(pcm) / 32768.0).clamp(-1.0, 1.0));
     }
 
+    Ok(AudioClip::new(channels, sample_rate, samples))
+}
+
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    if bytes.starts_with(b"RIFF") {
+        return parse_wav(bytes);
+    }
+    if bytes.starts_with(b"OggS") {
+        return decode_ogg_vorbis(bytes);
+    }
+    if bytes.starts_with(b"ID3")
+        || (bytes.len() >= 2
+            && bytes[0] == 0xFF
+            && (bytes[1] == 0xFB
+                || bytes[1] == 0xF3
+                || bytes[1] == 0xF2
+                || (bytes[1] & 0xE0) == 0xE0))
+    {
+        return decode_mp3(bytes);
+    }
+    if bytes.starts_with(b"FORM") && bytes.len() >= 12 && &bytes[8..12] == b"AIFF" {
+        return decode_aiff(bytes);
+    }
+    Err(AudioError::UnsupportedFormat(format!(
+        "unrecognized audio container ({} bytes)",
+        bytes.len()
+    )))
+}
+
+fn convert_i16_samples(pcm: &[i16]) -> Vec<f32> {
+    pcm.iter()
+        .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
+        .collect()
+}
+
+fn decode_ogg_vorbis(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(bytes))
+        .map_err(|err| AudioError::UnsupportedFormat(format!("ogg vorbis init failed: {err}")))?;
+    let channels = u16::from(reader.ident_hdr.audio_channels);
+    let sample_rate = reader.ident_hdr.audio_sample_rate;
+    if channels == 0 || channels > 2 || sample_rate == 0 {
+        return Err(AudioError::InvalidWav(
+            "ogg vorbis stream has unsupported channel count or zero sample rate".to_string(),
+        ));
+    }
+    let mut samples = Vec::new();
+    loop {
+        match reader.read_dec_packet_itl() {
+            Ok(Some(packet)) => samples.extend(convert_i16_samples(&packet)),
+            Ok(None) => break,
+            Err(err) => {
+                return Err(AudioError::InvalidWav(format!(
+                    "ogg vorbis decode failed: {err}"
+                )));
+            }
+        }
+    }
+    Ok(AudioClip::new(channels, sample_rate, samples))
+}
+
+fn decode_mp3(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    let mut decoder = minimp3::Decoder::new(std::io::Cursor::new(bytes));
+    let mut channels = 0u16;
+    let mut sample_rate = 0u32;
+    let mut samples = Vec::new();
+    loop {
+        match decoder.next_frame() {
+            Ok(frame) => {
+                if frame.channels == 0 || frame.sample_rate <= 0 {
+                    return Err(AudioError::InvalidWav(
+                        "mp3 frame has non-positive channels or sample rate".to_string(),
+                    ));
+                }
+                let frame_channels = frame.channels as u16;
+                let frame_rate = frame.sample_rate as u32;
+                if channels == 0 {
+                    channels = frame_channels;
+                    sample_rate = frame_rate;
+                } else if channels != frame_channels {
+                    return Err(AudioError::InvalidWav(
+                        "mp3 frame channel count changed mid-stream".to_string(),
+                    ));
+                }
+                samples.extend(convert_i16_samples(&frame.data));
+            }
+            Err(minimp3::Error::Eof) => break,
+            Err(err) => {
+                return Err(AudioError::InvalidWav(format!("mp3 decode failed: {err}")));
+            }
+        }
+    }
+    if channels == 0 {
+        return Err(AudioError::InvalidWav(
+            "mp3 stream contains no frames".to_string(),
+        ));
+    }
+    Ok(AudioClip::new(channels, sample_rate, samples))
+}
+
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    let slice = bytes.get(offset..offset + 2)?;
+    Some(u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    let slice = bytes.get(offset..offset + 4)?;
+    Some(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn extended80_to_rate(bytes: &[u8]) -> Result<u32, AudioError> {
+    if bytes.len() < 10 {
+        return Err(AudioError::InvalidWav(
+            "aiff sample rate shorter than 10-byte extended value".to_string(),
+        ));
+    }
+    let exponent = (u16::from(bytes[0] & 0x7F) << 8) | u16::from(bytes[1]);
+    let mut mantissa_bytes = [0u8; 8];
+    mantissa_bytes.copy_from_slice(&bytes[2..10]);
+    let mantissa = u64::from_be_bytes(mantissa_bytes);
+    if exponent == 0 && mantissa == 0 {
+        return Err(AudioError::InvalidWav(
+            "aiff sample rate is zero".to_string(),
+        ));
+    }
+    let value = (mantissa as f64) * 2f64.powi(i32::from(exponent) - 16383 - 63);
+    if !(value > 0.0 && value <= f64::from(u32::MAX)) {
+        return Err(AudioError::InvalidWav(
+            "aiff sample rate out of range".to_string(),
+        ));
+    }
+    Ok(value.round() as u32)
+}
+
+fn decode_aiff(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    if bytes.len() < 12 {
+        return Err(AudioError::InvalidWav(
+            "buffer shorter than 12-byte FORM header".to_string(),
+        ));
+    }
+    let mut offset = 12usize;
+    let mut comm_fields: Option<(u16, u32, u16, u32)> = None;
+    let mut data_slice: Option<&[u8]> = None;
+
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let Some(chunk_size_u32) = read_u32_be(bytes, offset + 4) else {
+            break;
+        };
+        let chunk_size = chunk_size_u32 as usize;
+        let payload_start = offset + 8;
+        let Some(payload_end) = payload_start.checked_add(chunk_size) else {
+            return Err(AudioError::InvalidWav("chunk size overflow".to_string()));
+        };
+        if payload_end > bytes.len() {
+            return Err(AudioError::InvalidWav(
+                "chunk extends past end of buffer".to_string(),
+            ));
+        }
+        let payload = &bytes[payload_start..payload_end];
+
+        if chunk_id == b"COMM" {
+            if chunk_size < 18 {
+                return Err(AudioError::InvalidWav(
+                    "aiff COMM chunk smaller than 18 bytes".to_string(),
+                ));
+            }
+            let Some(channels) = read_u16_be(bytes, payload_start) else {
+                return Err(AudioError::InvalidWav(
+                    "failed to read aiff channels".to_string(),
+                ));
+            };
+            let Some(frames) = read_u32_be(bytes, payload_start + 2) else {
+                return Err(AudioError::InvalidWav(
+                    "failed to read aiff frame count".to_string(),
+                ));
+            };
+            let Some(bits_per_sample) = read_u16_be(bytes, payload_start + 6) else {
+                return Err(AudioError::InvalidWav(
+                    "failed to read aiff bits per sample".to_string(),
+                ));
+            };
+            let sample_rate = extended80_to_rate(&payload[8..18])?;
+            comm_fields = Some((channels, frames, bits_per_sample, sample_rate));
+        } else if chunk_id == b"SSND" {
+            if chunk_size < 8 {
+                return Err(AudioError::InvalidWav(
+                    "aiff SSND chunk smaller than 8 bytes".to_string(),
+                ));
+            }
+            let Some(block_offset) = read_u32_be(bytes, payload_start) else {
+                return Err(AudioError::InvalidWav(
+                    "failed to read aiff ssnd offset".to_string(),
+                ));
+            };
+            let data_start = payload_start + 8 + block_offset as usize;
+            data_slice = bytes.get(data_start..payload_end);
+        }
+
+        let pad = chunk_size % 2;
+        offset = payload_end.saturating_add(pad);
+    }
+
+    let Some((channels, _frames, bits_per_sample, sample_rate)) = comm_fields else {
+        return Err(AudioError::InvalidWav(
+            "missing aiff COMM chunk".to_string(),
+        ));
+    };
+    if channels != 1 && channels != 2 {
+        return Err(AudioError::UnsupportedFormat(format!(
+            "AIFF channels {channels} (only mono 1 or stereo 2 supported)"
+        )));
+    }
+    if bits_per_sample != 16 {
+        return Err(AudioError::UnsupportedFormat(format!(
+            "AIFF bits_per_sample {bits_per_sample} (only 16-bit PCM supported)"
+        )));
+    }
+
+    let Some(raw_data) = data_slice else {
+        return Err(AudioError::InvalidWav(
+            "missing aiff SSND chunk".to_string(),
+        ));
+    };
+    let bytes_per_frame = usize::from(channels) * 2;
+    if raw_data.len() % bytes_per_frame != 0 {
+        return Err(AudioError::InvalidWav(
+            "aiff sound data not aligned to frame size".to_string(),
+        ));
+    }
+
+    let sample_count = raw_data.len() / 2;
+    let mut pcm = Vec::with_capacity(sample_count);
+    for idx in 0..sample_count {
+        let Some(sample) = read_u16_be(raw_data, idx * 2) else {
+            return Err(AudioError::InvalidWav("truncated aiff sample".to_string()));
+        };
+        pcm.push(sample as i16);
+    }
+    let samples = convert_i16_samples(&pcm);
     Ok(AudioClip::new(channels, sample_rate, samples))
 }
 
