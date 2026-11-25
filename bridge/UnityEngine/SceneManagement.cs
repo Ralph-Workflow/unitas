@@ -86,7 +86,19 @@ namespace UnityEngine
 
         internal void SetDeferredSceneLoadedEvent(Action callback)
         {
-            _deferredCompletionCallback = callback;
+            if (_deferredCompletionCallback == null)
+            {
+                _deferredCompletionCallback = callback;
+            }
+            else
+            {
+                Action existing = _deferredCompletionCallback;
+                _deferredCompletionCallback = () =>
+                {
+                    existing();
+                    callback();
+                };
+            }
         }
 
         internal void ClearDeferredSceneLoadedEvent()
@@ -562,7 +574,19 @@ namespace UnityEngine.SceneManagement
             bool deferExecution = !allowSceneActivation || _callbackDepth > 0 || HasHeldOperationAhead();
             if (deferExecution)
             {
-                operation.SetDeferredActivation(() => ExecuteHostLoad(host, scenePath, mode));
+                operation.SetDeferredActivation(() =>
+                {
+                    AsyncOperation? previousCapturing = _capturingAsyncLoad;
+                    _capturingAsyncLoad = operation;
+                    try
+                    {
+                        ExecuteHostLoad(host, scenePath, mode);
+                    }
+                    finally
+                    {
+                        _capturingAsyncLoad = previousCapturing;
+                    }
+                });
             }
             else
             {
@@ -688,6 +712,12 @@ namespace UnityEngine.SceneManagement
 
         internal static void RaiseActiveSceneChanged(Scene previousScene, Scene newScene)
         {
+            if (_capturingAsyncLoad != null)
+            {
+                _capturingAsyncLoad.SetDeferredSceneLoadedEvent(() => RaiseActiveSceneChanged(previousScene, newScene));
+                return;
+            }
+
             Action<Scene, Scene>? handlers = activeSceneChanged;
             if (handlers == null)
             {
@@ -841,7 +871,7 @@ namespace UnityEngine.SceneManagement
                 }
             }
 
-            if (host.TryResolveScenePath(sceneName, out string resolvedPath))
+            if (!EnforceBuildList && host.TryResolveScenePath(sceneName, out string resolvedPath))
             {
                 return resolvedPath;
             }

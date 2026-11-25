@@ -7,6 +7,12 @@ namespace UnityEngine.Events
 
     public delegate void UnityAction<T0>(T0 arg0);
 
+    public delegate void UnityAction<T0, T1>(T0 arg0, T1 arg1);
+
+    public delegate void UnityAction<T0, T1, T2>(T0 arg0, T1 arg1, T2 arg2);
+
+    public delegate void UnityAction<T0, T1, T2, T3>(T0 arg0, T1 arg1, T2 arg2, T3 arg3);
+
     public enum UnityEventCallState
     {
         Off = 0,
@@ -364,6 +370,72 @@ namespace UnityEngine.Events
             }
         }
 
+        protected void InvokePersistentDynamic<T0, T1>(T0 arg0, T1 arg1)
+        {
+            List<PersistentListenerEntry> snapshot = new List<PersistentListenerEntry>(_persistentListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                PersistentListenerEntry entry = snapshot[index];
+                if (entry.CallState == UnityEventCallState.Off)
+                {
+                    continue;
+                }
+
+                if (entry.ArgumentMode == PersistentArgumentMode.Dynamic)
+                {
+                    InvokeSinglePersistentDynamic(entry, (arg0, arg1));
+                }
+                else
+                {
+                    InvokeSinglePersistentVoid(entry);
+                }
+            }
+        }
+
+        protected void InvokePersistentDynamic<T0, T1, T2>(T0 arg0, T1 arg1, T2 arg2)
+        {
+            List<PersistentListenerEntry> snapshot = new List<PersistentListenerEntry>(_persistentListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                PersistentListenerEntry entry = snapshot[index];
+                if (entry.CallState == UnityEventCallState.Off)
+                {
+                    continue;
+                }
+
+                if (entry.ArgumentMode == PersistentArgumentMode.Dynamic)
+                {
+                    InvokeSinglePersistentDynamic(entry, (arg0, arg1, arg2));
+                }
+                else
+                {
+                    InvokeSinglePersistentVoid(entry);
+                }
+            }
+        }
+
+        protected void InvokePersistentDynamic<T0, T1, T2, T3>(T0 arg0, T1 arg1, T2 arg2, T3 arg3)
+        {
+            List<PersistentListenerEntry> snapshot = new List<PersistentListenerEntry>(_persistentListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                PersistentListenerEntry entry = snapshot[index];
+                if (entry.CallState == UnityEventCallState.Off)
+                {
+                    continue;
+                }
+
+                if (entry.ArgumentMode == PersistentArgumentMode.Dynamic)
+                {
+                    InvokeSinglePersistentDynamic(entry, (arg0, arg1, arg2, arg3));
+                }
+                else
+                {
+                    InvokeSinglePersistentVoid(entry);
+                }
+            }
+        }
+
         private void InvokeSinglePersistentVoid(PersistentListenerEntry entry)
         {
             if (entry.DirectVoidAction != null)
@@ -648,6 +720,195 @@ namespace UnityEngine.Events
                 try
                 {
                     call(arg0);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    Debug.LogException(ex);
+                }
+            }
+        }
+    }
+
+    public class UnityEvent<T0, T1> : UnityEventBase
+    {
+        private readonly List<UnityAction<T0, T1>> _dynamicListeners = new List<UnityAction<T0, T1>>();
+
+        public UnityEvent()
+        {
+        }
+
+        public UnityEvent(string ownerName, string fieldName)
+        {
+            OwnerName = ownerName ?? string.Empty;
+            FieldName = fieldName ?? string.Empty;
+        }
+
+        public void AddListener(UnityAction<T0, T1> call)
+        {
+            if (call == null)
+            {
+                throw new ArgumentNullException(nameof(call));
+            }
+
+            _dynamicListeners.Add(call);
+        }
+
+        public void RemoveListener(UnityAction<T0, T1> call)
+        {
+            if (call == null)
+            {
+                return;
+            }
+
+            _dynamicListeners.Remove(call);
+        }
+
+        public override void RemoveAllListeners()
+        {
+            _dynamicListeners.Clear();
+        }
+
+        public void Invoke(T0 arg0, T1 arg1)
+        {
+            InvokePersistentDynamic(arg0, arg1);
+            List<UnityAction<T0, T1>> snapshot = new List<UnityAction<T0, T1>>(_dynamicListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                UnityAction<T0, T1> call = snapshot[index];
+                if (!_dynamicListeners.Contains(call))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    call(arg0, arg1);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    Debug.LogException(ex);
+                }
+            }
+        }
+    }
+
+    public class UnityEvent<T0, T1, T2> : UnityEventBase
+    {
+        private readonly List<UnityAction<T0, T1, T2>> _dynamicListeners = new List<UnityAction<T0, T1, T2>>();
+
+        public UnityEvent()
+        {
+        }
+
+        public UnityEvent(string ownerName, string fieldName)
+        {
+            OwnerName = ownerName ?? string.Empty;
+            FieldName = fieldName ?? string.Empty;
+        }
+
+        public void AddListener(UnityAction<T0, T1, T2> call)
+        {
+            if (call == null)
+            {
+                throw new ArgumentNullException(nameof(call));
+            }
+
+            _dynamicListeners.Add(call);
+        }
+
+        public void RemoveListener(UnityAction<T0, T1, T2> call)
+        {
+            if (call == null)
+            {
+                return;
+            }
+
+            _dynamicListeners.Remove(call);
+        }
+
+        public override void RemoveAllListeners()
+        {
+            _dynamicListeners.Clear();
+        }
+
+        public void Invoke(T0 arg0, T1 arg1, T2 arg2)
+        {
+            InvokePersistentDynamic(arg0, arg1, arg2);
+            List<UnityAction<T0, T1, T2>> snapshot = new List<UnityAction<T0, T1, T2>>(_dynamicListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                UnityAction<T0, T1, T2> call = snapshot[index];
+                if (!_dynamicListeners.Contains(call))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    call(arg0, arg1, arg2);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    Debug.LogException(ex);
+                }
+            }
+        }
+    }
+
+    public class UnityEvent<T0, T1, T2, T3> : UnityEventBase
+    {
+        private readonly List<UnityAction<T0, T1, T2, T3>> _dynamicListeners = new List<UnityAction<T0, T1, T2, T3>>();
+
+        public UnityEvent()
+        {
+        }
+
+        public UnityEvent(string ownerName, string fieldName)
+        {
+            OwnerName = ownerName ?? string.Empty;
+            FieldName = fieldName ?? string.Empty;
+        }
+
+        public void AddListener(UnityAction<T0, T1, T2, T3> call)
+        {
+            if (call == null)
+            {
+                throw new ArgumentNullException(nameof(call));
+            }
+
+            _dynamicListeners.Add(call);
+        }
+
+        public void RemoveListener(UnityAction<T0, T1, T2, T3> call)
+        {
+            if (call == null)
+            {
+                return;
+            }
+
+            _dynamicListeners.Remove(call);
+        }
+
+        public override void RemoveAllListeners()
+        {
+            _dynamicListeners.Clear();
+        }
+
+        public void Invoke(T0 arg0, T1 arg1, T2 arg2, T3 arg3)
+        {
+            InvokePersistentDynamic(arg0, arg1, arg2, arg3);
+            List<UnityAction<T0, T1, T2, T3>> snapshot = new List<UnityAction<T0, T1, T2, T3>>(_dynamicListeners);
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                UnityAction<T0, T1, T2, T3> call = snapshot[index];
+                if (!_dynamicListeners.Contains(call))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    call(arg0, arg1, arg2, arg3);
                 }
                 catch (Exception ex) when (!(ex is OutOfMemoryException))
                 {

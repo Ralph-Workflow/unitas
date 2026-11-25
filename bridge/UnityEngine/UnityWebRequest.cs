@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -105,28 +107,38 @@ namespace UnityEngine.Networking
         private bool _sent;
         private float _downloadProgress;
         private ulong _downloadedBytes;
+        private float _uploadProgress;
+        private ulong _uploadedBytes;
 
         public UnityWebRequest()
-            : this(string.Empty, kHttpVerbGET, null)
+            : this(string.Empty, kHttpVerbGET, null, null)
         {
         }
 
         public UnityWebRequest(string url)
-            : this(url, kHttpVerbGET, null)
+            : this(url, kHttpVerbGET, null, null)
         {
         }
 
         public UnityWebRequest(string url, string method)
-            : this(url, method, null)
+            : this(url, method, null, null)
         {
         }
 
         public UnityWebRequest(string url, string method, DownloadHandler? downloadHandler)
+            : this(url, method, downloadHandler, null)
+        {
+        }
+
+        public UnityWebRequest(string url, string method, DownloadHandler? downloadHandler, UploadHandler? uploadHandler)
         {
             _url = url ?? string.Empty;
+            uri = TryCreateUri(_url);
             _method = string.IsNullOrWhiteSpace(method) ? kHttpVerbGET : method;
             this.downloadHandler = downloadHandler;
+            this.uploadHandler = uploadHandler;
             disposeDownloadHandlerOnDispose = true;
+            disposeUploadHandlerOnDispose = true;
             result = Result.InProgress;
             error = null;
         }
@@ -211,6 +223,10 @@ namespace UnityEngine.Networking
 
         public bool disposeDownloadHandlerOnDispose { get; set; }
 
+        public UploadHandler? uploadHandler { get; set; }
+
+        public bool disposeUploadHandlerOnDispose { get; set; }
+
         public Result result { get; private set; }
 
         public long responseCode { get; private set; }
@@ -229,19 +245,184 @@ namespace UnityEngine.Networking
 
         public ulong downloadedBytes => _downloadedBytes;
 
+        public float uploadProgress => isDone ? 1f : _uploadProgress;
+
+        public ulong uploadedBytes => _uploadedBytes;
+
         public static UnityWebRequest Get(string uri)
         {
-            return new UnityWebRequest(uri, kHttpVerbGET, new DownloadHandlerBuffer());
+            return new UnityWebRequest(uri, kHttpVerbGET, new DownloadHandlerBuffer(), null);
         }
 
         public static UnityWebRequest Head(string uri)
         {
-            return new UnityWebRequest(uri, kHttpVerbHEAD, null);
+            return new UnityWebRequest(uri, kHttpVerbHEAD, null, null);
         }
 
         public static UnityWebRequest Delete(string uri)
         {
-            return new UnityWebRequest(uri, kHttpVerbDELETE, null);
+            return new UnityWebRequest(uri, kHttpVerbDELETE, null, null);
+        }
+
+        public static UnityWebRequest Post(string uri, string postData, string contentType = "application/x-www-form-urlencoded")
+        {
+            byte[] payload = Encoding.UTF8.GetBytes(postData ?? string.Empty);
+            UploadHandlerRaw uploader = new UploadHandlerRaw(payload)
+            {
+                contentType = string.IsNullOrWhiteSpace(contentType) ? "application/x-www-form-urlencoded" : contentType,
+            };
+            return new UnityWebRequest(uri, kHttpVerbPOST, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static UnityWebRequest Post(string uri, Dictionary<string, string> formFields)
+        {
+            UploadHandlerForm uploader = new UploadHandlerForm(formFields);
+            return new UnityWebRequest(uri, kHttpVerbPOST, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static UnityWebRequest Post(string uri, WWWForm formData)
+        {
+            if (formData == null)
+            {
+                throw new ArgumentNullException(nameof(formData));
+            }
+
+            UploadHandlerForm uploader = new UploadHandlerForm(formData);
+            UnityWebRequest request = new UnityWebRequest(uri, kHttpVerbPOST, new DownloadHandlerBuffer(), uploader);
+            foreach (KeyValuePair<string, string> header in formData.headers)
+            {
+                if (!string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.SetRequestHeader(header.Key, header.Value);
+                }
+            }
+
+            return request;
+        }
+
+        public static UnityWebRequest Post(string uri, List<IMultipartFormSection> multipartFormSections)
+        {
+            byte[] boundary = GenerateBoundary();
+            return Post(uri, multipartFormSections, boundary);
+        }
+
+        public static UnityWebRequest Post(string uri, List<IMultipartFormSection> multipartFormSections, byte[] boundary)
+        {
+            if (multipartFormSections == null)
+            {
+                throw new ArgumentNullException(nameof(multipartFormSections));
+            }
+
+            if (boundary == null || boundary.Length == 0)
+            {
+                throw new ArgumentException("Boundary cannot be null or empty.", nameof(boundary));
+            }
+
+            byte[] payload = SerializeSimpleFormSections(multipartFormSections, boundary);
+            string boundaryText = Encoding.ASCII.GetString(boundary);
+            UploadHandlerRaw uploader = new UploadHandlerRaw(payload)
+            {
+                contentType = "multipart/form-data; boundary=" + boundaryText,
+            };
+            return new UnityWebRequest(uri, kHttpVerbPOST, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static UnityWebRequest PostWwwForm(string uri, string form)
+        {
+            string urlEncoded = string.IsNullOrEmpty(form) ? string.Empty : Uri.EscapeDataString(form);
+            byte[] payload = Encoding.UTF8.GetBytes(urlEncoded);
+            UploadHandlerRaw uploader = new UploadHandlerRaw(payload)
+            {
+                contentType = "application/x-www-form-urlencoded",
+            };
+            return new UnityWebRequest(uri, kHttpVerbPOST, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static UnityWebRequest Put(string uri, byte[] bodyData)
+        {
+            UploadHandlerRaw uploader = new UploadHandlerRaw(bodyData ?? Array.Empty<byte>())
+            {
+                contentType = "application/octet-stream",
+            };
+            return new UnityWebRequest(uri, kHttpVerbPUT, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static UnityWebRequest Put(string uri, string bodyData)
+        {
+            byte[] payload = Encoding.UTF8.GetBytes(bodyData ?? string.Empty);
+            UploadHandlerRaw uploader = new UploadHandlerRaw(payload)
+            {
+                contentType = "application/octet-stream",
+            };
+            return new UnityWebRequest(uri, kHttpVerbPUT, new DownloadHandlerBuffer(), uploader);
+        }
+
+        public static byte[] GenerateBoundary()
+        {
+            string token = "unitasboundary" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+            return Encoding.ASCII.GetBytes(token);
+        }
+
+        public static byte[] SerializeSimpleForm(Dictionary<string, string> formFields)
+        {
+            return UploadHandlerForm.EncodeFormFields(formFields);
+        }
+
+        public static byte[] SerializeSimpleFormSections(List<IMultipartFormSection> multipartFormSections, byte[] boundary)
+        {
+            if (multipartFormSections == null)
+            {
+                throw new ArgumentNullException(nameof(multipartFormSections));
+            }
+
+            if (boundary == null || boundary.Length == 0)
+            {
+                throw new ArgumentException("Boundary cannot be null or empty.", nameof(boundary));
+            }
+
+            string boundaryText = Encoding.ASCII.GetString(boundary);
+            using MemoryStream stream = new MemoryStream();
+            foreach (IMultipartFormSection section in multipartFormSections)
+            {
+                if (section == null)
+                {
+                    continue;
+                }
+
+                StringBuilder headerBuilder = new StringBuilder();
+                headerBuilder.Append("--").Append(boundaryText).Append("\r\n");
+                string sectionContentType = string.IsNullOrWhiteSpace(section.contentType)
+                    ? "application/octet-stream"
+                    : section.contentType!;
+                headerBuilder.Append("Content-Type: ").Append(sectionContentType).Append("\r\n");
+                headerBuilder.Append("Content-Disposition: form-data");
+                if (!string.IsNullOrEmpty(section.sectionName))
+                {
+                    headerBuilder.Append("; name=\"").Append(section.sectionName).Append('"');
+                }
+
+                if (!string.IsNullOrEmpty(section.fileName))
+                {
+                    headerBuilder.Append("; filename=\"").Append(section.fileName).Append('"');
+                }
+
+                headerBuilder.Append("\r\n\r\n");
+                byte[] headerBytes = Encoding.UTF8.GetBytes(headerBuilder.ToString());
+                stream.Write(headerBytes, 0, headerBytes.Length);
+
+                byte[] sectionBytes = section.sectionData ?? Array.Empty<byte>();
+                if (sectionBytes.Length > 0)
+                {
+                    stream.Write(sectionBytes, 0, sectionBytes.Length);
+                }
+
+                byte[] crlf = Encoding.ASCII.GetBytes("\r\n");
+                stream.Write(crlf, 0, crlf.Length);
+            }
+
+            byte[] closingBytes = Encoding.ASCII.GetBytes("--" + boundaryText + "--\r\n");
+            stream.Write(closingBytes, 0, closingBytes.Length);
+            return stream.ToArray();
         }
 
         public static void ClearDiagnostics()
@@ -360,6 +541,12 @@ namespace UnityEngine.Networking
                 downloadHandler = null;
             }
 
+            if (disposeUploadHandlerOnDispose && uploadHandler != null)
+            {
+                uploadHandler.Dispose();
+                uploadHandler = null;
+            }
+
             CancellationTokenSource? cts = _activeCts;
             _activeCts = null;
             cts?.Dispose();
@@ -431,9 +618,44 @@ namespace UnityEngine.Networking
             try
             {
                 using HttpRequestMessage requestMessage = new HttpRequestMessage(new HttpMethod(_method), uri);
+                string? customContentType = null;
                 foreach (KeyValuePair<string, string> header in _requestHeaders)
                 {
-                    requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    {
+                        customContentType = header.Value;
+                        continue;
+                    }
+
+                    if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value))
+                    {
+                        customContentType ??= uploadHandler?.contentType;
+                    }
+                }
+
+                if (uploadHandler != null)
+                {
+                    byte[] uploadBytes = uploadHandler.data;
+                    ByteArrayContent content = new ByteArrayContent(uploadBytes);
+                    string effectiveContentType = !string.IsNullOrWhiteSpace(customContentType)
+                        ? customContentType!
+                        : uploadHandler.contentType;
+                    if (!string.IsNullOrWhiteSpace(effectiveContentType))
+                    {
+                        if (MediaTypeHeaderValue.TryParse(effectiveContentType, out MediaTypeHeaderValue? parsedMediaType))
+                        {
+                            content.Headers.ContentType = parsedMediaType;
+                        }
+                        else
+                        {
+                            content.Headers.TryAddWithoutValidation("Content-Type", effectiveContentType);
+                        }
+                    }
+
+                    requestMessage.Content = content;
+                    _uploadedBytes = (ulong)uploadBytes.Length;
+                    _uploadProgress = 1f;
+                    uploadHandler.MarkSent();
                 }
 
                 using HttpResponseMessage responseMessage = SharedHttpClient

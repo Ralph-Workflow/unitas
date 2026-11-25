@@ -9,7 +9,7 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|loop> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>]");
                 return 1;
             }
 
@@ -18,10 +18,11 @@ namespace Unitas.Scripting
             bool isGenerateIde = string.Equals(command, "generate-ide", StringComparison.OrdinalIgnoreCase);
             bool isDiagnose = string.Equals(command, "diagnose", StringComparison.OrdinalIgnoreCase);
             bool isSymbols = string.Equals(command, "symbols", StringComparison.OrdinalIgnoreCase);
+            bool isLoop = string.Equals(command, "loop", StringComparison.OrdinalIgnoreCase);
 
-            if (!isCompile && !isGenerateIde && !isDiagnose && !isSymbols)
+            if (!isCompile && !isGenerateIde && !isDiagnose && !isSymbols && !isLoop)
             {
-                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', or 'symbols'.");
+                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', or 'loop'.");
                 return 1;
             }
 
@@ -105,6 +106,13 @@ namespace Unitas.Scripting
                 SymbolQueryResult queryResult = SymbolQuery.QueryProject(projectRoot, typeFilter, options);
                 Console.WriteLine(queryResult.ToJson());
                 return 0;
+            }
+
+            if (isLoop)
+            {
+                CodeLoopReport loopReport = CodeLoop.Run(projectRoot, options, typeFilter);
+                Console.WriteLine(loopReport.ToJson());
+                return loopReport.Succeeded ? 0 : 1;
             }
 
             ScriptCompilationResult result = ScriptCompilation.CompileProject(projectRoot, options);

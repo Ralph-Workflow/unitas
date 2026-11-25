@@ -9,6 +9,7 @@ namespace UnityEngine.TestTools
     {
         private static readonly List<Expectation> Pending = new List<Expectation>();
         private static readonly List<string> Unexpected = new List<string>();
+        private static int _consumedRecorderIndex;
 
         public static bool ignoreFailingMessages { get; set; }
 
@@ -34,9 +35,29 @@ namespace UnityEngine.TestTools
 
         public static void NoUnexpectedReceived()
         {
+            DrainFromLogRecorder();
             if (!ignoreFailingMessages && Unexpected.Count > 0)
             {
                 throw new AssertionException(Unexpected[0]);
+            }
+        }
+
+        public static void DrainFromLogRecorder()
+        {
+            IReadOnlyList<LogEntry> entries = LogRecorder.Entries;
+            while (_consumedRecorderIndex < entries.Count)
+            {
+                LogEntry entry = entries[_consumedRecorderIndex];
+                _consumedRecorderIndex++;
+
+                LogType logType = entry.Severity switch
+                {
+                    LogSeverity.Error => LogType.Error,
+                    LogSeverity.Warning => LogType.Warning,
+                    _ => LogType.Log
+                };
+
+                Record(logType, entry.Message);
             }
         }
 
@@ -62,6 +83,7 @@ namespace UnityEngine.TestTools
 
         public static IReadOnlyList<string> Verify()
         {
+            DrainFromLogRecorder();
             List<string> problems = new List<string>();
             for (int index = 0; index < Pending.Count; index++)
             {
@@ -81,6 +103,7 @@ namespace UnityEngine.TestTools
         {
             Pending.Clear();
             Unexpected.Clear();
+            _consumedRecorderIndex = LogRecorder.Entries.Count;
             ignoreFailingMessages = false;
         }
 

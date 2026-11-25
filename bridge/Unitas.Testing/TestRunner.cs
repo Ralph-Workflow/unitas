@@ -82,14 +82,30 @@ namespace Unitas.Testing
             LogAssert.Reset();
             LogRecorder.Clear();
 
+            string outputDir = !string.IsNullOrEmpty(effectiveOptions.OutputDirectory)
+                ? Path.GetFullPath(effectiveOptions.OutputDirectory)
+                : Path.Combine(fullProjectRoot, "Library", ScriptCompilation.DefaultOutputFolderName);
+
             List<DiscoveredTestAssembly> testAssemblies = TestDiscoveryAndGlueGenerator.DiscoverTestAssemblies(
                 fullProjectRoot,
                 out Dictionary<string, List<string>> _,
                 out List<ScriptDiagnostic> discoveryDiagnostics);
 
-            string outputDir = !string.IsNullOrEmpty(effectiveOptions.OutputDirectory)
-                ? Path.GetFullPath(effectiveOptions.OutputDirectory)
-                : Path.Combine(fullProjectRoot, "Library", ScriptCompilation.DefaultOutputFolderName);
+            if (effectiveOptions.SkipCompilation
+                && LastCompilationCache != null
+                && string.Equals(LastCompilationCache.ProjectRoot, fullProjectRoot, StringComparison.Ordinal)
+                && string.Equals(LastCompilationCache.OutputDir, outputDir, StringComparison.Ordinal))
+            {
+                return ExecuteCompiledTestRun(
+                    fullProjectRoot,
+                    outputDir,
+                    effectiveOptions,
+                    runStopwatch,
+                    testAssemblies,
+                    LastCompilationCache.AllDescriptors,
+                    LastCompilationCache.MetadataByMethodKey,
+                    LastCompilationCache.AllDiagnostics);
+            }
 
             ScriptCompilationOptions compileOptions = new ScriptCompilationOptions
             {
@@ -164,8 +180,6 @@ namespace Unitas.Testing
                     assemblyPostBuildTypes);
             }
 
-            List<DiscoveredTestCaseDescriptor> selectedDescriptors = FilterDescriptors(allDescriptors, effectiveOptions);
-
             AssemblyLoadContext testLoadContext = new AssemblyLoadContext(
                 "UnitasTestRun_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
                 isCollectible: true);
@@ -233,6 +247,66 @@ namespace Unitas.Testing
                         allDiagnostics);
                 }
             }
+
+            LastCompilationCache = new CachedTestCompilation(
+                fullProjectRoot,
+                outputDir,
+                allDescriptors,
+                metadataByMethodKey,
+                allDiagnostics);
+
+            return ExecuteCompiledTestRun(
+                fullProjectRoot,
+                outputDir,
+                effectiveOptions,
+                runStopwatch,
+                testAssemblies,
+                allDescriptors,
+                metadataByMethodKey,
+                allDiagnostics);
+        }
+
+        private sealed class CachedTestCompilation
+        {
+            public CachedTestCompilation(
+                string projectRoot,
+                string outputDir,
+                List<DiscoveredTestCaseDescriptor> allDescriptors,
+                Dictionary<string, SupplementalTestMetadata> metadataByMethodKey,
+                List<ScriptDiagnostic> allDiagnostics)
+            {
+                ProjectRoot = projectRoot;
+                OutputDir = outputDir;
+                AllDescriptors = allDescriptors;
+                MetadataByMethodKey = metadataByMethodKey;
+                AllDiagnostics = allDiagnostics;
+            }
+
+            public string ProjectRoot { get; }
+
+            public string OutputDir { get; }
+
+            public List<DiscoveredTestCaseDescriptor> AllDescriptors { get; }
+
+            public Dictionary<string, SupplementalTestMetadata> MetadataByMethodKey { get; }
+
+            public List<ScriptDiagnostic> AllDiagnostics { get; }
+        }
+
+        private static CachedTestCompilation? LastCompilationCache;
+
+        private static TestRunResult ExecuteCompiledTestRun(
+            string fullProjectRoot,
+            string outputDir,
+            TestRunOptions effectiveOptions,
+            Stopwatch runStopwatch,
+            List<DiscoveredTestAssembly> testAssemblies,
+            List<DiscoveredTestCaseDescriptor> allDescriptors,
+            Dictionary<string, SupplementalTestMetadata> metadataByMethodKey,
+            List<ScriptDiagnostic> allDiagnostics)
+        {
+            _ = outputDir;
+            List<DiscoveredTestCaseDescriptor> selectedDescriptors = FilterDescriptors(allDescriptors, effectiveOptions);
 
             List<TestCaseResult> results = new List<TestCaseResult>();
             bool wasCancelled = false;
@@ -476,6 +550,7 @@ namespace Unitas.Testing
             ISceneHost? previousSceneHost = SceneManager.Host;
             IApplicationHost? previousAppHost = Application.Host;
             PlayModeIsolatedSceneHost? isolatedSceneHost = null;
+            float savedTimeScale = Time.timeScale;
 
             UnityEngine.Object[] preExistingObjects = UnityEngine.Object.FindObjectsOfType<UnityEngine.Object>(true);
             HashSet<int> preExistingIds = new HashSet<int>();
@@ -574,6 +649,7 @@ namespace Unitas.Testing
                 RestoreEditTimeSnapshots(preExistingTransforms, preExistingGameObjects);
                 CoroutineScheduler.StopAll();
                 InvokeScheduler.StopAll();
+                Time.timeScale = savedTimeScale;
                 if (playHost != null)
                 {
                     try
@@ -594,6 +670,10 @@ namespace Unitas.Testing
             if (string.IsNullOrEmpty(failureMessage))
             {
                 failureMessage = logProblemText;
+                if (string.IsNullOrEmpty(failureStack))
+                {
+                    failureStack = "at " + descriptor.FullName + "()";
+                }
             }
             else if (logProblemText.Length > 0)
             {
@@ -645,6 +725,11 @@ namespace Unitas.Testing
 
             while (stack.Count > 0)
             {
+                if (options.CancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 if (frames >= maxFrames)
                 {
                     throw new AssertionException(
@@ -673,6 +758,11 @@ namespace Unitas.Testing
                     float remaining = waitSeconds.Seconds;
                     while (remaining > 1e-6f)
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         remaining -= (float)delta * Math.Max(0.0001f, Time.timeScale);
                         frames++;
@@ -690,6 +780,11 @@ namespace Unitas.Testing
                     float remaining = waitRealtime.Seconds;
                     while (remaining > 1e-6f)
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         remaining -= (float)delta;
                         frames++;
@@ -706,6 +801,11 @@ namespace Unitas.Testing
                 {
                     while (!waitUntil.Predicate())
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         frames++;
                         if (frames >= maxFrames)
@@ -721,6 +821,11 @@ namespace Unitas.Testing
                 {
                     while (!asyncOp.isDone)
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         frames++;
                         if (frames >= maxFrames)
@@ -736,6 +841,11 @@ namespace Unitas.Testing
                 {
                     while (CoroutineScheduler.ActiveCount > 0)
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         frames++;
                         if (frames >= maxFrames)
@@ -751,6 +861,11 @@ namespace Unitas.Testing
                 {
                     while (customYield.keepWaiting)
                     {
+                        if (options.CancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
                         StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
                         frames++;
                         if (frames >= maxFrames)
@@ -759,6 +874,13 @@ namespace Unitas.Testing
                         }
                     }
 
+                    continue;
+                }
+
+                if (yielded is WaitForFixedUpdate || yielded is WaitForEndOfFrame || yielded == null)
+                {
+                    StepSingleFrame(playHost, delta, ref consumedLogCount, capturedLogs);
+                    frames++;
                     continue;
                 }
 
@@ -791,6 +913,7 @@ namespace Unitas.Testing
 
         private static void DrainNewLogsToLogAssert(ref int consumedLogCount, List<string> capturedLogs)
         {
+            LogAssert.DrainFromLogRecorder();
             IReadOnlyList<LogEntry> entries = LogRecorder.Entries;
             while (consumedLogCount < entries.Count)
             {
@@ -805,7 +928,6 @@ namespace Unitas.Testing
                 };
 
                 capturedLogs.Add("[" + logType + "] " + entry.Message);
-                LogAssert.Record(logType, entry.Message);
             }
         }
 
@@ -877,8 +999,7 @@ namespace Unitas.Testing
                     continue;
                 }
 
-                if (!string.IsNullOrEmpty(options.AssemblyFilter)
-                    && !string.Equals(d.AssemblyName, options.AssemblyFilter, StringComparison.OrdinalIgnoreCase))
+                if (!MatchesAssemblyFilters(d.AssemblyName, options))
                 {
                     continue;
                 }
@@ -923,6 +1044,65 @@ namespace Unitas.Testing
             }
 
             return selected;
+        }
+
+        private static bool MatchesAssemblyFilters(string assemblyName, TestRunOptions options)
+        {
+            List<string> filters = new List<string>();
+            if (!string.IsNullOrEmpty(options.AssemblyFilter))
+            {
+                string[] parts = options.AssemblyFilter.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string trimmed = parts[i].Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                    {
+                        filters.Add(trimmed);
+                    }
+                }
+            }
+
+            if (options.AssemblyFilters != null)
+            {
+                for (int i = 0; i < options.AssemblyFilters.Count; i++)
+                {
+                    string item = options.AssemblyFilters[i];
+                    if (!string.IsNullOrEmpty(item))
+                    {
+                        string[] parts = item.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
+                        for (int p = 0; p < parts.Length; p++)
+                        {
+                            string trimmed = parts[p].Trim();
+                            if (!string.IsNullOrEmpty(trimmed))
+                            {
+                                filters.Add(trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (filters.Count == 0)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < filters.Count; i++)
+            {
+                string candidate = filters[i];
+                if (candidate.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    candidate = candidate.Substring(0, candidate.Length - 4);
+                }
+
+                if (string.Equals(assemblyName, candidate, StringComparison.OrdinalIgnoreCase)
+                    || MatchesSingleNamePattern(assemblyName, candidate))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool MatchesTestNameFilter(DiscoveredTestCaseDescriptor descriptor, string rawFilter)

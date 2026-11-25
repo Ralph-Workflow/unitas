@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import hashlib
 import json
 import os
 import re
@@ -1084,12 +1086,56 @@ def secret_delta(baseline_results: object, scanned_results: object) -> list[str]
     ]
 
 
+SECRET_SCAN_CACHE = REPO_ROOT / ".ruff_cache" / "secret_scan_cache.json"
+
+
+def secret_scan_files(root: Path = REPO_ROOT) -> list[str]:
+    files: list[str] = []
+    for walk_root, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(walk_root, root)
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dirnames[:] = [
+            name
+            for name in sorted(dirnames)
+            if name != ".git"
+            and not any(re.search(pattern, prefix + name + "/") for pattern in SECRET_SCAN_EXCLUDES)
+        ]
+        for filename in sorted(filenames):
+            rel_file = prefix + filename
+            if not any(re.search(pattern, rel_file) for pattern in SECRET_SCAN_EXCLUDES):
+                files.append(rel_file)
+    return files
+
+
+def secret_scan_digest(files: Sequence[str], root: Path = REPO_ROOT) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(SECRETS_BASELINE.read_bytes())
+    for rel_file in files:
+        hasher.update(rel_file.encode("utf-8"))
+        hasher.update(b"\0")
+        with contextlib.suppress(OSError):
+            hasher.update((root / rel_file).read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
 def check_secrets() -> list[str]:
     if not SECRETS_BASELINE.exists():
         return ["missing .secrets.baseline"]
-    command = ["detect-secrets", "scan", "--all-files"]
-    for pattern in SECRET_SCAN_EXCLUDES:
-        command.extend(["--exclude-files", pattern])
+    files = secret_scan_files()
+    if not files:
+        return []
+    digest = secret_scan_digest(files)
+    if SECRET_SCAN_CACHE.exists():
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            cached = json.loads(SECRET_SCAN_CACHE.read_text(encoding="utf-8"))
+            if (
+                isinstance(cached, dict)
+                and cached.get("digest") == digest
+                and isinstance(cached.get("findings"), list)
+            ):
+                return [str(item) for item in cached["findings"]]
+    command = ["detect-secrets", "scan", *files]
     completed = subprocess.run(
         command,
         cwd=REPO_ROOT,
@@ -1101,7 +1147,14 @@ def check_secrets() -> list[str]:
         return [f"detect-secrets scan failed: {completed.stderr.strip()}"]
     scanned = json.loads(completed.stdout)
     baseline = json.loads(SECRETS_BASELINE.read_text(encoding="utf-8"))
-    return secret_delta(baseline.get("results", {}), scanned.get("results", {}))
+    findings = secret_delta(baseline.get("results", {}), scanned.get("results", {}))
+    with contextlib.suppress(OSError):
+        SECRET_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        SECRET_SCAN_CACHE.write_text(
+            json.dumps({"digest": digest, "findings": findings}),
+            encoding="utf-8",
+        )
+    return findings
 
 
 GATES: dict[str, Callable[[], list[str]]] = {

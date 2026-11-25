@@ -4,6 +4,36 @@ using System.Collections.Generic;
 
 namespace UnityEngine
 {
+    public class CustomYieldInstruction : IEnumerator
+    {
+        public virtual bool keepWaiting => false;
+
+        public object? Current => null;
+
+        public bool MoveNext() => keepWaiting;
+
+        public virtual void Reset()
+        {
+        }
+    }
+
+    public sealed class WaitWhile : CustomYieldInstruction
+    {
+        public WaitWhile(Func<bool> predicate)
+        {
+            if (predicate == null)
+            {
+                throw new ArgumentNullException(nameof(predicate));
+            }
+
+            Predicate = predicate;
+        }
+
+        public Func<bool> Predicate { get; }
+
+        public override bool keepWaiting => Predicate();
+    }
+
     public static class CoroutineScheduler
     {
         private enum WaitKind
@@ -14,15 +44,17 @@ namespace UnityEngine
             FixedUpdate,
             EndOfFrame,
             Until,
+            While,
             ChildCoroutine
         }
 
         private sealed class CoroutineEntry
         {
-            public CoroutineEntry(MonoBehaviour owner, Coroutine handle, IEnumerator routine)
+            public CoroutineEntry(MonoBehaviour owner, Coroutine handle, IEnumerator routine, string? methodName)
             {
                 Owner = owner;
                 Handle = handle;
+                MethodName = methodName ?? string.Empty;
                 Enumerators = new Stack<IEnumerator>();
                 Enumerators.Push(routine);
                 Wait = WaitKind.NextFrame;
@@ -31,6 +63,8 @@ namespace UnityEngine
             public MonoBehaviour Owner { get; }
 
             public Coroutine Handle { get; }
+
+            public string MethodName { get; }
 
             public Stack<IEnumerator> Enumerators { get; }
 
@@ -47,7 +81,10 @@ namespace UnityEngine
 
         public static int ActiveCount => Entries.Count;
 
-        public static Coroutine Start(MonoBehaviour owner, IEnumerator routine)
+        public static Coroutine Start(MonoBehaviour owner, IEnumerator routine) =>
+            Start(owner, routine, null);
+
+        public static Coroutine Start(MonoBehaviour owner, IEnumerator routine, string? methodName)
         {
             if (owner is null)
             {
@@ -78,10 +115,35 @@ namespace UnityEngine
                 return handle;
             }
 
-            CoroutineEntry entry = new CoroutineEntry(owner, handle, routine);
+            CoroutineEntry entry = new CoroutineEntry(owner, handle, routine, methodName);
             Entries.Add(entry);
             AdvanceEntry(entry);
             return handle;
+        }
+
+        public static void StopByName(MonoBehaviour owner, string methodName)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (string.IsNullOrEmpty(methodName))
+            {
+                return;
+            }
+
+            for (int i = Entries.Count - 1; i >= 0; i--)
+            {
+                CoroutineEntry entry = Entries[i];
+                if (ReferenceEquals(entry.Owner, owner)
+                    && !string.IsNullOrEmpty(entry.MethodName)
+                    && string.Equals(entry.MethodName, methodName, StringComparison.Ordinal))
+                {
+                    entry.Handle.IsCompleted = true;
+                    Entries.RemoveAt(i);
+                }
+            }
         }
 
         public static void Stop(Coroutine coroutine)
@@ -197,7 +259,14 @@ namespace UnityEngine
                         break;
 
                     case WaitKind.Until:
-                        if (EvaluatePredicate(entry))
+                        if (EvaluatePredicate(entry, true))
+                        {
+                            AdvanceEntry(entry);
+                        }
+                        break;
+
+                    case WaitKind.While:
+                        if (EvaluatePredicate(entry, false))
                         {
                             AdvanceEntry(entry);
                         }
@@ -290,7 +359,7 @@ namespace UnityEngine
             Entries.Remove(entry);
         }
 
-        private static bool EvaluatePredicate(CoroutineEntry entry)
+        private static bool EvaluatePredicate(CoroutineEntry entry, bool resumeWhenTrue)
         {
             Func<bool>? predicate = entry.Predicate;
             if (predicate == null)
@@ -302,7 +371,8 @@ namespace UnityEngine
             LogRecorder.CurrentOrigin = entry.Owner;
             try
             {
-                return predicate();
+                bool result = predicate();
+                return resumeWhenTrue ? result : !result;
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -401,6 +471,22 @@ namespace UnityEngine
                     {
                         entry.Wait = WaitKind.Until;
                         entry.Predicate = waitUntil.Predicate;
+                        entry.Child = null;
+                        return;
+                    }
+
+                    if (yielded is WaitWhile waitWhile)
+                    {
+                        entry.Wait = WaitKind.While;
+                        entry.Predicate = waitWhile.Predicate;
+                        entry.Child = null;
+                        return;
+                    }
+
+                    if (yielded is CustomYieldInstruction customYield)
+                    {
+                        entry.Wait = WaitKind.While;
+                        entry.Predicate = () => customYield.keepWaiting;
                         entry.Child = null;
                         return;
                     }

@@ -357,12 +357,9 @@ namespace Unitas.Testing
                     writer.WriteEndElement();
                 }
 
-                if (!string.IsNullOrEmpty(testCase.StackTrace))
-                {
-                    writer.WriteStartElement("stack-trace");
-                    writer.WriteCData(testCase.StackTrace);
-                    writer.WriteEndElement();
-                }
+                writer.WriteStartElement("stack-trace");
+                writer.WriteCData(testCase.StackTrace ?? string.Empty);
+                writer.WriteEndElement();
 
                 writer.WriteEndElement();
             }

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text;
 
 namespace UnityEngine.Networking
@@ -99,6 +100,11 @@ namespace UnityEngine.Networking
 
         internal void SetData(byte[]? rawData)
         {
+            ReceivePayload(rawData ?? Array.Empty<byte>());
+        }
+
+        internal virtual void ReceivePayload(byte[] rawData)
+        {
             _data = rawData ?? Array.Empty<byte>();
         }
 
@@ -140,6 +146,50 @@ namespace UnityEngine.Networking
             }
 
             return www.downloadHandler.text;
+        }
+    }
+
+    public sealed class DownloadHandlerFile : DownloadHandler
+    {
+        private readonly string _filePath;
+        private readonly bool _append;
+
+        public DownloadHandlerFile(string filePath)
+            : this(filePath, false)
+        {
+        }
+
+        public DownloadHandlerFile(string filePath, bool append)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                throw new ArgumentException("File path cannot be null or empty.", nameof(filePath));
+            }
+
+            _filePath = filePath;
+            _append = append;
+        }
+
+        public bool removeFileOnAbort { get; set; }
+
+        internal override void ReceivePayload(byte[] rawData)
+        {
+            base.ReceivePayload(rawData);
+            string? parentDir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+            {
+                Directory.CreateDirectory(parentDir);
+            }
+
+            if (_append && File.Exists(_filePath))
+            {
+                using FileStream stream = new FileStream(_filePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+                stream.Write(rawData, 0, rawData.Length);
+            }
+            else
+            {
+                File.WriteAllBytes(_filePath, rawData);
+            }
         }
     }
 }

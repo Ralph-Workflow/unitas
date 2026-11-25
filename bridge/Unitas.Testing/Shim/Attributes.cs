@@ -119,22 +119,6 @@ namespace NUnit.Framework
     }
 }
 
-namespace UnityEngine
-{
-    public abstract class CustomYieldInstruction : System.Collections.IEnumerator
-    {
-        public abstract bool keepWaiting { get; }
-
-        public object? Current => null;
-
-        public bool MoveNext() => keepWaiting;
-
-        public virtual void Reset()
-        {
-        }
-    }
-}
-
 namespace UnityEngine.TestTools
 {
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]

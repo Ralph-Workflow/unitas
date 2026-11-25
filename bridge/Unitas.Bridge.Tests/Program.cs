@@ -72,12 +72,24 @@ namespace Unitas.Bridge.Tests
             TestAnimatorControllerBinaryEncoding();
             TestEndToEndAnimatorControllerAndTransitions();
             CoreApiTests.Run();
+            ValueTypeCompletionTests.Run();
             CompilationTests.Run();
             EventsTests.Run();
+            UnityEventArityTests.Run();
+            UnityWebRequestMethodTests.Run();
             ResourcesSceneTests.Run();
+            SceneAcceptanceTests.Run();
+            LifecycleAcceptanceTests.Run();
+            CoroutineAcceptanceTests.Run();
+            PlayerPrefsPersistenceTests.Run();
+            JsonUtilityTests.Run();
+            JsonUtilityRoundTripTests.Run();
             IdeGenerationTests.Run();
+            AgentWorkflowTests.Run();
             UtfRunnerTests.Run();
+            UtfHardeningTests.Run();
             DebuggingTests.Run();
+            DapSteppingTests.Run();
 
             if (Check.FailureCount > 0)
             {

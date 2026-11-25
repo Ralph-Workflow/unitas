@@ -54,10 +54,15 @@ namespace Unitas.Debugging
 
         public void NotifyStopped(DebugFrame frame)
         {
+            NotifyStopped(frame, "breakpoint");
+        }
+
+        public void NotifyStopped(DebugFrame frame, string reason)
+        {
             ArgumentNullException.ThrowIfNull(frame);
             JsonObject body = new JsonObject
             {
-                ["reason"] = "breakpoint",
+                ["reason"] = string.IsNullOrEmpty(reason) ? "breakpoint" : reason,
                 ["threadId"] = MainThreadId,
                 ["allThreadsStopped"] = true,
                 ["description"] = frame.Method
@@ -115,10 +120,17 @@ namespace Unitas.Debugging
                     SendResponse(request, true, new JsonObject
                     {
                         ["supportsConfigurationDoneRequest"] = true,
+                        ["supportsConditionalBreakpoints"] = true,
+                        ["supportsEvaluateForHovers"] = true,
                         ["supportsTerminateRequest"] = false
                     });
                     break;
+                case "launch":
+                    DebugAgent.MarkLaunched();
+                    SendResponse(request, true, new JsonObject());
+                    break;
                 case "attach":
+                    DebugAgent.MarkAttached();
                     SendResponse(request, true, new JsonObject());
                     break;
                 case "setBreakpoints":
@@ -148,6 +160,26 @@ namespace Unitas.Debugging
                     break;
                 case "variables":
                     HandleVariables(request);
+                    break;
+                case "evaluate":
+                    HandleEvaluate(request);
+                    break;
+                case "pause":
+                    DebugAgent.RequestPause();
+                    SendResponse(request, true, new JsonObject());
+                    break;
+                case "next":
+                case "stepOver":
+                    SendResponse(request, true, new JsonObject());
+                    DebugAgent.Step(DebugStepMode.StepOver);
+                    break;
+                case "stepIn":
+                    SendResponse(request, true, new JsonObject());
+                    DebugAgent.Step(DebugStepMode.StepIn);
+                    break;
+                case "stepOut":
+                    SendResponse(request, true, new JsonObject());
+                    DebugAgent.Step(DebugStepMode.StepOut);
                     break;
                 case "continue":
                     SendResponse(request, true, new JsonObject { ["allThreadsContinued"] = true });
@@ -180,16 +212,51 @@ namespace Unitas.Debugging
                     {
                         condition = text;
                     }
-                    DebugAgent.SetBreakpoint(path, line, condition);
-                    verified.Add(new JsonObject
+                    if (DebugAgent.TryVerifyBreakpointLocation(path, line, out string unboundReason))
                     {
-                        ["verified"] = true,
-                        ["line"] = line,
-                        ["id"] = line
-                    });
+                        DebugAgent.SetBreakpoint(path, line, condition);
+                        verified.Add(new JsonObject
+                        {
+                            ["verified"] = true,
+                            ["line"] = line,
+                            ["id"] = line
+                        });
+                    }
+                    else
+                    {
+                        verified.Add(new JsonObject
+                        {
+                            ["verified"] = false,
+                            ["line"] = line,
+                            ["id"] = line,
+                            ["message"] = unboundReason
+                        });
+                    }
                 }
             }
             SendResponse(request, true, new JsonObject { ["breakpoints"] = verified });
+        }
+
+        private void HandleEvaluate(JsonObject request)
+        {
+            DebugFrame? frame = DebugAgent.CurrentFrame;
+            if (frame == null)
+            {
+                SendError(request, "Cannot evaluate expression when execution is not stopped.");
+                return;
+            }
+            JsonObject? arguments = request["arguments"] as JsonObject;
+            string expression = ReadString(arguments?["expression"]);
+            if (!ConditionEvaluator.TryEvaluateValue(expression, frame.LocalNames, frame.Locals, out object? value, out string error))
+            {
+                SendError(request, error);
+                return;
+            }
+            SendResponse(request, true, new JsonObject
+            {
+                ["result"] = RenderValue(value),
+                ["variablesReference"] = 0
+            });
         }
 
         private void HandleStackTrace(JsonObject request)

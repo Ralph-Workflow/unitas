@@ -44,6 +44,19 @@ namespace Unitas.Debugging
             return _points.TryGetValue(id, out SequencePoint? point) ? point : null;
         }
 
+        public bool ContainsLocation(string file, int line)
+        {
+            string target = file ?? string.Empty;
+            foreach (SequencePoint point in _points.Values)
+            {
+                if (point.Line == line && string.Equals(point.File, target, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         public string ToJson()
         {
             JsonArray array = new JsonArray();

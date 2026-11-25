@@ -9,7 +9,6 @@ namespace Unitas.Debugging
         private const int MaxLength = 200;
         private const int MaxDepth = 16;
 
-        // limit: identifiers and literals only, 200 characters, 16 levels deep, no member access and no calls
         public static bool Evaluate(string expression, IReadOnlyList<string> names, IReadOnlyList<object?> values)
         {
             if (string.IsNullOrWhiteSpace(expression) || expression.Length > MaxLength)
@@ -18,7 +17,7 @@ namespace Unitas.Debugging
             }
             try
             {
-                return new Parser(expression, names, values).ParseExpression();
+                return new Parser(expression, names, values, false).ParseExpression();
             }
             catch (FormatException)
             {
@@ -26,19 +25,159 @@ namespace Unitas.Debugging
             }
         }
 
+        public static bool ContainsSideEffectOperator(string expression)
+        {
+            if (string.IsNullOrEmpty(expression))
+            {
+                return false;
+            }
+            bool inSingleQuote = false;
+            bool inDoubleQuote = false;
+            for (int index = 0; index < expression.Length; index++)
+            {
+                char current = expression[index];
+                if (current == '\'' && !inDoubleQuote)
+                {
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+                if (current == '"' && !inSingleQuote)
+                {
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+                if (inSingleQuote || inDoubleQuote)
+                {
+                    continue;
+                }
+                if (current == '+' && index + 1 < expression.Length && expression[index + 1] == '+')
+                {
+                    return true;
+                }
+                if (current == '-' && index + 1 < expression.Length && expression[index + 1] == '-')
+                {
+                    return true;
+                }
+                if (current == '=')
+                {
+                    char previous = index > 0 ? expression[index - 1] : '\0';
+                    char next = index + 1 < expression.Length ? expression[index + 1] : '\0';
+                    if (next == '=')
+                    {
+                        index++;
+                        continue;
+                    }
+                    if (previous == '=' || previous == '!' || previous == '<' || previous == '>')
+                    {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static bool TryEvaluateValue(
+            string expression,
+            IReadOnlyList<string> names,
+            IReadOnlyList<object?> values,
+            out object? result,
+            out string error)
+        {
+            result = null;
+            if (string.IsNullOrWhiteSpace(expression))
+            {
+                error = "Expression cannot be empty.";
+                return false;
+            }
+            if (expression.Length > MaxLength)
+            {
+                error = "Expression exceeds maximum length.";
+                return false;
+            }
+            if (ContainsSideEffectOperator(expression))
+            {
+                error = "Side-effecting evaluation is not supported in read-only debug evaluation.";
+                return false;
+            }
+            string trimmed = expression.Trim();
+            if (IsPlainIdentifier(trimmed))
+            {
+                if (trimmed == "true")
+                {
+                    result = true;
+                    error = string.Empty;
+                    return true;
+                }
+                if (trimmed == "false")
+                {
+                    result = false;
+                    error = string.Empty;
+                    return true;
+                }
+                if (trimmed == "null")
+                {
+                    result = null;
+                    error = string.Empty;
+                    return true;
+                }
+                for (int index = 0; index < names.Count; index++)
+                {
+                    if (string.Equals(names[index], trimmed, StringComparison.Ordinal))
+                    {
+                        result = index < values.Count ? values[index] : null;
+                        error = string.Empty;
+                        return true;
+                    }
+                }
+                error = "Unknown local variable '" + trimmed + "'.";
+                return false;
+            }
+            try
+            {
+                Parser parser = new Parser(trimmed, names, values, true);
+                result = parser.ParseValueExpression();
+                error = string.Empty;
+                return true;
+            }
+            catch (FormatException exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        private static bool IsPlainIdentifier(string text)
+        {
+            if (text.Length == 0 || (!char.IsLetter(text[0]) && text[0] != '_'))
+            {
+                return false;
+            }
+            for (int index = 1; index < text.Length; index++)
+            {
+                if (!char.IsLetterOrDigit(text[index]) && text[index] != '_')
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private sealed class Parser
         {
             private readonly string _text;
             private readonly IReadOnlyList<string> _names;
             private readonly IReadOnlyList<object?> _values;
+            private readonly bool _requireKnownIdentifiers;
             private int _position;
             private int _depth;
 
-            public Parser(string text, IReadOnlyList<string> names, IReadOnlyList<object?> values)
+            public Parser(string text, IReadOnlyList<string> names, IReadOnlyList<object?> values, bool requireKnownIdentifiers)
             {
                 _text = text;
                 _names = names;
                 _values = values;
+                _requireKnownIdentifiers = requireKnownIdentifiers;
             }
 
             public bool ParseExpression()
@@ -50,6 +189,51 @@ namespace Unitas.Debugging
                     throw new FormatException("trailing input");
                 }
                 return result;
+            }
+
+            public object? ParseValueExpression()
+            {
+                if (!ContainsLogicalOrComparisonTokens())
+                {
+                    object? literal = ParseOperand();
+                    SkipWhitespace();
+                    if (_position == _text.Length)
+                    {
+                        return literal;
+                    }
+                    _position = 0;
+                    _depth = 0;
+                }
+                return ParseExpression();
+            }
+
+            private bool ContainsLogicalOrComparisonTokens()
+            {
+                bool inSingleQuote = false;
+                bool inDoubleQuote = false;
+                for (int index = 0; index < _text.Length; index++)
+                {
+                    char current = _text[index];
+                    if (current == '\'' && !inDoubleQuote)
+                    {
+                        inSingleQuote = !inSingleQuote;
+                        continue;
+                    }
+                    if (current == '"' && !inSingleQuote)
+                    {
+                        inDoubleQuote = !inDoubleQuote;
+                        continue;
+                    }
+                    if (inSingleQuote || inDoubleQuote)
+                    {
+                        continue;
+                    }
+                    if (current == '=' || current == '!' || current == '<' || current == '>' || current == '&' || current == '|')
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             private bool ParseOr()
@@ -159,6 +343,10 @@ namespace Unitas.Debugging
                     {
                         return index < _values.Count ? _values[index] : null;
                     }
+                }
+                if (_requireKnownIdentifiers)
+                {
+                    throw new FormatException("Unknown local variable '" + name + "'.");
                 }
                 return null;
             }

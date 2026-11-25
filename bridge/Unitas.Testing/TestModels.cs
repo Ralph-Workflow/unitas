@@ -38,9 +38,13 @@ namespace Unitas.Testing
 
         public string? AssemblyFilter { get; set; }
 
+        public IReadOnlyList<string> AssemblyFilters { get; set; } = Array.Empty<string>();
+
         public string? ResultsXmlPath { get; set; }
 
         public string? OutputDirectory { get; set; }
+
+        public bool SkipCompilation { get; set; }
 
         public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 
