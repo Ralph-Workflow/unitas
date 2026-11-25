@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Unitas.Editor.Mcp;
 
@@ -20,7 +21,6 @@ namespace Unitas.Editor.Tests.Core
             return new SessionIdentity("agent-1", "stdio", "person-1");
         }
 
-        // session.rs: new_session_holds_only_read_project
         private static void NewSessionHoldsOnlyReadProject()
         {
             Authorizer authorizer = new Authorizer();
@@ -32,7 +32,6 @@ namespace Unitas.Editor.Tests.Core
                 scopes.Length == 1 && scopes[0] == Scope.ReadProject);
         }
 
-        // session.rs: person_grant_adds_the_scope
         private static void PersonGrantAddsTheScope()
         {
             Authorizer authorizer = new Authorizer();
@@ -52,7 +51,6 @@ namespace Unitas.Editor.Tests.Core
             Check.That("person_grant_adds_the_scope", authorized);
         }
 
-        // session.rs: session_inherited_grant_is_refused
         private static void SessionInheritedGrantIsRefused()
         {
             Authorizer authorizer = new Authorizer();
@@ -69,13 +67,12 @@ namespace Unitas.Editor.Tests.Core
 
             Check.That(
                 "session_inherited_grant_is_refused: refusal names the scope",
-                error != null && error.Message.Contains("deploy"));
+                error != null && error.Message.Contains("deploy", StringComparison.Ordinal));
             Check.That(
                 "session_inherited_grant_is_refused: a refused grant must not widen the session",
                 !authorizer.GetSession(id).Holds(Scope.Deploy));
         }
 
-        // session.rs: standing_grant_from_a_session_is_refused
         private static void StandingGrantFromASessionIsRefused()
         {
             Authorizer authorizer = new Authorizer();
@@ -93,7 +90,6 @@ namespace Unitas.Editor.Tests.Core
             Check.That("standing_grant_from_a_session_is_refused", refused);
         }
 
-        // session.rs: standing_grant_authorizes_a_matching_agent
         private static void StandingGrantAuthorizesAMatchingAgent()
         {
             Authorizer authorizer = new Authorizer();
@@ -113,7 +109,6 @@ namespace Unitas.Editor.Tests.Core
             Check.That("standing_grant_authorizes_a_matching_agent", authorized);
         }
 
-        // session.rs: missing_scope_refusal_names_the_scope
         private static void MissingScopeRefusalNamesTheScope()
         {
             Authorizer authorizer = new Authorizer();
@@ -130,7 +125,7 @@ namespace Unitas.Editor.Tests.Core
 
             Check.That(
                 "missing_scope_refusal_names_the_scope: refusal names the missing scope",
-                error != null && error.Message.Contains("external-network"));
+                error != null && error.Message.Contains("external-network", StringComparison.Ordinal));
             Check.That(
                 "missing_scope_refusal_names_the_scope: error carries the scope",
                 error != null && error.Scope == Scope.ExternalNetwork);

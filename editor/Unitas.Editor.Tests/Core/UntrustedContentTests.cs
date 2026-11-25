@@ -9,9 +9,9 @@ namespace Unitas.Editor.Tests.Core
         {
             MarkUntrustedWrapsPayloadWithOriginAndFlag();
             EnsureUntrustedIsIdempotent();
+            CompleteOperationWrapsResultInUntrustedEnvelope();
         }
 
-        // untrusted.rs: mark_untrusted_wraps_payload_with_origin_and_flag
         private static void MarkUntrustedWrapsPayloadWithOriginAndFlag()
         {
             JsonObject wrapped = UntrustedContent.Mark(
@@ -32,7 +32,6 @@ namespace Unitas.Editor.Tests.Core
                 wrapped["content"]!.ToJsonString());
         }
 
-        // untrusted.rs: ensure_untrusted_is_idempotent
         private static void EnsureUntrustedIsIdempotent()
         {
             JsonObject wrapped = UntrustedContent.Mark(
@@ -51,6 +50,28 @@ namespace Unitas.Editor.Tests.Core
                 "ensure_untrusted_is_idempotent: unchanged",
                 wrapped.ToJsonString(),
                 rewrapped.ToJsonString());
+        }
+
+        private static void CompleteOperationWrapsResultInUntrustedEnvelope()
+        {
+            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
+            host.GrantScope(session, Scope.Build, GrantAuthority.Person);
+            string operationId = host.StartOperation(session, "build.macos", Scope.Build);
+            host.CompleteOperation(operationId, "build-pipeline", new JsonObject { ["bundle"] = "Game.app" });
+
+            OperationHandle handle = host.GetOperation(operationId);
+            Check.That(
+                "resource_read_marks_untrusted_and_operations_track_completion: completed state is Completed",
+                handle.State is OperationState.Completed);
+            JsonNode? result = (handle.State as OperationState.Completed)?.Result;
+            Check.That(
+                "resource_read_marks_untrusted_and_operations_track_completion: completed operation result is untrusted envelope",
+                UntrustedContent.IsEnvelope(result));
+            Check.Equal(
+                "resource_read_marks_untrusted_and_operations_track_completion: completed operation origin",
+                "build-pipeline",
+                result?["origin"]?.GetValue<string>() ?? string.Empty);
         }
     }
 }

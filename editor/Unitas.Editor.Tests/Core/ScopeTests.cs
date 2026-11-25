@@ -10,7 +10,6 @@ namespace Unitas.Editor.Tests.Core
             ScopeNamesRoundTrip();
         }
 
-        // scope.rs: scope_set_is_the_fixed_aut_007_set
         private static void ScopeSetIsTheFixedAut007Set()
         {
             string[] names = new string[Scopes.All.Length];
@@ -27,7 +26,6 @@ namespace Unitas.Editor.Tests.Core
             Check.Equal("scope_set_is_the_fixed_aut_007_set: length", 11, Scopes.All.Length);
         }
 
-        // scope.rs: scope_names_round_trip
         private static void ScopeNamesRoundTrip()
         {
             bool roundTrips = true;

@@ -254,10 +254,10 @@ project evolves.
 
 RALPH-FACT: authoritative_verify_command: make verify
 RALPH-FACT: gate_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo and clippy), and the .NET 8.0 SDK
-RALPH-FACT: gate_order: policy-validate, bypass-audit, banned-constructs, comment-audit, deps, secret-scan, lint, typecheck, test, dotnet-build, dotnet-format, then dotnet-test — the order the Makefile verify target declares
+RALPH-FACT: gate_order: the Makefile verify target runs three concurrent groups — the scan group (policy-validate, bypass-audit, banned-constructs, comment-audit, deps, secret-scan), the suite group (lint, typecheck, test), and the .NET group (dotnet-build, then dotnet-format alongside dotnet-test)
 RALPH-FACT: fast_path_command: make lint
 RALPH-FACT: fast_path_selection_mechanism: none — the full gate finishes inside the fast-path cap, so the full gate is the fast path
-RALPH-FACT: gate_parallelism_mechanism: none — the gates run serially
+RALPH-FACT: gate_parallelism_mechanism: the Makefile verify target starts the scan group, the suite group, and the .NET group as concurrent sub-makes, one gate at a time inside the scan and suite groups, and the .NET group builds first and then runs dotnet-format alongside dotnet-test, so the wall clock is the slowest group while every gate keeps its declared order and its own 30s budget
 RALPH-FACT: gate_cache_mechanism_and_key: none — the gates are not cached
 RALPH-FACT: gate_duration_report_location: the duration line each Make target prints after its command
 RALPH-FACT: bypass_detection_lint_audit: make bypass-audit

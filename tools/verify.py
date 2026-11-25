@@ -1119,6 +1119,16 @@ def secret_scan_digest(files: Sequence[str], root: Path = REPO_ROOT) -> str:
     return hasher.hexdigest()
 
 
+def secret_scan_chunks(files: Sequence[str], count: int) -> list[list[str]]:
+    chunks: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
+    for relative in files:
+        index = loads.index(min(loads))
+        chunks[index].append(relative)
+        loads[index] += 1
+    return [chunk for chunk in chunks if chunk]
+
+
 def check_secrets() -> list[str]:
     if not SECRETS_BASELINE.exists():
         return ["missing .secrets.baseline"]
@@ -1135,19 +1145,30 @@ def check_secrets() -> list[str]:
                 and isinstance(cached.get("findings"), list)
             ):
                 return [str(item) for item in cached["findings"]]
-    command = ["detect-secrets", "scan", *files]
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        return [f"detect-secrets scan failed: {completed.stderr.strip()}"]
-    scanned = json.loads(completed.stdout)
+    chunks = secret_scan_chunks(files, 4)
+    runs = []
+    for chunk in chunks:
+        command = ["detect-secrets", "scan", *chunk]
+        runs.append(
+            subprocess.Popen(
+                command,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+    scanned: dict[str, object] = {}
+    for process in runs:
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            process.kill()
+            return [f"detect-secrets scan failed: {stderr.strip()}"]
+        for name, findings in json.loads(stdout).get("results", {}).items():
+            scanned[name] = findings
+    sys.stdout.write(f"secret scan: {len(files)} files in {len(chunks)} chunks\n")
     baseline = json.loads(SECRETS_BASELINE.read_text(encoding="utf-8"))
-    findings = secret_delta(baseline.get("results", {}), scanned.get("results", {}))
+    findings = secret_delta(baseline.get("results", {}), scanned)
     with contextlib.suppress(OSError):
         SECRET_SCAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
         SECRET_SCAN_CACHE.write_text(

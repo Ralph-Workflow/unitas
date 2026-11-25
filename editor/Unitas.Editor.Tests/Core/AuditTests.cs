@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -5,12 +6,13 @@ namespace Unitas.Editor.Tests.Core
 {
     public static class AuditTests
     {
+        private static readonly string[] SceneMainIdentities = { "scene:Main" };
+
         public static void Run()
         {
             AuditLogIsAppendOnlyAndExportsRecords();
         }
 
-        // audit.rs: audit_log_is_append_only_and_exports_records
         private static void AuditLogIsAppendOnlyAndExportsRecords()
         {
             AuditLog log = new AuditLog();
@@ -25,7 +27,7 @@ namespace Unitas.Editor.Tests.Core
                 "unitas://project/scenes",
                 Scope.ReadProject,
                 new AuditOutcome.Allowed(),
-                new[] { "scene:Main" }));
+                SceneMainIdentities));
             log.Record(new AuditEntry(
                 1_050,
                 sessionId,
@@ -34,7 +36,7 @@ namespace Unitas.Editor.Tests.Core
                 "scene.edit",
                 Scope.EditContent,
                 new AuditOutcome.RefusedMissingScope(Scope.EditContent),
-                new string[0]));
+                Array.Empty<string>()));
 
             Check.Equal("audit_log_is_append_only_and_exports_records: count", 2, log.Count);
             AuditRecord first = log.Records[0];
@@ -69,6 +71,15 @@ namespace Unitas.Editor.Tests.Core
                 "audit_log_is_append_only_and_exports_records: export outcome detail",
                 "allowed",
                 firstValue["outcome_detail"]!.GetValue<string>());
+            JsonObject secondValue = (JsonObject)exported[1]!;
+            Check.Equal(
+                "audit_log_is_append_only_and_exports_records: second export outcome",
+                "refused-missing-scope",
+                secondValue["outcome"]!.GetValue<string>());
+            Check.Equal(
+                "audit_log_is_append_only_and_exports_records: second export outcome detail",
+                "refused: missing scope edit-content",
+                secondValue["outcome_detail"]!.GetValue<string>());
         }
     }
 }

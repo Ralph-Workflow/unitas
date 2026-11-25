@@ -1,13 +1,38 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
 
-verify: policy-validate bypass-audit banned-constructs comment-audit deps secret-scan lint typecheck test dotnet-build dotnet-format dotnet-test
-	@now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s budget"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
+verify:
+	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \
+	$(MAKE) --no-print-directory verify-suite-gates & p2=$$!; \
+	$(MAKE) --no-print-directory verify-dotnet-gates & p3=$$!; \
+	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
+	test $$rc -eq 0 || { echo "verify failed"; exit 1; }; \
+	now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s budget"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
+
+verify-scan-gates:
+	@$(MAKE) --no-print-directory policy-validate
+	@$(MAKE) --no-print-directory bypass-audit
+	@$(MAKE) --no-print-directory banned-constructs
+	@$(MAKE) --no-print-directory comment-audit
+	@$(MAKE) --no-print-directory deps
+	@$(MAKE) --no-print-directory secret-scan
+
+verify-suite-gates:
+	@$(MAKE) --no-print-directory lint
+	@$(MAKE) --no-print-directory typecheck
+	@$(MAKE) --no-print-directory test
+
+verify-dotnet-gates:
+	@$(MAKE) --no-print-directory dotnet-build
+	@$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
+	$(MAKE) --no-print-directory dotnet-test; rc=$$?; \
+	wait $$pf || rc=1; \
+	exit $$rc
 
 test:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q

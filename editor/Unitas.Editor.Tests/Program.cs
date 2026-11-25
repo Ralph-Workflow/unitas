@@ -11,11 +11,14 @@ namespace Unitas.Editor.Tests
             (string Name, Action Run)[] suites =
             {
                 ("AuditTests", AuditTests.Run),
+                ("BuiltinDefaultsTests", BuiltinDefaultsTests.Run),
                 ("ClockTests", ClockTests.Run),
+                ("HttpTransportTests", HttpTransportTests.Run),
                 ("OperationStoreTests", OperationStoreTests.Run),
                 ("RegistryTests", RegistryTests.Run),
                 ("ScopeTests", ScopeTests.Run),
                 ("SessionTests", SessionTests.Run),
+                ("StdioTransportTests", StdioTransportTests.Run),
                 ("UntrustedContentTests", UntrustedContentTests.Run),
             };
 
