@@ -208,6 +208,109 @@ def test_bypass_audit_requires_reasons_for_quoted_ruff_ignore_keys(tmp_path: Pat
         ], key
 
 
+def test_bypass_audit_requires_reasons_for_escaped_ruff_ignore_keys(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    text = '[tool.ruff.lint]\nselect = ["ALL"]\n"\\u0069gnore" = ["COM812"]'
+    path.write_text(f"{text} # formatter conflict\n", encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == []
+    path.write_text(f"{text}\n", encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == [
+        "pyproject.toml:3: ruff ignore entry 'COM812' lacks a reason comment"
+    ]
+
+
+def test_bypass_audit_requires_reasons_for_escaped_ruff_ignore_entries(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[tool.ruff.lint]\nselect = ["ALL"]\nignore = [\n    "\\u0043OM812",\n]\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == [
+        "pyproject.toml:4: ruff ignore entry 'COM812' lacks a reason comment"
+    ]
+    path.write_text(
+        '[tool.ruff.lint]\nselect = ["ALL"]\nignore = [\n'
+        '    "\\u0043OM812", # reason: formatter conflict\n]\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+
+
+def test_bypass_audit_requires_reasons_for_ruff_ignore_entries_with_delimiters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "pyproject.toml"
+    for entries in ('["A#B", "COM812"]', '["A]B", "COM812"]'):
+        path.write_text(
+            f'[tool.ruff.lint]\nselect = ["ALL"]\nignore = {entries}\n',
+            encoding="utf-8",
+        )
+        findings = verify.check_bypass(tmp_path)
+        assert any(
+            "ruff ignore entry 'COM812' lacks a reason comment" in finding for finding in findings
+        ), entries
+
+
+def test_bypass_audit_requires_reasons_for_escaped_rust_lint_keys(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    manifest = _write_clean_rust_workspace(tmp_path)
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(
+        text.replace(
+            '# clean-code-policy.md bans doc comments\nmissing_errors_doc = "allow"\n',
+            '"missing_\\u0064ocs" = "allow"\n',
+        ),
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == [
+        "Cargo.toml:18: lint 'missing_docs' set to 'allow' lacks a reason comment"
+    ]
+    manifest.write_text(
+        text.replace(
+            'missing_errors_doc = "allow"',
+            '"missing_\\u0064ocs" = "allow" # clean-code-policy.md bans doc comments',
+        ),
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+
+
+def test_bypass_audit_flags_escaped_mypy_weakening_keys(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[tool.ruff.lint]\nselect = ["ALL"]\n[tool.mypy]\nstrict = true\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+    path.write_text(
+        '[tool.ruff.lint]\nselect = ["ALL"]\n[tool.mypy]\nstrict = true\n'
+        '"disable_\\u0065rror_code" = ["all"]\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == [
+        "pyproject.toml:5: mypy-disable-error-code configuration bypass"
+    ]
+
+
+def test_bypass_audit_flags_quoted_and_escaped_mypy_values(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    for value in ("'silent'", '"sil\\u0065nt"'):
+        path.write_text(
+            '[tool.ruff.lint]\nselect = ["ALL"]\n[tool.mypy]\nstrict = true\n'
+            f"follow_imports = {value}\n",
+            encoding="utf-8",
+        )
+        assert verify.check_bypass(tmp_path) == [
+            "pyproject.toml:5: mypy-follow-imports-silent configuration bypass"
+        ], value
+    path.write_text(
+        '[tool.ruff.lint]\nselect = ["ALL"]\n[tool.mypy]\nstrict = true\n'
+        'follow_imports = "normal"\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+
+
 def test_bypass_audit_flags_unopted_member_crate_and_missing_warnings_deny(
     tmp_path: Path,
 ) -> None:
@@ -814,3 +917,44 @@ def _guard_table(enforcement: str) -> str:
     separator = "|---|---|---|---|---|---|---|"
     row = f"| G | O | p | d | c | {enforcement} | r |"
     return "## Guard inventory\n\n" + header + "\n" + separator + "\n" + row + "\n"
+
+
+def test_bypass_audit_rejects_reason_comment_inside_toml_string(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    manifest = _write_clean_rust_workspace(tmp_path)
+    assert verify.check_bypass(tmp_path) == []
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(
+        text.replace(
+            '# clean-code-policy.md bans doc comments\nmissing_errors_doc = "allow"',
+            '"missing#docs" = "allow"',
+        ),
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == [
+        "Cargo.toml:18: lint 'missing#docs' set to 'allow' lacks a reason comment"
+    ]
+
+
+def test_bypass_audit_flags_conditional_rust_lint_attribute(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    (tmp_path / "clean.rs").write_text(
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n", encoding="utf-8"
+    )
+    assert verify.check_bypass(tmp_path) == []
+    nested = '#[cfg_attr(any(feature = "a", feature = "b"), allow(dead_code))]\n'
+    (tmp_path / "clean.rs").write_text(
+        '#[cfg_attr(feature = "extra", expect(clippy::unwrap_used))]\npub fn run() {}\n',
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == [
+        "clean.rs:1: rust conditional lint attribute suppression marker"
+    ]
+    (tmp_path / "clean.rs").write_text(f"{nested}pub fn run() {{}}\n", encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == [
+        "clean.rs:1: rust conditional lint attribute suppression marker"
+    ]
+    (tmp_path / "clean.rs").write_text(
+        '#[cfg_attr(feature = "extra", derive(Debug))]\npub fn run() {}\n', encoding="utf-8"
+    )
+    assert verify.check_bypass(tmp_path) == []

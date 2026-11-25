@@ -180,6 +180,10 @@ BYPASS_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
     ".rs": (
         ("rust allow attribute", re.compile(r"#!?\[\s*allow\b")),
         ("rust expect attribute", re.compile(r"#!?\[\s*expect\b")),
+        (
+            "rust conditional lint attribute",
+            re.compile(r"#!?\[\s*cfg_attr\s*\([^]]*\b(?:allow|expect)\b"),
+        ),
     ),
     ".cs": (
         ("csharp pragma warning disable", re.compile(r"#\s*pragma\s+warning\s+disable\b")),
@@ -228,8 +232,11 @@ CATALOG_BANNED_RUST_LINTS = frozenset(
     }
 )
 FORBIDDEN_CLIPPY_GROUPS = frozenset({"nursery", "restriction"})
-RUFF_IGNORE_ITEM_RE = re.compile(r"""(["'])([A-Za-z0-9]+)\1""")
-TOML_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=")
+TOML_KEY_TOKEN_RE = re.compile(
+    r"""^\s*(?P<key>(?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)"""
+    r"""(?:\s*\.\s*(?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+))*)\s*="""
+)
+TOML_STRING_TOKEN_RE = re.compile(r"""(?:"(?:[^"\\]|\\.)*"|'[^']*')""")
 REQUIRED_DIRECTORY_BUILD_PROPS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Nullable=enable", re.compile(r"<Nullable>\s*enable\s*</Nullable>")),
     (
@@ -669,24 +676,97 @@ def has_preceding_reason_comment(lines: Sequence[str], index: int) -> bool:
     return False
 
 
+def toml_index_outside_string(text: str, stop: str) -> int | None:
+    quote = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == "\\" and quote == '"':
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            index += 1
+            continue
+        if char in stop:
+            return index
+        index += 1
+    return None
+
+
+def decode_toml_key_path(token: str) -> list[str]:
+    try:
+        parsed = tomllib.loads(f"{token} = 0\n")
+    except tomllib.TOMLDecodeError:
+        return []
+    path: list[str] = []
+    current: object = parsed
+    while isinstance(current, dict) and len(current) == 1:
+        key, value = next(iter(current.items()))
+        path.append(key)
+        current = value
+    return path
+
+
+def decode_toml_string(token: str) -> str | None:
+    try:
+        parsed = tomllib.loads(f"k = {token}\n")
+    except tomllib.TOMLDecodeError:
+        return None
+    value = parsed.get("k")
+    return value if isinstance(value, str) else None
+
+
+def decode_toml_strings(text: str) -> list[str]:
+    values: list[str] = []
+    for match in TOML_STRING_TOKEN_RE.finditer(text):
+        value = decode_toml_string(match.group(0))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def toml_value_text(value: str) -> str:
+    match = TOML_STRING_TOKEN_RE.fullmatch(value.strip())
+    if match is None:
+        return value
+    decoded = decode_toml_string(match.group(0))
+    if decoded is None:
+        return value
+    escaped = decoded.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def check_ruff_ignore_reasons(text: str, display: str) -> list[str]:
     findings: list[str] = []
     lines = text.splitlines()
     in_ignore = False
     for index, raw_line in enumerate(lines):
-        code, _, comment = raw_line.strip().partition("#")
+        comment_index = toml_index_outside_string(raw_line, "#")
+        code = raw_line if comment_index is None else raw_line[:comment_index]
+        comment = "" if comment_index is None else raw_line[comment_index + 1 :]
         if not in_ignore:
-            start = re.match(r"""^(?:ignore|"ignore"|'ignore')\s*=\s*\[""", code)
+            start = TOML_KEY_TOKEN_RE.match(code)
             if start is None:
                 continue
-            code = code[start.end() :]
-        items, close, _ = code.partition("]")
-        in_ignore = not close
+            path = decode_toml_key_path(start.group("key"))
+            if not path or path[-1] != "ignore":
+                continue
+            code = code[start.end() :].lstrip()
+            if not code.startswith("["):
+                continue
+        close_index = toml_index_outside_string(code, "]")
+        items = code if close_index is None else code[:close_index]
+        in_ignore = close_index is None
         if not comment.strip() and not has_preceding_reason_comment(lines, index):
             findings.extend(
-                f"{display}:{index + 1}: ruff ignore entry {match.group(2)!r} "
-                "lacks a reason comment"
-                for match in RUFF_IGNORE_ITEM_RE.finditer(items)
+                f"{display}:{index + 1}: ruff ignore entry {rule!r} lacks a reason comment"
+                for rule in decode_toml_strings(items)
             )
     return findings
 
@@ -751,21 +831,34 @@ def rust_lint_level(entry: object) -> str:
     return ""
 
 
+def toml_key_lines(text: str) -> list[tuple[int, str, str]]:
+    entries: list[tuple[int, str, str]] = []
+    for index, raw_line in enumerate(text.splitlines()):
+        match = TOML_KEY_TOKEN_RE.match(raw_line)
+        if match is None:
+            continue
+        path = decode_toml_key_path(match.group("key"))
+        if path:
+            entries.append((index, path[-1], toml_value_text(raw_line[match.end() :])))
+    return entries
+
+
+def is_toml_key_line(text: str) -> bool:
+    match = TOML_KEY_TOKEN_RE.match(text)
+    return match is not None and bool(decode_toml_key_path(match.group("key")))
+
+
 def toml_key_line_map(text: str) -> dict[str, int]:
     mapping: dict[str, int] = {}
-    for index, raw_line in enumerate(text.splitlines()):
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith(("#", "[")):
-            continue
-        match = TOML_KEY_RE.match(stripped)
-        if match is not None:
-            mapping.setdefault(match.group(1), index)
+    for index, key, _ in toml_key_lines(text):
+        mapping.setdefault(key, index)
     return mapping
 
 
 def toml_entry_has_reason(lines: Sequence[str], line_index: int) -> bool:
     raw_line = lines[line_index]
-    if "#" in raw_line and raw_line.split("#", 1)[1].strip():
+    comment_index = toml_index_outside_string(raw_line, "#")
+    if comment_index is not None and raw_line[comment_index + 1 :].strip():
         return True
     cursor = line_index - 1
     while cursor >= 0:
@@ -777,7 +870,7 @@ def toml_entry_has_reason(lines: Sequence[str], line_index: int) -> bool:
                 return True
             cursor -= 1
             continue
-        if TOML_KEY_RE.match(stripped) is not None:
+        if is_toml_key_line(stripped):
             cursor -= 1
             continue
         return False
@@ -1007,10 +1100,11 @@ def check_bypass(root: Path = REPO_ROOT) -> list[str]:
             continue
         display = display_path(path, root)
         text = path.read_text(encoding="utf-8")
+        key_lines = toml_key_lines(text)
         for label, pattern in BYPASS_CONFIG_PATTERNS:
-            for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                findings.append(f"{display}:{line}: {label} configuration bypass")
+            for index, key, value in key_lines:
+                if pattern.search(f"{key} = {value}") is not None:
+                    findings.append(f"{display}:{index + 1}: {label} configuration bypass")
     findings.extend(check_lint_configuration(root))
     findings.extend(check_rust_configuration(root))
     findings.extend(check_csharp_configuration(root))
