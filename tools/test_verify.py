@@ -3,12 +3,15 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
 from itertools import product
 from typing import TYPE_CHECKING
+from unittest import mock
 
 from tools import verify
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -722,6 +725,85 @@ def test_secret_scan_excludes_build_output_but_not_sources() -> None:
     )
     for path in sources:
         assert not any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
+
+
+def test_dotnet_format_files_skip_build_output_but_keep_sources(tmp_path: Path) -> None:
+    project = tmp_path / "bridge" / "App"
+    (project / "obj" / "Debug").mkdir(parents=True)
+    (project / "bin" / "Release").mkdir(parents=True)
+    (project / "App.csproj").write_text("<Project />\n", encoding="utf-8")
+    (project / "Main.cs").write_text("class Main {}\n", encoding="utf-8")
+    (project / "obj" / "Debug" / "Generated.cs").write_text("class G {}\n", encoding="utf-8")
+    (project / "bin" / "Release" / "Compiled.cs").write_text("class C {}\n", encoding="utf-8")
+    (tmp_path / "editor").mkdir()
+    (tmp_path / ".editorconfig").write_text("root = true\n", encoding="utf-8")
+    files = verify.dotnet_format_files(tmp_path)
+    assert "bridge/App/Main.cs" in files
+    assert "bridge/App/App.csproj" in files
+    assert ".editorconfig" in files
+    assert not any("obj" in name or "bin" in name for name in files)
+
+
+def _fake_dotnet_run(
+    calls: list[list[str]], exit_code: int = 0
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(list(command))
+        if list(command)[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="8.0.428\n", stderr="")
+        return subprocess.CompletedProcess(command, exit_code)
+
+    return fake_run
+
+
+def test_dotnet_format_cache_hit_skips_the_formatter(tmp_path: Path) -> None:
+    (tmp_path / "bridge").mkdir()
+    (tmp_path / "bridge" / "Unitas.sln").write_text("sln\n", encoding="utf-8")
+    cache = tmp_path / "cache.json"
+    digest_calls: list[list[str]] = []
+    with mock.patch.object(subprocess, "run", _fake_dotnet_run(digest_calls)):
+        digest = verify.dotnet_format_digest(verify.dotnet_format_files(tmp_path), tmp_path)
+    cache.write_text(json.dumps({"digest": digest}), encoding="utf-8")
+
+    calls: list[list[str]] = []
+    with mock.patch.object(subprocess, "run", _fake_dotnet_run(calls)):
+        assert verify.run_dotnet_format(tmp_path, cache) == 0
+    assert all(command[-1] == "--version" for command in calls)
+
+
+def test_dotnet_format_runs_and_caches_on_success(tmp_path: Path) -> None:
+    (tmp_path / "bridge").mkdir()
+    (tmp_path / "bridge" / "Unitas.sln").write_text("sln\n", encoding="utf-8")
+    cache = tmp_path / "cache.json"
+    calls: list[list[str]] = []
+
+    with mock.patch.object(subprocess, "run", _fake_dotnet_run(calls)):
+        assert verify.run_dotnet_format(tmp_path, cache) == 0
+    assert any(command[1:] == list(verify.DOTNET_FORMAT_COMMAND[1:]) for command in calls)
+    assert json.loads(cache.read_text(encoding="utf-8"))["digest"]
+
+
+def test_dotnet_format_failure_is_not_cached(tmp_path: Path) -> None:
+    (tmp_path / "bridge").mkdir()
+    (tmp_path / "bridge" / "Unitas.sln").write_text("sln\n", encoding="utf-8")
+    cache = tmp_path / "cache.json"
+    calls: list[list[str]] = []
+
+    with mock.patch.object(subprocess, "run", _fake_dotnet_run(calls, exit_code=1)):
+        assert verify.run_dotnet_format(tmp_path, cache) == 1
+    assert not cache.exists()
+
+
+def test_dotnet_format_digest_tracks_source_content(tmp_path: Path) -> None:
+    source = tmp_path / "bridge" / "App" / "Main.cs"
+    source.parent.mkdir(parents=True)
+    source.write_text("class Main {}\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    with mock.patch.object(subprocess, "run", _fake_dotnet_run(calls)):
+        before = verify.dotnet_format_digest(verify.dotnet_format_files(tmp_path), tmp_path)
+        source.write_text("class Main { int x; }\n", encoding="utf-8")
+        after = verify.dotnet_format_digest(verify.dotnet_format_files(tmp_path), tmp_path)
+    assert before != after
 
 
 def _guard_table(enforcement: str) -> str:

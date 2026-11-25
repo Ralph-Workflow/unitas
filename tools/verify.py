@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -1657,6 +1658,107 @@ def check_secrets() -> list[str]:
     return findings
 
 
+DOTNET_FORMAT_CACHE = REPO_ROOT / ".ruff_cache" / "dotnet_format_cache.json"
+DOTNET_FORMAT_COMMAND = (
+    "dotnet",
+    "format",
+    "bridge/Unitas.sln",
+    "--verify-no-changes",
+    "--no-restore",
+)
+DOTNET_FORMAT_SOURCE_SUFFIXES = (".cs", ".csproj", ".sln", ".editorconfig", ".props", ".targets")
+DOTNET_FORMAT_ROOT_CONFIGS = (".editorconfig", "Directory.Build.props", "global.json")
+DOTNET_FORMAT_ANCESTOR_CONFIGS = (".editorconfig", "Directory.Build.props")
+
+
+def _dotnet_format_project_files(root: Path) -> list[str]:
+    files: list[str] = []
+    for base in ("bridge", "editor"):
+        base_root = root / base
+        if not base_root.is_dir():
+            continue
+        for walk_root, dirnames, filenames in os.walk(base_root):
+            dirnames[:] = [name for name in sorted(dirnames) if name not in ("obj", "bin")]
+            files.extend(
+                str(Path(walk_root, filename).relative_to(root))
+                for filename in sorted(filenames)
+                if filename.endswith(DOTNET_FORMAT_SOURCE_SUFFIXES)
+            )
+    return files
+
+
+def _dotnet_format_config_files(root: Path) -> list[str]:
+    files = [name for name in DOTNET_FORMAT_ROOT_CONFIGS if (root / name).exists()]
+    ancestor = root.parent
+    while True:
+        files.extend(
+            str(ancestor / name)
+            for name in DOTNET_FORMAT_ANCESTOR_CONFIGS
+            if (ancestor / name).exists()
+        )
+        if ancestor.parent == ancestor:
+            break
+        ancestor = ancestor.parent
+    return files
+
+
+def dotnet_format_files(root: Path = REPO_ROOT) -> list[str]:
+    return sorted(_dotnet_format_project_files(root) + _dotnet_format_config_files(root))
+
+
+def _dotnet_executable() -> str:
+    return shutil.which("dotnet") or "dotnet"
+
+
+def dotnet_format_digest(files: Sequence[str], root: Path = REPO_ROOT) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(" ".join(DOTNET_FORMAT_COMMAND).encode("utf-8"))
+    try:
+        completed = subprocess.run(
+            [_dotnet_executable(), "--version"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        hasher.update(completed.stdout.strip().encode("utf-8"))
+    except OSError:
+        hasher.update(b"dotnet:unavailable")
+    for rel_file in files:
+        hasher.update(rel_file.encode("utf-8"))
+        hasher.update(b"\0")
+        with contextlib.suppress(OSError):
+            hasher.update((root / rel_file).read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def run_dotnet_format(root: Path = REPO_ROOT, cache: Path = DOTNET_FORMAT_CACHE) -> int:
+    files = dotnet_format_files(root)
+    digest = dotnet_format_digest(files, root)
+    if cache.exists():
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            cached = json.loads(cache.read_text(encoding="utf-8"))
+            if isinstance(cached, dict) and cached.get("digest") == digest:
+                sys.stdout.write(
+                    f"dotnet format: cache hit for {len(files)} files (digest {digest[:12]})\n"
+                )
+                return 0
+    try:
+        completed = subprocess.run(
+            [_dotnet_executable(), *DOTNET_FORMAT_COMMAND[1:]], cwd=root, check=False
+        )
+    except OSError as error:
+        sys.stderr.write(f"dotnet format could not start: {error}\n")
+        return 1
+    if completed.returncode != 0:
+        return completed.returncode
+    with contextlib.suppress(OSError):
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"digest": digest}), encoding="utf-8")
+    return 0
+
+
 GATES: dict[str, Callable[[], list[str]]] = {
     "banned": check_banned,
     "bypass": check_bypass,
@@ -1689,6 +1791,8 @@ def run_timed(argv: Sequence[str]) -> int:
 def main(argv: Sequence[str]) -> int:
     if len(argv) > 1 and argv[1] == "timed":
         return run_timed(argv[1:])
+    if len(argv) > 1 and argv[1] == "dotnet-format":
+        return run_dotnet_format()
     if len(argv) != GATE_CLI_ARG_COUNT or argv[1] not in GATES:
         sys.stderr.write("usage: verify.py {" + "|".join(sorted(GATES)) + "}\n")
         return 2
