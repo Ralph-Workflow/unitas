@@ -1,7 +1,12 @@
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::camera::Camera;
 use crate::capture::{CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds};
+use crate::glyphs::{
+    layout_text, rasterize, FontLibrary, GlyphAtlas, GlyphResources, Rect, SwashCache, TextFrame,
+    TextPipeline, TextStyle,
+};
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
@@ -176,6 +181,15 @@ pub struct RenderScene<'a> {
 
 pub type GpuRenderer = Renderer;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOverlayItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub size_px: f32,
+    pub color: [f32; 4],
+}
+
 impl<'a, 'b> From<&'a MeshInstance<'b>> for GpuInstance<'b>
 where
     'b: 'a,
@@ -204,8 +218,23 @@ struct UniformState {
 
 struct SurfaceState {
     pipelines: Pipelines,
+    format: wgpu::TextureFormat,
+    config_size: (u32, u32),
     depth: wgpu::Texture,
     depth_size: (u32, u32),
+}
+
+struct TextTarget {
+    pipeline: TextPipeline,
+    resources: GlyphResources,
+    uploaded: usize,
+}
+
+struct TextState {
+    fonts: FontLibrary,
+    cache: SwashCache,
+    atlas: GlyphAtlas,
+    targets: HashMap<wgpu::TextureFormat, TextTarget>,
 }
 
 pub struct Renderer {
@@ -221,6 +250,7 @@ pub struct Renderer {
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
     surface: Mutex<Option<SurfaceState>>,
+    text: Mutex<TextState>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -401,6 +431,14 @@ impl Renderer {
             ID_FORMAT,
         );
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
+        let mut fonts = FontLibrary::new();
+        fonts.load_system_fonts();
+        let text = TextState {
+            fonts,
+            cache: SwashCache::new(),
+            atlas: GlyphAtlas::new(1024, 1024),
+            targets: HashMap::new(),
+        };
         Ok(Renderer {
             instance,
             adapter,
@@ -414,6 +452,7 @@ impl Renderer {
             capture_pipelines,
             uniforms: Mutex::new(uniforms),
             surface: Mutex::new(None),
+            text: Mutex::new(text),
         })
     }
 
@@ -431,6 +470,10 @@ impl Renderer {
 
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    pub fn has_overlay_fonts(&self) -> bool {
+        lock(&self.text).fonts.has_fonts()
     }
 
     pub fn render_offscreen(
@@ -472,7 +515,32 @@ impl Renderer {
         background: [f32; 3],
         size: (u32, u32),
     ) -> Result<Image, RenderError> {
+        let scene = RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        };
+        self.render_offscreen_with_overlay(instances, scene, size, &[])
+    }
+
+    pub fn render_offscreen_with_overlay(
+        &self,
+        instances: &[GpuInstance<'_>],
+        scene: RenderScene<'_>,
+        size: (u32, u32),
+        overlay: &[TextOverlayItem],
+    ) -> Result<Image, RenderError> {
         let (width, height) = size;
+        if width == 0 || height == 0 {
+            return Ok(Image::new(width, height));
+        }
+        let RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        } = scene;
         if width == 0 || height == 0 {
             return Ok(Image::new(width, height));
         }
@@ -532,6 +600,16 @@ impl Renderer {
                 view,
                 light,
             )?;
+        }
+        if !overlay.is_empty() {
+            self.draw_text_overlay(
+                &mut encoder,
+                &color_view,
+                OFFSCREEN_FORMAT,
+                (width, height),
+                1.0,
+                overlay,
+            );
         }
 
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
@@ -765,6 +843,8 @@ impl Renderer {
         let mut state = lock(&self.surface);
         *state = Some(SurfaceState {
             pipelines,
+            format: configuration.format,
+            config_size: (width, height),
             depth,
             depth_size: (width, height),
         });
@@ -809,6 +889,28 @@ impl Renderer {
         light: &DirectionalLight,
         background: [f32; 3],
     ) -> Result<(), RenderError> {
+        let scene = RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        };
+        self.render_to_surface_with_overlay(surface, instances, scene, &[])
+    }
+
+    pub fn render_to_surface_with_overlay(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[GpuInstance<'_>],
+        scene: RenderScene<'_>,
+        overlay: &[TextOverlayItem],
+    ) -> Result<(), RenderError> {
+        let RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        } = scene;
         let mut state = lock(&self.surface);
         let surface_state = match state.as_mut() {
             Some(surface_state) => surface_state,
@@ -873,9 +975,89 @@ impl Renderer {
                 light,
             )?;
         }
+        if !overlay.is_empty() {
+            let scale = size.0 as f32 / surface_state.config_size.0 as f32;
+            let format = surface_state.format;
+            self.draw_text_overlay(&mut encoder, &color_view, format, size, scale, overlay);
+        }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(surface_texture);
         Ok(())
+    }
+
+    fn draw_text_overlay(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        scale: f32,
+        overlay: &[TextOverlayItem],
+    ) {
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        let mut text = lock(&self.text);
+        let TextState {
+            fonts,
+            cache,
+            atlas,
+            targets,
+        } = &mut *text;
+        let mut quads = Vec::new();
+        for item in overlay {
+            if item.text.is_empty() || item.size_px <= 0.0 {
+                continue;
+            }
+            let scaled = item.size_px * scale;
+            let style = TextStyle::new(scaled, scaled, item.color);
+            let layout = layout_text(fonts, &item.text, None, &style);
+            let mut item_quads = rasterize(fonts, cache, atlas, &layout);
+            let dx = item.x * scale;
+            let dy = item.y * scale;
+            for quad in &mut item_quads {
+                quad.x += dx;
+                quad.y += dy;
+            }
+            quads.extend(item_quads);
+        }
+        let target = targets.entry(format).or_insert_with(|| {
+            let pipeline = TextPipeline::new(&self.device, format);
+            let resources = pipeline.upload_atlas(&self.device, &self.queue, atlas);
+            TextTarget {
+                pipeline,
+                resources,
+                uploaded: atlas.region_count(),
+            }
+        });
+        if target.uploaded != atlas.region_count() {
+            target.resources = target
+                .pipeline
+                .upload_atlas(&self.device, &self.queue, atlas);
+            target.uploaded = atlas.region_count();
+        }
+        if quads.is_empty() {
+            return;
+        }
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        };
+        let mut target_frame = TextFrame {
+            encoder,
+            view,
+            frame,
+            clip: frame,
+        };
+        target.pipeline.draw(
+            &self.device,
+            &self.queue,
+            &target.resources,
+            &mut target_frame,
+            &quads,
+        );
     }
 
     fn create_depth_texture(&self, width: u32, height: u32) -> wgpu::Texture {
@@ -1411,6 +1593,67 @@ mod tests {
         assert!(
             error <= GPU_CPU_MEAN_ERROR_TOLERANCE,
             "gpu/cpu mean channel error {error} exceeds declared tolerance {GPU_CPU_MEAN_ERROR_TOLERANCE}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn text_overlay_changes_pixels_inside_text_bounds_only(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        if !renderer.has_overlay_fonts() {
+            eprintln!("skipping text overlay test, no fonts available");
+            return Ok(());
+        }
+        let overlay = vec![TextOverlayItem {
+            text: "Ag".to_string(),
+            x: 10.0,
+            y: 10.0,
+            size_px: 24.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }];
+        let without = renderer.render_offscreen(
+            &[],
+            &camera(),
+            view(),
+            &light(),
+            BACKGROUND,
+            (WIDTH, HEIGHT),
+        )?;
+        let scene = RenderScene {
+            camera: &camera(),
+            view: view(),
+            light: &light(),
+            background: BACKGROUND,
+        };
+        let with = renderer.render_offscreen_with_overlay(&[], scene, (WIDTH, HEIGHT), &overlay)?;
+        let margin = 24.0f32;
+        let bound_x = 10.0f32 - margin;
+        let bound_y = 10.0f32 - margin;
+        let bound_w = 24.0 * 3.0 + margin;
+        let bound_h = 24.0 * 2.0 + margin;
+        let mut changed = 0usize;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                if without.get_pixel(x, y) != with.get_pixel(x, y) {
+                    changed += 1;
+                    assert!(
+                        (x as f32) >= bound_x
+                            && (x as f32) < bound_x + bound_w
+                            && (y as f32) >= bound_y
+                            && (y as f32) < bound_y + bound_h,
+                        "changed pixel ({x}, {y}) outside text bounds"
+                    );
+                }
+            }
+        }
+        assert!(changed > 0, "overlay produced no changed pixels");
+        assert_eq!(
+            without.get_pixel(WIDTH - 1, HEIGHT - 1),
+            with.get_pixel(WIDTH - 1, HEIGHT - 1)
         );
         Ok(())
     }

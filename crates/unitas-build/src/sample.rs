@@ -7,7 +7,6 @@ use unitas_core::EntityId;
 #[cfg(feature = "device")]
 use unitas_render::{cube, look_at, uv_sphere, Camera, DirectionalLight, Mat4};
 use unitas_render::{Mesh, Vec3};
-#[cfg(feature = "device")]
 use unitas_runtime::{
     CharacterMoveRequest, Runtime, RuntimeError, KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_RIGHT_ARROW,
     KEY_SPACE, KEY_UP_ARROW,
@@ -50,6 +49,9 @@ pub const PLAYER_CHARACTER_STEP_OFFSET: f64 = 0.25;
 pub const PLAYER_CHARACTER_SKIN_WIDTH: f64 = 0.05;
 pub const PLAYER_CHARACTER_MIN_MOVE_DISTANCE: f64 = 0.002;
 pub const CAMERA_OFFSET: [f32; 3] = [0.0, 9.5, -11.5];
+pub const PICKUP_ROTATE_SPEED_DEGREES_PER_SECOND: f64 = 60.0;
+pub const PICKUP_BOB_HEIGHT: f64 = 0.2;
+pub const PICKUP_BOB_SPEED: f64 = 2.0;
 
 pub fn roll_a_ball_scene_yaml() -> &'static str {
     r"%YAML 1.1
@@ -433,6 +435,13 @@ pub fn synthesize_chime_clip(
     parse_wav(&bytes)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HudSnapshot {
+    pub score: u32,
+    pub total: u32,
+    pub won: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PickupSlot {
     pub name: String,
@@ -449,9 +458,11 @@ pub struct RollABallController {
     pub audio_entity: EntityId,
     pub pickup_clip_id: AudioClipId,
     pub ambient_clip_id: AudioClipId,
+    pub win_clip_id: AudioClipId,
     pub pickups: Vec<PickupSlot>,
     pub score: u32,
     pub total_pickups: u32,
+    pub won: bool,
     pub camera_yaw_radians: f32,
     pub elapsed_seconds: f64,
     pub restart_count: u32,
@@ -613,8 +624,10 @@ impl RollABallController {
 
         let pickup_wav = synthesize_chime_wav_bytes(44_100, 660.0, 0.25);
         let ambient_wav = synthesize_chime_wav_bytes(44_100, 330.0, 0.35);
+        let win_wav = synthesize_chime_wav_bytes(44_100, 784.0, 0.6);
         let pickup_clip_id = runtime.audio_mut().load_wav_bytes(&pickup_wav)?;
         let ambient_clip_id = runtime.audio_mut().load_wav_bytes(&ambient_wav)?;
+        let win_clip_id = runtime.audio_mut().load_wav_bytes(&win_wav)?;
 
         let audio_entity = player_entity.unwrap_or_else(|| runtime.ensure_audio_source(0));
         runtime.audio_mut().ensure_source(audio_entity);
@@ -632,9 +645,11 @@ impl RollABallController {
             audio_entity,
             pickup_clip_id,
             ambient_clip_id,
+            win_clip_id,
             pickups,
             score: 0,
             total_pickups,
+            won: false,
             camera_yaw_radians: 0.0,
             elapsed_seconds: 0.0,
             restart_count: 0,
@@ -658,6 +673,14 @@ impl RollABallController {
         Ok(())
     }
 
+    pub fn hud_snapshot(&self) -> HudSnapshot {
+        HudSnapshot {
+            score: self.score,
+            total: self.total_pickups,
+            won: self.won,
+        }
+    }
+
     #[cfg(feature = "device")]
     pub fn step_on_bindings(
         &mut self,
@@ -666,6 +689,17 @@ impl RollABallController {
         camera_binding: &mut GpuCameraBinding,
         dt: f64,
     ) -> Result<(), RuntimeError> {
+        self.step_world(runtime, dt)?;
+        self.sync_pickup_meshes(meshes);
+        if let Some(player) = self.player_entity {
+            if let Some(position) = runtime.body_position(player) {
+                self.update_camera_follow_on_binding(position, camera_binding);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn step_world(&mut self, runtime: &mut Runtime, dt: f64) -> Result<(), RuntimeError> {
         let step_dt = if dt.is_finite() && dt > 0.0 {
             dt
         } else {
@@ -674,7 +708,7 @@ impl RollABallController {
         self.elapsed_seconds += step_dt;
 
         if runtime.input().is_key_pressed(u32::from(b'r')) {
-            self.reset_on_bindings(runtime, meshes, camera_binding)?;
+            self.reset_world(runtime)?;
             return Ok(());
         }
 
@@ -745,13 +779,12 @@ impl RollABallController {
             self.grounded = result.is_grounded;
             runtime.set_body_position(player, result.position)?;
 
-            self.check_pickups_on_bindings(result.position, runtime, meshes);
-            self.update_camera_follow_on_binding(result.position, camera_binding);
+            self.collect_pickups(result.position, runtime);
         }
+        self.animate_pickups(runtime);
         Ok(())
     }
 
-    #[cfg(feature = "device")]
     fn vertical_motion(&mut self, runtime: &Runtime, step_dt: f64) -> f64 {
         if self.grounded {
             self.vertical_velocity = if runtime.input().is_key_pressed(KEY_SPACE) {
@@ -765,7 +798,6 @@ impl RollABallController {
         self.vertical_velocity * step_dt
     }
 
-    #[cfg(feature = "device")]
     fn character_move_request(
         &self,
         runtime: &Runtime,
@@ -794,13 +826,10 @@ impl RollABallController {
         }
     }
 
-    #[cfg(feature = "device")]
-    fn check_pickups_on_bindings(
-        &mut self,
-        player_pos: [f64; 3],
-        runtime: &mut Runtime,
-        meshes: &mut [GpuMeshBinding],
-    ) {
+    fn collect_pickups(&mut self, player_pos: [f64; 3], runtime: &mut Runtime) {
+        if self.won {
+            return;
+        }
         let radius_sq = PICKUP_COLLECT_RADIUS * PICKUP_COLLECT_RADIUS;
         let mut newly_collected = false;
 
@@ -816,18 +845,82 @@ impl RollABallController {
                 slot.collected = true;
                 self.score += 1;
                 newly_collected = true;
-                if let Some(binding) = meshes.get_mut(slot.mesh_index) {
-                    binding.enabled = false;
-                }
             }
         }
 
-        if newly_collected {
-            runtime
-                .audio_mut()
-                .set_source_clip(self.audio_entity, Some(self.pickup_clip_id));
-            runtime.audio_mut().set_looping(self.audio_entity, false);
-            runtime.audio_mut().play(self.audio_entity, true);
+        if !newly_collected {
+            return;
+        }
+        let clip_id = if self.score >= self.total_pickups {
+            self.won = true;
+            self.win_clip_id
+        } else {
+            self.pickup_clip_id
+        };
+        let audio = runtime.audio_mut();
+        audio.set_source_clip(self.audio_entity, Some(clip_id));
+        audio.set_looping(self.audio_entity, false);
+        audio.play(self.audio_entity, true);
+    }
+
+    fn animate_pickups(&mut self, runtime: &mut Runtime) {
+        let angle = self.elapsed_seconds * PICKUP_ROTATE_SPEED_DEGREES_PER_SECOND.to_radians();
+        let half_angle = (angle * 0.5) as f32;
+        let rotation = [0.0, half_angle.sin(), 0.0, half_angle.cos()];
+        let bob_offset = (self.elapsed_seconds * PICKUP_BOB_SPEED).sin() * PICKUP_BOB_HEIGHT;
+        for slot in &self.pickups {
+            if slot.collected {
+                continue;
+            }
+            let Some(entity) = slot.entity else {
+                continue;
+            };
+            let Some(graph) = runtime.scene_graph_mut() else {
+                break;
+            };
+            if let Some(transform) = graph.transform_mut(entity) {
+                transform.rotation = rotation;
+                transform.translation = [
+                    slot.position[0] as f32,
+                    (slot.position[1] + bob_offset) as f32,
+                    slot.position[2] as f32,
+                ];
+            }
+        }
+    }
+
+    #[cfg(feature = "device")]
+    fn sync_pickup_meshes(&self, meshes: &mut [GpuMeshBinding]) {
+        let angle = self.elapsed_seconds * PICKUP_ROTATE_SPEED_DEGREES_PER_SECOND.to_radians();
+        let (sin_angle, cos_angle) = angle.sin_cos();
+        let bob_offset = (self.elapsed_seconds * PICKUP_BOB_SPEED).sin() * PICKUP_BOB_HEIGHT;
+        for slot in &self.pickups {
+            if let Some(binding) = meshes.get_mut(slot.mesh_index) {
+                binding.enabled = !slot.collected;
+                if binding.entity.is_none() {
+                    let x = slot.position[0] as f32;
+                    let y = (slot.position[1] + bob_offset) as f32;
+                    let z = slot.position[2] as f32;
+                    binding.model = Mat4::from_cols_array([
+                        0.75 * cos_angle as f32,
+                        0.0,
+                        -0.75 * sin_angle as f32,
+                        0.0,
+                        0.0,
+                        0.75,
+                        0.0,
+                        0.0,
+                        0.75 * sin_angle as f32,
+                        0.0,
+                        0.75 * cos_angle as f32,
+                        0.0,
+                        x,
+                        y,
+                        z,
+                        1.0,
+                    ]);
+                }
+            }
         }
     }
 
@@ -872,14 +965,20 @@ impl RollABallController {
         meshes: &mut [GpuMeshBinding],
         camera_binding: &mut GpuCameraBinding,
     ) -> Result<(), RuntimeError> {
+        self.reset_world(runtime)?;
+        self.sync_pickup_meshes(meshes);
+        self.update_camera_follow_on_binding(PLAYER_START_POSITION, camera_binding);
+        Ok(())
+    }
+
+    pub fn reset_world(&mut self, runtime: &mut Runtime) -> Result<(), RuntimeError> {
         self.teleport_player(runtime, PLAYER_START_POSITION)?;
         for slot in &mut self.pickups {
             slot.collected = false;
-            if let Some(binding) = meshes.get_mut(slot.mesh_index) {
-                binding.enabled = true;
-            }
         }
+        self.restore_pickup_transforms(runtime);
         self.score = 0;
+        self.won = false;
         self.camera_yaw_radians = 0.0;
         self.restart_count += 1;
         runtime
@@ -887,11 +986,28 @@ impl RollABallController {
             .set_source_clip(self.audio_entity, Some(self.ambient_clip_id));
         runtime.audio_mut().set_looping(self.audio_entity, true);
         runtime.audio_mut().play(self.audio_entity, false);
-        self.update_camera_follow_on_binding(PLAYER_START_POSITION, camera_binding);
         Ok(())
     }
 
-    #[cfg(feature = "device")]
+    fn restore_pickup_transforms(&mut self, runtime: &mut Runtime) {
+        for slot in &self.pickups {
+            let Some(entity) = slot.entity else {
+                continue;
+            };
+            let Some(graph) = runtime.scene_graph_mut() else {
+                break;
+            };
+            if let Some(transform) = graph.transform_mut(entity) {
+                transform.rotation = [0.0, 0.0, 0.0, 1.0];
+                transform.translation = [
+                    slot.position[0] as f32,
+                    slot.position[1] as f32,
+                    slot.position[2] as f32,
+                ];
+            }
+        }
+    }
+
     pub fn teleport_player(
         &mut self,
         runtime: &mut Runtime,
@@ -974,6 +1090,176 @@ mod tests {
         for pickup_name in PICKUP_NAMES {
             assert!(runtime.find_entity_by_name(pickup_name).is_some());
         }
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn roll_a_ball_gameplay_steps_headless_without_device_bindings(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = temp_dir("controller_headless")?;
+        let bundle = stage_roll_a_ball_bundle(&workspace)?;
+        let scene_path = workspace.join(&bundle.manifest.startup_scene_staged_path);
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+
+        let pickup_wav = synthesize_chime_wav_bytes(44_100, 660.0, 0.25);
+        let win_wav = synthesize_chime_wav_bytes(44_100, 784.0, 0.6);
+        let pickup_clip_id = runtime.audio_mut().load_wav_bytes(&pickup_wav)?;
+        let win_clip_id = runtime.audio_mut().load_wav_bytes(&win_wav)?;
+        let audio_entity = runtime.ensure_audio_source(0);
+        runtime.audio_mut().ensure_source(audio_entity);
+
+        let mut pickups = Vec::with_capacity(PICKUP_NAMES.len());
+        for (idx, pickup_name) in PICKUP_NAMES.iter().enumerate() {
+            pickups.push(PickupSlot {
+                name: (*pickup_name).to_string(),
+                entity: runtime.find_entity_by_name(pickup_name),
+                mesh_index: idx,
+                position: PICKUP_POSITIONS[idx],
+                collected: false,
+            });
+        }
+
+        let mut controller = RollABallController {
+            player_entity: runtime.find_entity_by_name("PlayerBall"),
+            camera_entity: runtime.find_entity_by_name("Main Camera"),
+            audio_entity,
+            pickup_clip_id,
+            ambient_clip_id: pickup_clip_id,
+            win_clip_id,
+            pickups,
+            score: 0,
+            total_pickups: 4,
+            won: false,
+            camera_yaw_radians: 0.0,
+            elapsed_seconds: 0.0,
+            restart_count: 0,
+            vertical_velocity: 0.0,
+            grounded: false,
+        };
+        assert_eq!(
+            controller.hud_snapshot(),
+            HudSnapshot {
+                score: 0,
+                total: 4,
+                won: false
+            }
+        );
+
+        runtime.tick(1.0 / 60.0)?;
+        controller.step_world(&mut runtime, 1.0 / 60.0)?;
+        assert_eq!(controller.score, 0);
+        assert!(!controller.won);
+
+        let pickup_entity = controller.pickups[0]
+            .entity
+            .ok_or("missing Pickup_1 entity")?;
+        let before = runtime
+            .world_transform_of(pickup_entity)
+            .ok_or("missing Pickup_1 transform")?;
+        controller.step_world(&mut runtime, 1.0 / 50.0)?;
+        let after = runtime
+            .world_transform_of(pickup_entity)
+            .ok_or("missing Pickup_1 transform after step")?;
+        assert_ne!(before.rotation, after.rotation);
+        assert_ne!(before.translation, after.translation);
+
+        for position in PICKUP_POSITIONS {
+            controller.teleport_player(&mut runtime, position)?;
+            controller.step_world(&mut runtime, 1.0 / 60.0)?;
+        }
+        assert_eq!(controller.score, 4);
+        assert!(controller.won);
+        assert_eq!(
+            controller.hud_snapshot(),
+            HudSnapshot {
+                score: 4,
+                total: 4,
+                won: true
+            }
+        );
+        assert_eq!(
+            runtime
+                .audio()
+                .source(audio_entity)
+                .and_then(|source| source.clip),
+            Some(win_clip_id)
+        );
+
+        runtime.input_mut().inject_key(u32::from(b'r'), true);
+        runtime.tick(1.0 / 60.0)?;
+        controller.step_world(&mut runtime, 1.0 / 60.0)?;
+        assert_eq!(controller.score, 0);
+        assert!(!controller.won);
+        assert_eq!(controller.restart_count, 1);
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "device")]
+    fn roll_a_ball_controller_collects_all_pickups_wins_and_restart_clears(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Ok(mut presenter) = GpuFramePresenter::from_new_renderer() else {
+            return Ok(());
+        };
+        let workspace = temp_dir("controller_win")?;
+        let bundle = stage_roll_a_ball_bundle(&workspace)?;
+        let scene_path = workspace.join(&bundle.manifest.startup_scene_staged_path);
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+
+        let mut controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter)?;
+        let player = controller
+            .player_entity
+            .ok_or("missing PlayerBall entity")?;
+
+        runtime.tick(1.0 / 60.0)?;
+        for position in PICKUP_POSITIONS {
+            controller.teleport_player(&mut runtime, position)?;
+            controller.step(&mut runtime, &mut presenter, 1.0 / 60.0)?;
+        }
+        assert_eq!(controller.score, 4);
+        assert!(controller.won);
+        let hud = controller.hud_snapshot();
+        assert_eq!(hud.score, 4);
+        assert_eq!(hud.total, 4);
+        assert!(hud.won);
+        let queued_clip = runtime
+            .audio()
+            .source(controller.audio_entity)
+            .and_then(|source| source.clip);
+        assert_eq!(queued_clip, Some(controller.win_clip_id));
+        for slot in &controller.pickups {
+            assert!(!presenter.meshes()[slot.mesh_index].enabled);
+        }
+
+        runtime.input_mut().inject_key(u32::from(b'r'), true);
+        runtime.tick(1.0 / 60.0)?;
+        controller.step(&mut runtime, &mut presenter, 1.0 / 60.0)?;
+        assert_eq!(controller.score, 0);
+        assert!(!controller.won);
+        assert_eq!(controller.restart_count, 1);
+        assert_eq!(
+            controller.hud_snapshot(),
+            HudSnapshot {
+                score: 0,
+                total: 4,
+                won: false
+            }
+        );
+        for slot in &controller.pickups {
+            assert!(presenter.meshes()[slot.mesh_index].enabled);
+        }
+        let reset_pos = runtime
+            .body_position(player)
+            .ok_or("missing PlayerBall physics body after restart")?;
+        assert_eq!(reset_pos, PLAYER_START_POSITION);
 
         fs::remove_dir_all(&workspace)?;
         Ok(())

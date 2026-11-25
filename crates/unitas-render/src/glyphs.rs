@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use cosmic_text::fontdb;
-use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Shaping, SwashCache};
+pub use cosmic_text::SwashCache;
+use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Shaping};
 
 use crate::image::Rgba8;
 
@@ -224,6 +225,10 @@ impl GlyphAtlas {
 
     pub fn region(&self, key: &CacheKey) -> Option<AtlasRegion> {
         self.regions.get(&AtlasKey::from_cache_key(*key)).copied()
+    }
+
+    pub fn region_count(&self) -> usize {
+        self.regions.len()
     }
 }
 

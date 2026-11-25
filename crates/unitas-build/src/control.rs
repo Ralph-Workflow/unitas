@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 use unitas_runtime::Runtime;
 
-#[cfg(feature = "device")]
+#[cfg(not(feature = "device"))]
+use crate::player::bind_roll_a_ball_controller_headless;
 use crate::RollABallController;
 #[cfg(feature = "device")]
 use unitas_render::{CaptureInstance, CaptureObject};
@@ -124,8 +125,7 @@ pub struct ControlSession {
     random_seed: u64,
     #[cfg(feature = "device")]
     presenter: GpuFramePresenter<'static>,
-    #[cfg(feature = "device")]
-    controller: RollABallController,
+    controller: Option<RollABallController>,
 }
 
 impl ControlSession {
@@ -137,6 +137,8 @@ impl ControlSession {
         let runtime = load_runtime(scene_path)?;
         #[cfg(feature = "device")]
         let (runtime, presenter, controller) = bind_scene(runtime)?;
+        #[cfg(not(feature = "device"))]
+        let (runtime, controller) = bind_headless(runtime)?;
         Ok(Self {
             runtime,
             scene_path: scene_path.to_path_buf(),
@@ -146,7 +148,6 @@ impl ControlSession {
             random_seed,
             #[cfg(feature = "device")]
             presenter,
-            #[cfg(feature = "device")]
             controller,
         })
     }
@@ -210,9 +211,15 @@ impl ControlSession {
         self.frames = 0;
         #[cfg(feature = "device")]
         {
-            self.controller =
+            self.controller = Some(
                 RollABallController::bind_to_scene(&mut self.runtime, &mut self.presenter)
-                    .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+                    .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?,
+            );
+        }
+        #[cfg(not(feature = "device"))]
+        {
+            self.controller = bind_roll_a_ball_controller_headless(&mut self.runtime)
+                .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
         }
         Ok(())
     }
@@ -225,11 +232,22 @@ impl ControlSession {
             self.runtime
                 .tick(self.delta_seconds)
                 .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
+            self.step_controller()?;
+            self.frames += 1;
+        }
+        Ok(())
+    }
+
+    fn step_controller(&mut self) -> Result<(), ProtocolError> {
+        if let Some(controller) = self.controller.as_mut() {
             #[cfg(feature = "device")]
-            self.controller
+            controller
                 .step(&mut self.runtime, &mut self.presenter, self.delta_seconds)
                 .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
-            self.frames += 1;
+            #[cfg(not(feature = "device"))]
+            controller
+                .step_world(&mut self.runtime, self.delta_seconds)
+                .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
         }
         Ok(())
     }
@@ -255,12 +273,23 @@ impl ControlSession {
     }
 
     fn state_payload(&self) -> Value {
+        let (score, total, won) = self
+            .controller
+            .as_ref()
+            .map(|controller| {
+                let hud = controller.hud_snapshot();
+                (hud.score, hud.total, hud.won)
+            })
+            .unwrap_or((0, 0, false));
         json!({
             "ok": true,
             "state": self.state.as_str(),
             "frames": self.frames,
             "delta_seconds": self.delta_seconds,
             "random_seed": self.random_seed,
+            "score": score,
+            "total": total,
+            "won": won,
         })
     }
 }
@@ -277,12 +306,28 @@ fn load_runtime(scene_path: &Path) -> Result<Runtime, ProtocolError> {
 #[cfg(feature = "device")]
 fn bind_scene(
     mut runtime: Runtime,
-) -> Result<(Runtime, GpuFramePresenter<'static>, RollABallController), ProtocolError> {
+) -> Result<
+    (
+        Runtime,
+        GpuFramePresenter<'static>,
+        Option<RollABallController>,
+    ),
+    ProtocolError,
+> {
     let mut presenter = GpuFramePresenter::from_new_renderer()
         .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
     let controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter)
         .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    Ok((runtime, presenter, controller))
+    Ok((runtime, presenter, Some(controller)))
+}
+
+#[cfg(not(feature = "device"))]
+fn bind_headless(
+    mut runtime: Runtime,
+) -> Result<(Runtime, Option<RollABallController>), ProtocolError> {
+    let controller = bind_roll_a_ball_controller_headless(&mut runtime)
+        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+    Ok((runtime, controller))
 }
 
 #[cfg(not(feature = "device"))]
@@ -841,6 +886,38 @@ mod tests {
         assert_eq!(first.runtime.input_key_state(97) & STATE_DOWN, STATE_DOWN);
         assert_eq!(second.runtime.input_key_state(97) & STATE_DOWN, 0);
         assert_ne!(first.random_seed, second.random_seed);
+        Ok(())
+    }
+
+    #[test]
+    fn state_payload_reports_roll_a_ball_gameplay_state() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let workspace =
+            std::env::temp_dir().join(format!("unitas_control_hud_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workspace);
+        let staged = crate::sample::stage_roll_a_ball_bundle(&workspace)?;
+        let scene_path = workspace.join(&staged.manifest.startup_scene_staged_path);
+
+        let mut session =
+            ControlSession::start(&scene_path, 1.0 / 60.0, 41).map_err(|error| error.outcome())?;
+        let payload = session
+            .dispatch(&Request::State)
+            .map_err(|error| error.outcome())?;
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["score"], json!(0));
+        assert_eq!(payload["total"], json!(4));
+        assert_eq!(payload["won"], json!(false));
+
+        session
+            .dispatch(&Request::Step { frames: 2 })
+            .map_err(|error| error.outcome())?;
+        let payload = session
+            .dispatch(&Request::State)
+            .map_err(|error| error.outcome())?;
+        assert_eq!(payload["frames"], json!(2));
+        assert_eq!(payload["total"], json!(4));
+
+        std::fs::remove_dir_all(&workspace)?;
         Ok(())
     }
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import json
+import queue
 import re
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +29,13 @@ COMPARE_ARG_COUNT = 3
 COMPARE_WITH_TOLERANCE_ARG_COUNT = 5
 ACTUAL_ARG_COUNT = 2
 MIN_SUSTAINED_FPS = 30.0
+CONTROL_STDIO_KEY_W = ord("w")
+CONTROL_STDIO_KEY_D = ord("d")
+CONTROL_STDIO_CHUNK_FRAMES = 30
+CONTROL_STDIO_MAX_FRAMES = 300
+CONTROL_STDIO_BUDGET_SECONDS = 90.0
+CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
+CONTROL_STATE_FIELDS = ("score", "total", "won")
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
@@ -52,6 +63,9 @@ DEVICE_REPORT_FIELDS: tuple[tuple[str, str], ...] = (
     ("audio_active", r"audio_active=(true|false)"),
     ("audio_frames", r"audio_frames=(\d+)"),
     ("ball_moved", r"ball_moved=(true|false)"),
+    ("score", r"score=(\d+/\d+)"),
+    ("won", r"won=(true|false)"),
+    ("hud", r"hud=(true|false)"),
 )
 
 SUSTAINED_FPS_PATTERN = re.compile(r"^sustained_fps=([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
@@ -207,9 +221,8 @@ def parse_device_report(output: str) -> dict[str, str] | None:
     report: dict[str, str] = {}
     for name, pattern in DEVICE_REPORT_FIELDS:
         match = re.search(pattern, line)
-        if match is None:
-            return None
-        report[name] = match.group(1)
+        if match is not None:
+            report[name] = match.group(1)
     return report
 
 
@@ -239,6 +252,13 @@ def sustained_fps_measurement(output: str) -> tuple[str, str | None]:
 def device_failure_reason(report: dict[str, str] | None) -> str | None:
     if report is None:
         return "the player reported no device verification line"
+    missing = [name for name, _pattern in DEVICE_REPORT_FIELDS if name not in report]
+    if missing:
+        names = ", ".join(missing)
+        return (
+            f"the device verification line lacks fields: {names}; "
+            "contract C3 requires score=<n>/<total>, won, and hud"
+        )
     frames = int(report["frames_presented"])
     tolerance = float(report["tolerance"])
     mean_error = float(report["mean_error"])
@@ -266,11 +286,166 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
             report["ball_moved"] != "true",
             "the synthetic input events did not move the sample scene ball",
         ),
+        (
+            report["hud"] != "true",
+            "the HUD overlay did not render on screen (hud=false); "
+            "the score HUD must be visible per contract C3",
+        ),
     )
     for failed, reason in checks:
         if failed:
             return reason
     return None
+
+
+def start_control_process() -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [str(PLAYER_BINARY), "--control-stdio"],
+        cwd=REPO_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def pump_control_responses(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+) -> None:
+    if process.stdout is not None:
+        for line in process.stdout:
+            responses.put(line)
+    responses.put(None)
+
+
+def stop_control_process(process: subprocess.Popen[str]) -> None:
+    if process.stdin is not None:
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+    if process.poll() is None:
+        try:
+            process.wait(timeout=CONTROL_STDIO_STOP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def control_request(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+    deadline: float,
+    command: dict[str, object],
+) -> dict[str, object]:
+    if process.stdin is None:
+        message = "control-stdio stdin is closed"
+        raise ControlCheckError(message)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        message = "the control-stdio check exceeded its time budget"
+        raise ControlCheckError(message)
+    try:
+        process.stdin.write(json.dumps(command) + "\n")
+        process.stdin.flush()
+        line = responses.get(timeout=remaining)
+    except OSError as error:
+        message = f"control-stdio write failed: {error}"
+        raise ControlCheckError(message) from error
+    except queue.Empty as error:
+        message = "control-stdio timed out without a response"
+        raise ControlCheckError(message) from error
+    if line is None:
+        message = "control-stdio closed the connection without a response"
+        raise ControlCheckError(message)
+    try:
+        payload = json.loads(line)
+    except ValueError as error:
+        message = f"control-stdio returned invalid JSON: {error}"
+        raise ControlCheckError(message) from error
+    if not isinstance(payload, dict):
+        message = "control-stdio returned a non-object response"
+        raise ControlCheckError(message)
+    if payload.get("ok") is not True:
+        detail = payload.get("error", "unknown error")
+        message = f"control-stdio command {command['cmd']} failed: {detail}"
+        raise ControlCheckError(message)
+    return payload
+
+
+def control_state_score(payload: dict[str, object]) -> int:
+    missing = [field for field in CONTROL_STATE_FIELDS if field not in payload]
+    if missing:
+        names = ", ".join(missing)
+        message = f"control-stdio state response lacks contract C3 fields: {names}"
+        raise ControlCheckError(message)
+    score = payload["score"]
+    if not isinstance(score, int) or isinstance(score, bool):
+        message = "control-stdio state response score is not an integer"
+        raise ControlCheckError(message)
+    return score
+
+
+def drive_control_session(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+    deadline: float,
+) -> int:
+    control_request(process, responses, deadline, {"cmd": "play"})
+    baseline = control_state_score(control_request(process, responses, deadline, {"cmd": "state"}))
+    control_request(
+        process,
+        responses,
+        deadline,
+        {
+            "cmd": "inject_input",
+            "events": [
+                {"kind": "key", "key": CONTROL_STDIO_KEY_W, "pressed": True},
+                {"kind": "key", "key": CONTROL_STDIO_KEY_D, "pressed": True},
+            ],
+        },
+    )
+    frames = 0
+    score = baseline
+    while frames < CONTROL_STDIO_MAX_FRAMES and score <= baseline:
+        payload = control_request(
+            process,
+            responses,
+            deadline,
+            {"cmd": "step", "frames": CONTROL_STDIO_CHUNK_FRAMES},
+        )
+        score = control_state_score(payload)
+        frames += CONTROL_STDIO_CHUNK_FRAMES
+    if score <= baseline:
+        message = (
+            f"drove the ball forward for {frames} frames but the state score "
+            f"stayed at {score}; no pickup was collected"
+        )
+        raise ControlCheckError(message)
+    return score
+
+
+def control_stdio_check(budget_seconds: float) -> str | None:
+    deadline = time.monotonic() + min(budget_seconds, CONTROL_STDIO_BUDGET_SECONDS)
+    responses: queue.Queue[str | None] = queue.Queue()
+    process = start_control_process()
+    threading.Thread(
+        target=pump_control_responses,
+        args=(process, responses),
+        daemon=True,
+    ).start()
+    try:
+        drive_control_session(process, responses, deadline)
+    except ControlCheckError as error:
+        return str(error)
+    except OSError as error:
+        return f"control-stdio process failed: {error}"
+    finally:
+        stop_control_process(process)
+    return None
+
+
+class ControlCheckError(Exception):
+    pass
 
 
 def run_package_device_gates(budget_seconds: float) -> int:
@@ -368,18 +543,28 @@ def run_device_lane(
     )
     if rc != 0:
         return rc
-    reason = device_failure_reason(parse_device_report(output))
+    report = parse_device_report(output)
+    reason = device_failure_reason(report)
     sustained_fps_text, fps_reason = sustained_fps_measurement(output)
+    stage = "device-verify"
     if reason is None:
         reason = fps_reason
+    if reason is None:
+        stage = "control-stdio"
+        reason = control_stdio_check(budget_seconds)
     if reason is not None:
-        sys.stderr.write(f"FAIL verify-device (device-verify): {reason} ({POLICY_CITATION})\n")
+        sys.stderr.write(f"FAIL verify-device ({stage}): {reason} ({POLICY_CITATION})\n")
         return 1
+    score_summary = ""
+    if report is not None:
+        score_summary = f" Score: {report['score']}, won={report['won']}, hud on screen."
     sys.stdout.write(
         "OK verify-device device-verify: the window presented frames, the GPU frame matched "
         "the approved reference within tolerance, the default audio device played the tone, "
         "and the synthetic input events moved the sample scene. Sustained frame rate: "
-        f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f})\n"
+        f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f}){score_summary}\n"
+        "OK verify-device control-stdio: scripted input drove the ball into a pickup "
+        "and the state payload score incremented per contract C3\n"
     )
 
     rc = run_package_device_gates(budget_seconds)

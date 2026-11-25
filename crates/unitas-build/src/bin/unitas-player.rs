@@ -216,13 +216,16 @@ fn main() -> ExitCode {
         match launch_bundle(&resolved_bundle_dir, frames, cli.delta_seconds) {
             Ok(result) => {
                 println!(
-                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={}",
+                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} score={}/{} won={} hud=false",
                     result.manifest.product_name,
                     result.startup_scene_path.display(),
                     result.loaded_scene_count,
                     result.root_object_count,
                     result.frames_stepped,
-                    result.development_diagnostics_enabled
+                    result.development_diagnostics_enabled,
+                    result.score,
+                    result.total,
+                    result.won
                 );
                 ExitCode::SUCCESS
             }
@@ -255,7 +258,7 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
     match launch_bundle_windowed(bundle_dir, options) {
         Ok(result) => {
             println!(
-                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{}",
+                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{} won={} hud={}",
                 result.launch.manifest.product_name,
                 result.launch.startup_scene_path.display(),
                 result.launch.loaded_scene_count,
@@ -266,7 +269,9 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
                 result.audio_device_status,
                 result.audio_frames_pushed,
                 result.score,
-                result.total_pickups
+                result.total_pickups,
+                result.won,
+                result.hud
             );
             ExitCode::SUCCESS
         }
@@ -327,7 +332,7 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
     match run_device_verification(reference_path, frames) {
         Ok(report) => {
             println!(
-                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}",
+                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}/{} won={} hud={}",
                 report.reference_path.display(),
                 report.width,
                 report.height,
@@ -341,7 +346,10 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
                 report.final_ball_position[0],
                 report.final_ball_position[1],
                 report.final_ball_position[2],
-                report.score
+                report.score,
+                report.total,
+                report.won,
+                report.hud
             );
             ExitCode::SUCCESS
         }

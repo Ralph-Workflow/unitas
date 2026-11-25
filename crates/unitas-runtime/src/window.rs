@@ -19,8 +19,8 @@ use std::time::Instant;
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
-    Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, MeshInstance, RenderError, Renderer,
-    Vec3, look_at, render_scene,
+    Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, MeshInstance, RenderError,
+    RenderScene, Renderer, TextOverlayItem, Vec3, look_at, render_scene,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -88,7 +88,11 @@ pub struct FrameInfo {
 }
 
 pub trait FramePresenter {
+    fn attach_window(&mut self, _window: &Arc<Window>) {}
+
     fn resize(&mut self, _width: u32, _height: u32) {}
+
+    fn apply_focus(&mut self, _input: &mut InputState, _focused: bool) {}
 
     fn update(&mut self, _runtime: &mut Runtime, _frame: &FrameInfo) -> Result<(), WindowError> {
         Ok(())
@@ -220,6 +224,78 @@ impl Default for GpuCameraBinding {
 type FrameUpdateCallback<'a> =
     Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
 
+type SurfaceBlit = Box<
+    dyn for<'a> FnMut(
+        &Renderer,
+        u32,
+        u32,
+        &[GpuInstance<'a>],
+        &Camera,
+        Mat4,
+        &DirectionalLight,
+        [f32; 3],
+        &[TextOverlayItem],
+    ) -> Result<(), RenderError>,
+>;
+
+fn resolve_camera_and_view(
+    binding: &GpuCameraBinding,
+    runtime: &Runtime,
+    width: u32,
+    height: u32,
+) -> (Camera, Mat4, [f32; 3]) {
+    let aspect = if height > 0 {
+        width.max(1) as f32 / height as f32
+    } else {
+        1.0
+    };
+    let mut camera = binding.camera;
+    camera.aspect = aspect;
+    let view = match binding
+        .entity
+        .and_then(|entity| runtime.world_transform_of(entity))
+    {
+        Some(transform) => view_matrix_from_transform(&transform),
+        None => binding.view,
+    };
+    (camera, view, binding.background)
+}
+
+fn collect_gpu_instances_from<'b>(
+    meshes: &'b [GpuMeshBinding],
+    runtime: &Runtime,
+) -> Vec<GpuInstance<'b>> {
+    let mut instances = Vec::with_capacity(meshes.len());
+    for entry in meshes {
+        if !entry.enabled {
+            continue;
+        }
+        let model = match entry
+            .entity
+            .and_then(|entity| runtime.world_transform_of(entity))
+        {
+            Some(transform) => transform_to_mat4(&transform),
+            None => entry.model,
+        };
+        instances.push(GpuInstance {
+            mesh: &entry.mesh,
+            model,
+            color: entry.color,
+            lit: entry.lit,
+        });
+    }
+    instances
+}
+
+fn is_transient_surface_error(error: &RenderError) -> bool {
+    match error {
+        RenderError::SurfaceUnavailable(message) => {
+            matches!(message.as_str(), "Timeout" | "Outdated" | "Occluded")
+        }
+        _ => false,
+    }
+}
+
 pub struct GpuFramePresenter<'a> {
     renderer: Arc<Renderer>,
     meshes: Vec<GpuMeshBinding>,
@@ -232,6 +308,11 @@ pub struct GpuFramePresenter<'a> {
     last_mixed_samples: Vec<f32>,
     total_audio_frames_pushed: u64,
     frames_presented: u64,
+    surface_blit: Option<SurfaceBlit>,
+    overlay: Vec<TextOverlayItem>,
+    overlay_source: Option<Arc<Mutex<Vec<TextOverlayItem>>>>,
+    overlay_drawn: bool,
+    audio_paused: bool,
     last_error: Option<WindowError>,
 }
 
@@ -253,6 +334,11 @@ impl<'a> GpuFramePresenter<'a> {
             last_mixed_samples: Vec::new(),
             total_audio_frames_pushed: 0,
             frames_presented: 0,
+            surface_blit: None,
+            overlay: Vec::new(),
+            overlay_source: None,
+            overlay_drawn: false,
+            audio_paused: false,
             last_error: None,
         }
     }
@@ -319,6 +405,10 @@ impl<'a> GpuFramePresenter<'a> {
         self.audio_output.as_ref()
     }
 
+    pub fn audio_paused(&self) -> bool {
+        self.audio_paused
+    }
+
     pub fn set_update_callback<F>(&mut self, callback: F)
     where
         F: FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a,
@@ -328,6 +418,22 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn set_capture_every_frame(&mut self, capture: bool) {
         self.capture_every_frame = capture;
+    }
+
+    pub fn set_overlay(&mut self, items: Vec<TextOverlayItem>) {
+        self.overlay = items;
+    }
+
+    pub fn overlay(&self) -> &[TextOverlayItem] {
+        &self.overlay
+    }
+
+    pub fn set_overlay_source(&mut self, source: Arc<Mutex<Vec<TextOverlayItem>>>) {
+        self.overlay_source = Some(source);
+    }
+
+    pub fn overlay_drawn(&self) -> bool {
+        self.overlay_drawn
     }
 
     pub fn last_captured_frame(&self) -> Option<&Image> {
@@ -356,45 +462,11 @@ impl<'a> GpuFramePresenter<'a> {
         width: u32,
         height: u32,
     ) -> (Camera, Mat4, [f32; 3]) {
-        let aspect = if height > 0 {
-            width.max(1) as f32 / height as f32
-        } else {
-            1.0
-        };
-        let mut camera = self.camera_binding.camera;
-        camera.aspect = aspect;
-        let view = match self
-            .camera_binding
-            .entity
-            .and_then(|entity| runtime.world_transform_of(entity))
-        {
-            Some(transform) => view_matrix_from_transform(&transform),
-            None => self.camera_binding.view,
-        };
-        (camera, view, self.camera_binding.background)
+        resolve_camera_and_view(&self.camera_binding, runtime, width, height)
     }
 
     pub fn collect_gpu_instances<'b>(&'b self, runtime: &Runtime) -> Vec<GpuInstance<'b>> {
-        let mut instances = Vec::with_capacity(self.meshes.len());
-        for entry in &self.meshes {
-            if !entry.enabled {
-                continue;
-            }
-            let model = match entry
-                .entity
-                .and_then(|entity| runtime.world_transform_of(entity))
-            {
-                Some(transform) => transform_to_mat4(&transform),
-                None => entry.model,
-            };
-            instances.push(GpuInstance {
-                mesh: &entry.mesh,
-                model,
-                color: entry.color,
-                lit: entry.lit,
-            });
-        }
-        instances
+        collect_gpu_instances_from(&self.meshes, runtime)
     }
 
     pub fn render_offscreen(
@@ -405,13 +477,17 @@ impl<'a> GpuFramePresenter<'a> {
     ) -> Result<Image, WindowError> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
         let instances = self.collect_gpu_instances(runtime);
-        let image = self.renderer.render_offscreen_with(
-            &instances,
-            &camera,
+        let scene = RenderScene {
+            camera: &camera,
             view,
-            &self.light,
+            light: &self.light,
             background,
+        };
+        let image = self.renderer.render_offscreen_with_overlay(
+            &instances,
+            scene,
             (width, height),
+            &self.overlay,
         )?;
         Ok(image)
     }
@@ -451,15 +527,61 @@ impl<'a> GpuFramePresenter<'a> {
             .unwrap_or(DEFAULT_AUDIO_SAMPLE_RATE);
         let frames = ((dt * f64::from(sample_rate)).round() as usize).clamp(1, 4096);
         let samples = runtime.audio_mut().mix(frames);
-        if let Some(output) = &self.audio_output {
-            let report = output.push_mixed(&samples);
-            self.total_audio_frames_pushed += report.accepted_frames;
+        if !self.audio_paused {
+            if let Some(output) = &self.audio_output {
+                let report = output.push_mixed(&samples);
+                self.total_audio_frames_pushed += report.accepted_frames;
+            }
         }
         self.last_mixed_samples = samples;
     }
 }
 
 impl FramePresenter for GpuFramePresenter<'_> {
+    fn attach_window(&mut self, window: &Arc<Window>) {
+        match self.renderer.instance().create_surface(Arc::clone(window)) {
+            Ok(surface) => {
+                let mut configured_size: Option<(u32, u32)> = None;
+                self.surface_blit = Some(Box::new(
+                    move |renderer: &Renderer,
+                          width: u32,
+                          height: u32,
+                          instances: &[GpuInstance],
+                          camera: &Camera,
+                          view: Mat4,
+                          light: &DirectionalLight,
+                          background: [f32; 3],
+                          overlay: &[TextOverlayItem]|
+                          -> Result<(), RenderError> {
+                        if configured_size != Some((width, height)) {
+                            renderer.configure_surface(&surface, width, height)?;
+                            configured_size = Some((width, height));
+                        }
+                        let scene = RenderScene {
+                            camera,
+                            view,
+                            light,
+                            background,
+                        };
+                        renderer.render_to_surface_with_overlay(&surface, instances, scene, overlay)
+                    },
+                ));
+            }
+            Err(error) => {
+                self.last_error = Some(WindowError::Render(error.to_string()));
+            }
+        }
+    }
+
+    fn apply_focus(&mut self, input: &mut InputState, focused: bool) {
+        apply_focus_change(
+            input,
+            &mut self.audio_paused,
+            self.audio_output.as_mut(),
+            focused,
+        );
+    }
+
     fn update(&mut self, runtime: &mut Runtime, frame: &FrameInfo) -> Result<(), WindowError> {
         if let Some(callback) = &mut self.update_callback {
             callback(runtime, frame)?;
@@ -468,34 +590,40 @@ impl FramePresenter for GpuFramePresenter<'_> {
         Ok(())
     }
 
-    fn present(&mut self, window: &Window, runtime: &Runtime, frame: &FrameInfo) {
+    fn present(&mut self, _window: &Window, runtime: &Runtime, frame: &FrameInfo) {
         let width = frame.width.max(1);
         let height = frame.height.max(1);
-        let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
-        let instances = self.collect_gpu_instances(runtime);
-        match self.renderer.instance().create_surface(window) {
-            Ok(surface) => {
-                if let Err(error) = self.renderer.configure_surface(&surface, width, height) {
-                    self.last_error = Some(WindowError::Render(error.to_string()));
-                    return;
-                }
-                if let Err(error) = self.renderer.render_to_surface_with(
-                    &surface,
-                    &instances,
-                    &camera,
-                    view,
-                    &self.light,
-                    background,
-                ) {
-                    self.last_error = Some(WindowError::Render(error.to_string()));
-                    return;
-                }
-            }
-            Err(error) => {
+        let (camera, view, background) =
+            resolve_camera_and_view(&self.camera_binding, runtime, width, height);
+        let instances = collect_gpu_instances_from(&self.meshes, runtime);
+        let Some(blit) = self.surface_blit.as_mut() else {
+            self.last_error = Some(WindowError::Render(String::from(
+                "window surface is not attached",
+            )));
+            return;
+        };
+        let overlay_items = match &self.overlay_source {
+            Some(source) => source.lock().map(|items| items.clone()).unwrap_or_default(),
+            None => self.overlay.clone(),
+        };
+        if let Err(error) = blit(
+            &self.renderer,
+            width,
+            height,
+            &instances,
+            &camera,
+            view,
+            &self.light,
+            background,
+            &overlay_items,
+        ) {
+            self.overlay_drawn = false;
+            if !is_transient_surface_error(&error) {
                 self.last_error = Some(WindowError::Render(error.to_string()));
-                return;
             }
+            return;
         }
+        self.overlay_drawn = !overlay_items.is_empty() && self.renderer.has_overlay_fonts();
         if self.capture_every_frame {
             match self.renderer.render_offscreen_with(
                 &instances,
@@ -681,7 +809,7 @@ struct WindowApp<'a> {
     runtime: &'a mut Runtime,
     presenter: &'a mut dyn FramePresenter,
     config: WindowConfig,
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     last_frame: Option<Instant>,
     frame_index: u64,
     error: Option<WindowError>,
@@ -725,6 +853,9 @@ impl<'a> WindowApp<'a> {
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
+        if event_loop.exiting() {
+            return;
+        }
         let now = Instant::now();
         let delta_seconds = match self.config.fixed_frame_delta_seconds {
             Some(fixed) if fixed.is_finite() && fixed > 0.0 => fixed,
@@ -787,7 +918,9 @@ impl ApplicationHandler for WindowApp<'_> {
             .with_resizable(self.config.resizable);
         match event_loop.create_window(attributes) {
             Ok(window) => {
+                let window = Arc::new(window);
                 let size = window.inner_size();
+                self.presenter.attach_window(&window);
                 self.presenter.resize(size.width, size.height);
                 window.request_redraw();
                 self.window = Some(window);
@@ -808,6 +941,16 @@ impl ApplicationHandler for WindowApp<'_> {
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => event_loop.exit(),
             WindowEvent::Resized(size) => self.presenter.resize(size.width, size.height),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(window) = &self.window {
+                    let size = window.inner_size();
+                    self.presenter.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::Focused(focused) => {
+                self.presenter
+                    .apply_focus(self.runtime.input_mut(), focused);
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if self.config.exit_on_escape
                     && event.state == ElementState::Pressed
@@ -824,7 +967,16 @@ impl ApplicationHandler for WindowApp<'_> {
                 apply_mouse_button(self.runtime.input_mut(), button, state);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                apply_pointer_move(self.runtime.input_mut(), position.x, position.y);
+                let scale_factor = self
+                    .window
+                    .as_ref()
+                    .map(|window| window.scale_factor())
+                    .unwrap_or(1.0);
+                apply_pointer_move(
+                    self.runtime.input_mut(),
+                    position.x / scale_factor,
+                    position.y / scale_factor,
+                );
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 apply_scroll(self.runtime.input_mut(), delta);
@@ -918,6 +1070,26 @@ pub fn apply_key_event(input: &mut InputState, physical_key: PhysicalKey, state:
 pub fn apply_mouse_button(input: &mut InputState, button: MouseButton, state: ElementState) {
     let code = mouse_button_code_from_winit(button);
     input.inject_mouse_button(code, state == ElementState::Pressed);
+}
+
+pub fn apply_focus_change(
+    input: &mut InputState,
+    audio_paused: &mut bool,
+    audio_output: Option<&mut DeviceOutput>,
+    focused: bool,
+) {
+    if focused {
+        *audio_paused = false;
+        if let Some(output) = audio_output {
+            let _ = output.set_paused(false);
+        }
+        return;
+    }
+    input.reset();
+    *audio_paused = true;
+    if let Some(output) = audio_output {
+        let _ = output.set_paused(true);
+    }
 }
 
 pub fn apply_pointer_move(input: &mut InputState, x: f64, y: f64) {
@@ -1083,6 +1255,26 @@ mod tests {
         );
         input.begin_frame(1.0 / 60.0);
         assert!(input.axis("Horizontal").unwrap_or(0.0) > 0.0);
+    }
+
+    #[test]
+    fn focus_change_clears_pressed_input_and_toggles_audio_pause() {
+        let mut input = input_state();
+        let mut audio_paused = false;
+        apply_key_event(
+            &mut input,
+            PhysicalKey::Code(KeyCode::KeyW),
+            ElementState::Pressed,
+        );
+        apply_mouse_button(&mut input, MouseButton::Left, ElementState::Pressed);
+        input.begin_frame(1.0 / 60.0);
+        apply_focus_change(&mut input, &mut audio_paused, None, false);
+        assert!(!input.is_key_down(u32::from(b'w')));
+        assert!(!input.is_key_pressed(u32::from(b'w')));
+        assert!(!input.is_mouse_button_down(0));
+        assert!(audio_paused);
+        apply_focus_change(&mut input, &mut audio_paused, None, true);
+        assert!(!audio_paused);
     }
 
     #[test]

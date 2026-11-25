@@ -24,5 +24,6 @@ pub use capture::{
 
 #[cfg(feature = "device")]
 pub use gpu::{
-    GpuInstance, GpuRenderer, RenderError, RenderScene, Renderer, GPU_CPU_MEAN_ERROR_TOLERANCE,
+    GpuInstance, GpuRenderer, RenderError, RenderScene, Renderer, TextOverlayItem,
+    GPU_CPU_MEAN_ERROR_TOLERANCE,
 };

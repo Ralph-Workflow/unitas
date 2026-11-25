@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "device")]
 use std::sync::{Arc, Mutex};
 
+use unitas_audio::AudioError;
 use unitas_render::Image;
+#[cfg(feature = "device")]
+use unitas_render::TextOverlayItem;
 #[cfg(feature = "device")]
 use unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE;
 #[cfg(feature = "device")]
-use unitas_runtime::window::{run_windowed_gpu, FramePresenter, GpuFramePresenter, WindowConfig};
+use unitas_runtime::window::{run_windowed_gpu, GpuFramePresenter, WindowConfig};
+use unitas_runtime::Runtime;
 #[cfg(feature = "device")]
 use unitas_runtime::KEY_RIGHT_ARROW;
 
@@ -20,7 +24,10 @@ use crate::bundle::{
 use crate::config::BuildConfiguration;
 use crate::report::{BuildDiagnostic, BuildReport, SizeCategoryEntry, SizeContributor};
 #[cfg(feature = "device")]
-use crate::sample::{stage_roll_a_ball_bundle, RollABallController};
+use crate::sample::{stage_roll_a_ball_bundle, HudSnapshot};
+use crate::sample::{
+    synthesize_chime_wav_bytes, PickupSlot, RollABallController, PICKUP_NAMES, PICKUP_POSITIONS,
+};
 use crate::targets::BuildTarget;
 
 pub const BUILD_REPORT_FILENAME: &str = "build-report.json";
@@ -130,6 +137,9 @@ pub struct PlayerLaunchResult {
     pub root_object_count: usize,
     pub frames_stepped: usize,
     pub development_diagnostics_enabled: bool,
+    pub score: u32,
+    pub total: u32,
+    pub won: bool,
 }
 
 pub type PlayerSession = PlayerLaunchResult;
@@ -169,6 +179,8 @@ pub struct WindowedPlayerResult {
     pub final_ball_position: [f64; 3],
     pub score: u32,
     pub total_pickups: u32,
+    pub won: bool,
+    pub hud: bool,
     pub captured_frame: Option<Image>,
 }
 
@@ -186,6 +198,9 @@ pub struct DeviceVerifyReport {
     pub initial_ball_position: [f64; 3],
     pub final_ball_position: [f64; 3],
     pub score: u32,
+    pub total: u32,
+    pub won: bool,
+    pub hud: bool,
     pub reference_path: PathBuf,
 }
 
@@ -221,6 +236,83 @@ pub fn load_and_validate_bundle_manifest(
     Ok((manifest, startup_scene_path))
 }
 
+pub(crate) fn bind_roll_a_ball_controller_headless(
+    runtime: &mut Runtime,
+) -> Result<Option<RollABallController>, AudioError> {
+    let player_entity = runtime.find_entity_by_name("PlayerBall");
+    if player_entity.is_none() {
+        return Ok(None);
+    }
+    let pickup_wav = synthesize_chime_wav_bytes(44_100, 660.0, 0.25);
+    let ambient_wav = synthesize_chime_wav_bytes(44_100, 330.0, 0.35);
+    let win_wav = synthesize_chime_wav_bytes(44_100, 784.0, 0.6);
+    let pickup_clip_id = runtime.audio_mut().load_wav_bytes(&pickup_wav)?;
+    let ambient_clip_id = runtime.audio_mut().load_wav_bytes(&ambient_wav)?;
+    let win_clip_id = runtime.audio_mut().load_wav_bytes(&win_wav)?;
+    let audio_entity = player_entity.unwrap_or_else(|| runtime.ensure_audio_source(0));
+    runtime.audio_mut().ensure_source(audio_entity);
+    runtime
+        .audio_mut()
+        .set_source_clip(audio_entity, Some(ambient_clip_id));
+    runtime.audio_mut().set_volume(audio_entity, 0.85);
+    runtime.audio_mut().set_looping(audio_entity, true);
+    runtime.audio_mut().play(audio_entity, false);
+
+    let mut pickups = Vec::with_capacity(PICKUP_NAMES.len());
+    for (idx, pickup_name) in PICKUP_NAMES.iter().enumerate() {
+        pickups.push(PickupSlot {
+            name: (*pickup_name).to_string(),
+            entity: runtime.find_entity_by_name(pickup_name),
+            mesh_index: idx,
+            position: PICKUP_POSITIONS[idx],
+            collected: false,
+        });
+    }
+
+    Ok(Some(RollABallController {
+        player_entity,
+        camera_entity: runtime.find_entity_by_name("Main Camera"),
+        audio_entity,
+        pickup_clip_id,
+        ambient_clip_id,
+        win_clip_id,
+        pickups,
+        score: 0,
+        total_pickups: PICKUP_NAMES.len() as u32,
+        won: false,
+        camera_yaw_radians: 0.0,
+        elapsed_seconds: 0.0,
+        restart_count: 0,
+        vertical_velocity: 0.0,
+        grounded: false,
+    }))
+}
+
+#[cfg(feature = "device")]
+pub(crate) fn hud_overlay_items(
+    snapshot: &HudSnapshot,
+    width: u32,
+    height: u32,
+) -> Vec<TextOverlayItem> {
+    let mut items = vec![TextOverlayItem {
+        text: format!("Score: {}/{}", snapshot.score, snapshot.total),
+        x: 16.0,
+        y: 16.0,
+        size_px: 28.0,
+        color: [1.0, 1.0, 1.0, 1.0],
+    }];
+    if snapshot.won {
+        items.push(TextOverlayItem {
+            text: String::from("You win!"),
+            x: (width as f32) * 0.5 - 90.0,
+            y: (height as f32) * 0.5 - 24.0,
+            size_px: 48.0,
+            color: [1.0, 0.85, 0.2, 1.0],
+        });
+    }
+    items
+}
+
 pub fn launch_bundle(
     bundle_dir: &Path,
     frames: usize,
@@ -240,6 +332,12 @@ pub fn launch_bundle(
         }
     })?;
 
+    let mut controller = bind_roll_a_ball_controller_headless(&mut runtime).map_err(|error| {
+        PlayerStartupError::AudioFailed {
+            message: error.to_string(),
+        }
+    })?;
+
     for frame in 0..frames {
         runtime
             .tick(delta_seconds)
@@ -247,7 +345,23 @@ pub fn launch_bundle(
                 frame,
                 message: error.to_string(),
             })?;
+        if let Some(controller) = controller.as_mut() {
+            controller
+                .step_world(&mut runtime, delta_seconds)
+                .map_err(|error| PlayerStartupError::FrameTickFailed {
+                    frame,
+                    message: error.to_string(),
+                })?;
+        }
     }
+
+    let (score, total, won) = controller
+        .as_ref()
+        .map(|controller| {
+            let hud = controller.hud_snapshot();
+            (hud.score, hud.total, hud.won)
+        })
+        .unwrap_or((0, 0, false));
 
     let loaded_scene_count = runtime.scene_count();
     let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
@@ -262,6 +376,9 @@ pub fn launch_bundle(
         root_object_count,
         frames_stepped: frames,
         development_diagnostics_enabled,
+        score,
+        total,
+        won,
     })
 }
 
@@ -413,10 +530,7 @@ pub fn launch_bundle_windowed(
 
     let width = options.width.max(1);
     let height = options.height.max(1);
-    let dt = options
-        .fixed_delta_seconds
-        .filter(|val| val.is_finite() && *val > 0.0)
-        .unwrap_or(1.0 / 60.0);
+    presenter.set_overlay(hud_overlay_items(&controller.hud_snapshot(), width, height));
 
     let window_config = WindowConfig {
         title: format!("{} ({})", manifest.product_name, manifest.version),
@@ -436,51 +550,18 @@ pub fn launch_bundle_windowed(
         runtime.input_mut().inject_pointer_move(24.0, 12.0);
     }
 
-    let window_result = run_windowed_with_controller(
+    run_windowed_with_controller(
         &mut runtime,
         &window_config,
         &mut presenter,
         &mut controller,
         options.inject_demo_input,
-    );
+    )
+    .map_err(|error| PlayerStartupError::WindowFailed {
+        message: error.to_string(),
+    })?;
 
-    let mut frames_presented = presenter.frames_presented();
-    if let Err(window_err) = window_result {
-        let fallback_frames = options.max_frames.unwrap_or(1).max(1);
-        for frame_idx in 0..fallback_frames {
-            if options.inject_demo_input {
-                runtime.input_mut().inject_key(u32::from(b'w'), true);
-                runtime.input_mut().inject_key(KEY_RIGHT_ARROW, true);
-                runtime
-                    .input_mut()
-                    .inject_pointer_move((frame_idx as f64 + 1.0) * 8.0, 4.0);
-            }
-            runtime
-                .tick(dt)
-                .map_err(|error| PlayerStartupError::FrameTickFailed {
-                    frame: frame_idx as usize,
-                    message: error.to_string(),
-                })?;
-            controller
-                .step(&mut runtime, &mut presenter, dt)
-                .map_err(|error| PlayerStartupError::FrameTickFailed {
-                    frame: frame_idx as usize,
-                    message: error.to_string(),
-                })?;
-            let frame_info = unitas_runtime::window::FrameInfo {
-                frame_index: frame_idx + 1,
-                width,
-                height,
-                delta_seconds: dt,
-            };
-            presenter.update(&mut runtime, &frame_info).map_err(|err| {
-                PlayerStartupError::WindowFailed {
-                    message: format!("{window_err}; fallback update failed: {err}"),
-                }
-            })?;
-            frames_presented = frame_idx + 1;
-        }
-    }
+    let frames_presented = presenter.frames_presented();
 
     let captured_frame = if options.capture_last_frame {
         Some(
@@ -495,6 +576,8 @@ pub fn launch_bundle_windowed(
     };
 
     let score = controller.score;
+    let won = controller.won;
+    let hud = presenter.overlay_drawn();
     let player_entity = controller.player_entity;
 
     let final_ball_position = player_entity
@@ -516,6 +599,9 @@ pub fn launch_bundle_windowed(
             root_object_count,
             frames_stepped: frames_presented as usize,
             development_diagnostics_enabled,
+            score,
+            total: total_pickups,
+            won,
         },
         frames_presented,
         audio_device_active,
@@ -524,6 +610,8 @@ pub fn launch_bundle_windowed(
         final_ball_position,
         score,
         total_pickups,
+        won,
+        hud,
         captured_frame,
     })
 }
@@ -539,10 +627,18 @@ fn run_windowed_with_controller(
     let shared_meshes = Arc::new(Mutex::new(presenter.meshes().to_vec()));
     let shared_camera = Arc::new(Mutex::new(*presenter.camera_binding()));
     let shared_controller = Arc::new(Mutex::new(controller.clone()));
+    let shared_overlay = Arc::new(Mutex::new(hud_overlay_items(
+        &controller.hud_snapshot(),
+        window_config.width,
+        window_config.height,
+    )));
 
     let cb_meshes = Arc::clone(&shared_meshes);
     let cb_camera = Arc::clone(&shared_camera);
     let cb_controller = Arc::clone(&shared_controller);
+    let cb_overlay = Arc::clone(&shared_overlay);
+
+    presenter.set_overlay_source(Arc::clone(&shared_overlay));
 
     presenter.set_update_callback(move |rt, frame| {
         if inject_demo_input {
@@ -556,6 +652,9 @@ fn run_windowed_with_controller(
         {
             ctrl.step_on_bindings(rt, &mut meshes, &mut cam, frame.delta_seconds)
                 .map_err(|error| unitas_runtime::window::WindowError::Runtime(error.to_string()))?;
+            if let Ok(mut overlay) = cb_overlay.lock() {
+                *overlay = hud_overlay_items(&ctrl.hud_snapshot(), frame.width, frame.height);
+            }
         }
         Ok(())
     });
@@ -571,6 +670,9 @@ fn run_windowed_with_controller(
     }
     if let Ok(cam) = shared_camera.lock() {
         presenter.set_camera_binding(*cam);
+    }
+    if let Ok(overlay) = shared_overlay.lock() {
+        presenter.set_overlay(overlay.clone());
     }
     res
 }
@@ -680,6 +782,11 @@ pub fn capture_sample_reference_bmp(
                 message: error.to_string(),
             }
         })?;
+    presenter.set_overlay(hud_overlay_items(
+        &controller.hud_snapshot(),
+        width.max(1),
+        height.max(1),
+    ));
 
     runtime
         .tick(1.0 / 60.0)
@@ -779,6 +886,7 @@ pub fn run_device_verification(
                 message: error.to_string(),
             }
         })?;
+    presenter.set_overlay(hud_overlay_items(&controller.hud_snapshot(), width, height));
 
     let initial_ball_position = controller
         .player_entity
@@ -858,6 +966,9 @@ pub fn run_device_verification(
         initial_ball_position,
         final_ball_position: windowed_result.final_ball_position,
         score: windowed_result.score,
+        total: windowed_result.total_pickups,
+        won: windowed_result.won,
+        hud: windowed_result.hud,
         reference_path: reference_bmp_path.to_path_buf(),
     })
 }
@@ -1034,5 +1145,66 @@ pub fn diagnostics_from_bundle_error(error: &BundleError) -> Vec<BuildDiagnostic
                 "rebuild the output bundle to regenerate a valid manifest",
             )),
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sample::stage_roll_a_ball_bundle;
+
+    #[test]
+    fn launch_bundle_steps_roll_a_ball_gameplay_headless() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let workspace = std::env::temp_dir().join(format!(
+            "unitas_player_headless_gameplay_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+        let staged = stage_roll_a_ball_bundle(&workspace)?;
+        let scene_path = workspace.join(&staged.manifest.startup_scene_staged_path);
+
+        let result = launch_bundle(&workspace, 4, 1.0 / 60.0)?;
+        assert_eq!(result.score, 0);
+        assert_eq!(result.total, 4);
+        assert!(!result.won);
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let mut controller = bind_roll_a_ball_controller_headless(&mut runtime)?
+            .ok_or("missing PlayerBall entity")?;
+
+        runtime.input_mut().inject_key(u32::from(b'w'), true);
+        runtime.input_mut().inject_key(u32::from(b'd'), true);
+        let player = controller
+            .player_entity
+            .ok_or("missing PlayerBall entity")?;
+        let start = runtime
+            .body_position(player)
+            .ok_or("missing PlayerBall body")?;
+        for _ in 0..8 {
+            runtime.tick(1.0 / 50.0)?;
+            controller.step_world(&mut runtime, 1.0 / 50.0)?;
+        }
+        let moved = runtime
+            .body_position(player)
+            .ok_or("missing PlayerBall body")?;
+        assert!(moved[0] > start[0] || moved[2] > start[2]);
+
+        for position in PICKUP_POSITIONS {
+            controller.teleport_player(&mut runtime, position)?;
+            runtime.tick(1.0 / 60.0)?;
+            controller.step_world(&mut runtime, 1.0 / 60.0)?;
+        }
+        assert_eq!(controller.score, 4);
+        assert!(controller.won);
+        let hud = controller.hud_snapshot();
+        assert_eq!(hud.score, 4);
+        assert_eq!(hud.total, 4);
+        assert!(hud.won);
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
     }
 }
