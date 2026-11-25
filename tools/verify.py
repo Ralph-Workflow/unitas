@@ -21,6 +21,7 @@ MAKEFILE = REPO_ROOT / "Makefile"
 SECRETS_BASELINE = REPO_ROOT / ".secrets.baseline"
 CONFIG_FILES = ("pyproject.toml", "tools/dependency-registry.toml")
 CARGO_LOCKFILE = Path("Cargo.lock")
+NUGET_LOCKFILE_NAME = "packages.lock.json"
 DEPENDENCY_REGISTRY = Path("tools") / "dependency-registry.toml"
 REGISTRY_ENTRY_KEYS = ("name", "version", "license", "advisory_reviewed", "note")
 PERMISSIVE_LICENSES = frozenset(
@@ -778,6 +779,7 @@ def check_dependencies() -> list[str]:
         if (REPO_ROOT / manifest).exists() != (REPO_ROOT / lock).exists():
             findings.append(f"{manifest} and {lock} must be committed together")
     findings.extend(check_dependency_registry())
+    findings.extend(check_nuget_registry())
     return findings
 
 
@@ -860,13 +862,13 @@ def lockfile_registry_packages(text: str) -> list[tuple[str, str]]:
     return packages
 
 
-def dependency_registry_entries(text: str) -> list[dict[str, str]]:
+def dependency_registry_entries(text: str, section: str = "package") -> list[dict[str, str]]:
     parsed = tomllib.loads(text)
-    raw = parsed.get("package", [])
+    raw = parsed.get(section, [])
     entries: list[dict[str, str]] = []
     if not isinstance(raw, list):
         return entries
-    block_lines = toml_block_start_lines(text, "[[package]]")
+    block_lines = toml_block_start_lines(text, f"[[{section}]]")
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             continue
@@ -960,6 +962,99 @@ def check_dependency_registry(root: Path = REPO_ROOT) -> list[str]:
             )
             continue
         findings.extend(registry_entry_findings(registry_display, name, version, matched))
+    return findings
+
+
+def iter_nuget_lockfiles(root: Path = REPO_ROOT) -> Iterator[Path]:
+    for walk_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            name
+            for name in sorted(dirnames)
+            if not name.startswith(".") and name not in SKIP_DIR_NAMES
+        ]
+        if NUGET_LOCKFILE_NAME in filenames:
+            yield Path(walk_root) / NUGET_LOCKFILE_NAME
+
+
+def nuget_lockfile_packages(text: str) -> list[tuple[str, str]]:
+    parsed = json.loads(text)
+    frameworks = parsed.get("dependencies", {}) if isinstance(parsed, dict) else {}
+    packages: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    if not isinstance(frameworks, dict):
+        return packages
+    for framework in sorted(frameworks):
+        locked = frameworks[framework]
+        if not isinstance(locked, dict):
+            continue
+        for name in sorted(locked):
+            item = locked[name]
+            if not isinstance(item, dict):
+                continue
+            resolved = item.get("resolved")
+            if not isinstance(resolved, str):
+                continue
+            if (name, resolved) in seen:
+                continue
+            seen.add((name, resolved))
+            packages.append((name, resolved))
+    return packages
+
+
+def nuget_lock_lines(text: str) -> dict[str, int]:
+    lines: dict[str, int] = {}
+    for index, line in enumerate(text.splitlines(), start=1):
+        match = re.match(r'^\s*"([^"]+)"\s*:', line)
+        if match is not None:
+            lines.setdefault(match.group(1), index)
+    return lines
+
+
+def check_nuget_registry(root: Path = REPO_ROOT) -> list[str]:
+    findings: list[str] = []
+    lock_paths = sorted(iter_nuget_lockfiles(root))
+    if not lock_paths:
+        return findings
+    registry_path = root / DEPENDENCY_REGISTRY
+    registry_display = display_path(registry_path)
+    if not registry_path.exists():
+        return [f"{registry_display}: the dependency registry is missing"]
+    try:
+        registry_text = registry_path.read_text(encoding="utf-8")
+    except OSError as error:
+        return [f"{registry_display}: the dependency registry could not be read: {error}"]
+    try:
+        entries = dependency_registry_entries(registry_text, "nuget")
+    except tomllib.TOMLDecodeError as error:
+        return [f"{registry_display}: the dependency registry is not valid TOML: {error}"]
+    recorded: dict[tuple[str, str], dict[str, str]] = {}
+    for entry in entries:
+        key = (entry["name"], entry["version"])
+        if key in recorded:
+            findings.append(
+                f"{registry_display}:{entry['line']}: duplicate registry entry for "
+                f"{entry['name']} {entry['version']}"
+            )
+            continue
+        recorded[key] = entry
+    for lock_path in lock_paths:
+        lock_display = display_path(lock_path)
+        try:
+            lock_text = lock_path.read_text(encoding="utf-8")
+            locked = nuget_lockfile_packages(lock_text)
+        except (OSError, json.JSONDecodeError) as error:
+            findings.append(f"{lock_display}: the lockfile could not be parsed: {error}")
+            continue
+        lock_lines = nuget_lock_lines(lock_text)
+        for name, version in locked:
+            matched = recorded.get((name, version))
+            if matched is None:
+                findings.append(
+                    f"{lock_display}:{lock_lines.get(name, 1)}: locked NuGet package "
+                    f"{name} {version} has no entry in {registry_display}"
+                )
+                continue
+            findings.extend(registry_entry_findings(registry_display, name, version, matched))
     return findings
 
 

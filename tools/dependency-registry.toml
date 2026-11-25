@@ -1943,3 +1943,9 @@ version = "0.4.0"
 license = "MIT/Apache-2.0"
 advisory_reviewed = "2026-11-25"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[nuget_schema]
+entry_header = "[[nuget]]"
+entry_keys = ["name", "version", "license", "advisory_reviewed", "note"]
+applies_to = "every NuGet package a committed per-project packages.lock.json locks, direct or transitive"
+entry_rule = "same permissive license allowlist and non-future ISO advisory_reviewed date as [[package]] entries; enforced by make deps"

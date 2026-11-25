@@ -49,6 +49,7 @@ dotnet-format:
 dotnet-test:
 	@cargo build -p unitas-runtime
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests
+	@python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 
 verify-device:
 	@echo "owner: wt-03"

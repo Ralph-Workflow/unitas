@@ -1,0 +1,15 @@
+[package]
+name = "unitas-editor-abi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[lints.clippy]
+correctness = "deny"
+suspicious = "deny"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = "1"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -146,17 +147,33 @@ def _write_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:
     return path
 
 
-def _write_registry(root: Path, entries: list[tuple[str, str, str | None, str]]) -> Path:
+def _write_registry(
+    root: Path,
+    entries: list[tuple[str, str, str | None, str]],
+    section: str = "package",
+) -> Path:
     path = root / "tools" / "dependency-registry.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     blocks = []
     for name, version, expression, reviewed in entries:
-        block = f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        block = f'[[{section}]]\nname = "{name}"\nversion = "{version}"\n'
         if expression is not None:
             block += f'license = "{expression}"\n'
         block += f'advisory_reviewed = "{reviewed}"\n'
         blocks.append(block)
     path.write_text("\n".join(blocks), encoding="utf-8")
+    return path
+
+
+def _write_nuget_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:
+    path = root / "editor" / "Unitas.Editor" / "packages.lock.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    locked = {
+        name: {"type": "Transitive", "resolved": version} for name, version in packages
+    }
+    path.write_text(
+        json.dumps({"version": 1, "dependencies": {"net8.0": locked}}), encoding="utf-8"
+    )
     return path
 
 
@@ -211,6 +228,55 @@ def test_dependency_registry_accepts_compliant_entries(tmp_path: Path) -> None:
         ],
     )
     assert verify.check_dependency_registry(root=tmp_path) == []
+
+
+def test_nuget_gate_reports_unlisted_package(tmp_path: Path) -> None:
+    _write_nuget_lockfile(tmp_path, [("Alpha", "1.0.0")])
+    _write_registry(tmp_path, [("Beta", "2.0.0", "MIT", "2026-01-01")], "nuget")
+    findings = verify.check_nuget_registry(root=tmp_path)
+    assert any("Alpha 1.0.0" in finding and "no entry" in finding for finding in findings)
+
+
+def test_nuget_gate_reports_disallowed_license(tmp_path: Path) -> None:
+    _write_nuget_lockfile(tmp_path, [("Alpha", "1.0.0")])
+    _write_registry(tmp_path, [("Alpha", "1.0.0", "GPL-3.0-only", "2026-01-01")], "nuget")
+    findings = verify.check_nuget_registry(root=tmp_path)
+    assert any("GPL-3.0-only" in finding for finding in findings)
+
+
+def test_nuget_gate_reports_future_advisory_date(tmp_path: Path) -> None:
+    _write_nuget_lockfile(tmp_path, [("Alpha", "1.0.0")])
+    _write_registry(tmp_path, [("Alpha", "1.0.0", "MIT", "2999-12-31")], "nuget")
+    findings = verify.check_nuget_registry(root=tmp_path)
+    assert any("is in the future" in finding for finding in findings)
+
+
+def test_nuget_gate_accepts_compliant_entries(tmp_path: Path) -> None:
+    _write_nuget_lockfile(tmp_path, [("Alpha", "1.0.0"), ("Beta", "2.0.0")])
+    _write_registry(
+        tmp_path,
+        [
+            ("Alpha", "1.0.0", "MIT OR Apache-2.0", "2026-01-01"),
+            ("Beta", "2.0.0", "BSD-3-Clause", "2026-01-01"),
+        ],
+        "nuget",
+    )
+    assert verify.check_nuget_registry(root=tmp_path) == []
+
+
+def test_nuget_gate_ignores_repository_without_lockfiles(tmp_path: Path) -> None:
+    assert verify.check_nuget_registry(root=tmp_path) == []
+    project_dir = tmp_path / "editor" / "Unitas.Editor"
+    obj_dir = project_dir / "obj"
+    agent_dir = tmp_path / ".agent"
+    obj_dir.mkdir(parents=True)
+    agent_dir.mkdir()
+    content = json.dumps(
+        {"version": 1, "dependencies": {"net8.0": {"Alpha": {"resolved": "1.0.0"}}}}
+    )
+    (obj_dir / "packages.lock.json").write_text(content, encoding="utf-8")
+    (agent_dir / "packages.lock.json").write_text(content, encoding="utf-8")
+    assert verify.check_nuget_registry(root=tmp_path) == []
 
 
 def test_secret_delta_reports_new_findings() -> None:

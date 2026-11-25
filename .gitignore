@@ -134,3 +134,4 @@ $RECYCLE.BIN/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+editor/**/obj/
