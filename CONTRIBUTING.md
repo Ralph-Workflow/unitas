@@ -7,6 +7,31 @@ Thank you for helping build unitas. Before you open a pull request:
 2. Run `make verify` and make sure every gate passes.
 3. Keep pull requests small and focused, with tests for every behavior change.
 
+## Independent implementation
+
+unitas reads and runs projects made for other engines, so it must be written
+independently of them. Every contribution follows these rules:
+
+* Work only from public documentation, published file formats, and the
+  observed behavior of projects you have the right to use.
+* Never copy code, comments, or documentation text from another engine, its
+  editor, its packages, or its tools, even when that source is publicly
+  viewable. Describe behavior in your own words.
+* Never decompile, disassemble, or otherwise reverse engineer another
+  engine's binaries, and never use leaked or confidential material or
+  anything covered by a non-disclosure agreement.
+* Test fixtures and sample content are written by hand, or come from content
+  you own or that carries a license compatible with GPL-3.0 and the
+  commercial license. Do not add asset-store content, bundled sample assets,
+  or another vendor's logos, icons, or images.
+* Name other products only to describe compatibility, as explained in
+  [TRADEMARKS.md](TRADEMARKS.md). Never use another vendor's marks in the
+  name or branding of anything unitas ships.
+
+Say in the pull request where any third-party material came from and under
+which license. If you are unsure whether something is allowed, ask before you
+submit it.
+
 ## Contributor License Agreement
 
 unitas is dual licensed under GPL-3.0 and a commercial license. Every

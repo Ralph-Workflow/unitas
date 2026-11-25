@@ -1,6 +1,6 @@
 # unitas Contributor License Agreement
 
-Version 1.0
+Version 1.1
 
 unitas is dual licensed. The public code is published under the GNU General
 Public License version 3 (GPL-3.0), and Ralph Workflow also offers unitas under
@@ -53,6 +53,12 @@ your contribution under both licenses.
    * any part of a Contribution that comes from a third party is identified
      in the pull request together with its license, and that license allows
      the use described in this Agreement;
+   * no Contribution is copied from, translated from, or derived from the
+     source code, reference source, documentation text, assets, or
+     decompiled or disassembled binaries of any proprietary game engine,
+     editor, or tool, and no Contribution was produced in breach of a
+     license agreement, terms of service, or confidentiality obligation that
+     binds You, including terms that prohibit reverse engineering;
    * where parts of a Contribution were produced with software tools,
      including AI coding assistants, You reviewed that material, You have the
      right to submit it under this Agreement, and to the best of Your

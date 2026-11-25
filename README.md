@@ -80,9 +80,12 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
 
 ## License
 
+Copyright (C) 2026 Ralph Workflow and the unitas contributors.
+
 unitas is dual licensed. It is available under the
 [GNU General Public License version 3](LICENSE) and under a separate commercial
-license from Ralph Workflow. For commercial licensing, contact
+license from Ralph Workflow. unitas is provided without any warranty, as set out
+in the license. For commercial licensing, contact
 hello@ralphworkflow.com.
 
 ## Trademarks and affiliation
@@ -92,8 +95,9 @@ endorsed by, sponsored by, or otherwise connected to any other game engine, its
 vendor, or its products. Any third-party product names, logos, and trademarks
 that appear in this repository's code or documentation belong to their
 respective owners and are used only to describe compatibility. Such use does
-not imply any relationship with, or endorsement by, those owners.
+not imply any relationship with, or endorsement by, those owners. See
+[TRADEMARKS.md](TRADEMARKS.md) for details.
 
 unitas is written independently. Contributions must not include code, assets,
 or documentation copied or decompiled from proprietary engines, editors, or
-their tools.
+their tools. The rules are in [CONTRIBUTING.md](CONTRIBUTING.md#independent-implementation).
