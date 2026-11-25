@@ -7,8 +7,8 @@ use unitas_core::EntityId;
 use unitas_render::{cube, look_at, uv_sphere, Camera, DirectionalLight, Mat4};
 use unitas_render::{Mesh, Vec3};
 use unitas_runtime::{
-    CharacterMoveRequest, Runtime, RuntimeError, KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_RIGHT_ARROW,
-    KEY_SPACE, KEY_UP_ARROW,
+    BodyRole, CharacterMoveRequest, Runtime, RuntimeError, KEY_DOWN_ARROW, KEY_LEFT_ARROW,
+    KEY_RIGHT_ARROW, KEY_SPACE, KEY_UP_ARROW,
 };
 
 #[cfg(feature = "device")]
@@ -770,19 +770,31 @@ impl RollABallController {
                 .unwrap_or(PLAYER_START_POSITION);
 
             let speed = PLAYER_MOVE_SPEED * boost;
-            let motion = [
-                world_dir_x * speed * step_dt,
-                self.vertical_motion(runtime, step_dt),
-                world_dir_z * speed * step_dt,
-            ];
+            let player_position = if runtime.body_role(player) == Some(BodyRole::Dynamic) {
+                // Unity drives a dynamic rigidbody with velocity: the solver
+                // owns the transform, so the controller never assigns it one.
+                let vertical = runtime.body_velocity(player).map_or(0.0, |v| v[1]);
+                runtime.set_body_velocity(
+                    player,
+                    [world_dir_x * speed, vertical, world_dir_z * speed],
+                )?;
+                runtime.body_position(player).unwrap_or(current_pos)
+            } else {
+                let motion = [
+                    world_dir_x * speed * step_dt,
+                    self.vertical_motion(runtime, step_dt),
+                    world_dir_z * speed * step_dt,
+                ];
 
-            let request =
-                self.character_move_request(runtime, player, current_pos, motion, step_dt);
-            let result = runtime.character_move(request)?;
-            self.grounded = result.is_grounded;
-            runtime.set_body_position(player, result.position)?;
+                let request =
+                    self.character_move_request(runtime, player, current_pos, motion, step_dt);
+                let result = runtime.character_move(request)?;
+                self.grounded = result.is_grounded;
+                runtime.set_body_position(player, result.position)?;
+                result.position
+            };
 
-            self.collect_pickups(result.position, runtime);
+            self.collect_pickups(player_position, runtime);
         }
         self.animate_pickups(runtime);
         Ok(())
@@ -1020,7 +1032,12 @@ impl RollABallController {
             return Ok(());
         };
         let target = runtime.character_teleport(Some(player), position)?;
-        runtime.set_body_position(player, target)?;
+        // Dynamic bodies reject a position assignment; a teleport moves them.
+        if runtime.body_role(player) == Some(BodyRole::Dynamic) {
+            runtime.teleport_body_position(player, target)?;
+        } else {
+            runtime.set_body_position(player, target)?;
+        }
         self.vertical_velocity = 0.0;
         self.grounded = false;
         Ok(())

@@ -238,7 +238,10 @@ impl Mat4 {
             a[1] * a[6] - a[0] * a[7],
             a[0] * a[4] - a[1] * a[3],
         ];
-        let b = |row: usize, col: usize| cof[col * 3 + row] * inv_det;
+        // The cofactor table is column-major: cof[c * 3 + r] holds C(r, c).
+        // The inverse needs the adjugate, A^-1 = C^T / det, so read the
+        // cofactor table row-major here.
+        let b = |row: usize, col: usize| cof[row * 3 + col] * inv_det;
         let tx = m[12];
         let ty = m[13];
         let tz = m[14];

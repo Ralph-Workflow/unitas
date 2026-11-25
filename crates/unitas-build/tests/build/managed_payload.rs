@@ -62,7 +62,10 @@ fn sample_config() -> Result<BuildConfiguration, Box<dyn Error>> {
     .with_mode(BuildMode::Development))
 }
 
-fn managed_entry(manifest: &BundleManifest, filename: &str) -> Option<&BundleManifestEntry> {
+fn managed_entry<'a>(
+    manifest: &'a BundleManifest,
+    filename: &str,
+) -> Option<&'a BundleManifestEntry> {
     let staged_path = format!("{MANAGED_DIR_NAME}/{filename}");
     manifest
         .entries

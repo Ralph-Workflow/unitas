@@ -23,3 +23,4 @@ pub use input::*;
 pub use runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
 };
+pub use unitas_physics::BodyRole;

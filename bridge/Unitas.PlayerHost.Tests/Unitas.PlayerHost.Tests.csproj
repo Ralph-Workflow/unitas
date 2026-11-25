@@ -6,12 +6,11 @@
     <LangVersion>9.0</LangVersion>
     <AssemblyName>Unitas.PlayerHost.Tests</AssemblyName>
     <RootNamespace>Unitas.PlayerHost.Tests</RootNamespace>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Unitas.PlayerHost/Unitas.PlayerHost.csproj" />
-    <ProjectReference Include="../../Unitas.Scripting/Unitas.Scripting.csproj" />
+    <ProjectReference Include="../Unitas.Scripting/Unitas.Scripting.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Runtime.Loader;
 using Unitas.Bridge;
 using Unitas.Bridge.Scripting;
@@ -74,7 +73,7 @@ namespace Unitas.PlayerHost
                             continue;
                         }
 
-                        Assembly.LoadFrom(path);
+                        AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
                     }
 
                     foreach (string path in assemblies)
@@ -161,7 +160,7 @@ namespace Unitas.PlayerHost
 
         private static bool IsAlreadyLoaded(string simpleName)
         {
-            foreach (Assembly assembly in AssemblyLoadContext.Default.Assemblies)
+            foreach (var assembly in AssemblyLoadContext.Default.Assemblies)
             {
                 if (string.Equals(assembly.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
                 {

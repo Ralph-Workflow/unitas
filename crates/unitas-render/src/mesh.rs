@@ -47,7 +47,7 @@ impl MeshAttributes {
         let mut tangents = vec![Vec3::ZERO; mesh.positions.len()];
         for tri in mesh.indices.chunks_exact(3) {
             let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-            let ( Some(p0), Some(p1), Some(p2) ) = (
+            let (Some(p0), Some(p1), Some(p2)) = (
                 mesh.positions.get(i0),
                 mesh.positions.get(i1),
                 mesh.positions.get(i2),

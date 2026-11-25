@@ -313,7 +313,8 @@ pub fn render_scene_materials(
         draw_instance(instance, &vp, light, camera_pos, &mut target);
     }
 
-    // Translucent pass: draw back-to-front (larger view-space depth first).
+    // Translucent pass: draw back-to-front (the farther view-space depth
+    // first; the camera looks down -z, so a smaller depth is farther away).
     let mut translucent: Vec<&MaterialInstance<'_>> = instances
         .iter()
         .filter(|instance| instance.material.blend == BlendMode::Blend)
@@ -321,8 +322,8 @@ pub fn render_scene_materials(
     translucent.sort_by(|a, b| {
         let depth_a = view.mul_mat4(&a.model).transform_point(Vec3::ZERO).z;
         let depth_b = view.mul_mat4(&b.model).transform_point(Vec3::ZERO).z;
-        depth_b
-            .partial_cmp(&depth_a)
+        depth_a
+            .partial_cmp(&depth_b)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for instance in translucent {

@@ -69,8 +69,9 @@ impl Image {
         }
     }
 
-    /// Bilinear sample with clamp-to-edge, matching the GPU sampler: `uv`
-    /// maps to texel centers at `(u * width - 0.5, v * height - 0.5)`.
+    /// Bilinear sample with clamp-to-edge. `uv` follows the Unity texture
+    /// convention, where `v = 1` is the texture's top row, so texel centres
+    /// sit at `(u * width - 0.5, (1 - v) * height - 0.5)`.
     pub fn sample_bilinear(&self, u: f32, v: f32) -> [f32; 3] {
         let w = self.width as f32;
         let h = self.height as f32;
@@ -78,7 +79,7 @@ impl Image {
             return [0.0; 3];
         }
         let x = (u * w - 0.5).clamp(0.0, w - 1.0);
-        let y = (v * h - 0.5).clamp(0.0, h - 1.0);
+        let y = ((1.0 - v) * h - 0.5).clamp(0.0, h - 1.0);
         let x0 = x.floor() as u32;
         let y0 = y.floor() as u32;
         let x1 = (x0 + 1).min(self.width - 1);
@@ -87,7 +88,11 @@ impl Image {
         let fy = y - y0 as f32;
         let texel = |tx: u32, ty: u32| -> [f32; 3] {
             let p = self.pixels[(ty as usize) * (self.width as usize) + (tx as usize)];
-            [f32::from(p[0]) / 255.0, f32::from(p[1]) / 255.0, f32::from(p[2]) / 255.0]
+            [
+                f32::from(p[0]) / 255.0,
+                f32::from(p[1]) / 255.0,
+                f32::from(p[2]) / 255.0,
+            ]
         };
         let c00 = texel(x0, y0);
         let c10 = texel(x1, y0);

@@ -1,23 +1,13 @@
 using System;
+using System.Globalization;
 using System.IO;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 using Unitas.Bridge;
 using Unitas.Scripting;
 using UnityEngine;
 
 namespace Unitas.PlayerHost.Tests
 {
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public unsafe delegate int PlayerInitDelegate(ulong runtimeHandle, byte* bundleRoot, byte* persistRoot);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate int PlayerTickDelegate(double deltaSeconds);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate int PlayerShutdownDelegate();
-
     public static class Program
     {
         public static int Main()
@@ -47,26 +37,22 @@ namespace Unitas.PlayerHost.Tests
             {
                 StageBundle(sampleRoot, bundleRoot);
                 CompileGameAssembly(sampleRoot, managedDir);
-
-                PlayerInitDelegate init = GetEntry<PlayerInitDelegate>("UnitasPlayerInit");
-                PlayerTickDelegate tick = GetEntry<PlayerTickDelegate>("UnitasPlayerTick");
-                PlayerShutdownDelegate shutdown = GetEntry<PlayerShutdownDelegate>("UnitasPlayerShutdown");
+                LogRecorder.Clear();
 
                 ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
                 Check.That("native runtime handle created", runtimeHandle != 0UL);
 
-                byte[] bundleUtf8 = Encoding.UTF8.GetBytes(bundleRoot + "\0");
-                byte[] persistUtf8 = Encoding.UTF8.GetBytes(persistRoot + "\0");
+                IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
+                IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
                 int initResult;
-                unsafe
+                try
                 {
-                    fixed (byte* bundlePtr = bundleUtf8)
-                    {
-                        fixed (byte* persistPtr = persistUtf8)
-                        {
-                            initResult = init(runtimeHandle, bundlePtr, persistPtr);
-                        }
-                    }
+                    initResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr);
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(bundlePtr);
+                    Marshal.FreeCoTaskMem(persistPtr);
                 }
 
                 Check.Equal("UnitasPlayerInit returns success", 0, initResult);
@@ -77,7 +63,7 @@ namespace Unitas.PlayerHost.Tests
 
                 for (int frame = 0; frame < 2; frame++)
                 {
-                    Check.Equal("settle tick " + frame + " returns success", 0, tick(DeltaSeconds));
+                    Check.Equal("settle tick " + frame + " returns success", 0, PlayerHostEntry.Tick(DeltaSeconds));
                 }
 
                 BridgeHost? host = PlayerHostCore.Host;
@@ -93,13 +79,13 @@ namespace Unitas.PlayerHost.Tests
                 host.InjectKey(KeyCode.W, true);
                 for (int frame = 0; frame < 20; frame++)
                 {
-                    Check.Equal("drive tick " + frame + " returns success", 0, tick(DeltaSeconds));
+                    Check.Equal("drive tick " + frame + " returns success", 0, PlayerHostEntry.Tick(DeltaSeconds));
                 }
 
                 host.InjectKey(KeyCode.W, false);
                 for (int frame = 0; frame < 5; frame++)
                 {
-                    tick(DeltaSeconds);
+                    PlayerHostEntry.Tick(DeltaSeconds);
                 }
 
                 float endZ = ball.transform.position.z;
@@ -107,9 +93,9 @@ namespace Unitas.PlayerHost.Tests
                 int score = ReadScore();
                 Check.Equal("score increased after driving over a pickup", 1, score > 0 ? 1 : 0);
 
-                Check.Equal("UnitasPlayerShutdown returns success", 0, shutdown());
-                Check.Equal("tick after shutdown reports NotInitialized", 7, tick(DeltaSeconds));
-                Check.Equal("double shutdown reports NotInitialized", 7, shutdown());
+                Check.Equal("UnitasPlayerShutdown returns success", 0, PlayerHostEntry.Shutdown());
+                Check.Equal("tick after shutdown reports NotInitialized", 7, PlayerHostEntry.Tick(DeltaSeconds));
+                Check.Equal("double shutdown reports NotInitialized", 7, PlayerHostEntry.Shutdown());
             }
             finally
             {
@@ -117,36 +103,20 @@ namespace Unitas.PlayerHost.Tests
             }
         }
 
-        private static T GetEntry<T>(string name)
-            where T : Delegate
-        {
-            MethodInfo method = typeof(PlayerHostEntry).GetMethod(
-                name,
-                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("Entry point not found: " + name);
-            return Marshal.GetDelegateForFunctionPointer<T>(method.MethodHandle.GetFunctionPointer());
-        }
-
         private static int ReadScore()
         {
-            GameObject? sensor = GameObject.Find("PickupSensor");
-            if (sensor == null)
+            const string Prefix = "Pickup collected score ";
+            foreach (LogEntry entry in LogRecorder.Entries)
             {
-                return -1;
-            }
-
-            foreach (Component component in sensor.GetComponents<Component>())
-            {
-                Type type = component.GetType();
-                if (!string.Equals(type.Name, "ScoreManager", StringComparison.Ordinal))
+                if (!entry.Message.StartsWith(Prefix, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                PropertyInfo? score = type.GetProperty("Score", BindingFlags.Public | BindingFlags.Instance);
-                if (score?.GetValue(component) is int value)
+                string reported = entry.Message.Substring(Prefix.Length);
+                if (int.TryParse(reported, NumberStyles.Integer, CultureInfo.InvariantCulture, out int collected))
                 {
-                    return value;
+                    return collected;
                 }
             }
 
