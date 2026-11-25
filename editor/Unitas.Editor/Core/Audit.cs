@@ -242,15 +242,17 @@ namespace Unitas.Editor.Mcp
     {
         private readonly List<AuditRecord> _records = new List<AuditRecord>();
         private readonly AuditStore? _store;
+        private readonly string? _storeFailure;
 
         public AuditLog()
-            : this(null)
+            : this(null, null)
         {
         }
 
-        public AuditLog(AuditStore? store)
+        public AuditLog(AuditStore? store, string? storeFailure = null)
         {
             _store = store;
+            _storeFailure = storeFailure;
             if (_store != null)
             {
                 foreach (AuditRecord existing in _store.LoadAll())
@@ -261,6 +263,8 @@ namespace Unitas.Editor.Mcp
         }
 
         public AuditStore? Store => _store;
+
+        public string? StoreFailure => _storeFailure;
 
         public AuditRecord Record(AuditEntry entry)
         {

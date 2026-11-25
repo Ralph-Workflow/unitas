@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Pipelines;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -18,6 +19,7 @@ namespace Unitas.Editor.Tests
         {
             StdioInitializeToolsAndResourcesRoundTrip().GetAwaiter().GetResult();
             StdioErrorMappingPreservesJsonRpcCodes().GetAwaiter().GetResult();
+            StdioProductionToolSetAndCaptureEndToEnd().GetAwaiter().GetResult();
         }
 
         private static async Task StdioInitializeToolsAndResourcesRoundTrip()
@@ -270,6 +272,239 @@ namespace Unitas.Editor.Tests
                 {
                 }
             }
+        }
+
+        private static async Task StdioProductionToolSetAndCaptureEndToEnd()
+        {
+            // The audit store lives under unitas-owned state outside project content (AUT-008);
+            // point it at a temp directory so the gate never writes into the developer's home.
+            string? previousStateDir = Environment.GetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable);
+            string stateDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-editor-stdio-" + Guid.NewGuid().ToString("N"));
+            Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, stateDir);
+            try
+            {
+                await StdioProductionToolSetAndCaptureEndToEndCore();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, previousStateDir);
+                try
+                {
+                    if (Directory.Exists(stateDir))
+                    {
+                        Directory.Delete(stateDir, true);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        private static async Task StdioProductionToolSetAndCaptureEndToEndCore()
+        {
+            // The production stdio server is StdioTransportHost over BuiltinDefaults.CreateStartupHost(),
+            // which registers the full tool set exactly once (RegisterAll).
+            using McpHost host = BuiltinDefaults.CreateStartupHost();
+            StdioTransportHost transportHost = new StdioTransportHost(host);
+            Pipe clientToServer = new Pipe();
+            Pipe serverToClient = new Pipe();
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task serverTask = transportHost.RunAsync(
+                clientToServer.Reader.AsStream(),
+                serverToClient.Writer.AsStream(),
+                cts.Token);
+            StreamClientTransport clientTransport = new StreamClientTransport(
+                clientToServer.Writer.AsStream(),
+                serverToClient.Reader.AsStream(),
+                null);
+            McpClient client = await McpClient.CreateAsync(
+                clientTransport,
+                new McpClientOptions
+                {
+                    ClientInfo = new Implementation
+                    {
+                        Name = "production-stdio-client",
+                        Version = "1.0.0",
+                    },
+                },
+                null,
+                cts.Token).ConfigureAwait(false);
+            string playSessionId = string.Empty;
+            try
+            {
+                IList<McpClientTool> tools = await client.ListToolsAsync(
+                    (RequestOptions?)null,
+                    cts.Token).ConfigureAwait(false);
+                Check.That(
+                    "stdio_production: tools/list exposes play.enter",
+                    HasTool(tools, "play.enter"));
+                Check.That(
+                    "stdio_production: tools/list exposes play.step",
+                    HasTool(tools, "play.step"));
+                Check.That(
+                    "stdio_production: tools/list exposes capture",
+                    HasTool(tools, "capture"));
+                Check.That(
+                    "stdio_production: tools/list exposes audit.export",
+                    HasTool(tools, "audit.export"));
+                Check.That(
+                    "stdio_production: tools/list exposes engine.abi_status",
+                    HasTool(tools, "engine.abi_status"));
+
+                string sessionId = transportHost.ActiveSessionId ?? string.Empty;
+                Check.That(
+                    "stdio_production: stdio session is created and active",
+                    !string.IsNullOrEmpty(sessionId));
+                // Out-of-band person grant: an stdio agent may never widen its own scopes (AUT-007).
+                host.GrantScope(sessionId, Scope.ExecuteProjectCode, GrantAuthority.Person);
+
+                CallToolResult enterResult = await client.CallToolAsync(
+                    new CallToolRequestParams
+                    {
+                        Name = "play.enter",
+                        Arguments = new Dictionary<string, JsonElement>(),
+                    },
+                    cts.Token).ConfigureAwait(false);
+                JsonNode? enterStructured = ParseStructuredContent(enterResult);
+                Check.That(
+                    "stdio_production: play.enter returns an untrusted envelope",
+                    UntrustedContent.IsEnvelope(enterStructured));
+                playSessionId = enterStructured?["content"]?["playSessionId"]?.GetValue<string>() ?? string.Empty;
+                Check.That(
+                    "stdio_production: play.enter starts the live worker and returns a play session id",
+                    !string.IsNullOrEmpty(playSessionId));
+
+                CallToolResult stepResult = await client.CallToolAsync(
+                    new CallToolRequestParams
+                    {
+                        Name = "play.step",
+                        Arguments = new Dictionary<string, JsonElement>
+                        {
+                            ["playSessionId"] = JsonArg(JsonSerializer.Serialize(playSessionId)),
+                            ["frames"] = JsonArg("4"),
+                        },
+                    },
+                    cts.Token).ConfigureAwait(false);
+                JsonNode? stepStructured = ParseStructuredContent(stepResult);
+                Check.That(
+                    "stdio_production: play.step returns an untrusted envelope",
+                    UntrustedContent.IsEnvelope(stepStructured));
+                Check.Equal(
+                    "stdio_production: play.step advanced the live worker by 4 frames",
+                    4,
+                    ReadInt(stepStructured?["content"]?["frames"], -1));
+
+                CallToolResult captureResult = await client.CallToolAsync(
+                    new CallToolRequestParams
+                    {
+                        Name = "capture",
+                        Arguments = new Dictionary<string, JsonElement>
+                        {
+                            ["playSessionId"] = JsonArg(JsonSerializer.Serialize(playSessionId)),
+                            ["width"] = JsonArg("64"),
+                            ["height"] = JsonArg("36"),
+                            ["id_map"] = JsonArg("true"),
+                        },
+                    },
+                    cts.Token).ConfigureAwait(false);
+                JsonNode? captureStructured = ParseStructuredContent(captureResult);
+                Check.That(
+                    "stdio_production: capture returns an untrusted envelope",
+                    UntrustedContent.IsEnvelope(captureStructured));
+                JsonNode? captureContent = captureStructured?["content"];
+                string base64Image = captureContent?["image"]?.GetValue<string>() ?? string.Empty;
+                int imageBytes = 0;
+                if (!string.IsNullOrEmpty(base64Image))
+                {
+                    imageBytes = Convert.FromBase64String(base64Image).Length;
+                }
+
+                Check.Equal(
+                    "stdio_production: capture base64 RGBA8 image decodes to width * height * 4 bytes",
+                    64 * 36 * 4,
+                    imageBytes);
+                JsonNode? idMapNode = captureContent?["id_map"];
+                JsonArray? idMap = idMapNode as JsonArray;
+                Check.Equal(
+                    "stdio_production: capture id_map has width * height entries",
+                    64 * 36,
+                    idMap?.Count ?? 0);
+                JsonNode? objectsNode = captureContent?["objects"];
+                JsonArray? objects = objectsNode as JsonArray;
+                Check.That(
+                    "stdio_production: capture objects list is non-empty",
+                    objects != null && objects.Count > 0);
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(playSessionId))
+                {
+                    try
+                    {
+                        await client.CallToolAsync(
+                            new CallToolRequestParams
+                            {
+                                Name = "play.exit",
+                                Arguments = new Dictionary<string, JsonElement>
+                                {
+                                    ["playSessionId"] = JsonArg(JsonSerializer.Serialize(playSessionId)),
+                                },
+                            },
+                            cts.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // Best effort: the worker must not keep the test process alive.
+                    }
+                }
+
+                await client.DisposeAsync().ConfigureAwait(false);
+                await cts.CancelAsync().ConfigureAwait(false);
+                await clientToServer.Writer.CompleteAsync().ConfigureAwait(false);
+                await serverToClient.Writer.CompleteAsync().ConfigureAwait(false);
+                try
+                {
+                    await serverTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+
+        private static bool HasTool(IList<McpClientTool> tools, string name)
+        {
+            foreach (McpClientTool tool in tools)
+            {
+                if (string.Equals(tool.Name, name, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static JsonElement JsonArg(string rawJson)
+        {
+            using JsonDocument document = JsonDocument.Parse(rawJson);
+            return document.RootElement.Clone();
+        }
+
+        private static int ReadInt(JsonNode? node, int fallback)
+        {
+            if (node is JsonValue value && value.TryGetValue(out long parsed))
+            {
+                return (int)parsed;
+            }
+
+            return fallback;
         }
 
         private static McpHost BuildTestHost()

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
@@ -82,9 +83,50 @@ namespace Unitas.Editor.Mcp
             McpHost host = new McpHost(
                 new SystemClock(),
                 PersonCredential.FromStartup(args),
-                new AuditLog());
+                CreateStartupAuditLog(args));
             RegisterAll(host);
             return host;
+        }
+
+        private static AuditLog CreateStartupAuditLog(string[]? args)
+        {
+            string projectPath = ResolveStartupProjectPath(args);
+            try
+            {
+                return new AuditLog(AuditStore.ForProject(projectPath));
+            }
+            catch (Exception error) when (error is McpError
+                || error is IOException
+                || error is UnauthorizedAccessException
+                || error is ArgumentException)
+            {
+                string reason = "audit store unavailable for project " + projectPath + ": " + error.Message;
+                Console.Error.WriteLine("[unitas] " + reason);
+                return new AuditLog(null, reason);
+            }
+        }
+
+        private static string ResolveStartupProjectPath(string[]? args)
+        {
+            string? requested = null;
+            if (args != null)
+            {
+                for (int index = 0; index < args.Length - 1; index++)
+                {
+                    if (string.Equals(args[index], CliArgs.ProjectPathOption, StringComparison.Ordinal))
+                    {
+                        requested = args[index + 1];
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(requested))
+            {
+                return Directory.GetCurrentDirectory();
+            }
+
+            return Path.GetFullPath(requested);
         }
     }
 }

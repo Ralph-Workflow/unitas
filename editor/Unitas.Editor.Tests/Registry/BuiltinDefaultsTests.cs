@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -11,6 +13,9 @@ namespace Unitas.Editor.Tests
             RegistersProjectStatusToolAndKnowledgeScopesResource();
             BuiltinDefaultsAreReadProjectScopedAndUntrusted();
             RegisteringBuiltinDefaultsTwiceFailsWithDuplicateTool();
+            StartupHostUsesPersistentAuditStoreOutsideProject();
+            StartupHostAuditRecordsSurviveHostRestart();
+            StartupHostRefusesStateDirectoryInsideProject();
         }
 
         private static void RegistersProjectStatusToolAndKnowledgeScopesResource()
@@ -101,6 +106,166 @@ namespace Unitas.Editor.Tests
             }
 
             Check.That("builtin: second registration throws DuplicateTool", threwDuplicate);
+        }
+
+        private static void StartupHostUsesPersistentAuditStoreOutsideProject()
+        {
+            string tempRoot = Path.Combine(Path.GetTempPath(), "unitas-startup-store-" + Guid.NewGuid().ToString("N"));
+            string projectDir = Path.Combine(tempRoot, "project");
+            string stateDir = Path.Combine(tempRoot, "state");
+            Directory.CreateDirectory(projectDir);
+            Directory.CreateDirectory(stateDir);
+            string? previousStateDir = Environment.GetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, stateDir);
+                using McpHost host = BuiltinDefaults.CreateStartupHost(new[] { "-projectPath", projectDir });
+                AuditStore? store = host.Audit.Store;
+                Check.That(
+                    "builtin_startup: the production startup host audits into a persistent store",
+                    store != null);
+                Check.That(
+                    "builtin_startup: the production startup host reports no store failure",
+                    host.Audit.StoreFailure == null);
+                if (store == null)
+                {
+                    return;
+                }
+
+                Check.That(
+                    "builtin_startup: the audit file lives outside the project directory",
+                    !AuditStore.IsPathInsideDirectory(store.AuditFilePath, projectDir));
+                Check.That(
+                    "builtin_startup: the audit file lives under the unitas state directory",
+                    store.AuditFilePath.StartsWith(
+                        Path.GetFullPath(stateDir) + Path.DirectorySeparatorChar,
+                        StringComparison.Ordinal));
+                Check.Equal(
+                    "builtin_startup: the store guards the resolved project path",
+                    Path.GetFullPath(projectDir),
+                    store.ProtectedProjectPath ?? string.Empty);
+                Check.Equal(
+                    "builtin_startup: the startup host wrote nothing into the project directory",
+                    0,
+                    Directory.GetFileSystemEntries(projectDir).Length);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, previousStateDir);
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, true);
+                }
+            }
+        }
+
+        private static void StartupHostAuditRecordsSurviveHostRestart()
+        {
+            string tempRoot = Path.Combine(Path.GetTempPath(), "unitas-startup-persist-" + Guid.NewGuid().ToString("N"));
+            string projectDir = Path.Combine(tempRoot, "project");
+            string stateDir = Path.Combine(tempRoot, "state");
+            Directory.CreateDirectory(projectDir);
+            Directory.CreateDirectory(stateDir);
+            string? previousStateDir = Environment.GetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable);
+            string? previousCredential = Environment.GetEnvironmentVariable(PersonCredential.EnvironmentVariableName);
+            try
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, stateDir);
+                Environment.SetEnvironmentVariable(PersonCredential.EnvironmentVariableName, "startup-person-token");
+                using (McpHost firstHost = BuiltinDefaults.CreateStartupHost(new[] { "-projectPath", projectDir }))
+                {
+                    string firstSession = firstHost.CreateSession(new SessionIdentity("agent-a", "http", "person-1"));
+                    firstHost.CallTool(firstSession, "project.status", new JsonObject());
+                    Check.Equal(
+                        "builtin_startup_persist: the first host audits the tool call",
+                        1,
+                        firstHost.Audit.Count);
+                    Check.Equal(
+                        "builtin_startup_persist: the first host audits project.status",
+                        "project.status",
+                        firstHost.Audit.Records[0].Target);
+                }
+
+                Check.Equal(
+                    "builtin_startup_persist: no audit file was written into the project directory",
+                    0,
+                    Directory.GetFileSystemEntries(projectDir).Length);
+
+                using (McpHost secondHost = BuiltinDefaults.CreateStartupHost(new[] { "-projectPath", projectDir }))
+                {
+                    Check.Equal(
+                        "builtin_startup_persist: the second host reloads the first host's record",
+                        1,
+                        secondHost.Audit.Count);
+                    Check.Equal(
+                        "builtin_startup_persist: the second host sees the persisted target",
+                        "project.status",
+                        secondHost.Audit.Records[0].Target);
+
+                    string secondSession = secondHost.CreateSession(new SessionIdentity("agent-a", "http", "person-1"));
+                    JsonNode exportEnvelope = secondHost.CallTool(
+                        secondSession,
+                        "audit.export",
+                        new JsonObject
+                        {
+                            ["personCredential"] = "startup-person-token",
+                        });
+                    JsonArray? exported = exportEnvelope["content"]?["records"] as JsonArray;
+                    Check.Equal(
+                        "builtin_startup_persist: audit.export exports the persisted record",
+                        1,
+                        exported?.Count ?? 0);
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, previousStateDir);
+                Environment.SetEnvironmentVariable(PersonCredential.EnvironmentVariableName, previousCredential);
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, true);
+                }
+            }
+        }
+
+        private static void StartupHostRefusesStateDirectoryInsideProject()
+        {
+            string tempRoot = Path.Combine(Path.GetTempPath(), "unitas-startup-inside-" + Guid.NewGuid().ToString("N"));
+            string projectDir = Path.Combine(tempRoot, "project");
+            string stateDir = Path.Combine(projectDir, ".unitas-state");
+            Directory.CreateDirectory(projectDir);
+            string? previousStateDir = Environment.GetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, stateDir);
+                using McpHost host = BuiltinDefaults.CreateStartupHost(new[] { "-projectPath", projectDir });
+                Check.That(
+                    "builtin_startup_guard: no audit store is created inside the project directory",
+                    host.Audit.Store == null);
+                Check.That(
+                    "builtin_startup_guard: the store failure is reported",
+                    host.Audit.StoreFailure != null);
+                Check.That(
+                    "builtin_startup_guard: the store failure names the AUT-008 guard",
+                    (host.Audit.StoreFailure ?? string.Empty).Contains("AUT-008", StringComparison.Ordinal));
+                string session = host.CreateSession(new SessionIdentity("agent-a", "http", "person-1"));
+                JsonNode statusEnvelope = host.CallTool(session, "project.status", new JsonObject());
+                Check.That(
+                    "builtin_startup_guard: the editor still serves tools after a store failure",
+                    UntrustedContent.IsEnvelope(statusEnvelope));
+                Check.Equal(
+                    "builtin_startup_guard: no state directory was created inside the project",
+                    0,
+                    Directory.GetFileSystemEntries(projectDir).Length);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable, previousStateDir);
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, true);
+                }
+            }
         }
     }
 }
