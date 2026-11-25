@@ -11,7 +11,7 @@ use unitas_runtime::particles::ParticleRuntimeWorld;
 use unitas_runtime::physics::PhysicsRuntimeWorld;
 
 #[test]
-fn physics_3d_entry_points_inspect_step_and_route_matrix_messages() -> Result<(), PhysicsError> {
+fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Result<(), PhysicsError> {
     let mut runtime_physics = PhysicsRuntimeWorld::new();
     let floor = EntityId::new(1);
     let crate_box = EntityId::new(2);
@@ -90,7 +90,7 @@ fn physics_3d_entry_points_inspect_step_and_route_matrix_messages() -> Result<()
 }
 
 #[test]
-fn physics_2d_entry_points_step_and_enforce_one_way_platform_effector() {
+fn subsystem_entry_physics_2d_steps_and_enforces_one_way_platform_effector() {
     let mut runtime_physics = PhysicsRuntimeWorld::new();
     let platform_entity = EntityId::new(10);
     let actor_entity = EntityId::new(11);
@@ -135,7 +135,7 @@ fn physics_2d_entry_points_step_and_enforce_one_way_platform_effector() {
 }
 
 #[test]
-fn particle_runtime_entry_points_control_systems_and_collide_with_3d_world() -> Result<(), PhysicsError>
+fn subsystem_entry_particles_control_systems_and_collide_with_3d_world() -> Result<(), PhysicsError>
 {
     let mut physics = PhysicsRuntimeWorld::new();
     let floor = EntityId::new(1);
