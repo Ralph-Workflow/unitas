@@ -62,7 +62,7 @@ concrete rules each one carries. Surfaces are added, amended, and
 retired as the project evolves; an out-of-date surface list is a policy
 violation, reviewed under "Maintenance triggers" below.
 
-RALPH-FACT: active_threat_surfaces: subprocess and shell execution, filesystem access, deserialization and parsing of Unity scene and prefab files, and the AI/agent execution surface; the web, memory-unsafe, and cryptography surfaces stay closed — the Rust crates reach no network and the ban gate forbids unsafe Rust
+RALPH-FACT: active_threat_surfaces: subprocess and shell execution, filesystem access, deserialization and parsing of Unity scene and prefab files, and the AI/agent execution surface; the web and cryptography surfaces stay closed — the Rust crates reach no network; the memory-unsafe surface opens only through unsafe zones registered under clean-code-policy.md "Unsafe code zones", and none is registered, so the ban gate forbids unsafe code everywhere
 
 Each surface in the catalog below is evaluated against the project's
 actual stack and code whenever the stack changes: surfaces that apply
@@ -73,7 +73,9 @@ re-opens the question instead of silently missing it.
 * Memory-unsafe code (C, C++, unsafe Rust blocks): banned functions
   (`strcpy`, `strcat`, `sprintf`, `gets`, unbounded `scanf`), mandatory
   bounds-checked alternatives, sanitizer or analyzer gates (ASan/UBSan,
-  compiler hardening flags), rules for every `unsafe` block.
+  compiler hardening flags), rules for every `unsafe` block. In this
+  project, unsafe Rust and unsafe C# are governed by
+  `clean-code-policy.md` "Unsafe code zones".
 * Web/HTTP surface (routes, APIs, templates): injection defenses
   (parameterized queries, no string-built SQL), output encoding and
   content security policy (XSS), request-forgery defenses (CSRF tokens,

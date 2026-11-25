@@ -46,12 +46,17 @@ Code uses only constructs the type checker and linter can fully verify. The
 default is ban. The burden of proof is on allowing a construct, never on
 banning it: a construct remains allowed only when its common use is safe and
 fully verifiable by both tools. Occasional need, careful use, or restriction to
-one module does not justify allowance. There are no scoped exemptions, inline
-suppressions, per-file ignores of a banned rule, allowlists, or baselines. The
-only remedy for a finding is restructuring the code. When a banned construct
-appears unavoidable, the agent reports the finding and stops instead of
-suppressing it. This rule has evidence tag `none` and ships as
-`deterministic` because the project's ban gate enforces it.
+one module does not justify allowance. There are no inline suppressions,
+per-file ignores of a banned rule, allowlists, or baselines. The single scoped
+allowance is a registered unsafe zone, governed by "Unsafe code zones" below.
+The remedy for a finding is restructuring the code. When a banned construct
+is genuinely required by a capability the product needs, the agent amends
+this policy in the same change: it narrows the ban to where the risk is,
+replaces it with enforced guardrails, and updates the enforcing gate and that
+gate's tests. It never suppresses the finding, never contorts the product to
+avoid the construct, and never stops the work. This rule has evidence tag
+`none` and ships as `deterministic` because the project's ban gate enforces
+it.
 
 The catalog names the enforcing linter rule IDs. Uppercase hyphenated
 identifiers without a linter prefix are project-gate rule IDs; the remediation
@@ -61,12 +66,108 @@ linter configuration.
 | Language | Banned constructs | Enforcing rule IDs | Enforcement |
 |---|---|---|---|
 | Python | `eval`; `exec`; `compile`; `__import__`; `globals`/`locals`/`vars`; `typing.cast`; an `Any` annotation; `assert` outside a test module; a bare or broad `except`; a named `lambda`; a mutable default argument; a star import; `os.environ`; `print` in library code. | `BANNED-CALL`; `BANNED-NAMESPACE`; `TYPING-CAST`; `ANN401`; `RUNTIME-ASSERT`; `E722`; `BLE001`; `E731`; `B006`; `F403`; `OS-ENVIRON`; `PRINT`. | deterministic: make banned-constructs |
-| Rust | `unsafe`; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`; `static_mut_refs`; `BANNED-ALLOW`; `clippy::unwrap_used`; `clippy::expect_used`; `clippy::panic`; `clippy::todo`; `clippy::unimplemented`; `clippy::dbg_macro`; `BANNED-UNTYPED-MACRO`; `BANNED-ANY`. | deterministic: make banned-constructs |
-| C# | Reflection APIs; `Unsafe`; raw types; unchecked casts; `dynamic`; `Object` parameter types; `#pragma warning disable`. | `BANNED-REFLECTION`; `BANNED-UNSAFE`; `rawtypes`; `unchecked`; `BANNED-DYNAMIC`; `BANNED-OBJECT-PARAMETER`; `BANNED-SUPPRESSION`. | deterministic: make banned-constructs |
+| Rust | `unsafe` outside a registered unsafe zone; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`; `static_mut_refs`; `BANNED-ALLOW`; `clippy::unwrap_used`; `clippy::expect_used`; `clippy::panic`; `clippy::todo`; `clippy::unimplemented`; `clippy::dbg_macro`; `BANNED-UNTYPED-MACRO`; `BANNED-ANY`. | deterministic: make banned-constructs |
+| C# | Reflection APIs; `unsafe`, pointers, and `System.Runtime.CompilerServices.Unsafe` outside a registered unsafe zone; raw types; unchecked casts; `dynamic`; `Object` parameter types; `#pragma warning disable`. | `BANNED-REFLECTION`; `BANNED-UNSAFE`; `rawtypes`; `unchecked`; `BANNED-DYNAMIC`; `BANNED-OBJECT-PARAMETER`; `BANNED-SUPPRESSION`. | deterministic: make banned-constructs |
+
+## Unsafe code zones
+
+Memory-unsafe code is required by the engine: C ABI exports and imports, .NET
+runtime hosting, native collections and job memory, GPU and audio buffer
+access, SIMD, and platform APIs. It is permitted only inside a registered
+unsafe zone. Everywhere else it stays banned. The rules below assume that
+agents write and change this code, so each safety claim is checked by a tool,
+never accepted on the strength of its explanation.
+
+Avoid unsafe code first:
+
+* Generate FFI bindings from one declaration. Rust exports are declared once,
+  and the C# `LibraryImport` declarations and any C headers are generated from
+  them (for example with `csbindgen`, `interoptopus`, or `cbindgen`). Nobody
+  hand-writes marshalling or maintains a symbol table.
+* Use the safe wrappers that maintained crates already provide: `netcorehost`
+  for .NET hosting, `bytemuck` or `zerocopy` for byte casts, and `wgpu`, `cpal`,
+  and `winit` for GPU, audio, and windowing.
+* `transmute`, `static mut`, and linker-level symbol aliasing of mangled names
+  stay banned inside zones too. A C symbol is named only with
+  `#[unsafe(no_mangle)]` or `#[unsafe(export_name = "...")]` in a zone.
+
+Zone registration:
+
+* A zone is a whole Rust crate or a whole C# project, never a file or a line.
+  Its public API is safe: no `unsafe fn`, raw pointer, or `SafeHandle`
+  internals cross the zone's public boundary, except the generated C ABI
+  surface itself.
+* Every zone is recorded in `tools/unsafe-zones.toml` with its path, language,
+  purpose, the invariants its unsafe code relies on (aliasing, lifetime,
+  alignment, threading, ownership), and the exact count of its unsafe blocks.
+  The registry is the only place zones are declared.
+* A Rust zone uses edition 2024 and its own `[lints]` table, which equals the
+  workspace table except for these differences:
+  * `unsafe_code` is not forbidden.
+  * `unsafe_op_in_unsafe_fn` is denied.
+  * `clippy::undocumented_unsafe_blocks`, `clippy::missing_safety_doc`,
+    `clippy::multiple_unsafe_ops_per_block`, and the pointer-cast lints
+    (`clippy::ptr_as_ptr`, `clippy::cast_ptr_alignment`,
+    `clippy::as_ptr_cast_mut`, and `clippy::borrow_as_ptr`) are denied.
+* A C# zone sets `AllowUnsafeBlocks` in its own project file only. It uses
+  `LibraryImport` with blittable signatures, `SafeHandle` for every owned
+  native resource, and `Span<T>` in place of pointers wherever the API allows.
+
+Boundary design:
+
+* Objects cross the boundary as generational handles that native code
+  validates on every call, never as pointers to Rust data. A stale handle is an
+  error, not a use-after-free.
+* Ownership crosses only through explicit create and destroy entry points.
+  Buffers and strings cross as pointer and length, with UTF-8 strings.
+* Every exported function catches panics with `std::panic::catch_unwind` and
+  returns an error code. No panic or exception unwinds across the boundary.
+* Native collections and job memory carry safety handles in development
+  builds that detect concurrent conflicting access, in the manner of Unity's
+  job-safety system.
+
+Documentation inside a zone:
+
+* Each `unsafe` block is preceded by one `// SAFETY:` comment that states why
+  the zone's registered invariants hold at that point. Each Rust `unsafe fn`
+  carries a `# Safety` doc section, and each C# `unsafe` member carries a
+  `// SAFETY:` comment. These are the only comments permitted in source code,
+  and only inside zones (see Commenting policy).
+
+Verification:
+
+* The zone gate runs in the default lane. It fails when:
+  * any unsafe construct appears outside a registered zone
+  * a zone's lint table or project settings differ from the rules above
+  * a zone's actual unsafe block count differs from its registered count (in
+    either direction, so that every change to the unsafe surface shows in the
+    registry diff)
+  * a symbol is aliased at link time
+  * a safety comment is missing or misplaced
+* `make verify-unsafe` runs in a declared non-default lane and is required for
+  every change that touches a zone:
+  * every zone's tests under Miri where the code does not call into foreign
+    code
+  * the zone and its callers built and tested with AddressSanitizer and
+    ThreadSanitizer
+  * Loom models of the job system's and the audio thread's synchronization
+    primitives
+  * a time-bounded fuzzing run of every exported entry point with random
+    handles, lengths, and call orders
+* Every change to a zone is reviewed against the zone's registered invariants
+  by an agent other than its author. That review checks that each invariant is
+  upheld, that no safe API can reach undefined behavior, and that a Miri,
+  sanitizer, or fuzz test exercises the change.
+
+Until the zone gate and `make verify-unsafe` exist, no zone is registered,
+and the ban gate keeps forbidding unsafe code everywhere. Building those two
+gates is the first part of the change that registers the first zone.
 
 ## Commenting policy
 
-Source code and `Makefile` contain no comments or docstrings. Intent,
+Source code and `Makefile` contain no comments or docstrings, except the
+`// SAFETY:` comments and `# Safety` doc sections that "Unsafe code zones"
+requires inside a registered zone. Intent,
 constraints, and invariants are expressed through names, types, structure,
 tests, and assertions. The only `#` line tolerated in source code or scripts
 is a shebang on line 1 of an executable script. Tool configuration files
@@ -154,6 +255,8 @@ this rule is deleted or reduced to current facts.
 | Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog reports zero findings over the tracked tree | the ban gate reports zero findings in the Python sources | the ban gate reports zero findings in the Python sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
+| Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree | the zone gate reports zero findings | advisory: the zone gate is built in the change that registers the first zone, and until then the ban gate forbids unsafe code everywhere; review: in the change that registers the first zone | when the linter alone enforces zone containment |
+| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, and fuzz checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: the lane is built in the change that registers the first zone; review: at every change that touches a zone | when no unsafe zone remains |
 
 ## Project facts to resolve
 
@@ -230,6 +333,8 @@ This policy MUST be reviewed in the same workflow as any of:
 * A new generated/vendored code category is added.
 * The commenting rule changes: a new banned comment shape, a change to
   the scanned file set, or a change to the enforcement mode.
+* An unsafe zone is registered, retired, or changes its invariants, or a
+  banned construct is found to be required by a product capability.
 
 ## Research basis
 
@@ -267,6 +372,26 @@ This policy MUST be reviewed in the same workflow as any of:
   title: "Documentation Best Practices"
   http: https://google.github.io/styleguide/docguide/best_practices.html
   review date: 2026-11-09
+
+* publisher: The Rust Project
+  title: "The Rustonomicon"
+  http: https://doc.rust-lang.org/nomicon/
+  review date: 2026-11-25
+
+* publisher: The Rust Project
+  title: "Miri: an interpreter for Rust's mid-level intermediate representation"
+  http: https://github.com/rust-lang/miri
+  review date: 2026-11-25
+
+* publisher: The Rust Project
+  title: "Clippy lints: undocumented_unsafe_blocks and multiple_unsafe_ops_per_block"
+  http: https://rust-lang.github.io/rust-clippy/master/index.html
+  review date: 2026-11-25
+
+* publisher: Microsoft
+  title: "Native interoperability best practices (.NET)"
+  http: https://learn.microsoft.com/en-us/dotnet/standard/native-interop/best-practices
+  review date: 2026-11-25
 
 ## Portfolio ownership
 
