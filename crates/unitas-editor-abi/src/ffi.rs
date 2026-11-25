@@ -123,22 +123,16 @@ mod tests {
         FFI_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn read_and_free(ptr: *mut c_char) -> Value {
+    fn read_and_free(ptr: *mut c_char) -> Result<Value, Box<dyn std::error::Error>> {
         assert!(!ptr.is_null());
         // SAFETY: ptr is a live CString from an export in this module.
-        let text = unsafe { CStr::from_ptr(ptr) }
-            .to_str()
-            .expect("utf-8 JSON")
-            .to_string();
-        unsafe { unitas_editor_string_free(ptr) };
-        serde_json::from_str(&text).expect("valid JSON")
+        let text = unsafe { CStr::from_ptr(ptr) }.to_str()?.to_string();
+        // SAFETY: ptr came from an export in this module and is released exactly once.
+        let _freed: () = unsafe { unitas_editor_string_free(ptr) };
+        Ok(serde_json::from_str(&text)?)
     }
 
-    fn cstring(text: &str) -> CString {
-        CString::new(text).expect("no interior nul")
-    }
-
-    fn install_test_table() {
+    fn install_test_table() -> Result<(), AbiError> {
         let descriptor = ToolDescriptor {
             name: "test.echo".to_string(),
             description: "Echo args".to_string(),
@@ -148,40 +142,40 @@ mod tests {
         };
         let table = DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor, Box::new(|args| Ok(args.clone())))
-            .expect("unique tool")
+            .tool(descriptor, Box::new(|args| Ok(args.clone())))?
             .build();
-        install_dispatch_table(table).expect("install");
+        install_dispatch_table(table)
     }
 
     #[test]
-    fn ffi_describe_invoke_and_error_paths() {
+    fn ffi_describe_invoke_and_error_paths() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = lock_ffi();
-        install_test_table();
+        install_test_table()?;
 
-        let described = read_and_free(unitas_editor_tools_describe());
+        let described = read_and_free(unitas_editor_tools_describe())?;
         assert_eq!(described["tools"][0]["name"], json!("test.echo"));
         assert_eq!(described["tools"][0]["requiredScope"], json!("read-project"));
 
-        let name = cstring("test.echo");
-        let args = cstring("{\"x\": 7}");
-        let invoked = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), args.as_ptr()));
+        let name = CString::new("test.echo")?;
+        let args = CString::new("{\"x\": 7}")?;
+        let invoked = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), args.as_ptr()))?;
         assert_eq!(invoked, json!({"x": 7}));
 
-        let unknown = cstring("nope");
-        let result = read_and_free(unitas_editor_tool_invoke(unknown.as_ptr(), args.as_ptr()));
+        let unknown = CString::new("nope")?;
+        let result = read_and_free(unitas_editor_tool_invoke(unknown.as_ptr(), args.as_ptr()))?;
         assert_eq!(result["error"]["kind"], json!("unknown-tool"));
 
-        let malformed = cstring("{not json");
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), malformed.as_ptr()));
+        let malformed = CString::new("{not json")?;
+        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), malformed.as_ptr()))?;
         assert_eq!(result["error"]["kind"], json!("invalid-args"));
 
-        let result = read_and_free(unitas_editor_tool_invoke(std::ptr::null(), args.as_ptr()));
+        let result = read_and_free(unitas_editor_tool_invoke(std::ptr::null(), args.as_ptr()))?;
         assert_eq!(result["error"]["kind"], json!("invalid-args"));
+        Ok(())
     }
 
     #[test]
-    fn ffi_missing_scope_returns_structured_error() {
+    fn ffi_missing_scope_returns_structured_error() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = lock_ffi();
         let descriptor = ToolDescriptor {
             name: "test.gated".to_string(),
@@ -191,19 +185,20 @@ mod tests {
             origin: "unitas://test".to_string(),
         };
         let table = DispatchTable::builder()
-            .tool(descriptor, Box::new(|_| Ok(json!({}))))
-            .expect("unique tool")
+            .tool(descriptor, Box::new(|_| Ok(json!({}))))?
             .build();
-        install_dispatch_table(table).expect("install");
+        install_dispatch_table(table)?;
 
-        let name = cstring("test.gated");
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()));
+        let name = CString::new("test.gated")?;
+        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()))?;
         assert_eq!(result["error"]["kind"], json!("missing-scope"));
         assert_eq!(result["error"]["scope"], json!("build"));
+        Ok(())
     }
 
     #[test]
-    fn ffi_panicking_handler_does_not_cross_the_boundary() {
+    fn ffi_panicking_handler_does_not_cross_the_boundary() -> Result<(), Box<dyn std::error::Error>>
+    {
         let _guard = lock_ffi();
         let descriptor = ToolDescriptor {
             name: "test.panic".to_string(),
@@ -214,13 +209,16 @@ mod tests {
         };
         let table = DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor, Box::new(|_| panic!("handler exploded")))
-            .expect("unique tool")
+            .tool(
+                descriptor,
+                Box::new(|_| -> Result<Value, String> { unreachable!("handler exploded") }),
+            )?
             .build();
-        install_dispatch_table(table).expect("install");
+        install_dispatch_table(table)?;
 
-        let name = cstring("test.panic");
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()));
+        let name = CString::new("test.panic")?;
+        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()))?;
         assert_eq!(result["error"]["kind"], json!("internal"));
+        Ok(())
     }
 }

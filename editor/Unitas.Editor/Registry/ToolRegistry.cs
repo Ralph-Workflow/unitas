@@ -80,7 +80,7 @@ namespace Unitas.Editor.Mcp
             tools.Add(definition.Name, new RegisteredTool(definition, handler));
         }
 
-        public IReadOnlyList<ToolDefinition> List()
+        public IReadOnlyList<ToolDefinition> Definitions()
         {
             List<ToolDefinition> definitions = new List<ToolDefinition>();
             foreach (RegisteredTool tool in tools.Values)

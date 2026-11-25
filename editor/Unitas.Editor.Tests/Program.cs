@@ -1,48 +1,67 @@
 using System;
-using System.Reflection;
+using Unitas.Editor.Tests.Core;
 
 namespace Unitas.Editor.Tests
 {
     public static class Program
     {
-        public static int Main()
+        public static int Main(string[] args)
         {
-            // Test groups are discovered by name so that each unit can be built and
-            // run on its own while the other units are still being written.
-            Assembly assembly = typeof(Program).Assembly;
-            Type[] types = assembly.GetTypes();
-            Array.Sort(types, (left, right) => string.CompareOrdinal(left.FullName, right.FullName));
-            foreach (Type type in types)
+            // The suite table is explicit so the runner discovers suites without reflection.
+            (string Name, Action Run)[] suites =
             {
-                if (!type.IsPublic || !type.Name.EndsWith("Tests", StringComparison.Ordinal))
-                {
-                    continue;
-                }
+                ("AuditTests", AuditTests.Run),
+                ("ClockTests", ClockTests.Run),
+                ("OperationStoreTests", OperationStoreTests.Run),
+                ("RegistryTests", RegistryTests.Run),
+                ("ScopeTests", ScopeTests.Run),
+                ("SessionTests", SessionTests.Run),
+                ("UntrustedContentTests", UntrustedContentTests.Run),
+            };
 
-                MethodInfo? run = type.GetMethod(
-                    "Run",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    Type.EmptyTypes,
-                    null);
-                if (run == null)
+            if (args.Length == 0)
+            {
+                foreach ((string name, Action run) in suites)
                 {
-                    continue;
+                    RunSuite(name, run);
                 }
-
-                try
-                {
-                    run.Invoke(null, null);
-                }
-                catch (TargetInvocationException failure)
-                {
-                    Check.That(type.Name + " runs without throwing", false);
-                    System.Console.WriteLine("      " + failure.InnerException);
-                }
+            }
+            else
+            {
+                RunSelected(suites, args[0]);
             }
 
             System.Console.WriteLine("failures: " + Check.FailureCount);
             return Check.FailureCount;
+        }
+
+        private static void RunSelected((string Name, Action Run)[] suites, string wanted)
+        {
+            foreach ((string name, Action run) in suites)
+            {
+                if (name == wanted)
+                {
+                    RunSuite(name, run);
+                    return;
+                }
+            }
+
+            System.Console.WriteLine("unknown suite: " + wanted);
+            Check.That("suite " + wanted + " is in the suite table", false);
+        }
+
+        private static void RunSuite(string name, Action run)
+        {
+            Check.Suite = name;
+            try
+            {
+                run();
+            }
+            catch (Exception error)
+            {
+                Check.That(name + " runs without throwing", false);
+                System.Console.WriteLine("      " + error);
+            }
         }
     }
 }

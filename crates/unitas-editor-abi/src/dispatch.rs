@@ -128,68 +128,70 @@ mod tests {
         }
     }
 
-    fn echo_table() -> DispatchTable {
-        DispatchTable::builder()
+    fn echo_table() -> Result<DispatchTable, AbiError> {
+        Ok(DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor("test.echo", Scope::ReadProject), Box::new(|args| Ok(args.clone())))
-            .expect("unique tool")
-            .tool(descriptor("test.build", Scope::Build), Box::new(|_| Ok(json!({}))))
-            .expect("unique tool")
-            .build()
+            .tool(descriptor("test.echo", Scope::ReadProject), Box::new(|args| Ok(args.clone())))?
+            .tool(descriptor("test.build", Scope::Build), Box::new(|_| Ok(json!({}))))?
+            .build())
     }
 
     #[test]
-    fn describe_lists_tools_in_name_order() {
-        let table = echo_table();
+    fn describe_lists_tools_in_name_order() -> Result<(), Box<dyn std::error::Error>> {
+        let table = echo_table()?;
         let manifest = table.manifest();
         let names: Vec<&str> = manifest.tools.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, ["test.build", "test.echo"]);
-        let parsed: Value = serde_json::from_str(&table.describe_json()).expect("valid JSON");
+        let parsed: Value = serde_json::from_str(&table.describe_json())?;
         assert_eq!(parsed["tools"][1]["requiredScope"], json!("read-project"));
         assert_eq!(parsed["tools"][1]["origin"], json!("unitas://test"));
+        Ok(())
     }
 
     #[test]
-    fn invoke_dispatches_to_handler() {
-        let table = echo_table();
+    fn invoke_dispatches_to_handler() -> Result<(), AbiError> {
+        let table = echo_table()?;
         let result = table.invoke("test.echo", &json!({"x": 1}));
         assert_eq!(result, json!({"x": 1}));
+        Ok(())
     }
 
     #[test]
-    fn invoke_unknown_name_returns_structured_error() {
-        let table = echo_table();
+    fn invoke_unknown_name_returns_structured_error() -> Result<(), AbiError> {
+        let table = echo_table()?;
         let result = table.invoke("nope", &json!({}));
         assert_eq!(result["error"]["kind"], json!("unknown-tool"));
         assert_eq!(result["error"]["tool"], json!("nope"));
+        Ok(())
     }
 
     #[test]
-    fn invoke_missing_scope_returns_structured_error() {
-        let table = echo_table();
+    fn invoke_missing_scope_returns_structured_error() -> Result<(), AbiError> {
+        let table = echo_table()?;
         let result = table.invoke("test.build", &json!({}));
         assert_eq!(result["error"]["kind"], json!("missing-scope"));
         assert_eq!(result["error"]["scope"], json!("build"));
+        Ok(())
     }
 
     #[test]
-    fn invoke_handler_failure_returns_structured_error() {
+    fn invoke_handler_failure_returns_structured_error() -> Result<(), AbiError> {
         let table = DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor("test.fail", Scope::ReadProject), Box::new(|_| Err("boom".to_string())))
-            .expect("unique tool")
+            .tool(descriptor("test.fail", Scope::ReadProject), Box::new(|_| Err("boom".to_string())))?
             .build();
         let result = table.invoke("test.fail", &json!({}));
         assert_eq!(result["error"]["kind"], json!("tool-failed"));
         assert_eq!(result["error"]["message"], json!("boom"));
+        Ok(())
     }
 
     #[test]
-    fn duplicate_tool_name_is_rejected() {
+    fn duplicate_tool_name_is_rejected() -> Result<(), AbiError> {
         let result = DispatchTable::builder()
-            .tool(descriptor("dup", Scope::ReadProject), Box::new(|_| Ok(json!({}))))
-            .expect("first registration")
+            .tool(descriptor("dup", Scope::ReadProject), Box::new(|_| Ok(json!({}))))?
             .tool(descriptor("dup", Scope::Build), Box::new(|_| Ok(json!({}))));
         assert_eq!(result.err(), Some(AbiError::DuplicateTool("dup".to_string())));
+        Ok(())
     }
 }

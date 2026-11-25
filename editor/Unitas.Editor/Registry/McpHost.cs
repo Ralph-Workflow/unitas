@@ -96,12 +96,12 @@ namespace Unitas.Editor.Mcp
 
         public IReadOnlyList<ToolDefinition> ListTools()
         {
-            return tools.List();
+            return tools.Definitions();
         }
 
         public IReadOnlyList<ResourceDefinition> ListResources()
         {
-            return resources.List();
+            return resources.Definitions();
         }
 
         public JsonNode CallTool(string sessionId, string name, JsonNode arguments)

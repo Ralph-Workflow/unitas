@@ -4,6 +4,9 @@ namespace Unitas.Editor.Tests
     {
         public static int FailureCount { get; private set; }
 
+        // The runner names the suite that is running so a failure names its suite.
+        public static string Suite { get; set; } = string.Empty;
+
         public static void That(string name, bool condition)
         {
             if (condition)
@@ -13,7 +16,7 @@ namespace Unitas.Editor.Tests
             else
             {
                 FailureCount++;
-                System.Console.WriteLine("FAIL: " + name);
+                System.Console.WriteLine("FAIL: " + Label() + name);
             }
         }
 
@@ -26,7 +29,7 @@ namespace Unitas.Editor.Tests
             else
             {
                 FailureCount++;
-                System.Console.WriteLine("FAIL: " + name + " (expected: '" + expected + "', got: '" + actual + "')");
+                System.Console.WriteLine("FAIL: " + Label() + name + " (expected: '" + expected + "', got: '" + actual + "')");
             }
         }
 
@@ -39,7 +42,7 @@ namespace Unitas.Editor.Tests
             else
             {
                 FailureCount++;
-                System.Console.WriteLine("FAIL: " + name + " (expected: " + expected + ", got: " + actual + ")");
+                System.Console.WriteLine("FAIL: " + Label() + name + " (expected: " + expected + ", got: " + actual + ")");
             }
         }
 
@@ -52,8 +55,13 @@ namespace Unitas.Editor.Tests
             else
             {
                 FailureCount++;
-                System.Console.WriteLine("FAIL: " + name + " (expected: " + expected + ", got: " + actual + ")");
+                System.Console.WriteLine("FAIL: " + Label() + name + " (expected: " + expected + ", got: " + actual + ")");
             }
+        }
+
+        private static string Label()
+        {
+            return Suite.Length == 0 ? string.Empty : "[" + Suite + "] ";
         }
     }
 }

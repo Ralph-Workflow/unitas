@@ -1949,3 +1949,129 @@ entry_header = "[[nuget]]"
 entry_keys = ["name", "version", "license", "advisory_reviewed", "note"]
 applies_to = "every NuGet package a committed per-project packages.lock.json locks, direct or transitive"
 entry_rule = "same permissive license allowlist and non-future ISO advisory_reviewed date as [[package]] entries; enforced by make deps"
+
+[[nuget]]
+name = "Microsoft.Extensions.AI.Abstractions"
+version = "10.11.0"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Caching.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Configuration.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.DependencyInjection.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Diagnostics.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.FileProviders.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Hosting.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Logging.Abstractions"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Options"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "Microsoft.Extensions.Primitives"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "ModelContextProtocol"
+version = "2.4.0"
+license = "Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "ModelContextProtocol.AspNetCore"
+version = "2.4.0"
+license = "Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "ModelContextProtocol.Core"
+version = "2.4.0"
+license = "Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "System.Diagnostics.DiagnosticSource"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "System.IO.Pipelines"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "System.Net.ServerSentEvents"
+version = "10.0.14"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "System.Text.Encodings.Web"
+version = "10.0.13"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"
+
+[[nuget]]
+name = "System.Text.Json"
+version = "10.0.13"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "offline NuGet vulnerability database (GitHub Advisory, updated 2026-11-24) and local nuspec consulted: no advisory affects this version"

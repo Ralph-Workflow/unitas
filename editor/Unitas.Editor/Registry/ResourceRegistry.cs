@@ -65,7 +65,7 @@ namespace Unitas.Editor.Mcp
             resources.Add(definition.Uri, new RegisteredResource(definition, reader));
         }
 
-        public IReadOnlyList<ResourceDefinition> List()
+        public IReadOnlyList<ResourceDefinition> Definitions()
         {
             List<ResourceDefinition> definitions = new List<ResourceDefinition>();
             foreach (RegisteredResource resource in resources.Values)

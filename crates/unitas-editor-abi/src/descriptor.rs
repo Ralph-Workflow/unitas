@@ -80,17 +80,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn scope_serde_names_match_as_str_for_all_scopes() {
+    fn scope_serde_names_match_as_str_for_all_scopes() -> Result<(), Box<dyn std::error::Error>> {
         for scope in Scope::ALL {
-            let encoded = serde_json::to_value(scope).expect("scope serializes");
+            let encoded = serde_json::to_value(scope)?;
             assert_eq!(encoded, json!(scope.as_str()));
             assert_eq!(Scope::from_name(scope.as_str()), Some(scope));
         }
         assert_eq!(Scope::from_name("root-access"), None);
+        Ok(())
     }
 
     #[test]
-    fn descriptor_roundtrips_contract_shape() {
+    fn descriptor_roundtrips_contract_shape() -> Result<(), Box<dyn std::error::Error>> {
         let wire = json!({
             "name": "scene.list",
             "description": "List scenes in the project",
@@ -98,11 +99,11 @@ mod tests {
             "requiredScope": "read-project",
             "origin": "unitas://editor/scene",
         });
-        let descriptor: ToolDescriptor =
-            serde_json::from_value(wire.clone()).expect("descriptor parses");
+        let descriptor: ToolDescriptor = serde_json::from_value(wire.clone())?;
         assert_eq!(descriptor.required_scope, Scope::ReadProject);
-        let encoded = serde_json::to_value(&descriptor).expect("descriptor serializes");
+        let encoded = serde_json::to_value(&descriptor)?;
         assert_eq!(encoded, wire);
+        Ok(())
     }
 
     #[test]
