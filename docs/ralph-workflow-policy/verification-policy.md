@@ -51,10 +51,35 @@ differently.
    check running only in an undeclared opt-in suite the default gate
    excludes will rot unnoticed: give it a lane, or delete it.
 9. Verification MUST complete in time proportional to the codebase, enforced
-   by the gate itself (fail on exceed), never by convention. Record it as
-   `verification_time_budget`.
-   - **Guide:** roughly **1 second per 1k LOC**.
-   - **HARD CAP: 2 minutes**, whatever the size — a gate slower than that
+   by the gate itself (fail on exceed), never by convention. Record the
+   enforced limit as `verification_time_budget`: the project's MEASURED gate
+   time, never a cap and never a guess.
+   - **Cost floor:** the irreducible toolchain cost of answering at all —
+     interpreter or runtime startup, environment provisioning, and the
+     incremental build and link that a one-line, behaviour-neutral edit to a
+     representative implementation file forces — measured
+     invocation-to-answer on a warm cache with every check deselected.
+     Record it as `verification_cost_floor`, separately for the full gate,
+     the fast path, and the default suite, each with its measuring command,
+     edited file, machine, and date. Test execution, check work, network,
+     sleeps, and anything a check could skip NEVER count toward the floor.
+     A floor that cannot be reproduced from its recorded command is zero.
+     Re-measure it whenever the toolchain, build configuration, or
+     reference machine changes; it shrinks freely and grows only as a
+     reviewed change carrying the new measurement. Reducing a large floor —
+     build caching, precompiled headers, a persistent build daemon,
+     splitting a monolithic link — is owned work under rule 22, not a
+     blocker on unrelated changes.
+   - **Controllable time** is measured time minus the matching cost floor.
+     Every guide and cap in this policy and the testing policy binds
+     controllable time only: a project whose toolchain needs minutes just to
+     rebuild is held to the same discipline as one that starts in a second.
+     A game engine whose one-line edit forces a 4-minute incremental link
+     records a 4-minute floor, and its gate is bound to that floor plus at
+     most 2 minutes.
+   - **Guide:** roughly **1 second of controllable time per 1k LOC**.
+   - **HARD CAP: 2 minutes above the recorded cost floor**, whatever the
+     size — a gate slower than that
      destroys the edit/verify loop humans and agents depend on, so past
      ~120k LOC the cap, not the rate, binds. This cap is far stricter than
      commonly cited industry guidance for a commit build, because an agent
@@ -62,7 +87,8 @@ differently.
      rather than per commit — a five-iteration task reaches ten minutes at
      this cap.
    - **Nesting:** the suite is ONE STEP inside this budget, not a parallel
-     allowance. The testing policy caps the default suite at 60 seconds so
+     allowance. The testing policy caps the default suite at 60 seconds above
+     its cost floor so
      type checking, linting, formatting, and audits fit in the remainder. A
      suite consuming the whole gate budget is a breach even when its own
      limit is satisfied.
@@ -71,6 +97,28 @@ differently.
      NOT relax toward the guide OR the cap — both are ceilings, never
      entitlements. Record the project's measured figure, never the cap.
      <!-- ralph-control: verification-budget-ratchet -->
+   - **Optimize first:** when the project's measured controllable time
+     exceeds a cap in this policy or the testing policy — a multi-million-line
+     codebase whose full gate takes 40 minutes above its floor — the agent
+     MUST first apply every reduction achievable within the run: run
+     independent checks in parallel, cache with complete keys so only work a
+     change can affect re-runs (rule 17), remove duplicate checks, and repair
+     the slowest checks and the missing seams behind them. Leaving an
+     achievable reduction undone is a violation, never a deferral.
+   - **Over a cap after optimizing:** record the measured figure, with no
+     headroom, as the enforced budget, so the gate fails the moment the
+     project gets slower. Record the residual excess in
+     `verification_budget_overage` in exactly this form, every field
+     non-empty:
+     `excess: <gate, fast-path, and suite seconds over each cap>; owner: <person or team>; plan: <reductions applied and reductions remaining>; review: <YYYY-MM-DD>`.
+     Readiness rejects any other form, and blocks once the review date has
+     passed: at review the agent optimizes again, re-measures, and records an
+     excess no higher than before with a new date. The budget and the excess
+     only shrink; every new default-lane cost MUST be offset by a recorded
+     removal or speed-up while the overage remains; narrowing the gate,
+     moving a check out of the default lane, or deselecting work to reach a
+     cap stays forbidden. The overage blocks no unrelated change. A project
+     within every cap records `none`.
 10. A run is judged on **time to a correct, verified change**; speed never permits partial proof.
 11. Prevent an extra pass first; within a pass, the cost of proving the change is the largest term; where they conflict, avoid the extra pass.
 12. The four commitments are: **fast path first**, **a slow gate is a defect**, **do not leave the loop slower**, and **checks answer consistently**. Non-compliance is a defect: fix it within the requested run when that fits its budget, or raise it to an owner who can act. A change is never done on a partial check.
@@ -100,11 +148,18 @@ differently.
     everything in its lane; a change is never verified on a selected subset.
 16. Fast-path and full-gate costs MUST be measured invocation-to-answer
     including startup, and the gate MUST emit its observed duration so a
-    regression is a number, not a feeling. Target 10 seconds for the fast
-    path, HARD CAP 30 seconds. Startup alone exceeding the target is a
-    defect to fix, not a reason to widen it; record the measured startup
-    floor when it binds. Added cost and any budget breach require an
-    explicit choice and actionable escalation.
+    regression is a number, not a feeling. Target 10 seconds of
+    controllable time for the fast path, HARD CAP 30 seconds above the fast
+    path's recorded cost floor (rule 9). Record the enforced limit as
+    `fast_path_time_budget`: the measured fast-path time, never the cap; the
+    fast path MUST fail when it exceeds that budget. A fast path already
+    over the cap records its excess in `verification_budget_overage` on
+    rule 9's terms. A project with a
+    negligible floor is held to 10 and 30 seconds outright. A floor above
+    the target is a measured fact to record and an owned reduction under
+    rule 22, never a reason to widen the cap on controllable time. Added
+    cost and any budget breach require an explicit choice and actionable
+    escalation.
 17. Parallelism and caching are the two legitimate levers for holding the
     budget as the project grows, permitted only when they cannot produce a
     FALSE GREEN. Parallelism requires independent, order-insensitive checks.
@@ -128,7 +183,9 @@ differently.
     growth or a hanging step is a hard indicator of a real problem, usually
     architectural — the testing policy's performance rule diagnoses it in
     full. Treat a gate performance regression as seriously as a failing
-    test: fix the design. NEVER raise a budget to make a slow gate fit.
+    test: fix the design. NEVER raise a budget to make a slow gate fit, and
+    never inflate a cost floor to the same end: a floor is re-measured from
+    its recorded command, never estimated.
 22. The full gate remains required before done. Reducing recurring
     full-gate, fast-path, or setup cost is in scope when it fits the run
     budget without displacing the request; otherwise raise it where an owner
@@ -207,7 +264,10 @@ RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
 RALPH-FACT: required_verification_profiles: none — every check runs in the default gate
-RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 9 to 12 seconds on 2026-11-23 across repeated runs with the Rust and .NET gates and the Milestone 4 physics slice wired into the default gate
+RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; the measured run took 28 seconds on 2026-11-24 with the Python, Rust, and .NET gates (including Unitas.Scripting and Unitas.Testing) wired into the default gate
+RALPH-FACT: verification_cost_floor: full gate floor 1.43s (measured via `pytest --collect-only -q` at 0.27s, `cargo check --workspace --all-targets` at 0.10s, and `dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All --no-restore` at 1.06s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 0.10s (measured via `cargo check --workspace --all-targets` against `crates/unitas-core/src/lib.rs`), and default suite floor 0.36s (measured via `pytest --collect-only -q` at 0.27s and `cargo test --workspace --no-run` at 0.09s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-24
+RALPH-FACT: fast_path_time_budget: 30 seconds enforced per step via VERIFY_BUDGET_SECONDS in the Makefile (`python3 tools/verify.py timed <step> 30 ...`) for `make lint`, which measured 0.18s warm on Apple Silicon on 2026-11-24
+RALPH-FACT: verification_budget_overage: none — full gate controllable time is 26.57s (28.00s measured minus 1.43s cost floor, below the 120s cap), fast-path controllable time is 0.08s (0.18s measured minus 0.10s cost floor, below the 30s cap), and default suite controllable time is 7.27s (7.63s measured for `make test` minus 0.36s cost floor, below the 60s cap)
 RALPH-FACT: verification_time_enforcement_mechanism: the timed gate wrapper fails the run when a gate exceeds the budget the Makefile declares
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
 
@@ -248,7 +308,8 @@ Volatile reports (per-run test logs, mutation-analysis dumps, coverage
 HTML, snapshot diffs) and large generated inventories go to ignored paths
 under `/tmp` or to CI artifacts. Commit only compact, deterministic,
 human-reviewable baselines whose diffs carry meaning: the
-`verification_time_budget` fact, the recorded gate-lane review with its
+`verification_time_budget`, `fast_path_time_budget`, and
+`verification_cost_floor` facts, the recorded gate-lane review with its
 dated evidence, and reviewable gate results. A reviewer who pulls the change
 must see a single small diff against a known baseline, not a thousand-line
 inventory of auto-generated noise.
@@ -257,8 +318,11 @@ An agent MUST NOT:
 
 * Add a "verification" command that does not exercise every default-gate
   check.
-* Lower the recorded `verification_time_budget` below the project's
-  measured figure, narrow the default gate to skip a documented check,
+* Lower the recorded `verification_time_budget` or `fast_path_time_budget`
+  below the project's measured figure, grow `verification_budget_overage`,
+  record an overage without its measured figure, owner, and reduction plan,
+  record a `verification_cost_floor`
+  that was not measured or that counts check work, narrow the default gate to skip a documented check,
   or shrink a per-step timeout past the proven floor to make a slow
   or failing run pass. The kernel's no-weakening rule (see
   `execution-kernel.md` §Kernel rules 4) applies in full to every
@@ -328,6 +392,8 @@ Review this policy in the same workflow as any of:
 * A named profile is added, retired, or has its owner or trigger changed.
 * A named profile has not run within its declared staleness horizon.
 * The observed gate duration moves materially, or the budget changes.
+* The toolchain, build configuration, or reference machine changes: re-measure
+  `verification_cost_floor`.
 * The bypass-detection audit changes.
 
 ## Research basis

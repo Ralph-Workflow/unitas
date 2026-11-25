@@ -66,10 +66,21 @@ Suite admission, and fixing the production seam.
    suite is one step among type checking, linting, formatting, and audits,
    so record a POINT VALUE strictly below the project's recorded
    `verification_time_budget` — never a range, never that budget in full.
-   Guide: ~0.5s per 1k LOC, deliberately half the verification policy's
-   whole-gate guide, leaving the remainder for other steps. HARD CAP 60
-   seconds. Past ~120k LOC the cap binds, and it does not move. A recorded
-   gate budget tighter than 120s binds before either number here. These
+   The guide and cap bind CONTROLLABLE time — the suite's measured time minus
+   its cost floor, recorded with the gate's floors in the verification
+   policy's `verification_cost_floor` fact and governed by that policy's
+   rule 9; test execution never counts toward a floor. Guide: ~0.5s of
+   controllable time per 1k LOC, deliberately half the verification
+   policy's whole-gate guide, leaving the remainder for other steps. HARD
+   CAP 60 seconds above the suite's recorded cost floor. Past ~120k LOC the
+   cap binds, and it does not move. A suite over the cap MUST first be
+   optimized as far as the run allows (rules 7, 11, 14, 15, and 17 and the
+   verification policy's rule 9); only the residual is recorded: its
+   measured time, with no headroom, as `suite_time_budget`, and its excess
+   in the verification policy's `verification_budget_overage`, on that
+   policy's rule 9 terms — the suite can never get slower, the excess only
+   shrinks, and new suite cost is offset while it remains. A recorded gate budget tighter than 120
+   seconds of controllable time binds before either number here. These
    limits govern the DEFAULT SUITE; named profiles and quarantine carry
    their own budgets.
 10. A timeout is a HARD failure, never a route to green.
@@ -388,7 +399,7 @@ RALPH-FACT: primary_test_framework: pytest
 RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates and the C# bridge console runner (bridge/Unitas.Bridge.Tests) for the UnityEngine bridge (default automated lane, owned by the repository maintainers); the Python tooling keeps pytest as the primary framework
 RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the pytest tmp_path; no state is shared between tests
 RALPH-FACT: io_mocking_approach: none — the gates read the working tree and never write outside it
-RALPH-FACT: suite_time_budget: 30 seconds for the whole suite
+RALPH-FACT: suite_time_budget: 25 seconds for the default suite (`make test`), drawn from the 30-second verification_time_budget; measured at 7.63s (7.27s controllable time above the 0.36s suite cost floor) on 2026-11-24
 RALPH-FACT: per_test_timeout: none — no per-test timeout is configured; the suite budget bounds the run
 RALPH-FACT: timeout_enforcement_mechanism: none — no timeout plugin is installed, so the suite budget review catches a slow suite
 RALPH-FACT: parallel_execution_mechanism: none — the suite runs serially
