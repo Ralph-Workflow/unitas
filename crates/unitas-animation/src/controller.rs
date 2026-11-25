@@ -733,6 +733,7 @@ struct ActiveTransition {
     duration: f32,
     target_time: f32,
     interruption_source: InterruptionSource,
+    target_frames: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -801,7 +802,7 @@ impl Animator {
 
     pub fn set_speed(&mut self, speed: f32) {
         if speed.is_finite() {
-            self.speed = speed.max(0.0);
+            self.speed = speed;
         }
     }
 
@@ -1067,6 +1068,7 @@ impl Animator {
                             exited,
                             bindings,
                             sample.fired_events,
+                            None,
                         );
                     }
                 }
@@ -1088,6 +1090,7 @@ impl Animator {
                                 exited,
                                 bindings,
                                 sample.fired_events,
+                                None,
                             );
                         }
                         self.active_transition = Some(ActiveTransition {
@@ -1096,6 +1099,7 @@ impl Animator {
                             duration: sanitize_delta(duration),
                             target_time: 0.0,
                             interruption_source: InterruptionSource::None,
+                            target_frames: 0,
                         });
                         entered = Some(target);
                     }
@@ -1110,7 +1114,7 @@ impl Animator {
             .map_or(1.0, |s| s.speed);
         let prev_time = self.state_time;
         let scaled_source_dt = dt * self.speed * source_speed.max(0.0);
-        let new_time = prev_time + scaled_source_dt;
+        let new_time = (prev_time + scaled_source_dt).max(0.0);
         self.state_time = new_time;
 
         let source_length = self.state_duration(self.current_state);
@@ -1198,7 +1202,14 @@ impl Animator {
                     entered = Some(self.current_state);
                     let sample = self.sample_state(self.current_state, 0.0, 0.0);
                     let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-                    return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+                    return self.finish(
+                        callbacks,
+                        entered,
+                        exited,
+                        bindings,
+                        sample.fired_events,
+                        None,
+                    );
                 }
                 self.active_transition = Some(ActiveTransition {
                     target_state: target_idx,
@@ -1206,6 +1217,7 @@ impl Animator {
                     duration: transition.duration,
                     target_time: 0.0,
                     interruption_source: transition.interruption_source,
+                    target_frames: 0,
                 });
                 entered = Some(target_idx);
             }
@@ -1239,7 +1251,14 @@ impl Animator {
                 entered = Some(self.current_state);
                 let sample = self.sample_state(self.current_state, 0.0, 0.0);
                 let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-                return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+                return self.finish(
+                    callbacks,
+                    entered,
+                    exited,
+                    bindings,
+                    sample.fired_events,
+                    None,
+                );
             }
             self.active_transition = Some(ActiveTransition {
                 target_state: target_idx,
@@ -1247,6 +1266,7 @@ impl Animator {
                 duration: transition.duration,
                 target_time: 0.0,
                 interruption_source: transition.interruption_source,
+                target_frames: 0,
             });
             entered = Some(target_idx);
         }
@@ -1283,9 +1303,22 @@ impl Animator {
                 let sample =
                     self.sample_state(self.current_state, prev_target_time, self.state_time);
                 let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-                return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+                return self.finish(
+                    callbacks,
+                    entered,
+                    exited,
+                    bindings,
+                    sample.fired_events,
+                    None,
+                );
             }
 
+            tr.target_frames += 1;
+            let destination_update = if tr.target_frames >= 2 {
+                Some(tr.target_state)
+            } else {
+                None
+            };
             self.active_transition = Some(tr);
             let alpha = (tr.elapsed / tr.duration).clamp(0.0, 1.0);
             let src_sample = self.sample_state(self.current_state, prev_time, new_time);
@@ -1295,12 +1328,26 @@ impl Animator {
             let mut fired_events = src_sample.fired_events;
             fired_events.extend(dst_sample.fired_events);
             let bindings = self.apply_write_defaults(self.current_state, bindings);
-            return self.finish(callbacks, entered, exited, bindings, fired_events);
+            return self.finish(
+                callbacks,
+                entered,
+                exited,
+                bindings,
+                fired_events,
+                destination_update,
+            );
         }
 
         let sample = self.sample_state(self.current_state, prev_time, new_time);
         let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-        self.finish(callbacks, entered, exited, bindings, sample.fired_events)
+        self.finish(
+            callbacks,
+            entered,
+            exited,
+            bindings,
+            sample.fired_events,
+            None,
+        )
     }
 
     fn finish(
@@ -1310,6 +1357,7 @@ impl Animator {
         exited: Option<usize>,
         bindings: Vec<SampledBinding>,
         fired_events: Vec<AnimationEvent>,
+        destination_update: Option<usize>,
     ) -> AnimatorStepResult {
         self.state_frames += 1;
         if let Some(index) = entered {
@@ -1319,6 +1367,9 @@ impl Animator {
             callbacks.push(
                 self.state_callback(StateMachineCallbackKind::OnStateUpdate, self.current_state),
             );
+        }
+        if let Some(index) = destination_update {
+            callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateUpdate, index));
         }
         if let Some(index) = exited {
             callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateExit, index));

@@ -121,7 +121,8 @@ fn binding_value(pose: &[SampledBinding], object_path: &str) -> Option<AnimatedV
 }
 
 #[test]
-fn mixer_output_is_the_weighted_blend_of_its_clip_inputs() -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_32_mixer_output_is_the_weighted_blend_of_its_clip_inputs(
+) -> Result<(), Box<dyn Error>> {
     let mut graph = PlayableGraph::new("Mix");
     let low = AnimationClipPlayable::create(&mut graph, constant_position_clip("Low", 1.0));
     let high = AnimationClipPlayable::create(&mut graph, constant_position_clip("High", 5.0));
@@ -138,7 +139,10 @@ fn mixer_output_is_the_weighted_blend_of_its_clip_inputs() -> Result<(), Box<dyn
     let AnimatedValue::Float(value) = binding_value(pose, "").ok_or("missing root binding")? else {
         return Err(String::from("root binding is not a float").into());
     };
-    assert!((value - 4.0).abs() < 1e-5, "weighted pose was {value}");
+    assert!(
+        (value - 4.0).abs() < 1e-5,
+        "ANI-002 outcome 32: the weighted pose of a 0.25/0.75 mixer was {value}"
+    );
 
     assert_eq!(graph.input_weight(mixer.handle(), 0), Some(0.25));
     assert_eq!(graph.input_weight(mixer.handle(), 1), Some(0.75));
@@ -148,7 +152,7 @@ fn mixer_output_is_the_weighted_blend_of_its_clip_inputs() -> Result<(), Box<dyn
 }
 
 #[test]
-fn script_playable_callbacks_fire_in_the_order_the_specification_states(
+fn ani_002_outcome_32_script_playable_callbacks_fire_in_the_order_the_specification_states(
 ) -> Result<(), Box<dyn Error>> {
     let log = CallLog::default();
     let mut graph = PlayableGraph::new("Script");
@@ -227,7 +231,8 @@ fn every_prepare_frame_runs_before_any_process_frame_of_the_same_frame(
 }
 
 #[test]
-fn avatar_mask_restricts_a_layer_to_the_masked_bindings() -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_31_avatar_mask_restricts_a_playable_layer_to_the_masked_bindings(
+) -> Result<(), Box<dyn Error>> {
     let mut graph = PlayableGraph::new("Layers");
     let base = AnimationClipPlayable::create(&mut graph, layered_clip("Base", 1.0, 2.0));
     let overlay = AnimationClipPlayable::create(&mut graph, layered_clip("Overlay", 10.0, 20.0));

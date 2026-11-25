@@ -9,9 +9,10 @@ use crate::two_d::body::{
     JointId2D, Rigidbody2D, RigidbodySleepMode2D,
 };
 use crate::two_d::collider::{
-    compute_contact2d, dot2, inverse_transform_point2, length2, normalize2, point_in_shape2d,
-    raycast_shape2d, rotate_vec2, shape_to_local_shapes_in_frame, sub2, transform_point2,
-    Collider2D, ColliderDesc2D, ColliderId2D, PhysicsMaterial2D, Shape2D,
+    compute_contact2d, dot2, inverse_transform_point2, length2, normal_angle_degrees, normalize2,
+    point_in_shape2d, raycast_shape2d, rotate_vec2, shape_to_local_shapes_in_frame, sub2,
+    surface_normal_at_point, transform_point2, Collider2D, ColliderDesc2D, ColliderId2D,
+    PhysicsMaterial2D, Shape2D,
 };
 use crate::two_d::composite::{
     CompositeCollider2D, CompositeGenerationType2D, TileColliderType2D, TilemapCollider2D,
@@ -77,6 +78,25 @@ impl ContactFilter2D {
         self.min_depth = min_depth;
         self.max_depth = max_depth;
         self
+    }
+
+    pub fn with_normal_angle(mut self, min_normal_angle: f32, max_normal_angle: f32) -> Self {
+        self.use_normal_angle = true;
+        self.min_normal_angle = min_normal_angle;
+        self.max_normal_angle = max_normal_angle;
+        self
+    }
+
+    pub fn matches_normal_angle(&self, normal: [f32; 2]) -> bool {
+        if !self.use_normal_angle {
+            return true;
+        }
+        let angle = normal_angle_degrees(normal);
+        if self.min_normal_angle <= self.max_normal_angle {
+            angle >= self.min_normal_angle && angle <= self.max_normal_angle
+        } else {
+            angle >= self.min_normal_angle || angle <= self.max_normal_angle
+        }
     }
 
     pub fn matches_collider(&self, collider: &Collider2D) -> bool {
@@ -229,6 +249,14 @@ impl World2D {
 
     pub fn set_queries_start_in_colliders(&mut self, value: bool) {
         self.queries_start_in_colliders = value;
+    }
+
+    pub fn callbacks_on_disable(&self) -> bool {
+        self.callbacks_on_disable
+    }
+
+    pub fn set_callbacks_on_disable(&mut self, value: bool) {
+        self.callbacks_on_disable = value;
     }
 
     pub fn auto_sync_transforms(&self) -> bool {
@@ -774,6 +802,9 @@ impl World2D {
                 angle,
                 self.queries_start_in_colliders,
             ) {
+                if !filter.matches_normal_angle(normal) {
+                    continue;
+                }
                 let fraction = if max_distance > 0.0 {
                     distance / max_distance
                 } else {
@@ -818,6 +849,16 @@ impl World2D {
             }
             let (center, angle) = self.collider_query_pose(collider);
             if point_in_shape2d(point, &collider.shape, center, angle) {
+                if filter.use_normal_angle {
+                    let Some(normal) =
+                        surface_normal_at_point(&collider.shape, center, angle, point)
+                    else {
+                        continue;
+                    };
+                    if !filter.matches_normal_angle(normal) {
+                        continue;
+                    }
+                }
                 out.push(collider.id);
             }
         }
@@ -889,18 +930,21 @@ impl World2D {
                 continue;
             }
             let (center, angle) = self.collider_query_pose(collider);
-            if compute_contact2d(
+            let Some(contact) = compute_contact2d(
                 probe,
                 probe_center,
                 probe_angle,
                 &collider.shape,
                 center,
                 angle,
-            )
-            .is_some()
-            {
-                out.push(collider.id);
+            ) else {
+                continue;
+            };
+            let collider_normal = [-contact.normal[0], -contact.normal[1]];
+            if !filter.matches_normal_angle(collider_normal) {
+                continue;
             }
+            out.push(collider.id);
         }
         out
     }

@@ -107,6 +107,16 @@ fn speed_of(body: &Body) -> f64 {
     sum.sqrt()
 }
 
+fn pair_exchanges_messages(first_role: BodyRole, second_role: BodyRole) -> bool {
+    if first_role == BodyRole::Kinematic && second_role != BodyRole::Dynamic {
+        return false;
+    }
+    if second_role == BodyRole::Kinematic && first_role != BodyRole::Dynamic {
+        return false;
+    }
+    first_role != BodyRole::Static || second_role != BodyRole::Static
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Body {
     entity: EntityId,
@@ -1276,6 +1286,9 @@ impl World {
             }
             for second in self.bodies.iter().skip(index + 1) {
                 if !second.simulated {
+                    continue;
+                }
+                if !pair_exchanges_messages(first.role, second.role) {
                     continue;
                 }
                 if first.shape.in_contact(

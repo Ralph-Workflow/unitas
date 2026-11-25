@@ -188,7 +188,14 @@ fn boxes_overlap_only_when_every_axis_overlaps() -> Result<(), PhysicsError> {
     let along_x = EntityId::new(2);
     let along_z = EntityId::new(3);
     world.add_body(origin, box_body([0.0, 0.0, 0.0]))?;
-    world.add_body(along_x, box_body([1.5, 0.0, 0.0]))?;
+    world.add_body(
+        along_x,
+        BodyDesc {
+            role: BodyRole::Dynamic,
+            mass: 1.0,
+            ..box_body([1.5, 0.0, 0.0])
+        },
+    )?;
     world.add_body(along_z, box_body([0.0, 0.0, 3.0]))?;
 
     world.step(0.1)?;
@@ -200,7 +207,8 @@ fn boxes_overlap_only_when_every_axis_overlaps() -> Result<(), PhysicsError> {
             a: origin,
             b: along_x,
             phase: Phase::Enter
-        }]
+        }],
+        "the overlap probe body must carry a Rigidbody because two static colliders exchange no messages"
     );
     Ok(())
 }
@@ -403,7 +411,11 @@ fn rotated_boxes_overlap_when_they_really_do() -> Result<(), PhysicsError> {
     )?;
     world.add_body(
         corner,
-        oriented_box([1.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.3, 0.3, 0.3]),
+        BodyDesc {
+            role: BodyRole::Dynamic,
+            mass: 1.0,
+            ..oriented_box([1.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.3, 0.3, 0.3])
+        },
     )?;
 
     world.step(0.1)?;
@@ -414,7 +426,8 @@ fn rotated_boxes_overlap_when_they_really_do() -> Result<(), PhysicsError> {
             a: rotated,
             b: corner,
             phase: Phase::Enter
-        }]
+        }],
+        "the overlap probe body must carry a Rigidbody because two static colliders exchange no messages"
     );
     Ok(())
 }
@@ -931,6 +944,134 @@ fn capsules_with_x_and_z_directions_collide_along_their_declared_axes() -> Resul
     );
     let z_pos = world.position(z_capsule).unwrap_or([0.0; 3]);
     assert!((z_pos[1] - 1.0).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn phy_001_two_static_overlapping_colliders_exchange_no_collision_or_trigger_messages(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let floor = EntityId::new(1);
+    let crate_body = EntityId::new(2);
+    world.add_body(floor, box_body([0.0, 0.0, 0.0]))?;
+    world.add_body(crate_body, box_body([0.5, 0.0, 0.0]))?;
+
+    world.step(0.1)?;
+    assert!(
+        world.drain_events().is_empty(),
+        "PHY-001: two static colliders must exchange no collision messages"
+    );
+    assert!(
+        world.drain_trigger_events().is_empty(),
+        "PHY-001: two static colliders must exchange no trigger messages"
+    );
+
+    world.step(0.1)?;
+    assert!(
+        world.drain_events().is_empty(),
+        "PHY-001: two static colliders must keep exchanging no collision messages"
+    );
+    Ok(())
+}
+
+#[test]
+fn phy_001_story_13_two_rigidbody_less_triggers_exchange_no_trigger_messages(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let left = EntityId::new(1);
+    let right = EntityId::new(2);
+    world.add_body(
+        left,
+        BodyDesc {
+            is_trigger: true,
+            ..box_body([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        right,
+        BodyDesc {
+            is_trigger: true,
+            ..box_body([0.5, 0.0, 0.0])
+        },
+    )?;
+
+    world.step(0.1)?;
+    assert!(
+        world.drain_trigger_events().is_empty(),
+        "PHY-001 story 13: a trigger between two colliders without a Rigidbody must produce no trigger messages"
+    );
+    assert!(
+        world.drain_events().is_empty(),
+        "PHY-001 story 13: a trigger between two colliders without a Rigidbody must produce no collision messages"
+    );
+    Ok(())
+}
+
+#[test]
+fn phy_001_kinematic_pairs_without_a_dynamic_counterpart_exchange_no_collision_messages(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let platform = EntityId::new(1);
+    let other_platform = EntityId::new(2);
+    let wall_platform = EntityId::new(3);
+    let wall = EntityId::new(4);
+    let moving_platform = EntityId::new(5);
+    let crate_body = EntityId::new(6);
+    world.add_body(
+        platform,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            ..box_body([0.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        other_platform,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            ..box_body([0.5, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(
+        wall_platform,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            ..box_body([10.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(wall, box_body([10.5, 0.0, 0.0]))?;
+    world.add_body(
+        moving_platform,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            ..box_body([20.0, 0.0, 0.0])
+        },
+    )?;
+    world.add_body(crate_body, sphere([20.5, 0.0, 0.0], [0.0; 3]))?;
+
+    world.step(0.1)?;
+    let events = world.drain_events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.a == platform && event.b == other_platform),
+        "PHY-001: two kinematic bodies must exchange no collision messages"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.a == wall_platform && event.b == wall),
+        "PHY-001: a kinematic body must exchange no collision messages with a static collider"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.a == moving_platform && event.b == crate_body),
+        "PHY-001: a kinematic body must exchange collision messages with a dynamic body"
+    );
     Ok(())
 }
 

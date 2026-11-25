@@ -704,7 +704,7 @@ pub fn is_present(finding: &Finding) -> bool {
 pub fn absence_finding(feature_id: &str) -> Finding {
     Finding {
         feature_id: feature_id.to_string(),
-        tier: Tier::Native,
+        tier: owning_feature_tier(feature_id, None),
         state: CompatibilityState::Unknown,
         content: ContentIdentity {
             guid: None,
@@ -898,7 +898,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
             .owning_feature_id
             .clone()
             .unwrap_or_else(|| "PRJ-006".to_string());
-        let tier = assessed.tier.unwrap_or(Tier::Native);
+        let tier = owning_feature_tier(&feature_id, assessed.tier);
         let relied_upon_unity_differences = if tier == Tier::Familiar {
             lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
                 entry
@@ -940,10 +940,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 |entry| entry.owning_feature_id.to_string(),
             )
         });
-        let tier = asset
-            .tier
-            .or_else(|| lookup_catalog_feature(&feature_id).map(|cat| cat.tier))
-            .unwrap_or(Tier::Native);
+        let tier = owning_feature_tier(&feature_id, asset.tier);
         let consequence = asset.observable_consequence.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || match state {
@@ -1007,7 +1004,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 |entry| entry.owning_feature_id.to_string(),
             )
         });
-        let tier = setting.tier.unwrap_or(Tier::Exact);
+        let tier = owning_feature_tier(&feature_id, setting.tier);
         let consequence = setting.observable_consequence.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || "project setting is represented and honored".to_string(),
@@ -1041,6 +1038,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
             }
         }
         let mut enriched = extra.clone();
+        enriched.tier = owning_feature_tier(&enriched.feature_id, Some(enriched.tier));
         if enriched.tier == Tier::Familiar && enriched.relied_upon_unity_differences.is_empty() {
             if let Some(entry) = lookup_familiar_behavior_differences(&enriched.feature_id) {
                 enriched.relied_upon_unity_differences = entry
@@ -1647,6 +1645,13 @@ pub fn lookup_catalog_feature(feature_id: &str) -> Option<&'static CatalogFeatur
     FEATURE_CATALOG
         .iter()
         .find(|entry| entry.feature_id == feature_id)
+}
+
+fn owning_feature_tier(feature_id: &str, declared: Option<Tier>) -> Tier {
+    lookup_catalog_feature(feature_id)
+        .map(|entry| entry.tier)
+        .or(declared)
+        .unwrap_or(Tier::Native)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -262,7 +262,7 @@ fn timeline_pingpong_wrap_mode_reverses_at_the_ends() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn timeline_signal_fires_once_per_crossing() -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_timeline_signal_fires_once_per_crossing() -> Result<(), Box<dyn Error>> {
     let (mut world, player) = timeline_of(
         vec![
             audio_track("music", 0.0, 4.0, 1.0),
@@ -283,12 +283,17 @@ fn timeline_signal_fires_once_per_crossing() -> Result<(), Box<dyn Error>> {
     assert_eq!(events[0].receiver, "door");
     assert_eq!(events[0].time, 1.0);
     world.update(player, 1.0)?;
-    assert_eq!(signal_count(&world, player)?, 1);
+    assert_eq!(
+        signal_count(&world, player)?,
+        1,
+        "CIN-001 outcome 33: a signal must fire once per crossing and not again while the playhead stays past it"
+    );
     Ok(())
 }
 
 #[test]
-fn timeline_signal_fires_again_when_pingpong_crosses_it_backwards() -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_timeline_signal_fires_again_when_pingpong_crosses_it_backwards(
+) -> Result<(), Box<dyn Error>> {
     let (mut world, player) = timeline_of(
         vec![
             audio_track("music", 0.0, 4.0, 1.0),

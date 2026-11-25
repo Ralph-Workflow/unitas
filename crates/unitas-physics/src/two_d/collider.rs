@@ -278,6 +278,77 @@ pub(crate) fn normalize2(v: [f32; 2]) -> Option<[f32; 2]> {
     }
 }
 
+pub(crate) fn normal_angle_degrees(normal: [f32; 2]) -> f32 {
+    let deg = normal[1].atan2(normal[0]).to_degrees();
+    if deg < 0.0 {
+        deg + 360.0
+    } else {
+        deg
+    }
+}
+
+pub(crate) fn surface_normal_at_point(
+    shape: &Shape2D,
+    center: [f32; 2],
+    angle: f32,
+    point: [f32; 2],
+) -> Option<[f32; 2]> {
+    match shape {
+        Shape2D::Circle { .. } => Some(normalize2(sub2(point, center)).unwrap_or([1.0, 0.0])),
+        Shape2D::Box { half_extents } => {
+            let local = inverse_transform_point2(point, center, angle);
+            let pen_x = half_extents[0] - local[0].abs();
+            let pen_y = half_extents[1] - local[1].abs();
+            let local_normal = if pen_x <= pen_y {
+                [if local[0] < 0.0 { -1.0 } else { 1.0 }, 0.0]
+            } else {
+                [0.0, if local[1] < 0.0 { -1.0 } else { 1.0 }]
+            };
+            Some(rotate_vec2(local_normal, angle))
+        }
+        Shape2D::Edge { start, end } => {
+            let a = transform_point2(*start, center, angle);
+            let b = transform_point2(*end, center, angle);
+            let cp = closest_point_on_segment2(a, b, point);
+            if let Some(n) = normalize2(sub2(point, cp)) {
+                return Some(n);
+            }
+            let tangent = sub2(b, a);
+            normalize2([-tangent[1], tangent[0]])
+        }
+        Shape2D::Polygon { .. } => {
+            let verts = shape_vertices_world(shape, center, angle)?;
+            let mut centroid = [0.0, 0.0];
+            for v in &verts {
+                centroid = add2(centroid, *v);
+            }
+            centroid = scale2(centroid, 1.0 / verts.len() as f32);
+            let mut best: Option<([f32; 2], [f32; 2], f32)> = None;
+            for i in 0..verts.len() {
+                let a = verts[i];
+                let b = verts[(i + 1) % verts.len()];
+                let cp = closest_point_on_segment2(a, b, point);
+                let d = sub2(point, cp);
+                let d2 = dot2(d, d);
+                if best.is_none_or(|(_, _, best_d2)| d2 < best_d2) {
+                    best = Some((cp, sub2(b, a), d2));
+                }
+            }
+            let (cp, edge, _) = best?;
+            let raw = normalize2(sub2(point, cp)).or_else(|| normalize2([-edge[1], edge[0]]))?;
+            // Orient outward, away from the centroid.
+            if dot2(raw, sub2(cp, centroid)) >= 0.0 {
+                Some(raw)
+            } else {
+                Some([-raw[0], -raw[1]])
+            }
+        }
+        Shape2D::Composite { shapes } => shapes
+            .iter()
+            .find_map(|sub| surface_normal_at_point(sub, center, angle, point)),
+    }
+}
+
 pub(crate) fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
     [a[0] - b[0], a[1] - b[1]]
 }

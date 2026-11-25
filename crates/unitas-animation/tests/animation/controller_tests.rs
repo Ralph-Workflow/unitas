@@ -1066,3 +1066,154 @@ fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
         "ANI-001 outcome 29: Write Defaults on must restore captured default value (2.0) for unanimated property"
     );
 }
+
+#[test]
+fn ani_001_outcome_27_negative_animator_speed_plays_a_state_in_reverse_and_fires_events_backwards()
+{
+    let clip = AnimationClip::new(
+        "ReverseEvents",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
+        )],
+        vec![
+            AnimationEvent::new(0.25, "Quarter"),
+            AnimationEvent::new(0.45, "NearHalf"),
+        ],
+    );
+    let controller = AnimatorController::new(
+        "ReverseController",
+        Vec::new(),
+        vec![AnimatorState::new("Run", StateMotion::Clip(clip))],
+        0,
+        Vec::new(),
+    );
+    let mut animator = Animator::new(controller);
+
+    let forward = animator.step(0.6);
+    assert_eq!(
+        forward
+            .fired_events
+            .iter()
+            .map(|e| e.function_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Quarter", "NearHalf"],
+        "ANI-001 outcome 27: forward playback must fire events in ascending time order"
+    );
+
+    animator.set_speed(-1.0);
+    assert_eq!(
+        animator.speed(),
+        -1.0,
+        "ANI-001 outcome 27: a negative animator speed must be kept so the state plays in reverse"
+    );
+    let backward = animator.step(0.5);
+    assert_eq!(
+        backward
+            .fired_events
+            .iter()
+            .map(|e| e.function_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["NearHalf", "Quarter"],
+        "ANI-001 outcome 27: reverse playback must fire events in descending time order"
+    );
+    assert!(
+        (backward.state_info.normalized_time - 0.1).abs() < 1e-5,
+        "ANI-001 outcome 27: reverse playback must rewind the normalized time"
+    );
+
+    let clamped = animator.step(0.5);
+    assert!(
+        clamped.fired_events.is_empty(),
+        "ANI-001 outcome 27: reverse playback past the clip start must not fire events"
+    );
+    assert!(
+        clamped.state_info.normalized_time.abs() < 1e-6,
+        "ANI-001 outcome 27: reverse playback must hold at the clip start"
+    );
+}
+
+#[test]
+fn ani_001_outcome_28_state_transition_trigger_callback_order_is_observable() {
+    use unitas_animation::StateMachineCallbackKind;
+
+    fn trace(result: &unitas_animation::AnimatorStepResult) -> Vec<String> {
+        result
+            .callbacks
+            .iter()
+            .map(|callback| format!("{:?}:{}", callback.kind, callback.state_index))
+            .collect()
+    }
+
+    let controller = AnimatorController::new(
+        "CallbackOrder",
+        vec![ParameterDef::trigger("go")],
+        vec![
+            AnimatorState::new("A", StateMotion::Clip(simple_clip("A", 1.0, 0.0, 1.0))),
+            AnimatorState::new("B", StateMotion::Clip(simple_clip("B", 1.0, 2.0, 3.0))),
+        ],
+        0,
+        vec![StateTransition::new(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+            false,
+            0.0,
+            0.5,
+        )],
+    );
+
+    let mut animator = Animator::new(controller);
+    let mut order: Vec<Vec<String>> = Vec::new();
+
+    order.push(trace(&animator.step(0.1)));
+    order.push(trace(&animator.step(0.1)));
+
+    assert_eq!(animator.set_trigger("go"), Ok(()));
+    let transition_start = animator.step(0.1);
+    order.push(trace(&transition_start));
+    assert!(
+        transition_start.state_info.is_in_transition,
+        "ANI-001 outcome 28: a trigger condition must start the transition in the same evaluation"
+    );
+    assert_eq!(
+        animator.is_trigger_set("go"),
+        Some(false),
+        "ANI-001 outcome 28: the transition must consume the trigger it fired on"
+    );
+
+    order.push(trace(&animator.step(0.1)));
+    order.push(trace(&animator.step(0.1)));
+    order.push(trace(&animator.step(0.1)));
+    order.push(trace(&animator.step(0.1)));
+    order.push(trace(&animator.step(0.1)));
+
+    assert_eq!(
+        order,
+        vec![
+            vec!["OnStateMachineEnter:0"],
+            vec!["OnStateUpdate:0"],
+            vec!["OnStateEnter:1", "OnStateUpdate:0"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateExit:0"],
+            vec!["OnStateUpdate:1"],
+        ],
+        "ANI-001 outcome 28: state machine behaviour callbacks must fire in the documented order"
+    );
+
+    let last = animator.step(0.1);
+    assert!(
+        last.callbacks
+            .iter()
+            .all(|callback| callback.kind == StateMachineCallbackKind::OnStateUpdate),
+        "ANI-001 outcome 28: after the transition only the destination state reports updates"
+    );
+}

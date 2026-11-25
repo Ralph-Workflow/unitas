@@ -33,16 +33,15 @@ fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_a
         if y > max_y {
             max_y = y;
         }
-        let vy = world
-            .body(player_body)
-            .map_or(0.0, |b| b.linear_velocity[1]);
-        if vy > 0.0 {
-            assert!(
-                world.drain_messages().is_empty(),
-                "upward pass through must fire zero collision or trigger messages"
-            );
-            assert!(!world.is_touching(player_col, platform_col));
-        }
+        let ascent_messages = world.drain_messages();
+        assert!(
+            ascent_messages.is_empty(),
+            "PHY-002 story 5: the upward pass through a one-way platform must fire zero collision or trigger messages, got {ascent_messages:?}"
+        );
+        assert!(
+            !world.is_touching(player_col, platform_col),
+            "PHY-002 story 5: the body must not touch the one-way platform while passing upward"
+        );
         if y > 0.8 {
             passed_above = true;
             break;

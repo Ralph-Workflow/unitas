@@ -470,15 +470,11 @@ fn phy_002_story_5_tilemap_collider_merged_into_composite_updates_when_tile_remo
     for _ in 0..35 {
         world.step(0.02);
         let y = world.body(player_body).map_or(-1.2, |b| b.position[1]);
-        let vy = world
-            .body(player_body)
-            .map_or(0.0, |b| b.linear_velocity[1]);
-        if vy > 0.0 {
-            assert!(
-                world.drain_messages().is_empty(),
-                "jumping upward through composite one-way tilemap platform must fire no events"
-            );
-        }
+        let ascent_messages = world.drain_messages();
+        assert!(
+            ascent_messages.is_empty(),
+            "PHY-002 story 5: jumping upward through a composite one-way tilemap platform must fire no events, got {ascent_messages:?}"
+        );
         if y > 1.0 {
             passed_up = true;
             break;

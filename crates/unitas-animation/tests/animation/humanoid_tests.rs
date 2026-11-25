@@ -103,7 +103,7 @@ fn build_humanoid_clip() -> AnimationClip {
 }
 
 #[test]
-fn humanoid_clip_sampled_onto_two_differently_proportioned_avatars_yields_equal_muscles_and_proportioned_transforms(
+fn ani_002_outcome_31_humanoid_clip_on_two_differently_proportioned_avatars_yields_equal_muscles(
 ) -> Result<(), Box<dyn Error>> {
     let short_avatar = build_proportioned_avatar("ShortAvatar", 1.0, 40.0, 100.0);
     let tall_avatar = build_proportioned_avatar("TallAvatar", 1.8, 40.0, 100.0);
@@ -125,7 +125,7 @@ fn humanoid_clip_sampled_onto_two_differently_proportioned_avatars_yields_equal_
         let tall_muscle = tall_pose.muscle(channel);
         assert!(
             (short_muscle - tall_muscle).abs() < 1e-6,
-            "muscle {channel:?} differed: {short_muscle} vs {tall_muscle}"
+            "ANI-002 outcome 31: muscle {channel:?} differed: {short_muscle} vs {tall_muscle}"
         );
     }
 
@@ -173,7 +173,7 @@ fn humanoid_clip_sampled_onto_two_differently_proportioned_avatars_yields_equal_
 }
 
 #[test]
-fn humanoid_retargeting_clamps_out_of_range_muscle_values_and_honors_per_avatar_degree_limits(
+fn ani_002_outcome_31_retargeting_clamps_muscle_values_and_honors_per_avatar_degree_limits(
 ) -> Result<(), Box<dyn Error>> {
     let flexible_avatar = build_proportioned_avatar("Flexible", 1.0, 60.0, 120.0);
     let stiff_avatar = build_proportioned_avatar("Stiff", 1.0, 20.0, 45.0);
@@ -227,8 +227,7 @@ fn humanoid_retargeting_clamps_out_of_range_muscle_values_and_honors_per_avatar_
 }
 
 #[test]
-fn avatar_mask_restricts_humanoid_layer_by_body_part_and_transform_path(
-) -> Result<(), Box<dyn Error>> {
+fn ani_002_outcome_31_avatar_mask_restricts_the_humanoid_layer() -> Result<(), Box<dyn Error>> {
     let avatar = build_proportioned_avatar("MaskedAvatar", 1.0, 45.0, 90.0);
 
     let mut base_pose = HumanPose::default();

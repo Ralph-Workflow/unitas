@@ -47,7 +47,8 @@ fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities(
 }
 
 #[test]
-fn cinemachine_camera_swap_starts_a_blend_that_completes() -> Result<(), Box<dyn Error>> {
+fn cin_001_outcome_33_camera_swap_keeps_the_live_camera_and_active_blend_inspectable_during_play(
+) -> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let first = cameras.add_camera(VirtualCamera::new("First", 10));
     let second = cameras.add_camera(VirtualCamera::new("Second", 10));

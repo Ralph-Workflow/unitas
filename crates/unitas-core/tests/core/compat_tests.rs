@@ -39,6 +39,16 @@ fn summary(package_name: &str, state: CompatibilityState, feature_ids: &[&str]) 
     }
 }
 
+fn version_in_line(line: &str) -> String {
+    if line == "Released or verified" {
+        return "1.0.0".to_string();
+    }
+    match line.strip_suffix(".x") {
+        Some(prefix) => format!("{prefix}.0"),
+        None => line.to_string(),
+    }
+}
+
 #[test]
 fn compat_least_supported_state_without_assessments_is_unknown() {
     assert_eq!(least_supported_state(&[]), CompatibilityState::Unknown);
@@ -215,7 +225,7 @@ fn compat_build_report_records_the_version_and_derives_package_summaries() {
 }
 
 #[test]
-fn compat_reassess_updates_only_the_matching_finding() {
+fn cmp_002_story_5_reassess_updates_only_the_affected_finding() {
     let assessed = finding(
         "PRJ-004",
         Tier::Semantic,
@@ -240,7 +250,10 @@ fn compat_reassess_updates_only_the_matching_finding() {
         reassessed.findings[0].state,
         CompatibilityState::Unsupported
     );
-    assert_eq!(reassessed.findings[1], untouched);
+    assert_eq!(
+        reassessed.findings[1], untouched,
+        "CMP-002 Story 5: reassessment must not change findings the project change did not affect"
+    );
     assert_eq!(
         reassessed.packages,
         vec![
@@ -248,10 +261,15 @@ fn compat_reassess_updates_only_the_matching_finding() {
             summary("REN", CompatibilityState::Supported, &["REN-006"]),
         ]
     );
+    assert_eq!(
+        reassessed.summary().overall_state,
+        CompatibilityState::Unsupported,
+        "CMP-002 Story 5: the reassessed report must state the new project state"
+    );
 }
 
 #[test]
-fn compat_reassess_appends_a_finding_for_unseen_content() {
+fn cmp_002_story_5_reassess_appends_a_finding_for_newly_present_content() {
     let assessed = finding(
         "PRJ-004",
         Tier::Semantic,
@@ -341,7 +359,7 @@ fn compat_report_keeps_the_findings_it_was_built_from() {
 }
 
 #[test]
-fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_unlisted_or_preview(
+fn cmp_002_story_6_supported_package_matrix_reports_urp_and_input_system_supported_and_unlisted_or_preview_unknown(
 ) {
     use unitas_core::compat::{
         assess_package, lookup_package_matrix, lookup_unsupported_family,
@@ -350,6 +368,54 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
 
     assert_eq!(SUPPORTED_PACKAGE_MATRIX.len(), 29);
     assert_eq!(RECOGNIZED_UNSUPPORTED_FAMILIES.len(), 11);
+
+    for entry in SUPPORTED_PACKAGE_MATRIX {
+        assert!(
+            !entry.version_line.trim().is_empty(),
+            "CMP-002 Story 6: matrix entry '{}' must carry a version line",
+            entry.package_id
+        );
+        assert!(
+            !entry.owning_spec.trim().is_empty(),
+            "CMP-002 Story 6: matrix entry '{}' must carry an owning specification",
+            entry.package_id
+        );
+        assert!(
+            !entry.state_notes.trim().is_empty(),
+            "CMP-002 Story 6: matrix entry '{}' must state its matrix state",
+            entry.package_id
+        );
+        let version = version_in_line(entry.version_line);
+        let assessed = assess_package(entry.package_id, &version, false);
+        assert_eq!(
+            assessed.resolved_version, version,
+            "CMP-002 Story 6: the report must state the resolved version of '{}'",
+            entry.package_id
+        );
+        assert_eq!(
+            assessed.tier,
+            Some(entry.tier),
+            "CMP-002 Story 6: the report must state the tier of '{}'",
+            entry.package_id
+        );
+        assert_eq!(
+            assessed.state, entry.state,
+            "CMP-002 Story 6: the report must state the matrix state of '{}'",
+            entry.package_id
+        );
+        assert_eq!(
+            assessed.owning_spec.as_deref(),
+            Some(entry.owning_spec),
+            "CMP-002 Story 6: the report must state the owning specification of '{}'",
+            entry.package_id
+        );
+        assert_eq!(
+            assessed.owning_feature_id.as_deref(),
+            Some(entry.owning_feature_id),
+            "CMP-002 Story 6: the report must state the owning feature of '{}'",
+            entry.package_id
+        );
+    }
 
     let urp = assess_package("com.unity.render-pipelines.universal", "14.0.10", false);
     assert_eq!(urp.state, CompatibilityState::Supported);
@@ -367,11 +433,19 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
     assert_eq!(input.owning_feature_id.as_deref(), Some("INP-002"));
 
     let unlisted = assess_package("com.vendor.custom-toolkit", "2.1.0", false);
-    assert_eq!(unlisted.state, CompatibilityState::Unknown);
+    assert_eq!(
+        unlisted.state,
+        CompatibilityState::Unknown,
+        "CMP-002 Story 6: a package the matrix does not list must be reported Unknown"
+    );
     assert!(unlisted.tier.is_none());
 
     let preview = assess_package("com.unity.inputsystem", "1.8.0-pre.1", false);
-    assert_eq!(preview.state, CompatibilityState::Unknown);
+    assert_eq!(
+        preview.state,
+        CompatibilityState::Unknown,
+        "CMP-002 Story 6: a preview version of a listed package must be reported Unknown"
+    );
 
     let modified_embedded = assess_package("com.unity.ugui", "1.0.0", true);
     assert_eq!(modified_embedded.state, CompatibilityState::Unknown);
@@ -407,7 +481,8 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
 }
 
 #[test]
-fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unlisted_or_preview() {
+fn cmp_002_story_6_project_report_reports_urp_and_input_system_with_tiers_and_owning_specs_and_unknown_for_unlisted_or_preview(
+) {
     use unitas_core::compat::{
         assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
         ProjectSettingEntry,
@@ -535,7 +610,203 @@ fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unli
 }
 
 #[test]
-fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_remain_playable_and_updates_on_removal(
+fn cmp_002_story_5_reassessment_after_a_project_change_updates_only_affected_findings_and_makes_the_project_state_clear(
+) {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+    };
+
+    let urp_scene = ProjectAssetEntry {
+        family: "URP Scene".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-playable-scene".to_string()),
+            asset_path: Some("Assets/Scenes/Playable.unity".to_string()),
+            sub_asset_id: None,
+            object_name: Some("Playable".to_string()),
+        },
+        owning_feature_id: Some("REN-006".to_string()),
+        tier: Some(Tier::Native),
+        state: Some(CompatibilityState::Supported),
+        observable_consequence: None,
+    };
+    let hdrp_asset = ProjectAssetEntry {
+        family: "High Definition Render Pipeline".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-hdrp-volume".to_string()),
+            asset_path: Some("Assets/HDRP/SkyVolume.asset".to_string()),
+            sub_asset_id: None,
+            object_name: Some("SkyVolume".to_string()),
+        },
+        owning_feature_id: None,
+        tier: None,
+        state: None,
+        observable_consequence: None,
+    };
+    let vendor_asset = ProjectAssetEntry {
+        family: "Unassessed vendor content".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-vendor-plugin".to_string()),
+            asset_path: Some("Assets/Vendor/plugin.asset".to_string()),
+            sub_asset_id: None,
+            object_name: Some("plugin".to_string()),
+        },
+        owning_feature_id: None,
+        tier: None,
+        state: None,
+        observable_consequence: None,
+    };
+    let package = ProjectPackageEntry {
+        package_id: "com.unity.render-pipelines.universal".to_string(),
+        version: "14.0.10".to_string(),
+        source: PackageSource::Registry,
+        is_locally_modified_embedded: false,
+    };
+
+    let before = assess_project(&ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![package.clone()],
+        assets: vec![urp_scene.clone(), hdrp_asset.clone(), vendor_asset.clone()],
+        settings: Vec::new(),
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    });
+
+    let after = assess_project(&ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![package],
+        assets: vec![urp_scene, vendor_asset],
+        settings: Vec::new(),
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    });
+
+    assert!(
+        before
+            .report
+            .findings
+            .iter()
+            .any(|finding| finding.content.asset_path.as_deref()
+                == Some("Assets/HDRP/SkyVolume.asset")),
+        "CMP-002 Story 5: the project before the change must report the HDRP content"
+    );
+    assert!(
+        !after
+            .report
+            .findings
+            .iter()
+            .any(|finding| finding.content.asset_path.as_deref()
+                == Some("Assets/HDRP/SkyVolume.asset")),
+        "CMP-002 Story 5: content removed by the project change must not keep a finding"
+    );
+
+    for path in ["Assets/Scenes/Playable.unity", "Assets/Vendor/plugin.asset"] {
+        let before_finding = before
+            .report
+            .findings
+            .iter()
+            .find(|finding| finding.content.asset_path.as_deref() == Some(path));
+        let after_finding = after
+            .report
+            .findings
+            .iter()
+            .find(|finding| finding.content.asset_path.as_deref() == Some(path));
+        assert!(
+            before_finding.is_some() && after_finding.is_some(),
+            "CMP-002 Story 5: unaffected content must keep its finding after reassessment"
+        );
+        if let (Some(before_finding), Some(after_finding)) = (before_finding, after_finding) {
+            assert_eq!(
+                before_finding, after_finding,
+                "CMP-002 Story 5: reassessment must update only the findings the project change affected"
+            );
+        }
+    }
+
+    assert_eq!(before.overall_state, CompatibilityState::Unsupported);
+    assert_eq!(
+        after.overall_state,
+        CompatibilityState::Unknown,
+        "CMP-002 Story 5: the reassessed report must state the new project state"
+    );
+    assert!(before.unsupported_features.contains(&"REN-006".to_string()));
+    assert!(
+        !after.unsupported_features.contains(&"REN-006".to_string()),
+        "CMP-002 Story 5: the removed content must no longer be reported unsupported"
+    );
+    assert!(after
+        .present_supported_features
+        .contains(&"REN-006".to_string()));
+    assert_eq!(after.effective_baseline_unity_version, "2022.3 LTS");
+    assert_eq!(
+        after.report.produced_by_unitas_version, "0.4.0",
+        "CMP-002 Story 5: the reassessed report must record the unitas version that produced it"
+    );
+}
+
+#[test]
+fn cmp_002_story_8_locally_modified_embedded_package_is_not_matched_and_is_assessed_as_third_party_content(
+) {
+    use unitas_core::compat::{
+        assess_package, assess_project, PackageSource, ProjectContent, ProjectPackageEntry,
+    };
+
+    let modified = assess_package("com.unity.ugui", "1.0.0", true);
+    assert_eq!(
+        modified.state,
+        CompatibilityState::Unknown,
+        "CMP-002 Story 8: a locally modified embedded copy must not match the released version"
+    );
+    assert!(modified.tier.is_none());
+    assert!(modified.owning_spec.is_none());
+    assert!(
+        modified.notes.contains("third-party"),
+        "CMP-002 Story 8: a locally modified embedded copy must be assessed as third-party content"
+    );
+
+    let released = assess_package("com.unity.ugui", "1.0.0", false);
+    assert_eq!(
+        released.state,
+        CompatibilityState::Supported,
+        "CMP-002 Story 8: an embedded copy whose content matches the released version is matched"
+    );
+    assert_eq!(released.tier, Some(Tier::Familiar));
+
+    let content = ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![ProjectPackageEntry {
+            package_id: "com.unity.ugui".to_string(),
+            version: "1.0.0".to_string(),
+            source: PackageSource::Embedded,
+            is_locally_modified_embedded: true,
+        }],
+        assets: Vec::new(),
+        settings: Vec::new(),
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    };
+
+    let assessment = assess_project(&content);
+    let finding = assessment
+        .report
+        .findings
+        .iter()
+        .find(|finding| finding.feature_id == "PRJ-006");
+    assert!(finding.is_some());
+    if let Some(finding) = finding {
+        assert_eq!(
+            finding.state,
+            CompatibilityState::Unknown,
+            "CMP-002 Story 8: the project report must report the modified copy as third-party content"
+        );
+        assert!(finding.observable_consequence.contains("third-party"));
+    }
+}
+
+#[test]
+fn cmp_002_story_7_hdrp_and_visual_scripting_are_unsupported_with_their_observable_consequence_while_urp_scenes_remain_playable(
 ) {
     use unitas_core::compat::{
         assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
@@ -1409,6 +1680,62 @@ fn cmp_002_story_19_unspecified_supported_package_behavior_is_unknown_and_packag
 }
 
 #[test]
+fn cmp_002_story_19_undemonstrated_package_behaviors_are_reported_with_their_real_compatibility_state(
+) {
+    use unitas_core::compat::assess_package;
+
+    let undemonstrated = [
+        (
+            "com.unity.localization",
+            "1.5.1",
+            CompatibilityState::Unsupported,
+        ),
+        (
+            "com.unity.addressables",
+            "1.21.21",
+            CompatibilityState::Unsupported,
+        ),
+        ("com.unity.burst", "1.8.7", CompatibilityState::Unsupported),
+        (
+            "com.unity.collections",
+            "2.1.4",
+            CompatibilityState::Unsupported,
+        ),
+        (
+            "com.unity.mathematics",
+            "1.2.6",
+            CompatibilityState::Unknown,
+        ),
+        (
+            "com.unity.nuget.newtonsoft-json",
+            "3.2.1",
+            CompatibilityState::Unknown,
+        ),
+    ];
+
+    for (package_id, version, expected_state) in undemonstrated {
+        let assessed = assess_package(package_id, version, false);
+        assert_eq!(
+            assessed.state, expected_state,
+            "CMP-002 Story 19: package '{package_id}' must be reported with its real compatibility state, never Supported"
+        );
+        assert_ne!(
+            assessed.state,
+            CompatibilityState::Supported,
+            "CMP-002 Story 19: package '{package_id}' is not demonstrated and must never be reported Supported"
+        );
+        let expected_reason = match expected_state {
+            CompatibilityState::Unsupported => "Unsupported: ",
+            _ => "Unknown: ",
+        };
+        assert!(
+            assessed.notes.starts_with(expected_reason),
+            "CMP-002 Story 19: package '{package_id}' must record why it is {expected_state:?}"
+        );
+    }
+}
+
+#[test]
 fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_and_rider_and_collab_are_partially_supported_with_exclusions(
 ) {
     use unitas_core::compat::{
@@ -1551,4 +1878,202 @@ fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and
         "CMP-002 Story 22: HDRP Shader Graph target must be reported Unsupported"
     );
     assert!(hdrp_target.behavior.contains("HDRP"));
+}
+
+#[test]
+fn cmp_002_story_1_report_identifies_every_recognized_unsupported_behavior_and_keeps_unassessed_content_explicit(
+) {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        RECOGNIZED_UNSUPPORTED_FAMILIES,
+    };
+
+    for entry in RECOGNIZED_UNSUPPORTED_FAMILIES {
+        let content = ProjectContent {
+            unitas_version: "0.4.0".to_string(),
+            declared_unity_version: Some("2022.3.20f1".to_string()),
+            packages: vec![ProjectPackageEntry {
+                package_id: "com.unity.render-pipelines.universal".to_string(),
+                version: "14.0.10".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            }],
+            assets: vec![
+                ProjectAssetEntry {
+                    family: entry.family.to_string(),
+                    content: ContentIdentity {
+                        guid: Some("guid-unsupported-case".to_string()),
+                        asset_path: Some("Assets/Unsupported/case.asset".to_string()),
+                        sub_asset_id: None,
+                        object_name: Some("case".to_string()),
+                    },
+                    owning_feature_id: None,
+                    tier: None,
+                    state: None,
+                    observable_consequence: None,
+                },
+                ProjectAssetEntry {
+                    family: "Unassessed vendor content".to_string(),
+                    content: ContentIdentity {
+                        guid: Some("guid-unassessed-case".to_string()),
+                        asset_path: Some("Assets/Vendor/unassessed.asset".to_string()),
+                        sub_asset_id: None,
+                        object_name: Some("unassessed".to_string()),
+                    },
+                    owning_feature_id: None,
+                    tier: None,
+                    state: None,
+                    observable_consequence: None,
+                },
+                ProjectAssetEntry {
+                    family: "URP Scene".to_string(),
+                    content: ContentIdentity {
+                        guid: Some("guid-playable-scene".to_string()),
+                        asset_path: Some("Assets/Scenes/Playable.unity".to_string()),
+                        sub_asset_id: None,
+                        object_name: Some("Playable".to_string()),
+                    },
+                    owning_feature_id: Some("REN-006".to_string()),
+                    tier: Some(Tier::Native),
+                    state: Some(CompatibilityState::Supported),
+                    observable_consequence: None,
+                },
+            ],
+            settings: Vec::new(),
+            additional_findings: Vec::new(),
+            track_absent_catalog_features: Vec::new(),
+        };
+
+        let assessment = assess_project(&content);
+
+        let unsupported = assessment.report.findings.iter().find(|finding| {
+            finding.content.asset_path.as_deref() == Some("Assets/Unsupported/case.asset")
+        });
+        assert!(
+            unsupported.is_some(),
+            "CMP-002 Story 1: recognized family '{}' must produce a finding",
+            entry.family
+        );
+        if let Some(finding) = unsupported {
+            assert_eq!(
+                finding.state,
+                CompatibilityState::Unsupported,
+                "CMP-002 Story 1: recognized family '{}' must be reported Unsupported",
+                entry.family
+            );
+            assert_eq!(finding.feature_id, entry.owning_feature_id);
+            assert_eq!(finding.observable_consequence, entry.observable_consequence);
+        }
+
+        let unassessed = assessment.report.findings.iter().find(|finding| {
+            finding.content.asset_path.as_deref() == Some("Assets/Vendor/unassessed.asset")
+        });
+        assert!(
+            unassessed.is_some(),
+            "CMP-002 Story 1: unassessed content must stay explicit"
+        );
+        if let Some(finding) = unassessed {
+            assert_eq!(
+                finding.state,
+                CompatibilityState::Unknown,
+                "CMP-002 Story 1: unassessed content must never be reported Supported"
+            );
+        }
+
+        assert!(
+            assessment
+                .playable_scenes
+                .contains(&"Assets/Scenes/Playable.unity".to_string()),
+            "CMP-002 Story 1: the rest of the project must remain editable and playable"
+        );
+        assert_eq!(assessment.overall_state, CompatibilityState::Unsupported);
+
+        for finding in &assessment.report.findings {
+            assert!(
+                !finding.behavior.trim().is_empty(),
+                "CMP-002 Story 1: every finding must name the assessed behavior"
+            );
+            assert!(
+                !finding.observable_consequence.trim().is_empty(),
+                "CMP-002 Story 1: every finding must state its observable consequence"
+            );
+            assert!(
+                !finding.conditions.is_empty(),
+                "CMP-002 Story 1: every finding must state the conditions under which it applies"
+            );
+            assert!(
+                is_present(finding),
+                "CMP-002 Story 1: every present finding must name the affected content"
+            );
+        }
+    }
+}
+
+#[test]
+fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning_catalog_feature() {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![
+            ProjectPackageEntry {
+                package_id: "com.vendor.unlisted".to_string(),
+                version: "1.0.0".to_string(),
+                source: PackageSource::ScopedRegistry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.unity.visualscripting".to_string(),
+                version: "1.9.1".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+        ],
+        assets: vec![ProjectAssetEntry {
+            family: "Enlighten realtime global illumination".to_string(),
+            content: ContentIdentity {
+                guid: Some("guid-enlighten-settings".to_string()),
+                asset_path: Some("Assets/Enlighten/RealtimeLighting.lighting".to_string()),
+                sub_asset_id: None,
+                object_name: Some("RealtimeLighting".to_string()),
+            },
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/QualitySettings.asset".to_string(),
+            family: "Quality".to_string(),
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: vec!["PHY-004".to_string()],
+    };
+
+    let assessment = assess_project(&content);
+
+    assert!(!assessment.report.findings.is_empty());
+    for finding in &assessment.report.findings {
+        let catalog = lookup_catalog_feature(&finding.feature_id);
+        assert!(
+            catalog.is_some(),
+            "CMP-002 Story 19: finding feature '{}' must name a catalog feature",
+            finding.feature_id
+        );
+        if let Some(catalog) = catalog {
+            assert_eq!(
+                finding.tier, catalog.tier,
+                "CMP-002 Story 19: finding for '{}' must carry the compatibility tier of its owning catalog feature",
+                finding.feature_id
+            );
+        }
+    }
 }

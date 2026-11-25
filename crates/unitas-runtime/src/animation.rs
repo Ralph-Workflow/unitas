@@ -228,10 +228,9 @@ impl AnimationWorld {
         let Some(entry) = self.entries.get_mut(&entity) else {
             return Err(format!("animator not found for entity {}", entity.as_u64()));
         };
-        let clamped = speed.max(0.0);
-        entry.speed = clamped;
+        entry.speed = speed;
         if let Some(animator) = &mut entry.animator {
-            animator.set_speed(clamped);
+            animator.set_speed(speed);
         }
         Ok(())
     }

@@ -1010,7 +1010,7 @@ fn hook_world() -> Result<(unitas_runtime::AnimationWorld, EntityId), Box<dyn Er
 }
 
 #[test]
-fn animation_ik_hook_alters_the_pose_after_the_layer_pose_is_evaluated(
+fn ani_002_outcome_31_on_animator_ik_alters_the_pose_after_the_layer_pose_is_evaluated(
 ) -> Result<(), Box<dyn Error>> {
     let (mut world, entity) = hook_world()?;
     let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
@@ -1029,18 +1029,26 @@ fn animation_ik_hook_alters_the_pose_after_the_layer_pose_is_evaluated(
 
     world.tick_with_hooks(0.5, &mut hooks);
 
-    assert_eq!(state.borrow().ik_layers, vec![0]);
+    assert_eq!(
+        state.borrow().ik_layers,
+        vec![0],
+        "ANI-002 outcome 31: OnAnimatorIK must run once for the layer with IK pass enabled"
+    );
     let transform = world
         .transform(entity)
         .ok_or("missing animator transform")?;
-    assert_eq!(transform.translation, [1.0, 2.0, 3.0]);
+    assert_eq!(
+        transform.translation,
+        [1.0, 2.0, 3.0],
+        "ANI-002 outcome 31: OnAnimatorIK must be able to alter the final pose"
+    );
     assert!(hooks.detach(entity));
     assert!(!hooks.is_attached(entity));
     Ok(())
 }
 
 #[test]
-fn animation_move_hook_receives_root_motion_and_suppresses_the_automatic_application(
+fn ani_002_outcome_31_on_animator_move_alters_the_motion_and_suppresses_the_automatic_root_motion(
 ) -> Result<(), Box<dyn Error>> {
     let (mut world, entity) = hook_world()?;
     let state = std::rc::Rc::new(std::cell::RefCell::new(HookState::default()));
@@ -1063,7 +1071,11 @@ fn animation_move_hook_receives_root_motion_and_suppresses_the_automatic_applica
     let transform = world
         .transform(entity)
         .ok_or("missing animator transform")?;
-    assert_eq!(transform.translation, [0.0, 0.0, 0.0]);
+    assert_eq!(
+        transform.translation,
+        [0.0, 0.0, 0.0],
+        "ANI-002 outcome 31: OnAnimatorMove must replace the automatically applied root motion"
+    );
     Ok(())
 }
 
@@ -1504,6 +1516,205 @@ fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_cl
     assert!(
         (pos_end - 10.0).abs() < 1e-4,
         "ANI-002 outcome 32: legacy Animation cross-fade at 100% must reach target pose 10.0, got {pos_end}"
+    );
+    Ok(())
+}
+
+#[test]
+fn ani_001_outcome_27_preview_play_mode_and_built_player_match_pose_and_events_in_looping_and_reverse(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_animation::AnimationEvent;
+
+    let clip = AnimationClip::new(
+        "LoopReverseClip",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
+        )],
+        vec![
+            AnimationEvent::new(0.2, "Fifth"),
+            AnimationEvent::new(0.6, "Sixty"),
+        ],
+    );
+    let controller = AnimatorController::new(
+        "LoopReverseController",
+        Vec::new(),
+        vec![AnimatorState::new("Run", StateMotion::Clip(clip.clone()))],
+        0,
+        Vec::new(),
+    );
+    let frame_deltas = [0.3_f64, 0.5, -0.7, 0.4];
+
+    let mut preview_poses = Vec::new();
+    let mut preview_events: Vec<String> = Vec::new();
+    let mut elapsed = 0.0_f32;
+    for delta in frame_deltas {
+        let step = delta as f32;
+        let sample = clip.sample(elapsed, elapsed + step);
+        if let Some(binding) = sample.bindings.first() {
+            if let unitas_animation::AnimatedValue::Float(x) = binding.value {
+                preview_poses.push(x);
+            }
+        }
+        for event in sample.fired_events {
+            preview_events.push(event.function_name);
+        }
+        elapsed += step;
+    }
+    assert_eq!(
+        preview_events,
+        vec!["Fifth", "Sixty", "Sixty", "Fifth", "Fifth"],
+        "ANI-001 outcome 27: preview must fire the same events in looping and reverse playback"
+    );
+
+    let mut world = AnimationWorld::new();
+    let entity = EntityId::new(21);
+    world.ensure_animator(entity, unitas_core::Transform::default());
+    let controller_handle = world.register_controller(controller.clone());
+    world.set_controller(entity, controller_handle)?;
+    let mut play_poses = Vec::new();
+    for delta in frame_deltas {
+        world.set_speed(entity, delta.signum() as f32)?;
+        world.tick(delta.abs());
+        let transform = world.transform(entity).ok_or("missing transform")?;
+        play_poses.push(transform.translation[0]);
+    }
+    let play_events: Vec<String> = world
+        .fired_events(entity)
+        .ok_or("missing events")?
+        .iter()
+        .map(|event| event.function_name.clone())
+        .collect();
+
+    let (player_handle, player_entity) = animator_runtime(&controller)?;
+    tick(player_handle, 0.0)?;
+    let mut player_poses = Vec::new();
+    for delta in frame_deltas {
+        let code =
+            unitas_runtime_animator_set_speed(player_handle, player_entity, delta.signum() as f32);
+        assert_eq!(
+            code, 0,
+            "ANI-001 outcome 27: the built player must accept a reverse animator speed"
+        );
+        tick(player_handle, delta.abs())?;
+        let info = state_info(player_handle, player_entity)?;
+        player_poses.push(info.position[0]);
+    }
+    let player_event_count = state_info(player_handle, player_entity)?.fired_event_count as usize;
+    assert_eq!(unitas_runtime_destroy(player_handle), 0);
+
+    let expected_poses = [3.0_f32, 8.0, 1.0, 5.0];
+    for index in 0..frame_deltas.len() {
+        assert!(
+            (preview_poses[index] - expected_poses[index]).abs() < 1e-4,
+            "ANI-001 outcome 27: preview must sample the clip in looping and reverse playback"
+        );
+        assert!(
+            (preview_poses[index] - play_poses[index]).abs() < 1e-5,
+            "ANI-001 outcome 27: preview vs play mode pose mismatch at frame {index}"
+        );
+        assert!(
+            (play_poses[index] - player_poses[index]).abs() < 1e-5,
+            "ANI-001 outcome 27: play mode vs built player pose mismatch at frame {index}"
+        );
+    }
+    assert_eq!(
+        play_events, preview_events,
+        "ANI-001 outcome 27: preview and play mode event sequences must match in reverse playback"
+    );
+    assert_eq!(
+        player_event_count,
+        preview_events.len(),
+        "ANI-001 outcome 27: built player event count must match preview and play mode"
+    );
+    Ok(())
+}
+
+#[test]
+fn ani_001_outcome_28_state_machine_behaviour_callback_order_is_observable_at_runtime(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_animation::StateMachineCallbackKind;
+
+    fn names(callbacks: &[unitas_animation::StateMachineCallback]) -> Vec<String> {
+        callbacks
+            .iter()
+            .map(|callback| format!("{:?}:{}", callback.kind, callback.state_index))
+            .collect()
+    }
+
+    let clip = AnimationClip::new(
+        "RuntimeCallbackClip",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)]),
+        )],
+        Vec::new(),
+    );
+    let controller = AnimatorController::new(
+        "RuntimeCallbackOrder",
+        vec![ParameterDef::trigger("go")],
+        vec![
+            AnimatorState::new("A", StateMotion::Clip(clip.clone())),
+            AnimatorState::new("B", StateMotion::Clip(clip)),
+        ],
+        0,
+        vec![StateTransition::new(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+            false,
+            0.0,
+            0.5,
+        )],
+    );
+
+    let mut world = AnimationWorld::new();
+    let entity = EntityId::new(31);
+    world.ensure_animator(entity, unitas_core::Transform::default());
+    let controller_handle = world.register_controller(controller);
+    world.set_controller(entity, controller_handle)?;
+
+    let mut order: Vec<Vec<String>> = Vec::new();
+    for _ in 0..2 {
+        world.tick(0.1);
+        order.push(names(world.callbacks(entity).ok_or("missing callbacks")?));
+    }
+    world.set_trigger(entity, "go")?;
+    for _ in 0..6 {
+        world.tick(0.1);
+        order.push(names(world.callbacks(entity).ok_or("missing callbacks")?));
+    }
+
+    assert_eq!(
+        order,
+        vec![
+            vec!["OnStateUpdate:0"],
+            vec!["OnStateUpdate:0"],
+            vec!["OnStateEnter:1", "OnStateUpdate:0"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+            vec!["OnStateExit:0"],
+            vec!["OnStateUpdate:1"],
+        ],
+        "ANI-001 outcome 28: the runtime must report state machine behaviour callbacks in the documented order"
+    );
+
+    let callbacks = world.callbacks(entity).ok_or("missing callbacks")?;
+    assert!(
+        callbacks
+            .iter()
+            .all(|callback| callback.kind == StateMachineCallbackKind::OnStateUpdate),
+        "ANI-001 outcome 28: after the transition only the destination state reports updates"
     );
     Ok(())
 }

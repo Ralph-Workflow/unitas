@@ -92,6 +92,120 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
 }
 
 #[test]
+fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collision_action_matrix(
+) -> Result<(), PhysicsError> {
+    let mut runtime_physics = PhysicsRuntimeWorld::new();
+    let floor = EntityId::new(1);
+    let trigger_zone = EntityId::new(2);
+    let crate_body = EntityId::new(3);
+    let dynamic_body = EntityId::new(4);
+
+    runtime_physics.add_body_3d(
+        floor,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [2.0, 0.5, 2.0],
+            },
+            position: [0.0, -0.5, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.5,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_physics.add_body_3d(
+        trigger_zone,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            position: [10.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: true,
+            layer: 0,
+            friction: 0.5,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_physics.add_body_3d(
+        crate_body,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            position: [10.5, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.5,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_physics.add_body_3d(
+        dynamic_body,
+        BodyDesc {
+            role: BodyRole::Dynamic,
+            shape: Shape::Sphere { radius: 0.5 },
+            position: [0.0, 0.4, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.5,
+            restitution: 0.0,
+        },
+    )?;
+
+    let (collisions, triggers) = runtime_physics.step_3d(0.02)?;
+    assert_eq!(
+        collisions.len(),
+        1,
+        "PHY-001: the subsystem entry must report only the collision pair that carries a Rigidbody"
+    );
+    assert_eq!(collisions[0].a, floor);
+    assert_eq!(collisions[0].b, dynamic_body);
+    assert!(
+        triggers.is_empty(),
+        "PHY-001 story 13: the subsystem entry must report no trigger event for two colliders without a Rigidbody"
+    );
+
+    let mut static_obj = PhysicsObject::new(10, 0);
+    static_obj.is_static = true;
+    let mut dynamic_obj = PhysicsObject::new(11, 0);
+    dynamic_obj.has_rigidbody = true;
+    assert!(
+        !runtime_physics
+            .route_3d_message(CollisionMessage::OnCollisionEnter, &static_obj, &dynamic_obj)
+            .is_empty(),
+        "PHY-001: the subsystem entry message surface must route the collision pair that carries a Rigidbody"
+    );
+    let mut trigger_obj = PhysicsObject::new(12, 0);
+    trigger_obj.is_trigger = true;
+    assert!(
+        runtime_physics
+            .route_3d_message(CollisionMessage::OnTriggerEnter, &trigger_obj, &static_obj)
+            .is_empty(),
+        "PHY-001 story 13: the subsystem entry message surface must route no trigger message for two colliders without a Rigidbody"
+    );
+    Ok(())
+}
+
+#[test]
 fn subsystem_entry_physics_2d_steps_and_enforces_one_way_platform_effector() {
     let mut runtime_physics = PhysicsRuntimeWorld::new();
     let platform_entity = EntityId::new(10);

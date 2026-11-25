@@ -676,6 +676,101 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
 }
 
 #[test]
+fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchange_messages(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_physics::{BodyDesc, BodyRole, Shape};
+    use unitas_runtime::physics::PhysicsRuntimeWorld;
+
+    let mut runtime_world = PhysicsRuntimeWorld::new();
+    let floor = EntityId::new(1);
+    let trigger_zone = EntityId::new(2);
+    let crate_body = EntityId::new(3);
+    let dynamic_body = EntityId::new(4);
+
+    runtime_world.add_body_3d(
+        floor,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [2.0, 0.5, 2.0],
+            },
+            position: [0.0, -0.5, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_world.add_body_3d(
+        trigger_zone,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            position: [10.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: true,
+            layer: 0,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_world.add_body_3d(
+        crate_body,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            position: [10.5, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    runtime_world.add_body_3d(
+        dynamic_body,
+        BodyDesc {
+            role: BodyRole::Dynamic,
+            shape: Shape::Sphere { radius: 0.5 },
+            position: [0.0, 0.4, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 0,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+
+    let (collisions, triggers) = runtime_world.step_3d(0.02)?;
+    assert!(
+        collisions.len() == 1 && collisions[0].a == floor && collisions[0].b == dynamic_body,
+        "PHY-001: the runtime physics world must report a collision event only for the pair that carries a Rigidbody, got {collisions:?}"
+    );
+    assert!(
+        triggers.is_empty(),
+        "PHY-001 story 13: the runtime physics world must report no trigger events for two colliders without a Rigidbody"
+    );
+    Ok(())
+}
+
+#[test]
 fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_objects_and_honors_action_matrix(
 ) {
     use unitas_physics::matrix::{CollisionMessage, PhysicsObject};
