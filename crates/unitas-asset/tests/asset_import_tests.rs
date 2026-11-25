@@ -8,6 +8,8 @@ mod database_tests;
 mod dependencies_tests;
 #[path = "asset_import/fbx_tests.rs"]
 mod fbx_tests;
+#[path = "asset_import/import_cache_tests.rs"]
+mod import_cache_tests;
 #[path = "asset_import/inflate_tests.rs"]
 mod inflate_tests;
 #[path = "asset_import/json_tests.rs"]
@@ -16,12 +18,16 @@ mod json_tests;
 mod model_tests;
 #[path = "asset_import/packages_tests.rs"]
 mod packages_tests;
+#[path = "asset_import/perf_import.rs"]
+mod perf_import;
 #[path = "asset_import/prefab_variant_tests.rs"]
 mod prefab_variant_tests;
 #[path = "asset_import/primitive_tests.rs"]
 mod primitive_tests;
 #[path = "asset_import/project_tests.rs"]
 mod project_tests;
+#[path = "asset_import/roll_a_ball_project_tests.rs"]
+mod roll_a_ball_project_tests;
 #[path = "asset_import/scene_save_tests.rs"]
 mod scene_save_tests;
 #[path = "asset_import/texture_tests.rs"]
