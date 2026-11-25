@@ -32,7 +32,6 @@ verify-suite-gates:
 	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
 	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D warnings
 	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
-	@python3 tools/verify.py timed typecheck-rs $(VERIFY_BUDGET_SECONDS) cargo check --workspace --all-targets
 	@$(MAKE) --no-print-directory test
 
 verify-dotnet-gates:
