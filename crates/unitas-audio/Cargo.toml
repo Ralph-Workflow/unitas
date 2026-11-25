@@ -13,5 +13,7 @@ device = ["dep:cpal"]
 
 [dependencies]
 cpal = { version = "0.18.2", optional = true }
+lewton = "0.10.2"
+minimp3 = "0.6.1"
 unitas-asset = { path = "../unitas-asset" }
 unitas-core = { path = "../unitas-core" }
