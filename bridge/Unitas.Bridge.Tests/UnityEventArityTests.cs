@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -56,14 +57,14 @@ namespace Unitas.Bridge.Tests
                 case "OnArity3Dynamic":
                     if (argument is ValueTuple<string, int, float> triple)
                     {
-                        Trace.Add("persistent:arity3:" + triple.Item1 + ":" + triple.Item2 + ":" + triple.Item3);
+                        Trace.Add("persistent:arity3:" + triple.Item1 + ":" + triple.Item2 + ":" + triple.Item3.ToString(CultureInfo.InvariantCulture));
                         return true;
                     }
                     return false;
                 case "OnArity4Dynamic":
                     if (argument is ValueTuple<string, int, float, bool> quad)
                     {
-                        Trace.Add("persistent:arity4:" + quad.Item1 + ":" + quad.Item2 + ":" + quad.Item3 + ":" + quad.Item4);
+                        Trace.Add("persistent:arity4:" + quad.Item1 + ":" + quad.Item2 + ":" + quad.Item3.ToString(CultureInfo.InvariantCulture) + ":" + quad.Item4);
                         return true;
                     }
                     return false;
@@ -83,6 +84,7 @@ namespace Unitas.Bridge.Tests
             TestRenamedPersistentMethodReportsOwnerFieldTargetMethodAndContinuesAcrossArities();
             TestSendMessageRequireReceiverVsDontRequireReceiver();
             TestInvokeRepeatingTimeScaleZeroPauseAndPermanentCancellationOnDestroy();
+            TestDecimalLocaleDoesNotCorruptFloatEventTraces();
         }
 
         private static void TestTwoArityUnityEventDynamicAndPersistentListeners()
@@ -133,9 +135,9 @@ namespace Unitas.Bridge.Tests
             UnityEvent<string, int, float> onHit = new UnityEvent<string, int, float>("CombatEmitter", "onHit");
 
             UnityAction<string, int, float> firstListener = (targetName, dmg, crit) =>
-                receiver.Trace.Add("runtime:1:" + targetName + ":" + dmg + ":" + crit);
+                receiver.Trace.Add("runtime:1:" + targetName + ":" + dmg + ":" + crit.ToString(CultureInfo.InvariantCulture));
             UnityAction<string, int, float> secondListener = (targetName, dmg, crit) =>
-                receiver.Trace.Add("runtime:2:" + targetName + ":" + dmg + ":" + crit);
+                receiver.Trace.Add("runtime:2:" + targetName + ":" + dmg + ":" + crit.ToString(CultureInfo.InvariantCulture));
 
             onHit.AddListener(firstListener);
             onHit.AddPersistentIntListener(owner, "onHit", receiver, "OnPersistentInt", 42);
@@ -177,9 +179,9 @@ namespace Unitas.Bridge.Tests
                 new UnityEvent<string, int, float, bool>("TelemetryBus", "onTelemetry");
 
             UnityAction<string, int, float, bool> firstListener = (evtName, code, elapsed, ok) =>
-                receiver.Trace.Add("runtime:1:" + evtName + ":" + code + ":" + elapsed + ":" + ok);
+                receiver.Trace.Add("runtime:1:" + evtName + ":" + code + ":" + elapsed.ToString(CultureInfo.InvariantCulture) + ":" + ok);
             UnityAction<string, int, float, bool> secondListener = (evtName, code, elapsed, ok) =>
-                receiver.Trace.Add("runtime:2:" + evtName + ":" + code + ":" + elapsed + ":" + ok);
+                receiver.Trace.Add("runtime:2:" + evtName + ":" + code + ":" + elapsed.ToString(CultureInfo.InvariantCulture) + ":" + ok);
 
             onTelemetry.AddListener(firstListener);
             onTelemetry.AddPersistentListener(owner, "onTelemetry", receiver, "OnPersistentVoid");
@@ -234,7 +236,7 @@ namespace Unitas.Bridge.Tests
                 "OnPersistentString",
                 "ConfirmPayload");
             onConfirm.AddListener((label, count, weight, active) =>
-                receiver.Trace.Add("runtime:confirm:" + label + ":" + count + ":" + weight + ":" + active));
+                receiver.Trace.Add("runtime:confirm:" + label + ":" + count + ":" + weight.ToString(CultureInfo.InvariantCulture) + ":" + active));
 
             LogRecorder.Clear();
             try
@@ -355,6 +357,46 @@ namespace Unitas.Bridge.Tests
                 Time.timeScale = savedTimeScale;
                 UnityEngine.Object.Destroy(componentDestroyHost);
                 UnityEngine.Object.Destroy(objectDestroyHost);
+            }
+        }
+
+        private static void TestDecimalLocaleDoesNotCorruptFloatEventTraces()
+        {
+            CultureInfo savedCulture = CultureInfo.CurrentCulture;
+            GameObject owner = new GameObject("LocaleHost");
+            ArityEventReceiverBehaviour receiver = owner.AddComponent<ArityEventReceiverBehaviour>();
+            try
+            {
+                CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+                UnityEvent<string, int, float> onArity3 = new UnityEvent<string, int, float>("LocaleHost", "onArity3");
+                onArity3.AddPersistentListener(owner, "onArity3", receiver, "OnArity3Dynamic");
+                onArity3.AddListener((targetName, dmg, crit) =>
+                    receiver.Trace.Add("runtime:1:" + targetName + ":" + dmg + ":" + crit.ToString(CultureInfo.InvariantCulture)));
+                onArity3.Invoke("Boss", 50, 1.5f);
+
+                Check.Equal(
+                    "UnityEvent<T0, T1, T2> formats float event trace with invariant decimal dot under de-DE locale",
+                    "persistent:arity3:Boss:50:1.5, runtime:1:Boss:50:1.5",
+                    string.Join(", ", receiver.Trace));
+
+                receiver.Trace.Clear();
+                UnityEvent<string, int, float, bool> onArity4 =
+                    new UnityEvent<string, int, float, bool>("LocaleHost", "onArity4");
+                onArity4.AddPersistentListener(owner, "onArity4", receiver, "OnArity4Dynamic");
+                onArity4.AddListener((evtName, code, elapsed, ok) =>
+                    receiver.Trace.Add("runtime:1:" + evtName + ":" + code + ":" + elapsed.ToString(CultureInfo.InvariantCulture) + ":" + ok));
+                onArity4.Invoke("Spawn", 7, 0.25f, true);
+
+                Check.Equal(
+                    "UnityEvent<T0, T1, T2, T3> formats float event trace with invariant decimal dot under de-DE locale",
+                    "persistent:arity4:Spawn:7:0.25:True, runtime:1:Spawn:7:0.25:True",
+                    string.Join(", ", receiver.Trace));
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = savedCulture;
+                UnityEngine.Object.Destroy(owner);
             }
         }
     }
