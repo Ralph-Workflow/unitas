@@ -299,6 +299,9 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_set_body_position(ulong runtime, ulong entity, IntPtr inBuffer);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_body_rotation(ulong runtime, ulong entity, IntPtr inBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_teleport_body_position(ulong runtime, ulong entity, IntPtr inBuffer);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

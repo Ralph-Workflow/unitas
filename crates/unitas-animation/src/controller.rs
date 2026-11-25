@@ -221,6 +221,16 @@ pub enum TransitionTarget {
     Exit,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionSource {
+    State(usize),
+    AnyState,
+}
+
+const ANY_STATE_FLAG: usize = 1usize << 31;
+const NO_SELF_FLAG: usize = 1usize << 30;
+const SOURCE_INDEX_MASK: usize = !(ANY_STATE_FLAG | NO_SELF_FLAG);
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StateTransition {
     pub source_state: usize,
@@ -272,6 +282,40 @@ impl StateTransition {
         duration: f32,
     ) -> Self {
         Self::new(source_state, target, conditions, true, exit_time, duration)
+    }
+
+    pub fn any_state(target: TransitionTarget, conditions: Vec<TransitionCondition>) -> Self {
+        Self::instant(ANY_STATE_FLAG, target, conditions)
+    }
+
+    pub fn any_state_with_exit_time(
+        target: TransitionTarget,
+        conditions: Vec<TransitionCondition>,
+        exit_time: f32,
+        duration: f32,
+    ) -> Self {
+        Self::with_exit_time(ANY_STATE_FLAG, target, conditions, exit_time, duration)
+    }
+
+    pub fn source(&self) -> TransitionSource {
+        if self.source_state & ANY_STATE_FLAG != 0 {
+            TransitionSource::AnyState
+        } else {
+            TransitionSource::State(self.source_state & SOURCE_INDEX_MASK)
+        }
+    }
+
+    pub fn can_transition_to_self(&self) -> bool {
+        self.source_state & NO_SELF_FLAG == 0
+    }
+
+    pub fn with_can_transition_to_self(mut self, allow: bool) -> Self {
+        if allow {
+            self.source_state &= !NO_SELF_FLAG;
+        } else {
+            self.source_state |= NO_SELF_FLAG;
+        }
+        self
     }
 }
 
@@ -485,15 +529,20 @@ impl AnimatorController {
         }
 
         for transition in &self.transitions {
-            let source_name = self.states.get(transition.source_state).map_or_else(
-                || format!("#{}", transition.source_state),
-                |s| s.name.clone(),
-            );
-            if transition.source_state >= self.states.len() {
-                diagnostics.push(AnimationDiagnostic::ConflictingTransition {
-                    source_state: source_name.clone(),
-                    reason: "source state index out of bounds".to_string(),
-                });
+            let source_name = match transition.source() {
+                TransitionSource::AnyState => "Any State".to_string(),
+                TransitionSource::State(index) => self
+                    .states
+                    .get(index)
+                    .map_or_else(|| format!("#{index}"), |state| state.name.clone()),
+            };
+            if let TransitionSource::State(index) = transition.source() {
+                if index >= self.states.len() {
+                    diagnostics.push(AnimationDiagnostic::ConflictingTransition {
+                        source_state: source_name.clone(),
+                        reason: "source state index out of bounds".to_string(),
+                    });
+                }
             }
             if let TransitionTarget::State(dst) = transition.target {
                 if dst >= self.states.len() {
@@ -508,7 +557,7 @@ impl AnimatorController {
                     .transitions
                     .iter()
                     .filter(|other| {
-                        other.source_state == transition.source_state
+                        other.source() == transition.source()
                             && !other.has_exit_time
                             && other.conditions.is_empty()
                     })
@@ -562,16 +611,23 @@ impl AnimatorController {
                 reachable.insert(self.entry_state);
                 queue.push(self.entry_state);
             }
+            for transition in &self.transitions {
+                if transition.source() != TransitionSource::AnyState {
+                    continue;
+                }
+                let next_idx = self.transition_target_index(transition);
+                if next_idx < self.states.len() && reachable.insert(next_idx) {
+                    queue.push(next_idx);
+                }
+            }
             while let Some(current) = queue.pop() {
                 for tr in &self.transitions {
-                    if tr.source_state == current {
-                        let next_idx = match tr.target {
-                            TransitionTarget::State(idx) => idx,
-                            TransitionTarget::Exit => self.entry_state,
-                        };
-                        if next_idx < self.states.len() && reachable.insert(next_idx) {
-                            queue.push(next_idx);
-                        }
+                    if tr.source() != TransitionSource::State(current) {
+                        continue;
+                    }
+                    let next_idx = self.transition_target_index(tr);
+                    if next_idx < self.states.len() && reachable.insert(next_idx) {
+                        queue.push(next_idx);
                     }
                 }
             }
@@ -585,6 +641,13 @@ impl AnimatorController {
         }
 
         diagnostics
+    }
+
+    fn transition_target_index(&self, transition: &StateTransition) -> usize {
+        match transition.target {
+            TransitionTarget::State(index) => index,
+            TransitionTarget::Exit => self.entry_state,
+        }
     }
 }
 
@@ -754,6 +817,7 @@ pub struct Animator {
     update_mode: AnimatorUpdateMode,
     culling_mode: AnimatorCullingMode,
     visible: bool,
+    keep_state_on_disable: bool,
     state_frames: u32,
     machine_entered: bool,
     pending_request: Option<AnimatorRequest>,
@@ -785,6 +849,7 @@ impl Animator {
             update_mode: AnimatorUpdateMode::Normal,
             culling_mode: AnimatorCullingMode::AlwaysAnimate,
             visible: true,
+            keep_state_on_disable: false,
             state_frames: 0,
             machine_entered: false,
             pending_request: None,
@@ -1460,6 +1525,14 @@ impl Animator {
         self.visible = visible;
     }
 
+    pub fn keep_state_on_disable(&self) -> bool {
+        self.keep_state_on_disable
+    }
+
+    pub fn set_keep_state_on_disable(&mut self, keep: bool) {
+        self.keep_state_on_disable = keep;
+    }
+
     pub fn captured_defaults(&self) -> &[SampledBinding] {
         &self.captured_defaults
     }
@@ -1480,6 +1553,9 @@ impl Animator {
     }
 
     pub fn reset(&mut self) {
+        if self.keep_state_on_disable {
+            return;
+        }
         let entry = if self.controller.entry_state < self.controller.states.len() {
             self.controller.entry_state
         } else {
@@ -1510,19 +1586,21 @@ impl Animator {
     }
 
     fn find_matching_transition(&self, source_state: usize, normalized_time: f32) -> Option<usize> {
+        self.find_transition(TransitionSource::AnyState, normalized_time)
+            .or_else(|| {
+                self.find_transition(TransitionSource::State(source_state), normalized_time)
+            })
+    }
+
+    fn find_transition(&self, wanted: TransitionSource, normalized_time: f32) -> Option<usize> {
         for (idx, tr) in self.controller.transitions.iter().enumerate() {
-            if tr.source_state != source_state {
+            if tr.source() != wanted {
                 continue;
             }
-            if tr.has_exit_time && normalized_time + 1e-6 < tr.exit_time {
+            if !self.transition_ready(tr, normalized_time) {
                 continue;
             }
-            if !tr.has_exit_time && tr.conditions.is_empty() {
-                return Some(idx);
-            }
-            if tr.conditions.iter().all(|c| self.evaluate_condition(c)) {
-                return Some(idx);
-            }
+            return Some(idx);
         }
         None
     }
@@ -1534,23 +1612,40 @@ impl Animator {
         exclude_target: usize,
     ) -> Option<usize> {
         for (idx, tr) in self.controller.transitions.iter().enumerate() {
-            if tr.source_state != source_state {
+            let source_matches = match tr.source() {
+                TransitionSource::AnyState => true,
+                TransitionSource::State(index) => index == source_state,
+            };
+            if !source_matches {
                 continue;
             }
             if tr.target == TransitionTarget::State(exclude_target) {
                 continue;
             }
-            if tr.has_exit_time && normalized_time + 1e-6 < tr.exit_time {
+            if !self.transition_ready(tr, normalized_time) {
                 continue;
             }
-            if !tr.has_exit_time && tr.conditions.is_empty() {
-                return Some(idx);
-            }
-            if tr.conditions.iter().all(|c| self.evaluate_condition(c)) {
-                return Some(idx);
-            }
+            return Some(idx);
         }
         None
+    }
+
+    fn transition_ready(&self, transition: &StateTransition, normalized_time: f32) -> bool {
+        if !transition.can_transition_to_self()
+            && transition.target == TransitionTarget::State(self.current_state)
+        {
+            return false;
+        }
+        if transition.has_exit_time && normalized_time + 1e-6 < transition.exit_time {
+            return false;
+        }
+        if !transition.has_exit_time && transition.conditions.is_empty() {
+            return true;
+        }
+        transition
+            .conditions
+            .iter()
+            .all(|c| self.evaluate_condition(c))
     }
 
     fn evaluate_condition(&self, cond: &TransitionCondition) -> bool {

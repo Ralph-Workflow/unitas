@@ -84,9 +84,9 @@ SphereCollider:
     )
 }
 
-fn write_scene() -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
+fn write_scene(name: &str) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
     let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_kinematic_placement_{}",
+        "unitas_runtime_kinematic_placement_{}_{name}",
         std::process::id()
     ));
     std::fs::create_dir_all(&temp_dir)?;
@@ -149,7 +149,7 @@ fn assert_vector_close(actual: [f64; 3], expected: [f64; 3], label: &str, tolera
 #[test]
 fn kinematic_rigidbody_keeps_serialized_transform_and_body_pose_at_scene_load()
 -> Result<(), Box<dyn Error>> {
-    let (temp_dir, scene_path) = write_scene()?;
+    let (temp_dir, scene_path) = write_scene("scene_load")?;
     let mut runtime = Runtime::new()?;
     let load_res = runtime.load_scene(&scene_path);
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -222,7 +222,7 @@ fn sample_scene_kinematic_platform_keeps_serialized_transform_and_body_pose()
 #[test]
 fn kinematic_platform_at_its_serialized_pose_supports_the_dynamic_marble()
 -> Result<(), Box<dyn Error>> {
-    let (temp_dir, scene_path) = write_scene()?;
+    let (temp_dir, scene_path) = write_scene("dynamic_marble")?;
     let mut runtime = Runtime::new()?;
     let load_res = runtime.load_scene(&scene_path);
     let _ = std::fs::remove_dir_all(&temp_dir);

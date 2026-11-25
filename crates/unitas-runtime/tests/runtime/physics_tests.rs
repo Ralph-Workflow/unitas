@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::Mutex;
 
-use unitas_core::EntityId;
+use unitas_core::{EntityId, normalize_rotation};
 use unitas_physics::BodyRole;
 use unitas_runtime::{Callbacks, Runtime};
 
@@ -921,4 +921,69 @@ fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_ob
             .is_empty(),
         "PHY-001 story 2 & story 13: disabling layer pair in 3D matrix stops message routing"
     );
+}
+
+#[test]
+fn runtime_syncs_kinematic_scene_graph_rotation_into_the_physics_world()
+-> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_kinematic_rotation_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join("kinematic_rotation.unity");
+    let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Platform\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 1\n  m_UseGravity: 0\n  m_IsKinematic: 1\n--- !u!65 &103\nBoxCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Size: {x: 4, y: 1, z: 4}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: Cargo\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 1, y: 1.0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {fileID: 200}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!65 &203\nBoxCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 1, z: 1}\n  m_Center: {x: 0, y: 0, z: 0}\n";
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+
+    let platform = EntityId::new(entity_handle(&runtime, "Platform")?);
+    let cargo = EntityId::new(entity_handle(&runtime, "Cargo")?);
+    assert_eq!(runtime.body_role(platform), Some(BodyRole::Kinematic));
+    assert_eq!(runtime.body_role(cargo), Some(BodyRole::Dynamic));
+
+    runtime.tick(TICK_DELTA)?;
+    let angle_per_step = 0.03f32;
+    let mut graph_rotation = [0.0f32; 4];
+    for step in 1..=25 {
+        let half = (step as f32 * angle_per_step) * 0.5;
+        graph_rotation = [0.0, half.sin(), 0.0, half.cos()];
+        let graph = match runtime.scene_graph_mut() {
+            Some(graph) => graph,
+            None => return Err(String::from("missing mutable scene graph").into()),
+        };
+        let transform = match graph.transform_mut(platform) {
+            Some(transform) => transform,
+            None => return Err(String::from("missing platform transform").into()),
+        };
+        transform.rotation = graph_rotation;
+        runtime.tick(TICK_DELTA)?;
+    }
+
+    let expected = normalize_rotation(graph_rotation);
+    let body_rotation = match runtime.physics_mut().world_3d().rotation(platform) {
+        Some(rotation) => rotation,
+        None => return Err(String::from("missing platform body rotation").into()),
+    };
+    let dot = f64::from(expected[0]) * body_rotation[0]
+        + f64::from(expected[1]) * body_rotation[1]
+        + f64::from(expected[2]) * body_rotation[2]
+        + f64::from(expected[3]) * body_rotation[3];
+    assert!(
+        dot.abs() > 1.0 - 1e-6,
+        "expected the scene graph rotation to reach the physics world, dot = {dot}"
+    );
+
+    let cargo_pos = match runtime.body_position(cargo) {
+        Some(pos) => pos,
+        None => return Err(String::from("missing cargo body position").into()),
+    };
+    assert!(
+        cargo_pos[2].abs() > 0.1,
+        "expected the rotating kinematic platform to carry the resting cargo tangentially, got z = {}",
+        cargo_pos[2]
+    );
+    Ok(())
 }

@@ -2,12 +2,49 @@ use unitas_core::normalize_rotation;
 
 const TIME_EPSILON: f32 = 1e-6;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AssetReference {
+    pub guid: u128,
+    pub file_id: i64,
+}
+
+impl AssetReference {
+    pub const NULL: Self = Self {
+        guid: 0,
+        file_id: 0,
+    };
+
+    pub const fn new(guid: u128, file_id: i64) -> Self {
+        Self { guid, file_id }
+    }
+
+    pub fn from_hex(guid: &str, file_id: i64) -> Option<Self> {
+        if guid.len() != 32 || !guid.chars().all(|character| character.is_ascii_hexdigit()) {
+            return None;
+        }
+        let value = u128::from_str_radix(guid, 16).ok()?;
+        Some(Self {
+            guid: value,
+            file_id,
+        })
+    }
+
+    pub fn guid_hex(&self) -> String {
+        format!("{:032x}", self.guid)
+    }
+
+    pub const fn is_null(&self) -> bool {
+        self.guid == 0 && self.file_id == 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnimatedValue {
     Float(f32),
     Vector3([f32; 3]),
     Quaternion([f32; 4]),
     Color([f32; 4]),
+    ObjectReference(AssetReference),
 }
 
 impl AnimatedValue {
@@ -231,12 +268,71 @@ impl FloatCurve {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ObjectReferenceKey {
+    pub time: f32,
+    pub reference: AssetReference,
+}
+
+impl ObjectReferenceKey {
+    pub const fn new(time: f32, reference: AssetReference) -> Self {
+        Self { time, reference }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectReferenceCurve {
+    pub keys: Vec<ObjectReferenceKey>,
+}
+
+impl ObjectReferenceCurve {
+    pub fn new(mut keys: Vec<ObjectReferenceKey>) -> Self {
+        keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+        Self { keys }
+    }
+
+    pub fn keyframes(&self) -> &[ObjectReferenceKey] {
+        &self.keys
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn max_time(&self) -> f32 {
+        self.keys.last().map_or(0.0, |key| key.time.max(0.0))
+    }
+
+    pub fn evaluate(&self, time: f32) -> AssetReference {
+        let Some(first) = self.keys.first() else {
+            return AssetReference::NULL;
+        };
+        if !time.is_finite() || time <= first.time {
+            return first.reference;
+        }
+        let mut current = first.reference;
+        for key in &self.keys {
+            if key.time <= time {
+                current = key.reference;
+            } else {
+                break;
+            }
+        }
+        current
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyCurve {
     Float(FloatCurve),
     Vector3([FloatCurve; 3]),
     Quaternion([FloatCurve; 4]),
     Color([FloatCurve; 4]),
+    ObjectReference(ObjectReferenceCurve),
 }
 
 impl PropertyCurve {
@@ -247,6 +343,7 @@ impl PropertyCurve {
             Self::Quaternion(cs) | Self::Color(cs) => {
                 cs.iter().map(FloatCurve::max_time).fold(0.0, f32::max)
             }
+            Self::ObjectReference(c) => c.max_time(),
         }
     }
 
@@ -267,6 +364,7 @@ impl PropertyCurve {
                 cs[2].evaluate(time),
                 cs[3].evaluate(time),
             ]),
+            Self::ObjectReference(c) => AnimatedValue::ObjectReference(c.evaluate(time)),
         }
     }
 }

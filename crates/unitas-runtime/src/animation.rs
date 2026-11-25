@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use unitas_animation::curve::AssetReference;
 use unitas_animation::{
     AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationError, AnimationEvent, Animator,
     AnimatorController, AnimatorCullingMode, AnimatorFrame, AnimatorStateInfo, AnimatorUpdateMode,
@@ -51,6 +52,13 @@ impl std::fmt::Display for AnimationRuntimeDiagnostic {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedObjectReference {
+    pub target: CurveBindingTarget,
+    pub reference: AssetReference,
+    pub changes: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityAnimatorEntry {
     pub controller_handle: u64,
@@ -68,6 +76,7 @@ pub struct EntityAnimatorEntry {
     pub callbacks: Vec<StateMachineCallback>,
     pub root_motion: AnimatorRootMotion,
     pub writes_transforms: bool,
+    pub applied_object_references: Vec<AppliedObjectReference>,
 }
 
 impl EntityAnimatorEntry {
@@ -88,6 +97,7 @@ impl EntityAnimatorEntry {
             callbacks: Vec::new(),
             root_motion: AnimatorRootMotion::default(),
             writes_transforms: true,
+            applied_object_references: Vec::new(),
         }
     }
 
@@ -162,6 +172,25 @@ impl AnimationWorld {
 
     pub fn entry_mut(&mut self, entity: EntityId) -> Option<&mut EntityAnimatorEntry> {
         self.entries.get_mut(&entity)
+    }
+
+    pub fn applied_object_reference(
+        &self,
+        entity: EntityId,
+        target: &CurveBindingTarget,
+    ) -> Option<&AppliedObjectReference> {
+        self.entries
+            .get(&entity)?
+            .applied_object_references
+            .iter()
+            .find(|applied| applied.target == *target)
+    }
+
+    pub fn applied_object_references(&self, entity: EntityId) -> &[AppliedObjectReference] {
+        self.entries
+            .get(&entity)
+            .map(|entry| entry.applied_object_references.as_slice())
+            .unwrap_or_default()
     }
 
     pub fn entities(&self) -> Vec<EntityId> {
@@ -683,6 +712,10 @@ fn apply_bindings_to_transform(
 ) -> Vec<SampledBinding> {
     let mut child_bindings = Vec::new();
     for binding in bindings {
+        if let AnimatedValue::ObjectReference(reference) = binding.value {
+            apply_object_reference(entry, &binding.target, reference);
+            continue;
+        }
         let Some((prop, ch)) = binding.target.parse_transform_property() else {
             entry.push_diagnostic(AnimationRuntimeDiagnostic::UnsupportedBinding {
                 entity,
@@ -699,6 +732,31 @@ fn apply_bindings_to_transform(
         }
     }
     child_bindings
+}
+
+fn apply_object_reference(
+    entry: &mut EntityAnimatorEntry,
+    target: &CurveBindingTarget,
+    reference: AssetReference,
+) {
+    if let Some(applied) = entry
+        .applied_object_references
+        .iter_mut()
+        .find(|applied| applied.target == *target)
+    {
+        if applied.reference != reference {
+            applied.reference = reference;
+            applied.changes = applied.changes.saturating_add(1);
+        }
+        return;
+    }
+    entry
+        .applied_object_references
+        .push(AppliedObjectReference {
+            target: target.clone(),
+            reference,
+            changes: 0,
+        });
 }
 
 pub fn apply_transform_property(

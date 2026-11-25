@@ -41,9 +41,9 @@
       "kind": "transform_position",
       "object": "PlatformMarble",
       "expected": [
-        -11.5,
-        1,
-        0
+        -11.06,
+        1.0,
+        -1.06
       ],
       "tolerance": 1.0
     },

@@ -19,6 +19,8 @@ namespace Unitas.Bridge.Playtest
             List<string> captures = new List<string>();
             CheckpointResult?[] checkpointResults = new CheckpointResult?[scenario.Checkpoints.Count];
             LogRecorder.Clear();
+            // Each scenario run starts on a fresh clock so repeated runs observe identical values.
+            Time.Reset();
             BridgeHost host = factory();
             try
             {

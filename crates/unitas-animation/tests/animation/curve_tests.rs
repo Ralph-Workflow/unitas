@@ -1,6 +1,18 @@
+use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
     AnimatedValue, AnimationCurve, FloatCurve, InterpolationMode, Keyframe, PropertyCurve,
 };
+
+const OBJECT_GUID_A: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
+const OBJECT_GUID_B: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
+
+fn reference_a() -> AssetReference {
+    AssetReference::new(OBJECT_GUID_A, 21300000)
+}
+
+fn reference_b() -> AssetReference {
+    AssetReference::new(OBJECT_GUID_B, 21300001)
+}
 
 #[test]
 fn empty_float_curve_evaluates_to_zero() {
@@ -261,4 +273,101 @@ fn property_curve_float_and_max_time_across_all_variants() {
         FloatCurve::new(vec![Keyframe::linear(2.0, 0.0)]),
     ]);
     assert_eq!(vc.max_time(), 4.0);
+}
+
+#[test]
+fn object_reference_curve_steps_discretely_between_keys() {
+    let curve = ObjectReferenceCurve::new(vec![
+        ObjectReferenceKey::new(0.0, reference_a()),
+        ObjectReferenceKey::new(1.0, reference_b()),
+        ObjectReferenceKey::new(2.0, AssetReference::new(OBJECT_GUID_A, 21300002)),
+    ]);
+    assert_eq!(curve.len(), 3);
+    assert_eq!(curve.max_time(), 2.0);
+    assert_eq!(curve.evaluate(-0.5), reference_a());
+    assert_eq!(curve.evaluate(0.0), reference_a());
+    assert_eq!(curve.evaluate(0.999), reference_a());
+    assert_eq!(curve.evaluate(1.0), reference_b());
+    assert_eq!(curve.evaluate(1.5), reference_b());
+    assert_eq!(
+        curve.evaluate(2.0),
+        AssetReference::new(OBJECT_GUID_A, 21300002)
+    );
+    assert_eq!(
+        curve.evaluate(9.0),
+        AssetReference::new(OBJECT_GUID_A, 21300002)
+    );
+}
+
+#[test]
+fn object_reference_curve_sorts_keys_and_clamps_to_the_first_key() {
+    let curve = ObjectReferenceCurve::new(vec![
+        ObjectReferenceKey::new(2.0, reference_b()),
+        ObjectReferenceKey::new(0.0, reference_a()),
+        ObjectReferenceKey::new(1.0, AssetReference::new(OBJECT_GUID_A, 21300002)),
+    ]);
+    assert_eq!(curve.keyframes()[0].time, 0.0);
+    assert_eq!(curve.keyframes()[1].time, 1.0);
+    assert_eq!(curve.keyframes()[2].time, 2.0);
+    assert_eq!(curve.evaluate(0.0), reference_a());
+    assert_eq!(
+        curve.evaluate(1.0),
+        AssetReference::new(OBJECT_GUID_A, 21300002)
+    );
+    assert_eq!(curve.evaluate(2.0), reference_b());
+}
+
+#[test]
+fn empty_object_reference_curve_evaluates_to_the_null_reference() {
+    let curve = ObjectReferenceCurve::new(Vec::new());
+    assert!(curve.is_empty());
+    assert_eq!(curve.len(), 0);
+    assert_eq!(curve.max_time(), 0.0);
+    assert_eq!(curve.evaluate(0.0), AssetReference::NULL);
+    assert!(AssetReference::NULL.is_null());
+    assert!(!reference_a().is_null());
+}
+
+#[test]
+fn property_curve_object_reference_evaluates_the_referenced_asset() {
+    let prop = PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+        ObjectReferenceKey::new(0.0, reference_a()),
+        ObjectReferenceKey::new(1.0, reference_b()),
+    ]));
+    assert_eq!(prop.max_time(), 1.0);
+    assert_eq!(
+        prop.evaluate(0.5),
+        AnimatedValue::ObjectReference(reference_a())
+    );
+    assert_eq!(
+        prop.evaluate(1.0),
+        AnimatedValue::ObjectReference(reference_b())
+    );
+    assert_eq!(
+        prop.evaluate(4.0),
+        AnimatedValue::ObjectReference(reference_b())
+    );
+}
+
+#[test]
+fn asset_reference_guid_hex_round_trips_through_the_repository_guid_convention() {
+    let reference = AssetReference::new(OBJECT_GUID_A, 21300000);
+    let guid_hex = format!("{OBJECT_GUID_A:032x}");
+    assert_eq!(reference.guid_hex(), guid_hex);
+    let Some(parsed) = AssetReference::from_hex(&guid_hex, 21300000) else {
+        assert_eq!(reference.guid_hex(), String::new());
+        return;
+    };
+    assert_eq!(parsed, reference);
+    assert!(AssetReference::from_hex("not-a-guid", 1).is_none());
+    assert!(AssetReference::from_hex("0123", 1).is_none());
+}
+
+#[test]
+fn animated_value_blend_switches_object_references_at_the_weight_threshold() {
+    let a = AnimatedValue::ObjectReference(reference_a());
+    let b = AnimatedValue::ObjectReference(reference_b());
+    assert_eq!(a.blend(&b, 0.25), a);
+    assert_eq!(a.blend(&b, 0.75), b);
+    assert_eq!(a.blend(&b, f32::NAN), a);
 }

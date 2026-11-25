@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, SampledBinding, WrapMode};
-use crate::curve::AnimatedValue;
+use crate::curve::{AnimatedValue, AssetReference};
 
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -977,6 +977,7 @@ fn default_value(value: &AnimatedValue) -> AnimatedValue {
         AnimatedValue::Vector3(_) => AnimatedValue::Vector3([0.0; 3]),
         AnimatedValue::Quaternion(_) => AnimatedValue::Quaternion([0.0, 0.0, 0.0, 1.0]),
         AnimatedValue::Color(_) => AnimatedValue::Color([0.0; 4]),
+        AnimatedValue::ObjectReference(_) => AnimatedValue::ObjectReference(AssetReference::NULL),
     }
 }
 

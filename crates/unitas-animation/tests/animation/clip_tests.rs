@@ -1,7 +1,11 @@
+use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
     AnimatedValue, AnimationClip, AnimationEvent, CurveBinding, CurveBindingTarget, FloatCurve,
     Keyframe, PropertyCurve, WrapMode,
 };
+
+const CLIP_OBJECT_GUID_A: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
+const CLIP_OBJECT_GUID_B: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
 
 fn make_linear_float_curve(t0: f32, v0: f32, t1: f32, v1: f32) -> FloatCurve {
     FloatCurve::new(vec![Keyframe::linear(t0, v0), Keyframe::linear(t1, v1)])
@@ -472,4 +476,118 @@ fn ani_001_outcome_27_reverse_playback_and_preview_play_mode_player_parity() {
         vec!["Ev02", "Ev08"],
         "ANI-001 outcome 27: reverse playback across loop boundary must fire events in descending order"
     );
+}
+
+#[test]
+fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary() {
+    let float_clip = AnimationClip::new(
+        "FloatLoop",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::stepped(0.0, 1.0),
+                Keyframe::stepped(1.0, 2.0),
+            ]),
+        )],
+        Vec::new(),
+    );
+    let object_clip = AnimationClip::new(
+        "SpriteLoop",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::new(
+            CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+            PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                ObjectReferenceKey::new(0.0, AssetReference::new(CLIP_OBJECT_GUID_A, 21300000)),
+                ObjectReferenceKey::new(1.0, AssetReference::new(CLIP_OBJECT_GUID_B, 21300001)),
+            ])),
+        )],
+        Vec::new(),
+    );
+
+    let float_at = |time: f32| float_clip.sample(time, time);
+    let object_at = |time: f32| object_clip.sample(time, time);
+
+    let float_start = float_at(0.0);
+    let object_start = object_at(0.0);
+    assert!((float_start.wrapped_time - object_start.wrapped_time).abs() < 1e-6);
+    assert_eq!(float_start.bindings[0].value, AnimatedValue::Float(1.0));
+    assert_eq!(
+        object_start.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    );
+
+    let float_mid = float_at(0.5);
+    let object_mid = object_at(0.5);
+    assert_eq!(float_mid.bindings[0].value, AnimatedValue::Float(1.0));
+    assert_eq!(
+        object_mid.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    );
+
+    let float_switch = float_at(1.0);
+    let object_switch = object_at(1.0);
+    assert_eq!(float_switch.bindings[0].value, AnimatedValue::Float(2.0));
+    assert_eq!(
+        object_switch.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_B, 21300001))
+    );
+
+    let float_hold = float_at(1.5);
+    let object_hold = object_at(1.5);
+    assert_eq!(float_hold.bindings[0].value, AnimatedValue::Float(2.0));
+    assert_eq!(
+        object_hold.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_B, 21300001))
+    );
+
+    let float_wrapped = float_at(2.0);
+    let object_wrapped = object_at(2.0);
+    assert!((float_wrapped.wrapped_time - object_wrapped.wrapped_time).abs() < 1e-6);
+    assert!((object_wrapped.wrapped_time - 0.0).abs() < 1e-6);
+    assert_eq!(float_wrapped.bindings[0].value, AnimatedValue::Float(1.0));
+    assert_eq!(
+        object_wrapped.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    );
+}
+
+#[test]
+fn clip_object_reference_curve_is_sampled_for_every_binding_in_the_clip() {
+    let clip = AnimationClip::new(
+        "SpriteSwap",
+        2.0,
+        60.0,
+        WrapMode::Once,
+        vec![
+            CurveBinding::new(
+                CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                    ObjectReferenceKey::new(0.0, AssetReference::new(CLIP_OBJECT_GUID_A, 21300000)),
+                    ObjectReferenceKey::new(1.0, AssetReference::new(CLIP_OBJECT_GUID_B, 21300001)),
+                ])),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                make_linear_float_curve(0.0, 0.0, 2.0, 4.0),
+            ),
+        ],
+        Vec::new(),
+    );
+    let sample = clip.sample(0.0, 0.75);
+    assert_eq!(sample.bindings.len(), 2);
+    assert_eq!(
+        sample.bindings[0].value,
+        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    );
+    assert_eq!(sample.bindings[0].target.property, "m_Sprite");
+    let AnimatedValue::Float(position) = sample.bindings[1].value else {
+        assert_eq!(sample.bindings[1].value, AnimatedValue::Float(0.0));
+        return;
+    };
+    assert!((position - 1.5).abs() < 1e-5);
 }

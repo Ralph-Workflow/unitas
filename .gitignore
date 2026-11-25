@@ -28,6 +28,7 @@ PROMPT.md
 /roll-a-ball/
 .agent/
 .agent/ralph-explore/
+.omo/
 /PROMPT*
 wt-*/
 /checkpoint.json

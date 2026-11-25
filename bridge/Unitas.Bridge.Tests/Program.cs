@@ -712,6 +712,8 @@ namespace Unitas.Bridge.Tests
                     Rigidbody? platformBody = platformScript!.GetComponent<Rigidbody>();
                     Check.That("Moving platform has Rigidbody", platformBody != null);
                     Physics.Provider!.TrySetBodyVelocity(platformScript.gameObject.NativeEntityId, new Vector3(4f, 0f, -2f));
+                    Check.That("Kinematic rotation write reaches the physics world", Physics.Provider!.TrySetBodyRotation(platformScript.gameObject.NativeEntityId, Quaternion.AngleAxis(90f, Vector3.up)));
+                    Check.That("Kinematic rotation write restores the original orientation", Physics.Provider!.TrySetBodyRotation(platformScript.gameObject.NativeEntityId, Quaternion.identity));
                     playerScript.transform.position = new Vector3(0f, 1.2f, 16f);
                     CollisionFlags platLand = cc.Move(new Vector3(0f, -0.3f, 0f));
                     Check.That("Landing on moving platform sets Below", (platLand & CollisionFlags.Below) != 0);

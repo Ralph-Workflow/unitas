@@ -369,6 +369,7 @@ BUDGET_RE = re.compile(r"(?m)^VERIFY_BUDGET_SECONDS\s*:?=\s*(\d+)")
 BUDGET_FACT_RE = re.compile(r"^RALPH-FACT:\s*verification_time_budget:\s*(\d+)", re.MULTILINE)
 SECRET_SCAN_EXCLUDES = (
     r"^\.agent/",
+    r"^\.omo/",
     r"^\.opencode/",
     r"^\.mypy_cache/",
     r"^\.pytest_cache/",

@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use unitas_animation::{
     AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationEvent, Animator,
     AnimatorController, AnimatorState, ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve,
@@ -1215,5 +1217,237 @@ fn ani_001_outcome_28_state_transition_trigger_callback_order_is_observable() {
             .iter()
             .all(|callback| callback.kind == StateMachineCallbackKind::OnStateUpdate),
         "ANI-001 outcome 28: after the transition only the destination state reports updates"
+    );
+}
+
+#[test]
+fn ani_001_any_state_transition_fires_from_multiple_source_states() -> Result<(), Box<dyn Error>> {
+    let controller = AnimatorController::new(
+        "AnyState",
+        vec![
+            ParameterDef::trigger("react"),
+            ParameterDef::bool("walk", false),
+        ],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "Walk",
+                StateMotion::Clip(simple_clip("Walk", 1.0, 1.0, 1.0)),
+            ),
+            AnimatorState::new(
+                "React",
+                StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
+            ),
+        ],
+        0,
+        vec![
+            StateTransition::any_state(
+                TransitionTarget::State(2),
+                vec![TransitionCondition::new("react", ConditionOp::If)],
+            ),
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("walk", ConditionOp::If)],
+            ),
+        ],
+    );
+
+    assert_eq!(
+        controller.transitions[0].source(),
+        unitas_animation::controller::TransitionSource::AnyState,
+        "ANI-001: an any state transition reports the any state source"
+    );
+
+    let decoded = AnimatorController::decode_binary(&controller.encode_binary())?;
+    assert_eq!(
+        decoded.transitions[0].source(),
+        unitas_animation::controller::TransitionSource::AnyState,
+        "ANI-001: the binary controller format keeps the any state source"
+    );
+
+    let mut animator = Animator::new(controller);
+    for source in [0usize, 1] {
+        animator.play(source);
+        animator.step(0.1);
+        assert_eq!(
+            animator.current_state_info().state_index,
+            source,
+            "ANI-001: the animator must sit in the requested source state"
+        );
+        assert_eq!(animator.set_trigger("react"), Ok(()));
+        animator.step(0.1);
+        assert_eq!(
+            animator.current_state_info().state_index,
+            2,
+            "ANI-001: the any state transition must fire from source state {source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn ani_001_any_state_transition_honours_can_transition_to_self() {
+    let build = |allow_self: bool| {
+        AnimatorController::new(
+            "AnyStateSelf",
+            vec![ParameterDef::trigger("react")],
+            vec![
+                AnimatorState::new(
+                    "Idle",
+                    StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+                ),
+                AnimatorState::new(
+                    "React",
+                    StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
+                ),
+            ],
+            0,
+            vec![StateTransition::any_state(
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("react", ConditionOp::If)],
+            )
+            .with_can_transition_to_self(allow_self)],
+        )
+    };
+
+    let mut blocked = Animator::new(build(false));
+    assert_eq!(blocked.set_trigger("react"), Ok(()));
+    blocked.step(0.1);
+    assert_eq!(blocked.current_state_info().state_index, 1);
+    blocked.step(0.25);
+    let running = blocked.current_state_info();
+    assert!((running.normalized_time - 0.25).abs() < 1e-5);
+    assert_eq!(blocked.set_trigger("react"), Ok(()));
+    blocked.step(0.1);
+    let held = blocked.current_state_info();
+    assert_eq!(held.state_index, 1);
+    assert!(
+        (held.normalized_time - 0.35).abs() < 1e-5,
+        "ANI-001: with Can Transition To Self disabled the any state transition must not restart the destination state"
+    );
+
+    let mut allowed = Animator::new(build(true));
+    assert_eq!(allowed.set_trigger("react"), Ok(()));
+    allowed.step(0.1);
+    assert_eq!(allowed.current_state_info().state_index, 1);
+    allowed.step(0.25);
+    let running = allowed.current_state_info();
+    assert!((running.normalized_time - 0.25).abs() < 1e-5);
+    assert_eq!(allowed.set_trigger("react"), Ok(()));
+    allowed.step(0.1);
+    let restarted = allowed.current_state_info();
+    assert_eq!(restarted.state_index, 1);
+    assert!(
+        (restarted.normalized_time - 0.0).abs() < 1e-5,
+        "ANI-001: with Can Transition To Self enabled the any state transition restarts the destination state"
+    );
+}
+
+#[test]
+fn ani_001_any_state_transition_with_exit_time_waits_for_the_normalized_time() {
+    let controller = AnimatorController::new(
+        "AnyStateExitTime",
+        vec![ParameterDef::trigger("react")],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 2.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "React",
+                StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
+            ),
+        ],
+        0,
+        vec![StateTransition::any_state_with_exit_time(
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("react", ConditionOp::If)],
+            0.5,
+            0.0,
+        )],
+    );
+
+    let mut animator = Animator::new(controller);
+    assert_eq!(animator.set_trigger("react"), Ok(()));
+    animator.step(0.5);
+    assert_eq!(
+        animator.current_state_info().state_index,
+        0,
+        "ANI-001: an any state transition with an exit time waits for the normalized time"
+    );
+    animator.step(0.5);
+    assert_eq!(
+        animator.current_state_info().state_index,
+        1,
+        "ANI-001: an any state transition with an exit time fires once the normalized time is reached"
+    );
+}
+
+#[test]
+fn ani_001_keep_animator_state_on_disable_preserves_state_and_time() {
+    let controller = AnimatorController::new(
+        "KeepState",
+        vec![ParameterDef::bool("go", false)],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new("Run", StateMotion::Clip(simple_clip("Run", 1.0, 1.0, 1.0))),
+        ],
+        0,
+        vec![StateTransition::instant(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+        )],
+    );
+
+    let mut animator = Animator::new(controller);
+    assert_eq!(animator.set_bool("go", true), Ok(()));
+    animator.step(0.25);
+    assert_eq!(animator.current_state_info().state_index, 1);
+    animator.step(0.5);
+    let running = animator.current_state_info();
+    assert!((running.normalized_time - 0.5).abs() < 1e-5);
+
+    animator.set_keep_state_on_disable(true);
+    assert!(animator.keep_state_on_disable());
+    animator.reset();
+    let kept = animator.current_state_info();
+    assert_eq!(
+        kept.state_index, 1,
+        "ANI-001: keepAnimatorStateOnDisable must preserve the current state across a reset"
+    );
+    assert!(
+        (kept.normalized_time - running.normalized_time).abs() < 1e-5,
+        "ANI-001: keepAnimatorStateOnDisable must preserve the state time across a reset"
+    );
+    assert_eq!(
+        animator.get_bool("go"),
+        Some(true),
+        "ANI-001: keepAnimatorStateOnDisable must preserve parameter values across a reset"
+    );
+
+    animator.set_keep_state_on_disable(false);
+    assert!(!animator.keep_state_on_disable());
+    animator.reset();
+    let reset = animator.current_state_info();
+    assert_eq!(
+        reset.state_index, 0,
+        "ANI-001: without keepAnimatorStateOnDisable a reset returns to the entry state"
+    );
+    assert!(
+        (reset.normalized_time - 0.0).abs() < 1e-5,
+        "ANI-001: without keepAnimatorStateOnDisable a reset clears the state time"
+    );
+    assert_eq!(
+        animator.get_bool("go"),
+        Some(false),
+        "ANI-001: without keepAnimatorStateOnDisable a reset restores the default parameter values"
     );
 }

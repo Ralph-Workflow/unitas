@@ -1,8 +1,12 @@
+use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
     AnimationClip, AnimationError, Animator, AnimatorController, AnimatorState, ConditionOp,
     CurveBinding, CurveBindingTarget, FloatCurve, Keyframe, ParameterDef, ParameterValue,
     PropertyCurve, StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
 };
+
+const WIRE_OBJECT_GUID_A: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
+const WIRE_OBJECT_GUID_B: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
 
 fn build_rich_controller() -> AnimatorController {
     let float_curve = FloatCurve::new(vec![
@@ -406,5 +410,90 @@ fn roundtrip_preserves_multi_threshold_blend_tree_and_multiple_events() -> Resul
     let bytes = ctrl.encode_binary();
     let decoded = AnimatorController::decode_binary(&bytes)?;
     assert_eq!(decoded, ctrl);
+    Ok(())
+}
+
+fn sprite_swap_controller() -> AnimatorController {
+    let clip = AnimationClip::new(
+        "SpriteSwap",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::new(
+            CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+            PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                ObjectReferenceKey::new(0.0, AssetReference::new(WIRE_OBJECT_GUID_A, 21300000)),
+                ObjectReferenceKey::new(1.0, AssetReference::new(WIRE_OBJECT_GUID_B, 21300001)),
+            ])),
+        )],
+        Vec::new(),
+    );
+    AnimatorController::new(
+        "SpriteController",
+        Vec::new(),
+        vec![AnimatorState::new("SpriteSwap", StateMotion::Clip(clip))],
+        0,
+        Vec::new(),
+    )
+}
+
+#[test]
+fn wire_v2_round_trips_an_object_reference_curve() -> Result<(), AnimationError> {
+    let original = sprite_swap_controller();
+    let encoded = original.encode_binary();
+    assert_eq!(encoded[4..8], 2u32.to_le_bytes());
+    let decoded = AnimatorController::decode_binary(&encoded)?;
+    assert_eq!(decoded, original);
+
+    let StateMotion::Clip(clip) = &decoded.states[0].motion else {
+        return Err(AnimationError::UnexpectedEof);
+    };
+    let PropertyCurve::ObjectReference(curve) = &clip.bindings[0].curve else {
+        return Err(AnimationError::UnexpectedEof);
+    };
+    assert_eq!(curve.len(), 2);
+    assert_eq!(
+        curve.keyframes()[0].reference,
+        AssetReference::new(WIRE_OBJECT_GUID_A, 21300000)
+    );
+    assert_eq!(
+        curve.keyframes()[1].reference,
+        AssetReference::new(WIRE_OBJECT_GUID_B, 21300001)
+    );
+    assert_eq!(
+        curve.evaluate(0.5),
+        AssetReference::new(WIRE_OBJECT_GUID_A, 21300000)
+    );
+    assert_eq!(
+        curve.evaluate(1.5),
+        AssetReference::new(WIRE_OBJECT_GUID_B, 21300001)
+    );
+    Ok(())
+}
+
+#[test]
+fn wire_v2_object_reference_curve_evaluates_identically_after_the_round_trip(
+) -> Result<(), AnimationError> {
+    let original = sprite_swap_controller();
+    let encoded = original.encode_binary();
+    let decoded = AnimatorController::decode_binary(&encoded)?;
+
+    let mut anim_a = Animator::new(original);
+    let mut anim_b = Animator::new(decoded);
+    for _ in 0..4 {
+        let frame_a = anim_a.step(0.25);
+        let frame_b = anim_b.step(0.25);
+        assert_eq!(frame_a, frame_b);
+    }
+    Ok(())
+}
+
+#[test]
+fn wire_v1_buffers_from_the_managed_bridge_encoder_still_decode() -> Result<(), AnimationError> {
+    let original = build_rich_controller();
+    let mut encoded = original.encode_binary();
+    encoded[4..8].copy_from_slice(&1u32.to_le_bytes());
+    let decoded = AnimatorController::decode_binary(&encoded)?;
+    assert_eq!(decoded, original);
     Ok(())
 }

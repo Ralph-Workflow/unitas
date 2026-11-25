@@ -1034,6 +1034,31 @@ def test_secret_scan_excludes_build_output_but_not_sources() -> None:
         assert not any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
 
 
+def test_secret_scan_excludes_agent_scratch_directories() -> None:
+    scratch = (
+        ".agent/tmp/development_prompt.md",
+        ".opencode/state.json",
+        ".omo/run-continuation/ses_deb337c08ffe2K5MiExtomhIVY.json",
+    )
+    for path in scratch:
+        assert any(re.search(pattern, path) for pattern in verify.SECRET_SCAN_EXCLUDES)
+
+
+def test_secret_scan_skips_agent_scratch_tree(tmp_path: Path) -> None:
+    scratch = tmp_path / ".omo" / "run-continuation"
+    scratch.mkdir(parents=True)
+    (scratch / "ses_deb337c08ffe2K5MiExtomhIVY.json").write_text(
+        '{"sessionID": "0Z3mQm9Qb2F0YQ=="}', encoding="utf-8"
+    )
+    (tmp_path / "crates").mkdir()
+    (tmp_path / "crates" / "lib.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+    files = verify.secret_scan_files(tmp_path)
+
+    assert "crates/lib.rs" in files
+    assert not any(path.startswith(".omo/") for path in files)
+
+
 def test_secret_scan_skips_generated_player_bundles(tmp_path: Path) -> None:
     bundle = tmp_path / "roll-a-ball"
     bundle.mkdir()

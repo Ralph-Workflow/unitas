@@ -1170,6 +1170,65 @@ fn kinematic_trigger_and_static_trigger_pair_emits_trigger_events() -> Result<()
 }
 
 #[test]
+fn rotating_kinematic_platform_drags_a_resting_dynamic_sphere() -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let platform = EntityId::new(1);
+    let ball = EntityId::new(2);
+    world.add_body(
+        platform,
+        BodyDesc {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [2.0, 0.25, 2.0],
+            },
+            layer: 0,
+            role: BodyRole::Kinematic,
+            friction: 0.6,
+            restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
+        },
+    )?;
+    world.add_body(
+        ball,
+        BodyDesc {
+            use_gravity: true,
+            ..sphere([1.0, 0.75, 0.0], [0.0; 3])
+        },
+    )?;
+
+    for _ in 0..5 {
+        world.step(0.02)?;
+    }
+    let start = world.position(ball).unwrap_or([0.0; 3]);
+
+    let angle_per_step = 0.03f64;
+    for step in 1..=40 {
+        let half = (step as f64 * angle_per_step) * 0.5;
+        world.set_rotation(platform, [0.0, half.sin(), 0.0, half.cos()])?;
+        world.step(0.02)?;
+    }
+    let end = world.position(ball).unwrap_or([0.0; 3]);
+
+    let drift = ((end[0] - start[0]).powi(2) + (end[2] - start[2]).powi(2)).sqrt();
+    assert!(
+        drift > 0.1,
+        "expected the spinning kinematic platform to drag the resting sphere, drifted {drift}"
+    );
+    assert!(
+        (end[1] - start[1]).abs() < 0.1,
+        "expected the sphere to stay resting on the platform, y went from {} to {}",
+        start[1],
+        end[1]
+    );
+    Ok(())
+}
+
+#[test]
 fn two_static_triggers_exchange_no_trigger_events() -> Result<(), PhysicsError> {
     let mut world = World::new();
     let left = EntityId::new(1);

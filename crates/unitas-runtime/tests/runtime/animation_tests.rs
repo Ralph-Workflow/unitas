@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::path::Path;
 
+use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
     AnimationClip, AnimatorController, AnimatorState, ConditionOp, CurveBinding,
-    CurveBindingTarget, FloatCurve, Keyframe, ParameterDef, StateMotion, StateTransition,
-    TransitionCondition, TransitionTarget, WrapMode, decode_controller_binary,
+    CurveBindingTarget, FloatCurve, Keyframe, ParameterDef, PropertyCurve, StateMotion,
+    StateTransition, TransitionCondition, TransitionTarget, WrapMode, decode_controller_binary,
     encode_controller_binary,
 };
 use unitas_core::EntityId;
@@ -1717,5 +1718,78 @@ fn ani_001_outcome_28_state_machine_behaviour_callback_order_is_observable_at_ru
             .all(|callback| callback.kind == StateMachineCallbackKind::OnStateUpdate),
         "ANI-001 outcome 28: after the transition only the destination state reports updates"
     );
+    Ok(())
+}
+
+#[test]
+fn ani_001_outcome_33_object_reference_curve_applies_the_resolved_reference_to_the_component_property()
+-> Result<(), Box<dyn Error>> {
+    let clip = AnimationClip::new(
+        "SpriteSwap",
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::new(
+            CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+            PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                ObjectReferenceKey::new(
+                    0.0,
+                    AssetReference::new(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef, 21300000),
+                ),
+                ObjectReferenceKey::new(
+                    1.0,
+                    AssetReference::new(0xfedc_ba98_7654_3210_fedc_ba98_7654_3210, 21300001),
+                ),
+            ])),
+        )],
+        Vec::new(),
+    );
+    let controller = AnimatorController::new(
+        "SpriteController",
+        Vec::new(),
+        vec![AnimatorState::new("SpriteSwap", StateMotion::Clip(clip))],
+        0,
+        Vec::new(),
+    );
+    let mut runtime = Runtime::new()?;
+    let entity = runtime.ensure_animator(0);
+    let handle = register_controller(&mut runtime, &controller)?;
+    runtime.set_animator_controller(entity, handle)?;
+    let target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
+
+    let start = runtime
+        .animation()
+        .applied_object_reference(entity, &target)
+        .ok_or("object reference was not applied to the component property")?;
+    assert_eq!(
+        start.reference,
+        AssetReference::new(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef, 21300000)
+    );
+    assert_eq!(start.changes, 0);
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(0));
+
+    runtime.tick(0.0)?;
+    runtime.tick(1.0)?;
+    let switched = runtime
+        .animation()
+        .applied_object_reference(entity, &target)
+        .ok_or("object reference was not applied to the component property")?;
+    assert_eq!(
+        switched.reference,
+        AssetReference::new(0xfedc_ba98_7654_3210_fedc_ba98_7654_3210, 21300001)
+    );
+    assert_eq!(switched.changes, 1);
+
+    runtime.tick(1.0)?;
+    let wrapped = runtime
+        .animation()
+        .applied_object_reference(entity, &target)
+        .ok_or("object reference was not applied to the component property")?;
+    assert_eq!(
+        wrapped.reference,
+        AssetReference::new(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef, 21300000)
+    );
+    assert_eq!(wrapped.changes, 2);
+    assert_eq!(runtime.animation().diagnostic_count(entity), Some(0));
     Ok(())
 }

@@ -11,7 +11,8 @@ use unitas_asset::{
 };
 use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{
-    EntityId, IDENTITY_ROTATION, SceneGraph, Transform, normalize_rotation, rotate_vector,
+    EntityId, IDENTITY_ROTATION, SceneGraph, Transform, multiply_rotation, normalize_rotation,
+    rotate_vector,
 };
 use unitas_physics::navigation::NavMesh;
 use unitas_physics::{
@@ -1387,6 +1388,7 @@ impl Runtime {
         rotation: [f64; 4],
     ) -> Result<(), RuntimeError> {
         self.physics.world_3d_mut().set_rotation(entity, rotation)?;
+        self.write_back_body_rotation(entity, rotation);
         Ok(())
     }
 
@@ -1547,6 +1549,23 @@ impl Runtime {
                 if should_update {
                     let _ = self.physics.world_3d_mut().set_position(*entity, graph_pos);
                 }
+                let graph_rotation = normalize_rotation(world_transform.rotation);
+                let graph_rotation = [
+                    f64::from(graph_rotation[0]),
+                    f64::from(graph_rotation[1]),
+                    f64::from(graph_rotation[2]),
+                    f64::from(graph_rotation[3]),
+                ];
+                let rotation_changed = match self.physics.world_3d().rotation(*entity) {
+                    Some(current) => !rotations_equivalent(current, graph_rotation),
+                    None => false,
+                };
+                if rotation_changed {
+                    let _ = self
+                        .physics
+                        .world_3d_mut()
+                        .set_rotation(*entity, graph_rotation);
+                }
             }
         }
     }
@@ -1576,6 +1595,35 @@ impl Runtime {
             };
             if let Some(transform) = scene.graph.transform_mut(entity) {
                 transform.translation = local_translation;
+            }
+            return;
+        }
+    }
+
+    fn write_back_body_rotation(&mut self, entity: EntityId, world_rotation: [f64; 4]) {
+        for scene in &mut self.scenes {
+            if scene.graph.entity(entity).is_none() {
+                continue;
+            }
+            let world = [
+                world_rotation[0] as f32,
+                world_rotation[1] as f32,
+                world_rotation[2] as f32,
+                world_rotation[3] as f32,
+            ];
+            let local = match scene
+                .graph
+                .parent(entity)
+                .and_then(|parent| scene.graph.world_transform(parent))
+            {
+                Some(parent_world) => {
+                    let parent = normalize_rotation(parent_world.rotation);
+                    multiply_rotation([-parent[0], -parent[1], -parent[2], parent[3]], world)
+                }
+                None => world,
+            };
+            if let Some(transform) = scene.graph.transform_mut(entity) {
+                transform.rotation = normalize_rotation(local);
             }
             return;
         }
@@ -2055,6 +2103,16 @@ fn normalized(vector: [f64; 3]) -> Option<[f64; 3]> {
         return None;
     }
     Some([vector[0] / length, vector[1] / length, vector[2] / length])
+}
+
+fn rotations_equivalent(a: [f64; 4], b: [f64; 4]) -> bool {
+    let a = normalize_rotation([a[0] as f32, a[1] as f32, a[2] as f32, a[3] as f32]);
+    let b = normalize_rotation([b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]);
+    let dot = f64::from(a[0]) * f64::from(b[0])
+        + f64::from(a[1]) * f64::from(b[1])
+        + f64::from(a[2]) * f64::from(b[2])
+        + f64::from(a[3]) * f64::from(b[3]);
+    (1.0 - dot.abs()) <= 1e-6
 }
 
 fn phase_code(phase: Phase) -> u32 {

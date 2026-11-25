@@ -1266,6 +1266,26 @@ namespace Unitas.Bridge
                 || TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_teleport_body_position, position);
         }
 
+        public bool TrySetBodyRotation(ulong entity, Quaternion rotation)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[32];
+            BitConverter.GetBytes((double)rotation.x).CopyTo(bytes, 0);
+            BitConverter.GetBytes((double)rotation.y).CopyTo(bytes, 8);
+            BitConverter.GetBytes((double)rotation.z).CopyTo(bytes, 16);
+            BitConverter.GetBytes((double)rotation.w).CopyTo(bytes, 24);
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+            return RuntimeInterop.unitas_runtime_set_body_rotation(_runtimeHandle, entity, buffer) == 0;
+        }
+
         public bool TrySetBodyVelocity(ulong entity, Vector3 velocity)
         {
             return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_velocity, velocity);

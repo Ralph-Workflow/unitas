@@ -4,11 +4,14 @@ use crate::controller::{
     ParameterDef, ParameterValue, StateMotion, StateTransition, TransitionCondition,
     TransitionTarget,
 };
-use crate::curve::{FloatCurve, InterpolationMode, Keyframe, PropertyCurve};
+use crate::curve::{
+    AssetReference, FloatCurve, InterpolationMode, Keyframe, ObjectReferenceCurve,
+    ObjectReferenceKey, PropertyCurve,
+};
 use crate::error::AnimationError;
 
 pub const WIRE_MAGIC: [u8; 4] = *b"UANC";
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;
 const EXTENSION_MAGIC: u32 = 0x5744_0001;
 
 pub fn encode_controller_binary(controller: &AnimatorController) -> Vec<u8> {
@@ -156,7 +159,7 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
         return Err(AnimationError::InvalidMagic);
     }
     let version = cursor.read_u32()?;
-    if version != WIRE_VERSION {
+    if version > WIRE_VERSION {
         return Err(AnimationError::UnsupportedVersion(version));
     }
     let name = cursor.read_str()?;
@@ -377,6 +380,15 @@ fn write_clip(out: &mut Vec<u8>, clip: &AnimationClip) {
                     write_float_curve(out, c);
                 }
             }
+            PropertyCurve::ObjectReference(c) => {
+                write_u8(out, 4);
+                write_u32(out, c.keys.len() as u32);
+                for key in &c.keys {
+                    write_f32(out, key.time);
+                    write_u128(out, key.reference.guid);
+                    write_i64(out, key.reference.file_id);
+                }
+            }
         }
     }
 
@@ -434,6 +446,20 @@ fn read_clip(cursor: &mut Cursor<'_>) -> Result<AnimationClip, AnimationError> {
                 read_float_curve(cursor)?,
                 read_float_curve(cursor)?,
             ]),
+            4 => {
+                let key_count = cursor.read_u32()? as usize;
+                let mut keys = Vec::with_capacity(key_count.min(4096));
+                for _ in 0..key_count {
+                    let time = cursor.read_f32()?;
+                    let guid = cursor.read_u128()?;
+                    let file_id = cursor.read_i64()?;
+                    keys.push(ObjectReferenceKey::new(
+                        time,
+                        AssetReference::new(guid, file_id),
+                    ));
+                }
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(keys))
+            }
             other => {
                 return Err(AnimationError::InvalidTag {
                     section: "PropertyCurve",
@@ -536,6 +562,12 @@ fn write_u32(out: &mut Vec<u8>, v: u32) {
 fn write_i32(out: &mut Vec<u8>, v: i32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
+fn write_i64(out: &mut Vec<u8>, v: i64) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn write_u128(out: &mut Vec<u8>, v: u128) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
 
 fn write_f32(out: &mut Vec<u8>, v: f32) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -614,6 +646,18 @@ impl<'a> Cursor<'a> {
     fn read_i32(&mut self) -> Result<i32, AnimationError> {
         let s = self.read_exact(4)?;
         Ok(i32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    }
+    fn read_i64(&mut self) -> Result<i64, AnimationError> {
+        let s = self.read_exact(8)?;
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(s);
+        Ok(i64::from_le_bytes(bytes))
+    }
+    fn read_u128(&mut self) -> Result<u128, AnimationError> {
+        let s = self.read_exact(16)?;
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(s);
+        Ok(u128::from_le_bytes(bytes))
     }
 
     fn read_f32(&mut self) -> Result<f32, AnimationError> {
