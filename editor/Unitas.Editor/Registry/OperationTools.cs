@@ -17,7 +17,7 @@ namespace Unitas.Editor.Mcp
             host.RegisterTool(
                 new ToolDefinition(
                     "operations.list",
-                    "List the operation handles the host has started",
+                    "Enumerate the operation handles the host has started",
                     new JsonObject
                     {
                         ["type"] = "object",

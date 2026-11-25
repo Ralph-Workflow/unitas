@@ -1,6 +1,5 @@
 macro_rules! ffi_export {
     (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
-        #[export_name = stringify!($name)]
         pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
             #[used]
             static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
@@ -370,11 +369,14 @@ mod tests {
         assert_eq!(unitas_editor_install_builtin_tools(), 0);
 
         let described = read_and_free(unitas_editor_tools_describe())?;
-        assert_eq!(described["tools"][0]["name"], json!("engine.abi_status"));
-        assert_eq!(
-            described["tools"][0]["origin"],
-            json!("unitas://native/editor-abi")
-        );
+        let tools = described["tools"]
+            .as_array()
+            .ok_or("describe payload has no tools array")?;
+        let abi_status = tools
+            .iter()
+            .find(|tool| tool["name"] == json!("engine.abi_status"))
+            .ok_or("engine.abi_status is not registered")?;
+        assert_eq!(abi_status["origin"], json!("unitas://native/editor-abi"));
 
         let name = allocate_c_string("engine.abi_status");
         let args = allocate_c_string("{\"probe\":true}");
