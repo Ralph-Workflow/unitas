@@ -23,7 +23,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
         {
-            string tempProject = CreateTempTestProject("story15");
+            string tempProject = CreateTempTestProject("shared_a");
             try
             {
                 string allXmlPath = Path.Combine(tempProject, "TestResults", "all.xml");
@@ -65,7 +65,8 @@ namespace Unitas.Bridge.Tests
                     {
                         Mode = TestModeFilter.All,
                         CategoryFilter = "Smoke",
-                        ResultsXmlPath = smokeXmlPath
+                        ResultsXmlPath = smokeXmlPath,
+                        SkipCompilation = true
                     });
 
                 Check.Equal("Story 15 Smoke category run compiles cleanly", true, smokeHeadless.CompileSucceeded);
@@ -102,14 +103,16 @@ namespace Unitas.Bridge.Tests
                     new TestRunOptions
                     {
                         Mode = TestModeFilter.EditMode,
-                        CategoryFilter = "Smoke"
+                        CategoryFilter = "Smoke",
+                        SkipCompilation = true
                     });
                 TestRunResult playOnly = TestRunner.RunProject(
                     tempProject,
                     new TestRunOptions
                     {
                         Mode = TestModeFilter.PlayMode,
-                        CategoryFilter = "Smoke"
+                        CategoryFilter = "Smoke",
+                        SkipCompilation = true
                     });
 
                 Check.Equal("Story 15 EditMode-only Smoke count matches EditMode subset (3)", 3, editOnly.PassedCount);
@@ -127,7 +130,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestStory16UnexpectedErrorLogFailsAndLogAssertExpectPasses()
         {
-            string tempProject = CreateTempTestProject("story16");
+            string tempProject = CreateTempTestProject("shared_a");
             try
             {
                 string logXmlPath = Path.Combine(tempProject, "TestResults", "logging.xml");
@@ -137,7 +140,8 @@ namespace Unitas.Bridge.Tests
                     {
                         Mode = TestModeFilter.EditMode,
                         CategoryFilter = "Logging",
-                        ResultsXmlPath = logXmlPath
+                        ResultsXmlPath = logXmlPath,
+                        SkipCompilation = true
                     });
 
                 Check.Equal("Story 16 logging test run compiles", true, logRun.CompileSucceeded);
@@ -184,7 +188,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestStory17CancelledTestRunReportsOnlyCompletedTests()
         {
-            string tempProject = CreateTempTestProject("story17");
+            string tempProject = CreateTempTestProject("shared_a");
             try
             {
                 using CancellationTokenSource cts = new CancellationTokenSource();
@@ -240,7 +244,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns()
         {
-            string tempProject = CreateTempTestProject("utf_gaps");
+            string tempProject = CreateTempTestProject("shared_b");
             try
             {
                 string gapsFile = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "UtfGapTests.cs");
@@ -324,7 +328,8 @@ namespace Unitas.Bridge.Tests
                     new TestRunOptions
                     {
                         Mode = TestModeFilter.EditMode,
-                        CategoryFilter = "Gaps"
+                        CategoryFilter = "Gaps",
+                        SkipCompilation = true
                     });
 
                 Check.Equal("UTF gaps test run compiles cleanly", true, gapsRun.CompileSucceeded);
@@ -379,7 +384,8 @@ namespace Unitas.Bridge.Tests
                     {
                         Mode = TestModeFilter.All,
                         TestNameFilter = "MyGame.EditTests.MathEditTests.SimpleAddition",
-                        ResultsXmlPath = exactXmlPath
+                        ResultsXmlPath = exactXmlPath,
+                        SkipCompilation = true
                     });
                 Check.Equal("Exact --test filter selects 1 test", 1, exactFilter.SelectedTestCaseCount);
                 Check.Equal("Exact --test filter passes", 1, exactFilter.PassedCount);
@@ -391,7 +397,8 @@ namespace Unitas.Bridge.Tests
                     {
                         Mode = TestModeFilter.All,
                         TestNameFilter = "MyGame.EditTests.*.MultiplyCases*",
-                        ResultsXmlPath = wildcardXmlPath
+                        ResultsXmlPath = wildcardXmlPath,
+                        SkipCompilation = true
                     });
                 Check.Equal("Wildcard --test filter selects 2 parameterized cases", 2, wildcardFilter.SelectedTestCaseCount);
                 Check.Equal("Wildcard --test filter passes all 2 cases", 2, wildcardFilter.PassedCount);
@@ -424,7 +431,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestPlayModeFreshSceneIsolationAndEditStateRestoration()
         {
-            string tempProject = CreateTempTestProject("playmode_isolation");
+            string tempProject = CreateTempTestProject("shared_b");
             UnityEngine.GameObject editTimeObject = new UnityEngine.GameObject("EditTimeSurvivorObject");
             editTimeObject.transform.position = new UnityEngine.Vector3(7f, 8f, 9f);
             try
@@ -515,7 +522,7 @@ namespace Unitas.Bridge.Tests
 
         private static void TestCliRunCommandExitCodes()
         {
-            string tempProject = CreateTempTestProject("cli_utf");
+            string tempProject = CreateTempTestProject("shared_a");
             try
             {
                 string xmlPath = Path.Combine(tempProject, "TestResults", "cli_smoke.xml");
@@ -594,9 +601,13 @@ namespace Unitas.Bridge.Tests
 
         private static string CreateTempTestProject(string label)
         {
-            string root = Path.Combine(
-                Path.GetTempPath(),
-                "unitas_utf_test_" + label + "_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
+            // One directory per group lets the repeated runs reuse the compiled
+            // test assemblies instead of recompiling the same sources every run.
+            string root = Path.Combine(Path.GetTempPath(), "unitas_utf_test_" + label);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
 
             string runtimeDir = Path.Combine(root, "Assets", "Scripts");
             string editTestsDir = Path.Combine(root, "Assets", "Tests", "EditMode");
