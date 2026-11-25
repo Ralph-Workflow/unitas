@@ -11,7 +11,8 @@ Thank you for helping build unitas. Before you open a pull request:
    audit (`bypass-audit`), the ban-catalog gate (`banned-constructs`), the
    comment audit (`comment-audit`), the dependency gate (`deps`), the secret
    scan (`secret-scan`), the linting and format checks (`ruff check`,
-   `ruff format --check`, `cargo fmt --check`, `cargo clippy`,
+   `ruff format --check`, `cargo fmt --all -- --check`,
+   `cargo clippy --workspace --all-targets -- -D warnings`,
    `dotnet-format`), the type checks (`mypy`, `cargo check`, `dotnet-build`),
    and the test suites (`pytest`, `cargo test`, `dotnet-test`).
 3. Keep pull requests small and focused, with tests for every behavior change.

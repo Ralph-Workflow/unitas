@@ -318,6 +318,15 @@ def test_banned_raw_generic_type_is_detected(tmp_path: Path) -> None:
     assert verify.banned_source_findings(source) == []
 
 
+def test_banned_any_downcast_is_detected(tmp_path: Path) -> None:
+    source = tmp_path / "sample.rs"
+    source.write_text("fn f(value: &std::any::Any) {}\n", encoding="utf-8")
+    findings = verify.banned_source_findings(source)
+    assert any("any type downcast" in finding for finding in findings)
+    source.write_text("fn f(value: &str) {}\n", encoding="utf-8")
+    assert verify.banned_source_findings(source) == []
+
+
 def test_banned_unchecked_is_detected(tmp_path: Path) -> None:
     source = tmp_path / "sample.cs"
     source.write_text("class C { int x = unchecked(1); }\n", encoding="utf-8")

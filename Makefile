@@ -1,9 +1,10 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
 
 VERIFY_BUDGET_SECONDS := 30
+SUITE_BUDGET_SECONDS := 25
 VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 
@@ -42,6 +43,9 @@ verify-dotnet-gates:
 	exit $$rc
 
 test:
+	@python3 tools/verify.py timed test-suite $(SUITE_BUDGET_SECONDS) $(MAKE) --no-print-directory test-steps
+
+test-steps:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q
 	@python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace
 

@@ -24,7 +24,8 @@ that cannot run is a red gate.
 The Rust workspace and Milestone 1 asset-import/scene-graph foundation are
 implemented. The C# UnityEngine bridge is implemented, and its
 dotnet-build, dotnet-format, and dotnet-test gates run in the default
-`make verify` lane.
+`make verify` lane. The C# editor host and the Rust editor ABI are implemented
+too, and their gates run in that same default lane.
 
 <!-- ralph-workflow-policy:begin v3 -->
 Quality policies live under `docs/ralph-workflow-policy/`. Every agent role loads

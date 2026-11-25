@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -285,6 +286,10 @@ BANNED_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
         ("unwrap outside a test module", re.compile(r"\.unwrap\(\)")),
         ("expect outside a test module", re.compile(r"\.expect\(")),
         ("panic macro", re.compile(r"\bpanic!\s*\(")),
+        (
+            "any type downcast",
+            re.compile(r"\bstd::any::Any\b|\bdyn\s+Any\b|\.downcast_(?:ref|mut)\b"),
+        ),
     ),
     ".cs": (
         ("dynamic type", re.compile(r"\bdynamic\b")),
@@ -1558,9 +1563,29 @@ def secret_scan_files(root: Path = REPO_ROOT) -> list[str]:
     return files
 
 
+def detect_secrets_version() -> str:
+    command = ["detect-secrets", "--version"]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return "detect-secrets:unavailable"
+    if completed.returncode != 0:
+        return "detect-secrets:unavailable"
+    return completed.stdout.strip() or "detect-secrets:unknown"
+
+
 def secret_scan_digest(files: Sequence[str], root: Path = REPO_ROOT) -> str:
     hasher = hashlib.sha256()
     hasher.update(SECRETS_BASELINE.read_bytes())
+    hasher.update(detect_secrets_version().encode("utf-8"))
+    hasher.update(sys.version.encode("utf-8"))
+    hasher.update(platform.platform().encode("utf-8"))
     for rel_file in files:
         hasher.update(rel_file.encode("utf-8"))
         hasher.update(b"\0")
@@ -1595,6 +1620,9 @@ def check_secrets() -> list[str]:
                 and cached.get("digest") == digest
                 and isinstance(cached.get("findings"), list)
             ):
+                sys.stdout.write(
+                    f"secret scan: cache hit for {len(files)} files (digest {digest[:12]})\n"
+                )
                 return [str(item) for item in cached["findings"]]
     chunks = secret_scan_chunks(files, 4)
     runs = []

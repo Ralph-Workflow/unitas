@@ -38,17 +38,22 @@ What the repository contains today:
   (`crates/unitas-build`).
 * **C# bridge.** A C# scripting API that runs component scripts against the
   Rust runtime, plus a declarative playtest scenario runner (`bridge/`).
+* **Editor host and MCP automation.** A headless C# editor host that serves
+  the Model Context Protocol over stdio and HTTP, registers project, scene,
+  audit, play-session, capture, and native Rust tools, and binds to the Rust
+  editor ABI (`editor/`, `crates/unitas-editor-abi`).
 
-Not built yet: the visual editor, the MCP and automation layer, opening an
-existing project directly, GPU rendering, platform targets beyond the headless
-player, and most of the [feature catalog](docs/product-specification/feature-catalog.md).
+Not built yet: the visual editor, opening an existing project directly,
+platform targets beyond the macOS player, and most of the
+[feature catalog](docs/product-specification/feature-catalog.md).
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `crates/` | Rust workspace: engine, runtime, and build crates |
+| `crates/` | Rust workspace: engine, runtime, build, and editor-ABI crates |
 | `bridge/` | C# scripting API, bridge host, and their tests |
+| `editor/` | C# editor host: MCP tools, play sessions, and the headless CLI |
 | `docs/product-specification/` | What the finished product does, feature by feature |
 | `docs/ralph-workflow-policy/` | Quality policy that every change must satisfy |
 | `tools/` | Verification gates and the CLA check, in standard-library Python |
@@ -71,7 +76,8 @@ That runs the policy self-check (`policy-validate`), the bypass audit
 (`bypass-audit`), the ban-catalog gate (`banned-constructs`), the comment audit
 (`comment-audit`), the dependency gate (`deps`), the secret scan
 (`secret-scan`), the linting and format checks (`ruff check`,
-`ruff format --check`, `cargo fmt --check`, `cargo clippy`, `dotnet-format`),
+`ruff format --check`, `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `dotnet-format`),
 the type checks (`mypy`, `cargo check`, `dotnet-build`), and the test suites
 (`pytest`, `cargo test`, `dotnet-test`), all within a fixed time budget. The C#
 test step loads the runtime as a `.dylib`, so the full gate currently runs on

@@ -12,10 +12,6 @@ namespace Unitas.Editor.Mcp
         {
             ArgumentNullException.ThrowIfNull(host);
             PlaySessionManager sessionManager = manager ?? new PlaySessionManager();
-            if (manager is null)
-            {
-                host.OwnResource(sessionManager);
-            }
 
             host.RegisterTool(
                 new ToolDefinition(
