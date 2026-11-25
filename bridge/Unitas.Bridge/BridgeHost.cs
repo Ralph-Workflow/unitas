@@ -884,8 +884,20 @@ namespace Unitas.Bridge
 
         private void UpdateProjectMetadata(string scenePath)
         {
-            string? projectRoot = ResolveProjectRoot(scenePath, out string resolvedDataPath);
-            _dataPath = resolvedDataPath;
+            string? projectRoot = null;
+            if (File.Exists(scenePath))
+            {
+                projectRoot = ResolveProjectRoot(scenePath, out string resolvedDataPath);
+                _dataPath = resolvedDataPath;
+            }
+            else
+            {
+                string fullScenePath = Path.Combine(Directory.GetCurrentDirectory(), scenePath);
+                string? sceneDir = Path.GetDirectoryName(fullScenePath);
+                _dataPath = string.IsNullOrEmpty(sceneDir)
+                    ? Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Assets"))
+                    : sceneDir;
+            }
 
             if (!TryReadNativeIdentity(RuntimeInterop.unitas_runtime_company_name, out string company))
             {
