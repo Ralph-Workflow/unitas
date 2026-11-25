@@ -1,0 +1,1186 @@
+use std::sync::{Mutex, MutexGuard};
+
+use crate::camera::Camera;
+use crate::image::Image;
+use crate::math::{Mat4, Vec3};
+use crate::mesh::Mesh;
+use crate::raster::{DirectionalLight, MeshInstance};
+
+const VERTEX_FLOATS: usize = 6;
+const VERTEX_STRIDE: u64 = 24;
+const UNIFORM_SLOT: u64 = 256;
+const GLOBAL_FLOATS: usize = 24;
+const INSTANCE_FLOATS: usize = 24;
+const COPY_ROW_ALIGNMENT: u64 = 256;
+const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
+
+const SHADER_SOURCE: &str = r#"
+struct Globals {
+    view_proj: mat4x4<f32>,
+    light_dir: vec4<f32>,
+    light_color: vec4<f32>,
+};
+
+struct InstanceData {
+    model: mat4x4<f32>,
+    color: vec4<f32>,
+    flags: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+@group(1) @binding(0) var<uniform> inst: InstanceData;
+
+struct VertexOut {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> VertexOut {
+    var out: VertexOut;
+    let world = inst.model * vec4<f32>(position, 1.0);
+    out.clip_position = globals.view_proj * world;
+    let transformed = (inst.model * vec4<f32>(normal, 0.0)).xyz;
+    let len = length(transformed);
+    out.normal = select(vec3<f32>(0.0, 0.0, 0.0), transformed / len, len > 1e-8);
+    out.color = inst.color.rgb;
+    return out;
+}
+
+@fragment
+fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
+    let len = length(vs_out.normal);
+    let normal = select(vec3<f32>(0.0, 0.0, 0.0), vs_out.normal / len, len > 1e-8);
+    let lambert = max(dot(normal, globals.light_dir.xyz), 0.0);
+    let shade = globals.light_color.w + globals.light_color.rgb * (lambert * globals.light_dir.w);
+    return vec4<f32>(vs_out.color * shade, 1.0);
+}
+
+@fragment
+fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(vs_out.color, 1.0);
+}
+"#;
+
+const ATTRIBUTES: [wgpu::VertexAttribute; 2] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 12,
+        shader_location: 1,
+    },
+];
+
+const VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    array_stride: VERTEX_STRIDE,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &ATTRIBUTES,
+};
+
+#[derive(Debug)]
+pub enum RenderError {
+    AdapterUnavailable(String),
+    DeviceRequestFailed(String),
+    SurfaceUnavailable(String),
+    SurfaceNotConfigured,
+    InvalidSize(u32, u32),
+    BufferCast(&'static str),
+    Readback(String),
+    Poll(String),
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::AdapterUnavailable(message) => {
+                write!(formatter, "no GPU adapter available: {message}")
+            }
+            RenderError::DeviceRequestFailed(message) => {
+                write!(formatter, "GPU device request failed: {message}")
+            }
+            RenderError::SurfaceUnavailable(message) => {
+                write!(formatter, "surface frame unavailable: {message}")
+            }
+            RenderError::SurfaceNotConfigured => {
+                write!(formatter, "surface was not configured for this renderer")
+            }
+            RenderError::InvalidSize(width, height) => {
+                write!(formatter, "invalid render target size {width}x{height}")
+            }
+            RenderError::BufferCast(kind) => {
+                write!(formatter, "failed to cast {kind} data for GPU upload")
+            }
+            RenderError::Readback(message) => write!(formatter, "readback failed: {message}"),
+            RenderError::Poll(message) => write!(formatter, "device poll failed: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuInstance<'a> {
+    pub mesh: &'a Mesh,
+    pub model: Mat4,
+    pub color: [f32; 3],
+    pub lit: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RenderScene<'a> {
+    pub camera: &'a Camera,
+    pub view: Mat4,
+    pub light: &'a DirectionalLight,
+    pub background: [f32; 3],
+}
+
+pub type GpuRenderer = Renderer;
+
+impl<'a, 'b> From<&'a MeshInstance<'b>> for GpuInstance<'b>
+where
+    'b: 'a,
+{
+    fn from(instance: &'a MeshInstance<'b>) -> Self {
+        GpuInstance {
+            mesh: instance.mesh,
+            model: instance.model,
+            color: instance.color,
+            lit: true,
+        }
+    }
+}
+
+struct Pipelines {
+    lit: wgpu::RenderPipeline,
+    unlit: wgpu::RenderPipeline,
+}
+
+struct UniformState {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+    global_bind_group: wgpu::BindGroup,
+    instance_bind_group: wgpu::BindGroup,
+}
+
+struct SurfaceState {
+    pipelines: Pipelines,
+    depth: wgpu::Texture,
+    depth_size: (u32, u32),
+}
+
+pub struct Renderer {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    global_layout: wgpu::BindGroupLayout,
+    instance_layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    offscreen_pipelines: Pipelines,
+    uniforms: Mutex<UniformState>,
+    surface: Mutex<Option<SurfaceState>>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn align_up(value: u64, alignment: u64) -> u64 {
+    value.div_ceil(alignment) * alignment
+}
+
+fn create_pipelines(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> Pipelines {
+    let depth_stencil = wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(true),
+        depth_compare: Some(wgpu::CompareFunction::Less),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    };
+    let lit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("lit"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(VERTEX_LAYOUT)],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(depth_stencil.clone()),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_lit"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let unlit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("unlit"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(VERTEX_LAYOUT)],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(depth_stencil),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_unlit"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    Pipelines { lit, unlit }
+}
+
+impl Renderer {
+    pub fn new() -> Result<Self, RenderError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|error| RenderError::AdapterUnavailable(error.to_string()))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(|error| RenderError::DeviceRequestFailed(error.to_string()))?;
+        Self::from_parts(instance, adapter, device, queue)
+    }
+
+    fn from_parts(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Self, RenderError> {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("scene"),
+            source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
+        });
+        let global_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("globals"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
+                },
+                count: None,
+            }],
+        });
+        let instance_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("instance"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new((INSTANCE_FLOATS * 4) as u64),
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene"),
+            bind_group_layouts: &[Some(&global_layout), Some(&instance_layout)],
+            immediate_size: 0,
+        });
+        let offscreen_pipelines =
+            create_pipelines(&device, &pipeline_layout, &shader, OFFSCREEN_FORMAT);
+        let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
+        Ok(Renderer {
+            instance,
+            adapter,
+            device,
+            queue,
+            global_layout,
+            instance_layout,
+            pipeline_layout,
+            shader,
+            offscreen_pipelines,
+            uniforms: Mutex::new(uniforms),
+            surface: Mutex::new(None),
+        })
+    }
+
+    pub fn instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    pub fn render_offscreen(
+        &self,
+        instances: &[MeshInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+        size: (u32, u32),
+    ) -> Result<Image, RenderError> {
+        let converted: Vec<GpuInstance<'_>> = instances.iter().map(GpuInstance::from).collect();
+        self.render_offscreen_with(&converted, camera, view, light, background, size)
+    }
+
+    pub fn render_offscreen_scene(
+        &self,
+        instances: &[MeshInstance<'_>],
+        scene: RenderScene<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<Image, RenderError> {
+        self.render_offscreen(
+            instances,
+            scene.camera,
+            scene.view,
+            scene.light,
+            scene.background,
+            (width, height),
+        )
+    }
+
+    pub fn render_offscreen_with(
+        &self,
+        instances: &[GpuInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+        size: (u32, u32),
+    ) -> Result<Image, RenderError> {
+        let (width, height) = size;
+        if width == 0 || height == 0 {
+            return Ok(Image::new(width, height));
+        }
+        let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen-color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OFFSCREEN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let depth_texture = self.create_depth_texture(width, height);
+        let color_view = color_texture.create_view(&Default::default());
+        let depth_view = depth_texture.create_view(&Default::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("offscreen"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("offscreen"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(background_color(background)),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_scene(
+                &mut pass,
+                &self.offscreen_pipelines,
+                instances,
+                camera,
+                view,
+                light,
+            )?;
+        }
+
+        let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: bytes_per_row * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &color_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let data = self.read_buffer(&readback)?;
+        Ok(image_from_rgba(&data, width, height, bytes_per_row))
+    }
+
+    pub fn configure_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<wgpu::SurfaceConfiguration, RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::InvalidSize(width, height));
+        }
+        let mut configuration = match surface.get_default_config(&self.adapter, width, height) {
+            Some(configuration) => configuration,
+            None => {
+                return Err(RenderError::SurfaceUnavailable(
+                    "no supported surface configuration".to_string(),
+                ))
+            }
+        };
+        configuration.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        surface.configure(&self.device, &configuration);
+        let pipelines = create_pipelines(
+            &self.device,
+            &self.pipeline_layout,
+            &self.shader,
+            configuration.format,
+        );
+        let depth = self.create_depth_texture(width, height);
+        let mut state = lock(&self.surface);
+        *state = Some(SurfaceState {
+            pipelines,
+            depth,
+            depth_size: (width, height),
+        });
+        Ok(configuration)
+    }
+
+    pub fn render_to_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[MeshInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+    ) -> Result<(), RenderError> {
+        let converted: Vec<GpuInstance<'_>> = instances.iter().map(GpuInstance::from).collect();
+        self.render_to_surface_with(surface, &converted, camera, view, light, background)
+    }
+
+    pub fn render_to_surface_scene(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[MeshInstance<'_>],
+        scene: RenderScene<'_>,
+    ) -> Result<(), RenderError> {
+        self.render_to_surface(
+            surface,
+            instances,
+            scene.camera,
+            scene.view,
+            scene.light,
+            scene.background,
+        )
+    }
+
+    pub fn render_to_surface_with(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[GpuInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+    ) -> Result<(), RenderError> {
+        let mut state = lock(&self.surface);
+        let surface_state = match state.as_mut() {
+            Some(surface_state) => surface_state,
+            None => return Err(RenderError::SurfaceNotConfigured),
+        };
+        let surface_texture = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            other => return Err(RenderError::SurfaceUnavailable(format!("{other:?}"))),
+        };
+        let size = (
+            surface_texture.texture.width(),
+            surface_texture.texture.height(),
+        );
+        if surface_state.depth_size != size {
+            surface_state.depth = self.create_depth_texture(size.0, size.1);
+            surface_state.depth_size = size;
+        }
+        let mut camera = *camera;
+        camera.aspect = size.0 as f32 / size.1 as f32;
+        let color_view = surface_texture.texture.create_view(&Default::default());
+        let depth_view = surface_state.depth.create_view(&Default::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("surface"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("surface"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(background_color(background)),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_scene(
+                &mut pass,
+                &surface_state.pipelines,
+                instances,
+                &camera,
+                view,
+                light,
+            )?;
+        }
+        self.queue.submit(Some(encoder.finish()));
+        self.queue.present(surface_texture);
+        Ok(())
+    }
+
+    fn create_depth_texture(&self, width: u32, height: u32) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    }
+
+    fn upload_mesh(&self, mesh: &Mesh) -> Result<Option<MeshBuffers>, RenderError> {
+        if mesh.positions.is_empty() || mesh.indices.is_empty() {
+            return Ok(None);
+        }
+        let mut vertex_data: Vec<f32> = Vec::with_capacity(mesh.positions.len() * VERTEX_FLOATS);
+        for (index, position) in mesh.positions.iter().enumerate() {
+            vertex_data.push(position.x);
+            vertex_data.push(position.y);
+            vertex_data.push(position.z);
+            let normal = mesh.normals.get(index).copied().unwrap_or(Vec3::ZERO);
+            vertex_data.push(normal.x);
+            vertex_data.push(normal.y);
+            vertex_data.push(normal.z);
+        }
+        let vertex_bytes = bytemuck::try_cast_slice::<f32, u8>(&vertex_data)
+            .map_err(|_| RenderError::BufferCast("vertex"))?;
+        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh-vertices"),
+            size: vertex_bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&vertex_buffer, 0, vertex_bytes);
+        let index_bytes = bytemuck::try_cast_slice::<u32, u8>(&mesh.indices)
+            .map_err(|_| RenderError::BufferCast("index"))?;
+        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh-indices"),
+            size: index_bytes.len() as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&index_buffer, 0, index_bytes);
+        Ok(Some(MeshBuffers {
+            vertices: vertex_buffer,
+            indices: index_buffer,
+            index_count: mesh.indices.len() as u32,
+        }))
+    }
+
+    fn draw_scene(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipelines: &Pipelines,
+        instances: &[GpuInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+    ) -> Result<(), RenderError> {
+        let view_proj = camera.projection_matrix() * view;
+        let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(instances.len());
+        for instance in instances {
+            meshes.push(self.upload_mesh(instance.mesh)?);
+        }
+
+        let mut state = lock(&self.uniforms);
+        if state.capacity < instances.len() {
+            let capacity = instances.len().max(state.capacity * 2).max(1);
+            *state = create_uniforms(
+                &self.device,
+                &self.global_layout,
+                &self.instance_layout,
+                capacity,
+            );
+        }
+
+        let mut globals = [0.0f32; GLOBAL_FLOATS];
+        globals[0..16].copy_from_slice(view_proj.as_array());
+        let direction = light.direction.normalize();
+        globals[16] = direction.x;
+        globals[17] = direction.y;
+        globals[18] = direction.z;
+        globals[19] = light.intensity.clamp(0.0, 1.0);
+        globals[20] = light.color[0];
+        globals[21] = light.color[1];
+        globals[22] = light.color[2];
+        globals[23] = 1.0 - globals[19];
+        self.queue
+            .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
+
+        let mut instance_data: Vec<f32> = Vec::with_capacity(instances.len() * INSTANCE_FLOATS);
+        for instance in instances {
+            instance_data.extend_from_slice(instance.model.as_array());
+            instance_data.extend_from_slice(&[
+                instance.color[0],
+                instance.color[1],
+                instance.color[2],
+                1.0,
+            ]);
+            instance_data.extend_from_slice(&[if instance.lit { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+        }
+        if !instance_data.is_empty() {
+            self.queue.write_buffer(
+                &state.buffer,
+                UNIFORM_SLOT,
+                bytemuck::cast_slice::<f32, u8>(&instance_data),
+            );
+        }
+
+        pass.set_bind_group(0, &state.global_bind_group, &[]);
+        for (index, instance) in instances.iter().enumerate() {
+            let mesh = match &meshes[index] {
+                Some(mesh) => mesh,
+                None => continue,
+            };
+            pass.set_bind_group(
+                1,
+                &state.instance_bind_group,
+                &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
+            );
+            if instance.lit {
+                pass.set_pipeline(&pipelines.lit);
+            } else {
+                pass.set_pipeline(&pipelines.unlit);
+            }
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        }
+        Ok(())
+    }
+
+    fn read_buffer(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, RenderError> {
+        let slice = buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| RenderError::Poll(error.to_string()))?;
+        let mapped = receiver
+            .recv()
+            .map_err(|_| RenderError::Readback("map callback was dropped".to_string()))?;
+        mapped.map_err(|_| RenderError::Readback("buffer map was rejected".to_string()))?;
+        let view = slice
+            .get_mapped_range()
+            .map_err(|error| RenderError::Readback(error.to_string()))?;
+        let data = view.to_vec();
+        drop(view);
+        buffer.unmap();
+        Ok(data)
+    }
+}
+
+struct MeshBuffers {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
+}
+
+fn create_uniforms(
+    device: &wgpu::Device,
+    global_layout: &wgpu::BindGroupLayout,
+    instance_layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> UniformState {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scene-uniforms"),
+        size: UNIFORM_SLOT * (capacity as u64 + 1),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("globals"),
+        layout: global_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
+            }),
+        }],
+    });
+    let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("instance"),
+        layout: instance_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new((INSTANCE_FLOATS * 4) as u64),
+            }),
+        }],
+    });
+    UniformState {
+        buffer,
+        capacity,
+        global_bind_group,
+        instance_bind_group,
+    }
+}
+
+fn background_color(background: [f32; 3]) -> wgpu::Color {
+    wgpu::Color {
+        r: f64::from(background[0]),
+        g: f64::from(background[1]),
+        b: f64::from(background[2]),
+        a: 1.0,
+    }
+}
+
+fn image_from_rgba(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> Image {
+    let mut image = Image::new(width, height);
+    let width = width as usize;
+    let height = height as usize;
+    let bytes_per_row = bytes_per_row as usize;
+    for y in 0..height {
+        let row_start = y * bytes_per_row;
+        for x in 0..width {
+            let offset = row_start + x * 4;
+            if offset + 3 >= data.len() {
+                continue;
+            }
+            image.pixels[y * width + x] = [data[offset], data[offset + 1], data[offset + 2]];
+        }
+    }
+    image
+}
+
+#[cfg(all(test, feature = "device"))]
+mod tests {
+    use super::*;
+    use crate::camera::look_at;
+    use crate::mesh::{cube, uv_sphere};
+    use crate::raster::render_scene;
+
+    const WIDTH: u32 = 128;
+    const HEIGHT: u32 = 128;
+    const BACKGROUND: [f32; 3] = [0.05, 0.05, 0.08];
+
+    fn camera() -> Camera {
+        Camera::perspective(60.0, 1.0, 0.1, 100.0)
+    }
+
+    fn light() -> DirectionalLight {
+        DirectionalLight {
+            direction: Vec3::new(0.4, 0.7, 0.6),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.8,
+        }
+    }
+
+    fn view() -> Mat4 {
+        look_at(
+            Vec3::new(0.0, 0.0, -5.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+    }
+
+    fn model(translation: Vec3, scale: f32) -> Mat4 {
+        Mat4::from_cols_array([
+            scale,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            scale,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            scale,
+            0.0,
+            translation.x,
+            translation.y,
+            translation.z,
+            1.0,
+        ])
+    }
+
+    fn renderer_or_skip() -> Option<Renderer> {
+        match Renderer::new() {
+            Ok(renderer) => Some(renderer),
+            Err(error) => {
+                eprintln!("skipping GPU test, no GPU device available: {error}");
+                None
+            }
+        }
+    }
+
+    fn mean_channel_error(gpu: &Image, cpu: &Image) -> f32 {
+        let mut total = 0.0f32;
+        let mut samples = 0usize;
+        for (gpu_pixel, cpu_pixel) in gpu.pixels.iter().zip(cpu.pixels.iter()) {
+            for channel in 0..3 {
+                total += (f32::from(gpu_pixel[channel]) - f32::from(cpu_pixel[channel])).abs();
+                samples += 1;
+            }
+        }
+        if samples == 0 {
+            0.0
+        } else {
+            total / samples as f32
+        }
+    }
+
+    fn grid_mesh(cells: u32) -> Mesh {
+        let stride = cells + 1;
+        let mut positions = Vec::with_capacity((stride * stride) as usize);
+        let mut normals = Vec::with_capacity((stride * stride) as usize);
+        let mut indices = Vec::with_capacity((cells * cells * 6) as usize);
+        for row in 0..=cells {
+            for column in 0..=cells {
+                let u = column as f32 / cells as f32;
+                let v = row as f32 / cells as f32;
+                positions.push(Vec3::new(u * 2.0 - 1.0, 0.0, v * 2.0 - 1.0));
+                normals.push(Vec3::new(0.0, 1.0, 0.0));
+            }
+        }
+        for row in 0..cells {
+            for column in 0..cells {
+                let i0 = row * stride + column;
+                let i1 = i0 + 1;
+                let i2 = i0 + stride;
+                let i3 = i2 + 1;
+                indices.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
+            }
+        }
+        Mesh {
+            positions,
+            normals,
+            indices,
+        }
+    }
+
+    #[test]
+    fn renderer_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Renderer>();
+    }
+
+    #[test]
+    fn offscreen_render_matches_cpu_reference() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let cube_mesh = cube(1.0);
+        let sphere_mesh = uv_sphere(0.6, 32, 16);
+        let instances = vec![
+            MeshInstance {
+                mesh: &cube_mesh,
+                model: model(Vec3::new(-0.9, 0.0, 0.0), 0.8),
+                color: [0.9, 0.3, 0.2],
+            },
+            MeshInstance {
+                mesh: &sphere_mesh,
+                model: model(Vec3::new(0.9, 0.0, 0.0), 1.0),
+                color: [0.2, 0.6, 0.9],
+            },
+        ];
+        let gpu = renderer.render_offscreen(
+            &instances,
+            &camera(),
+            view(),
+            &light(),
+            BACKGROUND,
+            (WIDTH, HEIGHT),
+        )?;
+        let cpu = render_scene(
+            &instances,
+            &camera(),
+            view(),
+            &light(),
+            BACKGROUND,
+            WIDTH,
+            HEIGHT,
+        );
+        assert_eq!(gpu.width, cpu.width);
+        assert_eq!(gpu.height, cpu.height);
+        let error = mean_channel_error(&gpu, &cpu);
+        eprintln!("gpu/cpu mean channel error {error} of {WIDTH}x{HEIGHT}");
+        assert!(
+            error <= GPU_CPU_MEAN_ERROR_TOLERANCE,
+            "gpu/cpu mean channel error {error} exceeds declared tolerance {GPU_CPU_MEAN_ERROR_TOLERANCE}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unlit_instance_renders_flat_colour() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let cube_mesh = cube(1.0);
+        let instances = vec![GpuInstance {
+            mesh: &cube_mesh,
+            model: model(Vec3::ZERO, 1.0),
+            color: [0.2, 0.4, 0.8],
+            lit: false,
+        }];
+        let image = renderer.render_offscreen_with(
+            &instances,
+            &camera(),
+            view(),
+            &light(),
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        assert_eq!(image.get_pixel(16, 16), [51, 102, 204]);
+        Ok(())
+    }
+
+    #[test]
+    fn lit_instance_is_shaded_by_the_directional_light() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let cube_mesh = cube(1.0);
+        let lit = vec![GpuInstance {
+            mesh: &cube_mesh,
+            model: model(Vec3::ZERO, 1.0),
+            color: [1.0, 1.0, 1.0],
+            lit: true,
+        }];
+        let unlit = vec![GpuInstance {
+            mesh: &cube_mesh,
+            model: model(Vec3::ZERO, 1.0),
+            color: [1.0, 1.0, 1.0],
+            lit: false,
+        }];
+        let lit_image = renderer.render_offscreen_with(
+            &lit,
+            &camera(),
+            view(),
+            &light(),
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        let unlit_image = renderer.render_offscreen_with(
+            &unlit,
+            &camera(),
+            view(),
+            &light(),
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        let lit_pixel = lit_image.get_pixel(16, 16);
+        let unlit_pixel = unlit_image.get_pixel(16, 16);
+        assert_eq!(unlit_pixel, [255, 255, 255]);
+        assert!(
+            lit_pixel[0] < unlit_pixel[0],
+            "lit pixel {lit_pixel:?} is not darker than unlit pixel {unlit_pixel:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mesh_above_the_16_bit_vertex_limit_renders() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let mesh = grid_mesh(300);
+        assert!(mesh.positions.len() > 65535);
+        let instances = vec![GpuInstance {
+            mesh: &mesh,
+            model: Mat4::identity(),
+            color: [0.8, 0.8, 0.8],
+            lit: true,
+        }];
+        let grid_view = look_at(
+            Vec3::new(0.0, 2.0, -3.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        );
+        let image = renderer.render_offscreen_with(
+            &instances,
+            &camera(),
+            grid_view,
+            &light(),
+            [0.0, 0.0, 0.0],
+            (64, 64),
+        )?;
+        let covered = image
+            .pixels
+            .iter()
+            .filter(|pixel| **pixel != [0, 0, 0])
+            .count();
+        assert!(
+            covered > 0,
+            "mesh with {} vertices produced no covered pixels",
+            mesh.positions.len()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn imported_mesh_buffers_round_trip_and_render_offscreen(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let positions: [[f32; 3]; 4] = [
+            [-0.8, -0.8, 0.0],
+            [-0.8, 0.8, 0.0],
+            [0.8, 0.8, 0.0],
+            [0.8, -0.8, 0.0],
+        ];
+        let normals: [[f32; 3]; 4] = [
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let imported = Mesh::from_buffers(&positions, &normals, &indices);
+        assert_eq!(imported.positions.len(), 4);
+        assert_eq!(imported.normals.len(), 4);
+        assert_eq!(imported.indices, indices);
+        let instances = vec![MeshInstance {
+            mesh: &imported,
+            model: Mat4::identity(),
+            color: [0.3, 0.9, 0.4],
+        }];
+        let scene = RenderScene {
+            camera: &camera(),
+            view: view(),
+            light: &light(),
+            background: [0.0, 0.0, 0.0],
+        };
+        let gpu = renderer.render_offscreen_scene(&instances, scene, 64, 64)?;
+        let cpu = render_scene(
+            &instances,
+            scene.camera,
+            scene.view,
+            scene.light,
+            scene.background,
+            64,
+            64,
+        );
+        assert_ne!(gpu.get_pixel(32, 32), [0, 0, 0]);
+        assert!(mean_channel_error(&gpu, &cpu) <= GPU_CPU_MEAN_ERROR_TOLERANCE);
+        Ok(())
+    }
+}

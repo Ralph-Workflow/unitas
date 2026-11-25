@@ -3,6 +3,13 @@ name = "unitas-build"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["device"]
+device = ["unitas-runtime/device", "unitas-render/device", "unitas-audio/device"]
+
 [dependencies]
 unitas-asset = { path = "../unitas-asset" }
+unitas-audio = { path = "../unitas-audio" }
+unitas-core = { path = "../unitas-core" }
+unitas-render = { path = "../unitas-render" }
 unitas-runtime = { path = "../unitas-runtime" }

@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use unitas_core::EntityId;
 
+#[cfg(feature = "device")]
+pub mod output;
+
 pub type AudioClipId = u64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,6 +12,7 @@ pub enum AudioError {
     UnsupportedFormat(String),
     InvalidWav(String),
     Io(String),
+    Device(String),
 }
 
 impl std::fmt::Display for AudioError {
@@ -17,6 +21,7 @@ impl std::fmt::Display for AudioError {
             Self::UnsupportedFormat(detail) => write!(formatter, "unsupported audio format: {detail}"),
             Self::InvalidWav(detail) => write!(formatter, "invalid wav data: {detail}"),
             Self::Io(detail) => write!(formatter, "audio io error: {detail}"),
+            Self::Device(detail) => write!(formatter, "audio device error: {detail}"),
         }
     }
 }

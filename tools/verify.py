@@ -10,6 +10,7 @@ import time
 import tokenize
 import tomllib
 from collections.abc import Callable, Iterator, Sequence
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -18,7 +19,24 @@ PORTFOLIO_PATH = POLICY_DIR / "policy-portfolio.toml"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
 MAKEFILE = REPO_ROOT / "Makefile"
 SECRETS_BASELINE = REPO_ROOT / ".secrets.baseline"
-CONFIG_FILES = ("pyproject.toml",)
+CONFIG_FILES = ("pyproject.toml", "tools/dependency-registry.toml")
+CARGO_LOCKFILE = Path("Cargo.lock")
+DEPENDENCY_REGISTRY = Path("tools") / "dependency-registry.toml"
+REGISTRY_ENTRY_KEYS = ("name", "version", "license", "advisory_reviewed", "note")
+PERMISSIVE_LICENSES = frozenset(
+    {
+        "0BSD",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "BSL-1.0",
+        "ISC",
+        "MIT",
+        "Unlicense",
+        "Unicode-3.0",
+        "Zlib",
+    }
+)
 COMMENT_SUFFIXES = (".cfg", ".ini", ".j2", ".jinja", ".sh", ".toml", ".yaml", ".yml")
 SOURCE_SUFFIXES = (
     ".cs",
@@ -127,6 +145,7 @@ APPROVED_GATE_TOOLS = frozenset(
     }
 )
 FACT_PATTERN = re.compile(r"^RALPH-FACT:\s*([^:]+):\s*(.*)$")
+TOML_STRING_FIELD = re.compile(r'^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)"$')
 COMMAND_PATTERN = re.compile(r"^RALPH-COMMAND:\s*(.*)$")
 DETERMINISTIC_PATTERN = re.compile(r"^deterministic:\s*(\S.*)$")
 ADVISORY_PATTERN = re.compile(r"^advisory:\s*([^;]+);\s*review:\s*(\S.*)$")
@@ -758,6 +777,189 @@ def check_dependencies() -> list[str]:
     for manifest, lock in (("Cargo.toml", "Cargo.lock"), ("package.json", "package-lock.json")):
         if (REPO_ROOT / manifest).exists() != (REPO_ROOT / lock).exists():
             findings.append(f"{manifest} and {lock} must be committed together")
+    findings.extend(check_dependency_registry())
+    return findings
+
+
+def split_license_expression(expression: str, operator: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    index = 0
+    while index < len(expression):
+        character = expression[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        if depth == 0 and expression.startswith(operator, index):
+            parts.append(current)
+            current = ""
+            index += len(operator)
+            continue
+        current += character
+        index += 1
+    parts.append(current)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def license_identifier_allowed(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("(") and stripped.endswith(")"):
+        return license_allowed(stripped[1:-1])
+    return stripped.split(" WITH ", 1)[0].strip() in PERMISSIVE_LICENSES
+
+
+def license_allowed(expression: str) -> bool:
+    if not expression.strip():
+        return False
+    normalized = expression.replace("/", " OR ")
+    return any(
+        all(
+            license_identifier_allowed(part)
+            for part in split_license_expression(alternative, "AND")
+        )
+        for alternative in split_license_expression(normalized, "OR")
+    )
+
+
+def toml_block_start_lines(text: str, header: str) -> list[int]:
+    return [
+        index for index, line in enumerate(text.splitlines(), start=1) if line.strip() == header
+    ]
+
+
+def toml_field_lines(text: str, field: str) -> dict[str, int]:
+    lines: dict[str, int] = {}
+    for index, line in enumerate(text.splitlines(), start=1):
+        match = TOML_STRING_FIELD.match(line.strip())
+        if match is None or match.group(1) != field:
+            continue
+        lines.setdefault(match.group(2), index)
+    return lines
+
+
+def lockfile_registry_packages(text: str) -> list[tuple[str, str]]:
+    parsed = tomllib.loads(text)
+    raw = parsed.get("package", [])
+    packages: list[tuple[str, str]] = []
+    if not isinstance(raw, list):
+        return packages
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        version = item.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        if "source" not in item:
+            continue
+        packages.append((name, version))
+    return packages
+
+
+def dependency_registry_entries(text: str) -> list[dict[str, str]]:
+    parsed = tomllib.loads(text)
+    raw = parsed.get("package", [])
+    entries: list[dict[str, str]] = []
+    if not isinstance(raw, list):
+        return entries
+    block_lines = toml_block_start_lines(text, "[[package]]")
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        entry: dict[str, str] = {}
+        for key in REGISTRY_ENTRY_KEYS:
+            value = item.get(key)
+            entry[key] = value if isinstance(value, str) else ""
+        entry["line"] = str(block_lines[index] if index < len(block_lines) else 1)
+        entries.append(entry)
+    return entries
+
+
+def registry_entry_findings(
+    display: str, name: str, version: str, entry: dict[str, str]
+) -> list[str]:
+    findings: list[str] = []
+    line = entry["line"]
+    expression = entry["license"]
+    if not expression:
+        findings.append(
+            f"{display}:{line}: registry entry for {name} {version} declares no license"
+        )
+    elif not license_allowed(expression):
+        findings.append(
+            f"{display}:{line}: license {expression!r} for {name} {version} is not "
+            "in the permissive allowlist"
+        )
+    reviewed = entry["advisory_reviewed"]
+    if not reviewed:
+        findings.append(
+            f"{display}:{line}: registry entry for {name} {version} records no "
+            "advisory_reviewed date"
+        )
+        return findings
+    try:
+        parsed = date.fromisoformat(reviewed)
+    except ValueError:
+        findings.append(
+            f"{display}:{line}: advisory_reviewed {reviewed!r} for {name} {version} "
+            "is not an ISO date"
+        )
+        return findings
+    if parsed > datetime.now(UTC).date():
+        findings.append(
+            f"{display}:{line}: advisory_reviewed {reviewed!r} for {name} {version} "
+            "is in the future"
+        )
+    return findings
+
+
+def check_dependency_registry(root: Path = REPO_ROOT) -> list[str]:
+    findings: list[str] = []
+    lock_path = root / CARGO_LOCKFILE
+    registry_path = root / DEPENDENCY_REGISTRY
+    lock_display = display_path(lock_path)
+    registry_display = display_path(registry_path)
+    if not lock_path.exists():
+        return [f"{lock_display}: the dependency registry needs a Cargo.lock to check"]
+    if not registry_path.exists():
+        return [f"{registry_display}: the dependency registry is missing"]
+    try:
+        lock_text = lock_path.read_text(encoding="utf-8")
+        registry_text = registry_path.read_text(encoding="utf-8")
+    except OSError as error:
+        return [f"{registry_display}: the dependency registry could not be read: {error}"]
+    try:
+        locked = lockfile_registry_packages(lock_text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"{lock_display}: the lockfile is not valid TOML: {error}"]
+    try:
+        entries = dependency_registry_entries(registry_text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"{registry_display}: the dependency registry is not valid TOML: {error}"]
+    recorded: dict[tuple[str, str], dict[str, str]] = {}
+    for entry in entries:
+        key = (entry["name"], entry["version"])
+        if key in recorded:
+            findings.append(
+                f"{registry_display}:{entry['line']}: duplicate registry entry for "
+                f"{entry['name']} {entry['version']}"
+            )
+            continue
+        recorded[key] = entry
+    lock_lines = toml_field_lines(lock_text, "name")
+    for name, version in locked:
+        matched = recorded.get((name, version))
+        if matched is None:
+            findings.append(
+                f"{lock_display}:{lock_lines.get(name, 1)}: registry package {name} "
+                f"{version} has no entry in {registry_display}"
+            )
+            continue
+        findings.extend(registry_entry_findings(registry_display, name, version, matched))
     return findings
 
 

@@ -5,6 +5,7 @@ pub mod input;
 pub mod particles;
 pub mod physics;
 mod runtime;
+pub mod window;
 
 pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};

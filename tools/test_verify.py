@@ -133,6 +133,86 @@ def test_dependency_gate_allows_stdlib_only() -> None:
     assert verify.check_dependencies() == []
 
 
+def _write_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:
+    path = root / "Cargo.lock"
+    blocks = [
+        "[[package]]\n"
+        f'name = "{name}"\n'
+        f'version = "{version}"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        for name, version in packages
+    ]
+    path.write_text("\n".join(blocks), encoding="utf-8")
+    return path
+
+
+def _write_registry(root: Path, entries: list[tuple[str, str, str | None, str]]) -> Path:
+    path = root / "tools" / "dependency-registry.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = []
+    for name, version, expression, reviewed in entries:
+        block = f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        if expression is not None:
+            block += f'license = "{expression}"\n'
+        block += f'advisory_reviewed = "{reviewed}"\n'
+        blocks.append(block)
+    path.write_text("\n".join(blocks), encoding="utf-8")
+    return path
+
+
+def test_dependency_registry_reports_unlisted_package(tmp_path: Path) -> None:
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    _write_registry(tmp_path, [("beta", "2.0.0", "MIT", "2026-01-01")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("alpha 1.0.0" in finding and "no entry" in finding for finding in findings)
+
+
+def test_dependency_registry_reports_disallowed_license(tmp_path: Path) -> None:
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    _write_registry(tmp_path, [("alpha", "1.0.0", "GPL-3.0-only", "2026-01-01")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("GPL-3.0-only" in finding for finding in findings)
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT AND GPL-3.0-only", "2026-01-01")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("MIT AND GPL-3.0-only" in finding for finding in findings)
+    _write_registry(
+        tmp_path, [("alpha", "1.0.0", "MIT OR Apache-2.0 OR LGPL-2.1-or-later", "2026-01-01")]
+    )
+    assert verify.check_dependency_registry(root=tmp_path) == []
+
+
+def test_dependency_registry_reports_missing_license(tmp_path: Path) -> None:
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    _write_registry(tmp_path, [("alpha", "1.0.0", None, "2026-01-01")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("declares no license" in finding for finding in findings)
+
+
+def test_dependency_registry_reports_unusable_advisory_date(tmp_path: Path) -> None:
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT", "")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("no advisory_reviewed date" in finding for finding in findings)
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT", "not-a-date")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("is not an ISO date" in finding for finding in findings)
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT", "2999-12-31")])
+    findings = verify.check_dependency_registry(root=tmp_path)
+    assert any("is in the future" in finding for finding in findings)
+
+
+def test_dependency_registry_accepts_compliant_entries(tmp_path: Path) -> None:
+    _write_lockfile(tmp_path, [("alpha", "1.0.0"), ("beta", "2.0.0")])
+    _write_registry(
+        tmp_path,
+        [
+            ("alpha", "1.0.0", "MIT OR Apache-2.0", "2026-01-01"),
+            ("beta", "2.0.0", "BSD-3-Clause", "2026-01-01"),
+        ],
+    )
+    assert verify.check_dependency_registry(root=tmp_path) == []
+
+
 def test_secret_delta_reports_new_findings() -> None:
     baseline = {"a.py": [{"type": "Hex High Entropy String", "line_number": 3}]}
     scanned = {

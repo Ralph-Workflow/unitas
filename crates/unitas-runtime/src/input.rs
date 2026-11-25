@@ -360,6 +360,54 @@ impl InputState {
         self.queued_scroll.1 += y;
     }
 
+    pub fn inject_key(&mut self, key: u32, pressed: bool) {
+        self.queue_key_event(key, pressed);
+    }
+
+    pub fn inject_mouse_button(&mut self, button: u32, pressed: bool) {
+        self.queue_mouse_button_event(button, pressed);
+    }
+
+    pub fn inject_mouse_move(&mut self, x: f64, y: f64) {
+        self.queue_pointer_move(x, y);
+    }
+
+    pub fn inject_mouse_scroll(&mut self, x: f64, y: f64) {
+        self.queue_scroll(x, y);
+    }
+
+    pub fn inject_pointer_move(&mut self, x: f64, y: f64) {
+        self.queue_pointer_move(x, y);
+    }
+
+    pub fn inject_scroll(&mut self, x: f64, y: f64) {
+        self.queue_scroll(x, y);
+    }
+
+    pub fn is_key_down(&self, key: u32) -> bool {
+        self.keys_down.contains(&key)
+    }
+
+    pub fn is_key_pressed(&self, key: u32) -> bool {
+        self.keys_pressed.contains(&key)
+    }
+
+    pub fn is_key_released(&self, key: u32) -> bool {
+        self.keys_released.contains(&key)
+    }
+
+    pub fn is_mouse_button_down(&self, button: u32) -> bool {
+        self.mouse_down.contains(&button)
+    }
+
+    pub fn is_mouse_button_pressed(&self, button: u32) -> bool {
+        self.mouse_pressed.contains(&button)
+    }
+
+    pub fn is_mouse_button_released(&self, button: u32) -> bool {
+        self.mouse_released.contains(&button)
+    }
+
     pub fn begin_frame(&mut self, delta_seconds: f64) {
         let dt = if delta_seconds.is_finite() && delta_seconds > 0.0 {
             delta_seconds

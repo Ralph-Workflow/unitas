@@ -3,6 +3,15 @@ name = "unitas-render"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["device"]
+device = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+
+[dependencies]
+bytemuck = { version = "1", optional = true }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "30", optional = true }
+
 [dev-dependencies]
 unitas-asset = { path = "../unitas-asset" }
 unitas-core = { path = "../unitas-core" }

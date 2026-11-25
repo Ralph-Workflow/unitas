@@ -40,8 +40,8 @@ lockfile.
 
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Pinned dependencies | Dependency owner | the tracked sources import the standard library only, and a manifest and its lockfile land together | the dependency gate reports zero third-party imports and zero manifest and lockfile pairs that disagree | the dependency gate reports zero third-party imports | deterministic: make deps | when the first third-party dependency lands and the gate grows a registry and lockfile check |
-| License compatibility | Dependency owner | the repository ships no third-party dependency whose licence needs review | the dependency gate reports zero third-party imports, so no licence review is outstanding | the dependency gate reports zero third-party imports | deterministic: make deps | when the first third-party dependency lands |
+| Pinned dependencies | Dependency owner | the tracked Python tooling imports the standard library only, and a manifest and its lockfile land together | the dependency gate reports zero third-party Python imports and zero manifest and lockfile pairs that disagree | the dependency gate reports zero third-party Python imports | deterministic: make deps | when the dependency gate stops checking Python imports and manifest and lockfile pairing |
+| Registry, licence and advisory review | Dependency owner | every registry package in Cargo.lock has an entry in tools/dependency-registry.toml carrying a permissive licence and an advisory-review date | the dependency gate reports zero registry packages in Cargo.lock that lack a registry entry, carry a licence outside the permissive allowlist, or lack a parseable advisory-review date | the dependency gate reports zero registry packages in Cargo.lock that lack a registry entry | deterministic: make deps | when the dependency gate drops the registry, licence, or advisory-review check |
 
 ## Advisory rules
 
@@ -85,13 +85,13 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: package_manager: cargo for the Rust workspace, whose manifest is Cargo.toml at the repository root; dotnet for the C# bridge solution (bridge/Unitas.sln); pyproject.toml carries gate-tool configuration only and declares no dependency
-RALPH-FACT: lockfile_path: Cargo.lock at the repository root — the workspace declares no third-party dependency and the C# bridge uses no NuGet packages, so the lockfile pins the workspace crates only
-RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; neither the tooling, the Rust crates, nor the C# bridge carry a third-party dependency
-RALPH-FACT: security_audit_command: none — no third-party dependency is declared by the tooling, the Rust workspace, or the C# bridge, so no vulnerability audit applies to the current tree
+RALPH-FACT: lockfile_path: Cargo.lock at the repository root — the Rust workspace pins both its own crates and the third-party crates it resolves in it, and the C# bridge uses no NuGet packages
+RALPH-FACT: license_allowlist: GPL-3.0-or-later, the licence the product ships under; every third-party Rust crate must carry a permissive licence recorded per crate and version in tools/dependency-registry.toml, while the tooling and the C# bridge stay free of third-party dependencies
+RALPH-FACT: security_audit_command: make deps — the dependency gate checks every registry package in Cargo.lock against the licence allowlist and against the advisory-review dates recorded in tools/dependency-registry.toml; the RustSec advisory-db and the OSV listing were consulted on 2026-11-25 to record those dates
 RALPH-FACT: type_info_policy: the tooling ships no type stubs; mypy resolves the standard library from the installed interpreter
 RALPH-FACT: ci_install_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo and clippy) comes from rustup; the .NET 8.0 SDK is provisioned via dotnet-install.sh
 RALPH-FACT: dependency_evaluation_record: docs/ralph-workflow-policy/dependency-policy.md
-RALPH-FACT: transitive_dependency_policy: none — the tooling imports the standard library only, the Rust crates declare no external dependency, and the C# bridge adds no NuGet package and no third-party Rust crate (dependency-free), so the repository has no transitive dependency
+RALPH-FACT: transitive_dependency_policy: the Rust workspace resolves third-party crates transitively — every package Cargo.lock pins with a registry source needs an entry in tools/dependency-registry.toml, while the tooling imports the standard library only and the C# bridge adds no NuGet package
 
 ## AI execution instructions
 

@@ -3,5 +3,10 @@ name = "unitas-audio"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["device"]
+device = ["dep:cpal"]
+
 [dependencies]
+cpal = { version = "0.18.2", optional = true }
 unitas-core = { path = "../unitas-core" }

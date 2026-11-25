@@ -9,6 +9,22 @@ pub struct Mesh {
     pub indices: Vec<u32>,
 }
 
+impl Mesh {
+    pub fn from_buffers(positions: &[[f32; 3]], normals: &[[f32; 3]], indices: &[u32]) -> Self {
+        Self {
+            positions: positions
+                .iter()
+                .map(|&[x, y, z]| Vec3::new(x, y, z))
+                .collect(),
+            normals: normals
+                .iter()
+                .map(|&[x, y, z]| Vec3::new(x, y, z))
+                .collect(),
+            indices: indices.to_vec(),
+        }
+    }
+}
+
 pub fn cube(size: f32) -> Mesh {
     let h = size * 0.5;
     let face_definitions: [(Vec3, [Vec3; 4]); 6] = [

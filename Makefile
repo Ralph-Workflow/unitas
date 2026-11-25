@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
+.PHONY: verify verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
@@ -49,3 +49,11 @@ dotnet-format:
 dotnet-test:
 	@cargo build -p unitas-runtime
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests
+
+verify-device:
+	@echo "owner: wt-03"
+	@echo "trigger: every milestone touching presentation"
+	@echo "lane: make verify-device"
+	@echo "evidence: lane exit status and captured GPU/audio/input artifacts"
+	@echo "review: when the player gains a new platform"
+	@python3 tools/verify_device.py
