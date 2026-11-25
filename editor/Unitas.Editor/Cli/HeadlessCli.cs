@@ -206,6 +206,19 @@ namespace Unitas.Editor.Mcp
                 exitCode = CombineExitCode(exitCode, buildExit);
             }
 
+            if (!string.IsNullOrEmpty(parsed.RunScenario))
+            {
+                int scenarioExit = RunScenarioOperation(
+                    host,
+                    sessionId,
+                    parsed.RunScenario!,
+                    resolvedProjectPath,
+                    resolvedLogLocation,
+                    operations,
+                    logLines);
+                exitCode = CombineExitCode(exitCode, scenarioExit);
+            }
+
             FlushLogFile(resolvedLogLocation, logLines);
             return BuildResult(
                 exitCode,
@@ -469,6 +482,60 @@ namespace Unitas.Editor.Mcp
                 resolvedLogLocation,
                 Array.Empty<string>(),
                 CliExitCode.BuildFailed,
+                operations,
+                logLines);
+        }
+
+        private static int RunScenarioOperation(
+            McpHost host,
+            string sessionId,
+            string scenarioPath,
+            string resolvedProjectPath,
+            string? resolvedLogLocation,
+            List<CliOperationRecord> operations,
+            List<string> logLines)
+        {
+            const string operationName = "scenario.run";
+            if (!HasRegisteredTool(host, operationName))
+            {
+                string message =
+                    "Command-line operation -runScenario is not supported because editor command "
+                    + operationName
+                    + " is not registered.";
+                CliDiagnostic diagnostic = new CliDiagnostic(
+                    "cli.unsupported.runScenario",
+                    "error",
+                    message,
+                    resolvedProjectPath,
+                    CliArgs.RunScenarioOption);
+                AppendAttributedLog(logLines, operationName, "unsupported-operation", message);
+                operations.Add(new CliOperationRecord(
+                    operationName,
+                    "unsupported-operation",
+                    "Unsupported",
+                    new[] { diagnostic },
+                    Array.Empty<string>(),
+                    resolvedLogLocation,
+                    null));
+                return CliExitCode.UnsupportedOperation;
+            }
+
+            host.GrantStanding(CliAgentName, Scope.ExecuteProjectCode, GrantAuthority.Person);
+            JsonObject arguments = new JsonObject
+            {
+                ["scenarioPath"] = scenarioPath,
+            };
+
+            return InvokeRegisteredToolOperation(
+                host,
+                sessionId,
+                operationName,
+                CliArgs.RunScenarioOption,
+                arguments,
+                resolvedProjectPath,
+                resolvedLogLocation,
+                Array.Empty<string>(),
+                CliExitCode.TestOrScenarioFailed,
                 operations,
                 logLines);
         }

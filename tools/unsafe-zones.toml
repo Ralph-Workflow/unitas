@@ -1,13 +1,22 @@
-[[zone]]
+[[zones]]
 path = "crates/unitas-editor-abi"
 language = "rust"
-purpose = "C ABI export surface for the editor host; names C symbols with unsafe(export_name) so the linker keeps stable entry points without a hand-maintained alias table"
-invariants = []
-unsafe_blocks = 0
+purpose = "Stable C ABI exports invoked by the C# editor host through P/Invoke; symbols are named with #[unsafe(export_name = ...)] so the ABI survives compiler changes"
+invariants = [
+  "every exported function catches panics with std::panic::catch_unwind and returns an error code or null; no panic unwinds across the boundary",
+  "string buffers returned to foreign code are owned by the crate's static string table or box allocator and remain valid until the matching free export runs",
+  "usize address parameters are validated against the crate-owned buffers before dereferencing length data, and lengths are bounds-checked",
+  "dispatch state lives behind std::sync primitives; handles are table indices, never raw pointers to Rust objects",
+]
+unsafe_block_count = 0
 
-[[zone]]
+[[zones]]
 path = "crates/unitas-runtime"
 language = "rust"
-purpose = "C ABI export surface for the runtime: names C symbols with unsafe(export_name) so the linker keeps stable entry points without a hand-maintained alias table"
-invariants = []
-unsafe_blocks = 0
+purpose = "Stable C ABI of the unitas runtime invoked from C# through P/Invoke; the 109 extern \"C\" exports are named with #[unsafe(export_name = ...)] at their definition site so the ABI survives compiler changes"
+invariants = [
+  "C symbols are named only with #[unsafe(export_name = ...)] inside the ffi_export! macro; no linker-level symbol aliasing of mangled names",
+  "the crate contains zero unsafe blocks; the only unsafe constructs are the export-name attributes on the extern \"C\" surface",
+  "exported symbol names are part of the cross-language ABI consumed by bridge/ and editor/ DllImports and must not drift",
+]
+unsafe_block_count = 0

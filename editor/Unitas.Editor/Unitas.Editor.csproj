@@ -12,6 +12,25 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../bridge/Unitas.Bridge/Unitas.Bridge.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../target/debug/libunitas_runtime.dylib" Condition="Exists('../../target/debug/libunitas_runtime.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libunitas_runtime.dylib</Link>
+    </None>
+    <None Include="../../target/debug/libunitas_runtime.so" Condition="Exists('../../target/debug/libunitas_runtime.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libunitas_runtime.so</Link>
+    </None>
+    <None Include="../../target/debug/unitas_runtime.dll" Condition="Exists('../../target/debug/unitas_runtime.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>unitas_runtime.dll</Link>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="2.4.0" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
   </ItemGroup>

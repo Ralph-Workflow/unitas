@@ -23,6 +23,7 @@ namespace Unitas.Editor.Tests
                 ("OperationToolsTests", OperationToolsTests.Run),
                 ("PlayAndCaptureTests", PlayAndCaptureTests.Run),
                 ("RegistryTests", RegistryTests.Run),
+                ("ScenarioToolsTests", ScenarioToolsTests.Run),
                 ("ScopeTests", ScopeTests.Run),
                 ("SessionTests", SessionTests.Run),
                 ("StdioTransportTests", StdioTransportTests.Run),

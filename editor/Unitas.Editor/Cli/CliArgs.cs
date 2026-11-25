@@ -15,6 +15,7 @@ namespace Unitas.Editor.Mcp
         public const string RunTestsFlag = "-runTests";
         public const string TestPlatformOption = "-testPlatform";
         public const string TestResultsOption = "-testResults";
+        public const string RunScenarioOption = "-runScenario";
 
         public static readonly IReadOnlyList<string> KnownArguments = new[]
         {
@@ -28,6 +29,7 @@ namespace Unitas.Editor.Mcp
             RunTestsFlag,
             TestPlatformOption,
             TestResultsOption,
+            RunScenarioOption,
         };
 
         public CliArgs(
@@ -41,6 +43,7 @@ namespace Unitas.Editor.Mcp
             bool runTests,
             string? testPlatform,
             string? testResults,
+            string? runScenario,
             IReadOnlyList<string> unrecognizedArguments,
             IReadOnlyList<string> missingValueArguments)
         {
@@ -56,6 +59,7 @@ namespace Unitas.Editor.Mcp
             RunTests = runTests;
             TestPlatform = testPlatform;
             TestResults = testResults;
+            RunScenario = runScenario;
             UnrecognizedArguments = unrecognizedArguments;
             MissingValueArguments = missingValueArguments;
         }
@@ -79,6 +83,8 @@ namespace Unitas.Editor.Mcp
         public string? TestPlatform { get; }
 
         public string? TestResults { get; }
+
+        public string? RunScenario { get; }
 
         public IReadOnlyList<string> UnrecognizedArguments { get; }
 
@@ -106,6 +112,7 @@ namespace Unitas.Editor.Mcp
             bool runTests = false;
             string? testPlatform = null;
             string? testResults = null;
+            string? runScenario = null;
             List<string> unrecognized = new List<string>();
             List<string> missingValues = new List<string>();
 
@@ -175,6 +182,13 @@ namespace Unitas.Editor.Mcp
                         testResults = value;
                     }
                 }
+                else if (string.Equals(current, RunScenarioOption, StringComparison.Ordinal))
+                {
+                    if (TryConsumeValue(args, ref index, current, unrecognized, missingValues, out string? value))
+                    {
+                        runScenario = value;
+                    }
+                }
                 else
                 {
                     unrecognized.Add(current);
@@ -193,6 +207,7 @@ namespace Unitas.Editor.Mcp
                 runTests,
                 testPlatform,
                 testResults,
+                runScenario,
                 unrecognized,
                 missingValues);
         }

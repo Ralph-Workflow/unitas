@@ -30,31 +30,6 @@ CONFIG_FILES = ("pyproject.toml", "tools/dependency-registry.toml")
 CARGO_LOCKFILE = Path("Cargo.lock")
 NUGET_LOCKFILE_NAME = "packages.lock.json"
 DEPENDENCY_REGISTRY = Path("tools") / "dependency-registry.toml"
-UNSAFE_ZONES_REGISTRY = Path("tools") / "unsafe-zones.toml"
-ZONE_RUST_DENIES = (
-    "warnings",
-    "unnecessary_transmutes",
-    "static_mut_refs",
-    "unsafe_op_in_unsafe_fn",
-    "improper_ctypes",
-    "improper_ctypes_definitions",
-)
-ZONE_CLIPPY_DENIES = (
-    "unwrap_used",
-    "expect_used",
-    "panic",
-    "todo",
-    "unimplemented",
-    "dbg_macro",
-    "undocumented_unsafe_blocks",
-    "missing_safety_doc",
-    "multiple_unsafe_ops_per_block",
-    "ptr_as_ptr",
-    "cast_ptr_alignment",
-    "as_ptr_cast_mut",
-    "borrow_as_ptr",
-    "transmute_ptr_to_ptr",
-)
 REGISTRY_ENTRY_KEYS = ("name", "version", "license", "advisory_reviewed", "note")
 PERMISSIVE_LICENSES = frozenset(
     {
@@ -257,6 +232,51 @@ CATALOG_BANNED_RUST_LINTS = frozenset(
     }
 )
 FORBIDDEN_CLIPPY_GROUPS = frozenset({"nursery", "restriction"})
+UNSAFE_ZONES_REGISTRY = Path("tools") / "unsafe-zones.toml"
+ZONE_RUST_EXTRA_DENIES = frozenset(
+    {"unsafe_op_in_unsafe_fn", "improper_ctypes", "improper_ctypes_definitions"}
+)
+ZONE_CLIPPY_EXTRA_DENIES = frozenset(
+    {
+        "undocumented_unsafe_blocks",
+        "missing_safety_doc",
+        "multiple_unsafe_ops_per_block",
+        "ptr_as_ptr",
+        "cast_ptr_alignment",
+        "as_ptr_cast_mut",
+        "borrow_as_ptr",
+        "transmute_ptr_to_ptr",
+    }
+)
+ZONE_RUST_DENIES = (
+    "warnings",
+    "unnecessary_transmutes",
+    "static_mut_refs",
+    "unsafe_op_in_unsafe_fn",
+    "improper_ctypes",
+    "improper_ctypes_definitions",
+)
+ZONE_CLIPPY_DENIES = (
+    "unwrap_used",
+    "expect_used",
+    "panic",
+    "todo",
+    "unimplemented",
+    "dbg_macro",
+    "undocumented_unsafe_blocks",
+    "missing_safety_doc",
+    "multiple_unsafe_ops_per_block",
+    "ptr_as_ptr",
+    "cast_ptr_alignment",
+    "as_ptr_cast_mut",
+    "borrow_as_ptr",
+    "transmute_ptr_to_ptr",
+)
+UNSAFE_ATTR_RS = re.compile(r"#\[unsafe\([^]]*\)\]")
+UNSAFE_WORD_RS = re.compile(r"\bunsafe\b")
+UNSAFE_WORD_CS = re.compile(r"\bunsafe\b")
+UNSAFE_BLOCK_RS = re.compile(r"\bunsafe\s*\{")
+LINK_ALIAS_RS = re.compile(r"(?:-Wl,)?-alias[,\s=]|--defsym\b|/ALTERNATENAME\b")
 TOML_KEY_TOKEN_RE = re.compile(
     r"""^\s*(?P<key>(?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)"""
     r"""(?:\s*\.\s*(?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+))*)\s*="""
@@ -981,27 +1001,8 @@ def check_workspace_cargo_toml(
     return findings, members
 
 
-def load_unsafe_zone_paths(root: Path = REPO_ROOT) -> set[str]:
-    registry = root / UNSAFE_ZONES_REGISTRY
-    if not registry.exists():
-        return set()
-    try:
-        parsed = tomllib.loads(registry.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return set()
-    zones = parsed.get("zone", [])
-    if not isinstance(zones, list):
-        return set()
-    return {
-        zone["path"]
-        for zone in zones
-        if isinstance(zone, dict) and isinstance(zone.get("path"), str)
-    }
-
-
 def check_zone_cargo_toml(
     parsed: dict[str, object],
-    text: str,
     display: str,
 ) -> list[str]:
     findings: list[str] = []
@@ -1026,7 +1027,6 @@ def check_zone_cargo_toml(
         )
         if rust_lint_level(rust_lints.get("unsafe_code")) == "forbid":
             findings.append(f"{display}: zone [lints.rust] must not forbid unsafe_code")
-        findings.extend(check_rust_lint_table(rust_lints, text, display, "rust"))
     clippy_lints = lints.get("clippy")
     if not isinstance(clippy_lints, dict):
         findings.append(f"{display}: zone crate declares no [lints.clippy] table")
@@ -1044,7 +1044,6 @@ def check_zone_cargo_toml(
             for lint in ZONE_CLIPPY_DENIES
             if rust_lint_level(clippy_lints.get(lint)) != "deny"
         )
-        findings.extend(check_rust_lint_table(clippy_lints, text, display, "clippy"))
     return findings
 
 
@@ -1052,11 +1051,11 @@ def check_member_cargo_toml(
     parsed: dict[str, object],
     text: str,
     display: str,
-    zones: set[str] | None = None,
+    zone_paths: frozenset[str],
 ) -> list[str]:
-    crate_dir = display.rsplit("/", 1)[0] if "/" in display else ""
-    if zones and crate_dir in zones:
-        return check_zone_cargo_toml(parsed, text, display)
+    manifest_dir = display.rsplit("/", 1)[0] if "/" in display else ""
+    if manifest_dir in zone_paths:
+        return check_zone_cargo_toml(parsed, display)
     findings: list[str] = []
     lints = parsed.get("lints")
     if lints != {"workspace": True}:
@@ -1092,7 +1091,9 @@ def check_rust_tool_configs(root: Path) -> list[str]:
 
 def check_rust_configuration(root: Path = REPO_ROOT) -> list[str]:
     findings: list[str] = []
-    zones = load_unsafe_zone_paths(root)
+    zones, zone_findings = load_unsafe_zones(root)
+    zone_paths = frozenset(zones)
+    findings.extend(zone_findings)
     cargo_files = sorted(iter_named_files(root, frozenset({"Cargo.toml"})))
     expected_members: set[Path] = set()
     for path in cargo_files:
@@ -1111,13 +1112,220 @@ def check_rust_configuration(root: Path = REPO_ROOT) -> list[str]:
                 (path.parent / member / "Cargo.toml").resolve() for member in members
             )
         if "package" in parsed:
-            findings.extend(check_member_cargo_toml(parsed, text, display, zones))
+            findings.extend(check_member_cargo_toml(parsed, text, display, zone_paths))
     findings.extend(
         f"{display_path(member_manifest, root)}: workspace member Cargo.toml is missing"
         for member_manifest in sorted(expected_members)
         if not member_manifest.exists()
     )
     findings.extend(check_rust_tool_configs(root))
+    return findings
+
+
+def load_unsafe_zones(root: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
+    registry = root / UNSAFE_ZONES_REGISTRY
+    if not registry.exists():
+        return {}, []
+    findings: list[str] = []
+    zones: dict[str, dict[str, object]] = {}
+    try:
+        parsed = tomllib.loads(registry.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        return {}, [f"{UNSAFE_ZONES_REGISTRY}: invalid TOML: {error}"]
+    entries = parsed.get("zones", parsed.get("zone"))
+    if not isinstance(entries, list):
+        return {}, [f"{UNSAFE_ZONES_REGISTRY}: zones must be a list"]
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            findings.append(f"{UNSAFE_ZONES_REGISTRY}: zone entry without a string path")
+            continue
+        zones[entry["path"]] = entry
+    return zones, findings
+
+
+def workspace_lint_tables(root: Path) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        parsed = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}, {}
+    workspace = parsed.get("workspace")
+    lints = workspace.get("lints") if isinstance(workspace, dict) else None
+    if not isinstance(lints, dict):
+        return {}, {}
+    rust = lints.get("rust")
+    clippy = lints.get("clippy")
+    return (
+        rust if isinstance(rust, dict) else {},
+        clippy if isinstance(clippy, dict) else {},
+    )
+
+
+def same_lint_entry(zone_entry: object, workspace_entry: object) -> bool:
+    if rust_lint_level(zone_entry) != rust_lint_level(workspace_entry):
+        return False
+    if isinstance(workspace_entry, dict):
+        return isinstance(zone_entry, dict) and zone_entry.get("priority") == (
+            workspace_entry.get("priority")
+        )
+    return True
+
+
+def check_zone_lint_table(
+    zone_table: dict[str, object],
+    workspace_table: dict[str, object],
+    overrides: dict[str, str],
+    display: str,
+    label: str,
+) -> list[str]:
+    findings: list[str] = []
+    for key, workspace_entry in workspace_table.items():
+        zone_entry = zone_table.get(key)
+        required = overrides.get(key)
+        if required is not None:
+            if rust_lint_level(zone_entry) != required:
+                findings.append(f"{display}: zone {label} lint {key!r} must be {required!r}")
+        elif not same_lint_entry(zone_entry, workspace_entry):
+            findings.append(f"{display}: zone {label} lint {key!r} must match the workspace entry")
+    findings.extend(
+        f"{display}: zone {label} lint {key!r} must be {overrides[key]!r}"
+        for key in sorted(overrides)
+        if key not in workspace_table and rust_lint_level(zone_table.get(key)) != overrides[key]
+    )
+    unexpected = sorted(set(zone_table) - set(workspace_table) - set(overrides))
+    if unexpected:
+        findings.append(
+            f"{display}: zone {label} lints {unexpected} are neither workspace lints "
+            "nor zone-required levels"
+        )
+    return findings
+
+
+def count_zone_unsafe_blocks(root: Path, zone_path: str) -> int:
+    count = 0
+    for path in iter_named_files(root / zone_path, frozenset(), (".rs",)):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        count += len(UNSAFE_BLOCK_RS.findall(text))
+    return count
+
+
+def check_zone_entry(
+    root: Path,
+    zone_path: str,
+    zone: dict[str, object],
+    workspace_rust: dict[str, object],
+    workspace_clippy: dict[str, object],
+) -> list[str]:
+    display = f"{zone_path}/Cargo.toml"
+    if zone.get("language") != "rust":
+        return [f"{display}: zone language {zone.get('language')!r} is not supported"]
+    try:
+        text = (root / zone_path / "Cargo.toml").read_text(encoding="utf-8")
+    except OSError:
+        return [f"{display}: registered zone has no Cargo.toml"]
+    try:
+        parsed = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"{display}: invalid TOML: {error}"]
+    package = parsed.get("package")
+    if not isinstance(package, dict):
+        return [f"{display}: registered zone is not a Rust package"]
+    findings: list[str] = []
+    if package.get("edition") != "2024":
+        findings.append(f"{display}: a Rust unsafe zone must use edition 2024")
+    lints = parsed.get("lints")
+    zone_rust = lints.get("rust") if isinstance(lints, dict) else None
+    zone_clippy = lints.get("clippy") if isinstance(lints, dict) else None
+    if not isinstance(zone_rust, dict) or not isinstance(zone_clippy, dict):
+        findings.append(
+            f"{display}: a Rust unsafe zone must declare [lints.rust] and [lints.clippy]"
+        )
+    else:
+        findings.extend(
+            check_zone_lint_table(
+                zone_rust,
+                workspace_rust,
+                dict.fromkeys(ZONE_RUST_EXTRA_DENIES, "deny") | {"unsafe_code": "allow"},
+                display,
+                "rust",
+            )
+        )
+        findings.extend(
+            check_zone_lint_table(
+                zone_clippy,
+                workspace_clippy,
+                dict.fromkeys(ZONE_CLIPPY_EXTRA_DENIES, "deny"),
+                display,
+                "clippy",
+            )
+        )
+    registered = zone.get("unsafe_block_count", zone.get("unsafe_blocks"))
+    if not isinstance(registered, int) or isinstance(registered, bool):
+        findings.append(f"{display}: unsafe_block_count must be an integer")
+    else:
+        actual = count_zone_unsafe_blocks(root, zone_path)
+        if registered != actual:
+            findings.append(
+                f"{display}: registered unsafe block count {registered} "
+                f"differs from actual {actual}"
+            )
+    return findings
+
+
+def path_in_zones(relative: str, zone_paths: frozenset[str]) -> bool:
+    return any(
+        relative == zone_path or relative.startswith(f"{zone_path}/") for zone_path in zone_paths
+    )
+
+
+def check_unsafe_outside_zones(root: Path, zone_paths: frozenset[str]) -> list[str]:
+    findings: list[str] = []
+    for path in iter_source_files(root):
+        relative = display_path(path, root)
+        if path_in_zones(relative, zone_paths):
+            continue
+        if path.suffix == ".rs":
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                masked = UNSAFE_ATTR_RS.sub("", line)
+                if UNSAFE_WORD_RS.search(masked):
+                    findings.append(
+                        f"{relative}:{lineno}: unsafe construct outside a registered unsafe zone"
+                    )
+        elif path.suffix == ".cs":
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if UNSAFE_WORD_CS.search(line):
+                    findings.append(
+                        f"{relative}:{lineno}: unsafe construct outside a registered unsafe zone"
+                    )
+    return findings
+
+
+def check_link_aliases(root: Path) -> list[str]:
+    findings: list[str] = []
+    for path in iter_named_files(root, frozenset(), (".rs",)):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in LINK_ALIAS_RS.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(
+                f"{display_path(path, root)}:{line}: link-time symbol alias is banned; "
+                "name C symbols with #[unsafe(export_name = ...)]"
+            )
+    return findings
+
+
+def check_zones(root: Path = REPO_ROOT) -> list[str]:
+    findings: list[str] = []
+    zones, registry_findings = load_unsafe_zones(root)
+    findings.extend(registry_findings)
+    zone_paths = frozenset(zones)
+    workspace_rust, workspace_clippy = workspace_lint_tables(root)
+    for zone_path in sorted(zones):
+        findings.extend(
+            check_zone_entry(root, zone_path, zones[zone_path], workspace_rust, workspace_clippy)
+        )
+    findings.extend(check_unsafe_outside_zones(root, zone_paths))
+    findings.extend(check_link_aliases(root))
     return findings
 
 
@@ -1957,6 +2165,7 @@ GATES: dict[str, Callable[[], list[str]]] = {
     "deps": check_dependencies,
     "policy": check_policy,
     "secret": check_secrets,
+    "zones": check_zones,
 }
 
 

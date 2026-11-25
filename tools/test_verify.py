@@ -119,6 +119,157 @@ def _write_clean_rust_workspace(root: Path) -> Path:
     return manifest
 
 
+ZONE_REGISTRY_ENTRY = (
+    "[[zones]]\n"
+    'path = "crates/zone-crate"\n'
+    'language = "rust"\n'
+    'purpose = "test zone"\n'
+    'invariants = ["test invariant"]\n'
+    "unsafe_block_count = 0\n"
+)
+
+
+def _write_zone_registry(root: Path, entry: str = ZONE_REGISTRY_ENTRY) -> Path:
+    registry = root / "tools" / "unsafe-zones.toml"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(entry, encoding="utf-8")
+    return registry
+
+
+def _write_zone_member(root: Path) -> Path:
+    member = root / "crates" / "zone-crate"
+    member.mkdir(parents=True, exist_ok=True)
+    (member / "Cargo.toml").write_text(
+        "[package]\n"
+        'name = "zone-crate"\n'
+        'version = "0.1.0"\n'
+        'edition = "2024"\n'
+        "[lints.rust]\n"
+        'warnings = "deny"\n'
+        'unsafe_code = "allow"\n'
+        'unnecessary_transmutes = "deny"\n'
+        'static_mut_refs = "deny"\n'
+        'unsafe_op_in_unsafe_fn = "deny"\n'
+        'improper_ctypes = "deny"\n'
+        'improper_ctypes_definitions = "deny"\n'
+        "[lints.clippy]\n"
+        'all = { level = "deny", priority = -1 }\n'
+        'pedantic = { level = "deny", priority = -1 }\n'
+        'unwrap_used = "deny"\n'
+        'expect_used = "deny"\n'
+        'panic = "deny"\n'
+        'todo = "deny"\n'
+        'unimplemented = "deny"\n'
+        'dbg_macro = "deny"\n'
+        'missing_errors_doc = "allow"\n'
+        'undocumented_unsafe_blocks = "deny"\n'
+        'missing_safety_doc = "deny"\n'
+        'multiple_unsafe_ops_per_block = "deny"\n'
+        'ptr_as_ptr = "deny"\n'
+        'cast_ptr_alignment = "deny"\n'
+        'as_ptr_cast_mut = "deny"\n'
+        'borrow_as_ptr = "deny"\n'
+        'transmute_ptr_to_ptr = "deny"\n',
+        encoding="utf-8",
+    )
+    return member
+
+
+def test_bypass_audit_accepts_registered_zone_lint_table(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    _write_clean_rust_workspace(tmp_path)
+    member = _write_zone_member(tmp_path)
+    findings = verify.check_bypass(tmp_path)
+    assert any("member crate must set [lints] workspace = true" in f for f in findings)
+    _write_zone_registry(tmp_path)
+    assert verify.check_bypass(tmp_path) == []
+    manifest = member / "Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'unsafe_code = "allow"', 'unsafe_code = "deny"'
+        ),
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+
+
+def test_zone_gate_accepts_compliant_zone(tmp_path: Path) -> None:
+    _write_clean_rust_workspace(tmp_path)
+    _write_zone_member(tmp_path)
+    _write_zone_registry(tmp_path)
+    assert verify.check_zones(tmp_path) == []
+
+
+def test_zone_gate_flags_lint_table_mismatch(tmp_path: Path) -> None:
+    _write_clean_rust_workspace(tmp_path)
+    member = _write_zone_member(tmp_path)
+    _write_zone_registry(tmp_path)
+    manifest = member / "Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'unsafe_code = "allow"', 'unsafe_code = "forbid"'
+        ),
+        encoding="utf-8",
+    )
+    findings = verify.check_zones(tmp_path)
+    assert any("zone rust lint 'unsafe_code' must be 'allow'" in f for f in findings)
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'undocumented_unsafe_blocks = "deny"', 'undocumented_unsafe_blocks = "allow"'
+        ),
+        encoding="utf-8",
+    )
+    findings = verify.check_zones(tmp_path)
+    assert any(
+        "zone clippy lint 'undocumented_unsafe_blocks' must be 'deny'" in f for f in findings
+    )
+
+
+def test_zone_gate_flags_unsafe_outside_zone(tmp_path: Path) -> None:
+    _write_clean_rust_workspace(tmp_path)
+    _write_zone_member(tmp_path)
+    _write_zone_registry(tmp_path)
+    source = tmp_path / "crates" / "alpha" / "lib.rs"
+    source.write_text(
+        '#[unsafe(export_name = "alpha_free")]\n'
+        'pub extern "C" fn alpha_free() {}\n'
+        "pub fn leak() { unsafe { } }\n",
+        encoding="utf-8",
+    )
+    findings = verify.check_zones(tmp_path)
+    outside = [f for f in findings if "unsafe construct outside a registered unsafe zone" in f]
+    assert outside == [
+        f"{source.relative_to(tmp_path)}:3: unsafe construct outside a registered unsafe zone"
+    ]
+
+
+def test_zone_gate_flags_unsafe_block_count_mismatch(tmp_path: Path) -> None:
+    _write_clean_rust_workspace(tmp_path)
+    member = _write_zone_member(tmp_path)
+    _write_zone_registry(
+        tmp_path, ZONE_REGISTRY_ENTRY.replace("unsafe_block_count = 0", "unsafe_block_count = 1")
+    )
+    source = member / "lib.rs"
+    source.write_text("pub fn zero() -> i32 { 0 }\n", encoding="utf-8")
+    findings = verify.check_zones(tmp_path)
+    assert any("registered unsafe block count 1 differs from actual 0" in f for f in findings)
+    _write_zone_registry(tmp_path)
+    source.write_text("pub fn leak() { unsafe { } }\n", encoding="utf-8")
+    findings = verify.check_zones(tmp_path)
+    assert any("registered unsafe block count 0 differs from actual 1" in f for f in findings)
+
+
+def test_zone_gate_flags_link_time_symbol_alias(tmp_path: Path) -> None:
+    _write_clean_rust_workspace(tmp_path)
+    build = tmp_path / "crates" / "alpha" / "build.rs"
+    build.write_text(
+        'fn main() { println!("cargo:rustc-cdylib-link-arg=-Wl,-alias,_mangled,_stable"); }\n',
+        encoding="utf-8",
+    )
+    findings = verify.check_zones(tmp_path)
+    assert any("link-time symbol alias is banned" in f for f in findings)
+
+
 def _write_clean_csharp_configs(root: Path) -> None:
     (root / "Directory.Build.props").write_text(
         "<!-- Governed by docs/ralph-workflow-policy/linting-policy.md -->\n"

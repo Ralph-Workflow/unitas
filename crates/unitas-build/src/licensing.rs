@@ -200,6 +200,13 @@ pub fn nuget_lock_packages(text: &str) -> Result<Vec<NuGetLockPackage>, ReportPa
         let entries = entries.as_object("dependencies")?;
         for (id, entry) in entries {
             let entry = entry.as_object(id)?;
+            if entry
+                .get("type")
+                .and_then(|value| value.as_str("type").ok())
+                == Some("Project")
+            {
+                continue;
+            }
             let version = entry
                 .get("resolved")
                 .and_then(|value| value.as_str("resolved").ok())
@@ -433,6 +440,25 @@ version = \"0.1.0\"
         assert!(packages
             .iter()
             .any(|package| package.id == "Beta" && package.version == "2.0.0"));
+        Ok(())
+    }
+
+    #[test]
+    fn nuget_lock_packages_skip_project_references() -> Result<(), Box<dyn std::error::Error>> {
+        let text = "\
+{
+  \"version\": 1,
+  \"dependencies\": {
+    \"net8.0\": {
+      \"Alpha\": { \"type\": \"Direct\", \"resolved\": \"1.0.0\" },
+      \"unitas.bridge\": { \"type\": \"Project\", \"dependencies\": {} }
+    }
+  }
+}
+";
+        let packages = nuget_lock_packages(text)?;
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].id, "Alpha");
         Ok(())
     }
 

@@ -231,9 +231,15 @@ Verification:
   upheld, that no safe API can reach undefined behavior, and that a Miri,
   sanitizer, or fuzz test exercises the change.
 
-Until the zone gate and `make verify-unsafe` exist, no zone is registered,
-and the ban gate keeps forbidding unsafe code everywhere. Building those two
-gates is the first part of the change that registers the first zone.
+The zone gate (`make zone-gate`, `python3 tools/verify.py zones`) runs in
+the default lane and is enforced deterministically; the first zone,
+`crates/unitas-editor-abi`, is registered in `tools/unsafe-zones.toml`.
+`make verify-unsafe` is declared as a non-default lane and currently wires
+the zone's Miri run (when a Miri toolchain is installed) and the zone's
+test suite; its remaining declared stages (sanitizer, Loom, fuzz, Kani,
+and layout tests) are reported by the lane as not yet wired, never
+claimed. Until those stages are wired, every change that touches a zone
+still owes the full verification list above.
 
 ## Commenting policy
 
@@ -327,8 +333,8 @@ this rule is deleted or reduced to current facts.
 | Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog reports zero findings over the tracked tree | the ban gate reports zero findings in the Python sources | the ban gate reports zero findings in the Python sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
-| Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree | the zone gate reports zero findings | advisory: the zone gate is built in the change that registers the first zone, and until then the ban gate forbids unsafe code everywhere; review: in the change that registers the first zone | when the linter alone enforces zone containment |
-| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: the lane is built in the change that registers the first zone; review: at every change that touches a zone | when no unsafe zone remains |
+| Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree | the zone gate reports zero findings | deterministic: make zone-gate | when the linter alone enforces zone containment |
+| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: sanitizer Loom fuzz Kani and layout-test stages are declared and not yet wired; review: at every change that touches a zone | when no unsafe zone remains |
 | Unsafe boundary layout agreement | Clean-code owner | Rust and C# agree on the size, alignment, and field offsets of every type that crosses the C ABI | the generated layout tests pass on both sides | the generated layout tests pass | advisory: the layout tests are generated in the change that registers the first zone; review: in the change that registers the first zone | when no type crosses the C ABI |
 
 ## Project facts to resolve
@@ -386,9 +392,14 @@ RALPH-REVIEW: review naming, cohesion, interface clarity, abstraction justificat
 
 RALPH-COMMAND: make comment-audit
 
+RALPH-COMMAND: make zone-gate
+
 The command gates' expected successful results are a clean dead-code audit
 and a clean comment audit over the new and changed lines; report any audit
-findings. The review gate certifies the judgment the audits cannot.
+findings. The zone gate must report zero findings; a registered zone's
+unsafe block count and lint table are checked against
+tools/unsafe-zones.toml and the workspace lint table. The review gate
+certifies the judgment the audits cannot.
 
 ## Exceptions
 

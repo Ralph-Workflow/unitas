@@ -74,6 +74,7 @@ namespace Unitas.Bridge.Tests
             LoggingTests.Run();
             RenderTests.Run();
             PlaytestTests.Run();
+            RollABallScenarioTests.Run();
             TestCharacterControllerDefaultsAndNullProvider();
             TestEndToEndCharacterControllerMoveAndSceneLoad();
             TestAudioDefaultsAndNullProvider();

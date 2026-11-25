@@ -7,8 +7,12 @@ edition = "2024"
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+# Registered unsafe zone (tools/unsafe-zones.toml): the workspace lint table copied
+# verbatim per clean-code-policy.md, except unsafe_code permitted for #[unsafe(export_name)]
+# C ABI exports, plus the zone-required denies.
 [lints.rust]
 warnings = "deny"
+unsafe_code = "allow"
 unnecessary_transmutes = "deny"
 static_mut_refs = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -24,6 +28,7 @@ panic = "deny"
 todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
+# Unsafe-zone guardrails required by clean-code-policy.md
 undocumented_unsafe_blocks = "deny"
 missing_safety_doc = "deny"
 multiple_unsafe_ops_per_block = "deny"

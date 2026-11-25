@@ -142,12 +142,22 @@
           "System.Text.Encodings.Web": "10.0.13"
         }
       },
+      "unitas.bridge": {
+        "type": "Project",
+        "dependencies": {
+          "UnityEngine": "[1.0.0, )"
+        }
+      },
       "unitas.editor": {
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol": "[2.4.0, )",
-          "ModelContextProtocol.AspNetCore": "[2.4.0, )"
+          "ModelContextProtocol.AspNetCore": "[2.4.0, )",
+          "Unitas.Bridge": "[1.0.0, )"
         }
+      },
+      "unityengine": {
+        "type": "Project"
       }
     }
   }

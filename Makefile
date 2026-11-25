@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -20,6 +20,7 @@ verify:
 verify-scan-gates:
 	@$(MAKE) --no-print-directory policy-validate
 	@$(MAKE) --no-print-directory bypass-audit
+	@$(MAKE) --no-print-directory zone-gate
 	@$(MAKE) --no-print-directory banned-constructs
 	@$(MAKE) --no-print-directory comment-audit
 	@$(MAKE) --no-print-directory deps
@@ -74,6 +75,9 @@ bypass-audit:
 banned-constructs:
 	@python3 tools/verify.py timed banned $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py banned
 
+zone-gate:
+	@python3 tools/verify.py timed zones $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py zones
+
 comment-audit:
 	@python3 tools/verify.py timed comments $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py comments
 
@@ -99,6 +103,21 @@ dotnet-test-run:
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
 	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
+
+verify-unsafe:
+	@echo "owner: wt-04-linting"
+	@echo "trigger: every change that touches a registered unsafe zone"
+	@echo "lane: make verify-unsafe (non-default)"
+	@echo "evidence: per-stage exit statuses below; sanitizer, Loom, fuzz, and Kani stages are declared but not yet wired"
+	@echo "review: at every change that touches a zone, by an agent other than its author"
+	@if cargo +nightly miri --version >/dev/null 2>&1; then \
+		echo "stage miri: cargo +nightly miri test -p unitas-editor-abi"; \
+		cargo +nightly miri test -p unitas-editor-abi; \
+	else \
+		echo "stage miri: not run (miri toolchain not installed)"; \
+	fi
+	@echo "stage zone tests: cargo test -p unitas-editor-abi"
+	@cargo test -p unitas-editor-abi
 
 verify-device:
 	@echo "owner: wt-03"

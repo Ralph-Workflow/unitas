@@ -54,22 +54,20 @@ fn build_player(args: &Value) -> Result<Value, String> {
     let started = Instant::now();
     let outcome = execute_build_for_host(&config, &output_dir, 0, BuildTarget::current_host());
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let (bundle, mut report) = match outcome.bundle {
-        Some(bundle) => (bundle, outcome.report),
-        None => {
-            let reason = outcome
-                .report
-                .errors
-                .iter()
-                .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(format!(
-                "build failed for target {}: {reason}",
-                target.identifier()
-            ));
-        }
+    let Some(bundle) = outcome.bundle else {
+        let reason = outcome
+            .report
+            .errors
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "build failed for target {}: {reason}",
+            target.identifier()
+        ));
     };
+    let mut report = outcome.report;
 
     report.elapsed_ms = elapsed_ms;
     let report_path = output_dir.join(BUILD_REPORT_FILENAME);

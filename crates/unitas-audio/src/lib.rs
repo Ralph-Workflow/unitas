@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use unitas_asset::audio_import::{decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav};
 use unitas_core::EntityId;
 
 #[cfg(feature = "device")]
@@ -117,6 +118,47 @@ fn read_i16_le(bytes: &[u8], offset: usize) -> Option<i16> {
 fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     let slice = bytes.get(offset..offset + 4)?;
     Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        return decode_shared(decode_wav(bytes));
+    }
+    if bytes.starts_with(b"OggS") {
+        return decode_shared(decode_ogg_vorbis(bytes));
+    }
+    if bytes.starts_with(b"ID3")
+        || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+    {
+        return decode_shared(decode_mp3(bytes));
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"AIFF" {
+        return decode_shared(decode_aiff(bytes));
+    }
+    Err(AudioError::UnsupportedFormat(
+        "unrecognized audio container".to_string(),
+    ))
+}
+
+fn decode_shared(
+    decoded: Result<
+        unitas_asset::audio_import::PcmClip,
+        unitas_asset::audio_import::AudioImportError,
+    >,
+) -> Result<AudioClip, AudioError> {
+    let clip = decoded.map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+    if clip.channels > 2 {
+        return Err(AudioError::UnsupportedFormat(format!(
+            "{} channels (only mono or stereo supported)",
+            clip.channels
+        )));
+    }
+    let samples = clip
+        .samples
+        .iter()
+        .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
+        .collect();
+    Ok(AudioClip::new(clip.channels, clip.sample_rate, samples))
 }
 
 pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {

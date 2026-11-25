@@ -252,9 +252,8 @@ mod tests {
         if ptr == 0 {
             return Err("null string pointer".into());
         }
-        let text = match read_c_string(ptr) {
-            Some(Ok(text)) => text,
-            _ => return Err("invalid UTF-8 string pointer".into()),
+        let Some(Ok(text)) = read_c_string(ptr) else {
+            return Err("invalid UTF-8 string pointer".into());
         };
         unitas_editor_string_free(ptr);
         Ok(serde_json::from_str(&text)?)

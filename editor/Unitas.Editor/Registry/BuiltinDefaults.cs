@@ -58,6 +58,7 @@ namespace Unitas.Editor.Mcp
             AuditTools.Register(host);
             PlayTools.Register(host, playSessions);
             CaptureTool.Register(host, playSessions);
+            ScenarioTools.Register(host);
             ChangeReviewTools.Register(host, new ChangeSetStore(host));
             BuildTools.Register(host);
             OperationTools.Register(host);

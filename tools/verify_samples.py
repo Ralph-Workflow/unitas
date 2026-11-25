@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_ROOT = REPO_ROOT / "samples" / "roll-a-ball"
 SCENARIO_DIR = SAMPLE_ROOT / "Scenarios"
+EDITOR_CLI = (
+    REPO_ROOT / "editor" / "Unitas.Editor" / "bin" / "Release" / "net8.0" / "Unitas.Editor.dll"
+)
+EDITOR_SCENARIOS = (
+    "collect_all_pickups.scenario.json",
+    "restart_recovery.scenario.json",
+)
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
 REPORT_DIR = REPO_ROOT / "target" / "samples-lane"
@@ -65,6 +72,27 @@ def metadata_text() -> str:
 def help_text() -> str:
     usage = "usage: verify_samples.py [--help] [--metadata]"
     return f"{usage}\nlane metadata:\n{metadata_text()}"
+
+
+def editor_scenario_steps() -> list[tuple[str, list[str], float, Path | None, Path]]:
+    return [
+        (
+            f"editor-scenario-{Path(scenario).stem}",
+            [
+                "dotnet",
+                str(EDITOR_CLI),
+                "-batchmode",
+                "-nographics",
+                "-quit",
+                "-runScenario",
+                str(SCENARIO_DIR / scenario),
+            ],
+            RUN_BUDGET_SECONDS,
+            None,
+            REPO_ROOT,
+        )
+        for scenario in EDITOR_SCENARIOS
+    ]
 
 
 def run_step(
@@ -192,6 +220,8 @@ def run_lane() -> int:
         scenario_env = persist_env if needs_persist else env
         rc = run_scenario(name, scenario_file, extra_args, scenario_env)
         results.append((name, rc))
+    for step in editor_scenario_steps():
+        results.append((step[0], run_step(step, env)))
 
     emit("scenario summary:")
     for name, rc in results:
