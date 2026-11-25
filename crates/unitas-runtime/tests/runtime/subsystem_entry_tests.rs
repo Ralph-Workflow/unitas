@@ -1,5 +1,8 @@
+use std::sync::Mutex;
+
 use unitas_core::EntityId;
 use unitas_physics::matrix::{CollisionMessage, PhysicsObject};
+use unitas_physics::navigation::{NavMesh, NavMeshTriangle, NavigationError};
 use unitas_physics::particles::{
     Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, ParticlePropertyCurves,
     ParticleShape, ParticleSystemForceField, ParticleSystemState, StopAction,
@@ -10,6 +13,7 @@ use unitas_physics::two_d::{
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape};
 use unitas_runtime::particles::ParticleRuntimeWorld;
 use unitas_runtime::physics::PhysicsRuntimeWorld;
+use unitas_runtime::{Callbacks, Runtime};
 
 #[test]
 fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Result<(), PhysicsError>
@@ -430,5 +434,352 @@ fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_r
         "REN-004 outcome 16: runtime particle world must report OnParticleTrigger contacts"
     );
     assert_eq!(triggers[0].entity, trigger_zone);
+    Ok(())
+}
+
+static SUBSYSTEM_ENTRY_COLLISIONS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
+static SUBSYSTEM_ENTRY_TRIGGERS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
+
+extern "C" fn subsystem_entry_create_script(_entity: u64, _hi: u64, _lo: u64) -> u64 {
+    1
+}
+
+extern "C" fn subsystem_entry_noop_handle(_handle: u64) {}
+
+extern "C" fn subsystem_entry_noop_step(_handle: u64, _delta: f64) {}
+
+extern "C" fn subsystem_entry_collision(a: u64, b: u64, phase: u32) {
+    if let Ok(mut events) = SUBSYSTEM_ENTRY_COLLISIONS.lock() {
+        events.push((a, b, phase));
+    }
+}
+
+extern "C" fn subsystem_entry_trigger(a: u64, b: u64, phase: u32) {
+    if let Ok(mut events) = SUBSYSTEM_ENTRY_TRIGGERS.lock() {
+        events.push((a, b, phase));
+    }
+}
+
+fn subsystem_entry_callbacks() -> Callbacks {
+    Callbacks {
+        create_script: subsystem_entry_create_script,
+        awake: subsystem_entry_noop_handle,
+        on_enable: subsystem_entry_noop_handle,
+        start: subsystem_entry_noop_handle,
+        fixed_update: subsystem_entry_noop_step,
+        update: subsystem_entry_noop_step,
+        late_update: subsystem_entry_noop_step,
+        on_disable: subsystem_entry_noop_handle,
+        destroy: subsystem_entry_noop_handle,
+        collision: subsystem_entry_collision,
+        trigger: subsystem_entry_trigger,
+    }
+}
+
+fn subsystem_entry_collision_events() -> Result<Vec<(u64, u64, u32)>, String> {
+    match SUBSYSTEM_ENTRY_COLLISIONS.lock() {
+        Ok(guard) => Ok(guard.clone()),
+        Err(_) => Err(String::from("mutex poisoned")),
+    }
+}
+
+fn subsystem_entry_trigger_events() -> Result<Vec<(u64, u64, u32)>, String> {
+    match SUBSYSTEM_ENTRY_TRIGGERS.lock() {
+        Ok(guard) => Ok(guard.clone()),
+        Err(_) => Err(String::from("mutex poisoned")),
+    }
+}
+
+fn subsystem_entry_navmesh() -> Result<NavMesh, NavigationError> {
+    let mut triangles = Vec::new();
+    for index in 0..4 {
+        let x = f64::from(index);
+        triangles.push(NavMeshTriangle::new(
+            [[x, 0.0, 0.0], [x, 0.0, 1.0], [x + 1.0, 0.0, 0.0]],
+            0,
+        ));
+        triangles.push(NavMeshTriangle::new(
+            [[x + 1.0, 0.0, 0.0], [x, 0.0, 1.0], [x + 1.0, 0.0, 1.0]],
+            0,
+        ));
+    }
+    NavMesh::build(&triangles, &[])
+}
+
+fn subsystem_entry_dynamic_sphere(position: [f64; 3], radius: f64) -> BodyDesc {
+    BodyDesc {
+        role: BodyRole::Dynamic,
+        shape: Shape::Sphere { radius },
+        position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: 1.0,
+        velocity: [0.0; 3],
+        use_gravity: true,
+        is_trigger: false,
+        layer: 0,
+        friction: 0.6,
+        restitution: 0.0,
+    }
+}
+
+#[test]
+fn subsystem_entry_runtime_tick_steps_2d_physics_and_dispatches_the_collision_callback(
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Ok(mut events) = SUBSYSTEM_ENTRY_COLLISIONS.lock() {
+        events.clear();
+    }
+    let mut runtime = Runtime::new()?;
+    let floor_entity = EntityId::new(31);
+    let ball_entity = EntityId::new(32);
+    let ball_body = {
+        let physics = runtime.physics_mut();
+        let floor_body = physics.add_body_2d(BodyDesc2D::static_body(floor_entity, [0.0, 0.0]));
+        let mut floor_collider = ColliderDesc2D::box_collider(floor_entity, [3.0, 0.2]);
+        floor_collider.attached_body = Some(floor_body);
+        physics.add_collider_2d(floor_collider);
+        let ball_body = physics.add_body_2d(BodyDesc2D::dynamic(ball_entity, [0.0, 1.0]));
+        let mut ball_collider = ColliderDesc2D::circle_collider(ball_entity, 0.2);
+        ball_collider.attached_body = Some(ball_body);
+        physics.add_collider_2d(ball_collider);
+        ball_body
+    };
+
+    runtime.set_callbacks(subsystem_entry_callbacks());
+    runtime.tick(0.02)?;
+    let start = runtime
+        .physics_mut()
+        .inspect_body_2d(ball_body)
+        .ok_or("missing 2D ball body")?
+        .position;
+    assert_eq!(
+        start,
+        [0.0, 1.0],
+        "the 2D ball must not move before the first simulated frame"
+    );
+
+    for _ in 0..6 {
+        runtime.tick(0.1)?;
+    }
+
+    let end = runtime
+        .physics_mut()
+        .inspect_body_2d(ball_body)
+        .ok_or("missing 2D ball body")?
+        .position;
+    assert!(
+        end[1] < start[1],
+        "the 2D rigidbody must fall under gravity across the fixed steps: start {start:?} end {end:?}"
+    );
+
+    let events = subsystem_entry_collision_events()?;
+    let ball = ball_entity.as_u64();
+    let floor = floor_entity.as_u64();
+    assert!(
+        events.iter().any(|(a, b, phase)| {
+            *phase == 0 && ((*a == ball && *b == floor) || (*a == floor && *b == ball))
+        }),
+        "the 2D contact must reach the script collision callback path: {events:?}"
+    );
+    assert!(
+        subsystem_entry_trigger_events()?.is_empty(),
+        "a 2D contact is not a trigger contact"
+    );
+    Ok(())
+}
+
+#[test]
+fn subsystem_entry_runtime_tick_ages_and_retires_emitted_particles(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = Runtime::new()?;
+    let emitter = EntityId::new(41);
+    let emitter_2d = EntityId::new(42);
+    {
+        let system = runtime.particles_mut().register_system(emitter, 7);
+        system.set_shape(ParticleShape::Point);
+        system.set_emit_position([0.0, 0.0, 0.0]);
+        system.set_emit_params(EmitParams {
+            start_speed: 0.0,
+            start_size: 0.1,
+            start_lifetime: 0.05,
+            start_color: [1.0, 1.0, 1.0, 1.0],
+        });
+    }
+    {
+        let system = runtime.particles_2d_mut().register_system(emitter_2d, 9);
+        system.system_mut().set_shape(ParticleShape::Point);
+        system.system_mut().set_emit_params(EmitParams {
+            start_speed: 0.0,
+            start_size: 0.1,
+            start_lifetime: 0.05,
+            start_color: [1.0, 1.0, 1.0, 1.0],
+        });
+    }
+    assert!(runtime.particles_mut().emit(emitter, 3));
+    runtime
+        .particles_2d_mut()
+        .system_mut(emitter_2d)
+        .ok_or("missing 2D particle system")?
+        .system_mut()
+        .emit(2);
+    assert_eq!(
+        runtime
+            .particles_mut()
+            .particles(emitter)
+            .map(|particles| particles.len()),
+        Some(3),
+        "the emitted particles must be live before the frame loop runs"
+    );
+    assert_eq!(
+        runtime
+            .particles_2d_mut()
+            .system(emitter_2d)
+            .map(|system| system.system().get_particles().len()),
+        Some(2),
+        "the emitted 2D particles must be live before the frame loop runs"
+    );
+
+    runtime.tick(0.02)?;
+    assert_eq!(
+        runtime
+            .particles_mut()
+            .particles(emitter)
+            .map(|particles| particles.len()),
+        Some(3),
+        "the first tick only initializes the runtime"
+    );
+
+    runtime.tick(0.1)?;
+    assert_eq!(
+        runtime
+            .particles_mut()
+            .particles(emitter)
+            .map(|particles| particles.len()),
+        Some(0),
+        "the particle must age past its lifetime and die inside the frame loop"
+    );
+    assert_eq!(
+        runtime
+            .particles_2d_mut()
+            .system(emitter_2d)
+            .map(|system| system.system().get_particles().len()),
+        Some(0),
+        "the 2D particle must age past its lifetime and die inside the frame loop"
+    );
+    Ok(())
+}
+
+#[test]
+fn subsystem_entry_runtime_tick_advances_a_nav_agent_along_its_path(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = Runtime::new()?;
+    let agent_entity = EntityId::new(51);
+    runtime
+        .navigation_mut()
+        .set_navmesh(subsystem_entry_navmesh()?);
+    runtime
+        .navigation_mut()
+        .add_agent(agent_entity, "Walker", [0.5, 0.0, 0.5])?;
+    runtime
+        .navigation_mut()
+        .set_destination(agent_entity, [3.5, 0.0, 0.5])?;
+
+    runtime.tick(0.02)?;
+    runtime.tick(0.1)?;
+    runtime.tick(0.1)?;
+
+    let position = runtime
+        .navigation_mut()
+        .position(agent_entity)
+        .ok_or("missing navmesh agent")?;
+    assert!(
+        position[0] > 0.5,
+        "the nav agent must advance along its path: {position:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn subsystem_entry_runtime_tick_with_time_scale_zero_freezes_2d_physics_and_particles_exactly_as_3d(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = Runtime::new()?;
+    let ball_entity = EntityId::new(61);
+    let body_entity = EntityId::new(62);
+    let emitter = EntityId::new(63);
+    let ball_body = {
+        let physics = runtime.physics_mut();
+        physics.add_body_3d(
+            body_entity,
+            subsystem_entry_dynamic_sphere([0.0, 2.0, 0.0], 0.25),
+        )?;
+        let ball_body = physics.add_body_2d(BodyDesc2D::dynamic(ball_entity, [0.0, 2.0]));
+        let mut ball_collider = ColliderDesc2D::circle_collider(ball_entity, 0.25);
+        ball_collider.attached_body = Some(ball_body);
+        physics.add_collider_2d(ball_collider);
+        ball_body
+    };
+    {
+        let system = runtime.particles_mut().register_system(emitter, 11);
+        system.set_shape(ParticleShape::Point);
+        system.set_emit_params(EmitParams {
+            start_speed: 0.0,
+            start_size: 0.1,
+            start_lifetime: 30.0,
+            start_color: [1.0, 1.0, 1.0, 1.0],
+        });
+    }
+    assert!(runtime.particles_mut().emit(emitter, 2));
+
+    runtime.tick(0.02)?;
+    runtime.tick(0.1)?;
+
+    let running_2d = runtime
+        .physics_mut()
+        .inspect_body_2d(ball_body)
+        .ok_or("missing 2D ball body")?
+        .position;
+    let running_3d = runtime
+        .physics_mut()
+        .world_3d()
+        .position(body_entity)
+        .ok_or("missing 3D body")?;
+    let running_age = runtime
+        .particles_mut()
+        .particles(emitter)
+        .and_then(|particles| particles.first().map(|particle| particle.age))
+        .ok_or("missing emitted particle")?;
+    assert!(running_2d[1] < 2.0, "the 2D body must fall while time runs");
+    assert!(running_3d[1] < 2.0, "the 3D body must fall while time runs");
+    assert!(running_age > 0.0, "the particle must age while time runs");
+
+    runtime.set_time_scale(0.0);
+    runtime.tick(0.1)?;
+
+    let frozen_2d = runtime
+        .physics_mut()
+        .inspect_body_2d(ball_body)
+        .ok_or("missing 2D ball body")?
+        .position;
+    let frozen_3d = runtime
+        .physics_mut()
+        .world_3d()
+        .position(body_entity)
+        .ok_or("missing 3D body")?;
+    let frozen_age = runtime
+        .particles_mut()
+        .particles(emitter)
+        .and_then(|particles| particles.first().map(|particle| particle.age))
+        .ok_or("missing emitted particle")?;
+    assert_eq!(
+        frozen_2d, running_2d,
+        "time scale zero must freeze the 2D physics exactly as it freezes the 3D physics"
+    );
+    assert_eq!(
+        frozen_3d, running_3d,
+        "time scale zero must freeze the 3D physics"
+    );
+    assert_eq!(
+        frozen_age, running_age,
+        "time scale zero must freeze the particle system exactly as it freezes the 3D physics"
+    );
     Ok(())
 }

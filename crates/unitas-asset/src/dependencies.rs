@@ -1,9 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::binary_ser::{is_text_serialized, read_serialized_file, SerializedFile};
+use crate::import_cache::{ImportCache, ImportCacheError};
 use crate::project::{AssetKind, Project};
 use crate::unity_yaml::{self, Node};
 
@@ -240,14 +242,38 @@ impl ImportSessionReport {
     }
 }
 
+pub(crate) const UNCHANGED_REASON: &str = "inputs unchanged; the recorded result was reused";
+
 #[derive(Debug, Clone, Default)]
 pub struct ImportSession {
     records: BTreeMap<PathBuf, ImportRecord>,
+    cache: Option<ImportCache>,
+    cache_error: Option<ImportCacheError>,
 }
 
 impl ImportSession {
     pub fn new() -> Self {
         ImportSession::default()
+    }
+
+    pub fn with_cache(cache: ImportCache) -> Self {
+        let records = cache
+            .records()
+            .map(|record| (record.path.clone(), record.clone()))
+            .collect();
+        ImportSession {
+            records,
+            cache: Some(cache),
+            cache_error: None,
+        }
+    }
+
+    pub fn cache(&self) -> Option<&ImportCache> {
+        self.cache.as_ref()
+    }
+
+    pub fn cache_error(&self) -> Option<&ImportCacheError> {
+        self.cache_error.as_ref()
     }
 
     pub fn record(&self, path: &Path) -> Option<&ImportRecord> {
@@ -259,6 +285,31 @@ impl ImportSession {
         candidates: &[ImportCandidate],
         importer: &mut dyn FnMut(&ImportCandidate) -> ImportOutcome,
     ) -> ImportSessionReport {
+        let plan = self.plan(candidates);
+        let outcomes = import_serially(candidates, &plan, importer);
+        self.finish(candidates, &plan, outcomes)
+    }
+
+    pub fn run_parallel(
+        &mut self,
+        candidates: &[ImportCandidate],
+        importer: &(dyn Fn(&ImportCandidate) -> ImportOutcome + Send + Sync),
+    ) -> ImportSessionReport {
+        self.run_parallel_with_workers(candidates, importer, default_worker_count(candidates.len()))
+    }
+
+    pub fn run_parallel_with_workers(
+        &mut self,
+        candidates: &[ImportCandidate],
+        importer: &(dyn Fn(&ImportCandidate) -> ImportOutcome + Send + Sync),
+        workers: usize,
+    ) -> ImportSessionReport {
+        let plan = self.plan(candidates);
+        let outcomes = import_in_pool(candidates, &plan, importer, workers);
+        self.finish(candidates, &plan, outcomes)
+    }
+
+    fn plan(&self, candidates: &[ImportCandidate]) -> ImportPlan {
         let mut changed: BTreeSet<String> = BTreeSet::new();
         let mut reasons: BTreeMap<PathBuf, String> = BTreeMap::new();
 
@@ -297,17 +348,38 @@ impl ImportSession {
             }
         }
 
-        let mut records = Vec::new();
+        ImportPlan {
+            reasons,
+            waves: dependency_waves(candidates, &changed),
+        }
+    }
+
+    fn finish(
+        &mut self,
+        candidates: &[ImportCandidate],
+        plan: &ImportPlan,
+        outcomes: BTreeMap<PathBuf, ImportOutcome>,
+    ) -> ImportSessionReport {
+        let mut ordered: Vec<&ImportCandidate> = candidates.iter().collect();
+        ordered.sort_by(|left, right| left.path.cmp(&right.path));
+
+        let mut records = Vec::with_capacity(ordered.len());
         let mut imported = 0usize;
         let mut reused = 0usize;
         let mut failed = 0usize;
 
-        for candidate in candidates {
+        for candidate in ordered {
             let fingerprint = candidate.fingerprint();
-            match reasons.get(&candidate.path).cloned() {
+            let record = match plan.reasons.get(&candidate.path) {
                 Some(reason) => {
                     let asset = candidate.path.display().to_string();
-                    let outcome = state_with_consequence(importer(candidate), &asset);
+                    let outcome = outcomes.get(&candidate.path).cloned().unwrap_or_else(|| {
+                        ImportOutcome::failed(ImportDiagnostic::new(
+                            asset.clone(),
+                            "the import produced no outcome",
+                            format!("the asset stays {}", AssetImportState::Failed.label()),
+                        ))
+                    });
                     let mut diagnostics = self
                         .records
                         .get(&candidate.path)
@@ -321,37 +393,37 @@ impl ImportSession {
                         diagnostics,
                         fingerprint,
                         reused: false,
-                        reason,
+                        reason: reason.clone(),
                     };
                     if record.state == AssetImportState::Failed {
                         failed += 1;
                     }
                     imported += 1;
-                    self.records.insert(candidate.path.clone(), record.clone());
-                    records.push(record);
+                    record
                 }
                 None => {
-                    let previous = match self.records.get(&candidate.path) {
-                        Some(previous) => previous.clone(),
-                        None => continue,
+                    let Some(previous) = self.records.get(&candidate.path).cloned() else {
+                        continue;
                     };
                     let record = ImportRecord {
                         reused: true,
-                        reason: "inputs unchanged; the recorded result was reused".to_string(),
+                        reason: UNCHANGED_REASON.to_string(),
                         ..previous
                     };
                     if record.state == AssetImportState::Failed {
                         failed += 1;
                     }
                     reused += 1;
-                    self.records.insert(candidate.path.clone(), record.clone());
-                    records.push(record);
+                    record
                 }
-            }
+            };
+            self.records.insert(record.path.clone(), record.clone());
+            records.push(record);
         }
 
         let succeeded = imported + reused - failed;
         let partial_success = failed > 0 && succeeded > 0;
+        self.persist();
         ImportSessionReport {
             records,
             imported,
@@ -361,6 +433,140 @@ impl ImportSession {
             partial_success,
         }
     }
+
+    fn persist(&mut self) {
+        let Some(cache) = &mut self.cache else {
+            return;
+        };
+        cache.replace(self.records.values().cloned());
+        if let Err(error) = cache.save() {
+            self.cache_error = Some(error);
+        }
+    }
+}
+
+struct ImportPlan {
+    reasons: BTreeMap<PathBuf, String>,
+    waves: Vec<Vec<usize>>,
+}
+
+pub fn default_worker_count(candidates: usize) -> usize {
+    let parallelism = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
+    parallelism.min(candidates)
+}
+
+fn dependency_waves(candidates: &[ImportCandidate], changed: &BTreeSet<String>) -> Vec<Vec<usize>> {
+    let mut remaining: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| changed.contains(&candidate.guid))
+        .map(|(index, _)| index)
+        .collect();
+    let mut waves: Vec<Vec<usize>> = Vec::new();
+    while !remaining.is_empty() {
+        let pending: BTreeSet<&str> = remaining
+            .iter()
+            .map(|index| candidates[*index].guid.as_str())
+            .collect();
+        let wave: Vec<usize> = remaining
+            .iter()
+            .copied()
+            .filter(|index| {
+                !candidates[*index].dependencies.iter().any(|dependency| {
+                    dependency != &candidates[*index].guid && pending.contains(dependency.as_str())
+                })
+            })
+            .collect();
+        let wave = if wave.is_empty() {
+            remaining.clone()
+        } else {
+            wave
+        };
+        for index in &wave {
+            remaining.retain(|other| other != index);
+        }
+        waves.push(wave);
+    }
+    waves
+}
+
+fn import_serially(
+    candidates: &[ImportCandidate],
+    plan: &ImportPlan,
+    importer: &mut dyn FnMut(&ImportCandidate) -> ImportOutcome,
+) -> BTreeMap<PathBuf, ImportOutcome> {
+    let mut outcomes = BTreeMap::new();
+    for wave in &plan.waves {
+        for index in wave {
+            let candidate = &candidates[*index];
+            let asset = candidate.path.display().to_string();
+            let outcome = state_with_consequence(importer(candidate), &asset);
+            outcomes.insert(candidate.path.clone(), outcome);
+        }
+    }
+    outcomes
+}
+
+fn import_in_pool(
+    candidates: &[ImportCandidate],
+    plan: &ImportPlan,
+    importer: &(dyn Fn(&ImportCandidate) -> ImportOutcome + Send + Sync),
+    workers: usize,
+) -> BTreeMap<PathBuf, ImportOutcome> {
+    let mut outcomes = BTreeMap::new();
+    for wave in &plan.waves {
+        for (index, outcome) in run_wave(candidates, wave, importer, workers) {
+            outcomes.insert(candidates[index].path.clone(), outcome);
+        }
+    }
+    outcomes
+}
+
+fn run_wave(
+    candidates: &[ImportCandidate],
+    wave: &[usize],
+    importer: &(dyn Fn(&ImportCandidate) -> ImportOutcome + Send + Sync),
+    workers: usize,
+) -> Vec<(usize, ImportOutcome)> {
+    if wave.len() <= 1 || workers <= 1 {
+        return wave
+            .iter()
+            .map(|index| {
+                let candidate = &candidates[*index];
+                let asset = candidate.path.display().to_string();
+                (*index, state_with_consequence(importer(candidate), &asset))
+            })
+            .collect();
+    }
+
+    let queue = Mutex::new(VecDeque::from(wave.to_vec()));
+    let results = Mutex::new(Vec::new());
+    let worker_count = workers.min(wave.len());
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let next = {
+                    let mut queue = queue.lock().unwrap_or_else(|error| error.into_inner());
+                    queue.pop_front()
+                };
+                let Some(index) = next else {
+                    break;
+                };
+                let candidate = &candidates[index];
+                let asset = candidate.path.display().to_string();
+                let outcome = state_with_consequence(importer(candidate), &asset);
+                results
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push((index, outcome));
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
 }
 
 fn state_with_consequence(outcome: ImportOutcome, asset: &str) -> ImportOutcome {

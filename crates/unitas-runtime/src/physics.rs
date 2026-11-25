@@ -10,7 +10,7 @@ use unitas_physics::two_d::{
     RoutedMessage2D, SurfaceEffector2D, World2D,
 };
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionEvent, PhysicsError, QueryHit, TriggerEvent, World,
+    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, QueryHit, TriggerEvent, World,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +38,14 @@ pub struct BodySnapshot2D {
     pub linear_velocity: [f32; 2],
     pub simulated: bool,
     pub sleeping: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactEvent2D {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub trigger: bool,
+    pub phase: Phase,
 }
 
 #[derive(Default)]
@@ -211,6 +219,22 @@ impl PhysicsRuntimeWorld {
     pub fn step_2d(&mut self, delta_seconds: f32) -> Vec<RoutedMessage2D> {
         self.world_2d.step(delta_seconds);
         self.world_2d.drain_messages()
+    }
+
+    pub fn step_2d_contacts(&mut self, delta_seconds: f32) -> Vec<ContactEvent2D> {
+        let messages = self.step_2d(delta_seconds);
+        messages
+            .iter()
+            .map(|message| ContactEvent2D {
+                a: message.recipient,
+                b: self
+                    .world_2d
+                    .collider(message.other_collider)
+                    .map_or(message.recipient, |collider| collider.game_object),
+                trigger: message.kind.is_trigger(),
+                phase: message.kind.phase(),
+            })
+            .collect()
     }
 
     pub fn ignore_layer_collision_2d(&mut self, layer_a: u8, layer_b: u8, ignore: bool) {

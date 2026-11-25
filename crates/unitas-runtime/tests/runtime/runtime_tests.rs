@@ -3,6 +3,9 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::Mutex;
 
+#[path = "roll_a_ball_tests.rs"]
+mod roll_a_ball_tests;
+
 use unitas_runtime::{
     test_read_query_buffer, test_write_path_buffer, unitas_runtime_box_cast,
     unitas_runtime_destroy, unitas_runtime_error_message, unitas_runtime_fixed_timestep,

@@ -241,7 +241,7 @@ pub struct ParticleSystem {
     collision_events: Vec<ParticleCollisionEvent>,
     trigger_events: Vec<ParticleTriggerEvent>,
     pending_stop_action: Option<StopAction>,
-    stopped_callback: Option<Box<dyn FnMut()>>,
+    stopped_callback: Option<Box<dyn FnMut() + Send>>,
     stopped_count: u32,
     disabled: bool,
     destroyed: bool,
@@ -446,7 +446,7 @@ impl ParticleSystem {
         }
     }
 
-    pub fn set_stopped_callback(&mut self, callback: Box<dyn FnMut()>) {
+    pub fn set_stopped_callback(&mut self, callback: Box<dyn FnMut() + Send>) {
         self.stopped_callback = Some(callback);
     }
 

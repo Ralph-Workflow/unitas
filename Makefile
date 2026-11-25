@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-samples test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -99,6 +99,14 @@ dotnet-test-run:
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
 	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
+
+verify-samples:
+	@echo "owner: wt-02-simulation"
+	@echo "trigger: every milestone touching sample content or the runtime tick"
+	@echo "lane: make verify-samples"
+	@echo "evidence: per-sample pass/fail lines with the sample revision"
+	@echo "review: when a sample is added to or removed from the sample matrix"
+	@python3 tools/verify_samples.py
 
 verify-device:
 	@echo "owner: wt-03"

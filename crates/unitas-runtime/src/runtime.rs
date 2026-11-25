@@ -13,6 +13,7 @@ use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{
     normalize_rotation, rotate_vector, EntityId, SceneGraph, Transform, IDENTITY_ROTATION,
 };
+use unitas_physics::navigation::NavMesh;
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
 };
@@ -23,6 +24,9 @@ use unitas_render::{
 use crate::animation::{apply_transform_property, AnimationRuntimeDiagnostic, AnimationWorld};
 use crate::error::{RenderError, RuntimeError};
 use crate::input::{default_axis_configs, AxisConfig, InputState};
+use crate::navigation::NavigationRuntimeWorld;
+use crate::particles::{ParticleRuntimeWorld, ParticleRuntimeWorld2D};
+use crate::physics::PhysicsRuntimeWorld;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -216,7 +220,10 @@ pub struct Runtime {
     character_states: HashMap<EntityId, CharacterController>,
     default_character_state: CharacterController,
     script_view: Vec<ScriptInstance>,
-    world: World,
+    physics: PhysicsRuntimeWorld,
+    particles: ParticleRuntimeWorld,
+    particles_2d: ParticleRuntimeWorld2D,
+    navigation: NavigationRuntimeWorld,
     audio: AudioWorld,
     animation: AnimationWorld,
     input: InputState,
@@ -245,7 +252,10 @@ impl Runtime {
             character_states: HashMap::new(),
             default_character_state: CharacterController::default(),
             script_view: Vec::new(),
-            world: World::new(),
+            physics: PhysicsRuntimeWorld::new(),
+            particles: ParticleRuntimeWorld::new(),
+            particles_2d: ParticleRuntimeWorld2D::new(),
+            navigation: NavigationRuntimeWorld::new(NavMesh::default()),
             audio: AudioWorld::new(),
             animation: AnimationWorld::new(),
             input: InputState::with_default_axes(),
@@ -372,7 +382,7 @@ impl Runtime {
             audio_sources.push((shifted, comp));
         }
         for (body, desc) in bodies.iter().zip(descs.iter()) {
-            self.world.add_body(*body, desc.1)?;
+            self.physics.world_3d_mut().add_body(*body, desc.1)?;
         }
         let entity_count = graph.len() as u64;
         self.scenes.push(LoadedScene {
@@ -414,7 +424,7 @@ impl Runtime {
         self.remove_scene_render_handles(&scene);
         self.teardown_scene(&scene, &mut hook);
         for body in &scene.bodies {
-            self.world.remove_body(*body);
+            self.physics.world_3d_mut().remove_body(*body);
         }
         for (entity, _) in &scene.character_controllers {
             if !self.persistent_entities.contains(entity) {
@@ -571,7 +581,7 @@ impl Runtime {
         axes: Vec<AxisConfig>,
         identity: ProjectIdentity,
     ) {
-        self.world.set_gravity(gravity);
+        self.physics.world_3d_mut().set_gravity(gravity);
         self.fixed_timestep = fixed_timestep;
         self.input.set_axes(axes);
         self.input.reset();
@@ -605,7 +615,7 @@ impl Runtime {
         }
         for scene in &scenes {
             for body in &scene.bodies {
-                self.world.remove_body(*body);
+                self.physics.world_3d_mut().remove_body(*body);
             }
             for (entity, _) in &scene.character_controllers {
                 if !self.persistent_entities.contains(entity) {
@@ -693,6 +703,22 @@ impl Runtime {
 
     pub fn audio_mut(&mut self) -> &mut AudioWorld {
         &mut self.audio
+    }
+
+    pub fn physics_mut(&mut self) -> &mut PhysicsRuntimeWorld {
+        &mut self.physics
+    }
+
+    pub fn particles_mut(&mut self) -> &mut ParticleRuntimeWorld {
+        &mut self.particles
+    }
+
+    pub fn particles_2d_mut(&mut self) -> &mut ParticleRuntimeWorld2D {
+        &mut self.particles_2d
+    }
+
+    pub fn navigation_mut(&mut self) -> &mut NavigationRuntimeWorld {
+        &mut self.navigation
     }
 
     pub fn ensure_animator(&mut self, entity: u64) -> EntityId {
@@ -993,10 +1019,12 @@ impl Runtime {
         self.input.begin_frame(scaled_delta);
         self.accumulator += scaled_delta;
         let fixed_step = self.fixed_timestep;
+        let mut contacts_2d = Vec::new();
         while self.accumulator >= fixed_step - EPSILON {
             self.sync_kinematic_transforms();
-            self.world.step(fixed_step)?;
+            self.physics.world_3d_mut().step(fixed_step)?;
             self.write_back_dynamic_transforms();
+            contacts_2d.extend(self.physics.step_2d_contacts(fixed_step as f32));
             if let Some(callbacks) = self.callbacks {
                 let handles = self.all_script_handles();
                 for handle in handles {
@@ -1010,8 +1038,8 @@ impl Runtime {
                 self.accumulator = 0.0;
             }
         }
-        let events = self.world.drain_events();
-        let trigger_events = self.world.drain_trigger_events();
+        let events = self.physics.world_3d_mut().drain_events();
+        let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
         if let Some(callbacks) = self.callbacks {
             for event in events {
                 let a = event.a.as_u64();
@@ -1029,6 +1057,20 @@ impl Runtime {
                     (callbacks.trigger)(a, b, phase);
                 });
             }
+            for contact in contacts_2d {
+                let a = contact.a.as_u64();
+                let b = contact.b.as_u64();
+                let phase = phase_code(contact.phase);
+                if contact.trigger {
+                    hook(self, &mut || {
+                        (callbacks.trigger)(a, b, phase);
+                    });
+                } else {
+                    hook(self, &mut || {
+                        (callbacks.collision)(a, b, phase);
+                    });
+                }
+            }
             let handles = self.all_script_handles();
             for handle in &handles {
                 let h = *handle;
@@ -1044,6 +1086,13 @@ impl Runtime {
             }
         }
         self.step_animators(scaled_delta);
+        self.particles
+            .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
+        self.particles_2d
+            .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
+        if scaled_delta >= 0.0 {
+            let _ = self.navigation.step(scaled_delta);
+        }
         self.sync_audio_source_positions();
         self.audio.tick(delta_seconds, self.time_scale);
         Ok(())
@@ -1147,7 +1196,7 @@ impl Runtime {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryRecord> {
-        self.records_from_hits(self.world.raycast_with_triggers(
+        self.records_from_hits(self.physics.world_3d().raycast_with_triggers(
             origin,
             direction,
             max_distance,
@@ -1175,10 +1224,12 @@ impl Runtime {
             origin[1] + direction[1] * max_distance,
             origin[2] + direction[2] * max_distance,
         ];
-        self.records_from_hits(
-            self.world
-                .linecast(origin, end, layer_mask, include_triggers),
-        )
+        self.records_from_hits(self.physics.world_3d().linecast(
+            origin,
+            end,
+            layer_mask,
+            include_triggers,
+        ))
     }
 
     pub fn sphere_cast(
@@ -1190,7 +1241,7 @@ impl Runtime {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryRecord> {
-        self.records_from_hits(self.world.sphere_cast(
+        self.records_from_hits(self.physics.world_3d().sphere_cast(
             origin,
             radius,
             direction,
@@ -1209,7 +1260,7 @@ impl Runtime {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryRecord> {
-        self.records_from_hits(self.world.box_cast(
+        self.records_from_hits(self.physics.world_3d().box_cast(
             origin,
             half_extents,
             direction,
@@ -1227,13 +1278,14 @@ impl Runtime {
         include_triggers: bool,
     ) -> Vec<QueryRecord> {
         let mut records: Vec<QueryRecord> = self
-            .world
+            .physics
+            .world_3d()
             .overlap_sphere_with_triggers(center, radius, layer_mask, include_triggers)
             .into_iter()
             .map(|entity| QueryRecord {
                 entity: entity.as_u64(),
                 distance: 0.0,
-                point: self.world.position(entity).unwrap_or(center),
+                point: self.physics.world_3d().position(entity).unwrap_or(center),
                 normal: [0.0, 0.0, 0.0],
             })
             .collect();
@@ -1258,11 +1310,11 @@ impl Runtime {
     }
 
     pub fn body_position(&self, entity: EntityId) -> Option<[f64; 3]> {
-        self.world.position(entity)
+        self.physics.world_3d().position(entity)
     }
 
     pub fn body_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
-        self.world.velocity(entity)
+        self.physics.world_3d().velocity(entity)
     }
 
     pub fn set_body_position(
@@ -1270,7 +1322,7 @@ impl Runtime {
         entity: EntityId,
         position: [f64; 3],
     ) -> Result<(), RuntimeError> {
-        self.world.set_position(entity, position)?;
+        self.physics.world_3d_mut().set_position(entity, position)?;
         self.write_back_body_transform(entity, position);
         Ok(())
     }
@@ -1280,7 +1332,9 @@ impl Runtime {
         entity: EntityId,
         position: [f64; 3],
     ) -> Result<(), RuntimeError> {
-        self.world.teleport_position(entity, position)?;
+        self.physics
+            .world_3d_mut()
+            .teleport_position(entity, position)?;
         self.write_back_body_transform(entity, position);
         Ok(())
     }
@@ -1290,12 +1344,12 @@ impl Runtime {
         entity: EntityId,
         velocity: [f64; 3],
     ) -> Result<(), RuntimeError> {
-        self.world.set_velocity(entity, velocity)?;
+        self.physics.world_3d_mut().set_velocity(entity, velocity)?;
         Ok(())
     }
 
     pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
-        self.world.body_role(entity)
+        self.physics.world_3d().body_role(entity)
     }
 
     pub fn character_controller_config(
@@ -1352,7 +1406,7 @@ impl Runtime {
         controller.excluded_entity = request.entity;
 
         let result = controller.move_character_with_dt(
-            &self.world,
+            self.physics.world_3d(),
             request.position,
             request.motion,
             delta_seconds,
@@ -1419,7 +1473,7 @@ impl Runtime {
     fn sync_kinematic_transforms(&mut self) {
         for scene in &self.scenes {
             for (entity, offset) in &scene.body_offsets {
-                if self.world.body_role(*entity) != Some(BodyRole::Kinematic) {
+                if self.physics.world_3d().body_role(*entity) != Some(BodyRole::Kinematic) {
                     continue;
                 }
                 let Some(world_transform) = scene.graph.world_transform(*entity) else {
@@ -1430,7 +1484,7 @@ impl Runtime {
                     f64::from(world_transform.translation[1]) + f64::from(offset[1]),
                     f64::from(world_transform.translation[2]) + f64::from(offset[2]),
                 ];
-                let should_update = match self.world.position(*entity) {
+                let should_update = match self.physics.world_3d().position(*entity) {
                     Some(current) => {
                         (graph_pos[0] - current[0]).abs() > 1e-6
                             || (graph_pos[1] - current[1]).abs() > 1e-6
@@ -1439,7 +1493,7 @@ impl Runtime {
                     None => false,
                 };
                 if should_update {
-                    let _ = self.world.set_position(*entity, graph_pos);
+                    let _ = self.physics.world_3d_mut().set_position(*entity, graph_pos);
                 }
             }
         }
@@ -1478,10 +1532,10 @@ impl Runtime {
     fn write_back_dynamic_transforms(&mut self) {
         for scene in &mut self.scenes {
             for (entity, offset) in &scene.body_offsets {
-                if self.world.body_role(*entity) != Some(BodyRole::Dynamic) {
+                if self.physics.world_3d().body_role(*entity) != Some(BodyRole::Dynamic) {
                     continue;
                 }
-                let Some(world_pos) = self.world.position(*entity) else {
+                let Some(world_pos) = self.physics.world_3d().position(*entity) else {
                     continue;
                 };
                 let world_translation = [

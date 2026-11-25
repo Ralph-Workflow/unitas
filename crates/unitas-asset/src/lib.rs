@@ -2,6 +2,7 @@ pub mod audio_import;
 pub mod binary_ser;
 pub mod database;
 pub mod dependencies;
+pub mod import_cache;
 pub mod inflate;
 pub mod json;
 pub mod material;
