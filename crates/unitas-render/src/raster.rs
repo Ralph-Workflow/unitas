@@ -313,8 +313,8 @@ pub fn render_scene_materials(
         draw_instance(instance, &vp, light, camera_pos, &mut target);
     }
 
-    // Translucent pass: draw back-to-front (the farther view-space depth
-    // first; the camera looks down -z, so a smaller depth is farther away).
+    // Translucent pass: draw back-to-front (smallest view-space z first;
+    // look_at is right-handed, so visible points have negative view z).
     let mut translucent: Vec<&MaterialInstance<'_>> = instances
         .iter()
         .filter(|instance| instance.material.blend == BlendMode::Blend)
@@ -699,7 +699,8 @@ mod tests {
     }
 
     /// Front-facing quad in the z=0 plane, spanning `-extent..extent`, with
-    /// UVs mapped so v=1 is at the top of the screen.
+    /// UVs mapped so v=0 is at the top of the screen, matching the GPU
+    /// sampler's top-left texture origin.
     fn uv_quad(extent: f32) -> (Mesh, MeshAttributes) {
         let positions = [
             [-extent, -extent, 0.0],
@@ -710,7 +711,7 @@ mod tests {
         let normals = [[0.0, 0.0, -1.0]; 4];
         let indices = [0u32, 1, 2, 0, 2, 3];
         let mesh = Mesh::from_buffers(&positions, &normals, &indices);
-        let uvs = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
+        let uvs = vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
         let attributes = mesh.attributes_with_uvs(uvs);
         (mesh, attributes)
     }

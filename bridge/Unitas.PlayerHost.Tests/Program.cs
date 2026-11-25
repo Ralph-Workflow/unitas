@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
@@ -146,8 +145,6 @@ namespace Unitas.PlayerHost.Tests
             {
                 StageBundle(sampleRoot, bundleRoot);
                 CompileGameAssembly(sampleRoot, managedDir);
-                LogRecorder.Clear();
-
                 ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
                 Check.That("native runtime handle created", runtimeHandle != 0UL);
 
@@ -185,6 +182,7 @@ namespace Unitas.PlayerHost.Tests
                 }
 
                 float startZ = ball.transform.position.z;
+                int pickupsBefore = CountPickups();
                 host.InjectKey(KeyCode.W, true);
                 for (int frame = 0; frame < 20; frame++)
                 {
@@ -199,8 +197,7 @@ namespace Unitas.PlayerHost.Tests
 
                 float endZ = ball.transform.position.z;
                 Check.That("marble moved north under injected input", endZ > startZ + 0.5f);
-                int score = ReadScore();
-                Check.Equal("score increased after driving over a pickup", 1, score > 0 ? 1 : 0);
+                Check.That("a pickup was collected after driving over it", CountPickups() < pickupsBefore);
 
                 Check.Equal("UnitasPlayerShutdown returns success", 0, PlayerHostEntry.Shutdown());
                 Check.Equal("tick after shutdown reports NotInitialized", 7, PlayerHostEntry.Tick(DeltaSeconds));
@@ -212,24 +209,18 @@ namespace Unitas.PlayerHost.Tests
             }
         }
 
-        private static int ReadScore()
+        private static int CountPickups()
         {
-            const string Prefix = "Pickup collected score ";
-            foreach (LogEntry entry in LogRecorder.Entries)
+            int count = 0;
+            for (int i = 1; i <= 12; i++)
             {
-                if (!entry.Message.StartsWith(Prefix, StringComparison.Ordinal))
+                if (GameObject.Find("Pickup_" + i) != null)
                 {
-                    continue;
-                }
-
-                string reported = entry.Message.Substring(Prefix.Length);
-                if (int.TryParse(reported, NumberStyles.Integer, CultureInfo.InvariantCulture, out int collected))
-                {
-                    return collected;
+                    count++;
                 }
             }
 
-            return -1;
+            return count;
         }
 
         private static void CompileGameAssembly(string sampleRoot, string managedDir)

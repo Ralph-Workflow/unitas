@@ -101,7 +101,8 @@ dotnet-test: runtime-build
 dotnet-test-run:
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
 	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
-	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
+	python3 tools/verify.py timed dotnet-test-playerhost $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.PlayerHost.Tests/bin/Release/net8.0/Unitas.PlayerHost.Tests & p3=$$!; \
+	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; exit $$rc
 
 verify-unsafe:
 	@echo "owner: editor and engine proof"
