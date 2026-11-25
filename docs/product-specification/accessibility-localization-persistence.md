@@ -18,6 +18,29 @@ and save data, is available to authorized agents through automation as defined
 in [Automation and MCP](automation-and-mcp.md), in the visual editor, and in
 headless sessions.
 
+### Compatibility tiers
+
+The tiers below are recorded in the [Feature catalog](feature-catalog.md) and
+defined in the [Compatibility contract](compatibility-contract.md); the
+baseline is Unity 2022.3 LTS:
+
+| ID | Tier |
+|---|---|
+| LOC-001 | Familiar |
+| ACC-001 | Native |
+| SAV-001 | Semantic |
+
+* **ACC-001 (Native):** editor and game accessibility are unitas-defined.
+* **LOC-001 (Familiar):** Localization package content imports with its
+  identity, and public types and members keep their Unity 2022.3 names and
+  signatures; the behavior is the one this document states, and every
+  difference from Unity 2022.3 is listed in the API reference owned by AUT-006
+  in [Automation and MCP](automation-and-mcp.md) and in the project
+  compatibility report.
+* **SAV-001 (Semantic):** `PlayerPrefs` and the serializers used for save data
+  behave as documented for Unity 2022.3 LTS in ordinary use; a found difference
+  is reported as Partially supported, naming it.
+
 ## Accessible editor experience
 
 Core editor workflows are keyboard operable and expose accessible names,
@@ -51,7 +74,7 @@ reduced motion, and configurable timing where the game exposes it. The input,
 UI, text, and audio building blocks for these are owned by
 [UI, audio, and input](ui-audio-input.md).
 
-Unity 2020.3 through 2022.3 offers no player screen-reader API. Any
+Unity 2022.3 LTS offers no player screen-reader API. Any
 assistive-technology metadata that unitas offers to players is a unitas
 extension, identified as such, and is not represented as Unity-compatible
 behavior.
@@ -88,7 +111,7 @@ editor, and identify missing or stale translations.
 
 ### Localization package scope
 
-When the project uses a listed Localization package version:
+When the project uses Localization 1.x:
 
 * Locales (with identifier, code, fallback metadata, and custom formatter),
   string tables, asset tables, shared table data, and table collections retain
@@ -98,19 +121,26 @@ When the project uses a listed Localization package version:
   reference and update their targets when the selected locale changes.
 * Smart Strings resolve variables (persistent variables, global variables
   groups, and arguments), plural-sensitive content, gender and choice
-  selection, conditional formatting, lists, and nested localized strings as
-  in the package.
+  selection, conditional formatting, lists, and nested localized strings.
+  A plural form is selected by the plural rules of the selected locale's
+  language, and a variable missing at format time produces a formatting error
+  naming the entry and variable.
 * Locale-aware number, currency, date, and time formatting follows the
   selected locale's culture or custom formatter.
 * Startup locale selectors (command line, system locale, specific locale, and
   player preference selectors) run in the order listed in the Localization
-  Settings, and the result is
+  Settings until one returns an available locale, and the result is
   distinguishable from the device locale and the project default.
-* `LocalizationSettings.SelectedLocale`, `SelectedLocaleChanged`, the
-  initialization operation, table preloading, and asynchronous table and asset
-  loading behave as in the package. Loading through Addressables follows
-  RUN-006 in [Scripting runtime](scripting-runtime.md).
-* Fallback locales apply in the order set by each Locale's fallback metadata, and the missing-translation
+* Assigning `LocalizationSettings.SelectedLocale` raises
+  `SelectedLocaleChanged` once and refreshes every bound `LocalizedString` and
+  `LocalizedAsset`. `LocalizationSettings.InitializationOperation` completes
+  after the selected locale is chosen and preloaded tables are loaded; tables
+  marked for preload are loaded before it completes, and other tables and
+  assets load asynchronously on first use, with their operations reporting
+  completion or failure. Loading through Addressables follows RUN-006 in
+  [Scripting runtime](scripting-runtime.md).
+* Fallback locales apply in the order set by each Locale's fallback metadata,
+  and the missing-translation
   behavior configured in the project (showing the missing message, an empty
   string, or the fallback) is honored and diagnosed.
 * Pseudo-localization locales produce their expanded, accented, or bracketed
@@ -252,8 +282,8 @@ unavailable, or controlled by an external platform service.
    strings and assets without reloading the scene, reports fallback and layout
    failures, and preserves game-state identity. (LOC-001)
 4. Smart Strings with variables and plurals and locale-aware number and date
-   formatting produce the package's output for each locale the project defines.
-   (LOC-001)
+   formatting produce, for each locale the project defines, the plural form its
+   language rules select and its culture's number and date format. (LOC-001)
 5. Previewing a pseudo-localized or right-to-left locale in the editor or
    through automation reports missing translations, missing assets, overflow,
    and the reported right-to-left and text-system support state without
@@ -268,10 +298,13 @@ unavailable, or controlled by an external platform service.
 8. Older saves that a project's load code accepts migrate with reported input
    version, resulting version, and outcome; corrupt, incompatible, absent, and
    failed data remain distinct outcomes. (SAV-001)
-9. Save data round-trips through `JsonUtility`, Newtonsoft Json, and
+9. For a project using Localization members whose unitas behavior differs from
+   Unity 2022.3, each difference appears in the AUT-006 API reference and in the
+   project compatibility report. (LOC-001)
+10. Save data round-trips through `JsonUtility`, Newtonsoft Json, and
    `XmlSerializer` on each scripting backend; `BinaryFormatter` is reported
    Partially supported and unavailable on the browser target; and a type
    removed by stripping produces a diagnostic naming the type. (SAV-001)
-10. Product knowledge available through automation states, for each target,
+11. Product knowledge available through automation states, for each target,
     when `PlayerPrefs.Save` and persistent-data file writes are durable and
     what a crash loses. (SAV-001)

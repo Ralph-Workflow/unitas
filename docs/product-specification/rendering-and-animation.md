@@ -68,7 +68,8 @@ Visual acceptance in this document uses TST-002 visual validation, owned by
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md):
 a capture is compared with a unitas-approved reference at the same target,
 resolution, quality level, camera, scene state, and time, with a tolerance
-declared in the scenario or reference as TST-002 defines. Draw order, the presence of every expected object, the shader pass
+declared in the scenario or reference as TST-002 defines. Draw order, the
+presence of every expected object, the shader pass
 selected for each renderer, and the set of lights affecting each renderer are
 compared exactly. A comparison without a declared tolerance is reported as not
 evaluable and is never reported as matching. Unity screenshots are not

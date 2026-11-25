@@ -354,8 +354,7 @@ Preview failure is distinct from runtime incompatibility.
 
 Files with the extensions `.txt`, `.json`, `.bytes`, `.csv`, `.xml`, `.html`,
 `.htm`, `.yaml`, and `.fnt` import as `TextAsset` with `text` and `bytes`
-exactly equal to the file content. `.md` files import as Unity 2022.3 LTS imports
-them.
+exactly equal to the file content.
 
 The browser identifies scenes, prefabs, materials, shaders, compute shaders,
 shader include files (`.hlsl`, `.cginc`), shader variant collections,
