@@ -9,29 +9,23 @@ namespace Unitas.Editor
     {
         public static async Task<int> Main(string[] args)
         {
-            // temporary harness until the player runs the editor project; piped stdin must remain open until responses arrive; must not ship
             if (args == null || args.Length == 0)
             {
-                await StdioTransportHost.WithDefaults().RunConsoleAsync().ConfigureAwait(false);
+                using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime();
+                await new StdioTransportHost(runtime.Host).RunConsoleAsync().ConfigureAwait(false);
                 return 0;
             }
 
             if (HeadlessCli.IsCliInvocation(args))
             {
-                using McpHost cliHost = BuiltinDefaults.CreateStartupHost(args);
-                try
-                {
-                    return HeadlessCli.Run(cliHost, args);
-                }
-                finally
-                {
-                    cliHost.DisposeOwnedResources();
-                }
+                using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime(args);
+                return HeadlessCli.Run(runtime.Host, args);
             }
 
             if (args.Length == 1 && string.Equals(args[0], "--stdio", StringComparison.Ordinal))
             {
-                await StdioTransportHost.WithDefaults().RunConsoleAsync().ConfigureAwait(false);
+                using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime();
+                await new StdioTransportHost(runtime.Host).RunConsoleAsync().ConfigureAwait(false);
                 return 0;
             }
 
@@ -56,8 +50,8 @@ namespace Unitas.Editor
                     return 2;
                 }
 
-                McpHost host = BuiltinDefaults.CreateStartupHost(args);
-                HttpTransportHost transportHost = new HttpTransportHost(host, port);
+                using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime(args);
+                HttpTransportHost transportHost = new HttpTransportHost(runtime.Host, port);
                 try
                 {
                     await transportHost.RunAsync().ConfigureAwait(false);
@@ -65,7 +59,6 @@ namespace Unitas.Editor
                 finally
                 {
                     await transportHost.DisposeAsync().ConfigureAwait(false);
-                    host.Dispose();
                 }
 
                 return 0;

@@ -17,6 +17,7 @@ use std::sync::{Mutex, OnceLock, RwLock};
 
 static TABLE: RwLock<Option<DispatchTable>> = RwLock::new(None);
 static STRINGS: OnceLock<Mutex<HashMap<usize, Box<[u8]>>>> = OnceLock::new();
+static STRING_BUFFER: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
 const PANIC_MESSAGE: &str = "internal panic in unitas-editor-abi";
 
@@ -64,7 +65,11 @@ fn string_registry() -> &'static Mutex<HashMap<usize, Box<[u8]>>> {
     STRINGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn allocate_c_string(text: &str) -> usize {
+fn string_buffer() -> &'static Mutex<Vec<u8>> {
+    STRING_BUFFER.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn allocate_c_string(text: &str) -> usize {
     let mut bytes = Vec::with_capacity(text.len() + 1);
     for &byte in text.as_bytes() {
         if byte == 0 {
@@ -74,19 +79,6 @@ fn allocate_c_string(text: &str) -> usize {
     }
     bytes.push(0);
     let boxed = bytes.into_boxed_slice();
-    let address = boxed.as_ptr() as usize;
-    let Ok(mut map) = string_registry().lock() else {
-        return 0;
-    };
-    map.insert(address, boxed);
-    address
-}
-
-fn allocate_c_buffer(capacity: usize) -> usize {
-    if capacity == 0 {
-        return 0;
-    }
-    let boxed = vec![0u8; capacity].into_boxed_slice();
     let address = boxed.as_ptr() as usize;
     let Ok(mut map) = string_registry().lock() else {
         return 0;
@@ -161,6 +153,45 @@ fn invoke_json(name_addr: usize, args_addr: usize) -> String {
 }
 
 ffi_export! {
+pub extern "C" fn unitas_editor_string_buffer(capacity: usize) -> usize {
+    catch_unwind(|| {
+        if capacity == 0 {
+            return 0;
+        }
+        let Ok(mut buffer) = string_buffer().lock() else {
+            return 0;
+        };
+        if buffer.len() < capacity {
+            buffer.resize(capacity, 0);
+        }
+        buffer.as_ptr() as usize
+    })
+    .unwrap_or(0)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_editor_allocate_string(address: usize, length: usize) -> usize {
+    catch_unwind(|| {
+        if address == 0 {
+            return 0;
+        }
+        let Ok(buffer) = string_buffer().lock() else {
+            return 0;
+        };
+        if address != buffer.as_ptr() as usize || length > buffer.len() {
+            return 0;
+        }
+        let Ok(text) = std::str::from_utf8(&buffer[..length]) else {
+            return 0;
+        };
+        allocate_c_string(text)
+    })
+    .unwrap_or(0)
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_editor_install_builtin_tools() -> i32 {
     catch_unwind(|| match ensure_default_dispatch_table() {
         Ok(()) => 0,
@@ -187,12 +218,6 @@ pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> us
         Ok(ptr) => ptr,
         Err(_) => panic_error(),
     }
-}
-}
-
-ffi_export! {
-pub extern "C" fn unitas_editor_string_buffer(capacity: usize) -> usize {
-    allocate_c_buffer(capacity)
 }
 }
 

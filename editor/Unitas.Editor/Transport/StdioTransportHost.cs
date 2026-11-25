@@ -43,11 +43,6 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        public static StdioTransportHost WithDefaults()
-        {
-            return new StdioTransportHost(BuiltinDefaults.CreateStartupHost());
-        }
-
         public McpServerOptions BuildServerOptions()
         {
             return new McpServerOptions

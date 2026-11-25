@@ -50,14 +50,14 @@ namespace Unitas.Editor.Mcp
                 });
         }
 
-        public static void RegisterAll(McpHost host)
+        public static void RegisterAll(McpHost host, PlaySessionManager playSessions)
         {
             ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(playSessions);
             Register(host);
             AuditTools.Register(host);
-            PlaySessionManager playSessionManager = PlayTools.Register(host);
-            host.OwnResource(playSessionManager);
-            CaptureTool.Register(host, playSessionManager);
+            PlayTools.Register(host, playSessions);
+            CaptureTool.Register(host, playSessions);
             host.TryRegisterNativeLibrary();
         }
 
@@ -78,13 +78,26 @@ namespace Unitas.Editor.Mcp
             return host;
         }
 
+        public static EditorRuntime CreateStartupRuntime(string[]? args = null)
+        {
+            McpHost host = new McpHost(
+                new SystemClock(),
+                PersonCredential.FromStartup(args),
+                CreateStartupAuditLog(args));
+            PlaySessionManager playSessions = new PlaySessionManager();
+            RegisterAll(host, playSessions);
+            return new EditorRuntime(host, playSessions);
+        }
+
         public static McpHost CreateStartupHost(string[]? args = null)
         {
             McpHost host = new McpHost(
                 new SystemClock(),
                 PersonCredential.FromStartup(args),
                 CreateStartupAuditLog(args));
-            RegisterAll(host);
+            PlaySessionManager playSessions = new PlaySessionManager();
+            host.OwnResource(playSessions);
+            RegisterAll(host, playSessions);
             return host;
         }
 

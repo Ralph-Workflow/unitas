@@ -12,12 +12,14 @@ namespace Unitas.Editor.Tests.Play
             WorkerCrashEndsOnlyThatPlaySessionAndHostContinues();
             PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential();
             LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds();
+            RuntimeDisposalStopsThePlayWorker();
         }
 
         private static void PlaySessionLifecycleAndIsolationWithWorker()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
-            using PlaySessionManager manager = PlayTools.Register(host);
+            using PlaySessionManager manager = new PlaySessionManager();
+            PlayTools.Register(host, manager);
             CaptureTool.Register(host, manager);
 
             string sessionA = host.CreateSession(new SessionIdentity("agent-a", "http", "person-1"));
@@ -166,7 +168,8 @@ namespace Unitas.Editor.Tests.Play
         private static void WorkerCrashEndsOnlyThatPlaySessionAndHostContinues()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
-            using PlaySessionManager manager = PlayTools.Register(host);
+            using PlaySessionManager manager = new PlaySessionManager();
+            PlayTools.Register(host, manager);
 
             string sessionId = host.CreateSession(new SessionIdentity("agent-crash-test", "http", "person-1"));
             host.GrantScope(sessionId, Scope.ExecuteProjectCode, GrantAuthority.Person);
@@ -260,7 +263,8 @@ namespace Unitas.Editor.Tests.Play
             PersonCredential credential = PersonCredential.FromToken("person-secret-token");
             using McpHost host = new McpHost(new SystemClock(), credential);
             BuiltinDefaults.Register(host);
-            using PlaySessionManager manager = PlayTools.Register(host);
+            using PlaySessionManager manager = new PlaySessionManager();
+            PlayTools.Register(host, manager);
 
             string stdioSession = host.CreateSession(new SessionIdentity("agent-stdio", "stdio", "stdio-local"));
             string httpSession = host.CreateSession(new SessionIdentity("agent-http", "http", "http-local"));
@@ -343,7 +347,8 @@ namespace Unitas.Editor.Tests.Play
         private static void LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
-            using PlaySessionManager manager = PlayTools.Register(host);
+            using PlaySessionManager manager = new PlaySessionManager();
+            PlayTools.Register(host, manager);
             CaptureTool.Register(host, manager);
 
             string sessionId = host.CreateSession(new SessionIdentity("agent-capture", "http", "person-1"));
@@ -496,6 +501,56 @@ namespace Unitas.Editor.Tests.Play
                 {
                     ["playSessionId"] = playSessionId,
                 });
+        }
+
+        private static void RuntimeDisposalStopsThePlayWorker()
+        {
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
+            using TrackedWorker worker = new TrackedWorker();
+            using PlaySessionManager manager = new PlaySessionManager(_ => worker);
+            manager.StartSession("agent-runtime", "operation-runtime");
+
+            using (EditorRuntime runtime = new EditorRuntime(host, manager))
+            {
+                Check.That(
+                    "runtime_disposal: the play worker runs while the runtime owns it",
+                    !worker.Disposed);
+            }
+
+            Check.That(
+                "runtime_disposal: disposing the runtime disposes the play worker",
+                worker.Disposed);
+        }
+
+        private sealed class TrackedWorker : IPlayWorker
+        {
+            public bool Disposed { get; private set; }
+
+            public bool HasExited => false;
+
+            public int? ExitCode => null;
+
+            public int? ProcessId => null;
+
+            public JsonObject SendCommand(JsonObject command)
+            {
+                return new JsonObject
+                {
+                    ["state"] = PlaySession.StatePlaying,
+                    ["frames"] = 0,
+                    ["delta_seconds"] = 1.0 / 60.0,
+                    ["random_seed"] = 1,
+                };
+            }
+
+            public void Kill()
+            {
+            }
+
+            public void Dispose()
+            {
+                Disposed = true;
+            }
         }
     }
 }

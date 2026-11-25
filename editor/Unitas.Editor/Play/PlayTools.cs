@@ -8,10 +8,10 @@ namespace Unitas.Editor.Mcp
         public const string PlaySessionOrigin = "unitas://play/session";
         public const string PermissionGrantOrigin = "unitas://permissions/grant";
 
-        public static PlaySessionManager Register(McpHost host, PlaySessionManager? manager = null)
+        public static void Register(McpHost host, PlaySessionManager sessionManager)
         {
             ArgumentNullException.ThrowIfNull(host);
-            PlaySessionManager sessionManager = manager ?? new PlaySessionManager();
+            ArgumentNullException.ThrowIfNull(sessionManager);
 
             host.RegisterTool(
                 new ToolDefinition(
@@ -149,8 +149,6 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.ReadProject),
                 arguments => HandlePersonGrant(host, arguments));
-
-            return sessionManager;
         }
 
         private static ToolOutput HandleEnter(

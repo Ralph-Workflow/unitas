@@ -83,25 +83,31 @@ namespace Unitas.Editor.Mcp
         private delegate void FreeStringDelegate(IntPtr ptr);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate IntPtr StringBufferDelegate(nuint capacity);
+        private delegate IntPtr StringBufferDelegate(UIntPtr capacity);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate IntPtr AllocateStringDelegate(IntPtr address, UIntPtr length);
 
         private readonly DescribeToolsDelegate describeTools;
         private readonly InvokeToolDelegate invokeTool;
         private readonly FreeStringDelegate freeString;
         private readonly StringBufferDelegate stringBuffer;
+        private readonly AllocateStringDelegate allocateString;
 
         private NativeLibraryLoader(
             string libraryPath,
             DescribeToolsDelegate describeTools,
             InvokeToolDelegate invokeTool,
             FreeStringDelegate freeString,
-            StringBufferDelegate stringBuffer)
+            StringBufferDelegate stringBuffer,
+            AllocateStringDelegate allocateString)
         {
             LibraryPath = libraryPath;
             this.describeTools = describeTools;
             this.invokeTool = invokeTool;
             this.freeString = freeString;
             this.stringBuffer = stringBuffer;
+            this.allocateString = allocateString;
         }
 
         public string LibraryPath { get; }
@@ -141,7 +147,8 @@ namespace Unitas.Editor.Mcp
             if (!NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_tools_describe", out IntPtr describeAddr)
                 || !NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_tool_invoke", out IntPtr invokeAddr)
                 || !NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_string_free", out IntPtr freeAddr)
-                || !NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_string_buffer", out IntPtr bufferAddr))
+                || !NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_string_buffer", out IntPtr bufferAddr)
+                || !NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_allocate_string", out IntPtr allocAddr))
             {
                 NativeLibrary.Free(loadedHandle);
                 failureOutcome = NativeLoadOutcome.LoadFailed(
@@ -171,8 +178,10 @@ namespace Unitas.Editor.Mcp
                 Marshal.GetDelegateForFunctionPointer<FreeStringDelegate>(freeAddr);
             StringBufferDelegate buffer =
                 Marshal.GetDelegateForFunctionPointer<StringBufferDelegate>(bufferAddr);
+            AllocateStringDelegate alloc =
+                Marshal.GetDelegateForFunctionPointer<AllocateStringDelegate>(allocAddr);
 
-            loader = new NativeLibraryLoader(resolvedPath, describe, invoke, free, buffer);
+            loader = new NativeLibraryLoader(resolvedPath, describe, invoke, free, buffer, alloc);
             failureOutcome = NativeLoadOutcome.Loaded(resolvedPath, 0);
             return true;
         }
@@ -239,31 +248,48 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(name);
             ArgumentNullException.ThrowIfNull(argsJson);
 
-            IntPtr nameBuffer = AllocateStringBuffer(name);
-            IntPtr argsBuffer = AllocateStringBuffer(argsJson);
+            IntPtr namePtr = AllocateNativeString(name);
+            IntPtr argsPtr = AllocateNativeString(argsJson);
             try
             {
-                IntPtr resultPtr = invokeTool(nameBuffer, argsBuffer);
+                IntPtr resultPtr = invokeTool(namePtr, argsPtr);
                 return ReadAndFreeOwnedString(resultPtr, "unitas_editor_tool_invoke");
             }
             finally
             {
-                freeString(nameBuffer);
-                freeString(argsBuffer);
+                if (argsPtr != IntPtr.Zero)
+                {
+                    freeString(argsPtr);
+                }
+
+                if (namePtr != IntPtr.Zero)
+                {
+                    freeString(namePtr);
+                }
             }
         }
 
-        private IntPtr AllocateStringBuffer(string value)
+        private IntPtr AllocateNativeString(string value)
         {
-            byte[] payload = Encoding.UTF8.GetBytes(value);
-            IntPtr buffer = stringBuffer((nuint)(payload.Length + 1));
-            if (buffer == IntPtr.Zero)
+            byte[] utf8 = Encoding.UTF8.GetBytes(value);
+            IntPtr bufferPtr = stringBuffer((UIntPtr)Math.Max(utf8.Length, 1));
+            if (bufferPtr == IntPtr.Zero)
             {
-                throw new McpError.InvalidRequest("native string buffer allocation failed");
+                throw new McpError.InvalidRequest("unitas_editor_string_buffer returned a null pointer");
             }
 
-            Marshal.Copy(payload, 0, buffer, payload.Length);
-            return buffer;
+            if (utf8.Length > 0)
+            {
+                Marshal.Copy(utf8, 0, bufferPtr, utf8.Length);
+            }
+
+            IntPtr handle = allocateString(bufferPtr, (UIntPtr)utf8.Length);
+            if (handle == IntPtr.Zero)
+            {
+                throw new McpError.InvalidRequest("unitas_editor_allocate_string returned a null pointer");
+            }
+
+            return handle;
         }
 
         private string ReadAndFreeOwnedString(IntPtr ptr, string exportName)
