@@ -139,3 +139,39 @@ fn cloth_rejects_a_description_without_a_grid() {
         Err(ClothError::InvalidDescription)
     ));
 }
+
+#[test]
+fn phy_004_story_7_cloth_on_character_collides_with_assigned_capsule_colliders_only_and_clears_transform_motion(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let character_capsule = EntityId::new(1);
+    let scene_capsule = EntityId::new(2);
+    world.add_body(character_capsule, static_capsule([-1.0, 0.5, 0.0]))?;
+    world.add_body(scene_capsule, static_capsule([1.0, 0.5, 0.0]))?;
+
+    let mut cloth = Cloth::new(ClothDesc::new([-1.5, 0.0, 0.0], 3.0, 1.0, 5, 2))?;
+    cloth.assign_collider(ClothCollider::capsule(
+        character_capsule,
+        CAPSULE_RADIUS,
+        CAPSULE_HEIGHT,
+    ))?;
+    cloth.simulate(&world, TIMESTEP)?;
+
+    assert!(
+        cloth
+            .contacts()
+            .iter()
+            .all(|contact| contact.entity == character_capsule),
+        "PHY-004 story 7: cloth on character must collide with its assigned capsule colliders only"
+    );
+    assert_eq!(cloth.contacts().len(), 2);
+
+    cloth.clear_transform_motion();
+    for particle in cloth.particles() {
+        assert_eq!(
+            particle.position, particle.previous_position,
+            "PHY-004 story 7: ClearTransformMotion must discard accumulated velocity"
+        );
+    }
+    Ok(())
+}

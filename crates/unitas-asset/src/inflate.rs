@@ -224,7 +224,7 @@ impl HuffmanTree {
             });
         }
         let mut available = 1i32;
-        for &count in &counts[1..=MAX_BITS] {
+        for &count in counts.iter().take(MAX_BITS + 1).skip(1) {
             available <<= 1;
             available -= i32::from(count);
             if available < 0 {

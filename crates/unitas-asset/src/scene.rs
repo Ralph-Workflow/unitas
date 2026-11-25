@@ -75,6 +75,9 @@ pub enum SceneError {
         transform_file_id: i64,
         game_object_file_id: i64,
     },
+    DuplicateFileId {
+        file_id: i64,
+    },
     DuplicateTransformOwner {
         game_object_file_id: i64,
     },
@@ -123,6 +126,9 @@ impl fmt::Display for SceneError {
                 formatter,
                 "transform {transform_file_id} references unknown game object {game_object_file_id}"
             ),
+            SceneError::DuplicateFileId { file_id } => {
+                write!(formatter, "duplicate local file id {file_id}")
+            }
             SceneError::DuplicateTransformOwner {
                 game_object_file_id,
             } => {
@@ -616,6 +622,12 @@ fn assemble_documents(
     context: &mut PrefabContext,
     expand: bool,
 ) -> Result<DocumentSet, SceneError> {
+    let mut seen_file_ids: HashSet<i64> = HashSet::new();
+    for document in &stream.documents {
+        if !seen_file_ids.insert(document.file_id) {
+            return Err(SceneError::DuplicateFileId { file_id: document.file_id });
+        }
+    }
     let mut set = DocumentSet {
         game_objects: HashMap::new(),
         transforms: HashMap::new(),

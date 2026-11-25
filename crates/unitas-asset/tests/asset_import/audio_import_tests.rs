@@ -1,7 +1,9 @@
 use unitas_asset::audio_import::{
-    decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav, detect_audio_state, import_audio,
-    AudioCompressionFormat, AudioImportError, AudioImportSettings, AudioImportState, AudioLoadType,
+    audio_import_outcome, decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav,
+    detect_audio_state, import_audio, import_audio_for_target, AudioCompressionFormat,
+    AudioImportError, AudioImportSettings, AudioImportState, AudioLoadType, AudioPlatformSettings,
 };
+use unitas_asset::dependencies::AssetImportState;
 
 fn extended80(rate: u32) -> [u8; 10] {
     let mut bytes = [0u8; 10];
@@ -527,7 +529,7 @@ fn import_reports_an_unsupported_container_as_an_error() {
 }
 
 #[test]
-fn xm_tracker_module_reports_unsupported_by_name() {
+fn prj004_outcome16_xm_modules_are_reported_unsupported() {
     let xm_header = b"Extended Module: ChipTune       \x1aFastTracker v2.00   \x04\x01";
     let settings = AudioImportSettings::default();
     assert_eq!(
@@ -927,4 +929,76 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
         detect_audio_state(&valid_wav[..valid_wav.len() - 1], "broken.wav"),
         AudioImportState::ImportFailed
     );
+}
+
+
+#[test]
+fn prj004_outcome16_aiff_imports_with_per_target_vorbis_and_force_to_mono(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let samples = vec![100i16, 300, -100, -300];
+    let bytes = build_form(
+        b"AIFF",
+        &[
+            chunk(b"COMM", &comm_body(2, 2, 16, 44100, None)),
+            chunk(b"SSND", &ssnd_body(&pcm16(&samples), 0)),
+        ],
+    );
+    let mut settings = AudioImportSettings {
+        force_to_mono: true,
+        ..AudioImportSettings::default()
+    };
+    settings.set_platform_override(AudioPlatformSettings {
+        build_target: "Standalone".to_string(),
+        overridden: true,
+        compression_format: AudioCompressionFormat::Vorbis,
+        quality: 0.7,
+        sample_rate: Some(22050),
+    });
+
+    let result = import_audio_for_target(&bytes, "clip.aiff", &settings, Some("Standalone"))?;
+    assert_eq!(result.state, AudioImportState::Imported);
+    assert_eq!(result.clip.channels, 1, "Force To Mono must be honoured");
+    assert_eq!(result.clip.samples, vec![200, -200]);
+    assert_eq!(result.applied_target.as_deref(), Some("Standalone"));
+    assert_eq!(result.applied_compression, AudioCompressionFormat::Vorbis);
+    assert_eq!(result.clip.sample_rate, 22050);
+    assert!(
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("Standalone") && note.contains("Vorbis")),
+        "expected the per-target Vorbis compression to be reported: {:?}",
+        result.notes
+    );
+
+    let default_target = import_audio_for_target(&bytes, "clip.aiff", &settings, None)?;
+    assert_eq!(default_target.applied_target, None);
+    assert_eq!(
+        default_target.applied_compression,
+        AudioCompressionFormat::PCM,
+        "a target without an override keeps the default compression format"
+    );
+    assert_eq!(default_target.clip.sample_rate, 44100);
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome5_an_unsupported_clip_has_a_visible_state_and_a_consequence(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let xm_header = b"Extended Module: ChipTune       \x1aFastTracker v2.00   \x04\x01";
+    let settings = AudioImportSettings::default();
+    let imported = import_audio(xm_header, "Assets/Audio/level1.xm", &settings)?;
+    assert_eq!(imported.state, AudioImportState::NotYetSupported);
+    let outcome = audio_import_outcome("Assets/Audio/level1.xm", Ok(&imported));
+    assert_eq!(outcome.state, AssetImportState::Failed);
+    assert!(!outcome.state.is_fully_usable());
+    assert_eq!(outcome.state.label(), "failed");
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|diagnostic| !diagnostic.consequence.is_empty()),
+        "expected a stated consequence for the unsupported clip"
+    );
+    Ok(())
 }

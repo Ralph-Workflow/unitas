@@ -299,3 +299,166 @@ fn parse_finite_f64(node: &Node, key: &str) -> Option<f64> {
         .and_then(Node::as_f64)
         .filter(|value| value.is_finite())
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingBoundary {
+    NextRecompilation,
+    NextPlaySession,
+    NextPhysicsStep,
+    NextBuild,
+    Immediate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingValueSource {
+    Default,
+    TargetOverride,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveTargetSetting {
+    pub target_group_id: String,
+    pub target_name: String,
+    pub effective_value: String,
+    pub source: SettingValueSource,
+    pub boundary: SettingBoundary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedProjectSettings {
+    pub fixed_timestep: f64,
+    pub gravity: [f64; 3],
+    pub layer_collision_matrix: [u32; 32],
+    pub identity: ProjectIdentity,
+    pub default_scripting_defines: String,
+    pub target_scripting_defines: Vec<(String, String)>,
+}
+
+impl LoadedProjectSettings {
+    pub fn fixed_timestep(&self) -> f64 {
+        self.fixed_timestep
+    }
+
+    pub fn fixed_timestep_boundary(&self) -> SettingBoundary {
+        SettingBoundary::NextPlaySession
+    }
+
+    pub fn collision_matrix_boundary(&self) -> SettingBoundary {
+        SettingBoundary::NextPhysicsStep
+    }
+
+    pub fn layers_collide(&self, layer_a: usize, layer_b: usize) -> bool {
+        if layer_a >= 32 || layer_b >= 32 {
+            return false;
+        }
+        (self.layer_collision_matrix[layer_a] & (1u32 << layer_b)) != 0
+    }
+
+    pub fn effective_scripting_defines(
+        &self,
+        target_group_id: &str,
+        target_name: &str,
+    ) -> EffectiveTargetSetting {
+        if let Some((_, value)) = self
+            .target_scripting_defines
+            .iter()
+            .find(|(k, v)| k == target_group_id && !v.is_empty())
+        {
+            return EffectiveTargetSetting {
+                target_group_id: target_group_id.to_string(),
+                target_name: target_name.to_string(),
+                effective_value: value.clone(),
+                source: SettingValueSource::TargetOverride,
+                boundary: SettingBoundary::NextRecompilation,
+            };
+        }
+        EffectiveTargetSetting {
+            target_group_id: target_group_id.to_string(),
+            target_name: target_name.to_string(),
+            effective_value: self.default_scripting_defines.clone(),
+            source: SettingValueSource::Default,
+            boundary: SettingBoundary::NextRecompilation,
+        }
+    }
+}
+
+pub fn parse_layer_collision_matrix(hex: &str) -> [u32; 32] {
+    let mut matrix = [0xFFFF_FFFFu32; 32];
+    let trimmed = hex.trim();
+    for (layer, chunk) in trimmed.as_bytes().chunks(8).take(32).enumerate() {
+        if chunk.len() == 8 {
+            if let Ok(hex_str) = std::str::from_utf8(chunk) {
+                if let Ok(bytes) = u32::from_str_radix(hex_str, 16) {
+                    matrix[layer] = bytes.swap_bytes();
+                }
+            }
+        }
+    }
+    matrix
+}
+
+pub fn load_project_settings(
+    settings_dir: &Path,
+) -> Result<LoadedProjectSettings, ProjectSettingsError> {
+    let time_path = settings_dir.join("TimeManager.asset");
+    let fixed_timestep = parse_time_manager(&time_path)?
+        .map(|t| t.fixed_timestep)
+        .unwrap_or(DEFAULT_FIXED_TIMESTEP);
+
+    let dynamics_path = settings_dir.join("DynamicsManager.asset");
+    let mut gravity = DEFAULT_GRAVITY;
+    let mut layer_collision_matrix = [0xFFFF_FFFFu32; 32];
+    if dynamics_path.exists() {
+        let stream = unity_yaml::parse_file(&dynamics_path)?;
+        if let Ok(dyn_settings) = parse_dynamics_manager_stream(&stream) {
+            gravity = dyn_settings.gravity;
+        }
+        if let Some(body) = stream.documents.iter().filter(|d| !d.stripped).find_map(|d| {
+            d.root
+                .get("PhysicsManager")
+                .or_else(|| d.root.get("DynamicsManager"))
+        }) {
+            if let Some(hex) = body.get("m_LayerCollisionMatrix").and_then(Node::as_str) {
+                layer_collision_matrix = parse_layer_collision_matrix(hex);
+            }
+        }
+    }
+
+    let player_path = settings_dir.join("ProjectSettings.asset");
+    let mut identity = ProjectIdentity::default();
+    let mut default_scripting_defines = String::new();
+    let mut target_scripting_defines = Vec::new();
+    if player_path.exists() {
+        let stream = unity_yaml::parse_file(&player_path)?;
+        if let Ok(id) = parse_player_settings_stream(&stream) {
+            identity = id;
+        }
+        if let Some(body) = stream
+            .documents
+            .iter()
+            .filter(|d| !d.stripped)
+            .find_map(|d| d.root.get("PlayerSettings"))
+        {
+            if let Some( Node::Mapping(entries)) = body.get("scriptingDefineSymbols") {
+                for (key, val) in entries {
+                    if let Some(text) = val.as_str() {
+                        if key == "default" {
+                            default_scripting_defines = text.to_string();
+                        } else {
+                            target_scripting_defines.push((key.clone(), text.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(LoadedProjectSettings {
+        fixed_timestep,
+        gravity,
+        layer_collision_matrix,
+        identity,
+        default_scripting_defines,
+        target_scripting_defines,
+    })
+}

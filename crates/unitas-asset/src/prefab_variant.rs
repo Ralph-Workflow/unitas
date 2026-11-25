@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use crate::prefab::{Modification, PrefabInstance, PrefabSource};
+use crate::prefab::{Modification, PrefabInstance, PrefabSource, PrefabSourceReference};
 use crate::scene_save::{self, SceneSaveError};
 use crate::unity_yaml::{self, Document, Header, Node, Stream, YamlError};
 
@@ -167,6 +167,7 @@ pub struct TargetedModification {
     pub target: SourceObjectId,
     pub property_path: String,
     pub value: String,
+    pub object_reference: Option<PrefabSourceReference>,
 }
 
 impl TargetedModification {
@@ -179,6 +180,20 @@ impl TargetedModification {
             target,
             property_path: property_path.into(),
             value: value.into(),
+            object_reference: None,
+        }
+    }
+
+    pub fn with_object_reference(
+        target: SourceObjectId,
+        property_path: impl Into<String>,
+        object_reference: PrefabSourceReference,
+    ) -> Self {
+        Self {
+            target,
+            property_path: property_path.into(),
+            value: String::new(),
+            object_reference: Some(object_reference),
         }
     }
 
@@ -187,6 +202,7 @@ impl TargetedModification {
             target: SourceObjectId::new(source_guid, modification.target_file_id),
             property_path: modification.property_path.clone(),
             value: modification.value.clone(),
+            object_reference: modification.object_reference.clone(),
         }
     }
 
@@ -195,6 +211,7 @@ impl TargetedModification {
             target_file_id: self.target.target_file_id,
             property_path: self.property_path.clone(),
             value: self.value.clone(),
+            object_reference: self.object_reference.clone(),
         }
     }
 }
@@ -416,6 +433,7 @@ impl PrefabVariantDefinition {
                 && item.property_path == modification.property_path
         }) {
             existing.value = modification.value;
+            existing.object_reference = modification.object_reference;
         } else {
             self.modifications.push(modification);
         }
@@ -428,30 +446,35 @@ impl PrefabVariantDefinition {
         }) {
             existing.target = modification.target;
             existing.value = modification.value;
+            existing.object_reference = modification.object_reference;
         } else {
             self.targeted_modifications.push(modification);
         }
     }
 
-    fn remove_modification(&mut self, target_file_id: i64, property_path: &str) -> Option<String> {
-        let mut removed_value = None;
+    fn remove_modification(
+        &mut self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<Modification> {
+        let mut removed = None;
         self.modifications.retain(|item| {
             let matches =
                 item.target_file_id == target_file_id && item.property_path == property_path;
             if matches {
-                removed_value = Some(item.value.clone());
+                removed = Some(item.clone());
             }
             !matches
         });
         self.targeted_modifications.retain(|item| {
             let matches =
                 item.target.target_file_id == target_file_id && item.property_path == property_path;
-            if matches && removed_value.is_none() {
-                removed_value = Some(item.value.clone());
+            if matches && removed.is_none() {
+                removed = Some(item.to_modification());
             }
             !matches
         });
-        removed_value
+        removed
     }
 }
 
@@ -494,6 +517,7 @@ impl ScenePrefabInstance {
                 && item.property_path == modification.property_path
         }) {
             existing.value = modification.value.clone();
+            existing.object_reference = modification.object_reference.clone();
         } else {
             self.instance.modifications.push(modification.clone());
         }
@@ -503,6 +527,7 @@ impl ScenePrefabInstance {
                 && item.property_path == targeted.property_path
         }) {
             existing.value = targeted.value;
+            existing.object_reference = targeted.object_reference;
         } else {
             self.targeted_modifications.push(targeted);
         }
@@ -554,25 +579,29 @@ impl ScenePrefabInstance {
         }
     }
 
-    fn remove_modification(&mut self, target_file_id: i64, property_path: &str) -> Option<String> {
-        let mut removed_value = None;
+    fn remove_modification(
+        &mut self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<Modification> {
+        let mut removed = None;
         self.instance.modifications.retain(|item| {
             let matches =
                 item.target_file_id == target_file_id && item.property_path == property_path;
             if matches {
-                removed_value = Some(item.value.clone());
+                removed = Some(item.clone());
             }
             !matches
         });
         self.targeted_modifications.retain(|item| {
             let matches =
                 item.target.target_file_id == target_file_id && item.property_path == property_path;
-            if matches && removed_value.is_none() {
-                removed_value = Some(item.value.clone());
+            if matches && removed.is_none() {
+                removed = Some(item.to_modification());
             }
             !matches
         });
-        removed_value
+        removed
     }
 }
 
@@ -580,13 +609,21 @@ impl ScenePrefabInstance {
 pub enum OverrideLevel {
     Prefab(String),
     SceneInstance(String),
+    NestedPrefab {
+        owner: String,
+        instance_file_id: i64,
+    },
 }
 
 impl OverrideLevel {
-    pub fn as_id(&self) -> &str {
+    pub fn as_id(&self) -> String {
         match self {
-            OverrideLevel::Prefab(guid) => guid.as_str(),
-            OverrideLevel::SceneInstance(id) => id.as_str(),
+            OverrideLevel::Prefab(guid) => guid.clone(),
+            OverrideLevel::SceneInstance(id) => id.clone(),
+            OverrideLevel::NestedPrefab {
+                owner,
+                instance_file_id,
+            } => format!("nested:{owner}:{instance_file_id}"),
         }
     }
 }
@@ -604,6 +641,7 @@ pub struct ResolvedComponent {
     pub defined_at: OverrideLevel,
     pub class_name: String,
     pub properties: BTreeMap<String, String>,
+    pub object_references: BTreeMap<String, PrefabSourceReference>,
     pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
 }
 
@@ -615,8 +653,15 @@ pub struct ResolvedNode {
     pub parent: Option<SourceObjectId>,
     pub children: Vec<SourceObjectId>,
     pub properties: BTreeMap<String, String>,
+    pub object_references: BTreeMap<String, PrefabSourceReference>,
     pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
     pub components: Vec<ResolvedComponent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrphanedOverrideResolution {
+    Discard,
+    Retain,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -627,6 +672,83 @@ pub struct OrphanedOverride {
     pub value: String,
 }
 
+impl OrphanedOverride {
+    pub fn resolution_options(&self) -> &'static [OrphanedOverrideResolution] {
+        &[
+            OrphanedOverrideResolution::Discard,
+            OrphanedOverrideResolution::Retain,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpackMode {
+    OneLevel,
+    Completely,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpackedPrefabHierarchy {
+    pub nodes: Vec<PrefabNodeRecord>,
+    pub nested_prefabs: Vec<NestedPrefabReference>,
+}
+
+impl UnpackedPrefabHierarchy {
+    pub fn effective_property(&self, target_file_id: i64, property_path: &str) -> Option<&str> {
+        for node in &self.nodes {
+            if node.file_id == target_file_id {
+                return node.properties.get(property_path).map(String::as_str);
+            }
+            for comp in &node.components {
+                if comp.file_id == target_file_id {
+                    return comp.properties.get(property_path).map(String::as_str);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn apply_to_scene_stream(&self, stream: &mut Stream, unpacked_instance_file_id: i64) {
+        stream.documents.retain(|doc| {
+            if doc.class_id == PREFAB_INSTANCE_CLASS_ID && doc.file_id == unpacked_instance_file_id
+            {
+                return false;
+            }
+            let owned_by_instance = match &doc.root {
+                Node::Mapping(entries) => entries.first().and_then(|(_, body)| {
+                    body.get("m_PrefabInstance")
+                        .and_then(|n| n.get("fileID"))
+                        .and_then(Node::as_i64)
+                }),
+                _ => None,
+            };
+            owned_by_instance != Some(unpacked_instance_file_id)
+        });
+        for node in &self.nodes {
+            stream
+                .documents
+                .extend(emit_prefab_node_documents(node, None));
+        }
+        for nested in &self.nested_prefabs {
+            let targeted: Vec<TargetedModification> = nested
+                .modifications
+                .iter()
+                .map(|m| TargetedModification::from_modification(&nested.source.guid, m))
+                .collect();
+            let empty_structural = StructuralOverrides::default();
+            upsert_prefab_instance_in_stream(
+                stream,
+                nested.instance_file_id,
+                &nested.source,
+                nested.parent_target_file_id,
+                &targeted,
+                &nested.modifications,
+                &empty_structural,
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHierarchy {
     pub chain: Vec<OverrideLevel>,
@@ -635,6 +757,16 @@ pub struct ResolvedHierarchy {
     pub nodes: BTreeMap<SourceObjectId, ResolvedNode>,
     pub ordered_nodes: Vec<SourceObjectId>,
     pub orphaned_overrides: Vec<OrphanedOverride>,
+    pub nested: Vec<ResolvedNestedPrefab>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNestedPrefab {
+    pub instance_file_id: i64,
+    pub parent_target_file_id: i64,
+    pub source: PrefabSource,
+    pub declared_at: OverrideLevel,
+    pub resolved: ResolvedPrefab,
 }
 
 impl ResolvedHierarchy {
@@ -656,6 +788,24 @@ impl ResolvedHierarchy {
             for component in &node.components {
                 if component.identity.target_file_id == target_file_id {
                     return component.properties.get(property_path).map(String::as_str);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn effective_object_reference(
+        &self,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Option<&PrefabSourceReference> {
+        for node in self.nodes.values() {
+            if node.identity.target_file_id == target_file_id {
+                return node.object_references.get(property_path);
+            }
+            for component in &node.components {
+                if component.identity.target_file_id == target_file_id {
+                    return component.object_references.get(property_path);
                 }
             }
         }
@@ -690,6 +840,15 @@ impl ResolvedHierarchy {
             .iter()
             .find(|entry| entry.is_effective)
             .map(|entry| &entry.level)
+    }
+
+    pub fn nested_by_instance_file_id(
+        &self,
+        instance_file_id: i64,
+    ) -> Option<&ResolvedNestedPrefab> {
+        self.nested
+            .iter()
+            .find(|nested| nested.instance_file_id == instance_file_id)
     }
 
     pub fn eligible_apply_targets(&self, from_level: &OverrideLevel) -> Vec<OverrideLevel> {
@@ -1140,6 +1299,7 @@ impl PrefabRegistry {
                     defined_at: base_level.clone(),
                     class_name: comp_rec.class_name.clone(),
                     properties: comp_rec.properties.clone(),
+                    object_references: BTreeMap::new(),
                     provenance: comp_prov,
                 });
             }
@@ -1153,6 +1313,7 @@ impl PrefabRegistry {
                     parent,
                     children,
                     properties: node_rec.properties.clone(),
+                    object_references: BTreeMap::new(),
                     provenance,
                     components,
                 },
@@ -1208,6 +1369,8 @@ impl PrefabRegistry {
             }
         }
 
+        let nested = self.resolve_nested_prefabs(&raw_chain_from_leaf)?;
+
         Ok(ResolvedPrefab::Complete(ResolvedHierarchy {
             chain: chain_levels,
             base_guid,
@@ -1215,7 +1378,49 @@ impl PrefabRegistry {
             nodes,
             ordered_nodes,
             orphaned_overrides,
+            nested,
         }))
+    }
+
+    fn resolve_nested_prefabs(
+        &self,
+        chain: &[String],
+    ) -> Result<Vec<ResolvedNestedPrefab>, PrefabVariantError> {
+        let mut resolved_nested = Vec::new();
+        for guid in chain {
+            let def = match self.prefabs.get(guid) {
+                Some(def) => def,
+                None => continue,
+            };
+            let declared_at = OverrideLevel::Prefab(guid.clone());
+            for nested in &def.nested_prefabs {
+                let level = OverrideLevel::NestedPrefab {
+                    owner: guid.clone(),
+                    instance_file_id: nested.instance_file_id,
+                };
+                let resolved = match self.resolve_internal(&nested.source.guid, None)? {
+                    ResolvedPrefab::Complete(mut hierarchy) => {
+                        hierarchy.chain.push(level.clone());
+                        apply_modifications_to_hierarchy(
+                            &mut hierarchy,
+                            &level,
+                            &nested.source.guid,
+                            &nested.modifications,
+                        );
+                        ResolvedPrefab::Complete(hierarchy)
+                    }
+                    broken => broken,
+                };
+                resolved_nested.push(ResolvedNestedPrefab {
+                    instance_file_id: nested.instance_file_id,
+                    parent_target_file_id: nested.parent_target_file_id,
+                    source: nested.source.clone(),
+                    declared_at: declared_at.clone(),
+                    resolved,
+                });
+            }
+        }
+        Ok(resolved_nested)
     }
 
     pub fn apply_override_to_level(
@@ -1226,6 +1431,122 @@ impl PrefabRegistry {
         target_file_id: i64,
         property_path: &str,
     ) -> Result<(), PrefabVariantError> {
+        if let OverrideLevel::NestedPrefab {
+            owner,
+            instance_file_id,
+        } = from_level
+        {
+            let nested_source_guid = {
+                let owner_def = match self.prefabs.get(owner) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: owner.clone(),
+                            dependent_guid: owner.clone(),
+                        })
+                    }
+                };
+                let nested_ref = match owner_def
+                    .nested_prefabs
+                    .iter()
+                    .find(|n| n.instance_file_id == *instance_file_id)
+                {
+                    Some(n) => n,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: from_level.as_id(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                };
+                nested_ref.source.guid.clone()
+            };
+            let nested_chain = self.inheritance_chain(&nested_source_guid)?;
+            let target_guid = match target_level {
+                OverrideLevel::Prefab(g) if nested_chain.contains(g) => g.clone(),
+                _ => {
+                    return Err(PrefabVariantError::InvalidTargetLevel {
+                        from_level: from_level.as_id(),
+                        target_level: target_level.as_id(),
+                        reason: String::from(
+                            "nested prefab override target must be in the nested prefab inheritance chain",
+                        ),
+                    })
+                }
+            };
+            let removed_mod = {
+                let owner_def = match self.prefabs.get_mut(owner) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: owner.clone(),
+                            dependent_guid: owner.clone(),
+                        })
+                    }
+                };
+                let nested_ref = match owner_def
+                    .nested_prefabs
+                    .iter_mut()
+                    .find(|n| n.instance_file_id == *instance_file_id)
+                {
+                    Some(n) => n,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: from_level.as_id(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                };
+                let mut found: Option<Modification> = None;
+                nested_ref.modifications.retain(|m| {
+                    let matches =
+                        m.target_file_id == target_file_id && m.property_path == property_path;
+                    if matches {
+                        found = Some(m.clone());
+                    }
+                    !matches
+                });
+                match found {
+                    Some(m) => m,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: from_level.as_id(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                }
+            };
+            if let Some(target_idx) = nested_chain.iter().position(|g| g == &target_guid) {
+                for inter_guid in nested_chain.iter().skip(target_idx + 1) {
+                    if let Some(inter_def) = self.prefabs.get_mut(inter_guid) {
+                        let _ = inter_def.remove_modification(target_file_id, property_path);
+                    }
+                }
+            }
+            let target_def = match self.prefabs.get_mut(&target_guid) {
+                Some(def) => def,
+                None => {
+                    return Err(PrefabVariantError::MissingBasePrefab {
+                        missing_guid: target_guid.clone(),
+                        dependent_guid: nested_source_guid,
+                    })
+                }
+            };
+            if target_def.base.is_none() {
+                let val = match &removed_mod.object_reference {
+                    Some(r) if removed_mod.value.is_empty() => r.to_encoded_string(),
+                    _ => removed_mod.value,
+                };
+                target_def.set_base_property(target_file_id, property_path, val)?;
+            } else {
+                target_def.record_override(removed_mod)?;
+            }
+            return Ok(());
+        }
+
         let leaf_guid = match &scene_instance {
             Some(inst) => inst.instance.source.guid.clone(),
             None => match from_level {
@@ -1233,8 +1554,17 @@ impl PrefabRegistry {
                 OverrideLevel::SceneInstance(id) => {
                     return Err(PrefabVariantError::InvalidTargetLevel {
                         from_level: id.clone(),
-                        target_level: target_level.as_id().to_string(),
+                        target_level: target_level.as_id(),
                         reason: String::from("scene instance not provided"),
+                    })
+                }
+                OverrideLevel::NestedPrefab { .. } => {
+                    return Err(PrefabVariantError::InvalidTargetLevel {
+                        from_level: from_level.as_id(),
+                        target_level: target_level.as_id(),
+                        reason: String::from(
+                            "nested prefab instance overrides cannot be applied from their own level",
+                        ),
                     })
                 }
             },
@@ -1253,8 +1583,8 @@ impl PrefabRegistry {
             Some(idx) => idx,
             None => {
                 return Err(PrefabVariantError::InvalidTargetLevel {
-                    from_level: from_level.as_id().to_string(),
-                    target_level: target_level.as_id().to_string(),
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
                     reason: String::from("source level is not in the inheritance chain"),
                 })
             }
@@ -1263,8 +1593,8 @@ impl PrefabRegistry {
             Some(idx) => idx,
             None => {
                 return Err(PrefabVariantError::InvalidTargetLevel {
-                    from_level: from_level.as_id().to_string(),
-                    target_level: target_level.as_id().to_string(),
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
                     reason: String::from("target level is not in the inheritance chain"),
                 })
             }
@@ -1272,20 +1602,20 @@ impl PrefabRegistry {
 
         if target_idx >= from_idx {
             return Err(PrefabVariantError::InvalidTargetLevel {
-                from_level: from_level.as_id().to_string(),
-                target_level: target_level.as_id().to_string(),
+                from_level: from_level.as_id(),
+                target_level: target_level.as_id(),
                 reason: String::from("target level must be an ancestor of source level"),
             });
         }
 
-        let override_value = match from_level {
+        let removed_mod = match from_level {
             OverrideLevel::SceneInstance(_) => {
                 let inst = match scene_instance {
                     Some(inst) => inst,
                     None => {
                         return Err(PrefabVariantError::InvalidTargetLevel {
-                            from_level: from_level.as_id().to_string(),
-                            target_level: target_level.as_id().to_string(),
+                            from_level: from_level.as_id(),
+                            target_level: target_level.as_id(),
                             reason: String::from("scene instance is required"),
                         })
                     }
@@ -1294,7 +1624,7 @@ impl PrefabRegistry {
                     Some(val) => val,
                     None => {
                         return Err(PrefabVariantError::OverrideNotFound {
-                            level: from_level.as_id().to_string(),
+                            level: from_level.as_id(),
                             target_file_id,
                             property_path: property_path.to_string(),
                         })
@@ -1315,12 +1645,21 @@ impl PrefabRegistry {
                     Some(val) => val,
                     None => {
                         return Err(PrefabVariantError::OverrideNotFound {
-                            level: from_level.as_id().to_string(),
+                            level: from_level.as_id(),
                             target_file_id,
                             property_path: property_path.to_string(),
                         })
                     }
                 }
+            }
+            OverrideLevel::NestedPrefab { .. } => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
+                    reason: String::from(
+                        "nested prefab instance overrides cannot be applied from their own level",
+                    ),
+                });
             }
         };
 
@@ -1344,20 +1683,27 @@ impl PrefabRegistry {
                     }
                 };
                 if target_def.base.is_none() {
-                    target_def.set_base_property(target_file_id, property_path, override_value)?;
+                    let val = match &removed_mod.object_reference {
+                        Some(r) if removed_mod.value.is_empty() => r.to_encoded_string(),
+                        _ => removed_mod.value,
+                    };
+                    target_def.set_base_property(target_file_id, property_path, val)?;
                 } else {
-                    target_def.record_override(Modification::new(
-                        target_file_id,
-                        property_path,
-                        override_value,
-                    ))?;
+                    target_def.record_override(removed_mod)?;
                 }
             }
             OverrideLevel::SceneInstance(_) => {
                 return Err(PrefabVariantError::InvalidTargetLevel {
-                    from_level: from_level.as_id().to_string(),
-                    target_level: target_level.as_id().to_string(),
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
                     reason: String::from("cannot apply override downward to a scene instance"),
+                });
+            }
+            OverrideLevel::NestedPrefab { .. } => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
+                    reason: String::from("a nested prefab instance level is not an apply target"),
                 });
             }
         }
@@ -1389,6 +1735,15 @@ impl PrefabRegistry {
                     .collect(),
                 None => Vec::new(),
             },
+            OverrideLevel::NestedPrefab { .. } => {
+                return Err(PrefabVariantError::InvalidTargetLevel {
+                    from_level: from_level.as_id(),
+                    target_level: target_level.as_id(),
+                    reason: String::from(
+                        "nested prefab instance overrides cannot be applied from their own level",
+                    ),
+                });
+            }
         };
 
         for (target_file_id, property_path) in keys {
@@ -1417,7 +1772,7 @@ impl PrefabRegistry {
                     Some(inst) => inst,
                     None => {
                         return Err(PrefabVariantError::OverrideNotFound {
-                            level: level.as_id().to_string(),
+                            level: level.as_id(),
                             target_file_id,
                             property_path: property_path.to_string(),
                         })
@@ -1428,7 +1783,7 @@ impl PrefabRegistry {
                     .is_none()
                 {
                     return Err(PrefabVariantError::OverrideNotFound {
-                        level: level.as_id().to_string(),
+                        level: level.as_id(),
                         target_file_id,
                         property_path: property_path.to_string(),
                     });
@@ -1450,7 +1805,47 @@ impl PrefabRegistry {
                     .is_none()
                 {
                     return Err(PrefabVariantError::OverrideNotFound {
-                        level: level.as_id().to_string(),
+                        level: level.as_id(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    });
+                }
+                Ok(())
+            }
+            OverrideLevel::NestedPrefab {
+                owner,
+                instance_file_id,
+            } => {
+                let def = match self.prefabs.get_mut(owner) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: owner.clone(),
+                            dependent_guid: owner.clone(),
+                        })
+                    }
+                };
+                let nested = match def
+                    .nested_prefabs
+                    .iter_mut()
+                    .find(|nested| nested.instance_file_id == *instance_file_id)
+                {
+                    Some(nested) => nested,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: level.as_id(),
+                            target_file_id,
+                            property_path: property_path.to_string(),
+                        })
+                    }
+                };
+                let before = nested.modifications.len();
+                nested.modifications.retain(|item| {
+                    !(item.target_file_id == target_file_id && item.property_path == property_path)
+                });
+                if nested.modifications.len() == before {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: level.as_id(),
                         target_file_id,
                         property_path: property_path.to_string(),
                     });
@@ -1471,8 +1866,8 @@ impl PrefabRegistry {
                     Some(inst) => inst,
                     None => {
                         return Err(PrefabVariantError::InvalidTargetLevel {
-                            from_level: level.as_id().to_string(),
-                            target_level: level.as_id().to_string(),
+                            from_level: level.as_id(),
+                            target_level: level.as_id(),
                             reason: String::from("scene instance not provided"),
                         })
                     }
@@ -1497,8 +1892,199 @@ impl PrefabRegistry {
                 def.structural_overrides = StructuralOverrides::default();
                 Ok(())
             }
+            OverrideLevel::NestedPrefab {
+                owner,
+                instance_file_id,
+            } => {
+                let def = match self.prefabs.get_mut(owner) {
+                    Some(def) => def,
+                    None => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: owner.clone(),
+                            dependent_guid: owner.clone(),
+                        })
+                    }
+                };
+                let nested = match def
+                    .nested_prefabs
+                    .iter_mut()
+                    .find(|nested| nested.instance_file_id == *instance_file_id)
+                {
+                    Some(nested) => nested,
+                    None => {
+                        return Err(PrefabVariantError::OverrideNotFound {
+                            level: level.as_id(),
+                            target_file_id: 0,
+                            property_path: String::from("nested prefab instance"),
+                        })
+                    }
+                };
+                nested.modifications.clear();
+                Ok(())
+            }
         }
     }
+
+    pub fn resolve_orphaned_override(
+        &mut self,
+        scene_instance: Option<&mut ScenePrefabInstance>,
+        level: &OverrideLevel,
+        target_file_id: i64,
+        property_path: &str,
+        resolution: OrphanedOverrideResolution,
+    ) -> Result<(), PrefabVariantError> {
+        match resolution {
+            OrphanedOverrideResolution::Retain => Ok(()),
+            OrphanedOverrideResolution::Discard => self.revert_override_at_level(
+                scene_instance,
+                level,
+                target_file_id,
+                property_path,
+            ),
+        }
+    }
+
+    pub fn unpack_instance(
+        &self,
+        instance: &ScenePrefabInstance,
+        mode: UnpackMode,
+    ) -> Result<UnpackedPrefabHierarchy, PrefabVariantError> {
+        let resolved = self.resolve_instance(instance)?;
+        let hierarchy = match resolved {
+            ResolvedPrefab::Complete(h) => h,
+            ResolvedPrefab::BrokenBase(broken) => {
+                return Err(PrefabVariantError::MissingBasePrefab {
+                    missing_guid: broken.missing_guid,
+                    dependent_guid: instance.instance.source.guid.clone(),
+                })
+            }
+        };
+        let mut nodes = Vec::new();
+        let mut nested_prefabs = Vec::new();
+        flatten_resolved_hierarchy(&hierarchy, mode, None, &mut nodes, &mut nested_prefabs)?;
+        Ok(UnpackedPrefabHierarchy {
+            nodes,
+            nested_prefabs,
+        })
+    }
+}
+
+fn flatten_resolved_hierarchy(
+    hierarchy: &ResolvedHierarchy,
+    mode: UnpackMode,
+    parent_override: Option<i64>,
+    out_nodes: &mut Vec<PrefabNodeRecord>,
+    out_nested: &mut Vec<NestedPrefabReference>,
+) -> Result<(), PrefabVariantError> {
+    for node_id in &hierarchy.ordered_nodes {
+        let rnode = match hierarchy.nodes.get(node_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        let parent_file_id = match &rnode.parent {
+            Some(p) => Some(p.target_file_id),
+            None => parent_override,
+        };
+        let children_ids: Vec<i64> = rnode
+            .children
+            .iter()
+            .map(|c| c.target_file_id)
+            .collect();
+        let components: Vec<PrefabComponentRecord> = rnode
+            .components
+            .iter()
+            .map(|rc| PrefabComponentRecord {
+                file_id: rc.identity.target_file_id,
+                class_name: rc.class_name.clone(),
+                properties: rc.properties.clone(),
+            })
+            .collect();
+        out_nodes.push(PrefabNodeRecord {
+            file_id: rnode.identity.target_file_id,
+            name: rnode.name.clone(),
+            parent_file_id,
+            children: children_ids,
+            properties: rnode.properties.clone(),
+            components,
+        });
+    }
+    match mode {
+        UnpackMode::OneLevel => {
+            for nested in &hierarchy.nested {
+                let modifications = extract_nested_modifications(nested);
+                out_nested.push(NestedPrefabReference {
+                    instance_file_id: nested.instance_file_id,
+                    parent_target_file_id: nested.parent_target_file_id,
+                    source: nested.source.clone(),
+                    modifications,
+                });
+            }
+        }
+        UnpackMode::Completely => {
+            for nested in &hierarchy.nested {
+                let nested_hierarchy = match &nested.resolved {
+                    ResolvedPrefab::Complete(h) => h,
+                    ResolvedPrefab::BrokenBase(broken) => {
+                        return Err(PrefabVariantError::MissingBasePrefab {
+                            missing_guid: broken.missing_guid.clone(),
+                            dependent_guid: nested.source.guid.clone(),
+                        })
+                    }
+                };
+                flatten_resolved_hierarchy(
+                    nested_hierarchy,
+                    UnpackMode::Completely,
+                    Some(nested.parent_target_file_id),
+                    out_nodes,
+                    out_nested,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn extract_nested_modifications(nested: &ResolvedNestedPrefab) -> Vec<Modification> {
+    let mut mods = Vec::new();
+    let hierarchy = match &nested.resolved {
+        ResolvedPrefab::Complete(h) => h,
+        ResolvedPrefab::BrokenBase(_) => return mods,
+    };
+    let expected_level = OverrideLevel::NestedPrefab {
+        owner: match &nested.declared_at {
+            OverrideLevel::Prefab(g) => g.clone(),
+            OverrideLevel::SceneInstance(id) => id.clone(),
+            OverrideLevel::NestedPrefab { owner, .. } => owner.clone(),
+        },
+        instance_file_id: nested.instance_file_id,
+    };
+    for node in hierarchy.nodes.values() {
+        for (prop, entries) in &node.provenance {
+            for entry in entries {
+                if entry.level == expected_level && entry.is_effective {
+                    mods.push(Modification::new(
+                        node.identity.target_file_id,
+                        prop.clone(),
+                        entry.value.clone(),
+                    ));
+                }
+            }
+        }
+        for comp in &node.components {
+            for (prop, entries) in &comp.provenance {
+                for entry in entries {
+                    if entry.level == expected_level && entry.is_effective {
+                        mods.push(Modification::new(
+                            comp.identity.target_file_id,
+                            prop.clone(),
+                            entry.value.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    mods
 }
 
 fn apply_level_overrides(
@@ -1569,6 +2155,7 @@ fn apply_level_overrides(
                 defined_at: level.clone(),
                 class_name: comp_rec.class_name.clone(),
                 properties: comp_rec.properties.clone(),
+                object_references: BTreeMap::new(),
                 provenance: comp_prov,
             });
         }
@@ -1580,6 +2167,7 @@ fn apply_level_overrides(
             parent: Some(parent_id.clone()),
             children: Vec::new(),
             properties: added_child.child.properties.clone(),
+            object_references: BTreeMap::new(),
             provenance,
             components,
         };
@@ -1645,6 +2233,7 @@ fn apply_level_overrides(
                 defined_at: level.clone(),
                 class_name: added_comp.component.class_name.clone(),
                 properties: added_comp.component.properties.clone(),
+                object_references: BTreeMap::new(),
                 provenance: comp_prov,
             });
         }
@@ -1652,16 +2241,29 @@ fn apply_level_overrides(
 
     for modification in modifications {
         let mut matched = false;
+        let effective_display_value = match &modification.object_reference {
+            Some(reference) if modification.value.is_empty() => reference.to_encoded_string(),
+            _ => modification.value.clone(),
+        };
         if let Some(target_id) = file_id_to_source.get(&modification.target_file_id).cloned() {
             if let Some(node) = nodes.get_mut(&target_id) {
                 matched = true;
                 if modification.property_path == "m_Name" {
-                    node.name = modification.value.clone();
+                    node.name = effective_display_value.clone();
                 }
                 node.properties.insert(
                     modification.property_path.clone(),
-                    modification.value.clone(),
+                    effective_display_value.clone(),
                 );
+                if let Some(reference) = &modification.object_reference {
+                    node.object_references
+                        .insert(modification.property_path.clone(), reference.clone());
+                } else if let Some(parsed_ref) =
+                    PrefabSourceReference::from_encoded_string(&modification.value)
+                {
+                    node.object_references
+                        .insert(modification.property_path.clone(), parsed_ref);
+                }
                 let entries = node
                     .provenance
                     .entry(modification.property_path.clone())
@@ -1671,7 +2273,7 @@ fn apply_level_overrides(
                 }
                 entries.push(ValueProvenanceEntry {
                     level: level.clone(),
-                    value: modification.value.clone(),
+                    value: effective_display_value.clone(),
                     is_effective: true,
                 });
             }
@@ -1683,8 +2285,17 @@ fn apply_level_overrides(
                         matched = true;
                         comp.properties.insert(
                             modification.property_path.clone(),
-                            modification.value.clone(),
+                            effective_display_value.clone(),
                         );
+                        if let Some(reference) = &modification.object_reference {
+                            comp.object_references
+                                .insert(modification.property_path.clone(), reference.clone());
+                        } else if let Some(parsed_ref) =
+                            PrefabSourceReference::from_encoded_string(&modification.value)
+                        {
+                            comp.object_references
+                                .insert(modification.property_path.clone(), parsed_ref);
+                        }
                         let entries = comp
                             .provenance
                             .entry(modification.property_path.clone())
@@ -1694,7 +2305,7 @@ fn apply_level_overrides(
                         }
                         entries.push(ValueProvenanceEntry {
                             level: level.clone(),
-                            value: modification.value.clone(),
+                            value: effective_display_value.clone(),
                             is_effective: true,
                         });
                         break;
@@ -1710,12 +2321,41 @@ fn apply_level_overrides(
                 level: level.clone(),
                 target_file_id: modification.target_file_id,
                 property_path: modification.property_path.clone(),
-                value: modification.value.clone(),
+                value: effective_display_value,
             });
         }
     }
 }
 
+fn apply_modifications_to_hierarchy(
+    hierarchy: &mut ResolvedHierarchy,
+    level: &OverrideLevel,
+    level_source_id: &str,
+    modifications: &[Modification],
+) {
+    let mut file_id_to_source = HashMap::new();
+    for node in hierarchy.nodes.values() {
+        file_id_to_source.insert(node.identity.target_file_id, node.identity.clone());
+        for component in &node.components {
+            file_id_to_source.insert(
+                component.identity.target_file_id,
+                component.identity.clone(),
+            );
+        }
+    }
+    let mut orphaned = Vec::new();
+    let structural = StructuralOverrides::default();
+    apply_level_overrides(
+        level,
+        level_source_id,
+        &structural,
+        modifications,
+        &mut hierarchy.nodes,
+        &mut file_id_to_source,
+        &mut orphaned,
+    );
+    hierarchy.orphaned_overrides.extend(orphaned);
+}
 fn remove_node_recursive(
     target_id: &SourceObjectId,
     nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
@@ -2184,6 +2824,13 @@ fn upsert_prefab_instance_in_stream(
         targeted_modifications
             .iter()
             .map(|tm| {
+                let obj_ref_node = match &tm.object_reference {
+                    Some(reference) => reference.to_node(),
+                    None => Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(String::from("0")),
+                    )]),
+                };
                 Node::Mapping(vec![
                     (
                         String::from("target"),
@@ -2204,13 +2851,7 @@ fn upsert_prefab_instance_in_stream(
                         Node::Scalar(tm.property_path.clone()),
                     ),
                     (String::from("value"), Node::Scalar(tm.value.clone())),
-                    (
-                        String::from("objectReference"),
-                        Node::Mapping(vec![(
-                            String::from("fileID"),
-                            Node::Scalar(String::from("0")),
-                        )]),
-                    ),
+                    (String::from("objectReference"), obj_ref_node),
                 ])
             })
             .collect()
@@ -2218,6 +2859,13 @@ fn upsert_prefab_instance_in_stream(
         raw_modifications
             .iter()
             .map(|m| {
+                let obj_ref_node = match &m.object_reference {
+                    Some(reference) => reference.to_node(),
+                    None => Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(String::from("0")),
+                    )]),
+                };
                 Node::Mapping(vec![
                     (
                         String::from("target"),
@@ -2235,13 +2883,7 @@ fn upsert_prefab_instance_in_stream(
                         Node::Scalar(m.property_path.clone()),
                     ),
                     (String::from("value"), Node::Scalar(m.value.clone())),
-                    (
-                        String::from("objectReference"),
-                        Node::Mapping(vec![(
-                            String::from("fileID"),
-                            Node::Scalar(String::from("0")),
-                        )]),
-                    ),
+                    (String::from("objectReference"), obj_ref_node),
                 ])
             })
             .collect()
@@ -2501,15 +3143,20 @@ fn parse_prefab_instance_from_stream(
                 Some(p) => p.to_string(),
                 None => continue,
             };
-            let value = match item.get("value").and_then(Node::as_str) {
-                Some(v) => v.to_string(),
-                None => continue,
-            };
-            targeted_modifications.push(TargetedModification::new(
-                SourceObjectId::new(target_guid, target_file_id),
+            let value = item
+                .get("value")
+                .and_then(Node::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let object_reference = item
+                .get("objectReference")
+                .and_then(PrefabSourceReference::from_node);
+            targeted_modifications.push(TargetedModification {
+                target: SourceObjectId::new(target_guid, target_file_id),
                 property_path,
                 value,
-            ));
+                object_reference,
+            });
         }
     }
 

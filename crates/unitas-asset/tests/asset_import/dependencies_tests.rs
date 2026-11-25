@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_asset::binary_ser::{Endianness, SUPPORTED_VERSION};
-use unitas_asset::dependencies::DependencyGraph;
+use unitas_asset::dependencies::{
+    DependencyGraph, ImportCandidate, ImportOutcome, ImportSession,
+};
 use unitas_asset::project::{Project, BASELINE_UNITY_VERSION};
 use unitas_asset::scene_save;
 use unitas_asset::trust::TrustStore;
@@ -17,6 +19,7 @@ const MATERIAL_GUID: &str = "22222222222222222222222222222222";
 const PREFAB_GUID: &str = "33333333333333333333333333333333";
 const SCENE_GUID: &str = "44444444444444444444444444444444";
 const BINARY_BUNDLE_GUID: &str = "55555555555555555555555555555555";
+const UNRELATED_GUID: &str = "66666666666666666666666666666666";
 
 const CYCLE_A_GUID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CYCLE_B_GUID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -196,7 +199,7 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
 }
 
 #[test]
-fn dependency_cycle_is_displayed_without_failure() -> TestResult {
+fn prj005_outcome7_dependency_cycles_are_displayed_without_failure() -> TestResult {
     let root = temp_dir("dependencies-cycle")?;
     let project_root = root.join("project");
 
@@ -583,6 +586,197 @@ fn prj005_outcome7_pre_delete_reverse_dependency_inspection_missing_reference_re
         graph_after_restore.reverse_dependencies_of(TEXTURE_GUID, true),
         transitive_dependents
     );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+fn referenced_texture_project(root: &Path) -> std::io::Result<()> {
+    write_file(
+        &root.join("ProjectSettings/ProjectVersion.txt"),
+        &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
+    )?;
+    write_file(&root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &root.join("Assets/Textures/Albedo.png.meta"),
+        &meta(TEXTURE_GUID, "TextureImporter:"),
+    )?;
+    let material_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: Stone\n  m_SavedProperties:\n    m_TexEnvs:\n    - _MainTex:\n        m_Texture: {{fileID: 2800000, guid: {TEXTURE_GUID}, type: 3}}\n"
+    );
+    write_file(&root.join("Assets/Materials/Stone.mat"), &material_yaml)?;
+    write_file(
+        &root.join("Assets/Materials/Stone.mat.meta"),
+        &meta(MATERIAL_GUID, "NativeFormatImporter:"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn prj002_outcome3_move_delete_and_restore_preserve_expose_and_restore_the_reference(
+) -> TestResult {
+    let root = temp_dir("dependencies-move-delete-restore")?;
+    let project_root = root.join("project");
+    referenced_texture_project(&project_root)?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (mut project, _) = Project::open(&project_root, &store)?;
+
+    project.move_asset(
+        Path::new("Assets/Textures/Albedo.png"),
+        Path::new("Assets/Artwork/Albedo.png"),
+    )?;
+    let graph_after_move = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_after_move.dependencies_of(MATERIAL_GUID),
+        vec![TEXTURE_GUID],
+        "moving the referenced asset keeps the reference"
+    );
+    assert_eq!(
+        graph_after_move.reverse_dependencies_of(TEXTURE_GUID, false),
+        vec![MATERIAL_GUID]
+    );
+
+    project.delete_asset(Path::new("Assets/Artwork/Albedo.png"))?;
+    assert_eq!(
+        project.inventory().lookup(TEXTURE_GUID),
+        unitas_asset::project::GuidLookup::Missing,
+        "deleting the referenced asset exposes the missing reference"
+    );
+    let graph_while_deleted = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_while_deleted.dependencies_of(MATERIAL_GUID),
+        vec![TEXTURE_GUID],
+        "the reference to the deleted asset stays visible as missing"
+    );
+
+    project.restore_asset(Path::new("Assets/Artwork/Albedo.png"))?;
+    match project.inventory().lookup(TEXTURE_GUID) {
+        unitas_asset::project::GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Artwork/Albedo.png"));
+        }
+        other => return Err(format!("expected the restored asset, got {other:?}").into()),
+    }
+    let graph_after_restore = DependencyGraph::build(&project)?;
+    assert_eq!(
+        graph_after_restore.dependencies_of(MATERIAL_GUID),
+        vec![TEXTURE_GUID],
+        "restoring the identified asset restores the reference"
+    );
+    assert_eq!(
+        graph_after_restore.reverse_dependencies_of(TEXTURE_GUID, false),
+        vec![MATERIAL_GUID]
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome6_reimport_touches_only_dependency_affected_assets() -> TestResult {
+    let root = temp_dir("dependencies-reimport")?;
+    let project_root = root.join("project");
+    referenced_texture_project(&project_root)?;
+    write_file(&project_root.join("Assets/Textures/Unrelated.png"), "other-png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Unrelated.png.meta"),
+        &meta(UNRELATED_GUID, "TextureImporter:"),
+    )?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (project, _) = Project::open(&project_root, &store)?;
+    let graph = DependencyGraph::build(&project)?;
+
+    let candidate = |path: &str, guid: &str, source: Vec<u8>| ImportCandidate {
+        path: PathBuf::from(path),
+        guid: guid.to_string(),
+        source,
+        metadata: String::new(),
+        settings: "TextureImporter".to_string(),
+        importer_version: "1".to_string(),
+        dependencies: graph
+            .dependencies_of(guid)
+            .iter()
+            .map(|dependency| dependency.to_string())
+            .collect(),
+    };
+
+    let albedo = candidate(
+        "Assets/Textures/Albedo.png",
+        TEXTURE_GUID,
+        fs::read(project_root.join("Assets/Textures/Albedo.png"))?,
+    );
+    let material = candidate(
+        "Assets/Materials/Stone.mat",
+        MATERIAL_GUID,
+        fs::read(project_root.join("Assets/Materials/Stone.mat"))?,
+    );
+    let unrelated = candidate(
+        "Assets/Textures/Unrelated.png",
+        UNRELATED_GUID,
+        fs::read(project_root.join("Assets/Textures/Unrelated.png"))?,
+    );
+
+    let mut session = ImportSession::new();
+    let mut importer = |_: &ImportCandidate| ImportOutcome::ready();
+
+    let first = session.run(&[albedo.clone(), material.clone(), unrelated.clone()], &mut importer);
+    assert_eq!(first.imported, 3);
+    assert_eq!(first.reused, 0);
+
+    let changed = candidate(
+        "Assets/Textures/Albedo.png",
+        TEXTURE_GUID,
+        b"changed-png-bytes".to_vec(),
+    );
+    let second = session.run(
+        &[changed.clone(), material.clone(), unrelated.clone()],
+        &mut importer,
+    );
+
+    assert_eq!(second.imported, 2, "only the changed asset and its dependent");
+    assert_eq!(second.reused, 1, "the unrelated asset keeps its result");
+    let changed_record = second
+        .record(Path::new("Assets/Textures/Albedo.png"))
+        .ok_or("expected a record for the changed texture")?;
+    assert!(!changed_record.reused);
+    assert_eq!(changed_record.reason, "source content changed");
+    let dependent_record = second
+        .record(Path::new("Assets/Materials/Stone.mat"))
+        .ok_or("expected a record for the dependent material")?;
+    assert!(!dependent_record.reused);
+    assert_eq!(
+        dependent_record.reason,
+        format!("dependency changed: {TEXTURE_GUID}")
+    );
+    let unrelated_record = second
+        .record(Path::new("Assets/Textures/Unrelated.png"))
+        .ok_or("expected a record for the unrelated texture")?;
+    assert!(unrelated_record.reused);
+    assert!(
+        unrelated_record.reason.contains("unchanged"),
+        "expected the unrelated asset to state that its inputs did not change: {}",
+        unrelated_record.reason
+    );
+
+    let mut meta_changed = changed;
+    meta_changed.metadata = "sRGBTexture: 0".to_string();
+    let third = session.run(
+        &[meta_changed, material.clone(), unrelated.clone()],
+        &mut importer,
+    );
+    assert_eq!(
+        third.imported, 2,
+        "PRJ-004 Outcome 6 .meta change reimports only the asset and its dependent"
+    );
+    assert_eq!(
+        third.reused, 1,
+        "PRJ-004 Outcome 6 unrelated asset is reused after .meta change"
+    );
+    let meta_record = third
+        .record(Path::new("Assets/Textures/Albedo.png"))
+        .ok_or("expected a record for the metadata-changed texture")?;
+    assert_eq!(meta_record.reason, "metadata changed");
 
     fs::remove_dir_all(&root)?;
     Ok(())

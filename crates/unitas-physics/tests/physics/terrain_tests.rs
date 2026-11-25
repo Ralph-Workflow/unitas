@@ -1,6 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::terrain::{
-    DetailInstance, Terrain, TerrainBody, TerrainData, TerrainError, TreeInstance, TreePrototype,
+    DetailInstance, DetailPrototype, DetailRenderMode, GrassWindSettings, Terrain, TerrainBody,
+    TerrainData, TerrainError, TerrainLayer, TreeInstance, TreePrototype, WindZone,
 };
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
@@ -468,5 +469,193 @@ fn terrain_bounds_report_the_placed_extent() -> TestResult {
     assert_eq!(bounds.max[2], 6.0);
     assert_eq!(bounds.min[1], 6.0);
     assert_eq!(bounds.max[1], 6.0);
+    Ok(())
+}
+
+#[test]
+fn env_001_story_11_splat_layers_delayed_heights_and_raycast_through_terrain_holes(
+) -> TestResult {
+    let resolution = 4usize;
+    let size = 8.0;
+    let data = flat_data(resolution, [size, 4.0, size], 3.0)?;
+    let grass_layer = data.add_terrain_layer(TerrainLayer::new("Grass", [2.0, 2.0]));
+    let rock_layer = data.add_terrain_layer(TerrainLayer::new("Rock", [4.0, 4.0]));
+    assert_eq!(grass_layer, 0);
+    assert_eq!(rock_layer, 1);
+    data.set_alphamap_weights(1, 1, &[0.25, 0.75]);
+
+    let terrain = Terrain::new(data.clone());
+    let hole_pos = cell_centre(resolution, size, 1, 1);
+    let solid_pos = cell_centre(resolution, size, 2, 2);
+
+    let weights = terrain
+        .splat_weights_at([hole_pos[0], 0.0, hole_pos[1]])
+        .ok_or("missing splat weights")?;
+    assert!((weights[0] - 0.25).abs() < 1e-9);
+    assert!((weights[1] - 0.75).abs() < 1e-9);
+
+    let solid_hit = terrain
+        .raycast([solid_pos[0], 10.0, solid_pos[1]], [0.0, -1.0, 0.0], 20.0)
+        .ok_or("ENV-001 Story 11: expected raycast hit on solid terrain cell")?;
+    assert!((solid_hit.point[1] - 3.0).abs() < 1e-6);
+
+    data.set_hole(1, 1, true);
+    let hole_hit = terrain.raycast([hole_pos[0], 10.0, hole_pos[1]], [0.0, -1.0, 0.0], 20.0);
+    assert!(
+        hole_hit.is_none(),
+        "ENV-001 Story 11: raycast must pass through terrain hole cell"
+    );
+
+    data.set_heights_delay_lod(&[([2, 2], 7.0)]);
+    assert_eq!(
+        data.height_at(2, 2),
+        3.0,
+        "ENV-001 Story 11: SetHeightsDelayLOD defers height commit until SyncHeightmap"
+    );
+    data.sync_heightmap();
+    assert_eq!(
+        data.height_at(2, 2),
+        7.0,
+        "ENV-001 Story 11: SyncHeightmap commits delayed height updates"
+    );
+    Ok(())
+}
+
+#[test]
+fn env_001_story_12_wind_zone_moves_tree_creator_trees_and_grass_while_excluding_speedtree(
+) -> TestResult {
+    let data = flat_data(4, [20.0, 10.0, 20.0], 2.0)?;
+    let tree_creator = data.add_tree_prototype(TreePrototype::tree_creator("TreeCreator_Pine", 3));
+    let speed_tree = data.add_tree_prototype(TreePrototype::speed_tree_8("SpeedTree8_Birch", 4));
+    data.set_tree_instances(&[
+        TreeInstance {
+            prototype: tree_creator,
+            normalized_position: [0.25, 0.25],
+            height_offset: 0.0,
+            rotation_y: 0.0,
+            scale: 1.0,
+        },
+        TreeInstance {
+            prototype: speed_tree,
+            normalized_position: [0.75, 0.75],
+            height_offset: 0.0,
+            rotation_y: 0.0,
+            scale: 1.0,
+        },
+    ]);
+    data.add_detail_prototype(DetailPrototype::instanced_grass("MeadowGrass"));
+    data.set_detail_instances(&[DetailInstance {
+        prototype: 0,
+        normalized_position: [0.5, 0.5],
+        height_offset: 0.0,
+        scale: 1.0,
+    }]);
+    data.set_grass_wind_settings(GrassWindSettings {
+        speed: 1.0,
+        size: 0.5,
+        bending: 0.8,
+        tint: [0.9, 0.9, 0.9],
+    });
+
+    let terrain = Terrain::new(data);
+    let wind_zone = WindZone::directional([1.0, 0.0, 0.0], 2.0, 0.5).with_pulse(0.4, 1.0);
+    let report = terrain.evaluate_wind(&wind_zone, 0.25);
+
+    assert_eq!(report.trees.len(), 2);
+    let creator_sample = &report.trees[0];
+    assert!(!creator_sample.wind_excluded);
+    assert!(
+        creator_sample.bend_offset[0] > 0.1,
+        "ENV-001 Story 12: Tree Creator tree must bend in WindZone direction"
+    );
+    assert!(creator_sample.excluded_reason.is_none());
+
+    let speedtree_sample = &report.trees[1];
+    assert!(speedtree_sample.wind_excluded);
+    assert_eq!(
+        speedtree_sample.bend_offset,
+        [0.0, 0.0, 0.0],
+        "ENV-001 Story 12: SpeedTree 8 wind animation is excluded"
+    );
+    assert!(
+        speedtree_sample
+            .excluded_reason
+            .as_deref()
+            .is_some_and(|msg| msg.contains("excluded") && msg.contains("SpeedTree8_Birch")),
+        "ENV-001 Story 12: excluded SpeedTree wind reports affected prototype"
+    );
+
+    assert_eq!(report.details.len(), 1);
+    let grass_sample = &report.details[0];
+    assert!(
+        grass_sample.wave_offset[0].abs() > 0.01,
+        "ENV-001 Story 12: terrain grass waves in response to WindZone and grass wind settings"
+    );
+    Ok(())
+}
+
+#[test]
+fn env_001_story_16_terrain_instanced_drawing_urp_lit_and_speedtree_8_lods(
+) -> TestResult {
+    let data = flat_data(4, [20.0, 10.0, 20.0], 2.0)?;
+    let tree_creator = data.add_tree_prototype(TreePrototype::tree_creator("TreeCreator_Elm", 2));
+    let speed_tree = data.add_tree_prototype(TreePrototype::speed_tree_8("SpeedTree8_Redwood", 4));
+    data.set_tree_instances(&[
+        TreeInstance {
+            prototype: tree_creator,
+            normalized_position: [0.25, 0.25],
+            height_offset: 0.0,
+            rotation_y: 0.5,
+            scale: 1.1,
+        },
+        TreeInstance {
+            prototype: speed_tree,
+            normalized_position: [0.75, 0.75],
+            height_offset: 0.0,
+            rotation_y: 1.0,
+            scale: 1.5,
+        },
+    ]);
+    data.add_detail_prototype(DetailPrototype::instanced_grass("InstancedDetailGrass"));
+    data.set_detail_instances(&[DetailInstance {
+        prototype: 0,
+        normalized_position: [0.5, 0.5],
+        height_offset: 0.0,
+        scale: 1.0,
+    }]);
+
+    let terrain = Terrain::new(data)
+        .with_draw_instanced(true)
+        .with_material_shader("Universal Render Pipeline/Terrain/Lit")
+        .with_billboard_start(45.0);
+    let draw = terrain.instanced_draw_data();
+
+    assert!(
+        draw.draw_instanced,
+        "ENV-001 Story 16: terrain uses instanced drawing"
+    );
+    assert_eq!(
+        draw.material_shader,
+        "Universal Render Pipeline/Terrain/Lit",
+        "ENV-001 Story 16: terrain renders with URP Terrain Lit material"
+    );
+    assert_eq!(draw.tree_batches.len(), 2);
+    assert!(draw.tree_batches[0].billboard_active);
+    assert_eq!(draw.tree_batches[1].prototype_name, "SpeedTree8_Redwood");
+    assert_eq!(
+        draw.tree_batches[1].lod_count, 4,
+        "ENV-001 Story 16: SpeedTree 8 asset reports imported mesh LODs"
+    );
+    assert!(draw.tree_batches[1].wind_excluded);
+    assert_eq!(draw.wind_exclusion_diagnostics.len(), 1);
+    assert!(draw.wind_exclusion_diagnostics[0].contains("SpeedTree8_Redwood"));
+
+    assert_eq!(draw.detail_batches.len(), 1);
+    assert_eq!(draw.detail_batches[0].render_mode, DetailRenderMode::Grass);
+    assert!(
+        draw.detail_batches[0].use_instancing,
+        "ENV-001 Story 16: detail grass prototype provides instanced drawing data"
+    );
+    assert_eq!(draw.detail_batches[0].world_positions.len(), 1);
     Ok(())
 }

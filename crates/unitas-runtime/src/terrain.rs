@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use unitas_core::EntityId;
 use unitas_physics::terrain::{
-    LargeWorldImpact, Terrain, TerrainBody, TerrainContact, TerrainData,
+    LargeWorldImpact, Terrain, TerrainBody, TerrainContact, TerrainData, TerrainInstancedDrawData,
+    TerrainRayHit, TerrainWindReport, WindZone,
 };
 use unitas_physics::World;
 
@@ -31,6 +32,7 @@ impl std::error::Error for TerrainRuntimeError {}
 pub struct TerrainWorld {
     terrains: BTreeMap<EntityId, Terrain>,
     heightfields: Vec<(EntityId, TerrainBody)>,
+    wind_zones: BTreeMap<EntityId, WindZone>,
 }
 
 impl TerrainWorld {
@@ -61,6 +63,10 @@ impl TerrainWorld {
         self.terrains.get(&entity)
     }
 
+    pub fn terrain_mut(&mut self, entity: EntityId) -> Option<&mut Terrain> {
+        self.terrains.get_mut(&entity)
+    }
+
     pub fn set_heights(
         &self,
         entity: EntityId,
@@ -85,6 +91,53 @@ impl TerrainWorld {
     pub fn is_hole(&self, entity: EntityId, world_position: [f64; 3]) -> bool {
         self.terrain(entity)
             .is_some_and(|terrain| terrain.is_hole(world_position))
+    }
+
+    pub fn raycast(
+        &self,
+        entity: EntityId,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<TerrainRayHit> {
+        self.terrain(entity)?.raycast(origin, direction, max_distance)
+    }
+
+    pub fn register_wind_zone(&mut self, entity: EntityId, wind_zone: WindZone) {
+        self.wind_zones.insert(entity, wind_zone);
+    }
+
+    pub fn wind_zone(&self, entity: EntityId) -> Option<&WindZone> {
+        self.wind_zones.get(&entity)
+    }
+
+    pub fn evaluate_wind(
+        &self,
+        terrain_entity: EntityId,
+        wind_entity: EntityId,
+        time_seconds: f64,
+    ) -> Result<TerrainWindReport, TerrainRuntimeError> {
+        let terrain = self
+            .terrains
+            .get(&terrain_entity)
+            .ok_or(TerrainRuntimeError::UnknownTerrain(terrain_entity))?;
+        let zone = self
+            .wind_zones
+            .get(&wind_entity)
+            .copied()
+            .unwrap_or_else(|| WindZone::directional([1.0, 0.0, 0.0], 0.0, 0.0));
+        Ok(terrain.evaluate_wind(&zone, time_seconds))
+    }
+
+    pub fn instanced_draw_data(
+        &self,
+        terrain_entity: EntityId,
+    ) -> Result<TerrainInstancedDrawData, TerrainRuntimeError> {
+        let terrain = self
+            .terrains
+            .get(&terrain_entity)
+            .ok_or(TerrainRuntimeError::UnknownTerrain(terrain_entity))?;
+        Ok(terrain.instanced_draw_data())
     }
 
     pub fn register_heightfield(

@@ -1,5 +1,8 @@
 use unitas_core::EntityId;
-use unitas_physics::terrain::{TerrainBody, TerrainData, TerrainError};
+use unitas_physics::terrain::{
+    DetailInstance, DetailPrototype, TerrainBody, TerrainData, TerrainError, TreeInstance,
+    TreePrototype, WindZone,
+};
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 use unitas_runtime::terrain::{far_position_impact, TerrainRuntimeError, TerrainWorld};
 
@@ -216,5 +219,85 @@ fn terrain_registration_rejects_duplicate_and_unknown_entities() -> TestResult {
         terrains.set_heights(entity, &[([0, 0], 1.0)]),
         Err(TerrainRuntimeError::UnknownTerrain(entity))
     );
+    Ok(())
+}
+
+#[test]
+fn env_001_story_11_12_16_runtime_terrain_raycast_holes_wind_zone_and_instanced_draw(
+) -> TestResult {
+    let data = flat_data(RESOLUTION, TERRAIN_SIZE, FLAT_HEIGHT)?;
+    data.set_hole(0, 0, true);
+    let creator_proto = data.add_tree_prototype(TreePrototype::tree_creator("TreeCreator_Oak", 3));
+    let speedtree_proto = data.add_tree_prototype(TreePrototype::speed_tree_8("SpeedTree8_Fir", 4));
+    data.set_tree_instances(&[
+        TreeInstance {
+            prototype: creator_proto,
+            normalized_position: [0.5, 0.5],
+            height_offset: 0.0,
+            rotation_y: 0.0,
+            scale: 1.0,
+        },
+        TreeInstance {
+            prototype: speedtree_proto,
+            normalized_position: [0.8, 0.8],
+            height_offset: 0.0,
+            rotation_y: 0.25,
+            scale: 1.2,
+        },
+    ]);
+    data.add_detail_prototype(DetailPrototype::instanced_grass("RuntimeMeadowGrass"));
+    data.set_detail_instances(&[DetailInstance {
+        prototype: 0,
+        normalized_position: [0.5, 0.5],
+        height_offset: 0.0,
+        scale: 1.0,
+    }]);
+
+    let mut terrains = TerrainWorld::new();
+    let terrain_id = EntityId::new(20);
+    let wind_id = EntityId::new(21);
+    terrains.register_terrain(terrain_id, &data, [0.0, 0.0, 0.0])?;
+    terrains.register_wind_zone(wind_id, WindZone::directional([1.0, 0.0, 0.0], 2.5, 0.4));
+
+    assert!(
+        terrains
+            .raycast(
+                terrain_id,
+                [HOLE_CELL_CENTRE[0], 15.0, HOLE_CELL_CENTRE[2]],
+                [0.0, -1.0, 0.0],
+                30.0
+            )
+            .is_none(),
+        "ENV-001 Story 11: runtime terrain raycast passes through hole cell"
+    );
+    let solid_hit = terrains
+        .raycast(terrain_id, [0.0, 15.0, 0.0], [0.0, -1.0, 0.0], 30.0)
+        .ok_or("ENV-001 Story 11: expected runtime terrain raycast hit on solid cell")?;
+    assert!((solid_hit.point[1] - FLAT_HEIGHT).abs() < 1e-6);
+
+    let wind_report = terrains.evaluate_wind(terrain_id, wind_id, 0.25)?;
+    assert_eq!(wind_report.trees.len(), 2);
+    assert!(
+        wind_report.trees[0].bend_offset[0] > 0.1,
+        "ENV-001 Story 12: runtime WindZone bends Tree Creator tree"
+    );
+    assert!(
+        wind_report.trees[1].wind_excluded,
+        "ENV-001 Story 12/16: SpeedTree 8 wind animation is reported as excluded"
+    );
+    assert_eq!(wind_report.details.len(), 1);
+    assert!(
+        wind_report.details[0].wave_offset[0].abs() > 0.01,
+        "ENV-001 Story 12: runtime WindZone waves terrain grass"
+    );
+
+    let draw_data = terrains.instanced_draw_data(terrain_id)?;
+    assert!(draw_data.draw_instanced);
+    assert_eq!(
+        draw_data.material_shader,
+        "Universal Render Pipeline/Terrain/Lit"
+    );
+    assert_eq!(draw_data.tree_batches[1].lod_count, 4);
+    assert!(draw_data.detail_batches[0].use_instancing);
     Ok(())
 }

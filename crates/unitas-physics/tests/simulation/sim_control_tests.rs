@@ -258,3 +258,68 @@ fn a_fixed_timestep_that_is_not_a_positive_number_is_rejected() {
     ));
     assert_eq!(simulation.fixed_timestep(), 0.02);
 }
+
+#[test]
+fn phy_004_story_8_script_simulation_mode_advances_only_via_simulate_and_local_physics_mode_scene_simulates_independently(
+) -> Result<(), SimulationError> {
+    let mut default_scene = Simulation::new(World::new());
+    default_scene.set_mode(SimulationMode::Script);
+    let mut local_scene = Simulation::local(World::new());
+
+    let default_body = EntityId::new(1);
+    let local_body = EntityId::new(2);
+    default_scene
+        .world_mut()
+        .add_body(default_body, moving_box([0.0, 0.0, 0.0]))?;
+    local_scene
+        .world_mut()
+        .add_body(local_body, moving_box([0.0, 0.0, 0.0]))?;
+
+    assert!(
+        default_scene.advance(0.25)?.is_none(),
+        "PHY-004 story 8: with simulation mode set to Script, physics must not advance on engine frame advance"
+    );
+    assert_eq!(
+        default_scene.world().position(default_body),
+        Some([0.0, 0.0, 0.0])
+    );
+
+    default_scene.simulate(0.25)?;
+    assert_eq!(
+        default_scene.world().position(default_body),
+        Some([0.5, 0.0, 0.0]),
+        "PHY-004 story 8: Physics.Simulate must advance the default scene in Script mode"
+    );
+    assert_eq!(
+        local_scene.world().position(local_body),
+        Some([0.0, 0.0, 0.0]),
+        "PHY-004 story 8: local physics scene must not advance when default scene is simulated"
+    );
+
+    local_scene.simulate(0.5)?;
+    assert_eq!(
+        local_scene.world().position(local_body),
+        Some([1.0, 0.0, 0.0]),
+        "PHY-004 story 8: local physics scene advances independently when its Simulate is called"
+    );
+    assert_eq!(
+        default_scene.world().position(default_body),
+        Some([0.5, 0.0, 0.0]),
+        "PHY-004 story 8: simulating local physics scene must not advance default scene"
+    );
+    assert!(
+        !default_scene
+            .world()
+            .overlap_sphere_default_layer([1.0, 0.0, 0.0], 2.0, 0)
+            .contains(&local_body),
+        "PHY-004 story 8: objects in a local physics scene must not appear in queries of the default scene"
+    );
+    assert_eq!(
+        local_scene
+            .world()
+            .overlap_sphere_default_layer([1.0, 0.0, 0.0], 2.0, 0),
+        vec![local_body],
+        "PHY-004 story 8: queries of a local physics scene return its own content"
+    );
+    Ok(())
+}

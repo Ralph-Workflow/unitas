@@ -345,3 +345,234 @@ fn trusted_open_with_fetch_consent_moves_vectors_to_permitted() -> TestResult {
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+#[test]
+fn prj008_outcome11_outcome13_ci_headless_invocation_trust_matrix_and_agent_request_delivery(
+) -> TestResult {
+    let root = temp_dir("prj008-outcome11-13")?;
+    let project = project_dir(&root)?;
+    let store = TrustStore::new(root.join("user-trust.json"));
+    let project_path = path_text(&project)?;
+
+    write_project_file(
+        &project.join("ProjectSettings/ProjectVersion.txt"),
+        "m_EditorVersion: 2022.3.16f1\n",
+    )?;
+    write_project_file(
+        &project.join("Assets/Editor/CiHook.cs"),
+        "using UnityEditor;\n[InitializeOnLoad]\npublic static class CiHook {}\n",
+    )?;
+    write_project_file(
+        &project.join("Assets/Editor/CiHook.cs.meta"),
+        "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\nMonoImporter:\n  externalObjects: {}\n",
+    )?;
+    write_project_file(
+        &project.join("Assets/Gen/CiGen.cs"),
+        "using Microsoft.CodeAnalysis;\n[Generator]\npublic class CiGen {}\n",
+    )?;
+    write_project_file(
+        &project.join("Assets/Gen/CiGen.cs.meta"),
+        "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nMonoImporter:\n  externalObjects: {}\n",
+    )?;
+    write_project_file(
+        &project.join("Packages/manifest.json"),
+        r#"{
+  "dependencies": {
+    "com.example.ci-git": {
+      "git": "https://example.invalid/ci-git.git"
+    }
+  }
+}"#,
+    )?;
+
+    let (_, no_flag_report) = Project::open_with_invocation(
+        &project,
+        &store,
+        unitas_asset::trust::InvocationTrust {
+            trust: false,
+            fetch_consent: false,
+        },
+    )?;
+    assert!(
+        no_flag_report.capabilities.restricted
+            && !no_flag_report.capabilities.may_run_code
+            && !no_flag_report.capabilities.may_fetch,
+        "PRJ-008 Outcome 13: CI run without trust or fetch-consent argument stays restricted and fetches nothing"
+    );
+    assert_eq!(
+        unitas_asset::trust::require_code_execution(
+            no_flag_report.capabilities,
+            "run_playmode_tests"
+        ),
+        Err(unitas_asset::trust::TrustRequiredError {
+            operation: "run_playmode_tests".to_string(),
+        }),
+        "PRJ-008 Outcome 13: untrusted run without flag fails when code execution is required"
+    );
+
+    let (_, fetch_only_report) = Project::open_with_invocation(
+        &project,
+        &store,
+        unitas_asset::trust::InvocationTrust {
+            trust: false,
+            fetch_consent: true,
+        },
+    )?;
+    assert!(
+        fetch_only_report.capabilities.restricted
+            && !fetch_only_report.capabilities.may_run_code
+            && fetch_only_report.capabilities.may_fetch,
+        "PRJ-008 Outcome 13: CI run with only fetch-consent argument fetches package but runs no project code"
+    );
+    assert!(fetch_only_report.trust_gate.has_permitted_vector(
+        BlockedVectorKind::GitPackageFetch,
+        "com.example.ci-git"
+    ));
+    assert!(fetch_only_report.trust_gate.has_blocked_vector(
+        BlockedVectorKind::InitializeOnLoad,
+        "Assets/Editor/CiHook.cs"
+    ));
+
+    let (_, explicit_trust_report) = Project::open_with_invocation(
+        &project,
+        &store,
+        unitas_asset::trust::InvocationTrust {
+            trust: true,
+            fetch_consent: false,
+        },
+    )?;
+    assert!(
+        !explicit_trust_report.capabilities.restricted
+            && explicit_trust_report.capabilities.may_run_code
+            && explicit_trust_report.capabilities.may_fetch,
+        "PRJ-008 Outcome 13: CI run with explicit trust argument compiles/runs code and fetches git package"
+    );
+    assert!(
+        explicit_trust_report.trust_gate.blocked_vectors.is_empty(),
+        "PRJ-008 Outcome 13: all vectors permitted during explicit trust invocation"
+    );
+    assert!(
+        !store.is_trusted(&project_path) && !store.has_fetch_consent(&project_path),
+        "PRJ-008 Outcome 13: explicit invocation trust argument applies only for that invocation without persisting trust"
+    );
+
+    let agent_request = store.request_trust(&unitas_asset::trust::TrustRequest {
+        project_path: project_path.clone(),
+        code: vec![
+            "Assets/Editor/CiHook.cs".to_string(),
+            "Assets/Gen/CiGen.cs".to_string(),
+        ],
+    })?;
+    assert_eq!(store.pending_requests(), vec![agent_request]);
+    assert_eq!(
+        store.request_trust_from_automation(&project_path),
+        TrustOutcome::Refused(TrustRefusal::AutomationCannotGrant),
+        "PRJ-008 Outcome 11 & 13: MCP/automation request to grant trust is refused"
+    );
+    assert_eq!(
+        store.grant_fetch_consent(&project_path, TrustOrigin::Automation)?,
+        TrustOutcome::Refused(TrustRefusal::AutomationCannotGrant),
+        "PRJ-008 Outcome 13: MCP/automation request to grant fetch consent is refused"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj008_outcome18_importing_unitypackage_with_scripts_in_untrusted_project_lists_collisions_and_extracts_without_compiling_or_running(
+) -> TestResult {
+    let root = temp_dir("prj008-outcome18")?;
+    let project = project_dir(&root)?;
+    let store = TrustStore::new(root.join("user-trust.json"));
+
+    write_project_file(
+        &project.join("ProjectSettings/ProjectVersion.txt"),
+        "m_EditorVersion: 2022.3.16f1\n",
+    )?;
+    let colliding_guid = "11111111111111111111111111111111";
+    let script_guid = "22222222222222222222222222222222";
+    write_project_file(
+        &project.join("Assets/Materials/Existing.mat"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: Existing\n",
+    )?;
+    write_project_file(
+        &project.join("Assets/Materials/Existing.mat.meta"),
+        &format!("fileFormatVersion: 2\nguid: {colliding_guid}\nNativeFormatImporter:\n  externalObjects: {{}}\n"),
+    )?;
+
+    let (opened_before, _) = Project::open(&project, &store)?;
+    let package_entries = vec![
+        unitas_asset::project::UnityPackageEntry {
+            guid: colliding_guid.to_string(),
+            pathname: "Assets/Materials/ImportedBrick.mat".to_string(),
+            asset_bytes: b"%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: ImportedBrick\n".to_vec(),
+            meta_text: format!("fileFormatVersion: 2\nguid: {colliding_guid}\nNativeFormatImporter:\n  externalObjects: {{}}\n"),
+        },
+        unitas_asset::project::UnityPackageEntry {
+            guid: script_guid.to_string(),
+            pathname: "Assets/Editor/ImportedAutoRun.cs".to_string(),
+            asset_bytes: b"using UnityEditor;\n[InitializeOnLoad]\npublic static class ImportedAutoRun {\n    static ImportedAutoRun() { System.IO.File.WriteAllText(\"pkg_pwned.txt\", \"ran\"); }\n}\n".to_vec(),
+            meta_text: format!("fileFormatVersion: 2\nguid: {script_guid}\nMonoImporter:\n  externalObjects: {{}}\n"),
+        },
+    ];
+
+    let archive = unitas_asset::project::build_unitypackage_bytes(&package_entries);
+    let preview = opened_before.preview_unitypackage(&archive)?;
+    assert_eq!(
+        preview.items.len(),
+        2,
+        "PRJ-008 Outcome 18: preview lists all .unitypackage contents before writing"
+    );
+    assert_eq!(
+        preview.guid_collisions,
+        vec![unitas_asset::project::UnityPackageCollision {
+            guid: colliding_guid.to_string(),
+            incoming_path: PathBuf::from("Assets/Materials/ImportedBrick.mat"),
+            existing_path: PathBuf::from("Assets/Materials/Existing.mat"),
+        }],
+        "PRJ-008 Outcome 18: preview lists every GUID collision before anything is written"
+    );
+    assert!(
+        !project.join("Assets/Editor/ImportedAutoRun.cs").exists(),
+        "PRJ-008 Outcome 18: preview writes nothing to disk"
+    );
+
+    let import_report = opened_before.import_unitypackage(&archive, &[script_guid])?;
+    assert_eq!(
+        import_report.extracted_paths,
+        vec![PathBuf::from("Assets/Editor/ImportedAutoRun.cs")],
+        "PRJ-008 Outcome 18: selected items are extracted for inspection"
+    );
+    assert!(
+        !import_report.scripts_compiled && !import_report.scripts_executed,
+        "PRJ-008 Outcome 18: scripts are neither compiled nor executed in an untrusted project"
+    );
+    assert!(
+        import_report
+            .trust_gate
+            .has_blocked_vector(BlockedVectorKind::InitializeOnLoad, "Assets/Editor/ImportedAutoRun.cs"),
+        "PRJ-008 Outcome 18: extracted script is gated by project trust"
+    );
+    assert!(!project.join("pkg_pwned.txt").exists());
+
+    let (opened_after, report_after) = Project::open(&project, &store)?;
+    assert!(
+        opened_after
+            .inventory()
+            .entries
+            .iter()
+            .any(|e| e.path == Path::new("Assets/Editor/ImportedAutoRun.cs")),
+        "PRJ-008 Outcome 18: extracted script asset is inspectable in project inventory"
+    );
+    assert!(
+        report_after
+            .trust_gate
+            .has_blocked_vector(BlockedVectorKind::InitializeOnLoad, "Assets/Editor/ImportedAutoRun.cs"),
+        "PRJ-008 Outcome 18: reopening untrusted project keeps imported script blocked"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+

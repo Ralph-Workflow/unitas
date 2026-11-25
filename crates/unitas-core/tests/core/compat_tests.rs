@@ -1149,3 +1149,397 @@ fn compat_canonical_parser_rejects_malformed_text_and_escapes_special_characters
         assert_eq!(parsed, Ok(report));
     }
 }
+
+#[test]
+fn cmp_002_story_16_migrates_unity_2021_3_urp_12_x_against_2022_3_lts_urp_14_x_baseline_without_2021_3_claims() {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2021.3.38f1".to_string()),
+        packages: vec![ProjectPackageEntry {
+            package_id: "com.unity.render-pipelines.universal".to_string(),
+            version: "12.1.14".to_string(),
+            source: PackageSource::Registry,
+            is_locally_modified_embedded: false,
+        }],
+        assets: vec![ProjectAssetEntry {
+            family: "URP Forward Scene".to_string(),
+            content: ContentIdentity {
+                guid: Some("guid-migrated-urp-scene".to_string()),
+                asset_path: Some("Assets/Scenes/MigratedLevel.unity".to_string()),
+                sub_asset_id: None,
+                object_name: Some("MigratedLevel".to_string()),
+            },
+            owning_feature_id: Some("REN-006".to_string()),
+            tier: Some(Tier::Native),
+            state: Some(CompatibilityState::Supported),
+            observable_consequence: None,
+        }],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/ProjectVersion.txt".to_string(),
+            family: "Serialized project version".to_string(),
+            owning_feature_id: Some("SER-005".to_string()),
+            tier: Some(Tier::Exact),
+            state: Some(CompatibilityState::Supported),
+            observable_consequence: None,
+        }],
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    };
+
+    let assessment = assess_project(&content);
+    assert!(assessment.migrated_from_earlier_lts);
+    assert_eq!(assessment.effective_baseline_unity_version, "2022.3 LTS");
+    assert_eq!(assessment.overall_state, CompatibilityState::Supported);
+
+    let urp = assessment
+        .assessed_packages
+        .iter()
+        .find(|pkg| pkg.package_id == "com.unity.render-pipelines.universal");
+    assert!(urp.is_some());
+    if let Some(urp_pkg) = urp {
+        assert_eq!(
+            urp_pkg.state,
+            CompatibilityState::Supported,
+            "CMP-002 Story 16: URP 12.x in a 2021.3 LTS project must migrate and assess as Supported against URP 14.x"
+        );
+        assert_eq!(urp_pkg.tier, Some(Tier::Native));
+        assert_eq!(urp_pkg.owning_spec.as_deref(), Some("rendering-and-animation.md"));
+        assert_eq!(urp_pkg.owning_feature_id.as_deref(), Some("REN-006"));
+        assert!(urp_pkg.notes.contains("14.x"));
+        assert!(!urp_pkg.notes.contains("2021.3-specific"));
+    }
+
+    for f in &assessment.report.findings {
+        assert!(
+            !f.behavior.contains("2021.3") && !f.observable_consequence.contains("2021.3-specific"),
+            "CMP-002 Story 16: no finding may claim 2021.3-specific behavior"
+        );
+    }
+}
+
+#[test]
+fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar_catalog_populates_all_differences() {
+    use unitas_core::compat::{
+        build_familiar_finding, build_semantic_finding, lookup_familiar_behavior_differences,
+        FAMILIAR_BEHAVIOR_DIFFERENCES,
+    };
+
+    let semantic = build_semantic_finding(
+        "PHY-001",
+        CompatibilityState::Supported,
+        content("Assets/Prefabs/DynamicCrate.prefab"),
+        "Rigidbody continuous collision detection and friction impulse solver",
+        "CMP-001::phy_001_rigidbody_stack_benchmark",
+        None,
+    );
+    assert!(semantic.is_ok());
+    if let Ok(semantic_finding) = semantic {
+        assert_eq!(semantic_finding.tier, Tier::Semantic);
+        assert!(
+            semantic_finding.observable_consequence.contains("Unity 2022.3 LTS"),
+            "CMP-002 Story 17: Semantic finding must cite Unity 2022.3 LTS"
+        );
+        assert!(
+            semantic_finding.observable_consequence.contains("CMP-001"),
+            "CMP-002 Story 17: Semantic finding must cite its CMP-001 benchmark"
+        );
+        assert!(
+            semantic_finding
+                .conditions
+                .iter()
+                .any(|c| c.contains("CMP-001::phy_001_rigidbody_stack_benchmark")),
+            "CMP-002 Story 17: Semantic finding conditions must record the CMP-001 benchmark ID"
+        );
+    }
+
+    let expected_counts = [
+        ("ANI-001", "rendering-and-animation.md", 5usize),
+        ("ANI-002", "rendering-and-animation.md", 3usize),
+        ("CIN-001", "rendering-and-animation.md", 2usize),
+        ("REN-004", "rendering-and-animation.md", 6usize),
+        ("PHY-004", "physics-navigation-terrain.md", 3usize),
+        ("NAV-001", "physics-navigation-terrain.md", 4usize),
+        ("ENV-001", "physics-navigation-terrain.md", 2usize),
+    ];
+
+    assert_eq!(FAMILIAR_BEHAVIOR_DIFFERENCES.len(), 7);
+
+    for (feature_id, expected_spec, expected_count) in expected_counts {
+        let entry = lookup_familiar_behavior_differences(feature_id);
+        assert!(
+            entry.is_some(),
+            "CMP-002 Story 17 / Outcome 34: missing Familiar difference entry for {feature_id}"
+        );
+        if let Some(catalog_diffs) = entry {
+            assert_eq!(catalog_diffs.owning_spec, expected_spec);
+            assert_eq!(
+                catalog_diffs.differences.len(),
+                expected_count,
+                "CMP-002 Story 17 / Outcome 34: unexpected difference count for {feature_id}"
+            );
+        }
+
+        let built = build_familiar_finding(
+            feature_id,
+            CompatibilityState::Supported,
+            content(&format!("Assets/Test/{feature_id}.asset")),
+            &format!("{feature_id} behavior assessment"),
+            &[],
+        );
+        assert!(built.is_ok());
+        if let Ok(familiar_finding) = built {
+            assert_eq!(familiar_finding.tier, Tier::Familiar);
+            assert_eq!(
+                familiar_finding.relied_upon_unity_differences.len(),
+                expected_count,
+                "CMP-002 Story 17 / Outcome 34: Familiar finding for {feature_id} must list all {expected_count} canonical differences"
+            );
+            assert!(
+                familiar_finding
+                    .observable_consequence
+                    .contains(expected_spec),
+                "CMP-002 Story 17: Familiar finding for {feature_id} must cite its owning spec {expected_spec}"
+            );
+            assert!(
+                familiar_finding
+                    .observable_consequence
+                    .contains("AUT-006"),
+                "Outcome 34: Familiar finding for {feature_id} must reference the AUT-006 API reference"
+            );
+        }
+    }
+}
+
+#[test]
+fn cmp_002_story_18_translated_material_accepts_against_unitas_reference_and_rejects_unity_screenshot_pixel_diff_failure() {
+    use unitas_core::compat::assess_translated_material;
+
+    let accepted = assess_translated_material(
+        content("Assets/Materials/HeroLit.mat"),
+        "Standard -> URP/Lit translated material",
+        Some("Refs/TST-002/hero_lit_approved.png"),
+        true,
+        true,
+    );
+    assert_eq!(accepted.feature_id, "REN-002");
+    assert_eq!(accepted.tier, Tier::Native);
+    assert_eq!(
+        accepted.state,
+        CompatibilityState::Supported,
+        "CMP-002 Story 18: translated material matching unitas-approved reference image is Supported even when pixels differ from a Unity screenshot"
+    );
+    assert!(accepted.observable_consequence.contains("TST-002"));
+    assert!(accepted
+        .observable_consequence
+        .contains("Refs/TST-002/hero_lit_approved.png"));
+    assert!(accepted
+        .observable_consequence
+        .contains("never a compatibility failure"));
+
+    let base_report = build_report("0.4.0", Vec::new());
+    let bogus_pixel_failure = FindingInput::new(
+        "REN-002",
+        Tier::Native,
+        CompatibilityState::Unsupported,
+        content("Assets/Materials/HeroLit.mat"),
+        "Translated material rendering",
+        "pixel difference from a Unity screenshot exceeded threshold",
+    );
+    let rejected = submit_finding(&base_report, bogus_pixel_failure);
+    assert!(
+        rejected.is_err(),
+        "CMP-002 Story 18: report must never present a pixel difference from a Unity screenshot as a compatibility failure"
+    );
+}
+
+#[test]
+fn cmp_002_story_19_unspecified_supported_package_behavior_is_unknown_and_package_matrix_tiers_match_feature_catalog() {
+    use unitas_core::compat::{
+        assess_package_behavior, PackageBehaviorClassification, SUPPORTED_PACKAGE_MATRIX,
+    };
+
+    for entry in SUPPORTED_PACKAGE_MATRIX {
+        let catalog = lookup_catalog_feature(entry.owning_feature_id);
+        assert!(
+            catalog.is_some(),
+            "CMP-002 Story 19: every package matrix entry must reference a valid catalog feature"
+        );
+        if let Some(cat) = catalog {
+            assert_eq!(
+                entry.tier, cat.tier,
+                "CMP-002 Story 19: package {} tier must equal owning catalog feature {} tier",
+                entry.package_id, entry.owning_feature_id
+            );
+            assert_eq!(
+                entry.owning_spec, cat.owning_spec,
+                "CMP-002 Story 19: package {} owning spec must equal owning catalog feature {} spec",
+                entry.package_id, entry.owning_feature_id
+            );
+        }
+    }
+
+    let unspecified = assess_package_behavior(
+        "com.unity.inputsystem",
+        "1.7.0",
+        content("Assets/Input/PlayerControls.inputactions"),
+        "InputActionRebindingExtensions.LoadBindingOverridesFromJson undocumented experimental hook",
+        PackageBehaviorClassification::NeitherNamedNorExcluded,
+    );
+    assert_eq!(
+        unspecified.state,
+        CompatibilityState::Unknown,
+        "CMP-002 Story 19: behavior in a Supported package neither named nor excluded by the owning spec must be reported Unknown"
+    );
+    assert_eq!(unspecified.feature_id, "INP-002");
+    assert_eq!(unspecified.tier, Tier::Familiar);
+}
+
+#[test]
+fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_and_rider_and_collab_are_partially_supported_with_exclusions() {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![
+            ProjectPackageEntry {
+                package_id: "com.unity.ide.rider".to_string(),
+                version: "3.0.28".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.unity.collab-proxy".to_string(),
+                version: "2.3.1".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+        ],
+        assets: vec![ProjectAssetEntry {
+            family: "Unity-built AssetBundles and Addressables content".to_string(),
+            content: ContentIdentity {
+                guid: Some("guid-unity-bundle".to_string()),
+                asset_path: Some("Assets/StreamingAssets/level1.bundle".to_string()),
+                sub_asset_id: None,
+                object_name: Some("level1.bundle".to_string()),
+            },
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/LightingSettings.lighting".to_string(),
+            family: "Enlighten realtime global illumination".to_string(),
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    };
+
+    let assessment = assess_project(&content);
+
+    let enlighten = assessment.report.findings.iter().find(|f| {
+        f.content.asset_path.as_deref() == Some("ProjectSettings/LightingSettings.lighting")
+    });
+    assert!(enlighten.is_some());
+    if let Some(f) = enlighten {
+        assert_eq!(f.state, CompatibilityState::Unsupported);
+        assert_eq!(f.feature_id, "REN-003");
+    }
+
+    let bundle = assessment.report.findings.iter().find(|f| {
+        f.content.asset_path.as_deref() == Some("Assets/StreamingAssets/level1.bundle")
+    });
+    assert!(bundle.is_some());
+    if let Some(f) = bundle {
+        assert_eq!(f.state, CompatibilityState::Unsupported);
+        assert_eq!(f.feature_id, "BLD-005");
+    }
+
+    let rider = assessment
+        .assessed_packages
+        .iter()
+        .find(|p| p.package_id == "com.unity.ide.rider");
+    assert!(rider.is_some());
+    if let Some(p) = rider {
+        assert_eq!(p.state, CompatibilityState::PartiallySupported);
+        assert_eq!(p.owning_feature_id.as_deref(), Some("DIA-002"));
+        assert!(p.notes.contains("preference"));
+        assert!(p.notes.contains("RUN-010"));
+    }
+
+    let collab = assessment
+        .assessed_packages
+        .iter()
+        .find(|p| p.package_id == "com.unity.collab-proxy");
+    assert!(collab.is_some());
+    if let Some(p) = collab {
+        assert_eq!(p.state, CompatibilityState::PartiallySupported);
+        assert_eq!(p.owning_feature_id.as_deref(), Some("EDT-007"));
+        assert!(p.notes.contains("no version-control client is provided"));
+    }
+}
+
+#[test]
+fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and_hdrp_target_is_unsupported() {
+    use unitas_core::compat::{
+        assess_shader_graph, ShaderGraphNodeIssue, ShaderGraphTarget,
+    };
+
+    let unrepresentable = assess_shader_graph(
+        content("Assets/Shaders/WaterSurface.shadergraph"),
+        ShaderGraphTarget::Universal,
+        &[ShaderGraphNodeIssue {
+            node_type: "CustomHDSceneColorNode".to_string(),
+            node_id: "node-98a1".to_string(),
+        }],
+        &["Assets/Materials/OceanWater.mat".to_string()],
+    );
+    assert_eq!(unrepresentable.feature_id, "REN-006");
+    assert_eq!(unrepresentable.tier, Tier::Native);
+    assert_eq!(unrepresentable.state, CompatibilityState::Unsupported);
+    assert_eq!(
+        unrepresentable.content.asset_path.as_deref(),
+        Some("Assets/Shaders/WaterSurface.shadergraph")
+    );
+    assert_eq!(
+        unrepresentable.content.sub_asset_id.as_deref(),
+        Some("node-98a1")
+    );
+    assert!(unrepresentable.behavior.contains("WaterSurface.shadergraph"));
+    assert!(unrepresentable.behavior.contains("CustomHDSceneColorNode"));
+    assert!(unrepresentable.behavior.contains("node-98a1"));
+    assert!(unrepresentable
+        .observable_consequence
+        .contains("Assets/Materials/OceanWater.mat"));
+
+    let hdrp_target = assess_shader_graph(
+        content("Assets/Shaders/HdrpDecal.shadergraph"),
+        ShaderGraphTarget::HighDefinition,
+        &[],
+        &["Assets/Materials/HdrpDecal.mat".to_string()],
+    );
+    assert_eq!(hdrp_target.feature_id, "REN-006");
+    assert_eq!(hdrp_target.tier, Tier::Native);
+    assert_eq!(
+        hdrp_target.state,
+        CompatibilityState::Unsupported,
+        "CMP-002 Story 22: HDRP Shader Graph target must be reported Unsupported"
+    );
+    assert!(hdrp_target.behavior.contains("HDRP"));
+}
+
+
+

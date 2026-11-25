@@ -78,7 +78,8 @@ fn an_unknown_document_round_trips_untouched() -> TestResult {
 }
 
 #[test]
-fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
+fn ser002_outcome6_saving_one_scene_of_an_additive_set_writes_only_that_scene_and_the_set_reopens_identically(
+) -> TestResult {
     let root = temp_root("additive_set");
     fs::create_dir_all(&root)?;
     let alpha_path = root.join("Alpha.unity");
@@ -98,6 +99,9 @@ fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
         &["GameObject", "m_Name"],
         "Alpha"
     ));
+    let beta_stream = unity_yaml::parse(&beta_text)?;
+    let alpha_identities = document_identities(&alpha_stream);
+    let beta_identities = document_identities(&beta_stream);
     let scenes = vec![
         SceneFile {
             path: alpha_path.clone(),
@@ -105,7 +109,7 @@ fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
         },
         SceneFile {
             path: beta_path.clone(),
-            stream: unity_yaml::parse(&beta_text)?,
+            stream: beta_stream,
         },
     ];
     scene_save::save_scene_set(&scenes, &alpha_path)?;
@@ -115,12 +119,36 @@ fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
         alpha_text.replacen("  m_Name: Root\n", "  m_Name: Alpha\n", 1)
     );
     assert_eq!(fs::read_to_string(&beta_path)?, beta_text);
+
+    let reopened_alpha = unity_yaml::parse_file(&alpha_path)?;
+    let reopened_beta = unity_yaml::parse_file(&beta_path)?;
+    assert_eq!(document_identities(&reopened_alpha), alpha_identities);
+    assert_eq!(document_identities(&reopened_beta), beta_identities);
+    assert_eq!(reopened_alpha.documents.len(), alpha_identities.len());
+    assert_eq!(reopened_beta.documents.len(), beta_identities.len());
     let _ = fs::remove_dir_all(&root);
     Ok(())
 }
 
+fn document_identities(stream: &unity_yaml::Stream) -> Vec<(i64, String)> {
+    stream
+        .documents
+        .iter()
+        .map(|document| {
+            let name = document
+                .root
+                .get("GameObject")
+                .and_then(|body| body.get("m_Name"))
+                .and_then(Node::as_str)
+                .unwrap_or_default()
+                .to_string();
+            (document.file_id, name)
+        })
+        .collect()
+}
+
 #[test]
-fn a_failed_save_keeps_the_previous_file_content() -> TestResult {
+fn ser001_outcome5_a_failed_save_leaves_the_prior_content_identifiable() -> TestResult {
     let root = temp_root("failed_save");
     fs::create_dir_all(&root)?;
     let path = root.join("Scene.unity");
@@ -254,8 +282,7 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 #[test]
-fn value_fidelity_special_floats_sequences_references_managed_references_and_hide_flags_round_trip(
-) -> TestResult {
+fn ser001_outcome1_values_references_order_and_identities_survive_load_edit_save() -> TestResult {
     let root = temp_root("value_fidelity");
     fs::create_dir_all(&root)?;
     let path = root.join("ValueFidelity.unity");
@@ -343,7 +370,7 @@ fn value_fidelity_special_floats_sequences_references_managed_references_and_hid
 }
 
 #[test]
-fn additive_scene_set_adding_new_object_to_active_scene_leaves_other_scene_untouched_and_reopens(
+fn ser002_outcome6_additive_scene_set_adding_new_object_to_active_scene_leaves_other_scene_untouched_and_reopens(
 ) -> TestResult {
     let root = temp_root("additive_new_object");
     fs::create_dir_all(&root)?;
@@ -430,7 +457,7 @@ fn remap_internal_file_ids(node: &mut Node, id_map: &[(i64, i64)]) {
 }
 
 #[test]
-fn duplicated_hierarchy_redirects_internal_references_and_preserves_external_references(
+fn ser001_ser004_outcome9_duplicated_hierarchy_redirects_internal_references_and_preserves_external_references(
 ) -> TestResult {
     let root = temp_root("duplicate_hierarchy");
     fs::create_dir_all(&root)?;
@@ -523,7 +550,7 @@ fn duplicated_hierarchy_redirects_internal_references_and_preserves_external_ref
 }
 
 #[test]
-fn missing_script_missing_prefab_unrecognized_class_and_circular_component_refs_round_trip(
+fn ser004_outcome10_and_11_missing_script_missing_prefab_unrecognized_class_and_circular_references_survive_an_unrelated_edit_and_save(
 ) -> TestResult {
     let root = temp_root("resilience_round_trip");
     fs::create_dir_all(&root)?;
@@ -753,7 +780,7 @@ fn build_mixed_mode_typed_v22_binary(go_name: &str, baked_lighting_blob: &[u8]) 
 }
 
 #[test]
-fn mixed_mode_real_v22_binary_asset_with_baked_blob_and_text_yaml_edit_save_and_reload(
+fn ser005_outcome12_an_edited_binary_stays_binary_and_an_edited_text_stays_text(
 ) -> TestResult {
     let root = temp_root("mixed_mode_real_v22");
     fs::create_dir_all(&root)?;
@@ -1038,6 +1065,20 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
         .and_then(|r| r.get("RefIds"))
         .and_then(Node::as_sequence)
         .ok_or("missing RefIds after save")?[0];
+    let missing_after_save: Vec<&str> = mb_mid
+        .get("references")
+        .and_then(|r| r.get("RefIds"))
+        .and_then(Node::as_sequence)
+        .ok_or("missing RefIds after save")?
+        .iter()
+        .filter_map(|entry| entry.get("type")?.get("class")?.as_str())
+        .filter(|class| !known_runtime_types.contains(class))
+        .collect();
+    assert_eq!(
+        missing_after_save,
+        vec!["RemovedStealthTactic"],
+        "the removed type is no longer reported missing after the unrelated edit and save"
+    );
     assert_eq!(ref_entry_mid.get("rid").and_then(Node::as_i64), Some(2001));
     assert_eq!(
         ref_entry_mid
@@ -1060,7 +1101,11 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
         .and_then(|t| t.get("class"))
         .and_then(Node::as_str)
         .ok_or("missing restored class")?;
-    assert!(restored_runtime_types.contains(&restored_class));
+    assert_eq!(restored_class, "RemovedStealthTactic");
+    assert!(
+        restored_runtime_types.contains(&restored_class),
+        "the restored type does not resolve to the serialized class"
+    );
 
     let _ = fs::remove_dir_all(&root);
     Ok(())
@@ -1392,6 +1437,281 @@ fn ser004_outcome11_cross_scene_reference_assignment_in_additive_set_produces_di
             .and_then(Node::as_i64),
         Some(0)
     );
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn ser001_outcome1_unchanged_save_writes_no_file_change() -> TestResult {
+    let root = temp_root("ser001_outcome1");
+    fs::create_dir_all(&root)?;
+    let path = root.join("Unchanged.unity");
+    let original = fs::read_to_string(SCENE_FIXTURE)?;
+    fs::write(&path, &original)?;
+
+    let stream = unity_yaml::parse_file(&path)?;
+    assert_eq!(scene_save::emit_stream(&stream), original);
+
+    fs::create_dir(root.join("Unchanged.unity.tmp"))?;
+    scene_save::save_stream(&path, &stream)?;
+    assert_eq!(fs::read_to_string(&path)?, original);
+
+    let mut edited = unity_yaml::parse_file(&path)?;
+    assert!(set_field(
+        &mut edited.documents[0].root,
+        &["GameObject", "m_Name"],
+        "Edited"
+    ));
+    let error = match scene_save::save_stream(&path, &edited) {
+        Ok(()) => return Err(String::from("the changed save unexpectedly succeeded").into()),
+        Err(error) => error,
+    };
+    assert!(matches!(error, SceneSaveError::Io { .. }));
+    assert_eq!(fs::read_to_string(&path)?, original);
+
+    fs::remove_dir(root.join("Unchanged.unity.tmp"))?;
+    scene_save::save_stream(&path, &edited)?;
+    assert_eq!(
+        fs::read_to_string(&path)?,
+        original.replacen("  m_Name: Root\n", "  m_Name: Edited\n", 1)
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn ser005_outcome13_saving_assets_writes_no_unity_generated_folder() -> TestResult {
+    let root = temp_root("ser005_outcome13");
+    fs::create_dir_all(&root)?;
+    let scene_path = root.join("Scene.unity");
+    let binary_path = root.join("Asset.asset");
+    let original = fs::read_to_string(SCENE_FIXTURE)?;
+    let binary = b"\x00\x01\x02binary payload";
+    fs::write(&scene_path, &original)?;
+    fs::write(&binary_path, binary)?;
+
+    let mut stream = unity_yaml::parse_file(&scene_path)?;
+    assert!(set_field(
+        &mut stream.documents[0].root,
+        &["GameObject", "m_Name"],
+        "Edited"
+    ));
+    scene_save::save_stream(&scene_path, &stream)?;
+    scene_save::save_asset(&binary_path, &binary_asset(binary))?;
+
+    for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
+        assert!(!root.join(folder).exists(), "{folder} was written by the save");
+    }
+    let mut entries: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        entries.push(entry.file_name().to_string_lossy().to_string());
+    }
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec![String::from("Asset.asset"), String::from("Scene.unity")]
+    );
+    assert_eq!(
+        fs::read_to_string(&scene_path)?,
+        original.replacen("  m_Name: Root\n", "  m_Name: Edited\n", 1)
+    );
+    assert_eq!(fs::read(&binary_path)?, binary.to_vec());
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn ser005_outcome18_an_older_serialized_version_is_rewritten_only_after_an_edit_in_the_baseline_form_and_the_first_save_lists_the_affected_assets(
+) -> TestResult {
+    let root = temp_root("ser005_outcome18");
+    fs::create_dir_all(&root)?;
+    let path = root.join("Legacy.unity");
+    let legacy = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  serializedVersion: 6\n  m_Name: LegacyBrick\n  m_Texture: {fileID: 2800000, guid: 11111111111111111111111111111111, type: 3}\n  m_Keywords:\n  - first\n  - second\n";
+    fs::write(&path, legacy)?;
+
+    let asset = SerializedAsset::read(&fs::read(&path)?)?;
+    let unchanged = scene_save::save_asset_upgraded(&path, &asset)?;
+    assert!(!unchanged.written, "an unchanged asset was rewritten");
+    assert!(!unchanged.upgraded);
+    assert_eq!(unchanged.path, path);
+    assert_eq!(fs::read_to_string(&path)?, legacy);
+
+    let before = unity_yaml::parse_file(&path)?;
+    let before_material = before
+        .documents
+        .first()
+        .and_then(|document| document.root.get("Material"))
+        .ok_or("missing Material")?;
+    assert_eq!(
+        before_material.get("serializedVersion").and_then(Node::as_i64),
+        Some(6)
+    );
+
+    let mut edited = SerializedAsset::read(&fs::read(&path)?)?;
+    match &mut edited {
+        SerializedAsset::Text { stream, .. } => {
+            assert!(set_field(
+                &mut stream.documents[0].root,
+                &["Material", "m_Name"],
+                "UpgradedBrick"
+            ));
+        }
+        SerializedAsset::Binary(_) => return Err(String::from("expected a text asset").into()),
+    }
+    let upgraded = scene_save::save_asset_upgraded(&path, &edited)?;
+    assert!(upgraded.written);
+    assert!(upgraded.upgraded);
+
+    let baseline = fs::read_to_string(&path)?;
+    assert!(
+        !baseline.contains("serializedVersion"),
+        "the older serializedVersion was kept: {baseline}"
+    );
+    assert!(baseline.contains("m_Name: UpgradedBrick"));
+
+    let reloaded = unity_yaml::parse_file(&path)?;
+    let after_material = reloaded
+        .documents
+        .first()
+        .and_then(|document| document.root.get("Material"))
+        .ok_or("missing upgraded Material")?;
+    assert!(after_material.get("serializedVersion").is_none());
+    assert_eq!(
+        after_material.get("m_Name").and_then(Node::as_str),
+        Some("UpgradedBrick")
+    );
+    assert_eq!(
+        before_material
+            .get("m_Texture")
+            .and_then(|texture| texture.get("guid"))
+            .and_then(Node::as_str),
+        after_material
+            .get("m_Texture")
+            .and_then(|texture| texture.get("guid"))
+            .and_then(Node::as_str)
+    );
+    assert_eq!(
+        before_material.get("m_Keywords").and_then(Node::as_sequence),
+        after_material.get("m_Keywords").and_then(Node::as_sequence)
+    );
+
+    let notice = scene_save::upgrade_notice(&[String::from("Assets/Legacy.unity")]);
+    assert!(
+        notice.contains("Assets/Legacy.unity"),
+        "the notice omits the affected asset: {notice}"
+    );
+    assert!(
+        notice.contains("2022.3"),
+        "the notice omits the baseline release: {notice}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn ser005_outcomes_13_17_18_19_project_open_migration_no_library_writes_build_and_gitignore_footprint(
+) -> TestResult {
+    use unitas_asset::project::{MigrationStatus, Project, BASELINE_UNITY_VERSION};
+    use unitas_asset::trust::{TrustOrigin, TrustStore};
+
+    let root = temp_root("ser005_outcomes_13_17_18_19");
+    let _ = fs::remove_dir_all(&root);
+    let project_root = root.join("project_2021");
+    let per_user_dir = root.join("per_user_state");
+    fs::create_dir_all(project_root.join("Assets/Materials"))?;
+    fs::create_dir_all(project_root.join("Assets/Scenes"))?;
+    fs::create_dir_all(project_root.join("ProjectSettings"))?;
+    fs::create_dir_all(&per_user_dir)?;
+
+    let mat_guid = "11111111111111111111111111111111";
+    let scene_guid = "33333333333333333333333333333333";
+    let brick_path = project_root.join("Assets/Materials/Brick.mat");
+    let scene_path = project_root.join("Assets/Scenes/Main.unity");
+    let legacy_brick = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  serializedVersion: 6\n  m_Name: Brick\n";
+    let scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Cube\n  m_Material: {{fileID: 2100000, guid: {mat_guid}, type: 2}}\n"
+    );
+    fs::write(&brick_path, legacy_brick)?;
+    fs::write(
+        project_root.join("Assets/Materials/Brick.mat.meta"),
+        format!("fileFormatVersion: 2\nguid: {mat_guid}\nNativeFormatImporter:\n  externalObjects: {{}}\n  serializedVersion: 2\n  userData: \n"),
+    )?;
+    fs::write(&scene_path, &scene_yaml)?;
+    fs::write(
+        project_root.join("Assets/Scenes/Main.unity.meta"),
+        format!("fileFormatVersion: 2\nguid: {scene_guid}\nNativeFormatImporter:\n  externalObjects: {{}}\n  serializedVersion: 2\n  userData: \n"),
+    )?;
+    fs::write(
+        project_root.join("ProjectSettings/ProjectVersion.txt"),
+        "m_EditorVersion: 2021.3.16f1\n",
+    )?;
+
+    let store = TrustStore::new(per_user_dir.join("trust.json"));
+    let (_, report_on_open) = Project::open(&project_root, &store)?;
+    assert_eq!(report_on_open.declared_version.as_deref(), Some("2021.3.16f1"));
+    assert!(!project_root.join("ProjectSettings/UnitasVersion.txt").exists());
+    for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
+        assert!(!project_root.join(folder).exists());
+    }
+    assert_eq!(fs::read_to_string(&brick_path)?, legacy_brick);
+
+    let preview_assets = match &report_on_open.migration {
+        MigrationStatus::RequiresUpgrade(preview) => preview.assets.clone(),
+        other => return Err(format!("expected RequiresUpgrade, got {other:?}").into()),
+    };
+    assert!(preview_assets.contains(&String::from("Assets/Materials/Brick.mat")));
+    let notice = scene_save::upgrade_notice(&preview_assets);
+    assert!(notice.contains("Assets/Materials/Brick.mat"));
+    assert!(notice.contains(BASELINE_UNITY_VERSION));
+
+    let mut brick_asset = SerializedAsset::read(&fs::read(&brick_path)?)?;
+    if let SerializedAsset::Text { stream, .. } = &mut brick_asset {
+        assert!(set_field(
+            &mut stream.documents[0].root,
+            &["Material", "m_Name"],
+            "BrickUpgraded"
+        ));
+    }
+    let save_outcome = scene_save::save_asset_upgraded(&brick_path, &brick_asset)?;
+    assert!(save_outcome.written);
+    assert!(save_outcome.upgraded);
+    assert!(!fs::read_to_string(&brick_path)?.contains("serializedVersion"));
+
+    store.trust_project(&project_root.to_string_lossy(), TrustOrigin::Person)?;
+    let user_cache = per_user_dir.join("import_cache.bin");
+    fs::write(&user_cache, b"cache")?;
+
+    let sln_path = project_root.join("project_2021.sln");
+    let csproj_path = project_root.join("Assembly-CSharp.csproj");
+    let build_out = root.join("Builds/Standalone/Player.app");
+    fs::create_dir_all(
+        build_out
+            .parent()
+            .ok_or("missing parent for build output")?,
+    )?;
+    fs::write(&sln_path, "Microsoft Visual Studio Solution File")?;
+    fs::write(&csproj_path, "<Project Sdk=\"Microsoft.NET.Sdk\" />")?;
+    fs::write(&build_out, "player_binary")?;
+
+    let version_rel = PathBuf::from("ProjectSettings/UnitasVersion.txt");
+    let policy_rel = PathBuf::from("ProjectSettings/UnitasReviewPolicy.json");
+    fs::write(project_root.join(&version_rel), "unitas_version: 0.1.0\n")?;
+    fs::write(project_root.join(&policy_rel), "{\"requireApproval\":true}\n")?;
+
+    for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
+        assert!(!project_root.join(folder).exists());
+    }
+    assert!(sln_path.is_file());
+    assert!(csproj_path.is_file());
+    assert!(build_out.is_file());
+    assert!(user_cache.is_file());
+    assert!(project_root.join(&version_rel).is_file());
+    assert!(project_root.join(&policy_rel).is_file());
 
     let _ = fs::remove_dir_all(&root);
     Ok(())

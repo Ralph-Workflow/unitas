@@ -672,6 +672,56 @@ fn prj007_outcome10_per_target_scripting_defines_collision_matrix_and_fixed_time
         Some("retained_verbatim")
     );
 
+    let typed_settings = unitas_asset::project_settings::load_project_settings(&root)?;
+    assert_eq!(
+        typed_settings.fixed_timestep(),
+        0.008333334,
+        "PRJ-007 Outcome 10: typed fixed timestep reflects saved setting"
+    );
+    assert_eq!(
+        typed_settings.fixed_timestep_boundary(),
+        unitas_asset::project_settings::SettingBoundary::NextPlaySession,
+        "PRJ-007 Outcome 10: fixed timestep declares next play session boundary (RUN-004)"
+    );
+    assert!(
+        !typed_settings.layers_collide(1, 0),
+        "PRJ-007 Outcome 10: layer collision matrix bit disables collision between layer 1 and layer 0 (PHY-001)"
+    );
+    assert!(
+        typed_settings.layers_collide(0, 0),
+        "PRJ-007 Outcome 10: layer collision matrix bit keeps collision between layer 0 and layer 0 (PHY-001)"
+    );
+    assert_eq!(
+        typed_settings.collision_matrix_boundary(),
+        unitas_asset::project_settings::SettingBoundary::NextPhysicsStep,
+        "PRJ-007 Outcome 10: layer collision matrix declares physics simulation boundary (PHY-001)"
+    );
+    let android_effective = typed_settings.effective_scripting_defines("7", "Android");
+    assert_eq!(
+        android_effective.effective_value,
+        "ANDROID_BUILD;MOBILE_INPUT;VULKAN_BACKEND",
+        "PRJ-007 Outcome 10: effective per-target scripting define for Android"
+    );
+    assert_eq!(
+        android_effective.source,
+        unitas_asset::project_settings::SettingValueSource::TargetOverride,
+        "PRJ-007 Outcome 10: Android scripting define source is TargetOverride"
+    );
+    assert_eq!(
+        android_effective.boundary,
+        unitas_asset::project_settings::SettingBoundary::NextRecompilation,
+        "PRJ-007 Outcome 10: scripting defines take effect at next recompilation (RUN-007)"
+    );
+    let webgl_effective = typed_settings.effective_scripting_defines("13", "WebGL");
+    assert_eq!(
+        webgl_effective.effective_value, "GLOBAL_DEFAULT",
+        "PRJ-007 Outcome 10: unoverridden target falls back to default scripting defines"
+    );
+    assert_eq!(
+        webgl_effective.source,
+        unitas_asset::project_settings::SettingValueSource::Default
+    );
+
     fs::remove_dir_all(&root)?;
     Ok(())
 }

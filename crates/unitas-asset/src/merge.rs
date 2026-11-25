@@ -2076,3 +2076,505 @@ fn diff_prefab_instance_overrides(
 
     diffs
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConflictResolutionChoice {
+    Ours,
+    Theirs,
+    Custom(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictResolution {
+    pub file_id: i64,
+    pub property: Option<String>,
+    pub choice: ConflictResolutionChoice,
+}
+
+pub fn resolve_conflicts_bytes(
+    base: &[u8],
+    ours: &[u8],
+    theirs: &[u8],
+    resolutions: &[ConflictResolution],
+) -> Result<MergeOutcome, MergeError> {
+    let base_asset = parse_asset(base, MergeSide::Base)?;
+    let mut ours_asset = parse_asset(ours, MergeSide::Ours)?;
+    let mut theirs_asset = parse_asset(theirs, MergeSide::Theirs)?;
+    for resolution in resolutions {
+        apply_resolution(&mut ours_asset, &mut theirs_asset, resolution)?;
+    }
+    merge_assets(&base_asset, &ours_asset, &theirs_asset)
+}
+
+pub fn resolve_conflicts_to_path(
+    base: &Path,
+    ours: &Path,
+    theirs: &Path,
+    resolutions: &[ConflictResolution],
+    output: &Path,
+) -> Result<MergeOutcome, MergeError> {
+    let base_bytes = read_file(base)?;
+    let ours_bytes = read_file(ours)?;
+    let theirs_bytes = read_file(theirs)?;
+    let outcome = resolve_conflicts_bytes(&base_bytes, &ours_bytes, &theirs_bytes, resolutions)?;
+    if !outcome.conflicts.is_empty() {
+        return Err(MergeError::UnresolvedConflicts {
+            conflicts: outcome.conflicts,
+        });
+    }
+    let introduced: Vec<UnresolvedReference> = outcome
+        .references
+        .iter()
+        .filter(|reference| reference.introduced)
+        .cloned()
+        .collect();
+    if !introduced.is_empty() {
+        return Err(MergeError::UnresolvedReferences {
+            references: introduced,
+        });
+    }
+    let text = match outcome.merged.as_deref() {
+        Some(text) => text,
+        None => {
+            return Err(MergeError::InvalidMerge {
+                message: String::from("merge produced no result"),
+            })
+        }
+    };
+    fs::write(output, text).map_err(|error| MergeError::Io {
+        path: output.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    Ok(outcome)
+}
+
+fn apply_resolution(
+    ours: &mut Asset,
+    theirs: &mut Asset,
+    resolution: &ConflictResolution,
+) -> Result<(), MergeError> {
+    match &resolution.property {
+        Some(property_path) => {
+            let ours_obj = ours
+                .objects
+                .iter()
+                .find(|obj| obj.file_id == resolution.file_id)
+                .cloned();
+            let theirs_obj = theirs
+                .objects
+                .iter()
+                .find(|obj| obj.file_id == resolution.file_id)
+                .cloned();
+            let chosen_node = match &resolution.choice {
+                ConflictResolutionChoice::Ours => ours_obj
+                    .as_ref()
+                    .and_then(|obj| get_nested_node(&obj.properties, property_path))
+                    .cloned(),
+                ConflictResolutionChoice::Theirs => theirs_obj
+                    .as_ref()
+                    .and_then(|obj| get_nested_node(&obj.properties, property_path))
+                    .cloned(),
+                ConflictResolutionChoice::Custom(val) => Some(Node::Scalar(val.clone())),
+            };
+            if let Some(node) = chosen_node {
+                if let Some(obj) = ours
+                    .objects
+                    .iter_mut()
+                    .find(|obj| obj.file_id == resolution.file_id)
+                {
+                    set_nested_node(&mut obj.properties, property_path, node.clone());
+                }
+                if let Some(obj) = theirs
+                    .objects
+                    .iter_mut()
+                    .find(|obj| obj.file_id == resolution.file_id)
+                {
+                    set_nested_node(&mut obj.properties, property_path, node);
+                }
+            }
+        }
+        None => match &resolution.choice {
+            ConflictResolutionChoice::Ours => {
+                let ours_obj = ours
+                    .objects
+                    .iter()
+                    .find(|obj| obj.file_id == resolution.file_id)
+                    .cloned();
+                theirs
+                    .objects
+                    .retain(|obj| obj.file_id != resolution.file_id);
+                if let Some(obj) = ours_obj {
+                    theirs.objects.push(obj);
+                }
+            }
+            ConflictResolutionChoice::Theirs => {
+                let theirs_obj = theirs
+                    .objects
+                    .iter()
+                    .find(|obj| obj.file_id == resolution.file_id)
+                    .cloned();
+                ours.objects
+                    .retain(|obj| obj.file_id != resolution.file_id);
+                if let Some(obj) = theirs_obj {
+                    ours.objects.push(obj);
+                }
+            }
+            ConflictResolutionChoice::Custom(custom_yaml) => {
+                let parsed = parse_asset(custom_yaml.as_bytes(), MergeSide::Ours)?;
+                if let Some(custom_obj) = parsed
+                    .objects
+                    .into_iter()
+                    .find(|obj| obj.file_id == resolution.file_id)
+                {
+                    ours.objects
+                        .retain(|obj| obj.file_id != resolution.file_id);
+                    theirs
+                        .objects
+                        .retain(|obj| obj.file_id != resolution.file_id);
+                    ours.objects.push(custom_obj.clone());
+                    theirs.objects.push(custom_obj);
+                }
+            }
+        },
+    }
+    Ok(())
+}
+
+fn get_nested_node<'a>(node: &'a Node, path: &str) -> Option<&'a Node> {
+    let mut current = node;
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            continue;
+        }
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+fn set_nested_node(node: &mut Node, path: &str, value: Node) {
+    let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    set_nested_segments(node, &segments, value);
+}
+
+fn set_nested_segments(node: &mut Node, segments: &[&str], value: Node) {
+    let (first, rest) = match segments.split_first() {
+        Some(pair) => pair,
+        None => {
+            *node = value;
+            return;
+        }
+    };
+    if let Node::Mapping(entries) = node {
+        if rest.is_empty() {
+            if let Some((_, existing)) = entries.iter_mut().find(|(k, _)| k == first) {
+                *existing = value;
+            } else {
+                entries.push(((*first).to_string(), value));
+            }
+        } else if let Some((_, child)) = entries.iter_mut().find(|(k, _)| k == first) {
+            set_nested_segments(child, rest, value);
+        } else {
+            let mut child = Node::Mapping(Vec::new());
+            set_nested_segments(&mut child, rest, value);
+            entries.push(((*first).to_string(), child));
+        }
+    }
+}
+
+pub fn mcp_merge_asset(base: &str, ours: &str, theirs: &str) -> Result<MergeOutcome, MergeError> {
+    merge_bytes(base.as_bytes(), ours.as_bytes(), theirs.as_bytes())
+}
+
+pub fn mcp_semantic_diff_asset(old: &str, new: &str) -> Result<DiffOutcome, MergeError> {
+    semantic_diff_bytes(old.as_bytes(), new.as_bytes())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FileChangeOrigin {
+    Person,
+    AgentSession { session_id: String },
+    ExternalSourceControl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAccountabilityState {
+    Clean,
+    Unsaved,
+    ExternallyChanged,
+    Conflicted,
+    AccountedKeepUnsaved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileResolutionAction {
+    Save,
+    DiscardAndReload,
+    KeepUnsavedWork,
+    ResolveConflict { resolved_bytes: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedFileAccountability {
+    pub path: PathBuf,
+    pub state: FileAccountabilityState,
+    pub origins: Vec<FileChangeOrigin>,
+    pub unresolved_conflicts: Vec<MergeConflict>,
+    pub saved_bytes: Vec<u8>,
+    pub working_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceGuardError {
+    UnaccountedFiles {
+        files: Vec<TrackedFileAccountability>,
+    },
+    UntrackedFile {
+        path: PathBuf,
+    },
+    UnresolvedMergeConflict {
+        path: PathBuf,
+        conflicts: Vec<MergeConflict>,
+    },
+    MergeFailed {
+        path: PathBuf,
+        error: MergeError,
+    },
+}
+
+impl fmt::Display for WorkspaceGuardError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkspaceGuardError::UnaccountedFiles { files } => {
+                write!(
+                    formatter,
+                    "cannot close or reload: {} unsaved or conflicting file(s) unaccounted for",
+                    files.len()
+                )
+            }
+            WorkspaceGuardError::UntrackedFile { path } => {
+                write!(formatter, "file is not tracked in workspace guard: {}", path.display())
+            }
+            WorkspaceGuardError::UnresolvedMergeConflict { path, conflicts } => {
+                write!(
+                    formatter,
+                    "file {} still has {} unresolved conflict(s)",
+                    path.display(),
+                    conflicts.len()
+                )
+            }
+            WorkspaceGuardError::MergeFailed { path, error } => {
+                write!(formatter, "merge validation failed for {}: {error}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for WorkspaceGuardError {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceMergeGuard {
+    files: BTreeMap<PathBuf, TrackedFileAccountability>,
+}
+
+impl WorkspaceMergeGuard {
+    pub fn new() -> Self {
+        Self {
+            files: BTreeMap::new(),
+        }
+    }
+
+    pub fn record_saved(&mut self, path: &Path, bytes: &[u8]) {
+        self.files.insert(
+            path.to_path_buf(),
+            TrackedFileAccountability {
+                path: path.to_path_buf(),
+                state: FileAccountabilityState::Clean,
+                origins: Vec::new(),
+                unresolved_conflicts: Vec::new(),
+                saved_bytes: bytes.to_vec(),
+                working_bytes: bytes.to_vec(),
+            },
+        );
+    }
+
+    pub fn record_unsaved_edit(&mut self, path: &Path, origin: FileChangeOrigin, bytes: &[u8]) {
+        let entry = self
+            .files
+            .entry(path.to_path_buf())
+            .or_insert_with(|| TrackedFileAccountability {
+                path: path.to_path_buf(),
+                state: FileAccountabilityState::Clean,
+                origins: Vec::new(),
+                unresolved_conflicts: Vec::new(),
+                saved_bytes: Vec::new(),
+                working_bytes: Vec::new(),
+            });
+        entry.working_bytes = bytes.to_vec();
+        if !entry.origins.contains(&origin) {
+            entry.origins.push(origin);
+        }
+        if entry.state != FileAccountabilityState::Conflicted {
+            entry.state = FileAccountabilityState::Unsaved;
+        }
+    }
+
+    pub fn record_external_change_or_conflict(
+        &mut self,
+        path: &Path,
+        external_bytes: &[u8],
+        conflicts: Vec<MergeConflict>,
+    ) {
+        let entry = self
+            .files
+            .entry(path.to_path_buf())
+            .or_insert_with(|| TrackedFileAccountability {
+                path: path.to_path_buf(),
+                state: FileAccountabilityState::Clean,
+                origins: Vec::new(),
+                unresolved_conflicts: Vec::new(),
+                saved_bytes: external_bytes.to_vec(),
+                working_bytes: external_bytes.to_vec(),
+            });
+        if !entry
+            .origins
+            .contains(&FileChangeOrigin::ExternalSourceControl)
+        {
+            entry.origins.push(FileChangeOrigin::ExternalSourceControl);
+        }
+        if !conflicts.is_empty() {
+            entry.state = FileAccountabilityState::Conflicted;
+            entry.unresolved_conflicts = conflicts;
+        } else if entry.state == FileAccountabilityState::Unsaved
+            || entry.state == FileAccountabilityState::AccountedKeepUnsaved
+        {
+            let outcome = merge_bytes(&entry.saved_bytes, &entry.working_bytes, external_bytes);
+            match outcome {
+                Ok(merged) if merged.conflicts.is_empty() => {
+                    entry.state = FileAccountabilityState::ExternallyChanged;
+                }
+                Ok(merged) => {
+                    entry.state = FileAccountabilityState::Conflicted;
+                    entry.unresolved_conflicts = merged.conflicts;
+                }
+                Err(_) => {
+                    entry.state = FileAccountabilityState::Conflicted;
+                }
+            }
+        } else {
+            entry.state = FileAccountabilityState::ExternallyChanged;
+            entry.saved_bytes = external_bytes.to_vec();
+        }
+    }
+
+    pub fn unaccounted_files(&self) -> Vec<TrackedFileAccountability> {
+        self.files
+            .values()
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    FileAccountabilityState::Unsaved
+                        | FileAccountabilityState::ExternallyChanged
+                        | FileAccountabilityState::Conflicted
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn can_close_workspace(&self) -> Result<(), WorkspaceGuardError> {
+        let unaccounted = self.unaccounted_files();
+        if unaccounted.is_empty() {
+            Ok(())
+        } else {
+            Err(WorkspaceGuardError::UnaccountedFiles { files: unaccounted })
+        }
+    }
+
+    pub fn can_reload_file(&self, path: &Path) -> Result<(), WorkspaceGuardError> {
+        let entry = self
+            .files
+            .get(path)
+            .ok_or_else(|| WorkspaceGuardError::UntrackedFile {
+                path: path.to_path_buf(),
+            })?;
+        match entry.state {
+            FileAccountabilityState::Clean => Ok(()),
+            FileAccountabilityState::Unsaved
+            | FileAccountabilityState::ExternallyChanged
+            | FileAccountabilityState::Conflicted
+            | FileAccountabilityState::AccountedKeepUnsaved => {
+                Err(WorkspaceGuardError::UnaccountedFiles {
+                    files: vec![entry.clone()],
+                })
+            }
+        }
+    }
+
+    pub fn account_for_file(
+        &mut self,
+        path: &Path,
+        action: FileResolutionAction,
+    ) -> Result<TrackedFileAccountability, WorkspaceGuardError> {
+        let entry = self
+            .files
+            .get_mut(path)
+            .ok_or_else(|| WorkspaceGuardError::UntrackedFile {
+                path: path.to_path_buf(),
+            })?;
+        match action {
+            FileResolutionAction::Save => {
+                if !entry.unresolved_conflicts.is_empty() {
+                    return Err(WorkspaceGuardError::UnresolvedMergeConflict {
+                        path: path.to_path_buf(),
+                        conflicts: entry.unresolved_conflicts.clone(),
+                    });
+                }
+                entry.saved_bytes = entry.working_bytes.clone();
+                entry.origins.clear();
+                entry.state = FileAccountabilityState::Clean;
+            }
+            FileResolutionAction::DiscardAndReload => {
+                entry.working_bytes = entry.saved_bytes.clone();
+                entry.origins.clear();
+                entry.unresolved_conflicts.clear();
+                entry.state = FileAccountabilityState::Clean;
+            }
+            FileResolutionAction::KeepUnsavedWork => {
+                if !entry.unresolved_conflicts.is_empty() {
+                    return Err(WorkspaceGuardError::UnresolvedMergeConflict {
+                        path: path.to_path_buf(),
+                        conflicts: entry.unresolved_conflicts.clone(),
+                    });
+                }
+                entry.state = FileAccountabilityState::AccountedKeepUnsaved;
+            }
+            FileResolutionAction::ResolveConflict { resolved_bytes } => {
+                let parsed = parse_asset(&resolved_bytes, MergeSide::Ours).map_err(|error| {
+                    WorkspaceGuardError::MergeFailed {
+                        path: path.to_path_buf(),
+                        error,
+                    }
+                })?;
+                let names = object_names(&parsed.objects);
+                let paths = build_paths(&parsed.objects, &names);
+                let dangling = unresolved_references(&parsed.objects, &paths);
+                if !dangling.is_empty() {
+                    return Err(WorkspaceGuardError::MergeFailed {
+                        path: path.to_path_buf(),
+                        error: MergeError::UnresolvedReferences {
+                            references: dangling,
+                        },
+                    });
+                }
+                entry.saved_bytes = resolved_bytes.clone();
+                entry.working_bytes = resolved_bytes;
+                entry.unresolved_conflicts.clear();
+                entry.origins.clear();
+                entry.state = FileAccountabilityState::Clean;
+            }
+        }
+        Ok(entry.clone())
+    }
+}
+
+

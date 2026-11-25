@@ -6,7 +6,12 @@ pub mod fbx;
 pub mod gltf;
 pub mod obj;
 
-pub use fbx::{import_fbx, import_fbx_bytes, FbxImportError};
+pub use fbx::{
+    import_fbx, import_fbx_bytes, import_fbx_with_settings, FbxAnimationCompression,
+    FbxAnimationType, FbxAvatarBone, FbxClipDefinition, FbxExtractedMaterial, FbxImportBundle,
+    FbxImportError, FbxImportSettings, FbxImportedAvatar, FbxImportedClip, FbxKeyframe,
+    FbxMaterialLocation,
+};
 pub use gltf::import_gltf;
 pub use obj::{import_obj, import_obj_bytes};
 

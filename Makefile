@@ -82,7 +82,7 @@ dotnet-build: runtime-build
 	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND)
 
 dotnet-format:
-	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) dotnet format bridge/Unitas.sln --verify-no-changes --no-restore
+	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) dotnet format whitespace bridge/Unitas.sln --verify-no-changes --no-restore
 
 dotnet-test: runtime-build
 	@$(MAKE) --no-print-directory dotnet-test-run

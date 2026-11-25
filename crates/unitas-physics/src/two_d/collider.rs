@@ -68,7 +68,7 @@ pub struct ColliderDesc2D {
     pub offset: [f32; 2],
     pub rotation: f32,
     pub is_trigger: bool,
-    pub material: PhysicsMaterial2D,
+    pub material: Option<PhysicsMaterial2D>,
     pub used_by_effector: bool,
     pub used_by_composite: bool,
     pub game_object: EntityId,
@@ -89,7 +89,7 @@ impl Default for ColliderDesc2D {
             offset: [0.0, 0.0],
             rotation: 0.0,
             is_trigger: false,
-            material: PhysicsMaterial2D::default(),
+            material: None,
             used_by_effector: false,
             used_by_composite: false,
             game_object: EntityId::new(0),
@@ -157,7 +157,7 @@ impl ColliderDesc2D {
     }
 
     pub fn with_material(mut self, material: PhysicsMaterial2D) -> Self {
-        self.material = material;
+        self.material = Some(material);
         self
     }
 
@@ -196,6 +196,7 @@ pub struct Collider2D {
     pub rotation: f32,
     pub is_trigger: bool,
     pub material: PhysicsMaterial2D,
+    pub uses_default_material: bool,
     pub used_by_effector: bool,
     pub used_by_composite: bool,
     pub game_object: EntityId,
@@ -205,17 +206,24 @@ pub struct Collider2D {
     pub active: bool,
     pub min_depth: f32,
     pub max_depth: f32,
+    pub(crate) query_offset: [f32; 2],
+    pub(crate) query_rotation: f32,
 }
 
 impl Collider2D {
     pub fn from_desc(id: ColliderId2D, desc: ColliderDesc2D) -> Self {
+        let (material, uses_default_material) = match desc.material {
+            Some(material) => (material, false),
+            None => (PhysicsMaterial2D::default(), true),
+        };
         Self {
             id,
             shape: desc.shape,
             offset: desc.offset,
             rotation: desc.rotation,
             is_trigger: desc.is_trigger,
-            material: desc.material,
+            material,
+            uses_default_material,
             used_by_effector: desc.used_by_effector,
             used_by_composite: desc.used_by_composite,
             game_object: desc.game_object,
@@ -225,6 +233,8 @@ impl Collider2D {
             active: desc.active,
             min_depth: desc.min_depth,
             max_depth: desc.max_depth,
+            query_offset: desc.offset,
+            query_rotation: desc.rotation,
         }
     }
 }

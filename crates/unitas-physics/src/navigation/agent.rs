@@ -1,34 +1,83 @@
+use std::collections::BTreeMap;
+
 use unitas_core::EntityId;
 
-use crate::body::{add, rotate_vector, subtract, vector_length, IDENTITY_ROTATION};
-use crate::navigation::mesh::ALL_AREAS_MASK;
+use crate::body::{add, distance, dot, rotate_vector, subtract, vector_length, IDENTITY_ROTATION};
+use crate::navigation::mesh::{area_matches_mask, ALL_AREAS_MASK};
 use crate::navigation::path::PathLinkTraversal;
 use crate::navigation::{
     NavMesh, NavMeshLink, NavigationError, PathQueryResult, PathQueryStatus, UnreachableReason,
 };
 
 const DEFAULT_SPEED: f64 = 3.5;
+const DEFAULT_RADIUS: f64 = 0.5;
+const DEFAULT_AVOIDANCE_PRIORITY: u32 = 50;
 const POSITION_EPSILON: f64 = 1e-9;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NavMeshQueryFilter {
+    pub area_mask: u32,
+    area_costs: BTreeMap<u32, f64>,
+}
+
+impl Default for NavMeshQueryFilter {
+    fn default() -> Self {
+        Self::new(ALL_AREAS_MASK)
+    }
+}
+
+impl NavMeshQueryFilter {
+    pub fn new(area_mask: u32) -> Self {
+        Self {
+            area_mask,
+            area_costs: BTreeMap::new(),
+        }
+    }
+
+    pub fn set_area_cost(&mut self, area: u32, cost: f64) -> Result<(), NavigationError> {
+        if !cost.is_finite() || cost <= 0.0 {
+            return Err(NavigationError::InvalidAreaCost { area, cost });
+        }
+        self.area_costs.insert(area, cost);
+        Ok(())
+    }
+
+    pub fn get_area_cost(&self, area: u32) -> Option<f64> {
+        self.area_costs.get(&area).copied()
+    }
+
+    pub fn area_costs(&self) -> &BTreeMap<u32, f64> {
+        &self.area_costs
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct NavMeshAgent {
     pub speed: f64,
+    pub radius: f64,
+    pub avoidance_priority: u32,
+    pub is_stopped: bool,
     pub update_position: bool,
     pub update_rotation: bool,
+    pub update_up_axis: bool,
     pub auto_traverse_off_mesh_link: bool,
     pub auto_repath: bool,
     pub area_mask: u32,
+    area_costs: BTreeMap<u32, f64>,
     entity: EntityId,
     name: String,
     position: [f64; 3],
     next_position: [f64; 3],
     rotation: [f64; 4],
     velocity: [f64; 3],
+    desired_velocity: [f64; 3],
     destination: Option<[f64; 3]>,
     path_status: Option<PathQueryStatus>,
+    unreachable_reason: Option<UnreachableReason>,
     corners: Vec<[f64; 3]>,
     corner_index: usize,
     link_traversals: Vec<PathLinkTraversal>,
+    path_polygons: Vec<usize>,
     active_off_mesh_link: Option<NavMeshLink>,
     waiting_on_off_mesh_link: bool,
 }
@@ -37,22 +86,30 @@ impl NavMeshAgent {
     pub fn new(entity: EntityId, name: impl Into<String>, position: [f64; 3]) -> Self {
         Self {
             speed: DEFAULT_SPEED,
+            radius: DEFAULT_RADIUS,
+            avoidance_priority: DEFAULT_AVOIDANCE_PRIORITY,
+            is_stopped: false,
             update_position: true,
             update_rotation: true,
+            update_up_axis: true,
             auto_traverse_off_mesh_link: true,
             auto_repath: true,
             area_mask: ALL_AREAS_MASK,
+            area_costs: BTreeMap::new(),
             entity,
             name: name.into(),
             position,
             next_position: position,
             rotation: IDENTITY_ROTATION,
             velocity: [0.0; 3],
+            desired_velocity: [0.0; 3],
             destination: None,
             path_status: None,
+            unreachable_reason: None,
             corners: Vec::new(),
             corner_index: 0,
             link_traversals: Vec::new(),
+            path_polygons: Vec::new(),
             active_off_mesh_link: None,
             waiting_on_off_mesh_link: false,
         }
@@ -90,6 +147,10 @@ impl NavMeshAgent {
         self.velocity
     }
 
+    pub fn desired_velocity(&self) -> [f64; 3] {
+        self.desired_velocity
+    }
+
     pub fn destination(&self) -> Option<[f64; 3]> {
         self.destination
     }
@@ -98,8 +159,67 @@ impl NavMeshAgent {
         self.path_status
     }
 
+    pub fn unreachable_reason(&self) -> Option<UnreachableReason> {
+        self.unreachable_reason
+    }
+
+    pub fn corners(&self) -> &[[f64; 3]] {
+        &self.corners
+    }
+
+    pub fn remaining_distance(&self) -> f64 {
+        if !self.has_path() || self.corner_index >= self.corners.len() {
+            return 0.0;
+        }
+        let mut total = distance(self.next_position, self.corners[self.corner_index]);
+        for idx in self.corner_index..(self.corners.len() - 1) {
+            total += distance(self.corners[idx], self.corners[idx + 1]);
+        }
+        total
+    }
+
+    pub fn set_area_cost(&mut self, area: u32, cost: f64) -> Result<(), NavigationError> {
+        if !cost.is_finite() || cost <= 0.0 {
+            return Err(NavigationError::InvalidAreaCost { area, cost });
+        }
+        self.area_costs.insert(area, cost);
+        Ok(())
+    }
+
+    pub fn get_area_cost(&self, navmesh: &NavMesh, area: u32) -> f64 {
+        self.area_costs
+            .get(&area)
+            .copied()
+            .unwrap_or_else(|| navmesh.area_cost(area))
+    }
+
+    pub fn reset_path(&mut self) {
+        self.destination = None;
+        self.path_status = None;
+        self.unreachable_reason = None;
+        self.corners.clear();
+        self.corner_index = 0;
+        self.link_traversals.clear();
+        self.path_polygons.clear();
+        self.active_off_mesh_link = None;
+        self.waiting_on_off_mesh_link = false;
+        self.velocity = [0.0; 3];
+        self.desired_velocity = [0.0; 3];
+    }
+
     pub fn has_path(&self) -> bool {
         self.corner_index < self.corners.len() || self.waiting_on_off_mesh_link
+    }
+
+    pub fn is_path_stale(&self, navmesh: &NavMesh) -> bool {
+        self.has_invalidated_link(navmesh)
+            || self.path_polygons.iter().any(|poly| {
+                navmesh.is_polygon_carved(*poly)
+                    || navmesh
+                        .polygons()
+                        .get(*poly)
+                        .is_none_or(|p| !area_matches_mask(p.area, self.area_mask))
+            })
     }
 
     pub fn is_on_navmesh(&self, navmesh: &NavMesh) -> bool {
@@ -153,19 +273,34 @@ impl NavMeshAgent {
                 name: self.name.clone(),
             });
         }
-        let result = navmesh.find_path_with_mask(self.next_position, target, self.area_mask);
+        let result = navmesh.find_path_with_costs(
+            self.next_position,
+            target,
+            self.area_mask,
+            &self.area_costs,
+        );
         match result.status {
             PathQueryStatus::Complete | PathQueryStatus::Partial => {
                 self.destination = Some(target);
                 self.path_status = Some(result.status);
+                self.unreachable_reason = result.unreachable_reason;
                 self.corners = result.corners.clone();
                 self.corner_index = usize::from(self.corners.len() > 1);
                 self.link_traversals = result.link_traversals.clone();
+                self.path_polygons = result.polygons.clone();
                 self.active_off_mesh_link = None;
                 self.waiting_on_off_mesh_link = false;
                 Ok(result)
             }
             PathQueryStatus::Invalid => {
+                self.path_status = Some(PathQueryStatus::Invalid);
+                self.unreachable_reason = result.unreachable_reason;
+                self.corners.clear();
+                self.corner_index = 0;
+                self.link_traversals.clear();
+                self.path_polygons.clear();
+                self.active_off_mesh_link = None;
+                self.waiting_on_off_mesh_link = false;
                 if result.unreachable_reason == Some(UnreachableReason::StartNotOnNavMesh) {
                     Err(NavigationError::AgentOffNavMesh {
                         entity: self.entity,
@@ -184,15 +319,20 @@ impl NavMeshAgent {
         }
         self.position = position;
         self.next_position = position;
-        self.velocity = [0.0; 3];
-        self.destination = None;
-        self.path_status = None;
-        self.corners.clear();
-        self.corner_index = 0;
-        self.link_traversals.clear();
-        self.active_off_mesh_link = None;
-        self.waiting_on_off_mesh_link = false;
+        self.reset_path();
         Ok(())
+    }
+
+    pub fn warp_on_navmesh(&mut self, navmesh: &NavMesh, position: [f64; 3]) -> bool {
+        if !position.iter().all(|component| component.is_finite()) {
+            return false;
+        }
+        let Some(hit) = navmesh.sample_position(position, self.radius.max(0.5), self.area_mask)
+        else {
+            return false;
+        };
+        let _ = self.warp(hit.position);
+        true
     }
 
     pub fn step_with_navmesh(&mut self, navmesh: &NavMesh, delta_seconds: f64) {
@@ -212,7 +352,7 @@ impl NavMeshAgent {
         let needs_repath = self.path_status == Some(PathQueryStatus::Partial)
             || (!self.has_path()
                 && vector_length(subtract(target, self.next_position)) > POSITION_EPSILON)
-            || self.has_invalidated_link(navmesh);
+            || self.is_path_stale(navmesh);
         if needs_repath {
             let _ = self.set_destination(navmesh, target);
         }
@@ -246,12 +386,9 @@ impl NavMeshAgent {
         {
             return;
         }
-        if self.waiting_on_off_mesh_link {
+        if self.is_stopped || self.waiting_on_off_mesh_link || !self.has_path() {
             self.velocity = [0.0; 3];
-            return;
-        }
-        if !self.has_path() {
-            self.velocity = [0.0; 3];
+            self.desired_velocity = [0.0; 3];
             return;
         }
 
@@ -313,12 +450,116 @@ impl NavMeshAgent {
             displacement[1] / delta_seconds,
             displacement[2] / delta_seconds,
         ];
+        self.desired_velocity = self.velocity;
         if self.update_position {
             self.position = current;
         }
         if self.update_rotation {
             if let Some(rot) = look_rotation_xz(displacement) {
                 self.rotation = rot;
+            }
+        }
+    }
+
+    pub fn step_agents_with_avoidance(
+        agents: &mut [NavMeshAgent],
+        navmesh: &NavMesh,
+        delta_seconds: f64,
+    ) {
+        if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
+            return;
+        }
+        let previous_positions: Vec<[f64; 3]> =
+            agents.iter().map(NavMeshAgent::next_position).collect();
+        for agent in agents.iter_mut() {
+            agent.step_with_navmesh(navmesh, delta_seconds);
+        }
+
+        let count = agents.len();
+        for i in 0..count {
+            for j in (i + 1)..count {
+                let pos_i = agents[i].next_position;
+                let pos_j = agents[j].next_position;
+                let min_dist = agents[i].radius.max(0.0) + agents[j].radius.max(0.0);
+                if min_dist <= POSITION_EPSILON {
+                    continue;
+                }
+                let mut diff = [pos_j[0] - pos_i[0], 0.0, pos_j[2] - pos_i[2]];
+                let mut dist = vector_length(diff);
+                if dist >= min_dist {
+                    continue;
+                }
+                if dist <= POSITION_EPSILON {
+                    let travel_i = subtract(pos_i, previous_positions[i]);
+                    let len_i = (travel_i[0] * travel_i[0] + travel_i[2] * travel_i[2]).sqrt();
+                    diff = if len_i > POSITION_EPSILON {
+                        [-travel_i[2] / len_i, 0.0, travel_i[0] / len_i]
+                    } else {
+                        [0.0, 0.0, 1.0]
+                    };
+                    dist = 0.0;
+                } else {
+                    diff = [diff[0] / dist, 0.0, diff[2] / dist];
+                }
+                let overlap = min_dist - dist;
+                let prio_i = agents[i].avoidance_priority;
+                let prio_j = agents[j].avoidance_priority;
+                let (weight_i, weight_j) = if prio_i < prio_j {
+                    (0.0, 1.0)
+                } else if prio_j < prio_i {
+                    (1.0, 0.0)
+                } else {
+                    (0.5, 0.5)
+                };
+
+                let lateral = [-diff[2], 0.0, diff[0]];
+                let vel_i = subtract(pos_i, previous_positions[i]);
+                let vel_j = subtract(pos_j, previous_positions[j]);
+                let head_on = dot(vel_i, diff) > 0.0 && dot(vel_j, diff) < 0.0;
+                let push_dir = if head_on {
+                    [
+                        diff[0] * 0.6 + lateral[0] * 0.8,
+                        0.0,
+                        diff[2] * 0.6 + lateral[2] * 0.8,
+                    ]
+                } else {
+                    diff
+                };
+                let push_len = vector_length(push_dir).max(POSITION_EPSILON);
+                let unit_push = [
+                    push_dir[0] / push_len,
+                    0.0,
+                    push_dir[2] / push_len,
+                ];
+
+                if weight_i > 0.0 {
+                    let candidate_i = [
+                        agents[i].next_position[0] - unit_push[0] * overlap * weight_i,
+                        agents[i].next_position[1],
+                        agents[i].next_position[2] - unit_push[2] * overlap * weight_i,
+                    ];
+                    apply_avoidance_displacement(
+                        &mut agents[i],
+                        navmesh,
+                        previous_positions[i],
+                        candidate_i,
+                        delta_seconds,
+                    );
+                }
+                if weight_j > 0.0 {
+                    let candidate_j = [
+                        agents[j].next_position[0] + unit_push[0] * overlap * weight_j,
+                        agents[j].next_position[1],
+                        agents[j].next_position[2] + unit_push[2] * overlap * weight_j,
+                    ];
+                    apply_avoidance_displacement(
+                        &mut agents[j],
+                        navmesh,
+                        previous_positions[j],
+                        candidate_j,
+                        delta_seconds,
+                    );
+                }
             }
         }
     }
@@ -342,6 +583,39 @@ impl NavMeshAgent {
             if !self.auto_traverse_off_mesh_link {
                 self.waiting_on_off_mesh_link = true;
             }
+        }
+    }
+}
+
+fn apply_avoidance_displacement(
+    agent: &mut NavMeshAgent,
+    navmesh: &NavMesh,
+    previous: [f64; 3],
+    candidate: [f64; 3],
+    delta_seconds: f64,
+) {
+    let resolved = if navmesh.polygon_at(candidate).is_some() {
+        candidate
+    } else if let Some(hit) =
+        navmesh.sample_position(candidate, agent.radius.max(1.0), agent.area_mask)
+    {
+        hit.position
+    } else {
+        candidate
+    };
+    agent.next_position = resolved;
+    let displacement = subtract(resolved, previous);
+    agent.velocity = [
+        displacement[0] / delta_seconds,
+        displacement[1] / delta_seconds,
+        displacement[2] / delta_seconds,
+    ];
+    if agent.update_position {
+        agent.position = resolved;
+    }
+    if agent.update_rotation {
+        if let Some(rot) = look_rotation_xz(displacement) {
+            agent.rotation = rot;
         }
     }
 }

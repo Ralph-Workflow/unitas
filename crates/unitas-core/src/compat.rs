@@ -146,7 +146,7 @@ pub const SUPPORTED_PACKAGE_MATRIX: &[PackageMatrixEntry] = &[
         state: CompatibilityState::PartiallySupported,
         owning_spec: "rendering-and-animation.md",
         owning_feature_id: "REN-006",
-        state_notes: "Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported",
+        state_notes: "Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported; a graph that uses a node unitas cannot represent is reported per graph and node under REN-006",
     },
     PackageMatrixEntry {
         package_id: "com.unity.postprocessing",
@@ -546,6 +546,15 @@ pub fn assess_package(
     resolved_version: &str,
     is_locally_modified_embedded: bool,
 ) -> AssessedPackage {
+    assess_package_for_baseline(package_id, resolved_version, is_locally_modified_embedded, false)
+}
+
+pub fn assess_package_for_baseline(
+    package_id: &str,
+    resolved_version: &str,
+    is_locally_modified_embedded: bool,
+    migrated_from_earlier_lts: bool,
+) -> AssessedPackage {
     if is_locally_modified_embedded {
         return AssessedPackage {
             package_id: package_id.to_string(),
@@ -580,9 +589,7 @@ pub fn assess_package(
                 .to_string(),
         };
     };
-    if is_preview_or_experimental_version(resolved_version)
-        || !version_matches_line(resolved_version, entry.version_line)
-    {
+    if is_preview_or_experimental_version(resolved_version) {
         return AssessedPackage {
             package_id: package_id.to_string(),
             resolved_version: resolved_version.to_string(),
@@ -596,6 +603,32 @@ pub fn assess_package(
             ),
         };
     }
+    let matches_direct = version_matches_line(resolved_version, entry.version_line);
+    let matches_migrated = !matches_direct
+        && migrated_from_earlier_lts
+        && version_migrates_from_earlier_lts_line(resolved_version, entry.version_line);
+    if !matches_direct && !matches_migrated {
+        return AssessedPackage {
+            package_id: package_id.to_string(),
+            resolved_version: resolved_version.to_string(),
+            tier: Some(entry.tier),
+            state: CompatibilityState::Unknown,
+            owning_spec: Some(entry.owning_spec.to_string()),
+            owning_feature_id: Some(entry.owning_feature_id.to_string()),
+            notes: format!(
+                "version {resolved_version} is outside the Unity 2022.3 LTS matrix line ({})",
+                entry.version_line
+            ),
+        };
+    }
+    let notes = if matches_migrated {
+        format!(
+            "migrated under SER-005 and assessed against Unity 2022.3 LTS matrix line ({}); {}",
+            entry.version_line, entry.state_notes
+        )
+    } else {
+        entry.state_notes.to_string()
+    };
     AssessedPackage {
         package_id: package_id.to_string(),
         resolved_version: resolved_version.to_string(),
@@ -603,8 +636,23 @@ pub fn assess_package(
         state: entry.state,
         owning_spec: Some(entry.owning_spec.to_string()),
         owning_feature_id: Some(entry.owning_feature_id.to_string()),
-        notes: entry.state_notes.to_string(),
+        notes,
     }
+}
+
+fn version_migrates_from_earlier_lts_line(version: &str, line: &str) -> bool {
+    let Some(target_prefix) = line.strip_suffix(".x") else {
+        return false;
+    };
+    let target_major = match target_prefix.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+        Some(v) => v,
+        None => return false,
+    };
+    let resolved_major = match version.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+        Some(v) => v,
+        None => return false,
+    };
+    resolved_major > 0 && resolved_major < target_major
 }
 
 fn is_preview_or_experimental_version(version: &str) -> bool {
@@ -826,10 +874,11 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 notes: "built-in engine module".to_string(),
             }
         } else {
-            assess_package(
+            assess_package_for_baseline(
                 &pkg.package_id,
                 &pkg.version,
                 pkg.is_locally_modified_embedded,
+                migrated_from_earlier_lts,
             )
         };
         let feature_id = assessed
@@ -837,6 +886,17 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
             .clone()
             .unwrap_or_else(|| "PRJ-006".to_string());
         let tier = assessed.tier.unwrap_or(Tier::Native);
+        let relied_upon_unity_differences = if tier == Tier::Familiar {
+            lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
+                entry
+                    .differences
+                    .iter()
+                    .map(|diff| (*diff).to_string())
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
         findings.push(Finding {
             feature_id,
             tier,
@@ -848,7 +908,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 object_name: Some(format!("{}@{}", pkg.package_id, pkg.version)),
             },
             behavior: format!("package {} ({})", pkg.package_id, pkg.version),
-            relied_upon_unity_differences: Vec::new(),
+            relied_upon_unity_differences,
             observable_consequence: assessed.notes.clone(),
             conditions: vec!["package resolved in project manifest".to_string()],
             related_findings: Vec::new(),
@@ -867,7 +927,10 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 |entry| entry.owning_feature_id.to_string(),
             )
         });
-        let tier = asset.tier.unwrap_or(Tier::Native);
+        let tier = asset
+            .tier
+            .or_else(|| lookup_catalog_feature(&feature_id).map(|cat| cat.tier))
+            .unwrap_or(Tier::Native);
         let consequence = asset.observable_consequence.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || match state {
@@ -896,13 +959,24 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 }
             }
         }
+        let relied_upon_unity_differences = if tier == Tier::Familiar {
+            lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
+                entry
+                    .differences
+                    .iter()
+                    .map(|diff| (*diff).to_string())
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
         findings.push(Finding {
             feature_id,
             tier,
             state,
             content: asset.content.clone(),
             behavior: format!("asset family {}", asset.family),
-            relied_upon_unity_differences: Vec::new(),
+            relied_upon_unity_differences,
             observable_consequence: consequence,
             conditions: vec!["asset is present in project".to_string()],
             related_findings: Vec::new(),
@@ -953,7 +1027,17 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 }
             }
         }
-        findings.push(extra.clone());
+        let mut enriched = extra.clone();
+        if enriched.tier == Tier::Familiar && enriched.relied_upon_unity_differences.is_empty() {
+            if let Some(entry) = lookup_familiar_behavior_differences(&enriched.feature_id) {
+                enriched.relied_upon_unity_differences = entry
+                    .differences
+                    .iter()
+                    .map(|diff| (*diff).to_string())
+                    .collect();
+            }
+        }
+        findings.push(enriched);
     }
 
     let mut present_supported_features: Vec<String> = Vec::new();
@@ -1552,6 +1636,447 @@ pub fn lookup_catalog_feature(feature_id: &str) -> Option<&'static CatalogFeatur
         .find(|entry| entry.feature_id == feature_id)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FamiliarBehaviorDifferenceEntry {
+    pub feature_id: &'static str,
+    pub owning_spec: &'static str,
+    pub differences: &'static [&'static str],
+}
+
+pub const FAMILIAR_BEHAVIOR_DIFFERENCES: &[FamiliarBehaviorDifferenceEntry] = &[
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "ANI-001",
+        owning_spec: "rendering-and-animation.md",
+        differences: &[
+            "AnimationClip::sample caps event firing across multi-cycle steps in a single frame to at most 64 loop/ping-pong cycles (max_cycles = 64), whereas Unity 2022.3 LTS does not specify a 64-cycle cap.",
+            "PropertyCurve::Quaternion evaluation and pose blending use shortest-path component-aligned Hermite/Linear interpolation followed by unit normalization (nlerp_shortest) rather than Unity's internal slerp/squad curve resampling.",
+            "StateMotion::BlendTree2D computes child blend weights via inverse-squared Euclidean distance in (parameter_x, parameter_y) space across SimpleDirectional, FreeformDirectional, and FreeformCartesian modes rather than polar-angle/gradient-band Delaunay triangulation.",
+            "Within a single frame, animation events across different animators fire in deterministic ascending EntityId evaluation order rather than native job-thread completion order.",
+            "Controller default property values for Write Defaults are captured from the controller's curves evaluated at t = 0.0 upon binding rather than snapshotting live scene values at OnEnable.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "ANI-002",
+        owning_spec: "rendering-and-animation.md",
+        differences: &[
+            "Humanoid muscle space models 19 HumanBones (7 required core bones) and 17 primary normalized MuscleChannel axes with analytical twist extraction and linear hips_scale root retargeting rather than Unity's 55-muscle + finger-DoF solver.",
+            "OnAnimatorIK limb solving uses a deterministic closed-form analytical two-bone law-of-cosines solver (solve_two_bone_ik) with pole-vector projection and clamped slerp look-at distribution rather than iterative cyclic coordinate descent (CCD).",
+            "PlayableGraph invokes ScriptPlayable callbacks in deterministic ascending node-creation index order among reachable nodes (all PrepareFrame before any ProcessFrame) rather than depth-first topological traversal from outputs.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "CIN-001",
+        owning_spec: "rendering-and-animation.md",
+        differences: &[
+            "TimelineWorld::drive_animation drives bound AnimationWorld entities by gating animator playback speed and tracking clip local time rather than constructing an internal AnimationLayerMixerPlayable sub-graph per track.",
+            "CinemachineWorld resolves equal-priority active virtual cameras deterministically by a monotonically increasing activation counter and reports normalized linear blend progress elapsed / duration rather than custom AnimationCurve tangents.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "REN-004",
+        owning_spec: "rendering-and-animation.md",
+        differences: &[
+            "Particle emission and shape sampling use a platform-independent SplitMix64 PRNG with Marsaglia sphere rejection and Newton-Raphson cube root so fixed seeds produce identical particle counts and positions across all hosts/targets, whereas numeric sample positions for a given seed differ from Unity 2022.3 LTS's internal generator.",
+            "ParticleShape::Mesh samples uniformly inside the mesh's axis-aligned bounding box rather than barycentric triangle/vertex/edge surface weighting.",
+            "Property-over-lifetime modules evaluate two-keyframe linear curves (Curve<N>) at normalized age age / lifetime.",
+            "3D and 2D particle collision and trigger queries evaluate sphere/circle overlaps of radius particle.size * 0.5 with radial contact normals rather than sub-step raycast trajectory deflection.",
+            "ParticleSystemForceField evaluates Sphere and Box containment with directional, gravity, radial gravity_focus, and linear drag forces without 3D vector-field textures or curl-noise tables.",
+            "Visual Effect Graph (com.unity.visualeffectgraph) is excluded and reported as Unsupported under REN-004.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "PHY-004",
+        owning_spec: "physics-navigation-terrain.md",
+        differences: &[
+            "WheelCollider uses unitas's deterministic sphere-cast suspension and piecewise-linear slip solver rather than PhysX 4.1's vehicle SDK solver; trajectories are repeatable per target but not bit-for-bit identical to Unity 2022.3 LTS.",
+            "ArticulationBody steps hierarchical Revolute and Prismatic joint chains deterministically in reduced coordinates with PD target drives clamped to [lower, upper].",
+            "Cloth simulates a deterministic Verlet particle grid with distance constraints, gravity, damping, ClearTransformMotion, and collision resolution exclusively against assigned ClothCollider capsules.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "NAV-001",
+        owning_spec: "physics-navigation-terrain.md",
+        differences: &[
+            "Calling SetDestination or path-dependent members on an off-NavMesh NavMeshAgent (isOnNavMesh == false) raises an explicit error naming the agent and member (NavigationError::AgentOffNavMesh) rather than failing silently.",
+            "Path queries and agents expose structured UnreachableReason (StartNotOnNavMesh, GoalNotOnNavMesh, NoRouteToGoal) alongside PathComplete, PathPartial, and PathInvalid.",
+            "Saved navigation data that no longer matches its source geometry or settings is marked and reported is_stale() == true and is never silently rebuilt on entering play mode.",
+            "Navigation mesh building, NavMeshObstacle polygon carving, portal A* pathfinding, and reciprocal priority-weighted avoidance use unitas's deterministic solver rather than Recast/Detour's internal voxel/crowd numeric output.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "ENV-001",
+        owning_spec: "physics-navigation-terrain.md",
+        differences: &[
+            "SpeedTree 7 (.spm) and SpeedTree 8 (.st) geometry, materials, and imported mesh LODs are supported (PartiallySupported), whereas SpeedTree wind animation is excluded and reported on each affected prototype (wind_excluded == true) while Tree Creator trees and terrain grass wave with WindZone.",
+            "World positions remain 32-bit single-precision without silent origin rebasing; objects at >= 100,000 units report a structured LargeWorldImpact identifying the affected systems (physics, rendering, animation, navigation).",
+        ],
+    },
+];
+
+pub fn lookup_familiar_behavior_differences(
+    feature_id: &str,
+) -> Option<&'static FamiliarBehaviorDifferenceEntry> {
+    FAMILIAR_BEHAVIOR_DIFFERENCES
+        .iter()
+        .find(|entry| entry.feature_id == feature_id)
+}
+
+pub fn build_semantic_finding(
+    feature_id: &str,
+    state: CompatibilityState,
+    content: ContentIdentity,
+    behavior: &str,
+    cmp_001_benchmark_id: &str,
+    found_difference: Option<&str>,
+) -> Result<Finding, FindingSubmissionError> {
+    let trimmed_id = feature_id.trim();
+    if trimmed_id.is_empty() {
+        return Err(FindingSubmissionError::EmptyFeatureId);
+    }
+    let Some(catalog_entry) = lookup_catalog_feature(trimmed_id) else {
+        return Err(FindingSubmissionError::UnknownCatalogFeatureId {
+            feature_id: trimmed_id.to_string(),
+        });
+    };
+    if catalog_entry.tier != Tier::Semantic {
+        return Err(FindingSubmissionError::CatalogTierMismatch {
+            feature_id: trimmed_id.to_string(),
+            expected: catalog_entry.tier,
+            submitted: Tier::Semantic,
+        });
+    }
+    let benchmark = cmp_001_benchmark_id.trim();
+    if benchmark.is_empty() {
+        return Err(FindingSubmissionError::EmptyObservableConsequence);
+    }
+    let consequence = match found_difference {
+        Some(diff) if !diff.trim().is_empty() => format!(
+            "assessed against Unity 2022.3 LTS reference ({}) and backed by CMP-001 benchmark {}; difference: {}",
+            catalog_entry.owning_spec,
+            benchmark,
+            diff.trim()
+        ),
+        _ => format!(
+            "matches Unity 2022.3 LTS documented observable behavior ({}) as verified by CMP-001 benchmark {}",
+            catalog_entry.owning_spec, benchmark
+        ),
+    };
+    let mut input = FindingInput::new(
+        trimmed_id,
+        Tier::Semantic,
+        state,
+        content,
+        behavior,
+        consequence,
+    )
+    .with_condition(format!("reference: Unity 2022.3 LTS ({})", catalog_entry.owning_spec))
+    .with_condition(format!("benchmark: {benchmark}"));
+    if let Some(diff) = found_difference {
+        if !diff.trim().is_empty() {
+            input = input.with_unity_difference(diff.trim());
+        }
+    }
+    validate_finding_input(input, &[])
+}
+
+pub fn build_familiar_finding(
+    feature_id: &str,
+    state: CompatibilityState,
+    content: ContentIdentity,
+    behavior: &str,
+    additional_differences: &[&str],
+) -> Result<Finding, FindingSubmissionError> {
+    let trimmed_id = feature_id.trim();
+    if trimmed_id.is_empty() {
+        return Err(FindingSubmissionError::EmptyFeatureId);
+    }
+    let Some(catalog_entry) = lookup_catalog_feature(trimmed_id) else {
+        return Err(FindingSubmissionError::UnknownCatalogFeatureId {
+            feature_id: trimmed_id.to_string(),
+        });
+    };
+    if catalog_entry.tier != Tier::Familiar {
+        return Err(FindingSubmissionError::CatalogTierMismatch {
+            feature_id: trimmed_id.to_string(),
+            expected: catalog_entry.tier,
+            submitted: Tier::Familiar,
+        });
+    }
+    let mut differences: Vec<String> = lookup_familiar_behavior_differences(trimmed_id)
+        .map(|entry| {
+            entry
+                .differences
+                .iter()
+                .map(|diff| (*diff).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    for extra in additional_differences {
+        let trimmed = extra.trim();
+        if !trimmed.is_empty() && !differences.iter().any(|existing| existing == trimmed) {
+            differences.push(trimmed.to_string());
+        }
+    }
+    let consequence = format!(
+        "behavior defined by {} ({}) and listed in the AUT-006 API reference with {} Unity 2022.3 LTS difference(s)",
+        catalog_entry.owning_spec,
+        trimmed_id,
+        differences.len()
+    );
+    let mut input = FindingInput::new(
+        trimmed_id,
+        Tier::Familiar,
+        state,
+        content,
+        behavior,
+        consequence,
+    )
+    .with_condition(format!(
+        "owning specification: {} ({})",
+        catalog_entry.owning_spec, trimmed_id
+    ))
+    .with_condition("listed in AUT-006 API reference".to_string());
+    for diff in differences {
+        input = input.with_unity_difference(diff);
+    }
+    validate_finding_input(input, &[])
+}
+
+pub fn assess_translated_material(
+    content: ContentIdentity,
+    material_description: &str,
+    unitas_reference_image: Option<&str>,
+    passes_unitas_reference: bool,
+    differs_from_unity_screenshot: bool,
+) -> Finding {
+    let sanitized = sanitize_content_identity(&content);
+    let (state, consequence) = match (unitas_reference_image, passes_unitas_reference) {
+        (Some(ref_img), true) => (
+            CompatibilityState::Supported,
+            format!(
+                "translated material passes visual validation against unitas-approved reference image '{ref_img}' (TST-002); pixel difference from a Unity screenshot (observed={differs_from_unity_screenshot}) is never a compatibility failure"
+            ),
+        ),
+        (Some(ref_img), false) => (
+            CompatibilityState::PartiallySupported,
+            format!(
+                "translated material diverges from unitas-approved reference image '{ref_img}' (TST-002)"
+            ),
+        ),
+        (None, _) => (
+            CompatibilityState::Unknown,
+            "translated material has not yet been compared against a unitas-approved reference image (TST-002)".to_string(),
+        ),
+    };
+    Finding {
+        feature_id: "REN-002".to_string(),
+        tier: Tier::Native,
+        state,
+        content: sanitized,
+        behavior: material_description.trim().to_string(),
+        relied_upon_unity_differences: Vec::new(),
+        observable_consequence: consequence,
+        conditions: vec![
+            "visual acceptance uses unitas-approved references (TST-002), not Unity screenshots"
+                .to_string(),
+        ],
+        related_findings: Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PackageBehaviorClassification {
+    NamedSupported,
+    NamedExcluded(&'static str),
+    NeitherNamedNorExcluded,
+}
+
+pub fn assess_package_behavior(
+    package_id: &str,
+    resolved_version: &str,
+    content: ContentIdentity,
+    behavior_description: &str,
+    classification: PackageBehaviorClassification,
+) -> Finding {
+    let assessed_pkg = assess_package(package_id, resolved_version, false);
+    let feature_id = assessed_pkg
+        .owning_feature_id
+        .clone()
+        .unwrap_or_else(|| "PRJ-006".to_string());
+    let tier = assessed_pkg
+        .tier
+        .or_else(|| lookup_catalog_feature(&feature_id).map(|entry| entry.tier))
+        .unwrap_or(Tier::Native);
+    let owning_spec = assessed_pkg
+        .owning_spec
+        .clone()
+        .or_else(|| lookup_catalog_feature(&feature_id).map(|entry| entry.owning_spec.to_string()))
+        .unwrap_or_else(|| "compatibility-contract.md".to_string());
+
+    let (state, consequence) = if assessed_pkg.state != CompatibilityState::Supported
+        && assessed_pkg.state != CompatibilityState::PartiallySupported
+    {
+        (assessed_pkg.state, assessed_pkg.notes)
+    } else {
+        match classification {
+            PackageBehaviorClassification::NamedSupported => (
+                CompatibilityState::Supported,
+                format!(
+                    "package {package_id} ({resolved_version}) behavior is named and supported by {owning_spec} ({feature_id})"
+                ),
+            ),
+            PackageBehaviorClassification::NamedExcluded(exclusion) => (
+                CompatibilityState::PartiallySupported,
+                format!(
+                    "package {package_id} ({resolved_version}) behavior is excluded by {owning_spec} ({feature_id}): {exclusion}"
+                ),
+            ),
+            PackageBehaviorClassification::NeitherNamedNorExcluded => (
+                CompatibilityState::Unknown,
+                format!(
+                    "behavior in Supported package {package_id} ({resolved_version}) is neither named nor excluded by {owning_spec} ({feature_id}) and is Unknown until assessed"
+                ),
+            ),
+        }
+    };
+
+    let relied_upon_unity_differences = if tier == Tier::Familiar {
+        lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
+            entry
+                .differences
+                .iter()
+                .map(|diff| (*diff).to_string())
+                .collect()
+        })
+    } else {
+        Vec::new()
+    };
+
+    Finding {
+        feature_id,
+        tier,
+        state,
+        content: sanitize_content_identity(&content),
+        behavior: behavior_description.trim().to_string(),
+        relied_upon_unity_differences,
+        observable_consequence: consequence,
+        conditions: vec![format!("package {package_id}@{resolved_version}")],
+        related_findings: Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShaderGraphTarget {
+    BuiltIn,
+    Universal,
+    HighDefinition,
+    VisualEffect,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ShaderGraphNodeIssue {
+    pub node_type: String,
+    pub node_id: String,
+}
+
+pub fn assess_shader_graph(
+    graph_content: ContentIdentity,
+    target: ShaderGraphTarget,
+    unrepresentable_nodes: &[ShaderGraphNodeIssue],
+    affected_materials: &[String],
+) -> Finding {
+    let mut content = sanitize_content_identity(&graph_content);
+    let graph_label = content
+        .asset_path
+        .clone()
+        .or_else(|| content.object_name.clone())
+        .or_else(|| content.guid.clone())
+        .unwrap_or_else(|| "ShaderGraph".to_string());
+    let materials_clause = if affected_materials.is_empty() {
+        "no affected materials".to_string()
+    } else {
+        format!("affected materials: {}", affected_materials.join(", "))
+    };
+
+    match target {
+        ShaderGraphTarget::HighDefinition => Finding {
+            feature_id: "REN-006".to_string(),
+            tier: Tier::Native,
+            state: CompatibilityState::Unsupported,
+            content,
+            behavior: format!("Shader Graph '{graph_label}' with HDRP graph target"),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: format!(
+                "Shader Graph HDRP graph target is Unsupported under REN-006; {materials_clause}"
+            ),
+            conditions: vec!["Shader Graph target is HDRP".to_string()],
+            related_findings: Vec::new(),
+        },
+        ShaderGraphTarget::VisualEffect => Finding {
+            feature_id: "REN-006".to_string(),
+            tier: Tier::Native,
+            state: CompatibilityState::Unsupported,
+            content,
+            behavior: format!(
+                "Shader Graph '{graph_label}' with Visual Effect Graph target"
+            ),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: format!(
+                "Shader Graph Visual Effect Graph target is Unsupported under REN-006; {materials_clause}"
+            ),
+            conditions: vec!["Shader Graph target is Visual Effect Graph".to_string()],
+            related_findings: vec!["REN-004".to_string()],
+        },
+        ShaderGraphTarget::BuiltIn | ShaderGraphTarget::Universal => {
+            if let Some(first_issue) = unrepresentable_nodes.first() {
+                if content.sub_asset_id.is_none() {
+                    content.sub_asset_id = Some(first_issue.node_id.clone());
+                }
+                let nodes_summary: Vec<String> = unrepresentable_nodes
+                    .iter()
+                    .map(|issue| format!("{} ({})", issue.node_type, issue.node_id))
+                    .collect();
+                Finding {
+                    feature_id: "REN-006".to_string(),
+                    tier: Tier::Native,
+                    state: CompatibilityState::Unsupported,
+                    content,
+                    behavior: format!(
+                        "Shader Graph '{graph_label}' uses unrepresentable node(s): {}",
+                        nodes_summary.join(", ")
+                    ),
+                    relied_upon_unity_differences: Vec::new(),
+                    observable_consequence: format!(
+                        "graph '{graph_label}' cannot be represented due to node(s) {} and renders as a failed shader; {materials_clause}",
+                        nodes_summary.join(", ")
+                    ),
+                    conditions: vec![
+                        "Shader Graph contains unrepresentable node".to_string(),
+                    ],
+                    related_findings: Vec::new(),
+                }
+            } else {
+                Finding {
+                    feature_id: "REN-006".to_string(),
+                    tier: Tier::Native,
+                    state: CompatibilityState::Supported,
+                    content,
+                    behavior: format!("Shader Graph '{graph_label}'"),
+                    relied_upon_unity_differences: Vec::new(),
+                    observable_consequence: format!(
+                        "Shader Graph '{graph_label}' imports and translates cleanly; {materials_clause}"
+                    ),
+                    conditions: vec![
+                        "Shader Graph target is URP or Built-in with representable nodes"
+                            .to_string(),
+                    ],
+                    related_findings: Vec::new(),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompatibilitySummary {
     pub overall_state: CompatibilityState,
@@ -1687,6 +2212,9 @@ pub enum FindingSubmissionError {
         tier: Tier,
         state: CompatibilityState,
     },
+    UnityScreenshotPixelDifferenceIsNotCompatibilityFailure {
+        feature_id: String,
+    },
     DuplicateFindingIdentity {
         feature_id: String,
         content: Box<ContentIdentity>,
@@ -1726,6 +2254,10 @@ impl std::fmt::Display for FindingSubmissionError {
             } => write!(
                 formatter,
                 "finding for '{feature_id}' ({tier:?}) with state {state:?} must list at least one relied-upon Unity difference"
+            ),
+            Self::UnityScreenshotPixelDifferenceIsNotCompatibilityFailure { feature_id } => write!(
+                formatter,
+                "finding for '{feature_id}' cannot report a pixel difference from a Unity screenshot as a compatibility failure"
             ),
             Self::DuplicateFindingIdentity {
                 feature_id,
@@ -1833,6 +2365,22 @@ fn validate_finding_input(
             tier: input.tier,
             state: input.state,
         });
+    }
+    let lower_consequence = observable_consequence.to_ascii_lowercase();
+    let lower_behavior = behavior.to_ascii_lowercase();
+    if input.tier == Tier::Native
+        && matches!(
+            input.state,
+            CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
+        )
+        && ((lower_consequence.contains("pixel") && lower_consequence.contains("unity screenshot"))
+            || (lower_behavior.contains("pixel") && lower_behavior.contains("unity screenshot")))
+    {
+        return Err(
+            FindingSubmissionError::UnityScreenshotPixelDifferenceIsNotCompatibilityFailure {
+                feature_id,
+            },
+        );
     }
     let is_duplicate = existing.iter().any(|item| {
         item.feature_id == feature_id && sanitize_content_identity(&item.content) == content

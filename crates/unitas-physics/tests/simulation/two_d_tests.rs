@@ -5,7 +5,7 @@ use unitas_physics::two_d::{
 };
 
 #[test]
-fn dynamic_body_hitting_static_box_delivers_enter_touching_and_ignore_collision() {
+fn phy_002_story_14_dynamic_body_hitting_static_box_delivers_enter_touching_and_ignore_collision() {
     let mut world = World2D::with_gravity([0.0, 0.0]);
     let floor_go = EntityId::new(1);
     let box_go = EntityId::new(2);
@@ -54,7 +54,7 @@ fn dynamic_body_hitting_static_box_delivers_enter_touching_and_ignore_collision(
 }
 
 #[test]
-fn layer_collision_matrix_gates_callbacks_and_default_mask_queries() {
+fn phy_002_story_2_2d_layer_matrix_gates_collision_callbacks_and_default_mask_queries() {
     let mut world = World2D::with_gravity([0.0, 0.0]);
     let go_a = EntityId::new(10);
     let go_b = EntityId::new(20);
@@ -425,7 +425,7 @@ fn composite_collider_merges_child_colliders_and_manual_generation_gates_rebuild
 }
 
 #[test]
-fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way_platform() {
+fn phy_002_story_5_tilemap_collider_merged_into_composite_updates_when_tile_removed() {
     use unitas_physics::two_d::{
         CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D,
         PlatformEffector2D, TileColliderType2D, TilemapCollider2D,
@@ -746,3 +746,421 @@ fn rigidbody2d_sleep_modes_and_interpolation_modes_behave_per_mode() {
         extrap_pos[0]
     );
 }
+
+#[test]
+fn phy_002_story_2_2d_layer_matrix_gates_trigger_callbacks_and_default_mask_overlap_queries() {
+    use unitas_physics::matrix::CollisionMatrix;
+
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let mut matrix = CollisionMatrix::new();
+    matrix.disable_pair(1, 2);
+    world.set_collision_matrix(matrix);
+
+    let trigger_go = EntityId::new(810);
+    let mover_go = EntityId::new(811);
+
+    let trigger_col = world.add_collider(
+        ColliderDesc2D::box_collider(trigger_go, [1.0, 1.0])
+            .with_trigger(true)
+            .with_layer(1),
+    );
+    let mover_body = world.add_body(BodyDesc2D::dynamic(mover_go, [0.0, 0.0]).with_layer(2));
+    let mover_col = world.add_collider(
+        ColliderDesc2D::circle_collider(mover_go, 0.4)
+            .with_attached_body(mover_body)
+            .with_layer(2),
+    );
+
+    world.step(0.02);
+    assert!(
+        world.drain_messages().is_empty(),
+        "PHY-002 story 2: a disabled layer pair must stop 2D trigger callbacks"
+    );
+    assert!(!world.is_touching(trigger_col, mover_col));
+
+    let ray_hits = world.raycast_default_layer([-5.0, 0.0], [1.0, 0.0], 20.0, 1);
+    assert!(
+        ray_hits.iter().all(|hit| hit.collider != mover_col),
+        "PHY-002 story 2: a disabled layer pair must drop that layer from default-mask 2D raycasts"
+    );
+    assert!(
+        !world
+            .overlap_circle_default_layer([0.0, 0.0], 0.1, 1)
+            .contains(&mover_col),
+        "PHY-002 story 2: a disabled layer pair must drop that layer from default-mask 2D overlap queries"
+    );
+
+    world.ignore_layer_collision(1, 2, false);
+    world.step(0.02);
+    let messages = world.drain_messages();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.kind == MessageKind2D::TriggerEnter2D),
+        "PHY-002 story 2: re-enabling the layer pair must restore 2D trigger callbacks"
+    );
+    assert!(world.is_touching(trigger_col, mover_col));
+    assert!(
+        world
+            .overlap_circle_default_layer([0.0, 0.0], 0.1, 1)
+            .contains(&mover_col),
+        "PHY-002 story 2: re-enabling the layer pair must restore that layer in default-mask 2D overlap queries"
+    );
+}
+
+#[test]
+fn phy_002_story_2_2d_collider_without_material_uses_the_default_physics_material() {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    world.set_default_material(PhysicsMaterial2D::new(0.8, 0.4));
+
+    let default_go = EntityId::new(820);
+    let explicit_go = EntityId::new(821);
+    let default_col = world.add_collider(ColliderDesc2D::box_collider(default_go, [1.0, 1.0]));
+    let explicit_col = world.add_collider(
+        ColliderDesc2D::box_collider(explicit_go, [1.0, 1.0])
+            .with_material(PhysicsMaterial2D::new(0.25, 0.9)),
+    );
+
+    assert_eq!(
+        world.collider(default_col).map(|collider| collider.material),
+        Some(PhysicsMaterial2D::new(0.8, 0.4)),
+        "PHY-002 story 2: a 2D collider with no material must use the world default material"
+    );
+    assert_eq!(
+        world.collider(explicit_col).map(|collider| collider.material),
+        Some(PhysicsMaterial2D::new(0.25, 0.9))
+    );
+
+    world.set_default_material(PhysicsMaterial2D::new(0.1, 0.2));
+    assert_eq!(
+        world.collider(default_col).map(|collider| collider.material),
+        Some(PhysicsMaterial2D::new(0.1, 0.2)),
+        "PHY-002 story 2: a new world default material must reach 2D colliders that use the default"
+    );
+    assert_eq!(
+        world.collider(explicit_col).map(|collider| collider.material),
+        Some(PhysicsMaterial2D::new(0.25, 0.9)),
+        "PHY-002 story 2: an explicit 2D collider material must survive a world default material change"
+    );
+}
+
+#[test]
+fn phy_002_story_2_auto_sync_transforms_off_hides_moved_2d_collider_from_queries_until_sync_or_step(
+) {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    world.set_auto_sync_transforms(false);
+    assert!(!world.auto_sync_transforms());
+
+    let go = EntityId::new(830);
+    let body = world.add_body(BodyDesc2D::kinematic(go, [0.0, 0.0]));
+    let col = world.add_collider(
+        ColliderDesc2D::box_collider(go, [0.5, 0.5]).with_attached_body(body),
+    );
+
+    assert_eq!(
+        world.overlap_point([0.0, 0.0], ContactFilter2D::no_filter()),
+        vec![col],
+        "PHY-002 story 2: initial 2D collider pose must be visible to queries"
+    );
+
+    world.set_body_position(body, [5.0, 0.0]);
+    assert_eq!(
+        world.overlap_point([0.0, 0.0], ContactFilter2D::no_filter()),
+        vec![col],
+        "PHY-002 story 2: with auto_sync_transforms off, queries must still see the old 2D position before SyncTransforms"
+    );
+    assert!(
+        world
+            .overlap_point([5.0, 0.0], ContactFilter2D::no_filter())
+            .is_empty(),
+        "PHY-002 story 2: with auto_sync_transforms off, moved 2D collider must not be visible at new position before SyncTransforms"
+    );
+    assert!(
+        world
+            .raycast([5.0, 3.0], [0.0, -1.0], 5.0, ContactFilter2D::no_filter())
+            .is_empty(),
+        "PHY-002 story 2: with auto_sync_transforms off, 2D raycast must not hit moved collider before SyncTransforms"
+    );
+
+    world.sync_transforms();
+    assert!(
+        world
+            .overlap_point([0.0, 0.0], ContactFilter2D::no_filter())
+            .is_empty(),
+        "PHY-002 story 2: after SyncTransforms, old 2D position must no longer hit"
+    );
+    assert_eq!(
+        world.overlap_point([5.0, 0.0], ContactFilter2D::no_filter()),
+        vec![col],
+        "PHY-002 story 2: after SyncTransforms, moved 2D collider must be visible at new position"
+    );
+
+    world.set_body_position(body, [10.0, 0.0]);
+    assert!(
+        world
+            .overlap_point([10.0, 0.0], ContactFilter2D::no_filter())
+            .is_empty(),
+        "PHY-002 story 2: second 2D transform move with auto_sync_transforms off must stay hidden until step"
+    );
+    world.step(0.02);
+    assert_eq!(
+        world.overlap_point([10.0, 0.0], ContactFilter2D::no_filter()),
+        vec![col],
+        "PHY-002 story 2: simulation step must synchronize moved 2D collider for subsequent queries"
+    );
+}
+
+#[test]
+fn phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break() {
+    use unitas_physics::two_d::{
+        ConstantForce2D, DistanceJoint2D, FixedJoint2D, FrictionJoint2D, HingeJoint2D,
+        Joint2D, JointLimits2D, JointMotor2D, RelativeJoint2D, SliderJoint2D, SpringJoint2D,
+        TargetJoint2D, WheelJoint2D,
+    };
+
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let cf_go = EntityId::new(900);
+    let cf_body = world.add_body(
+        BodyDesc2D::dynamic(cf_go, [0.0, 0.0]).with_rotation(std::f32::consts::FRAC_PI_2),
+    );
+    world.attach_constant_force(
+        cf_body,
+        ConstantForce2D {
+            force: [4.0, 0.0],
+            relative_force: [2.0, 0.0],
+            torque: 3.0,
+        },
+    );
+    world.step(0.5);
+    let b_vel = world
+        .body(cf_body)
+        .map_or([0.0, 0.0], |b| b.linear_velocity);
+    let b_ang = world.body(cf_body).map_or(0.0, |b| b.angular_velocity);
+    assert!(
+        (b_vel[0] - 2.0).abs() < 1e-3 && (b_vel[1] - 1.0).abs() < 1e-3,
+        "PHY-002 story 5: ConstantForce2D must apply world force and rotated relative_force every step, got {:?}",
+        b_vel
+    );
+    assert!(
+        (b_ang - 1.4625).abs() < 1e-3,
+        "PHY-002 story 5: ConstantForce2D must apply torque every step, got {}",
+        b_ang
+    );
+
+    let anchor_b = world.add_body(BodyDesc2D::static_body(EntityId::new(901), [0.0, 0.0]));
+    let orb_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(902), [5.0, 0.0]));
+    let dist_j = world.add_joint(Joint2D::Distance(DistanceJoint2D {
+        body_a: anchor_b,
+        body_b: Some(orb_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        distance: 2.0,
+        max_distance_only: false,
+        break_force: f32::INFINITY,
+    }));
+    world.step(0.05);
+    let orb_x = world.body(orb_b).map_or(5.0, |b| b.position[0]);
+    assert!(
+        (orb_x - 2.0).abs() < 0.1,
+        "PHY-002 story 5: DistanceJoint2D must pull body to target distance 2.0, got {orb_x}"
+    );
+    assert!(world.joint(dist_j).is_some());
+
+    let spr_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(903), [4.0, 0.0]));
+    world.add_joint(Joint2D::Spring(SpringJoint2D {
+        body_a: anchor_b,
+        body_b: Some(spr_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        distance: 1.0,
+        damping_ratio: 0.5,
+        frequency: 4.0,
+        break_force: f32::INFINITY,
+    }));
+    world.step(0.05);
+    assert!(
+        world.body(spr_b).map_or(4.0, |b| b.position[0]) < 3.9,
+        "PHY-002 story 5: SpringJoint2D must accelerate stretched body toward rest distance"
+    );
+
+    let tgt_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(904), [0.0, 0.0]));
+    world.add_joint(Joint2D::Target(TargetJoint2D {
+        body: tgt_b,
+        anchor: [0.0, 0.0],
+        target: [3.0, 4.0],
+        max_force: 100.0,
+        frequency: 5.0,
+        damping_ratio: 0.7,
+        break_force: f32::INFINITY,
+    }));
+    world.step(0.05);
+    let tgt_pos = world.body(tgt_b).map_or([0.0, 0.0], |b| b.position);
+    assert!(
+        tgt_pos[0] > 0.1 && tgt_pos[1] > 0.1,
+        "PHY-002 story 5: TargetJoint2D must pull body toward world target"
+    );
+
+    let fix_b = world.add_body(
+        BodyDesc2D::dynamic(EntityId::new(905), [3.0, -2.0]).with_rotation(1.2),
+    );
+    world.add_joint(Joint2D::Fixed(FixedJoint2D {
+        body_a: anchor_b,
+        body_b: Some(fix_b),
+        local_offset: [1.0, 2.0],
+        reference_angle: 0.25,
+        damping_ratio: 1.0,
+        frequency: 0.0,
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.05);
+    let fb_pos = world.body(fix_b).map_or([0.0, 0.0], |b| b.position);
+    let fb_rot = world.body(fix_b).map_or(0.0, |b| b.rotation);
+    assert!(
+        (fb_pos[0] - 1.0).abs() < 1e-3
+            && (fb_pos[1] - 2.0).abs() < 1e-3
+            && (fb_rot - 0.25).abs() < 1e-3,
+        "PHY-002 story 5: FixedJoint2D must lock relative offset and rotation"
+    );
+
+    let rel_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(906), [5.0, 5.0]));
+    world.add_joint(Joint2D::Relative(RelativeJoint2D {
+        body_a: anchor_b,
+        body_b: Some(rel_b),
+        linear_offset: [-1.0, 0.5],
+        angular_offset: -0.5,
+        max_force: 500.0,
+        max_torque: 500.0,
+        correction_scale: 1.0,
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.05);
+    let rb_x = world.body(rel_b).map_or(5.0, |b| b.position[0]);
+    let rb_rot = world.body(rel_b).map_or(0.0, |b| b.rotation);
+    assert!(
+        rb_x < 4.5 && rb_rot < 0.0,
+        "PHY-002 story 5: RelativeJoint2D must drive body toward linear and angular offsets"
+    );
+
+    let fric_b = world.add_body(
+        BodyDesc2D::dynamic(EntityId::new(907), [0.0, 0.0]).with_velocity([10.0, 0.0]),
+    );
+    if let Some(b) = world.body_mut(fric_b) {
+        b.angular_velocity = 8.0;
+    }
+    world.add_joint(Joint2D::Friction(FrictionJoint2D {
+        body_a: anchor_b,
+        body_b: Some(fric_b),
+        max_force: 10.0,
+        max_torque: 6.0,
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.1);
+    let frb_vx = world.body(fric_b).map_or(10.0, |b| b.linear_velocity[0]);
+    let frb_w = world.body(fric_b).map_or(8.0, |b| b.angular_velocity);
+    assert!(
+        frb_vx < 9.5 && frb_w < 7.6,
+        "PHY-002 story 5: FrictionJoint2D must decelerate linear and angular velocity"
+    );
+
+    let hinge_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(908), [0.0, 0.0]));
+    world.add_joint(Joint2D::Hinge(HingeJoint2D {
+        body_a: anchor_b,
+        body_b: Some(hinge_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        use_motor: true,
+        motor: JointMotor2D {
+            motor_speed: 10.0,
+            max_motor_torque: 100.0,
+        },
+        use_limits: true,
+        limits: JointLimits2D {
+            min: -0.2,
+            max: 0.3,
+        },
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.1);
+    let hb_rot = world.body(hinge_b).map_or(0.0, |b| b.rotation);
+    assert!(
+        (hb_rot - 0.3).abs() < 1e-3,
+        "PHY-002 story 5: HingeJoint2D motor and upper angular limit must clamp rotation to 0.3, got {}",
+        hb_rot
+    );
+
+    let slide_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(909), [0.0, 3.0]));
+    world.add_joint(Joint2D::Slider(SliderJoint2D {
+        body_a: anchor_b,
+        body_b: Some(slide_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        angle_degrees: 0.0,
+        use_motor: true,
+        motor: JointMotor2D {
+            motor_speed: 20.0,
+            max_motor_torque: 500.0,
+        },
+        use_limits: true,
+        limits: JointLimits2D {
+            min: -1.0,
+            max: 1.5,
+        },
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.1);
+    let sb_pos = world.body(slide_b).map_or([0.0, 3.0], |b| b.position);
+    assert!(
+        sb_pos[1].abs() < 1e-3 && (sb_pos[0] - 1.5).abs() < 1e-2,
+        "PHY-002 story 5: SliderJoint2D must project body onto slide axis and clamp translation to limit 1.5, got {:?}",
+        sb_pos
+    );
+
+    let wheel_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(910), [0.0, -2.0]));
+    world.add_joint(Joint2D::Wheel(WheelJoint2D {
+        body_a: anchor_b,
+        body_b: Some(wheel_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        suspension_angle_degrees: 90.0,
+        suspension_frequency: 6.0,
+        suspension_damping_ratio: 0.7,
+        use_motor: true,
+        motor: JointMotor2D {
+            motor_speed: 6.0,
+            max_motor_torque: 50.0,
+        },
+        break_force: f32::INFINITY,
+        break_torque: f32::INFINITY,
+    }));
+    world.step(0.1);
+    let wb_y = world.body(wheel_b).map_or(-2.0, |b| b.position[1]);
+    let wb_w = world.body(wheel_b).map_or(0.0, |b| b.angular_velocity);
+    assert!(
+        wb_y > -2.0 && wb_w > 1.0,
+        "PHY-002 story 5: WheelJoint2D suspension and motor must pull wheel toward anchor and spin it"
+    );
+
+    let fragile_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(911), [10.0, 0.0]));
+    let fragile_j = world.add_joint(Joint2D::Distance(DistanceJoint2D {
+        body_a: anchor_b,
+        body_b: Some(fragile_b),
+        anchor_a: [0.0, 0.0],
+        anchor_b: [0.0, 0.0],
+        distance: 1.0,
+        max_distance_only: false,
+        break_force: 5.0,
+    }));
+    world.step(0.02);
+    assert!(
+        world.joint(fragile_j).is_none(),
+        "PHY-002 story 5: 2D joint exceeding break_force must break and be removed"
+    );
+    assert_eq!(world.drain_broken_joints(), vec![fragile_j]);
+}
+
+

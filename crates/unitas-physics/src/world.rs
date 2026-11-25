@@ -126,6 +126,10 @@ struct Body {
     uses_default_material: bool,
     previous_position: [f64; 3],
     sweep_velocity: [f64; 3],
+    pending_force: [f64; 3],
+    pending_impulse: [f64; 3],
+    pending_move_position: Option<[f64; 3]>,
+    pending_move_rotation: Option<[f64; 4]>,
     sleeping: bool,
     sleep_timer: f64,
     simulated: bool,
@@ -477,6 +481,10 @@ impl World {
             uses_default_material: false,
             previous_position: desc.position,
             sweep_velocity: [0.0; 3],
+            pending_force: [0.0; 3],
+            pending_impulse: [0.0; 3],
+            pending_move_position: None,
+            pending_move_rotation: None,
             sleeping: false,
             sleep_timer: 0.0,
             simulated: true,
@@ -581,6 +589,7 @@ impl World {
         let slot = &mut self.bodies[index];
         slot.position = p;
         slot.previous_position = p;
+        slot.pending_move_position = None;
         if auto_sync {
             slot.query_position = p;
         }
@@ -604,11 +613,80 @@ impl World {
         let auto_sync = self.auto_sync_transforms;
         let slot = &mut self.bodies[index];
         slot.rotation = rotation;
+        slot.pending_move_rotation = None;
         if auto_sync {
             slot.query_rotation = rotation;
         }
         slot.sleeping = false;
         slot.sleep_timer = 0.0;
+        Ok(())
+    }
+
+    pub fn move_position(&mut self, body: EntityId, target: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !target.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        if self.bodies[index].role != BodyRole::Kinematic {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        self.bodies[index].pending_move_position = Some(target);
+        Ok(())
+    }
+
+    pub fn move_rotation(&mut self, body: EntityId, target: [f64; 4]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !target.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        if self.bodies[index].role != BodyRole::Kinematic {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        self.bodies[index].pending_move_rotation = Some(target);
+        Ok(())
+    }
+
+    pub fn add_force(&mut self, body: EntityId, force: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !force.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let slot = &mut self.bodies[index];
+        if slot.role == BodyRole::Dynamic {
+            slot.pending_force[0] += force[0];
+            slot.pending_force[1] += force[1];
+            slot.pending_force[2] += force[2];
+            if force != [0.0; 3] {
+                slot.sleeping = false;
+                slot.sleep_timer = 0.0;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add_impulse(&mut self, body: EntityId, impulse: [f64; 3]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !impulse.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let slot = &mut self.bodies[index];
+        if slot.role == BodyRole::Dynamic {
+            slot.pending_impulse[0] += impulse[0];
+            slot.pending_impulse[1] += impulse[1];
+            slot.pending_impulse[2] += impulse[2];
+            if impulse != [0.0; 3] {
+                slot.sleeping = false;
+                slot.sleep_timer = 0.0;
+            }
+        }
         Ok(())
     }
 
@@ -637,6 +715,8 @@ impl World {
         self.bodies[index].sleeping = true;
         self.bodies[index].sleep_timer = 0.0;
         self.bodies[index].velocity = [0.0; 3];
+        self.bodies[index].pending_force = [0.0; 3];
+        self.bodies[index].pending_impulse = [0.0; 3];
         Ok(())
     }
 
@@ -980,9 +1060,32 @@ impl World {
 
     fn integrate(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
-            if !body.simulated || body.role != BodyRole::Dynamic || body.sleeping {
+            if !body.simulated {
                 continue;
             }
+            if body.role == BodyRole::Kinematic {
+                if let Some(target_pos) = body.pending_move_position.take() {
+                    body.position = target_pos;
+                }
+                if let Some(target_rot) = body.pending_move_rotation.take() {
+                    body.rotation = target_rot;
+                }
+                continue;
+            }
+            if body.role != BodyRole::Dynamic || body.sleeping {
+                continue;
+            }
+            let inv_mass = body.inverse_mass();
+            if inv_mass > 0.0 {
+                body.velocity[0] +=
+                    (body.pending_force[0] * delta_seconds + body.pending_impulse[0]) * inv_mass;
+                body.velocity[1] +=
+                    (body.pending_force[1] * delta_seconds + body.pending_impulse[1]) * inv_mass;
+                body.velocity[2] +=
+                    (body.pending_force[2] * delta_seconds + body.pending_impulse[2]) * inv_mass;
+            }
+            body.pending_force = [0.0; 3];
+            body.pending_impulse = [0.0; 3];
             if body.use_gravity {
                 body.velocity[0] += self.gravity[0] * delta_seconds;
                 body.velocity[1] += self.gravity[1] * delta_seconds;

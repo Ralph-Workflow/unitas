@@ -99,12 +99,179 @@ impl NavMeshLink {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NavMeshObstacle {
+    pub center: [f64; 3],
+    pub half_extents: [f64; 3],
+    pub carving: bool,
+    pub carve_only_stationary: bool,
+    pub is_stationary: bool,
+    pub enabled: bool,
+}
+
+impl NavMeshObstacle {
+    pub fn carving_box(center: [f64; 3], half_extents: [f64; 3]) -> Self {
+        Self {
+            center,
+            half_extents,
+            carving: true,
+            carve_only_stationary: false,
+            is_stationary: true,
+            enabled: true,
+        }
+    }
+
+    pub fn with_carving(mut self, carving: bool) -> Self {
+        self.carving = carving;
+        self
+    }
+
+    pub fn with_carve_only_stationary(
+        mut self,
+        carve_only_stationary: bool,
+        is_stationary: bool,
+    ) -> Self {
+        self.carve_only_stationary = carve_only_stationary;
+        self.is_stationary = is_stationary;
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn is_active_carver(&self) -> bool {
+        self.enabled && self.carving && (!self.carve_only_stationary || self.is_stationary)
+    }
+
+    pub fn blocks_point(&self, point: [f64; 3]) -> bool {
+        self.is_active_carver()
+            && (point[0] - self.center[0]).abs() <= self.half_extents[0] + VERTEX_EPSILON
+            && (point[1] - self.center[1]).abs() <= self.half_extents[1] + HEIGHT_TOLERANCE
+            && (point[2] - self.center[2]).abs() <= self.half_extents[2] + VERTEX_EPSILON
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NavMeshSurface {
+    triangles: Vec<NavMeshTriangle>,
+    areas: Vec<NavMeshArea>,
+    links: Vec<NavMeshLink>,
+    obstacles: Vec<NavMeshObstacle>,
+    navmesh: Option<NavMesh>,
+    is_stale: bool,
+    build_count: usize,
+}
+
+impl Default for NavMeshSurface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NavMeshSurface {
+    pub fn new() -> Self {
+        Self {
+            triangles: Vec::new(),
+            areas: Vec::new(),
+            links: Vec::new(),
+            obstacles: Vec::new(),
+            navmesh: None,
+            is_stale: false,
+            build_count: 0,
+        }
+    }
+
+    pub fn set_geometry(&mut self, triangles: Vec<NavMeshTriangle>) {
+        self.triangles = triangles;
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+    }
+
+    pub fn set_areas(&mut self, areas: Vec<NavMeshArea>) {
+        self.areas = areas;
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+    }
+
+    pub fn set_links(&mut self, links: Vec<NavMeshLink>) {
+        self.links = links;
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+    }
+
+    pub fn add_link(&mut self, link: NavMeshLink) {
+        self.links.push(link);
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+    }
+
+    pub fn set_obstacles(&mut self, obstacles: Vec<NavMeshObstacle>) {
+        self.obstacles = obstacles;
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+    }
+
+    pub fn add_obstacle(&mut self, obstacle: NavMeshObstacle) -> usize {
+        self.obstacles.push(obstacle);
+        if self.navmesh.is_some() {
+            self.is_stale = true;
+        }
+        self.obstacles.len() - 1
+    }
+
+    pub fn is_stale(&self) -> bool {
+        self.is_stale
+    }
+
+    pub fn build_count(&self) -> usize {
+        self.build_count
+    }
+
+    pub fn navmesh(&self) -> Option<&NavMesh> {
+        self.navmesh.as_ref()
+    }
+
+    pub fn build_navmesh(&mut self) -> Result<&NavMesh, NavigationError> {
+        let mut built = NavMesh::build(&self.triangles, &self.areas)?;
+        for obstacle in &self.obstacles {
+            built.add_obstacle(*obstacle)?;
+        }
+        for link in &self.links {
+            built.add_link(*link)?;
+        }
+        self.navmesh = Some(built);
+        self.is_stale = false;
+        self.build_count += 1;
+        match self.navmesh.as_ref() {
+            Some(mesh) => Ok(mesh),
+            None => Err(NavigationError::DegenerateTriangle { index: 0 }),
+        }
+    }
+
+    pub fn update_navmesh(
+        &mut self,
+        triangles: Vec<NavMeshTriangle>,
+    ) -> Result<&NavMesh, NavigationError> {
+        self.set_geometry(triangles);
+        self.build_navmesh()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NavMesh {
     pub(crate) polygons: Vec<NavMeshPolygon>,
     pub(crate) links: Vec<NavMeshLink>,
+    pub(crate) obstacles: Vec<NavMeshObstacle>,
     area_costs: BTreeMap<u32, f64>,
     min_area_cost: f64,
+    revision: u64,
 }
 
 impl Default for NavMesh {
@@ -112,8 +279,10 @@ impl Default for NavMesh {
         Self {
             polygons: Vec::new(),
             links: Vec::new(),
+            obstacles: Vec::new(),
             area_costs: BTreeMap::new(),
             min_area_cost: 1.0,
+            revision: 0,
         }
     }
 }
@@ -164,11 +333,85 @@ impl NavMesh {
         let mut navmesh = Self {
             polygons,
             links: Vec::new(),
+            obstacles: Vec::new(),
             area_costs,
             min_area_cost,
+            revision: 1,
         };
         navmesh.link_neighbors();
         Ok(navmesh)
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn set_area_cost(&mut self, area: u32, cost: f64) -> Result<(), NavigationError> {
+        if !cost.is_finite() || cost <= 0.0 {
+            return Err(NavigationError::InvalidAreaCost { area, cost });
+        }
+        self.area_costs.insert(area, cost);
+        self.min_area_cost = self
+            .area_costs
+            .values()
+            .copied()
+            .fold(1.0_f64, f64::min);
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn add_obstacle(&mut self, obstacle: NavMeshObstacle) -> Result<usize, NavigationError> {
+        if !obstacle.center.iter().all(|c| c.is_finite())
+            || !obstacle
+                .half_extents
+                .iter()
+                .all(|e| e.is_finite() && *e > 0.0)
+        {
+            return Err(NavigationError::InvalidObstacle {
+                center: obstacle.center,
+                half_extents: obstacle.half_extents,
+            });
+        }
+        self.obstacles.push(obstacle);
+        self.revision = self.revision.saturating_add(1);
+        Ok(self.obstacles.len() - 1)
+    }
+
+    pub fn set_obstacle_enabled(&mut self, index: usize, enabled: bool) -> bool {
+        if let Some(obstacle) = self.obstacles.get_mut(index) {
+            obstacle.enabled = enabled;
+            self.revision = self.revision.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_obstacle_stationary(&mut self, index: usize, is_stationary: bool) -> bool {
+        if let Some(obstacle) = self.obstacles.get_mut(index) {
+            obstacle.is_stationary = is_stationary;
+            self.revision = self.revision.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn obstacles(&self) -> &[NavMeshObstacle] {
+        &self.obstacles
+    }
+
+    pub fn is_polygon_carved(&self, polygon_index: usize) -> bool {
+        let Some(polygon) = self.polygons.get(polygon_index) else {
+            return true;
+        };
+        self.obstacles.iter().any(|obstacle| {
+            obstacle.blocks_point(polygon.centroid)
+                || polygon
+                    .vertices
+                    .iter()
+                    .all(|v| obstacle.blocks_point(*v))
+        })
     }
 
     pub fn add_link(&mut self, link: NavMeshLink) -> Result<(), NavigationError> {
@@ -200,12 +443,14 @@ impl NavMesh {
             end_polygon,
             ..link
         });
+        self.revision = self.revision.saturating_add(1);
         Ok(())
     }
 
     pub fn set_link_activated(&mut self, index: usize, activated: bool) -> bool {
         if let Some(link) = self.links.get_mut(index) {
             link.activated = activated;
+            self.revision = self.revision.saturating_add(1);
             true
         } else {
             false
@@ -231,7 +476,10 @@ impl NavMesh {
     pub fn polygon_at(&self, point: [f64; 3]) -> Option<usize> {
         self.polygons
             .iter()
-            .position(|polygon| point_in_triangle(point, &polygon.vertices))
+            .enumerate()
+            .position(|(index, polygon)| {
+                !self.is_polygon_carved(index) && point_in_triangle(point, &polygon.vertices)
+            })
     }
 
     pub fn sample_position(
@@ -248,7 +496,7 @@ impl NavMesh {
         }
         let mut best: Option<NavMeshHit> = None;
         for (index, polygon) in self.polygons.iter().enumerate() {
-            if !area_matches_mask(polygon.area, area_mask) {
+            if self.is_polygon_carved(index) || !area_matches_mask(polygon.area, area_mask) {
                 continue;
             }
             let closest = closest_point_on_triangle(source, &polygon.vertices);
@@ -275,7 +523,7 @@ impl NavMesh {
         }
         let mut best: Option<NavMeshHit> = None;
         for (index, polygon) in self.polygons.iter().enumerate() {
-            if !area_matches_mask(polygon.area, area_mask) {
+            if self.is_polygon_carved(index) || !area_matches_mask(polygon.area, area_mask) {
                 continue;
             }
             for edge_index in 0..3 {
@@ -315,8 +563,10 @@ impl NavMesh {
             };
         }
 
-        let start_poly = self.polygons.iter().enumerate().find(|(_, poly)| {
-            area_matches_mask(poly.area, area_mask) && point_in_triangle(source, &poly.vertices)
+        let start_poly = self.polygons.iter().enumerate().find(|(index, poly)| {
+            !self.is_polygon_carved(*index)
+                && area_matches_mask(poly.area, area_mask)
+                && point_in_triangle(source, &poly.vertices)
         });
         let Some((start_index, start_polygon)) = start_poly else {
             return NavMeshHit {
@@ -343,7 +593,7 @@ impl NavMesh {
 
         let mut boundary_hits = Vec::new();
         for (index, polygon) in self.polygons.iter().enumerate() {
-            if !area_matches_mask(polygon.area, area_mask) {
+            if self.is_polygon_carved(index) || !area_matches_mask(polygon.area, area_mask) {
                 continue;
             }
             for edge_index in 0..3 {
@@ -377,8 +627,10 @@ impl NavMesh {
             };
         }
 
-        let target_poly = self.polygons.iter().enumerate().find(|(_, poly)| {
-            area_matches_mask(poly.area, area_mask) && point_in_triangle(target, &poly.vertices)
+        let target_poly = self.polygons.iter().enumerate().find(|(index, poly)| {
+            !self.is_polygon_carved(*index)
+                && area_matches_mask(poly.area, area_mask)
+                && point_in_triangle(target, &poly.vertices)
         });
         if let Some((end_index, end_polygon)) = target_poly {
             NavMeshHit {
@@ -417,6 +669,7 @@ impl NavMesh {
             .enumerate()
             .any(|(other_index, other)| {
                 other_index != polygon_index
+                    && !self.is_polygon_carved(other_index)
                     && area_matches_mask(other.area, area_mask)
                     && polygon_has_edge(&other.vertices, edge_start, edge_end)
             })

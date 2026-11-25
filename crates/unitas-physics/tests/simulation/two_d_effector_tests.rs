@@ -5,7 +5,8 @@ use unitas_physics::two_d::{
 };
 
 #[test]
-fn platform_effector_allows_upward_pass_through_without_events_and_lands_from_above() {
+fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_and_lands_from_above(
+) {
     let mut world = World2D::with_gravity([0.0, -10.0]);
     let platform_go = EntityId::new(1);
     let player_go = EntityId::new(2);

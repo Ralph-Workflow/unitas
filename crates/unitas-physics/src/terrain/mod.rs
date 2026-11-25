@@ -3,13 +3,17 @@ use std::rc::Rc;
 
 use unitas_core::EntityId;
 
-use crate::body::{capsule_half_segment, capsule_local_axis, dot, rotate_vector, subtract, Shape};
+use crate::body::{
+    capsule_half_segment, capsule_local_axis, distance, dot, rotate_vector, subtract, vector_length,
+    Shape,
+};
 use crate::world::World;
 
 pub const LARGE_WORLD_PRECISION_THRESHOLD: f64 = 100_000.0;
 
 const DEFAULT_FRICTION: f64 = 0.6;
 const MIN_NORMAL_Y: f64 = 1e-6;
+const RAYCAST_STEPS: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TerrainError {
@@ -51,6 +55,13 @@ pub struct TerrainContact {
     pub depth: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainRayHit {
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub distance: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LargeWorldImpact {
     pub position: [f64; 3],
@@ -70,6 +81,7 @@ impl LargeWorldImpact {
             vec![
                 "physics float-precision position handling",
                 "rendering float-precision position handling",
+                "animation float-precision transform handling",
                 "navigation float-precision path handling",
             ]
         } else {
@@ -99,11 +111,72 @@ impl LargeWorldImpact {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainLayer {
+    pub name: String,
+    pub tile_size: [f64; 2],
+}
+
+impl TerrainLayer {
+    pub fn new(name: impl Into<String>, tile_size: [f64; 2]) -> Self {
+        Self {
+            name: name.into(),
+            tile_size,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailRenderMode {
+    GrassBillboard,
+    VertexLit,
+    Grass,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailPrototype {
+    pub name: String,
+    pub render_mode: DetailRenderMode,
+    pub use_instancing: bool,
+    pub healthy_color: [f64; 3],
+    pub dry_color: [f64; 3],
+}
+
+impl DetailPrototype {
+    pub fn instanced_grass(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            render_mode: DetailRenderMode::Grass,
+            use_instancing: true,
+            healthy_color: [0.3, 0.8, 0.2],
+            dry_color: [0.7, 0.6, 0.2],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreePrototype {
     pub name: String,
     pub wind_excluded: bool,
     pub lod_count: u32,
+}
+
+impl TreePrototype {
+    pub fn tree_creator(name: impl Into<String>, lod_count: u32) -> Self {
+        Self {
+            name: name.into(),
+            wind_excluded: false,
+            lod_count,
+        }
+    }
+
+    pub fn speed_tree_8(name: impl Into<String>, lod_count: u32) -> Self {
+        Self {
+            name: name.into(),
+            wind_excluded: true,
+            lod_count,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,6 +197,180 @@ pub struct DetailInstance {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GrassWindSettings {
+    pub speed: f64,
+    pub size: f64,
+    pub bending: f64,
+    pub tint: [f64; 3],
+}
+
+impl Default for GrassWindSettings {
+    fn default() -> Self {
+        Self {
+            speed: 0.5,
+            size: 0.5,
+            bending: 0.5,
+            tint: [0.9, 0.9, 0.9],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindZoneMode {
+    Directional,
+    Spherical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindZone {
+    pub mode: WindZoneMode,
+    pub position: [f64; 3],
+    pub direction: [f64; 3],
+    pub main: f64,
+    pub turbulence: f64,
+    pub pulse_magnitude: f64,
+    pub pulse_frequency: f64,
+    pub radius: f64,
+}
+
+impl WindZone {
+    pub fn directional(direction: [f64; 3], main: f64, turbulence: f64) -> Self {
+        let len = vector_length(direction);
+        let unit = if len > 1e-9 {
+            [direction[0] / len, direction[1] / len, direction[2] / len]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        Self {
+            mode: WindZoneMode::Directional,
+            position: [0.0; 3],
+            direction: unit,
+            main,
+            turbulence,
+            pulse_magnitude: 0.5,
+            pulse_frequency: 1.0,
+            radius: 0.0,
+        }
+    }
+
+    pub fn spherical(position: [f64; 3], radius: f64, main: f64, turbulence: f64) -> Self {
+        Self {
+            mode: WindZoneMode::Spherical,
+            position,
+            direction: [1.0, 0.0, 0.0],
+            main,
+            turbulence,
+            pulse_magnitude: 0.5,
+            pulse_frequency: 1.0,
+            radius,
+        }
+    }
+
+    pub fn with_pulse(mut self, magnitude: f64, frequency: f64) -> Self {
+        self.pulse_magnitude = magnitude;
+        self.pulse_frequency = frequency;
+        self
+    }
+
+    pub fn force_at(&self, point: [f64; 3], time_seconds: f64) -> [f64; 3] {
+        let pulse = (time_seconds * self.pulse_frequency * std::f64::consts::TAU).sin()
+            * self.pulse_magnitude;
+        let strength = (self.main + pulse + self.turbulence * 0.25).max(0.0);
+        match self.mode {
+            WindZoneMode::Directional => [
+                self.direction[0] * strength,
+                self.direction[1] * strength,
+                self.direction[2] * strength,
+            ],
+            WindZoneMode::Spherical => {
+                if self.radius <= 0.0 {
+                    return [0.0; 3];
+                }
+                let offset = subtract(point, self.position);
+                let dist = vector_length(offset);
+                if dist >= self.radius {
+                    return [0.0; 3];
+                }
+                let falloff = 1.0 - dist / self.radius;
+                let dir = if dist > 1e-9 {
+                    [offset[0] / dist, offset[1] / dist, offset[2] / dist]
+                } else {
+                    self.direction
+                };
+                [
+                    dir[0] * strength * falloff,
+                    dir[1] * strength * falloff,
+                    dir[2] * strength * falloff,
+                ]
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeWindSample {
+    pub instance_index: usize,
+    pub prototype_index: usize,
+    pub prototype_name: String,
+    pub lod_count: u32,
+    pub wind_excluded: bool,
+    pub excluded_reason: Option<String>,
+    pub base_position: [f64; 3],
+    pub bent_position: [f64; 3],
+    pub bend_offset: [f64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailWindSample {
+    pub instance_index: usize,
+    pub prototype_index: usize,
+    pub base_position: [f64; 3],
+    pub wave_position: [f64; 3],
+    pub wave_offset: [f64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainWindReport {
+    pub trees: Vec<TreeWindSample>,
+    pub details: Vec<DetailWindSample>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstancedTreeBatch {
+    pub prototype_index: usize,
+    pub prototype_name: String,
+    pub lod_count: u32,
+    pub billboard_active: bool,
+    pub wind_excluded: bool,
+    pub excluded_reason: Option<String>,
+    pub world_positions: Vec<[f64; 3]>,
+    pub scales: Vec<f64>,
+    pub rotations_y: Vec<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstancedDetailBatch {
+    pub prototype_index: usize,
+    pub prototype_name: String,
+    pub render_mode: DetailRenderMode,
+    pub use_instancing: bool,
+    pub world_positions: Vec<[f64; 3]>,
+    pub scales: Vec<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainInstancedDrawData {
+    pub material_shader: String,
+    pub draw_instanced: bool,
+    pub billboard_start: f64,
+    pub tree_distance: f64,
+    pub detail_distance: f64,
+    pub tree_batches: Vec<InstancedTreeBatch>,
+    pub detail_batches: Vec<InstancedDetailBatch>,
+    pub wind_exclusion_diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainBody {
     pub entity: EntityId,
     pub shape: Shape,
@@ -140,10 +387,15 @@ struct TerrainHeightData {
     heightmap_resolution: usize,
     size: [f64; 3],
     heights: Vec<f64>,
+    delayed_heights: Option<Vec<f64>>,
     holes: Vec<bool>,
+    layers: Vec<TerrainLayer>,
+    alphamaps: Vec<Vec<f64>>,
     tree_prototypes: Vec<TreePrototype>,
     tree_instances: Vec<TreeInstance>,
+    detail_prototypes: Vec<DetailPrototype>,
     detail_instances: Vec<DetailInstance>,
+    grass_wind: GrassWindSettings,
 }
 
 impl TerrainHeightData {
@@ -181,10 +433,15 @@ impl TerrainData {
                 heightmap_resolution,
                 size,
                 heights: vec![0.0; cells],
+                delayed_heights: None,
                 holes: vec![false; cells],
+                layers: Vec::new(),
+                alphamaps: Vec::new(),
                 tree_prototypes: Vec::new(),
                 tree_instances: Vec::new(),
+                detail_prototypes: Vec::new(),
                 detail_instances: Vec::new(),
+                grass_wind: GrassWindSettings::default(),
             })),
         })
     }
@@ -217,6 +474,28 @@ impl TerrainData {
             let index = inner.index(column, row);
             inner.heights[index] = *height;
         }
+        inner.delayed_heights = None;
+    }
+
+    pub fn set_heights_delay_lod(&self, updates: &[([usize; 2], f64)]) {
+        let mut inner = self.inner.borrow_mut();
+        let mut buffer = inner
+            .delayed_heights
+            .take()
+            .unwrap_or_else(|| inner.heights.clone());
+        for (position, height) in updates {
+            let (column, row) = inner.clamp_indices(position[0], position[1]);
+            let index = inner.index(column, row);
+            buffer[index] = *height;
+        }
+        inner.delayed_heights = Some(buffer);
+    }
+
+    pub fn sync_heightmap(&self) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(delayed) = inner.delayed_heights.take() {
+            inner.heights = delayed;
+        }
     }
 
     pub fn heights(&self) -> Vec<f64> {
@@ -234,6 +513,60 @@ impl TerrainData {
         let (column, row) = inner.clamp_indices(column, row);
         let index = inner.index(column, row);
         inner.holes[index] = is_hole;
+    }
+
+    pub fn add_terrain_layer(&self, layer: TerrainLayer) -> usize {
+        let mut inner = self.inner.borrow_mut();
+        let cells = inner.heightmap_resolution * inner.heightmap_resolution;
+        let is_first = inner.layers.is_empty();
+        inner.layers.push(layer);
+        for cell_weights in &mut inner.alphamaps {
+            cell_weights.push(if is_first { 1.0 } else { 0.0 });
+        }
+        if inner.alphamaps.is_empty() {
+            inner.alphamaps = vec![vec![1.0]; cells];
+        }
+        inner.layers.len() - 1
+    }
+
+    pub fn terrain_layers(&self) -> Vec<TerrainLayer> {
+        self.inner.borrow().layers.clone()
+    }
+
+    pub fn set_alphamap_weights(&self, column: usize, row: usize, weights: &[f64]) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.layers.is_empty() {
+            return;
+        }
+        let (column, row) = inner.clamp_indices(column, row);
+        let index = inner.index(column, row);
+        let layer_count = inner.layers.len();
+        let cells = inner.heightmap_resolution * inner.heightmap_resolution;
+        if inner.alphamaps.len() != cells {
+            inner.alphamaps = vec![vec![0.0; layer_count]; cells];
+        }
+        let mut row_weights = vec![0.0; layer_count];
+        let mut sum = 0.0;
+        for (i, w) in weights.iter().take(layer_count).enumerate() {
+            let clamped = w.max(0.0);
+            row_weights[i] = clamped;
+            sum += clamped;
+        }
+        if sum > 1e-9 {
+            for w in &mut row_weights {
+                *w /= sum;
+            }
+        }
+        inner.alphamaps[index] = row_weights;
+    }
+
+    pub fn alphamap_weights(&self, column: usize, row: usize) -> Vec<f64> {
+        let inner = self.inner.borrow();
+        if inner.alphamaps.is_empty() {
+            return Vec::new();
+        }
+        let (column, row) = inner.clamp_indices(column, row);
+        inner.alphamaps[inner.index(column, row)].clone()
     }
 
     pub fn add_tree_prototype(&self, prototype: TreePrototype) -> usize {
@@ -254,12 +587,30 @@ impl TerrainData {
         self.inner.borrow().tree_instances.clone()
     }
 
+    pub fn add_detail_prototype(&self, prototype: DetailPrototype) -> usize {
+        let mut inner = self.inner.borrow_mut();
+        inner.detail_prototypes.push(prototype);
+        inner.detail_prototypes.len() - 1
+    }
+
+    pub fn detail_prototypes(&self) -> Vec<DetailPrototype> {
+        self.inner.borrow().detail_prototypes.clone()
+    }
+
     pub fn set_detail_instances(&self, instances: &[DetailInstance]) {
         self.inner.borrow_mut().detail_instances = instances.to_vec();
     }
 
     pub fn detail_instances(&self) -> Vec<DetailInstance> {
         self.inner.borrow().detail_instances.clone()
+    }
+
+    pub fn set_grass_wind_settings(&self, settings: GrassWindSettings) {
+        self.inner.borrow_mut().grass_wind = settings;
+    }
+
+    pub fn grass_wind_settings(&self) -> GrassWindSettings {
+        self.inner.borrow().grass_wind
     }
 
     pub fn wind_excluded_prototypes(&self) -> Vec<usize> {
@@ -279,6 +630,11 @@ pub struct Terrain {
     data: TerrainData,
     position: [f64; 3],
     collider_enabled: bool,
+    draw_instanced: bool,
+    material_shader: String,
+    billboard_start: f64,
+    tree_distance: f64,
+    detail_distance: f64,
 }
 
 impl Terrain {
@@ -287,6 +643,11 @@ impl Terrain {
             data,
             position: [0.0; 3],
             collider_enabled: true,
+            draw_instanced: true,
+            material_shader: "Universal Render Pipeline/Terrain/Lit".to_string(),
+            billboard_start: 50.0,
+            tree_distance: 2000.0,
+            detail_distance: 80.0,
         }
     }
 
@@ -297,6 +658,21 @@ impl Terrain {
 
     pub fn with_collider_enabled(mut self, enabled: bool) -> Self {
         self.collider_enabled = enabled;
+        self
+    }
+
+    pub fn with_draw_instanced(mut self, draw_instanced: bool) -> Self {
+        self.draw_instanced = draw_instanced;
+        self
+    }
+
+    pub fn with_material_shader(mut self, shader: impl Into<String>) -> Self {
+        self.material_shader = shader.into();
+        self
+    }
+
+    pub fn with_billboard_start(mut self, billboard_start: f64) -> Self {
+        self.billboard_start = billboard_start;
         self
     }
 
@@ -314,6 +690,14 @@ impl Terrain {
 
     pub fn collider_enabled(&self) -> bool {
         self.collider_enabled
+    }
+
+    pub fn draw_instanced(&self) -> bool {
+        self.draw_instanced
+    }
+
+    pub fn material_shader(&self) -> &str {
+        &self.material_shader
     }
 
     pub fn bounds(&self) -> TerrainBounds {
@@ -339,6 +723,10 @@ impl Terrain {
         }
     }
 
+    pub fn sample_height(&self, world_position: [f64; 3]) -> Option<f64> {
+        self.height_at(world_position)
+    }
+
     pub fn height_at(&self, world_position: [f64; 3]) -> Option<f64> {
         self.sample_surface(world_position)
             .map(|(surface, _)| surface[1])
@@ -347,6 +735,11 @@ impl Terrain {
     pub fn normal_at(&self, world_position: [f64; 3]) -> Option<[f64; 3]> {
         self.sample_surface(world_position)
             .map(|(_, normal)| normal)
+    }
+
+    pub fn splat_weights_at(&self, world_position: [f64; 3]) -> Option<Vec<f64>> {
+        let (column, row) = self.cell_index(world_position[0], world_position[2])?;
+        Some(self.data.alphamap_weights(column, row))
     }
 
     pub fn is_hole(&self, world_position: [f64; 3]) -> bool {
@@ -365,6 +758,269 @@ impl Terrain {
 
     pub fn is_collidable(&self, world_position: [f64; 3]) -> bool {
         self.collider_enabled && self.is_walkable(world_position)
+    }
+
+    pub fn raycast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<TerrainRayHit> {
+        if !self.collider_enabled || max_distance <= 0.0 || !max_distance.is_finite() {
+            return None;
+        }
+        let dir_len = vector_length(direction);
+        if dir_len <= 1e-9 {
+            return None;
+        }
+        let unit = [
+            direction[0] / dir_len,
+            direction[1] / dir_len,
+            direction[2] / dir_len,
+        ];
+        let step = max_distance / RAYCAST_STEPS as f64;
+        let mut prev_t = 0.0;
+        let mut prev_above = true;
+        for i in 0..=RAYCAST_STEPS {
+            let t = i as f64 * step;
+            let point = [
+                origin[0] + unit[0] * t,
+                origin[1] + unit[1] * t,
+                origin[2] + unit[2] * t,
+            ];
+            let Some((surface, normal)) = self.sample_surface(point) else {
+                prev_t = t;
+                continue;
+            };
+            let above = point[1] >= surface[1];
+            if i == 0 {
+                if !above && !self.is_hole(point) {
+                    return Some(TerrainRayHit {
+                        point: surface,
+                        normal,
+                        distance: 0.0,
+                    });
+                }
+            } else if prev_above && !above {
+                let mut low = prev_t;
+                let mut high = t;
+                for _ in 0..16 {
+                    let mid = 0.5 * (low + high);
+                    let mid_pt = [
+                        origin[0] + unit[0] * mid,
+                        origin[1] + unit[1] * mid,
+                        origin[2] + unit[2] * mid,
+                    ];
+                    if let Some((surf, _)) = self.sample_surface(mid_pt) {
+                        if mid_pt[1] >= surf[1] {
+                            low = mid;
+                        } else {
+                            high = mid;
+                        }
+                    } else {
+                        low = mid;
+                    }
+                }
+                let hit_t = 0.5 * (low + high);
+                let hit_pt = [
+                    origin[0] + unit[0] * hit_t,
+                    origin[1] + unit[1] * hit_t,
+                    origin[2] + unit[2] * hit_t,
+                ];
+                if !self.is_hole(hit_pt) {
+                    if let Some((surf, norm)) = self.sample_surface(hit_pt) {
+                        return Some(TerrainRayHit {
+                            point: surf,
+                            normal: norm,
+                            distance: distance(origin, surf),
+                        });
+                    }
+                }
+            }
+            prev_above = above;
+            prev_t = t;
+        }
+        None
+    }
+
+    pub fn evaluate_wind(&self, wind_zone: &WindZone, time_seconds: f64) -> TerrainWindReport {
+        let prototypes = self.data.tree_prototypes();
+        let tree_instances = self.data.tree_instances();
+        let detail_instances = self.data.detail_instances();
+        let grass_wind = self.data.grass_wind_settings();
+
+        let mut trees = Vec::with_capacity(tree_instances.len());
+        for (idx, instance) in tree_instances.iter().enumerate() {
+            let base =
+                self.instance_world_position(instance.normalized_position, instance.height_offset);
+            let proto = prototypes.get(instance.prototype);
+            let (name, lod_count, wind_excluded) = match proto {
+                Some(p) => (p.name.clone(), p.lod_count, p.wind_excluded),
+                None => ("MissingTreePrototype".to_string(), 0, true),
+            };
+            let (bend_offset, excluded_reason) = if wind_excluded {
+                (
+                    [0.0; 3],
+                    Some(format!(
+                        "SpeedTree wind animation is excluded on prototype '{name}' ({lod_count} LODs imported)"
+                    )),
+                )
+            } else {
+                let force = wind_zone.force_at(base, time_seconds);
+                (
+                    [
+                        force[0] * 0.25 * instance.scale.max(0.1),
+                        force[1] * 0.05 * instance.scale.max(0.1),
+                        force[2] * 0.25 * instance.scale.max(0.1),
+                    ],
+                    None,
+                )
+            };
+            let bent = [
+                base[0] + bend_offset[0],
+                base[1] + bend_offset[1],
+                base[2] + bend_offset[2],
+            ];
+            trees.push(TreeWindSample {
+                instance_index: idx,
+                prototype_index: instance.prototype,
+                prototype_name: name,
+                lod_count,
+                wind_excluded,
+                excluded_reason,
+                base_position: base,
+                bent_position: bent,
+                bend_offset,
+            });
+        }
+
+        let mut details = Vec::with_capacity(detail_instances.len());
+        for (idx, instance) in detail_instances.iter().enumerate() {
+            let base =
+                self.instance_world_position(instance.normalized_position, instance.height_offset);
+            let zone_force = wind_zone.force_at(base, time_seconds);
+            let phase = (base[0] + base[2]) * grass_wind.size.max(0.1)
+                + time_seconds * grass_wind.speed.max(0.1) * std::f64::consts::TAU;
+            let wave = phase.sin() * grass_wind.bending.max(0.05);
+            let wave_offset = [
+                (zone_force[0] + wave) * 0.15 * instance.scale.max(0.1),
+                0.0,
+                (zone_force[2] + wave * 0.5) * 0.15 * instance.scale.max(0.1),
+            ];
+            let wave_position = [
+                base[0] + wave_offset[0],
+                base[1] + wave_offset[1],
+                base[2] + wave_offset[2],
+            ];
+            details.push(DetailWindSample {
+                instance_index: idx,
+                prototype_index: instance.prototype,
+                base_position: base,
+                wave_position,
+                wave_offset,
+            });
+        }
+
+        TerrainWindReport { trees, details }
+    }
+
+    pub fn instanced_draw_data(&self) -> TerrainInstancedDrawData {
+        let tree_prototypes = self.data.tree_prototypes();
+        let tree_instances = self.data.tree_instances();
+        let detail_prototypes = self.data.detail_prototypes();
+        let detail_instances = self.data.detail_instances();
+
+        let mut tree_batches = Vec::with_capacity(tree_prototypes.len());
+        let mut wind_exclusion_diagnostics = Vec::new();
+        for (proto_idx, proto) in tree_prototypes.iter().enumerate() {
+            let mut world_positions = Vec::new();
+            let mut scales = Vec::new();
+            let mut rotations_y = Vec::new();
+            for inst in tree_instances.iter().filter(|i| i.prototype == proto_idx) {
+                let pos =
+                    self.instance_world_position(inst.normalized_position, inst.height_offset);
+                if !self.is_hole(pos) {
+                    world_positions.push(pos);
+                    scales.push(inst.scale);
+                    rotations_y.push(inst.rotation_y);
+                }
+            }
+            let excluded_reason = if proto.wind_excluded {
+                let msg = format!(
+                    "SpeedTree wind animation is excluded on prototype '{}' ({} LODs imported)",
+                    proto.name, proto.lod_count
+                );
+                wind_exclusion_diagnostics.push(msg.clone());
+                Some(msg)
+            } else {
+                None
+            };
+            tree_batches.push(InstancedTreeBatch {
+                prototype_index: proto_idx,
+                prototype_name: proto.name.clone(),
+                lod_count: proto.lod_count,
+                billboard_active: self.billboard_start < self.tree_distance,
+                wind_excluded: proto.wind_excluded,
+                excluded_reason,
+                world_positions,
+                scales,
+                rotations_y,
+            });
+        }
+
+        let mut detail_batches = Vec::new();
+        if detail_prototypes.is_empty() && !detail_instances.is_empty() {
+            let mut world_positions = Vec::new();
+            let mut scales = Vec::new();
+            for inst in &detail_instances {
+                let pos =
+                    self.instance_world_position(inst.normalized_position, inst.height_offset);
+                if !self.is_hole(pos) {
+                    world_positions.push(pos);
+                    scales.push(inst.scale);
+                }
+            }
+            detail_batches.push(InstancedDetailBatch {
+                prototype_index: 0,
+                prototype_name: "DefaultDetailGrass".to_string(),
+                render_mode: DetailRenderMode::Grass,
+                use_instancing: true,
+                world_positions,
+                scales,
+            });
+        } else {
+            for (proto_idx, proto) in detail_prototypes.iter().enumerate() {
+                let mut world_positions = Vec::new();
+                let mut scales = Vec::new();
+                for inst in detail_instances.iter().filter(|i| i.prototype == proto_idx) {
+                    let pos =
+                        self.instance_world_position(inst.normalized_position, inst.height_offset);
+                    if !self.is_hole(pos) {
+                        world_positions.push(pos);
+                        scales.push(inst.scale);
+                    }
+                }
+                detail_batches.push(InstancedDetailBatch {
+                    prototype_index: proto_idx,
+                    prototype_name: proto.name.clone(),
+                    render_mode: proto.render_mode,
+                    use_instancing: proto.use_instancing,
+                    world_positions,
+                    scales,
+                });
+            }
+        }
+
+        TerrainInstancedDrawData {
+            material_shader: self.material_shader.clone(),
+            draw_instanced: self.draw_instanced,
+            billboard_start: self.billboard_start,
+            tree_distance: self.tree_distance,
+            detail_distance: self.detail_distance,
+            tree_batches,
+            detail_batches,
+            wind_exclusion_diagnostics,
+        }
     }
 
     pub fn contact(

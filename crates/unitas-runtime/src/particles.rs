@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use unitas_core::EntityId;
 use unitas_physics::particles::{
-    Curve, EmitParams, Particle, ParticleCollisionEvent, ParticleCollisionEvent2D,
-    ParticlePropertyCurves, ParticleShape, ParticleSystem, ParticleSystem2D, ParticleSystemState,
-    ParticleTriggerEvent, ParticleTriggerEvent2D, StopAction,
+    Curve, CustomParticleDataStream, EmitParams, Particle, ParticleCollisionEvent,
+    ParticleCollisionEvent2D, ParticlePropertyCurves, ParticleShape, ParticleSystem,
+    ParticleSystem2D, ParticleSystemForceField, ParticleSystemState, ParticleTriggerEvent,
+    ParticleTriggerEvent2D, StopAction,
 };
 use unitas_physics::two_d::World2D;
 use unitas_physics::World;
@@ -165,6 +166,37 @@ impl ParticleRuntimeWorld {
             return false;
         };
         system.set_particles(particles);
+        true
+    }
+
+    pub fn set_custom_particle_data(
+        &mut self,
+        entity: EntityId,
+        stream: CustomParticleDataStream,
+        data: &[[f32; 4]],
+    ) -> bool {
+        let Some(system) = self.systems.get_mut(&entity) else {
+            return false;
+        };
+        system.set_custom_particle_data(stream, data);
+        true
+    }
+
+    pub fn get_custom_particle_data(
+        &self,
+        entity: EntityId,
+        stream: CustomParticleDataStream,
+    ) -> Option<&[[f32; 4]]> {
+        self.systems
+            .get(&entity)
+            .map(|system| system.get_custom_particle_data(stream))
+    }
+
+    pub fn add_force_field(&mut self, entity: EntityId, field: ParticleSystemForceField) -> bool {
+        let Some(system) = self.systems.get_mut(&entity) else {
+            return false;
+        };
+        system.add_force_field(field);
         true
     }
 

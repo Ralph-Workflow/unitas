@@ -504,3 +504,142 @@ fn timeline_unknown_sequence_and_player_are_rejected() -> Result<(), Box<dyn Err
     }
     Ok(())
 }
+
+#[test]
+fn cin_001_outcome_33_combined_five_track_timeline_plays_pauses_seeks_completes_under_hold_loop_none_and_inspects_camera_blend(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_runtime::cinemachine::BlendStyle;
+
+    let anim_entity = EntityId::new(101);
+    let act_entity = EntityId::new(102);
+
+    let tracks = vec![
+        animation_track(anim_entity, 0.0, 2.0),
+        audio_track("theme", 0.0, 2.0, 0.75),
+        activation_track(act_entity, 0.0, 1.5, true),
+        signal_track(vec![signal_clip(" cue_mid", "director", 1.0, false, false)]),
+        TimelineTrack {
+            kind: TimelineTrackKind::CinemachineShot,
+            clips: vec![
+                TimelineClip {
+                    name: "CamA".to_string(),
+                    start: 0.0,
+                    duration: 1.0,
+                    payload: TimelineClipPayload::CinemachineShot {
+                        camera: "CamA".to_string(),
+                        blend: Some(CameraBlend::cut()),
+                    },
+                },
+                TimelineClip {
+                    name: "CamB".to_string(),
+                    start: 1.0,
+                    duration: 1.0,
+                    payload: TimelineClipPayload::CinemachineShot {
+                        camera: "CamB".to_string(),
+                        blend: Some(CameraBlend {
+                            style: BlendStyle::Linear,
+                            duration: 0.5,
+                        }),
+                    },
+                },
+            ],
+        },
+    ];
+
+    for mode in [
+        TimelineWrapMode::Hold,
+        TimelineWrapMode::Loop,
+        TimelineWrapMode::None,
+    ] {
+        let (mut world, player) = timeline_of(tracks.clone(), mode)?;
+        world.register_entity(act_entity);
+        let mut animations = AnimationWorld::new();
+        animations.ensure_animator(anim_entity, Transform::default());
+        let mut cameras = CinemachineWorld::new();
+        let cam_a = cameras.add_camera(VirtualCamera::new("CamA", 5));
+        let cam_b = cameras.add_camera(VirtualCamera::new("CamB", 5));
+        cameras.set_active(cam_a, true);
+        cameras.set_active(cam_b, true);
+
+        world.player_mut(player).ok_or("player missing")?.play();
+        world.update(player, 0.5)?;
+        world.drive_animation(player, &mut animations)?;
+        world.drive_cinemachine(player, &mut cameras)?;
+        cameras.update(0.5);
+
+        assert_eq!(animations.speed(anim_entity), Some(1.0));
+        assert_eq!(
+            world.player(player).ok_or("player missing")?.active_audio_clips()[0].clip,
+            "theme"
+        );
+        assert_eq!(
+            world.player(player).ok_or("player missing")?.active_activation_clips(),
+            vec![(act_entity, true)]
+        );
+        assert_eq!(
+            cameras.live_camera().map(|c| c.name.as_str()),
+            Some("CamA"),
+            "CIN-001 outcome 33: live virtual camera must be CamA in first shot"
+        );
+        assert_eq!(signal_count(&world, player)?, 0);
+
+        world.player_mut(player).ok_or("player missing")?.pause();
+        world.update(player, 0.5)?;
+        assert_eq!(
+            time_of(&world, player)?,
+            0.5,
+            "CIN-001 outcome 33: paused timeline must hold time"
+        );
+
+        world.player_mut(player).ok_or("player missing")?.play();
+        world.update(player, 0.75)?;
+        world.drive_cinemachine(player, &mut cameras)?;
+        cameras.update(0.25);
+
+        assert_eq!(
+            signal_count(&world, player)?,
+            1,
+            "CIN-001 outcome 33: signal must fire once on crossing t=1.0"
+        );
+        assert_eq!(
+            cameras.live_camera().map(|c| c.name.as_str()),
+            Some("CamB"),
+            "CIN-001 outcome 33: live virtual camera must switch to CamB in second shot"
+        );
+        let active_blend = cameras
+            .active_blend()
+            .ok_or("CIN-001 outcome 33: camera transition must have inspectable active blend")?;
+        assert!(
+            (active_blend.progress() - 0.5).abs() < 1e-6,
+            "CIN-001 outcome 33: active blend weight/progress must be 0.5 at 0.25s of 0.5s blend"
+        );
+
+        world.player_mut(player).ok_or("player missing")?.seek(0.25);
+        assert_eq!(time_of(&world, player)?, 0.25);
+
+        world.player_mut(player).ok_or("player missing")?.seek(1.5);
+        world.update(player, 1.0)?;
+
+        let tl = world.player(player).ok_or("player missing")?;
+        match mode {
+            TimelineWrapMode::Hold => {
+                assert_eq!(tl.time(), 2.0);
+                assert_eq!(tl.state(), PlaybackState::Playing);
+                assert_eq!(tl.stopped_count(), 0);
+            }
+            TimelineWrapMode::Loop => {
+                assert!((tl.time() - 0.5).abs() < 1e-6);
+                assert_eq!(tl.wraps(), 1);
+                assert_eq!(tl.state(), PlaybackState::Playing);
+            }
+            TimelineWrapMode::None | TimelineWrapMode::Once => {
+                assert_eq!(tl.time(), 2.0);
+                assert_eq!(tl.state(), PlaybackState::Complete);
+                assert_eq!(tl.stopped_count(), 1);
+            }
+            TimelineWrapMode::PingPong => {}
+        }
+    }
+    Ok(())
+}
+

@@ -23,6 +23,36 @@ pub enum TrustOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustRequiredError {
+    pub operation: String,
+}
+
+impl fmt::Display for TrustRequiredError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "trust-required: operation '{}' cannot run in restricted mode",
+            self.operation
+        )
+    }
+}
+
+impl std::error::Error for TrustRequiredError {}
+
+pub fn require_code_execution(
+    capabilities: ProjectCapabilities,
+    operation: &str,
+) -> Result<(), TrustRequiredError> {
+    if capabilities.may_run_code && !capabilities.restricted {
+        Ok(())
+    } else {
+        Err(TrustRequiredError {
+            operation: operation.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustRecord {
     pub project_path: String,
     pub trusted: bool,
@@ -36,11 +66,33 @@ pub struct ProjectCapabilities {
     pub restricted: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InvocationTrust {
+    pub trust: bool,
+    pub fetch_consent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustRequest {
+    pub project_path: String,
+    pub code: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlockedVectorKind {
     InitializeOnLoad,
     SourceGenerator,
     GitPackageFetch,
+}
+
+impl BlockedVectorKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BlockedVectorKind::InitializeOnLoad => "initialize-on-load script",
+            BlockedVectorKind::SourceGenerator => "source generator",
+            BlockedVectorKind::GitPackageFetch => "git package fetch",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -244,6 +296,12 @@ pub struct TrustStore {
     store_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TrustStoreState {
+    records: BTreeMap<String, TrustRecord>,
+    requests: Vec<TrustRequest>,
+}
+
 impl TrustStore {
     pub fn new(store_path: impl Into<PathBuf>) -> Self {
         TrustStore {
@@ -264,14 +322,15 @@ impl TrustStore {
             return Ok(TrustOutcome::Refused(TrustRefusal::AutomationCannotGrant));
         }
         let key = self.key(project_path)?;
-        let mut records = self.records()?;
-        let record = records.entry(key.clone()).or_insert(TrustRecord {
-            project_path: key,
+        let mut state = self.state()?;
+        let record = state.records.entry(key.clone()).or_insert(TrustRecord {
+            project_path: key.clone(),
             trusted: false,
             fetch_consent: false,
         });
         record.trusted = true;
-        self.write_records(&records)?;
+        state.requests.retain(|pending| pending.project_path != key);
+        self.write_state(&state)?;
         Ok(TrustOutcome::Granted)
     }
 
@@ -284,11 +343,11 @@ impl TrustStore {
 
     pub fn revoke_trust(&self, project_path: &str) -> Result<(), TrustError> {
         let key = self.key(project_path)?;
-        let mut records = self.records()?;
-        if let Some(record) = records.get_mut(&key) {
+        let mut state = self.state()?;
+        if let Some(record) = state.records.get_mut(&key) {
             record.trusted = false;
         }
-        self.write_records(&records)?;
+        self.write_state(&state)?;
         Ok(())
     }
 
@@ -301,24 +360,24 @@ impl TrustStore {
             return Ok(TrustOutcome::Refused(TrustRefusal::AutomationCannotGrant));
         }
         let key = self.key(project_path)?;
-        let mut records = self.records()?;
-        let record = records.entry(key.clone()).or_insert(TrustRecord {
+        let mut state = self.state()?;
+        let record = state.records.entry(key.clone()).or_insert(TrustRecord {
             project_path: key,
             trusted: false,
             fetch_consent: false,
         });
         record.fetch_consent = true;
-        self.write_records(&records)?;
+        self.write_state(&state)?;
         Ok(TrustOutcome::Granted)
     }
 
     pub fn revoke_fetch_consent(&self, project_path: &str) -> Result<(), TrustError> {
         let key = self.key(project_path)?;
-        let mut records = self.records()?;
-        if let Some(record) = records.get_mut(&key) {
+        let mut state = self.state()?;
+        if let Some(record) = state.records.get_mut(&key) {
             record.fetch_consent = false;
         }
-        self.write_records(&records)?;
+        self.write_state(&state)?;
         Ok(())
     }
 
@@ -356,12 +415,47 @@ impl TrustStore {
         project_path: &str,
         invocation_consent: bool,
     ) -> ProjectCapabilities {
+        self.capabilities_with_invocation(
+            project_path,
+            InvocationTrust {
+                trust: false,
+                fetch_consent: invocation_consent,
+            },
+        )
+    }
+
+    pub fn capabilities_with_invocation(
+        &self,
+        project_path: &str,
+        invocation: InvocationTrust,
+    ) -> ProjectCapabilities {
         let trusted = self.is_trusted(project_path);
+        let may_run_code = trusted || invocation.trust;
+        let may_fetch = invocation.trust
+            || invocation.fetch_consent
+            || (trusted && self.has_fetch_consent(project_path));
         ProjectCapabilities {
-            may_run_code: trusted,
-            may_fetch: invocation_consent || (trusted && self.has_fetch_consent(project_path)),
-            restricted: !trusted,
+            may_run_code,
+            may_fetch,
+            restricted: !may_run_code,
         }
+    }
+
+    pub fn request_trust(&self, request: &TrustRequest) -> Result<TrustRequest, TrustError> {
+        let key = self.key(&request.project_path)?;
+        let mut state = self.state()?;
+        state.requests.retain(|pending| pending.project_path != key);
+        let recorded = TrustRequest {
+            project_path: key,
+            code: request.code.clone(),
+        };
+        state.requests.push(recorded.clone());
+        self.write_state(&state)?;
+        Ok(recorded)
+    }
+
+    pub fn pending_requests(&self) -> Vec<TrustRequest> {
+        self.state().map(|state| state.requests).unwrap_or_default()
     }
 
     fn key(&self, project_path: &str) -> Result<String, TrustError> {
@@ -377,10 +471,14 @@ impl TrustStore {
     }
 
     fn records(&self) -> Result<BTreeMap<String, TrustRecord>, TrustError> {
+        self.state().map(|state| state.records)
+    }
+
+    fn state(&self) -> Result<TrustStoreState, TrustError> {
         let text = match fs::read_to_string(&self.store_path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BTreeMap::new())
+                return Ok(TrustStoreState::default())
             }
             Err(error) => {
                 return Err(TrustError::Io {
@@ -390,38 +488,58 @@ impl TrustStore {
             }
         };
         if text.trim().is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(TrustStoreState::default());
         }
         let root = parse(&text).map_err(|e| TrustError::InvalidStore(format!("{e:?}")))?;
-        let projects = match root.get("projects") {
-            Some(value) => value
-                .as_object()
-                .ok_or_else(|| TrustError::InvalidStore("projects is not an object".to_string()))?,
-            None => return Ok(BTreeMap::new()),
-        };
-        let mut records = BTreeMap::new();
-        for (path, entry) in projects {
-            records.insert(
-                path.clone(),
-                TrustRecord {
-                    project_path: path.clone(),
-                    trusted: entry
-                        .get("trusted")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    fetch_consent: entry
-                        .get("fetchConsent")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                },
-            );
+        let mut state = TrustStoreState::default();
+        if let Some(projects) = root.get("projects") {
+            let projects = projects.as_object().ok_or_else(|| {
+                TrustError::InvalidStore("projects is not an object".to_string())
+            })?;
+            for (path, entry) in projects {
+                state.records.insert(
+                    path.clone(),
+                    TrustRecord {
+                        project_path: path.clone(),
+                        trusted: entry.get("trusted").and_then(|v| v.as_bool()).unwrap_or(false),
+                        fetch_consent: entry
+                            .get("fetchConsent")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    },
+                );
+            }
         }
-        Ok(records)
+        if let Some(requests) = root.get("requests") {
+            let requests = requests.as_array().ok_or_else(|| {
+                TrustError::InvalidStore("requests is not an array".to_string())
+            })?;
+            for request in requests {
+                let project_path = request
+                    .get("projectPath")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let code = request
+                    .get("code")
+                    .and_then(|v| v.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .map(|item| item.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                state.requests.push(TrustRequest { project_path, code });
+            }
+        }
+        Ok(state)
     }
 
-    fn write_records(&self, records: &BTreeMap<String, TrustRecord>) -> Result<(), TrustError> {
+    fn write_state(&self, state: &TrustStoreState) -> Result<(), TrustError> {
         let mut projects = Vec::new();
-        for (path, record) in records {
+        for (path, record) in &state.records {
             projects.push((
                 path.clone(),
                 JsonValue::Object(vec![
@@ -433,9 +551,22 @@ impl TrustStore {
                 ]),
             ));
         }
+        let mut requests = Vec::new();
+        for request in &state.requests {
+            let code = request
+                .code
+                .iter()
+                .map(|entry| JsonValue::String(entry.clone()))
+                .collect();
+            requests.push(JsonValue::Object(vec![
+                ("projectPath".to_string(), JsonValue::String(request.project_path.clone())),
+                ("code".to_string(), JsonValue::Array(code)),
+            ]));
+        }
         let root = JsonValue::Object(vec![
             ("version".to_string(), JsonValue::Number(1.0)),
             ("projects".to_string(), JsonValue::Object(projects)),
+            ("requests".to_string(), JsonValue::Array(requests)),
         ]);
         if let Some(parent) = self.store_path.parent() {
             if !parent.as_os_str().is_empty() {

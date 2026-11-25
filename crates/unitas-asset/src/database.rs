@@ -2,16 +2,516 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::dependencies::{AssetImportState, ImportDiagnostic, ImportOutcome};
 use crate::project::{build_inventory, AssetEntry, AssetKind, Project};
+use crate::unity_yaml::{self, Node};
 
 const TRASH_DIRECTORY: &str = ".unitas/trash";
+
+const TEXT_ASSET_EXTENSIONS: [&str; 9] = [
+    "txt", "json", "bytes", "csv", "xml", "html", "htm", "yaml", "fnt",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AssetFilter {
     pub name_contains: Option<String>,
     pub class: Option<String>,
     pub label: Option<String>,
+    pub folder: Option<PathBuf>,
+    pub state: Option<AssetImportState>,
     pub include_sub_assets: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextAssetContent {
+    pub name: String,
+    pub text: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecognizedAssetFamily {
+    TextAsset,
+    AvatarMask,
+    AudioMixer,
+    SpriteAtlasV1,
+    SpriteAtlasV2,
+    Scene,
+    Prefab,
+    Material,
+    Shader,
+    ComputeShader,
+    ShaderInclude,
+    ShaderVariantCollection,
+    AnimationClip,
+    AnimatorController,
+    AnimatorOverrideController,
+    Font,
+    GuiSkin,
+    Video,
+    Script,
+    ScriptableObject,
+    PhysicMaterial,
+    PhysicsMaterial2D,
+    InputActions,
+    TerrainData,
+    TerrainLayer,
+    LightingSettings,
+    Cubemap,
+    Flare,
+    RenderTexture,
+    Preset,
+    Timeline,
+    Signal,
+    Texture2D,
+    AudioClip,
+    Model,
+}
+
+impl RecognizedAssetFamily {
+    pub fn class_name(self) -> &'static str {
+        match self {
+            RecognizedAssetFamily::TextAsset => "TextAsset",
+            RecognizedAssetFamily::AvatarMask => "AvatarMask",
+            RecognizedAssetFamily::AudioMixer => "AudioMixerController",
+            RecognizedAssetFamily::SpriteAtlasV1 => "SpriteAtlas",
+            RecognizedAssetFamily::SpriteAtlasV2 => "SpriteAtlasAsset",
+            RecognizedAssetFamily::Scene => "SceneAsset",
+            RecognizedAssetFamily::Prefab => "Prefab",
+            RecognizedAssetFamily::Material => "Material",
+            RecognizedAssetFamily::Shader => "Shader",
+            RecognizedAssetFamily::ComputeShader => "ComputeShader",
+            RecognizedAssetFamily::ShaderInclude => "ShaderInclude",
+            RecognizedAssetFamily::ShaderVariantCollection => "ShaderVariantCollection",
+            RecognizedAssetFamily::AnimationClip => "AnimationClip",
+            RecognizedAssetFamily::AnimatorController => "AnimatorController",
+            RecognizedAssetFamily::AnimatorOverrideController => "AnimatorOverrideController",
+            RecognizedAssetFamily::Font => "Font",
+            RecognizedAssetFamily::GuiSkin => "GUISkin",
+            RecognizedAssetFamily::Video => "VideoClip",
+            RecognizedAssetFamily::Script => "MonoScript",
+            RecognizedAssetFamily::ScriptableObject => "ScriptableObject",
+            RecognizedAssetFamily::PhysicMaterial => "PhysicMaterial",
+            RecognizedAssetFamily::PhysicsMaterial2D => "PhysicsMaterial2D",
+            RecognizedAssetFamily::InputActions => "InputActionAsset",
+            RecognizedAssetFamily::TerrainData => "TerrainData",
+            RecognizedAssetFamily::TerrainLayer => "TerrainLayer",
+            RecognizedAssetFamily::LightingSettings => "LightingSettings",
+            RecognizedAssetFamily::Cubemap => "Cubemap",
+            RecognizedAssetFamily::Flare => "Flare",
+            RecognizedAssetFamily::RenderTexture => "RenderTexture",
+            RecognizedAssetFamily::Preset => "Preset",
+            RecognizedAssetFamily::Timeline => "TimelineAsset",
+            RecognizedAssetFamily::Signal => "SignalAsset",
+            RecognizedAssetFamily::Texture2D => "Texture2D",
+            RecognizedAssetFamily::AudioClip => "AudioClip",
+            RecognizedAssetFamily::Model => "Mesh",
+        }
+    }
+
+    pub fn family_label(self) -> &'static str {
+        match self {
+            RecognizedAssetFamily::TextAsset => "TextAsset",
+            RecognizedAssetFamily::AvatarMask => "AvatarMask",
+            RecognizedAssetFamily::AudioMixer => "AudioMixer",
+            RecognizedAssetFamily::SpriteAtlasV1 => "SpriteAtlas v1",
+            RecognizedAssetFamily::SpriteAtlasV2 => "SpriteAtlas v2",
+            RecognizedAssetFamily::Scene => "Scene",
+            RecognizedAssetFamily::Prefab => "Prefab",
+            RecognizedAssetFamily::Material => "Material",
+            RecognizedAssetFamily::Shader => "Shader",
+            RecognizedAssetFamily::ComputeShader => "ComputeShader",
+            RecognizedAssetFamily::ShaderInclude => "ShaderInclude",
+            RecognizedAssetFamily::ShaderVariantCollection => "ShaderVariantCollection",
+            RecognizedAssetFamily::AnimationClip => "AnimationClip",
+            RecognizedAssetFamily::AnimatorController => "AnimatorController",
+            RecognizedAssetFamily::AnimatorOverrideController => "AnimatorOverrideController",
+            RecognizedAssetFamily::Font => "Font",
+            RecognizedAssetFamily::GuiSkin => "GUISkin",
+            RecognizedAssetFamily::Video => "Video",
+            RecognizedAssetFamily::Script => "MonoScript",
+            RecognizedAssetFamily::ScriptableObject => "ScriptableObject",
+            RecognizedAssetFamily::PhysicMaterial => "PhysicMaterial",
+            RecognizedAssetFamily::PhysicsMaterial2D => "PhysicsMaterial2D",
+            RecognizedAssetFamily::InputActions => "InputActions",
+            RecognizedAssetFamily::TerrainData => "TerrainData",
+            RecognizedAssetFamily::TerrainLayer => "TerrainLayer",
+            RecognizedAssetFamily::LightingSettings => "LightingSettings",
+            RecognizedAssetFamily::Cubemap => "Cubemap",
+            RecognizedAssetFamily::Flare => "Flare",
+            RecognizedAssetFamily::RenderTexture => "RenderTexture",
+            RecognizedAssetFamily::Preset => "Preset",
+            RecognizedAssetFamily::Timeline => "Timeline",
+            RecognizedAssetFamily::Signal => "Signal",
+            RecognizedAssetFamily::Texture2D => "Texture2D",
+            RecognizedAssetFamily::AudioClip => "AudioClip",
+            RecognizedAssetFamily::Model => "Model",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentifiedAssetFamily {
+    pub family: RecognizedAssetFamily,
+    pub outcome: ImportOutcome,
+}
+
+pub fn is_text_asset_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            TEXT_ASSET_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+}
+
+pub fn import_text_asset(bytes: &[u8], file_name: &str) -> Result<TextAssetContent, DatabaseError> {
+    let path = Path::new(file_name);
+    if !is_text_asset_path(path) {
+        return Err(DatabaseError::Io {
+            path: path.to_path_buf(),
+            message: format!("unsupported TextAsset extension for {file_name}"),
+        });
+    }
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name)
+        .to_string();
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    Ok(TextAssetContent {
+        name,
+        text,
+        bytes: bytes.to_vec(),
+    })
+}
+
+pub fn identify_asset_family(path: &Path, bytes: &[u8], meta_text: Option<&str>) -> Option<IdentifiedAssetFamily> {
+    let asset_label = path.display().to_string();
+    let ext = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if is_text_asset_path(path) {
+        return Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::TextAsset,
+            outcome: ImportOutcome::ready(),
+        });
+    }
+
+    match ext.as_str() {
+        "mask" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AvatarMask,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "mixer" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AudioMixer,
+                outcome: ImportOutcome::limited(
+                    ImportDiagnostic::new(
+                        &asset_label,
+                        "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
+                        "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
+                    )
+                    .partially_usable(),
+                ),
+            });
+        }
+        "spriteatlasv2" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::SpriteAtlasV2,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "spriteatlas" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::SpriteAtlasV1,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "unity" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Scene,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "prefab" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Prefab,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "mat" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Material,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "shader" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Shader,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "compute" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::ComputeShader,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "hlsl" | "cginc" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::ShaderInclude,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "shadervariants" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::ShaderVariantCollection,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "anim" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AnimationClip,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "controller" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AnimatorController,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "overridecontroller" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AnimatorOverrideController,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "ttf" | "otf" | "fontsettings" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Font,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "guiskin" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::GuiSkin,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "mp4" | "webm" | "mov" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Video,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "cs" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Script,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "physicmaterial" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::PhysicMaterial,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "physicsmaterial2d" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::PhysicsMaterial2D,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "inputactions" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::InputActions,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "terrainlayer" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::TerrainLayer,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "lighting" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::LightingSettings,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "cubemap" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Cubemap,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "flare" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Flare,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "rendertexture" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::RenderTexture,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "preset" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Preset,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "playable" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Timeline,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "signal" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Signal,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Texture2D,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "gif" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Texture2D,
+                outcome: ImportOutcome::limited(
+                    ImportDiagnostic::new(
+                        &asset_label,
+                        "GIF imports first frame only; later animation frames are excluded",
+                        "the asset imports with the first frame; later frames stay unavailable",
+                    )
+                    .partially_usable(),
+                ),
+            });
+        }
+        "pict" | "pct" | "pic" | "iff" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Texture2D,
+                outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                    &asset_label,
+                    format!("{ext} texture format is Unsupported"),
+                    "the asset cannot be imported; its content stays unavailable",
+                )),
+            });
+        }
+        "wav" | "wave" | "aif" | "aiff" | "aifc" | "ogg" | "mp3" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AudioClip,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "xm" | "mod" | "it" | "s3m" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::AudioClip,
+                outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                    &asset_label,
+                    format!("{ext} tracker module format is Unsupported"),
+                    "the audio clip cannot be imported; the asset stays failed",
+                )),
+            });
+        }
+        "fbx" | "gltf" | "glb" | "obj" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Model,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        "blend" | "max" | "ma" | "mb" | "c4d" | "lxo" | "3ds" => {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Model,
+                outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                    &asset_label,
+                    format!("{ext} format is Unsupported without launching external applications"),
+                    "the model cannot be imported; content-creation application files are not converted",
+                )),
+            });
+        }
+        _ => {}
+    }
+
+    if let Some(meta) = meta_text {
+        if meta.contains("SpriteAtlasImporter:") {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::SpriteAtlasV2,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+        if meta.contains("TextScriptImporter:") {
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::TextAsset,
+                outcome: ImportOutcome::ready(),
+            });
+        }
+    }
+
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Ok(stream) = unity_yaml::parse(text) {
+            if let Some(doc) = stream.documents.iter().find(|doc| !doc.stripped) {
+                if let Node::Mapping(entries) = &doc.root {
+                    if let Some((key, _)) = entries.first() {
+                        let family = match key.as_str() {
+                            "AvatarMask" => Some((
+                                RecognizedAssetFamily::AvatarMask,
+                                ImportOutcome::ready(),
+                            )),
+                            "AudioMixerController" | "AudioMixer" => Some((
+                                RecognizedAssetFamily::AudioMixer,
+                                ImportOutcome::limited(
+                                    ImportDiagnostic::new(
+                                        &asset_label,
+                                        "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
+                                        "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
+                                    )
+                                    .partially_usable(),
+                                ),
+                            )),
+                            "SpriteAtlasAsset" => Some((
+                                RecognizedAssetFamily::SpriteAtlasV2,
+                                ImportOutcome::ready(),
+                            )),
+                            "SpriteAtlas" => Some((
+                                RecognizedAssetFamily::SpriteAtlasV1,
+                                ImportOutcome::ready(),
+                            )),
+                            "TerrainData" => Some((
+                                RecognizedAssetFamily::TerrainData,
+                                ImportOutcome::ready(),
+                            )),
+                            "MonoBehaviour" => Some((
+                                RecognizedAssetFamily::ScriptableObject,
+                                ImportOutcome::ready(),
+                            )),
+                            _ => None,
+                        };
+                        if let Some((family, outcome)) = family {
+                            return Some(IdentifiedAssetFamily { family, outcome });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,8 +544,39 @@ impl Project {
         self.inventory
             .entries
             .iter()
-            .filter(|entry| matches_filter(entry, filter))
+            .filter(|entry| matches_filter(self, entry, filter))
             .collect()
+    }
+
+    pub fn rename_asset(&mut self, from: &Path, new_file_name: &str) -> Result<(), DatabaseError> {
+        let from_rel = self.relative_path(from);
+        let to_rel = match from_rel.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(new_file_name),
+            _ => PathBuf::from(new_file_name),
+        };
+        self.move_asset(&from_rel, &to_rel)
+    }
+
+    pub fn asset_import_state(&self, entry: &AssetEntry) -> AssetImportState {
+        let full_path = self.root.join(&entry.path);
+        if !full_path.is_file() {
+            return AssetImportState::Missing;
+        }
+        let ext = entry
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .unwrap_or_default();
+        if ext == "cs" && self.capabilities().restricted {
+            return AssetImportState::BlockedByTrust;
+        }
+        let bytes = fs::read(&full_path).unwrap_or_default();
+        let meta_text = fs::read_to_string(meta_path_for(&full_path)).ok();
+        if let Some(identified) = identify_asset_family(&entry.path, &bytes, meta_text.as_deref()) {
+            return identified.outcome.state;
+        }
+        AssetImportState::Ready
     }
 
     pub fn move_asset(&mut self, from: &Path, to: &Path) -> Result<(), DatabaseError> {
@@ -158,12 +689,24 @@ fn relocate_pair(
     Ok(())
 }
 
-fn matches_filter(entry: &AssetEntry, filter: &AssetFilter) -> bool {
+fn matches_filter(project: &Project, entry: &AssetEntry, filter: &AssetFilter) -> bool {
     if !filter.include_sub_assets && entry.kind != AssetKind::Main {
         return false;
     }
+    if let Some(expected_folder) = &filter.folder {
+        let rel_folder = project.relative_path(expected_folder);
+        if !entry.path.starts_with(&rel_folder) {
+            return false;
+        }
+    }
     if let Some(expected_class) = &filter.class {
-        if entry.class.as_deref() != Some(expected_class.as_str()) {
+        let actual_class = resolved_entry_class(project, entry);
+        if actual_class.as_deref() != Some(expected_class.as_str()) {
+            return false;
+        }
+    }
+    if let Some(expected_state) = filter.state {
+        if project.asset_import_state(entry) != expected_state {
             return false;
         }
     }
@@ -178,6 +721,17 @@ fn matches_filter(entry: &AssetEntry, filter: &AssetFilter) -> bool {
         }
     }
     true
+}
+
+fn resolved_entry_class(project: &Project, entry: &AssetEntry) -> Option<String> {
+    if let Some(class) = &entry.class {
+        return Some(class.clone());
+    }
+    let full_path = project.root.join(&entry.path);
+    let bytes = fs::read(&full_path).unwrap_or_default();
+    let meta_text = fs::read_to_string(meta_path_for(&full_path)).ok();
+    identify_asset_family(&entry.path, &bytes, meta_text.as_deref())
+        .map(|identified| identified.family.class_name().to_string())
 }
 
 fn matches_name(entry: &AssetEntry, needle: &str) -> bool {

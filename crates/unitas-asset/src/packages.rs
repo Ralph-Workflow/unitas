@@ -520,7 +520,7 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
             registry
                 .scopes
                 .iter()
-                .any(|scope| scope == &dependency.name)
+                .any(|scope| scope_matches(scope, &dependency.name))
         }) {
             dependency.source = PackageSource::ScopedRegistry(registry.url.clone());
             dependency.scoped_registry = Some(registry.url.clone());
@@ -528,6 +528,15 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
     }
 
     Ok(manifest)
+}
+
+fn scope_matches(scope: &str, package_name: &str) -> bool {
+    if scope == package_name {
+        return true;
+    }
+    package_name
+        .strip_prefix(scope)
+        .is_some_and(|rest| rest.starts_with('.'))
 }
 
 pub fn parse_lock(text: &str) -> Result<PackageLock, PackageError> {
@@ -847,11 +856,8 @@ pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> Resolu
     let conflicted = detect_conflicts(&groups, &direct, &mut report);
 
     for dependency in &manifest.dependencies {
-        let version = dependency.version.clone().or_else(|| {
-            locked
-                .get(dependency.name.as_str())
-                .and_then(|e| e.version.clone())
-        });
+        let locked_entry = locked.get(dependency.name.as_str()).copied();
+        let version = resolve_direct_version(dependency, locked_entry);
         match version {
             Some(version) => report.resolved.push(ResolvedPackage {
                 name: dependency.name.clone(),
@@ -882,7 +888,7 @@ pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> Resolu
             }
             report.resolved.push(ResolvedPackage {
                 name: entry.name.clone(),
-                version: entry.version.clone(),
+                version: locked_entry_version(entry),
                 source: entry.source.clone(),
                 depth: entry.depth,
             });
@@ -909,6 +915,35 @@ pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> Resolu
     report
 }
 
+fn locked_entry_version(entry: &LockedPackage) -> Option<String> {
+    if matches!(entry.source, PackageSource::Git(_)) {
+        if let Some(hash) = &entry.hash {
+            return Some(hash.clone());
+        }
+    }
+    entry.version.clone().or_else(|| entry.hash.clone())
+}
+
+fn resolve_direct_version(
+    dependency: &PackageDependency,
+    locked_entry: Option<&LockedPackage>,
+) -> Option<String> {
+    if let Some(entry) = locked_entry {
+        if let Some(locked_ver) = locked_entry_version(entry) {
+            return Some(locked_ver);
+        }
+    }
+    if matches!(dependency.source, PackageSource::Git(_)) {
+        if let Some(hash) = &dependency.hash {
+            return Some(hash.clone());
+        }
+    }
+    dependency
+        .version
+        .clone()
+        .or_else(|| dependency.hash.clone())
+}
+
 pub fn open_offline(manifest: &PackageManifest, lock: &PackageLock) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     let requests = collect_requests(manifest, Some(lock));
@@ -931,7 +966,7 @@ pub fn open_offline(manifest: &PackageManifest, lock: &PackageLock) -> Resolutio
         }
         report.resolved.push(ResolvedPackage {
             name: entry.name.clone(),
-            version: entry.version.clone(),
+            version: locked_entry_version(entry),
             source: entry.source.clone(),
             depth: entry.depth,
         });

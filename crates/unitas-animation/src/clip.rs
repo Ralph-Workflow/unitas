@@ -310,7 +310,7 @@ impl AnimationClip {
     }
 
     fn collect_events(&self, prev_time: f32, current_time: f32) -> Vec<AnimationEvent> {
-        if self.events.is_empty() || current_time <= prev_time {
+        if self.events.is_empty() || (current_time - prev_time).abs() <= EVENT_EPSILON {
             return Vec::new();
         }
         let d = self.effective_duration();
@@ -324,6 +324,10 @@ impl AnimationClip {
                     .collect();
             }
             return Vec::new();
+        }
+
+        if current_time < prev_time {
+            return self.collect_events_reverse(prev_time, current_time, d);
         }
 
         match self.wrap_mode {
@@ -374,13 +378,114 @@ impl AnimationClip {
                         } else {
                             let rev_lo = d - seg_hi;
                             let rev_hi = d - seg_lo;
-                            fired.extend(self.events_in_window(rev_lo, rev_hi, true, include_lo));
+                            fired.extend(
+                                self.events_in_window_descending(rev_lo, rev_hi, true, include_lo),
+                            );
                         }
                     }
                 }
                 fired
             }
         }
+    }
+
+    fn collect_events_reverse(&self, prev_time: f32, current_time: f32, d: f32) -> Vec<AnimationEvent> {
+        match self.wrap_mode {
+            WrapMode::Once | WrapMode::ClampForever => {
+                if prev_time <= 0.0 {
+                    return Vec::new();
+                }
+                let hi = prev_time.min(d);
+                let lo = current_time.max(0.0);
+                let include_hi = prev_time >= d;
+                self.events_in_window_descending(lo, hi, true, include_hi)
+            }
+            WrapMode::Loop => {
+                let start_cycle = (prev_time.max(0.0) / d).floor() as i64;
+                let end_cycle = (current_time.max(0.0) / d).floor() as i64;
+                let max_cycles = (start_cycle - end_cycle).clamp(0, 64);
+                let mut fired = Vec::new();
+                for offset in 0..=max_cycles {
+                    let cycle = start_cycle - offset;
+                    let cycle_start = cycle as f32 * d;
+                    let cycle_end = (cycle + 1) as f32 * d;
+                    let seg_lo = (current_time.max(cycle_start) - cycle_start).clamp(0.0, d);
+                    let seg_hi = (prev_time.min(cycle_end) - cycle_start).clamp(0.0, d);
+                    if seg_hi > seg_lo + EVENT_EPSILON {
+                        let include_hi = offset > 0;
+                        fired.extend(
+                            self.events_in_window_descending(seg_lo, seg_hi, true, include_hi),
+                        );
+                    }
+                }
+                fired
+            }
+            WrapMode::PingPong => {
+                let start_cycle = (prev_time.max(0.0) / d).floor() as i64;
+                let end_cycle = (current_time.max(0.0) / d).floor() as i64;
+                let max_cycles = (start_cycle - end_cycle).clamp(0, 64);
+                let mut fired = Vec::new();
+                for offset in 0..=max_cycles {
+                    let cycle = start_cycle - offset;
+                    let cycle_start = cycle as f32 * d;
+                    let cycle_end = (cycle + 1) as f32 * d;
+                    let seg_lo = (current_time.max(cycle_start) - cycle_start).clamp(0.0, d);
+                    let seg_hi = (prev_time.min(cycle_end) - cycle_start).clamp(0.0, d);
+                    if seg_hi > seg_lo + EVENT_EPSILON {
+                        let include_hi = offset > 0;
+                        if cycle.rem_euclid(2) == 0 {
+                            fired.extend(self.events_in_window_descending(
+                                seg_lo,
+                                seg_hi,
+                                true,
+                                include_hi,
+                            ));
+                        } else {
+                            let fwd_lo = d - seg_hi;
+                            let fwd_hi = d - seg_lo;
+                            fired.extend(self.events_in_window(fwd_lo, fwd_hi, include_hi, true));
+                        }
+                    }
+                }
+                fired
+            }
+        }
+    }
+
+    fn events_in_window_descending(
+        &self,
+        lo: f32,
+        hi: f32,
+        include_lo: bool,
+        include_hi: bool,
+    ) -> Vec<AnimationEvent> {
+        let mut matched: Vec<(usize, &AnimationEvent)> = self
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                if !e.time.is_finite() {
+                    return false;
+                }
+                let ge_lo = if include_lo {
+                    e.time >= lo - EVENT_EPSILON
+                } else {
+                    e.time > lo + EVENT_EPSILON
+                };
+                let le_hi = if include_hi {
+                    e.time <= hi + EVENT_EPSILON
+                } else {
+                    e.time < hi - EVENT_EPSILON
+                };
+                ge_lo && le_hi
+            })
+            .collect();
+        matched.sort_by(|(idx_a, ev_a), (idx_b, ev_b)| {
+            ev_b.time
+                .total_cmp(&ev_a.time)
+                .then_with(|| idx_a.cmp(idx_b))
+        });
+        matched.into_iter().map(|(_, ev)| ev.clone()).collect()
     }
 
     fn events_in_window(

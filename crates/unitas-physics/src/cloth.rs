@@ -229,6 +229,12 @@ impl Cloth {
         &self.contacts
     }
 
+    pub fn clear_transform_motion(&mut self) {
+        for particle in &mut self.particles {
+            particle.previous_position = particle.position;
+        }
+    }
+
     pub fn simulate(&mut self, world: &World, delta_seconds: f64) -> Result<(), ClothError> {
         if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
             return Err(ClothError::InvalidDeltaTime(delta_seconds));

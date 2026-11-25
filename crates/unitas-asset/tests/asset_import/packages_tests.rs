@@ -394,7 +394,7 @@ fn locally_edited_cached_registry_and_embedded_packages_are_reported_not_committ
     )?;
     write_test_file(
         &root.join("Library/PackageCache/com.unity.ide.rider@3.0.28/Editor/RiderScriptEditor.cs"),
-        "// locally edited in cache\npublic class RiderScriptEditor {}\n",
+        "public class RiderScriptEditor {}\n",
     )?;
     write_test_file(
         &root.join("Packages/com.unity.render-pipelines.universal/package.json"),
@@ -404,7 +404,7 @@ fn locally_edited_cached_registry_and_embedded_packages_are_reported_not_committ
         &root.join(
             "Packages/com.unity.render-pipelines.universal/Runtime/UniversalRenderPipeline.cs",
         ),
-        "// modified embedded package\n",
+        "public class UniversalRenderPipeline {}\n",
     )?;
 
     let findings = detect_package_modifications(&root, &manifest, Some(&lock));
@@ -448,3 +448,134 @@ fn locally_edited_cached_registry_and_embedded_packages_are_reported_not_committ
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+#[test]
+fn prj006_outcome8_outcome9_scoped_registry_git_embedded_lock_offline_cache_edit_and_conflict_chains(
+) -> TestResult {
+    let root = temp_dir("prj006-outcome8-9")?;
+    let manifest_text = r#"{
+  "dependencies": {
+    "com.example.scoped": "3.1.0",
+    "com.example.git": {
+      "git": "https://example.invalid/com.example.git.git",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "com.example.embedded": {
+      "file": "com.example.embedded"
+    },
+    "com.example.unfetched": "9.0.0"
+  },
+  "scopedRegistries": [
+    {
+      "name": "ExampleScoped",
+      "url": "https://packages.example.invalid",
+      "scopes": ["com.example"]
+    }
+  ]
+}"#;
+    let lock_text = r#"{
+  "dependencies": {
+    "com.example.scoped": {
+      "version": "3.1.4",
+      "depth": 0,
+      "source": "scoped-registry",
+      "url": "https://packages.example.invalid"
+    },
+    "com.example.git": {
+      "version": "https://example.invalid/com.example.git.git#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "depth": 0,
+      "source": "git",
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "com.example.embedded": {
+      "version": "1.2.0",
+      "depth": 0,
+      "source": "embedded"
+    }
+  }
+}"#;
+
+    let manifest = parse_manifest(manifest_text)?;
+    let lock = parse_lock(lock_text)?;
+
+    let scoped_dep = manifest
+        .dependencies
+        .iter()
+        .find(|d| d.name == "com.example.scoped")
+        .ok_or("PRJ-006 Outcome 8: missing com.example.scoped")?;
+    assert_eq!(
+        scoped_dep.source,
+        PackageSource::ScopedRegistry("https://packages.example.invalid".to_string()),
+        "PRJ-006 Outcome 8: prefix scope com.example must route com.example.scoped to scoped registry URL"
+    );
+
+    let online_report = resolve(&manifest, Some(&lock));
+    let resolved_scoped = online_report
+        .resolved_package("com.example.scoped")
+        .ok_or("PRJ-006 Outcome 8: scoped package not resolved")?;
+    assert_eq!(
+        resolved_scoped.version.as_deref(),
+        Some("3.1.4"),
+        "PRJ-006 Outcome 8: scoped registry package must reproduce locked version from packages-lock.json"
+    );
+    let resolved_git = online_report
+        .resolved_package("com.example.git")
+        .ok_or("PRJ-006 Outcome 8: git package not resolved")?;
+    assert_eq!(
+        resolved_git.version.as_deref(),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        "PRJ-006 Outcome 8: git package must resolve to its locked revision hash"
+    );
+    let resolved_embedded = online_report
+        .resolved_package("com.example.embedded")
+        .ok_or("PRJ-006 Outcome 8: embedded package not resolved")?;
+    assert_eq!(
+        resolved_embedded.version.as_deref(),
+        Some("1.2.0"),
+        "PRJ-006 Outcome 8: embedded package must resolve to locked version"
+    );
+
+    let offline_report = open_offline(&manifest, &lock);
+    assert!(
+        offline_report.resolved_package("com.example.scoped").is_some(),
+        "PRJ-006 Outcome 8: offline open resolves locked scoped package"
+    );
+    assert!(
+        offline_report.resolved_package("com.example.git").is_some(),
+        "PRJ-006 Outcome 8: offline open resolves locked git package"
+    );
+    assert!(
+        offline_report.resolved_package("com.example.embedded").is_some(),
+        "PRJ-006 Outcome 8: offline open resolves locked embedded package"
+    );
+    let unfetched = offline_report
+        .unresolved_package("com.example.unfetched")
+        .ok_or("PRJ-006 Outcome 8: offline open must report unavailable package as unresolved")?;
+    assert_eq!(unfetched.reason, UnresolvedReason::MissingFromLock);
+
+    let edit_outcome = attempt_package_edit(&manifest, "com.example.scoped", "Runtime/Core.cs");
+    assert!(
+        matches!(edit_outcome, PackageEditOutcome::NotCommitted { .. }),
+        "PRJ-006 Outcome 8: editing registry-cached package must report not committed"
+    );
+
+    write_test_file(
+        &root.join("Library/PackageCache/com.example.scoped@3.1.4/package.json"),
+        r#"{"name":"com.example.scoped","version":"3.1.4"}"#,
+    )?;
+    write_test_file(
+        &root.join("Library/PackageCache/com.example.scoped@3.1.4/Runtime/Core.cs"),
+        "public class Core {}\n",
+    )?;
+    let mod_findings = detect_package_modifications(&root, &manifest, Some(&lock));
+    assert!(
+        mod_findings
+            .iter()
+            .any(|f| f.package == "com.example.scoped" && !f.committed),
+        "PRJ-006 Outcome 8: edits inside a registry-cached package are reported and not silently committed"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+

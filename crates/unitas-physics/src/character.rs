@@ -87,11 +87,52 @@ impl BitAndAssign for CollisionFlags {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControllerColliderHit {
+    pub collider: EntityId,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub move_direction: [f64; 3],
+    pub move_length: f64,
+}
+
+impl Default for ControllerColliderHit {
+    fn default() -> Self {
+        Self {
+            collider: EntityId::new(0),
+            point: [0.0; 3],
+            normal: [0.0; 3],
+            move_direction: [0.0; 3],
+            move_length: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MoveResult {
     pub position: [f64; 3],
     pub is_grounded: bool,
     pub collision_flags: CollisionFlags,
     pub ground_entity: Option<EntityId>,
+}
+
+const MAX_RECORDED_HITS: usize = 8;
+
+#[derive(Default)]
+struct MoveStepOutcome {
+    flags: CollisionFlags,
+    grounded: bool,
+    ground_entity: Option<EntityId>,
+    hits: [ControllerColliderHit; MAX_RECORDED_HITS],
+    hit_count: usize,
+}
+
+impl MoveStepOutcome {
+    fn push_hit(&mut self, hit: ControllerColliderHit) {
+        if self.hit_count < MAX_RECORDED_HITS {
+            self.hits[self.hit_count] = hit;
+            self.hit_count += 1;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +150,9 @@ pub struct CharacterController {
     is_grounded: bool,
     collision_flags: CollisionFlags,
     ground_entity: Option<EntityId>,
+    velocity: [f64; 3],
+    collider_hits: [ControllerColliderHit; MAX_RECORDED_HITS],
+    collider_hit_count: usize,
 }
 
 impl Default for CharacterController {
@@ -127,6 +171,9 @@ impl Default for CharacterController {
             is_grounded: false,
             collision_flags: CollisionFlags::NONE,
             ground_entity: None,
+            velocity: [0.0; 3],
+            collider_hits: [ControllerColliderHit::default(); MAX_RECORDED_HITS],
+            collider_hit_count: 0,
         }
     }
 }
@@ -175,6 +222,20 @@ impl CharacterController {
         self.ground_entity
     }
 
+    pub fn velocity(&self) -> [f64; 3] {
+        self.velocity
+    }
+
+    pub fn collider_hits(&self) -> &[ControllerColliderHit] {
+        &self.collider_hits[..self.collider_hit_count]
+    }
+
+    pub fn drain_collider_hits(&mut self) -> Vec<ControllerColliderHit> {
+        let out = self.collider_hits[..self.collider_hit_count].to_vec();
+        self.collider_hit_count = 0;
+        out
+    }
+
     pub fn teleport(&mut self, position: [f64; 3]) -> Result<[f64; 3], PhysicsError> {
         self.validate()?;
         if !position.iter().all(|component| component.is_finite()) {
@@ -183,7 +244,28 @@ impl CharacterController {
         self.is_grounded = false;
         self.collision_flags = CollisionFlags::NONE;
         self.ground_entity = None;
+        self.velocity = [0.0; 3];
+        self.collider_hit_count = 0;
         Ok(position)
+    }
+
+    pub fn simple_move(
+        &mut self,
+        world: &World,
+        current_position: [f64; 3],
+        speed: [f64; 3],
+        delta_seconds: f64,
+    ) -> Result<MoveResult, PhysicsError> {
+        if !delta_seconds.is_finite() || delta_seconds < 0.0 {
+            return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
+        }
+        let g = world.gravity();
+        let motion = [
+            speed[0] * delta_seconds,
+            g[1] * delta_seconds,
+            speed[2] * delta_seconds,
+        ];
+        self.move_character_with_dt(world, current_position, motion, delta_seconds)
     }
 
     pub fn move_character(
@@ -217,6 +299,8 @@ impl CharacterController {
             self.is_grounded = false;
             self.collision_flags = CollisionFlags::NONE;
             self.ground_entity = None;
+            self.velocity = [0.0; 3];
+            self.collider_hit_count = 0;
             return Ok(MoveResult {
                 position: current_position,
                 is_grounded: false,
@@ -225,19 +309,19 @@ impl CharacterController {
             });
         }
 
+        self.collider_hit_count = 0;
         let platform_delta = self.platform_displacement(world, delta_seconds);
         let total_motion = add(motion, platform_delta);
         let mut position = current_position;
-        let mut flags = CollisionFlags::NONE;
-        let mut grounded = false;
-        let mut ground_entity = None;
+        let mut outcome = MoveStepOutcome::default();
 
-        let depenetrated = self.depenetrate(world, position, &mut flags);
+        let depenetrated = self.depenetrate(world, position, &mut outcome.flags);
         let did_depenetrate = vector_length(subtract(depenetrated, position)) > MOTION_EPSILON;
         position = depenetrated;
 
         if vector_length(total_motion) < self.min_move_distance && !did_depenetrate {
             self.collision_flags = CollisionFlags::NONE;
+            self.velocity = [0.0; 3];
             return Ok(MoveResult {
                 position,
                 is_grounded: self.is_grounded,
@@ -252,9 +336,7 @@ impl CharacterController {
                 world,
                 position,
                 lateral_motion,
-                &mut flags,
-                &mut grounded,
-                &mut ground_entity,
+                &mut outcome,
             );
         }
 
@@ -264,18 +346,16 @@ impl CharacterController {
                 world,
                 position,
                 vertical_motion[1],
-                &mut flags,
-                &mut grounded,
-                &mut ground_entity,
+                &mut outcome,
             );
         }
 
         if total_motion[1] <= MOTION_EPSILON {
             if let Some(hit) = self.probe_ground(world, position) {
                 if self.is_walkable_normal(hit.normal) {
-                    grounded = true;
-                    flags.insert(CollisionFlags::BELOW);
-                    ground_entity = Some(hit.entity);
+                    outcome.grounded = true;
+                    outcome.flags.insert(CollisionFlags::BELOW);
+                    outcome.ground_entity = Some(hit.entity);
                     if hit.distance > self.skin_width && total_motion[1] <= 0.0 {
                         let snap = (hit.distance - self.skin_width).min(self.skin_width);
                         position[1] -= snap;
@@ -284,15 +364,27 @@ impl CharacterController {
             }
         }
 
-        self.is_grounded = grounded;
-        self.collision_flags = flags;
-        self.ground_entity = ground_entity;
+        self.is_grounded = outcome.grounded;
+        self.collision_flags = outcome.flags;
+        self.ground_entity = outcome.ground_entity;
+        self.collider_hits = outcome.hits;
+        self.collider_hit_count = outcome.hit_count;
+        if delta_seconds > MOTION_EPSILON {
+            let disp = subtract(position, current_position);
+            self.velocity = [
+                disp[0] / delta_seconds,
+                disp[1] / delta_seconds,
+                disp[2] / delta_seconds,
+            ];
+        } else {
+            self.velocity = [0.0; 3];
+        }
 
         Ok(MoveResult {
             position,
-            is_grounded: grounded,
-            collision_flags: flags,
-            ground_entity,
+            is_grounded: outcome.grounded,
+            collision_flags: outcome.flags,
+            ground_entity: outcome.ground_entity,
         })
     }
 
@@ -467,9 +559,7 @@ impl CharacterController {
         world: &World,
         start_position: [f64; 3],
         lateral_motion: [f64; 3],
-        flags: &mut CollisionFlags,
-        grounded: &mut bool,
-        ground_entity: &mut Option<EntityId>,
+        outcome: &mut MoveStepOutcome,
     ) -> [f64; 3] {
         let mut position = start_position;
         let mut remaining = lateral_motion;
@@ -488,6 +578,14 @@ impl CharacterController {
                 break;
             };
 
+            outcome.push_hit(ControllerColliderHit {
+                collider: hit.entity,
+                point: hit.point,
+                normal: hit.normal,
+                move_direction: direction,
+                move_length: distance,
+            });
+
             let safe_travel = (hit.distance - self.skin_width).max(0.0);
             position = [
                 position[0] + direction[0] * safe_travel,
@@ -502,22 +600,22 @@ impl CharacterController {
             ];
 
             if self.is_walkable_normal(hit.normal) {
-                flags.insert(CollisionFlags::BELOW);
-                *grounded = true;
-                *ground_entity = Some(hit.entity);
+                outcome.flags.insert(CollisionFlags::BELOW);
+                outcome.grounded = true;
+                outcome.ground_entity = Some(hit.entity);
                 remaining = project_onto_plane(leftover, hit.normal);
                 continue;
             }
 
             if let Some((stepped_pos, step_ground)) = self.try_step_up(world, position, leftover) {
                 position = stepped_pos;
-                flags.insert(CollisionFlags::BELOW);
-                *grounded = true;
-                *ground_entity = Some(step_ground);
+                outcome.flags.insert(CollisionFlags::BELOW);
+                outcome.grounded = true;
+                outcome.ground_entity = Some(step_ground);
                 break;
             }
 
-            flags.insert(self.classify_normal(hit.normal));
+            outcome.flags.insert(self.classify_normal(hit.normal));
             let mut wall_normal = [hit.normal[0], 0.0, hit.normal[2]];
             if let Some(norm_xz) = normalize(wall_normal) {
                 wall_normal = norm_xz;
@@ -628,9 +726,7 @@ impl CharacterController {
         world: &World,
         start_position: [f64; 3],
         vertical_delta: f64,
-        flags: &mut CollisionFlags,
-        grounded: &mut bool,
-        ground_entity: &mut Option<EntityId>,
+        outcome: &mut MoveStepOutcome,
     ) -> [f64; 3] {
         let direction = if vertical_delta > 0.0 {
             [0.0, 1.0, 0.0]
@@ -647,6 +743,14 @@ impl CharacterController {
             ];
         };
 
+        outcome.push_hit(ControllerColliderHit {
+            collider: hit.entity,
+            point: hit.point,
+            normal: hit.normal,
+            move_direction: direction,
+            move_length: distance,
+        });
+
         let safe_travel = (hit.distance - self.skin_width).max(0.0);
         let mut position = [
             start_position[0],
@@ -655,13 +759,13 @@ impl CharacterController {
         ];
 
         if vertical_delta > 0.0 {
-            flags.insert(CollisionFlags::ABOVE);
+            outcome.flags.insert(CollisionFlags::ABOVE);
         } else if self.is_walkable_normal(hit.normal) {
-            flags.insert(CollisionFlags::BELOW);
-            *grounded = true;
-            *ground_entity = Some(hit.entity);
+            outcome.flags.insert(CollisionFlags::BELOW);
+            outcome.grounded = true;
+            outcome.ground_entity = Some(hit.entity);
         } else {
-            flags.insert(CollisionFlags::SIDES);
+            outcome.flags.insert(CollisionFlags::SIDES);
             let leftover_dist = (distance - safe_travel).max(0.0);
             if leftover_dist > MOTION_EPSILON {
                 let slide = project_onto_plane([0.0, -leftover_dist, 0.0], hit.normal);
@@ -676,9 +780,9 @@ impl CharacterController {
                         ) {
                             Some(second_hit) => {
                                 if self.is_walkable_normal(second_hit.normal) {
-                                    flags.insert(CollisionFlags::BELOW);
-                                    *grounded = true;
-                                    *ground_entity = Some(second_hit.entity);
+                                    outcome.flags.insert(CollisionFlags::BELOW);
+                                    outcome.grounded = true;
+                                    outcome.ground_entity = Some(second_hit.entity);
                                 }
                                 (second_hit.distance - self.skin_width).max(0.0)
                             }

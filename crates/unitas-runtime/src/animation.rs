@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use unitas_animation::{
-    AnimatedValue, AnimationDiagnostic, AnimationError, AnimationEvent, Animator,
-    AnimatorController, AnimatorStateInfo, CurveBindingTarget, SampledBinding, TransformChannel,
-    TransformProperty,
+    blend_sampled_bindings, AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationError,
+    AnimationEvent, Animator, AnimatorController, AnimatorCullingMode, AnimatorFrame,
+    AnimatorStateInfo, AnimatorUpdateMode, CurveBindingTarget, SampledBinding,
+    StateMachineCallback, StateMachineCallbackKind, TransformChannel, TransformProperty, WrapMode,
 };
 use unitas_core::{compose_world, normalize_rotation, EntityId, Transform};
 
@@ -19,6 +20,10 @@ pub enum AnimationRuntimeDiagnostic {
     UnresolvedChildPath {
         entity: EntityId,
         object_path: String,
+    },
+    LegacyAnimation {
+        entity: EntityId,
+        message: String,
     },
 }
 
@@ -39,6 +44,9 @@ impl std::fmt::Display for AnimationRuntimeDiagnostic {
                 formatter,
                 "child object path '{object_path}' could not be resolved in scene graph"
             ),
+            Self::LegacyAnimation { message, .. } => {
+                write!(formatter, "legacy animation: {message}")
+            }
         }
     }
 }
@@ -52,6 +60,14 @@ pub struct EntityAnimatorEntry {
     pub fired_events: Vec<AnimationEvent>,
     pub typed_diagnostics: Vec<AnimationRuntimeDiagnostic>,
     pub diagnostics: Vec<String>,
+    pub update_mode: AnimatorUpdateMode,
+    pub culling_mode: AnimatorCullingMode,
+    pub visible: bool,
+    pub enabled: bool,
+    pub keep_state_on_disable: bool,
+    pub callbacks: Vec<StateMachineCallback>,
+    pub root_motion: AnimatorRootMotion,
+    pub writes_transforms: bool,
 }
 
 impl EntityAnimatorEntry {
@@ -64,6 +80,14 @@ impl EntityAnimatorEntry {
             fired_events: Vec::new(),
             typed_diagnostics: Vec::new(),
             diagnostics: Vec::new(),
+            update_mode: AnimatorUpdateMode::Normal,
+            culling_mode: AnimatorCullingMode::AlwaysAnimate,
+            visible: true,
+            enabled: true,
+            keep_state_on_disable: false,
+            callbacks: Vec::new(),
+            root_motion: AnimatorRootMotion::default(),
+            writes_transforms: true,
         }
     }
 
@@ -81,6 +105,7 @@ pub struct AnimationWorld {
     controllers: BTreeMap<u64, AnimatorController>,
     next_controller_handle: u64,
     entries: BTreeMap<EntityId, EntityAnimatorEntry>,
+    legacy: BTreeMap<EntityId, LegacyAnimationComponent>,
 }
 
 impl AnimationWorld {
@@ -89,6 +114,7 @@ impl AnimationWorld {
             controllers: BTreeMap::new(),
             next_controller_handle: 1,
             entries: BTreeMap::new(),
+            legacy: BTreeMap::new(),
         }
     }
 
@@ -166,6 +192,9 @@ impl AnimationWorld {
         };
         let mut animator = Animator::new(controller);
         animator.set_speed(entry.speed);
+        animator.set_update_mode(entry.update_mode);
+        animator.set_culling_mode(entry.culling_mode);
+        animator.set_visible(entry.visible);
         let initial_diags: Vec<AnimationDiagnostic> = animator.diagnostics().to_vec();
         entry.controller_handle = controller_handle;
         entry.fired_events.clear();
@@ -174,14 +203,20 @@ impl AnimationWorld {
         for diag in initial_diags {
             entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
         }
+        let defaults = animator.captured_defaults().to_vec();
+        let mut transform = entry.transform.clone();
+        let mut default_children = apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
         let step_result = animator.step(0.0);
         for diag in step_result.diagnostics {
             entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
         }
         entry.fired_events.extend(step_result.fired_events);
+        entry.callbacks = step_result.callbacks;
         entry.animator = Some(animator);
-        let child_bindings = apply_self_bindings_to_entry(entity, entry, &step_result.bindings);
-        Ok(child_bindings)
+        let child_bindings = apply_bindings_to_transform(entity, entry, &mut transform, &step_result.bindings);
+        entry.transform = transform;
+        default_children.extend(child_bindings);
+        Ok(default_children)
     }
 
     pub fn set_speed(&mut self, entity: EntityId, speed: f32) -> Result<(), String> {
@@ -402,34 +437,235 @@ impl AnimationWorld {
     }
 
     pub fn tick(&mut self, scaled_delta_seconds: f64) -> Vec<(EntityId, Vec<SampledBinding>)> {
-        let dt = if scaled_delta_seconds.is_finite() && scaled_delta_seconds > 0.0 {
+        let delta = if scaled_delta_seconds.is_finite() && scaled_delta_seconds > 0.0 {
             scaled_delta_seconds as f32
         } else {
             0.0
         };
+        self.tick_frame(&AnimatorFrame::new(delta, delta, 1.0 / 60.0))
+    }
+
+    pub fn tick_frame(&mut self, frame: &AnimatorFrame) -> Vec<(EntityId, Vec<SampledBinding>)> {
         let mut all_child_bindings = Vec::new();
         for (entity, entry) in &mut self.entries {
+            if !entry.enabled {
+                continue;
+            }
             let Some(animator) = &mut entry.animator else {
                 continue;
             };
-            let step_result = animator.step(dt);
+            let step_result = animator.step_frame(frame);
             for diag in step_result.diagnostics {
                 entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
             }
             entry.fired_events.extend(step_result.fired_events);
+            entry.callbacks = step_result.callbacks;
+            entry.writes_transforms = step_result.writes_transforms;
+            let previous = entry.transform.clone();
+            let mut sampled = entry.transform.clone();
             let child_bindings =
-                apply_self_bindings_to_entry(*entity, entry, &step_result.bindings);
+                apply_bindings_to_transform(*entity, entry, &mut sampled, &step_result.bindings);
+            entry.root_motion = AnimatorRootMotion {
+                delta_position: subtract_vectors(sampled.translation, previous.translation),
+                delta_rotation: rotation_delta(previous.rotation, sampled.rotation),
+            };
+            if step_result.writes_transforms {
+                entry.transform = sampled;
+            }
             if !child_bindings.is_empty() {
                 all_child_bindings.push((*entity, child_bindings));
             }
         }
+        self.tick_legacy(frame, &mut all_child_bindings);
         all_child_bindings
+    }
+
+    fn tick_legacy(
+        &mut self,
+        frame: &AnimatorFrame,
+        all_child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
+    ) {
+        let entities: Vec<EntityId> = self.legacy.keys().copied().collect();
+        for entity in entities {
+            let Some(component) = self.legacy.get_mut(&entity) else {
+                continue;
+            };
+            let sample = component.step(frame.scaled_delta);
+            let Some(entry) = self.entries.get_mut(&entity) else {
+                continue;
+            };
+            for message in &sample.errors {
+                entry.push_diagnostic(AnimationRuntimeDiagnostic::LegacyAnimation {
+                    entity,
+                    message: message.clone(),
+                });
+            }
+            if sample.bindings.is_empty() {
+                continue;
+            }
+            entry.fired_events.extend(sample.fired_events);
+            let previous = entry.transform.clone();
+            let mut sampled = entry.transform.clone();
+            let child_bindings =
+                apply_bindings_to_transform(entity, entry, &mut sampled, &sample.bindings);
+            let weight = component.weight();
+            if weight < 1.0 {
+                sampled.translation = blend_vector(previous.translation, sampled.translation, weight);
+                sampled.rotation = blend_quaternion(previous.rotation, sampled.rotation, weight);
+                sampled.scale = blend_vector(previous.scale, sampled.scale, weight);
+            }
+            entry.transform = sampled;
+            if !child_bindings.is_empty() {
+                all_child_bindings.push((entity, child_bindings));
+            }
+        }
+    }
+
+    pub fn set_update_mode(&mut self, entity: EntityId, mode: AnimatorUpdateMode) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.update_mode = mode;
+        if let Some(animator) = &mut entry.animator {
+            animator.set_update_mode(mode);
+        }
+        Ok(())
+    }
+
+    pub fn update_mode(&self, entity: EntityId) -> Option<AnimatorUpdateMode> {
+        self.entries.get(&entity).map(|entry| entry.update_mode)
+    }
+
+    pub fn set_culling_mode(
+        &mut self,
+        entity: EntityId,
+        mode: AnimatorCullingMode,
+    ) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.culling_mode = mode;
+        if let Some(animator) = &mut entry.animator {
+            animator.set_culling_mode(mode);
+        }
+        Ok(())
+    }
+
+    pub fn culling_mode(&self, entity: EntityId) -> Option<AnimatorCullingMode> {
+        self.entries.get(&entity).map(|entry| entry.culling_mode)
+    }
+
+    pub fn set_visible(&mut self, entity: EntityId, visible: bool) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.visible = visible;
+        if let Some(animator) = &mut entry.animator {
+            animator.set_visible(visible);
+        }
+        Ok(())
+    }
+
+    pub fn is_visible(&self, entity: EntityId) -> Option<bool> {
+        self.entries.get(&entity).map(|entry| entry.visible)
+    }
+
+    pub fn set_keep_state_on_disable(&mut self, entity: EntityId, keep: bool) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.keep_state_on_disable = keep;
+        Ok(())
+    }
+
+    pub fn keep_state_on_disable(&self, entity: EntityId) -> Option<bool> {
+        self.entries
+            .get(&entity)
+            .map(|entry| entry.keep_state_on_disable)
+    }
+
+    pub fn disable_animator(&mut self, entity: EntityId) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        if !entry.enabled {
+            return Ok(());
+        }
+        entry.enabled = false;
+        if entry.keep_state_on_disable {
+            return Ok(());
+        }
+        let (machine, defaults) = {
+            let Some(animator) = &mut entry.animator else {
+                return Ok(());
+            };
+            let machine = animator.controller().name.clone();
+            animator.reset();
+            (machine, animator.captured_defaults().to_vec())
+        };
+        entry.callbacks = vec![StateMachineCallback {
+            kind: StateMachineCallbackKind::OnStateMachineExit,
+            state_index: 0,
+            state_name: String::new(),
+            machine: Some(machine),
+        }];
+        let mut transform = entry.transform.clone();
+        apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
+        entry.transform = transform;
+        Ok(())
+    }
+
+    pub fn enable_animator(&mut self, entity: EntityId) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.enabled = true;
+        Ok(())
+    }
+
+    pub fn is_enabled(&self, entity: EntityId) -> Option<bool> {
+        self.entries.get(&entity).map(|entry| entry.enabled)
+    }
+
+    pub fn callbacks(&self, entity: EntityId) -> Option<&[StateMachineCallback]> {
+        self.entries
+            .get(&entity)
+            .map(|entry| entry.callbacks.as_slice())
+    }
+
+    pub fn root_motion(&self, entity: EntityId) -> Option<AnimatorRootMotion> {
+        self.entries.get(&entity).map(|entry| entry.root_motion)
+    }
+
+    pub fn set_legacy_animation(&mut self, entity: EntityId, component: LegacyAnimationComponent) {
+        self.legacy.insert(entity, component);
+    }
+
+    pub fn legacy_animation(&self, entity: EntityId) -> Option<&LegacyAnimationComponent> {
+        self.legacy.get(&entity)
+    }
+
+    pub fn legacy_animation_mut(&mut self, entity: EntityId) -> Option<&mut LegacyAnimationComponent> {
+        self.legacy.get_mut(&entity)
+    }
+
+    pub fn remove_legacy_animation(&mut self, entity: EntityId) -> bool {
+        self.legacy.remove(&entity).is_some()
     }
 }
 
-fn apply_self_bindings_to_entry(
+fn current_state_index(entry: &EntityAnimatorEntry) -> usize {
+    entry
+        .animator
+        .as_ref()
+        .map(|animator| animator.current_state_info().state_index)
+        .unwrap_or(0)
+}
+
+fn apply_bindings_to_transform(
     entity: EntityId,
     entry: &mut EntityAnimatorEntry,
+    transform: &mut Transform,
     bindings: &[SampledBinding],
 ) -> Vec<SampledBinding> {
     let mut child_bindings = Vec::new();
@@ -444,7 +680,7 @@ fn apply_self_bindings_to_entry(
             continue;
         };
         if binding.target.object_path.is_empty() {
-            apply_transform_property(&mut entry.transform, prop, ch, binding.value);
+            apply_transform_property(transform, prop, ch, binding.value);
         } else {
             child_bindings.push(binding.clone());
         }
@@ -507,6 +743,301 @@ pub fn apply_transform_property(
             transform.scale[2] = v;
         }
         _ => {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyCullingType {
+    AlwaysAnimate,
+    CullUpdateTransforms,
+    CullCompletely,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyClipEntry {
+    pub name: String,
+    pub clip: AnimationClip,
+    pub legacy: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyAnimationState {
+    Stopped,
+    Playing,
+    Paused,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyAnimationSample {
+    pub bindings: Vec<SampledBinding>,
+    pub fired_events: Vec<AnimationEvent>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LegacyCrossFade {
+    from: usize,
+    elapsed: f32,
+    duration: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyAnimationComponent {
+    clips: Vec<LegacyClipEntry>,
+    playing: Option<usize>,
+    queue: Vec<usize>,
+    cross_fade: Option<LegacyCrossFade>,
+    blended: Vec<(usize, f32)>,
+    time: f32,
+    weight: f32,
+    layer: usize,
+    culling: LegacyCullingType,
+    visible: bool,
+    errors: Vec<String>,
+}
+
+impl Default for LegacyAnimationComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LegacyAnimationComponent {
+    pub fn new() -> Self {
+        Self {
+            clips: Vec::new(),
+            playing: None,
+            queue: Vec::new(),
+            cross_fade: None,
+            blended: Vec::new(),
+            time: 0.0,
+            weight: 1.0,
+            layer: 0,
+            culling: LegacyCullingType::AlwaysAnimate,
+            visible: true,
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn add_clip(&mut self, name: impl Into<String>, clip: AnimationClip, legacy: bool) {
+        let name = name.into();
+        self.clips.retain(|entry| entry.name != name);
+        self.clips.push(LegacyClipEntry { name, clip, legacy });
+    }
+
+    pub fn clip_names(&self) -> Vec<String> {
+        self.clips.iter().map(|entry| entry.name.clone()).collect()
+    }
+
+    pub fn weight(&self) -> f32 {
+        self.weight
+    }
+
+    pub fn set_weight(&mut self, weight: f32) {
+        if weight.is_finite() {
+            self.weight = weight.clamp(0.0, 1.0);
+        }
+    }
+
+    pub fn layer(&self) -> usize {
+        self.layer
+    }
+
+    pub fn set_layer(&mut self, layer: usize) {
+        self.layer = layer;
+    }
+
+    pub fn culling_type(&self) -> LegacyCullingType {
+        self.culling
+    }
+
+    pub fn set_culling_type(&mut self, culling: LegacyCullingType) {
+        self.culling = culling;
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    pub fn time(&self) -> f32 {
+        self.time
+    }
+
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    pub fn state(&self, name: &str) -> LegacyAnimationState {
+        let Some(index) = self.clips.iter().position(|entry| entry.name == name) else {
+            return LegacyAnimationState::Stopped;
+        };
+        if self.playing == Some(index) {
+            LegacyAnimationState::Playing
+        } else {
+            LegacyAnimationState::Stopped
+        }
+    }
+
+    pub fn is_playing(&self, name: &str) -> bool {
+        self.state(name) == LegacyAnimationState::Playing
+    }
+
+    pub fn play(&mut self, name: &str) -> Result<(), String> {
+        let index = match self.resolve(name) {
+            Ok(index) => index,
+            Err(message) => return self.fail(message),
+        };
+        self.playing = Some(index);
+        self.time = 0.0;
+        self.cross_fade = None;
+        self.blended.clear();
+        Ok(())
+    }
+
+    pub fn cross_fade(&mut self, name: &str, fade_length: f32) -> Result<(), String> {
+        let index = match self.resolve(name) {
+            Ok(index) => index,
+            Err(message) => return self.fail(message),
+        };
+        let duration = if fade_length.is_finite() {
+            fade_length.max(0.0)
+        } else {
+            0.0
+        };
+        if duration <= 0.0 {
+            self.playing = Some(index);
+            self.time = 0.0;
+            self.cross_fade = None;
+            return Ok(());
+        }
+        if let Some(previous) = self.playing {
+            self.cross_fade = Some(LegacyCrossFade {
+                from: previous,
+                elapsed: 0.0,
+                duration,
+            });
+        }
+        self.playing = Some(index);
+        self.time = 0.0;
+        self.blended.clear();
+        Ok(())
+    }
+
+    pub fn blend(&mut self, name: &str, weight: f32) -> Result<(), String> {
+        let index = match self.resolve(name) {
+            Ok(index) => index,
+            Err(message) => return self.fail(message),
+        };
+        let weight = if weight.is_finite() {
+            weight.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.blended.retain(|(existing, _)| *existing != index);
+        if weight > 0.0 {
+            self.blended.push((index, weight));
+        }
+        Ok(())
+    }
+
+    pub fn play_queued(&mut self, name: &str) -> Result<(), String> {
+        let index = match self.resolve(name) {
+            Ok(index) => index,
+            Err(message) => return self.fail(message),
+        };
+        self.queue.push(index);
+        Ok(())
+    }
+
+    pub fn step(&mut self, delta_seconds: f32) -> LegacyAnimationSample {
+        let delta = if delta_seconds.is_finite() && delta_seconds > 0.0 {
+            delta_seconds
+        } else {
+            0.0
+        };
+        if self.culling == LegacyCullingType::CullCompletely && !self.visible {
+            return LegacyAnimationSample {
+                bindings: Vec::new(),
+                fired_events: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
+        let Some(index) = self.playing else {
+            return LegacyAnimationSample {
+                bindings: Vec::new(),
+                fired_events: Vec::new(),
+                errors: Vec::new(),
+            };
+        };
+        let previous_time = self.time;
+        self.time += delta;
+        let sample = self.clips[index].clip.sample(previous_time, self.time);
+        let mut bindings = sample.bindings;
+        let mut fired_events = sample.fired_events;
+        if let Some(mut fade) = self.cross_fade {
+            fade.elapsed += delta;
+            let alpha = if fade.duration > 0.0 {
+                (fade.elapsed / fade.duration).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let from_sample = self.clips[fade.from].clip.sample(previous_time, self.time);
+            bindings = blend_sampled_bindings(&from_sample.bindings, &bindings, alpha);
+            fired_events.extend(from_sample.fired_events);
+            if alpha >= 1.0 {
+                self.cross_fade = None;
+            } else {
+                self.cross_fade = Some(fade);
+            }
+        }
+        for (blend_index, weight) in self.blended.clone() {
+            let blend_sample = self.clips[blend_index].clip.sample(previous_time, self.time);
+            bindings = blend_sampled_bindings(&bindings, &blend_sample.bindings, weight);
+            fired_events.extend(blend_sample.fired_events);
+        }
+        let duration = self.clips[index].clip.effective_duration();
+        let finished = duration > 0.0
+            && self.time >= duration
+            && matches!(
+                self.clips[index].clip.wrap_mode,
+                WrapMode::Once | WrapMode::ClampForever
+            );
+        if finished {
+            if let Some(next) = self.queue.first().copied() {
+                self.queue.remove(0);
+                self.playing = Some(next);
+                self.time = 0.0;
+            } else {
+                self.playing = None;
+                self.time = duration;
+            }
+        }
+        LegacyAnimationSample {
+            bindings,
+            fired_events,
+            errors: Vec::new(),
+        }
+    }
+
+    fn resolve(&self, name: &str) -> Result<usize, String> {
+        let Some(index) = self.clips.iter().position(|entry| entry.name == name) else {
+            return Err(format!(
+                "animation clip '{name}' is not assigned to the legacy animation component"
+            ));
+        };
+        if !self.clips[index].legacy {
+            return Err(format!(
+                "animation clip '{name}' is not marked legacy and does not play"
+            ));
+        }
+        Ok(index)
+    }
+
+    fn fail(&mut self, message: String) -> Result<(), String> {
+        if !self.errors.contains(&message) {
+            self.errors.push(message.clone());
+        }
+        Err(message)
     }
 }
 
@@ -983,6 +1514,11 @@ pub trait AnimatorScriptHooks {
     fn on_animator_move(&mut self, _entity: EntityId, _motion: &mut AnimatorRootMotion) -> bool {
         false
     }
+    fn on_state_enter(&mut self, _entity: EntityId, _callback: &StateMachineCallback) {}
+    fn on_state_update(&mut self, _entity: EntityId, _callback: &StateMachineCallback) {}
+    fn on_state_exit(&mut self, _entity: EntityId, _callback: &StateMachineCallback) {}
+    fn on_state_machine_enter(&mut self, _entity: EntityId, _machine: &str) {}
+    fn on_state_machine_exit(&mut self, _entity: EntityId, _machine: &str) {}
 }
 
 struct AnimatorHookEntry {
@@ -1082,12 +1618,25 @@ impl AnimationWorld {
         scaled_delta_seconds: f64,
         hooks: &mut AnimatorHookWorld,
     ) -> Vec<(EntityId, Vec<SampledBinding>)> {
+        let delta = if scaled_delta_seconds.is_finite() && scaled_delta_seconds > 0.0 {
+            scaled_delta_seconds as f32
+        } else {
+            0.0
+        };
+        self.tick_frame_with_hooks(&AnimatorFrame::new(delta, delta, 1.0 / 60.0), hooks)
+    }
+
+    pub fn tick_frame_with_hooks(
+        &mut self,
+        frame: &AnimatorFrame,
+        hooks: &mut AnimatorHookWorld,
+    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
         let previous: Vec<(EntityId, Transform)> = self
             .entries
             .iter()
             .map(|(entity, entry)| (*entity, entry.transform.clone()))
             .collect();
-        let mut child_bindings = self.tick(scaled_delta_seconds);
+        let mut child_bindings = self.tick_frame(frame);
         for (entity, previous_transform) in previous {
             let Some(entry) = self.entries.get_mut(&entity) else {
                 continue;
@@ -1098,15 +1647,33 @@ impl AnimationWorld {
             let Some(script) = hook_entry.script.as_mut() else {
                 continue;
             };
+            for callback in entry.callbacks.clone() {
+                match callback.kind {
+                    StateMachineCallbackKind::OnStateEnter => {
+                        script.on_state_enter(entity, &callback);
+                    }
+                    StateMachineCallbackKind::OnStateUpdate => {
+                        script.on_state_update(entity, &callback);
+                    }
+                    StateMachineCallbackKind::OnStateExit => {
+                        script.on_state_exit(entity, &callback);
+                    }
+                    StateMachineCallbackKind::OnStateMachineEnter => {
+                        if let Some(machine) = callback.machine.as_deref() {
+                            script.on_state_machine_enter(entity, machine);
+                        }
+                    }
+                    StateMachineCallbackKind::OnStateMachineExit => {
+                        if let Some(machine) = callback.machine.as_deref() {
+                            script.on_state_machine_exit(entity, machine);
+                        }
+                    }
+                    StateMachineCallbackKind::OnStateMove | StateMachineCallbackKind::OnStateIK => {}
+                }
+            }
             let sampled_translation = entry.transform.translation;
             let sampled_rotation = entry.transform.rotation;
-            let mut motion = AnimatorRootMotion {
-                delta_position: subtract_vectors(
-                    sampled_translation,
-                    previous_transform.translation,
-                ),
-                delta_rotation: rotation_delta(previous_transform.rotation, sampled_rotation),
-            };
+            let mut motion = entry.root_motion;
             let existing_entity_bindings: Vec<SampledBinding> = child_bindings
                 .iter()
                 .find(|(e, _)| *e == entity)
@@ -1137,6 +1704,9 @@ impl AnimationWorld {
             );
             let mut ik_ran = false;
             for layer_index in ik_layers {
+                if !entry.writes_transforms {
+                    break;
+                }
                 ik_ran = true;
                 populate_pose_from_skeleton(
                     &mut pose,
@@ -1145,6 +1715,12 @@ impl AnimationWorld {
                     &hook_entry.skeleton_chains,
                     hook_entry.look_at_bone_path.as_deref(),
                 );
+                entry.callbacks.push(StateMachineCallback {
+                    kind: StateMachineCallbackKind::OnStateIK,
+                    state_index: current_state_index(entry),
+                    state_name: String::new(),
+                    machine: None,
+                });
                 script.on_animator_ik(entity, layer_index, &mut pose);
                 pose.solve();
                 if let Some(body_position) = pose.body_position {
@@ -1182,6 +1758,12 @@ impl AnimationWorld {
             } else {
                 None
             };
+            entry.callbacks.push(StateMachineCallback {
+                kind: StateMachineCallbackKind::OnStateMove,
+                state_index: current_state_index(entry),
+                state_name: String::new(),
+                machine: None,
+            });
             if script.on_animator_move(entity, &mut motion) {
                 let mut moved_translation =
                     add_vectors(previous_transform.translation, motion.delta_position);
@@ -1438,6 +2020,20 @@ fn sanitize_weight(weight: f32) -> f32 {
         weight.clamp(0.0, 1.0)
     } else {
         0.0
+    }
+}
+
+fn blend_vector(a: [f32; 3], b: [f32; 3], weight: f32) -> [f32; 3] {
+    match AnimatedValue::Vector3(a).blend(&AnimatedValue::Vector3(b), weight) {
+        AnimatedValue::Vector3(value) => value,
+        _ => b,
+    }
+}
+
+fn blend_quaternion(a: [f32; 4], b: [f32; 4], weight: f32) -> [f32; 4] {
+    match AnimatedValue::Quaternion(a).blend(&AnimatedValue::Quaternion(b), weight) {
+        AnimatedValue::Quaternion(value) => value,
+        _ => b,
     }
 }
 

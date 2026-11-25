@@ -13,6 +13,7 @@ pub enum TimelineWrapMode {
     Loop,
     PingPong,
     Hold,
+    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,7 +333,7 @@ impl TimelinePlayer {
             return;
         }
         match self.wrap_mode {
-            TimelineWrapMode::Once => self.advance_once(delta, duration),
+            TimelineWrapMode::Once | TimelineWrapMode::None => self.advance_once(delta, duration),
             TimelineWrapMode::Hold => self.advance_hold(delta, duration),
             TimelineWrapMode::Loop => self.advance_loop(delta, duration),
             TimelineWrapMode::PingPong => self.advance_pingpong(delta, duration),

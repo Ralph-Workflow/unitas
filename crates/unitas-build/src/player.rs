@@ -13,8 +13,9 @@ use unitas_runtime::window::{run_windowed_gpu, FramePresenter, GpuFramePresenter
 use unitas_runtime::KEY_RIGHT_ARROW;
 
 use crate::bundle::{
-    content_hash_hex, stage_bundle_for_host, BundleError, BundleManifest, StagedBundle,
-    BUNDLE_MANIFEST_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
+    content_hash_hex, stage_bundle_for_host, BundleError, BundleManifest, ContentBuildResult,
+    StagedBundle, BUNDLE_MANIFEST_FILENAME, CONTENT_CATALOG_FILENAME,
+    DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
 };
 use crate::config::BuildConfiguration;
 use crate::report::{BuildDiagnostic, BuildReport, SizeCategoryEntry, SizeContributor};
@@ -262,6 +263,111 @@ pub fn launch_bundle(
         frames_stepped: frames,
         development_diagnostics_enabled,
     })
+}
+
+pub fn apply_content_update_to_player(
+    player_bundle_dir: &Path,
+    content_update: &ContentBuildResult,
+    frames: usize,
+    delta_seconds: f64,
+) -> Result<PlayerLaunchResult, PlayerStartupError> {
+    let (mut manifest, _startup_scene_path) = load_and_validate_bundle_manifest(player_bundle_dir)?;
+    if !content_update
+        .catalog
+        .is_compatible_with_player(&manifest.version, manifest.target)
+    {
+        return Err(PlayerStartupError::VerificationFailed {
+            message: format!(
+                "content update catalog '{}' (target '{}', compatibility '{}') is incompatible with shipped player version '{}' on target '{}'",
+                content_update.catalog.catalog_id,
+                content_update.catalog.target,
+                content_update.catalog.player_compatibility_version,
+                manifest.version,
+                manifest.target
+            ),
+        });
+    }
+
+    for emitted in &content_update.emitted_bundles {
+        let updated_bundle_path = content_update.output_dir.join(&emitted.staged_path);
+        let bytes = fs::read(&updated_bundle_path).map_err(|error| {
+            PlayerStartupError::ManifestLoad {
+                bundle_dir: player_bundle_dir.to_path_buf(),
+                source: BundleError::Io {
+                    path: updated_bundle_path.clone(),
+                    message: error.to_string(),
+                },
+            }
+        })?;
+        let dest_content_bundle = player_bundle_dir.join(&emitted.staged_path);
+        if let Some(parent) = dest_content_bundle.parent() {
+            fs::create_dir_all(parent).map_err(|error| PlayerStartupError::ManifestLoad {
+                bundle_dir: player_bundle_dir.to_path_buf(),
+                source: BundleError::Io {
+                    path: parent.to_path_buf(),
+                    message: error.to_string(),
+                },
+            })?;
+        }
+        fs::write(&dest_content_bundle, &bytes).map_err(|error| {
+            PlayerStartupError::ManifestLoad {
+                bundle_dir: player_bundle_dir.to_path_buf(),
+                source: BundleError::Io {
+                    path: dest_content_bundle,
+                    message: error.to_string(),
+                },
+            }
+        })?;
+
+        for entry in &mut manifest.entries {
+            if entry.source_path == emitted.source_path
+                || entry.staged_path.ends_with(&emitted.source_path)
+            {
+                let staged_scene_dest = player_bundle_dir.join(&entry.staged_path);
+                fs::write(&staged_scene_dest, &bytes).map_err(|error| {
+                    PlayerStartupError::ManifestLoad {
+                        bundle_dir: player_bundle_dir.to_path_buf(),
+                        source: BundleError::Io {
+                            path: staged_scene_dest,
+                            message: error.to_string(),
+                        },
+                    }
+                })?;
+                entry.content_hash = emitted.content_hash.clone();
+                entry.size_bytes = emitted.size_bytes;
+                entry.root_object_count = emitted.root_object_count;
+            }
+        }
+    }
+
+    manifest.total_content_bytes = manifest
+        .entries
+        .iter()
+        .fold(0u64, |acc, item| acc.saturating_add(item.size_bytes));
+    manifest.manifest_hash = manifest.compute_manifest_hash();
+    let manifest_path = player_bundle_dir.join(BUNDLE_MANIFEST_FILENAME);
+    fs::write(&manifest_path, manifest.to_canonical_string()).map_err(|error| {
+        PlayerStartupError::ManifestLoad {
+            bundle_dir: player_bundle_dir.to_path_buf(),
+            source: BundleError::Io {
+                path: manifest_path,
+                message: error.to_string(),
+            },
+        }
+    })?;
+
+    let catalog_dest = player_bundle_dir.join(CONTENT_CATALOG_FILENAME);
+    fs::write(&catalog_dest, content_update.catalog.to_canonical_string()).map_err(|error| {
+        PlayerStartupError::ManifestLoad {
+            bundle_dir: player_bundle_dir.to_path_buf(),
+            source: BundleError::Io {
+                path: catalog_dest,
+                message: error.to_string(),
+            },
+        }
+    })?;
+
+    launch_bundle(player_bundle_dir, frames, delta_seconds)
 }
 
 #[cfg(feature = "device")]

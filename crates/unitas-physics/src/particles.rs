@@ -34,6 +34,80 @@ pub enum ParticleShape {
     Mesh { bounds: [f32; 3] },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomParticleDataStream {
+    Custom1,
+    Custom2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ForceFieldShape {
+    Sphere { radius: f32 },
+    Box { half_extents: [f32; 3] },
+}
+
+impl ForceFieldShape {
+    pub fn contains(&self, field_position: [f32; 3], point: [f32; 3]) -> bool {
+        let dx = point[0] - field_position[0];
+        let dy = point[1] - field_position[1];
+        let dz = point[2] - field_position[2];
+        if !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+            return false;
+        }
+        match *self {
+            Self::Sphere { radius } => {
+                if !radius.is_finite() || radius < 0.0 {
+                    return false;
+                }
+                dx * dx + dy * dy + dz * dz <= radius * radius
+            }
+            Self::Box { half_extents } => {
+                let hx = if half_extents[0].is_finite() {
+                    half_extents[0].max(0.0)
+                } else {
+                    return false;
+                };
+                let hy = if half_extents[1].is_finite() {
+                    half_extents[1].max(0.0)
+                } else {
+                    return false;
+                };
+                let hz = if half_extents[2].is_finite() {
+                    half_extents[2].max(0.0)
+                } else {
+                    return false;
+                };
+                dx.abs() <= hx && dy.abs() <= hy && dz.abs() <= hz
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleSystemForceField {
+    pub position: [f32; 3],
+    pub shape: ForceFieldShape,
+    pub direction: [f32; 3],
+    pub gravity: [f32; 3],
+    pub gravity_focus: f32,
+    pub drag: f32,
+    pub layer: u8,
+}
+
+impl Default for ParticleSystemForceField {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            shape: ForceFieldShape::Sphere { radius: 1.0 },
+            direction: [0.0; 3],
+            gravity: [0.0; 3],
+            gravity_focus: 0.0,
+            drag: 0.0,
+            layer: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
     pub position: [f32; 3],
@@ -156,8 +230,14 @@ pub struct ParticleSystem {
     emit_position: [f32; 3],
     emit_rotation: [f32; 4],
     collision_layer_mask: u32,
+    external_forces_enabled: bool,
+    external_forces_multiplier: f32,
+    external_forces_layer_mask: u32,
+    force_fields: Vec<ParticleSystemForceField>,
     particles: Vec<Particle>,
     runtime: Vec<ParticleRuntime>,
+    custom_data_1: Vec<[f32; 4]>,
+    custom_data_2: Vec<[f32; 4]>,
     collision_events: Vec<ParticleCollisionEvent>,
     trigger_events: Vec<ParticleTriggerEvent>,
     pending_stop_action: Option<StopAction>,
@@ -186,8 +266,14 @@ impl ParticleSystem {
             emit_position: [0.0; 3],
             emit_rotation: IDENTITY_ROTATION,
             collision_layer_mask: ALL_LAYERS,
+            external_forces_enabled: false,
+            external_forces_multiplier: 1.0,
+            external_forces_layer_mask: ALL_LAYERS,
+            force_fields: Vec::new(),
             particles: Vec::new(),
             runtime: Vec::new(),
+            custom_data_1: Vec::new(),
+            custom_data_2: Vec::new(),
             collision_events: Vec::new(),
             trigger_events: Vec::new(),
             pending_stop_action: None,
@@ -297,6 +383,65 @@ impl ParticleSystem {
         self.collision_layer_mask
     }
 
+    pub fn set_external_forces_enabled(&mut self, enabled: bool) {
+        self.external_forces_enabled = enabled;
+    }
+
+    pub fn is_external_forces_enabled(&self) -> bool {
+        self.external_forces_enabled
+    }
+
+    pub fn set_external_forces_multiplier(&mut self, multiplier: f32) {
+        self.external_forces_multiplier = if multiplier.is_finite() { multiplier } else { 0.0 };
+    }
+
+    pub fn external_forces_multiplier(&self) -> f32 {
+        self.external_forces_multiplier
+    }
+
+    pub fn set_external_forces_layer_mask(&mut self, layer_mask: u32) {
+        self.external_forces_layer_mask = layer_mask;
+    }
+
+    pub fn external_forces_layer_mask(&self) -> u32 {
+        self.external_forces_layer_mask
+    }
+
+    pub fn add_force_field(&mut self, field: ParticleSystemForceField) {
+        self.force_fields.push(field);
+    }
+
+    pub fn clear_force_fields(&mut self) {
+        self.force_fields.clear();
+    }
+
+    pub fn force_fields(&self) -> &[ParticleSystemForceField] {
+        &self.force_fields
+    }
+
+    pub fn set_custom_particle_data(
+        &mut self,
+        stream: CustomParticleDataStream,
+        data: &[[f32; 4]],
+    ) {
+        let count = self.particles.len();
+        let mut synced = vec![[0.0; 4]; count];
+        for (slot, value) in synced.iter_mut().zip(data.iter().copied()) {
+            *slot = value;
+        }
+        match stream {
+            CustomParticleDataStream::Custom1 => self.custom_data_1 = synced,
+            CustomParticleDataStream::Custom2 => self.custom_data_2 = synced,
+        }
+    }
+
+    pub fn get_custom_particle_data(&self, stream: CustomParticleDataStream) -> &[[f32; 4]] {
+        match stream {
+            CustomParticleDataStream::Custom1 => &self.custom_data_1,
+            CustomParticleDataStream::Custom2 => &self.custom_data_2,
+        }
+    }
+
     pub fn set_stopped_callback(&mut self, callback: Box<dyn FnMut()>) {
         self.stopped_callback = Some(callback);
     }
@@ -359,6 +504,8 @@ impl ParticleSystem {
     pub fn clear(&mut self) {
         self.particles.clear();
         self.runtime.clear();
+        self.custom_data_1.clear();
+        self.custom_data_2.clear();
         if self.pending_stop_action.is_some() {
             self.apply_pending_stop_action();
         }
@@ -388,6 +535,7 @@ impl ParticleSystem {
     }
 
     pub fn set_particles(&mut self, particles: Vec<Particle>) {
+        let count = particles.len();
         self.runtime = particles
             .iter()
             .map(|particle| ParticleRuntime {
@@ -396,6 +544,8 @@ impl ParticleSystem {
             })
             .collect();
         self.particles = particles;
+        self.custom_data_1.resize(count, [0.0; 4]);
+        self.custom_data_2.resize(count, [0.0; 4]);
     }
 
     pub fn update_collisions(&mut self, world: &World) {
@@ -531,6 +681,63 @@ impl ParticleSystem {
                     self.runtime[index].force_velocity[2] + force[2] * delta_time,
                 ];
             }
+            if self.external_forces_enabled && self.external_forces_multiplier != 0.0 {
+                let pos = self.particles[index].position;
+                let mult = self.external_forces_multiplier;
+                for field in &self.force_fields {
+                    if field.layer < 32
+                        && (self.external_forces_layer_mask & (1u32 << field.layer)) == 0
+                    {
+                        continue;
+                    }
+                    if !field.shape.contains(field.position, pos) {
+                        continue;
+                    }
+                    let mut accel = [
+                        (field.direction[0] + field.gravity[0]) * mult,
+                        (field.direction[1] + field.gravity[1]) * mult,
+                        (field.direction[2] + field.gravity[2]) * mult,
+                    ];
+                    if field.gravity_focus.is_finite() && field.gravity_focus != 0.0 {
+                        let to_center = [
+                            field.position[0] - pos[0],
+                            field.position[1] - pos[1],
+                            field.position[2] - pos[2],
+                        ];
+                        let dist = (to_center[0] * to_center[0]
+                            + to_center[1] * to_center[1]
+                            + to_center[2] * to_center[2])
+                            .sqrt();
+                        if dist > 1e-6 {
+                            let scale = field.gravity_focus * mult / dist;
+                            accel[0] += to_center[0] * scale;
+                            accel[1] += to_center[1] * scale;
+                            accel[2] += to_center[2] * scale;
+                        }
+                    }
+                    self.runtime[index].force_velocity = [
+                        self.runtime[index].force_velocity[0] + accel[0] * delta_time,
+                        self.runtime[index].force_velocity[1] + accel[1] * delta_time,
+                        self.runtime[index].force_velocity[2] + accel[2] * delta_time,
+                    ];
+                    if field.drag.is_finite() && field.drag > 0.0 {
+                        let damp = (1.0 - field.drag * mult * delta_time).clamp(0.0, 1.0);
+                        self.runtime[index].base_velocity = [
+                            self.runtime[index].base_velocity[0] * damp,
+                            self.runtime[index].base_velocity[1] * damp,
+                            self.runtime[index].base_velocity[2] * damp,
+                        ];
+                        self.runtime[index].force_velocity = [
+                            self.runtime[index].force_velocity[0] * damp,
+                            self.runtime[index].force_velocity[1] * damp,
+                            self.runtime[index].force_velocity[2] * damp,
+                        ];
+                    }
+                }
+                if self.curves.velocity.is_none() {
+                    velocity = self.runtime[index].base_velocity;
+                }
+            }
             velocity = [
                 velocity[0] + self.runtime[index].force_velocity[0],
                 velocity[1] + self.runtime[index].force_velocity[1],
@@ -558,6 +765,12 @@ impl ParticleSystem {
             if self.particles[index].age >= self.particles[index].lifetime {
                 self.particles.remove(index);
                 self.runtime.remove(index);
+                if index < self.custom_data_1.len() {
+                    self.custom_data_1.remove(index);
+                }
+                if index < self.custom_data_2.len() {
+                    self.custom_data_2.remove(index);
+                }
             } else {
                 index += 1;
             }
@@ -616,6 +829,8 @@ impl ParticleSystem {
                 base_velocity: velocity,
                 force_velocity: [0.0; 3],
             });
+            self.custom_data_1.push([0.0; 4]);
+            self.custom_data_2.push([0.0; 4]);
         }
     }
 

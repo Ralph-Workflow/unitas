@@ -9,23 +9,32 @@ pub mod sample;
 pub mod targets;
 
 pub use bundle::{
-    content_hash_hex, stage_bundle, stage_bundle_for_host, BundleError, BundleManifest,
-    BundleManifestEntry, StagedBundle, BUNDLE_MANIFEST_FILENAME, BUNDLE_MANIFEST_FORMAT_VERSION,
+    build_addressables_content, build_addressables_content_for_host,
+    build_addressables_content_update, build_addressables_content_update_for_host,
+    build_content_catalog, build_content_catalog_for_host, build_content_update,
+    build_content_update_for_host, content_hash_hex, derive_compatible_player_versions,
+    derive_player_compatibility_version, stage_bundle, stage_bundle_for_host,
+    validate_content_bundle, AddressablesGroupConfig, AddressablesProfile, BundleError,
+    BundleManifest, BundleManifestEntry, ContentBuildMode, ContentBuildResult, ContentBundleInput,
+    ContentCatalog, ContentCatalogEntry, ContentRejectionReason, RejectedContentBundle,
+    StagedBundle, BUNDLE_MANIFEST_FILENAME, BUNDLE_MANIFEST_FORMAT_VERSION,
+    CONTENT_CATALOG_FILENAME, CONTENT_CATALOG_FORMAT_VERSION,
     DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE,
 };
 pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIdentity};
 pub use player::{
-    build_project, build_project_for_host, decode_bmp_bytes, diagnostics_from_bundle_error,
-    execute_build, execute_build_for_host, launch_bundle, load_and_validate_bundle_manifest,
-    mean_image_channel_error, BuildOutcomeBundle, DeviceVerifyReport, PlayerLaunchResult,
-    PlayerSession, PlayerStartupError, WindowedLaunchOptions, WindowedPlayerResult,
-    BUILD_REPORT_FILENAME, DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
+    apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,
+    diagnostics_from_bundle_error, execute_build, execute_build_for_host, launch_bundle,
+    load_and_validate_bundle_manifest, mean_image_channel_error, BuildOutcomeBundle,
+    DeviceVerifyReport, PlayerLaunchResult, PlayerSession, PlayerStartupError,
+    WindowedLaunchOptions, WindowedPlayerResult, BUILD_REPORT_FILENAME,
+    DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
 };
 #[cfg(feature = "device")]
 pub use player::{capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification};
 pub use report::{
-    BuildDiagnostic, BuildOutcome, BuildReport, ReportParseError, SizeCategoryEntry,
-    SizeContributor,
+    BuildDiagnostic, BuildOutcome, BuildReport, ContentBuildReport, ContentBundleReportEntry,
+    RejectedBundleReportEntry, ReportParseError, SizeCategoryEntry, SizeContributor,
 };
 pub use sample::{
     imported_gem_mesh, roll_a_ball_scene_yaml, stage_roll_a_ball_bundle,

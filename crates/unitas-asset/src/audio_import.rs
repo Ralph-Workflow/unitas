@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::Cursor;
 
+use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use lewton::header::HeaderReadError;
 use lewton::inside_ogg::OggStreamReader;
 use lewton::{OggReadError, VorbisError};
@@ -42,6 +43,34 @@ impl fmt::Display for AudioCompressionFormat {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AudioPlatformSettings {
+    pub build_target: String,
+    pub overridden: bool,
+    pub compression_format: AudioCompressionFormat,
+    pub quality: f32,
+    pub sample_rate: Option<u32>,
+}
+
+impl Default for AudioPlatformSettings {
+    fn default() -> Self {
+        AudioPlatformSettings {
+            build_target: "DefaultAudioPlatform".to_string(),
+            overridden: false,
+            compression_format: AudioCompressionFormat::PCM,
+            quality: 1.0,
+            sample_rate: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioTargetSettings {
+    pub compression_format: AudioCompressionFormat,
+    pub quality: f32,
+    pub sample_rate: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AudioImportSettings {
     pub force_to_mono: bool,
     pub normalize: bool,
@@ -50,6 +79,7 @@ pub struct AudioImportSettings {
     pub preload_audio_data: bool,
     pub sample_rate_override: Option<u32>,
     pub quality: f32,
+    pub platform_settings: Vec<AudioPlatformSettings>,
 }
 
 impl Default for AudioImportSettings {
@@ -62,6 +92,43 @@ impl Default for AudioImportSettings {
             preload_audio_data: true,
             sample_rate_override: None,
             quality: 1.0,
+            platform_settings: Vec::new(),
+        }
+    }
+}
+
+impl AudioImportSettings {
+    pub fn platform_override(&self, build_target: &str) -> Option<&AudioPlatformSettings> {
+        self.platform_settings
+            .iter()
+            .find(|setting| setting.build_target == build_target && setting.overridden)
+    }
+
+    pub fn set_platform_override(&mut self, setting: AudioPlatformSettings) {
+        if let Some(existing) = self
+            .platform_settings
+            .iter_mut()
+            .find(|item| item.build_target == setting.build_target)
+        {
+            *existing = setting;
+        } else {
+            self.platform_settings.push(setting);
+        }
+    }
+
+    pub fn effective_for_target(&self, build_target: Option<&str>) -> AudioTargetSettings {
+        let override_setting = build_target.and_then(|target| self.platform_override(target));
+        match override_setting {
+            Some(setting) => AudioTargetSettings {
+                compression_format: setting.compression_format,
+                quality: setting.quality,
+                sample_rate: setting.sample_rate,
+            },
+            None => AudioTargetSettings {
+                compression_format: self.compression_format,
+                quality: self.quality,
+                sample_rate: self.sample_rate_override,
+            },
         }
     }
 }
@@ -78,6 +145,8 @@ pub struct AudioImportResult {
     pub clip: PcmClip,
     pub state: AudioImportState,
     pub settings: AudioImportSettings,
+    pub applied_target: Option<String>,
+    pub applied_compression: AudioCompressionFormat,
     pub notes: Vec<String>,
 }
 
@@ -676,7 +745,17 @@ pub fn import_audio(
     file_name: &str,
     settings: &AudioImportSettings,
 ) -> Result<AudioImportResult, AudioImportError> {
+    import_audio_for_target(bytes, file_name, settings, None)
+}
+
+pub fn import_audio_for_target(
+    bytes: &[u8],
+    file_name: &str,
+    settings: &AudioImportSettings,
+    build_target: Option<&str>,
+) -> Result<AudioImportResult, AudioImportError> {
     let state = detect_audio_state(bytes, file_name);
+    let target_settings = settings.effective_for_target(build_target);
     if state == AudioImportState::NotYetSupported {
         let reason = unsupported_reason(bytes, file_name);
         return Ok(AudioImportResult {
@@ -687,6 +766,8 @@ pub fn import_audio(
             },
             state,
             settings: settings.clone(),
+            applied_target: build_target.map(|target| target.to_string()),
+            applied_compression: target_settings.compression_format,
             notes: vec![format!("{file_name}: {reason}")],
         });
     }
@@ -707,12 +788,14 @@ pub fn import_audio(
         return Err(AudioImportError::NotAiff);
     };
     let mut notes = Vec::new();
-    apply_import_transforms(&mut clip, settings, &mut notes);
+    apply_import_transforms(&mut clip, settings, &target_settings, build_target, &mut notes);
 
     Ok(AudioImportResult {
         clip,
         state: AudioImportState::Imported,
         settings: settings.clone(),
+        applied_target: build_target.map(|target| target.to_string()),
+        applied_compression: target_settings.compression_format,
         notes,
     })
 }
@@ -720,6 +803,8 @@ pub fn import_audio(
 fn apply_import_transforms(
     clip: &mut PcmClip,
     settings: &AudioImportSettings,
+    target_settings: &AudioTargetSettings,
+    build_target: Option<&str>,
     notes: &mut Vec<String>,
 ) {
     if settings.force_to_mono && clip.channels > 1 {
@@ -755,7 +840,7 @@ fn apply_import_transforms(
         }
     }
 
-    if let Some(rate) = settings.sample_rate_override {
+    if let Some(rate) = target_settings.sample_rate {
         if rate != clip.sample_rate {
             notes.push(format!(
                 "sample rate override applied: {} -> {} (samples not resampled)",
@@ -765,11 +850,53 @@ fn apply_import_transforms(
         clip.sample_rate = rate;
     }
 
-    if settings.compression_format != AudioCompressionFormat::PCM {
+    if target_settings.compression_format != AudioCompressionFormat::PCM {
+        let target_note = match build_target {
+            Some(target) => format!("{target}: "),
+            None => String::new(),
+        };
         notes.push(format!(
-            "{} compression recorded as an import setting; decoded samples remain PCM",
-            settings.compression_format
+            "{target_note}{} compression recorded as an import setting; decoded samples remain PCM",
+            target_settings.compression_format
         ));
+    }
+}
+
+pub fn audio_import_outcome(
+    path: &str,
+    result: Result<&AudioImportResult, &AudioImportError>,
+) -> ImportOutcome {
+    match result {
+        Ok(imported) => match imported.state {
+            AudioImportState::Imported => match imported.notes.first() {
+                None => ImportOutcome::ready(),
+                Some(note) => ImportOutcome::limited(
+                    ImportDiagnostic::new(
+                        path,
+                        note.clone(),
+                        "the clip imports with the stated limitation; the affected content stays unavailable",
+                    )
+                    .partially_usable(),
+                ),
+            },
+            AudioImportState::NotYetSupported | AudioImportState::UnsupportedContainer => {
+                ImportOutcome::failed(ImportDiagnostic::new(
+                    path,
+                    imported.notes.join("; "),
+                    "the clip format is not supported; the asset cannot be used at runtime",
+                ))
+            }
+            AudioImportState::ImportFailed => ImportOutcome::failed(ImportDiagnostic::new(
+                path,
+                imported.notes.join("; "),
+                "the clip cannot be decoded; the asset stays failed and stays silent",
+            )),
+        },
+        Err(error) => ImportOutcome::failed(ImportDiagnostic::new(
+            path,
+            error.to_string(),
+            "the clip cannot be imported; the asset stays failed and stays silent",
+        )),
     }
 }
 

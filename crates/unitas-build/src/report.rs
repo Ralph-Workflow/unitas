@@ -7,7 +7,8 @@ use unitas_core::compat::{
 };
 
 use crate::bundle::{
-    ContentBuildMode, ContentBuildResult, ContentRejectionReason, RejectedContentBundle,
+    ContentBuildMode, ContentBuildResult, ContentCatalogEntry, ContentRejectionReason,
+    RejectedContentBundle,
 };
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing::{licensing_record, LicensingRecord, ThirdPartyNotice};
@@ -1618,16 +1619,45 @@ impl RejectedBundleReportEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentBundleReportEntry {
+    pub bundle_name: String,
+    pub group_name: String,
+    pub build_path: String,
+    pub load_path: String,
+    pub content_hash: String,
+    pub size_bytes: u64,
+    pub dependencies: Vec<String>,
+}
+
+impl ContentBundleReportEntry {
+    pub fn from_catalog_entry(entry: &ContentCatalogEntry) -> Self {
+        Self {
+            bundle_name: entry.bundle_name.clone(),
+            group_name: entry.group_name.clone(),
+            build_path: entry.build_path.clone(),
+            load_path: entry.load_path.clone(),
+            content_hash: entry.content_hash.clone(),
+            size_bytes: entry.size_bytes,
+            dependencies: entry.dependencies.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentBuildReport {
     pub mode: ContentBuildMode,
+    pub catalog_id: String,
+    pub profile_name: Option<String>,
     pub unitas_version: String,
     pub player_compatibility_version: String,
+    pub compatible_player_versions: Vec<String>,
     pub target: BuildTarget,
     pub architecture: TargetArch,
     pub outcome: BuildOutcome,
     pub elapsed_ms: u64,
     pub catalog_path: Option<PathBuf>,
     pub catalog_hash: String,
+    pub bundles: Vec<ContentBundleReportEntry>,
     pub emitted_bundles: Vec<String>,
     pub unchanged_bundles: Vec<String>,
     pub rejected_bundles: Vec<RejectedBundleReportEntry>,
@@ -1646,6 +1676,12 @@ impl ContentBuildReport {
         } else {
             BuildOutcome::Failed
         };
+        let bundles = result
+            .catalog
+            .bundles
+            .iter()
+            .map(ContentBundleReportEntry::from_catalog_entry)
+            .collect();
         let emitted_bundles = result
             .emitted_bundles
             .iter()
@@ -1676,14 +1712,18 @@ impl ContentBuildReport {
 
         Self {
             mode,
+            catalog_id: result.catalog.catalog_id.clone(),
+            profile_name: result.catalog.profile_name.clone(),
             unitas_version: result.catalog.unitas_version.clone(),
             player_compatibility_version: result.catalog.player_compatibility_version.clone(),
+            compatible_player_versions: result.catalog.compatible_player_versions.clone(),
             target: result.catalog.target,
             architecture: result.catalog.target.arch(),
             outcome,
             elapsed_ms,
             catalog_path: Some(result.catalog_path.clone()),
             catalog_hash: result.catalog.catalog_hash.clone(),
+            bundles,
             emitted_bundles,
             unchanged_bundles: result.unchanged_bundles.clone(),
             rejected_bundles,
@@ -1695,12 +1735,27 @@ impl ContentBuildReport {
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\n");
         push_kv_str(&mut out, 2, "mode", self.mode.as_str(), true);
+        push_kv_str(&mut out, 2, "catalog_id", &self.catalog_id, true);
+        push_kv_opt_str(
+            &mut out,
+            2,
+            "profile_name",
+            self.profile_name.as_deref(),
+            true,
+        );
         push_kv_str(&mut out, 2, "unitas_version", &self.unitas_version, true);
         push_kv_str(
             &mut out,
             2,
             "player_compatibility_version",
             &self.player_compatibility_version,
+            true,
+        );
+        push_kv_string_array(
+            &mut out,
+            2,
+            "compatible_player_versions",
+            &self.compatible_player_versions,
             true,
         );
         push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
@@ -1721,6 +1776,7 @@ impl ContentBuildReport {
             true,
         );
         push_kv_str(&mut out, 2, "catalog_hash", &self.catalog_hash, true);
+        push_kv_content_bundles(&mut out, 2, "bundles", &self.bundles, true);
         push_kv_string_array(&mut out, 2, "emitted_bundles", &self.emitted_bundles, true);
         push_kv_string_array(
             &mut out,
@@ -1756,9 +1812,13 @@ impl ContentBuildReport {
         let mode = ContentBuildMode::from_name(mode_str).ok_or_else(|| {
             ReportParseError::new(format!("unrecognized content build mode '{mode_str}'"))
         })?;
+        let catalog_id = get_required_str(obj, "catalog_id")?.to_string();
+        let profile_name = get_optional_string(obj, "profile_name")?;
         let unitas_version = get_required_str(obj, "unitas_version")?.to_string();
         let player_compatibility_version =
             get_required_str(obj, "player_compatibility_version")?.to_string();
+        let compatible_player_versions =
+            get_required_string_list(obj, "compatible_player_versions")?;
         let target_str = get_required_str(obj, "target")?;
         let architecture_str = get_required_str(obj, "architecture")?;
         let architecture = parse_target_arch(architecture_str)?;
@@ -1770,6 +1830,7 @@ impl ContentBuildReport {
         let elapsed_ms = get_required_u64(obj, "elapsed_ms")?;
         let catalog_path = get_optional_path(obj, "catalog_path")?;
         let catalog_hash = get_required_str(obj, "catalog_hash")?.to_string();
+        let bundles = get_required_content_bundles(obj, "bundles")?;
         let emitted_bundles = get_required_string_list(obj, "emitted_bundles")?;
         let unchanged_bundles = get_required_string_list(obj, "unchanged_bundles")?;
         let rejected_bundles = get_required_rejected_bundles(obj, "rejected_bundles")?;
@@ -1779,14 +1840,18 @@ impl ContentBuildReport {
 
         Ok(Self {
             mode,
+            catalog_id,
+            profile_name,
             unitas_version,
             player_compatibility_version,
+            compatible_player_versions,
             target,
             architecture,
             outcome,
             elapsed_ms,
             catalog_path,
             catalog_hash,
+            bundles,
             emitted_bundles,
             unchanged_bundles,
             rejected_bundles,
@@ -1794,6 +1859,68 @@ impl ContentBuildReport {
             compatibility_findings,
         })
     }
+}
+
+fn push_kv_content_bundles(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[ContentBundleReportEntry],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "bundle_name", &item.bundle_name, true);
+        push_kv_str(out, indent + 4, "group_name", &item.group_name, true);
+        push_kv_str(out, indent + 4, "build_path", &item.build_path, true);
+        push_kv_str(out, indent + 4, "load_path", &item.load_path, true);
+        push_kv_str(out, indent + 4, "content_hash", &item.content_hash, true);
+        push_kv_u64(out, indent + 4, "size_bytes", item.size_bytes, true);
+        push_kv_string_array(out, indent + 4, "dependencies", &item.dependencies, false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
+fn get_required_content_bundles(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<ContentBundleReportEntry>, ReportParseError> {
+    let arr = get_field(obj, key)?.as_array(key)?;
+    let mut list = Vec::with_capacity(arr.len());
+    for item in arr {
+        let entry_obj = item.as_object(key)?;
+        let bundle_name = get_required_str(entry_obj, "bundle_name")?.to_string();
+        let group_name = get_required_str(entry_obj, "group_name")?.to_string();
+        let build_path = get_required_str(entry_obj, "build_path")?.to_string();
+        let load_path = get_required_str(entry_obj, "load_path")?.to_string();
+        let content_hash = get_required_str(entry_obj, "content_hash")?.to_string();
+        let size_bytes = get_required_u64(entry_obj, "size_bytes")?;
+        let dependencies = get_required_string_list(entry_obj, "dependencies")?;
+        list.push(ContentBundleReportEntry {
+            bundle_name,
+            group_name,
+            build_path,
+            load_path,
+            content_hash,
+            size_bytes,
+            dependencies,
+        });
+    }
+    Ok(list)
 }
 
 fn push_kv_rejected_bundles(

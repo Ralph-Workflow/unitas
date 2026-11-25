@@ -55,6 +55,120 @@ fn character_lands_on_ground_and_reports_below_and_grounded() -> Result<(), Phys
 }
 
 #[test]
+fn phy_003_story_4_character_traverses_step_slope_and_moving_platform_reporting_ground_state(
+) -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let ground = EntityId::new(1);
+    let step = EntityId::new(2);
+    let slope = EntityId::new(3);
+    let platform = EntityId::new(4);
+
+    world.add_body(ground, static_box([0.0, -0.5, 0.0], [40.0, 0.5, 10.0]))?;
+    world.add_body(step, static_box([2.0, 0.1, 0.0], [0.5, 0.1, 5.0]))?;
+    world.add_body(
+        slope,
+        oriented_static_box([10.0, 0.5, 0.0], rotation_about_z(25.0), [3.0, 0.5, 5.0]),
+    )?;
+    world.add_body(
+        platform,
+        BodyDesc {
+            position: [5.0, -0.3, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [2.0, 0.0, 0.0],
+            use_gravity: false,
+            is_trigger: false,
+            shape: Shape::Box {
+                half_extents: [1.5, 0.5, 5.0],
+            },
+            layer: ALL_LAYERS,
+            role: BodyRole::Kinematic,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+
+    let mut controller = CharacterController::new(0.5, 2.0)?;
+    controller.step_offset = 0.3;
+    controller.slope_limit_deg = 45.0;
+
+    let mut pos = [0.0, 1.08, 0.0];
+    let mut climbed_step = false;
+    let mut rode_platform = false;
+    let mut climbed_slope = false;
+    for _ in 0..240 {
+        let res = controller.move_character(&world, pos, [0.25, -0.1, 0.0])?;
+        pos = res.position;
+
+        if res.ground_entity == Some(step) {
+            climbed_step = true;
+            assert!(
+                res.is_grounded,
+                "PHY-003 story 4: a character standing on a step must report grounded"
+            );
+            assert!(
+                res.collision_flags.contains(CollisionFlags::BELOW),
+                "PHY-003 story 4: a character standing on a step must report the BELOW collision flag"
+            );
+            assert!(
+                pos[1] > 1.2,
+                "PHY-003 story 4: a character must climb the step, got y={}",
+                pos[1]
+            );
+        }
+
+        if res.ground_entity == Some(platform) && !rode_platform {
+            rode_platform = true;
+            world.step(0.1)?;
+            let carried =
+                controller.move_character_with_dt(&world, res.position, [0.0, -0.05, 0.0], 0.1)?;
+            assert!(
+                carried.is_grounded,
+                "PHY-003 story 4: a character riding a moving platform must report grounded"
+            );
+            assert_eq!(
+                carried.ground_entity,
+                Some(platform),
+                "PHY-003 story 4: a character riding a moving platform must report the platform as ground"
+            );
+            assert!(
+                (carried.position[0] - (res.position[0] + 0.2)).abs() < 1e-2,
+                "PHY-003 story 4: a moving platform must carry the grounded character, got x={}",
+                carried.position[0]
+            );
+            pos = carried.position;
+        }
+
+        if res.ground_entity == Some(slope) && pos[1] > 1.5 {
+            climbed_slope = true;
+            assert!(
+                res.is_grounded,
+                "PHY-003 story 4: a character on a slope must report grounded"
+            );
+            assert!(
+                res.collision_flags.contains(CollisionFlags::BELOW),
+                "PHY-003 story 4: a character on a slope must report the BELOW collision flag"
+            );
+            break;
+        }
+    }
+
+    assert!(
+        climbed_step,
+        "PHY-003 story 4: the character must traverse the step"
+    );
+    assert!(
+        rode_platform,
+        "PHY-003 story 4: the character must traverse the moving platform"
+    );
+    assert!(
+        climbed_slope,
+        "PHY-003 story 4: the character must traverse the slope"
+    );
+    Ok(())
+}
+
+#[test]
 fn character_hits_wall_and_slides_along_surface_with_sides_flag() -> Result<(), PhysicsError> {
     let mut world = World::new();
     world.add_body(
@@ -96,7 +210,8 @@ fn character_hits_ceiling_and_clamps_upward_motion_with_above_flag() -> Result<(
 }
 
 #[test]
-fn character_climbs_step_within_step_offset_and_stays_grounded() -> Result<(), PhysicsError> {
+fn phy_003_story_4_character_climbs_step_within_step_offset_and_stays_grounded(
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
@@ -173,7 +288,8 @@ fn step_blocked_by_low_overhead_ceiling_cannot_be_climbed() -> Result<(), Physic
 }
 
 #[test]
-fn character_climbs_walkable_slope_within_slope_limit() -> Result<(), PhysicsError> {
+fn phy_003_story_4_character_climbs_walkable_slope_within_slope_limit() -> Result<(), PhysicsError>
+{
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
@@ -250,8 +366,8 @@ fn narrow_step_too_thin_to_support_tread_is_rejected() -> Result<(), PhysicsErro
 }
 
 #[test]
-fn kinematic_platform_moved_via_set_position_carries_grounded_character() -> Result<(), PhysicsError>
-{
+fn phy_003_story_4_kinematic_platform_moved_via_set_position_carries_grounded_character(
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     let platform = EntityId::new(1);
     world.add_body(
@@ -291,7 +407,8 @@ fn kinematic_platform_moved_via_set_position_carries_grounded_character() -> Res
 }
 
 #[test]
-fn moving_platform_carries_grounded_character_via_world_velocity() -> Result<(), PhysicsError> {
+fn phy_003_story_4_moving_platform_carries_grounded_character_via_world_velocity(
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     let platform = EntityId::new(1);
     world.add_body(
@@ -559,3 +676,51 @@ fn collision_flags_bit_operations_compose_and_mask() {
         CollisionFlags::SIDES | CollisionFlags::ABOVE | CollisionFlags::BELOW
     );
 }
+
+#[test]
+fn phy_003_story_4_character_slides_down_steep_slope_and_reports_controller_collider_hits(
+) -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let steep_slope = EntityId::new(10);
+    let wall = EntityId::new(11);
+    world.add_body(
+        steep_slope,
+        oriented_static_box([0.0, 0.0, 0.0], rotation_about_z(60.0), [4.0, 0.5, 4.0]),
+    )?;
+    world.add_body(
+        wall,
+        static_box([-3.0, 1.0, 0.0], [0.5, 3.0, 4.0]),
+    )?;
+
+    let mut controller = CharacterController::new(0.5, 2.0)?;
+    controller.slope_limit_deg = 45.0;
+
+    let start = [0.0, 2.5, 0.0];
+    let res = controller.move_character_with_dt(&world, start, [0.0, -1.5, 0.0], 0.05)?;
+    assert!(
+        !res.is_grounded,
+        "PHY-003 story 4: landing on a slope steeper than slopeLimit must not report grounded"
+    );
+    assert!(
+        res.collision_flags.contains(CollisionFlags::SIDES),
+        "PHY-003 story 4: a slope steeper than slopeLimit must report CollisionFlags::SIDES"
+    );
+    assert!(
+        res.position[0] < start[0] - 0.05 && res.position[1] < start[1] - 0.1,
+        "PHY-003 story 4: character must slide down the steeper slope, got {:?}",
+        res.position
+    );
+    assert!(
+        controller.velocity()[1] < 0.0,
+        "PHY-003 story 4: CharacterController must expose velocity after Move, got {:?}",
+        controller.velocity()
+    );
+    let hits = controller.collider_hits();
+    assert!(
+        hits.iter().any(|h| h.collider == steep_slope && h.move_length > 0.0),
+        "PHY-003 story 4: OnControllerColliderHit records must include contact with the steep slope"
+    );
+    Ok(())
+}
+
+

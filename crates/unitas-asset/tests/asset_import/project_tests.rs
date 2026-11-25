@@ -1056,3 +1056,130 @@ fn prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similar
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+#[test]
+fn prj001_outcome1_outcome2_outcome12_open_2020_3_2021_3_2022_3_with_or_without_library_and_upgrade_action_round_trip(
+) -> TestResult {
+    let root = temp_dir("prj001-outcomes-1-2-12")?;
+    let store = TrustStore::new(root.join("trust.json"));
+
+    let mut reference_inventory: Option<AssetInventory> = None;
+    let mut reference_targets: Option<Vec<(String, Option<String>)>> = None;
+
+    for (index, version) in ["2020.3.48f1", "2021.3.16f1", "2022.3.16f1"]
+        .into_iter()
+        .enumerate()
+    {
+        let project_root = root.join(format!("project_{index}"));
+        build_project(&project_root, version)?;
+
+        let (_, report_no_lib_first) = Project::open(&project_root, &store)?;
+        let (_, report_no_lib_second) = Project::open(&project_root, &store)?;
+        assert_eq!(
+            report_no_lib_first.inventory, report_no_lib_second.inventory,
+            "PRJ-001 Outcome 1: opening {version} twice without Library/ must yield identical asset identities"
+        );
+
+        write_file(&project_root.join("Library/ArtifactDB"), "unity-cache")?;
+        write_file(
+            &project_root.join("Library/Cached.asset.meta"),
+            &meta("ffffffffffffffffffffffffffffffff", "NativeFormatImporter:"),
+        )?;
+        let (_, report_with_lib) = Project::open(&project_root, &store)?;
+        assert_eq!(
+            report_no_lib_first.inventory, report_with_lib.inventory,
+            "PRJ-001 Outcome 1: opening {version} with or without Library/ must yield identical asset identities"
+        );
+
+        let mut targets: Vec<(String, Option<String>)> = guid_references(&project_root)
+            .into_iter()
+            .map(|(guid, _)| {
+                let resolved = target_of(&report_with_lib.inventory, &guid);
+                (guid, resolved)
+            })
+            .collect();
+        targets.sort();
+
+        if let Some(expected_inv) = &reference_inventory {
+            assert_eq!(
+                &report_with_lib.inventory, expected_inv,
+                "PRJ-001 Outcome 1: 2020.3, 2021.3, and 2022.3 in-place open must yield identical asset identities"
+            );
+        } else {
+            reference_inventory = Some(report_with_lib.inventory.clone());
+        }
+        if let Some(expected_targets) = &reference_targets {
+            assert_eq!(
+                &targets, expected_targets,
+                "PRJ-001 Outcome 1: 2020.3, 2021.3, and 2022.3 in-place open must yield identical reference targets"
+            );
+        } else {
+            reference_targets = Some(targets);
+        }
+
+        let compatibility =
+            unitas_asset::project::build_compatibility_report(&project_root, &report_with_lib);
+        assert!(
+            compatibility.accounts_for_all(&report_with_lib),
+            "PRJ-001 Outcome 12: compatibility report must account for every recognized asset, package, and setting"
+        );
+    }
+
+    let mig_root = root.join("project_upgrade_2021");
+    build_project(&mig_root, "2021.3.16f1")?;
+    let snap_before_open = snapshot(&mig_root)?;
+    let (mut mig_project, mig_report) = Project::open(&mig_root, &store)?;
+    assert_eq!(
+        mig_report.effective_behavior_version, BASELINE_UNITY_VERSION,
+        "PRJ-001 Outcome 2: 2021.3 project must open with 2022.3 LTS effective behavior"
+    );
+    assert_eq!(
+        snapshot(&mig_root)?,
+        snap_before_open,
+        "PRJ-001 Outcome 2: nothing rewritten on open"
+    );
+
+    let preview = mig_project.preview_upgrade()?;
+    assert!(
+        preview
+            .assets
+            .contains(&String::from("Assets/Materials/Brick.mat")),
+        "PRJ-001 Outcome 2: pre-write upgrade preview must list affected assets"
+    );
+    assert!(
+        preview
+            .settings
+            .contains(&String::from("TimeManager.asset")),
+        "PRJ-001 Outcome 2: pre-write upgrade preview must list affected settings"
+    );
+    assert!(
+        preview
+            .packages
+            .contains(&String::from("com.unity.ide.rider")),
+        "PRJ-001 Outcome 2: pre-write upgrade preview must list affected packages"
+    );
+
+    let committed = mig_project.commit_upgrade("2022.3.16f1")?;
+    assert_eq!(
+        committed, preview,
+        "PRJ-001 Outcome 2: committed upgrade must match pre-write preview"
+    );
+    let (_, upgraded_report) = Project::open(&mig_root, &store)?;
+    assert_eq!(
+        upgraded_report.declared_version.as_deref(),
+        Some("2022.3.16f1"),
+        "PRJ-001 Outcome 2: explicit upgrade action records 2022.3 LTS in ProjectVersion.txt"
+    );
+    assert_eq!(
+        upgraded_report.migration,
+        MigrationStatus::Current,
+        "PRJ-001 Outcome 2: upgraded project reopens as Current"
+    );
+    assert_eq!(
+        upgraded_report.inventory, mig_report.inventory,
+        "PRJ-001 Exact round-trip: asset identities survive upgrade load, edit, save"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}

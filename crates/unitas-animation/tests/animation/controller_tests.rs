@@ -535,6 +535,7 @@ fn state_marked_is_exit_immediately_cycles_back_to_entry_state_on_transition() {
                 motion: StateMotion::None,
                 speed: 1.0,
                 is_exit: true,
+                write_defaults: true,
             },
         ],
         0,
@@ -860,3 +861,202 @@ fn parameter_getters_return_none_on_unknown_or_mismatched_type() {
     assert_eq!(animator.controller().name, "Getters");
     assert!(animator.diagnostics().is_empty());
 }
+
+#[test]
+fn ani_001_outcome_28_2d_and_direct_blend_trees_interruption_sources_and_callback_order() {
+    use unitas_animation::{
+        BlendTree2DMode, InterruptionSource, StateMachineCallbackKind,
+    };
+    let clip_center = simple_clip("Center", 1.0, 0.0, 0.0);
+    let clip_right = simple_clip("Right", 1.0, 10.0, 10.0);
+    let clip_up = simple_clip("Up", 1.0, 0.0, 20.0);
+
+    let tree_2d = StateMotion::BlendTree2D {
+        mode: BlendTree2DMode::SimpleDirectional,
+        parameter_x: "vel_x".to_string(),
+        parameter_y: "vel_y".to_string(),
+        children: vec![
+            ([0.0, 0.0], clip_center),
+            ([1.0, 0.0], clip_right.clone()),
+            ([0.0, 1.0], clip_up.clone()),
+        ],
+    };
+
+    let tree_direct = StateMotion::BlendTreeDirect {
+        children: vec![
+            ("w_right".to_string(), clip_right.clone()),
+            ("w_up".to_string(), clip_up.clone()),
+        ],
+    };
+
+    let state_a = AnimatorState::new("State2D", tree_2d);
+    let state_b = AnimatorState::new("StateDirect", tree_direct);
+    let state_c = AnimatorState::new("InterruptedTarget", StateMotion::Clip(clip_right));
+
+    let mut tr_a_to_b = StateTransition::new(
+        0,
+        TransitionTarget::State(1),
+        vec![TransitionCondition::new("to_direct", ConditionOp::If)],
+        false,
+        0.0,
+        1.0,
+    );
+    tr_a_to_b.interruption_source = InterruptionSource::Source;
+
+    let tr_a_to_c = StateTransition::new(
+        0,
+        TransitionTarget::State(2),
+        vec![TransitionCondition::new("interrupt", ConditionOp::If)],
+        false,
+        0.0,
+        0.0,
+    );
+
+    let controller = AnimatorController::new(
+        "ANI001Outcome28",
+        vec![
+            ParameterDef::float("vel_x", 1.0),
+            ParameterDef::float("vel_y", 0.0),
+            ParameterDef::float("w_right", 0.25),
+            ParameterDef::float("w_up", 0.75),
+            ParameterDef::bool("to_direct", false),
+            ParameterDef::trigger("interrupt"),
+        ],
+        vec![state_a, state_b, state_c],
+        0,
+        vec![tr_a_to_b, tr_a_to_c],
+    );
+
+    assert!(
+        controller.validate().is_empty(),
+        "ANI-001 outcome 28: 2D and Direct blend tree controller must validate cleanly"
+    );
+
+    let mut animator = Animator::new(controller);
+    let s1 = animator.step(0.1);
+    assert_eq!(
+        s1.bindings[0].value,
+        AnimatedValue::Float(10.0),
+        "ANI-001 outcome 28: 2D blend tree at (1, 0) must sample Right clip"
+    );
+    assert_eq!(
+        s1.callbacks[0].kind,
+        StateMachineCallbackKind::OnStateMachineEnter,
+        "ANI-001 outcome 28: OnStateMachineEnter fires on initial evaluation"
+    );
+
+    assert_eq!(animator.set_bool("to_direct", true), Ok(()));
+    let s2 = animator.step(0.2);
+    assert!(s2.state_info.is_in_transition);
+    assert_eq!(s2.state_info.next_state_index, Some(1));
+    assert!(
+        s2.callbacks
+            .iter()
+            .any(|cb| cb.kind == StateMachineCallbackKind::OnStateEnter && cb.state_index == 1),
+        "ANI-001 outcome 28: OnStateEnter fires on destination state when transition starts"
+    );
+
+    assert_eq!(animator.set_trigger("interrupt"), Ok(()));
+    let s3 = animator.step(0.1);
+    assert_eq!(
+        s3.state_info.state_index, 2,
+        "ANI-001 outcome 28: transition with InterruptionSource::Source must allow source transition to interrupt active transition"
+    );
+    assert!(
+        s3.callbacks
+            .iter()
+            .any(|cb| cb.kind == StateMachineCallbackKind::OnStateExit && cb.state_index == 0),
+        "ANI-001 outcome 28: OnStateExit fires when source state is left"
+    );
+}
+
+#[test]
+fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
+    let clip_xy = AnimationClip::new(
+        "MoveXY",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 5.0)]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.y"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 2.0), Keyframe::linear(1.0, 8.0)]),
+            ),
+        ],
+        Vec::new(),
+    );
+    let clip_x_only = AnimationClip::new(
+        "MoveXOnly",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+        )],
+        Vec::new(),
+    );
+
+    let controller = AnimatorController::new(
+        "ANI001Outcome29",
+        vec![ParameterDef::int("phase", 0)],
+        vec![
+            AnimatorState::with_write_defaults("FullXY", StateMotion::Clip(clip_xy), true),
+            AnimatorState::with_write_defaults("NoDefaultsX", StateMotion::Clip(clip_x_only.clone()), false),
+            AnimatorState::with_write_defaults("WithDefaultsX", StateMotion::Clip(clip_x_only), true),
+        ],
+        0,
+        vec![
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("phase", ConditionOp::Equals(1))],
+            ),
+            StateTransition::instant(
+                1,
+                TransitionTarget::State(2),
+                vec![TransitionCondition::new("phase", ConditionOp::Equals(2))],
+            ),
+        ],
+    );
+
+    let mut animator = Animator::new(controller);
+    let step0 = animator.step(0.5);
+    let y0 = step0
+        .bindings
+        .iter()
+        .find(|b| b.target.property == "localPosition.y")
+        .map(|b| b.value);
+    assert_eq!(y0, Some(AnimatedValue::Float(5.0)));
+
+    assert_eq!(animator.set_int("phase", 1), Ok(()));
+    let step1 = animator.step(0.1);
+    let has_y_in_no_defaults = step1
+        .bindings
+        .iter()
+        .any(|b| b.target.property == "localPosition.y");
+    assert!(
+        !has_y_in_no_defaults,
+        "ANI-001 outcome 29: Write Defaults off must not emit default binding for unanimated property"
+    );
+
+    assert_eq!(animator.set_int("phase", 2), Ok(()));
+    let step2 = animator.step(0.1);
+    let y2 = step2
+        .bindings
+        .iter()
+        .find(|b| b.target.property == "localPosition.y")
+        .map(|b| b.value);
+    assert_eq!(
+        y2,
+        Some(AnimatedValue::Float(2.0)),
+        "ANI-001 outcome 29: Write Defaults on must restore captured default value (2.0) for unanimated property"
+    );
+}
+
+
+

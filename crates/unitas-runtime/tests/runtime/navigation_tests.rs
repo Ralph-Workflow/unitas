@@ -1,5 +1,8 @@
 use unitas_core::EntityId;
-use unitas_physics::navigation::{NavMesh, NavMeshTriangle, NavigationError};
+use unitas_physics::navigation::{
+    NavMesh, NavMeshArea, NavMeshLink, NavMeshObstacle, NavMeshQueryFilter, NavMeshSurface,
+    NavMeshTriangle, NavigationError, PathQueryStatus,
+};
 use unitas_runtime::navigation::{NavigationRuntimeError, NavigationRuntimeWorld};
 
 const TOLERANCE: f64 = 1e-6;
@@ -144,5 +147,82 @@ fn navigation_runtime_rejects_an_invalid_delta_time() -> Result<(), NavigationRu
         world.step(f64::NAN),
         Err(NavigationRuntimeError::InvalidDeltaTime(_))
     ));
+    Ok(())
+}
+
+#[test]
+fn nav_001_story_9_10_15_runtime_surface_rebuild_carving_link_and_reciprocal_avoidance(
+) -> Result<(), NavigationRuntimeError> {
+    let mut surface = NavMeshSurface::new();
+    surface.set_geometry(row([0.0, 0.0, 0.0], 2, 1.0, 0));
+    surface.set_areas(vec![NavMeshArea::new(0, 1.0), NavMeshArea::new(1, 5.0)]);
+    let initial = surface.build_navmesh()?.clone();
+
+    let mut world = NavigationRuntimeWorld::new(initial);
+    let agent_a = EntityId::new(10);
+    let agent_b = EntityId::new(11);
+    world.add_agent(agent_a, "Alpha", [0.5, 0.0, 0.5])?;
+
+    let mut updated_geom = row([0.0, 0.0, 0.0], 2, 1.0, 0);
+    updated_geom.extend(row([4.0, 0.0, 0.0], 3, 1.0, 0));
+    updated_geom.extend(row([4.0, 0.0, 1.0], 3, 1.0, 0));
+    surface.add_link(NavMeshLink::new([1.5, 0.0, 0.5], [4.5, 0.0, 0.5], true));
+    world.rebuild_surface(&mut surface, updated_geom)?;
+
+    let rebuilt_path = world.set_destination(agent_a, [6.5, 0.0, 0.5])?;
+    assert_eq!(
+        rebuilt_path.status,
+        PathQueryStatus::Complete,
+        "NAV-001 Story 10: runtime rebuild of NavMeshSurface enables path across NavMeshLink"
+    );
+
+    for _ in 0..16 {
+        world.step(0.15)?;
+    }
+    let pos_a = world
+        .position(agent_a)
+        .ok_or(NavigationRuntimeError::UnknownAgent(agent_a))?;
+    assert!(
+        (pos_a[0] - 6.5).abs() < TOLERANCE,
+        "NAV-001 Story 10: agent crosses NavMeshLink after runtime surface rebuild"
+    );
+
+    world.add_agent(agent_b, "Bravo", [4.5, 0.0, 0.5])?;
+    if let Some(a) = world.agent_mut(agent_a) {
+        a.avoidance_priority = 10;
+        a.radius = 0.4;
+    }
+    if let Some(b) = world.agent_mut(agent_b) {
+        b.avoidance_priority = 90;
+        b.radius = 0.4;
+    }
+    world.set_destination(agent_a, [4.5, 0.0, 0.5])?;
+    world.set_destination(agent_b, [6.5, 0.0, 0.5])?;
+    for _ in 0..6 {
+        world.step(0.1)?;
+    }
+    let pos_a_after = world
+        .position(agent_a)
+        .ok_or(NavigationRuntimeError::UnknownAgent(agent_a))?;
+    let pos_b_after = world
+        .position(agent_b)
+        .ok_or(NavigationRuntimeError::UnknownAgent(agent_b))?;
+    let dist_xz =
+        ((pos_a_after[0] - pos_b_after[0]).powi(2) + (pos_a_after[2] - pos_b_after[2]).powi(2))
+            .sqrt();
+    assert!(
+        dist_xz > 0.2,
+        "NAV-001 Story 15: runtime step resolves reciprocal avoidance between agents"
+    );
+
+    world.add_obstacle(NavMeshObstacle::carving_box([5.5, 0.0, 0.5], [0.4, 1.0, 0.4]))?;
+    let mut filter = NavMeshQueryFilter::new(NavMesh::ALL_AREAS);
+    filter.set_area_cost(0, 1.0)?;
+    let detoured = world.calculate_path([4.5, 0.0, 0.5], [6.5, 0.0, 0.5], &filter);
+    assert_eq!(detoured.status, PathQueryStatus::Complete);
+    assert!(
+        detoured.corners.iter().any(|c| c[2] > 0.9),
+        "NAV-001 Story 9: runtime calculate_path detours around carving obstacle"
+    );
     Ok(())
 }

@@ -1,8 +1,12 @@
+use unitas_asset::dependencies::{
+    AssetImportState, ImportCandidate, ImportDiagnostic, ImportOutcome, ImportSession,
+};
 use unitas_asset::texture::import::{
-    apply_max_size, decode_texture, generate_mip_chain, import_texture, import_texture_for_target,
-    srgb_to_linear, DecodedTexture, FilterMode, SpriteMode, TextureCompressionQuality,
-    TextureFormat, TextureImportError, TextureImportSettings, TexturePlatformFormat,
-    TexturePlatformSettings, WrapMode,
+    apply_max_size, decode_texture, generate_mip_chain, import_texture,
+    import_texture_for_target, srgb_to_linear, texture_import_outcome, DecodedTexture,
+    FilterMode, SpriteMode, TextureCompressionQuality, TextureFormat, TextureImportError,
+    TextureImportSettings, TextureImporterType, TexturePlatformFormat, TexturePlatformSettings,
+    WrapMode,
 };
 use unitas_asset::texture::jpeg::decode_jpeg;
 use unitas_asset::texture::png::decode_png;
@@ -536,6 +540,7 @@ fn converts_srgb_values_to_linear() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn import_settings_survive_a_meta_text_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     let settings = TextureImportSettings {
+        texture_type: TextureImporterType::NormalMap,
         srgb: false,
         max_size: 1024,
         mipmaps: false,
@@ -544,7 +549,10 @@ fn import_settings_survive_a_meta_text_round_trip() -> Result<(), Box<dyn std::e
         wrap_mode: WrapMode::Clamp,
         filter_mode: FilterMode::Trilinear,
         platform_settings: Vec::new(),
+        sprite_slices: Vec::new(),
     };
+    assert!(settings.is_normal_map());
+    assert!(settings.is_linear());
     let text = settings.to_meta_text();
     let restored = TextureImportSettings::from_meta_text(&text)?;
     assert_eq!(restored, settings);
@@ -779,6 +787,7 @@ fn applies_srgb_mipmaps_and_sprite_settings_to_decoded_jpeg(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let texture = decode_texture(&baseline_jpeg_4x4(), "atlas.jpg")?;
     let settings = TextureImportSettings {
+        texture_type: TextureImporterType::Sprite,
         srgb: true,
         max_size: 4,
         mipmaps: true,
@@ -787,6 +796,7 @@ fn applies_srgb_mipmaps_and_sprite_settings_to_decoded_jpeg(
         wrap_mode: WrapMode::Clamp,
         filter_mode: FilterMode::Bilinear,
         platform_settings: Vec::new(),
+        sprite_slices: Vec::new(),
     };
     assert!(!settings.is_linear());
     let red_pixel = texture.pixel(0, 0).unwrap_or(&[0, 0, 0, 0]);
@@ -895,7 +905,7 @@ fn two_frame_animated_gif_2x2() -> Vec<u8> {
 }
 
 #[test]
-fn reports_pict_as_unsupported_by_name() {
+fn prj004_outcome14_pict_is_reported_unsupported() {
     let pict_bytes = vec![0u8; 528];
     let error = decode_error(decode_texture(&pict_bytes, "Assets/Textures/legacy.pict"));
     assert_eq!(
@@ -925,7 +935,7 @@ fn reports_pict_as_unsupported_by_name() {
 }
 
 #[test]
-fn imports_gif_first_frame_and_reports_excluded_later_frames(
+fn prj004_outcome14_gif_imports_its_first_frame_and_reports_the_exclusion(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gif = two_frame_animated_gif_2x2();
     let settings = TextureImportSettings::default();
@@ -953,9 +963,10 @@ fn imports_gif_first_frame_and_reports_excluded_later_frames(
 }
 
 #[test]
-fn per_target_texture_compression_overrides_survive_meta_round_trip_and_reimport(
+fn prj004_outcome14_per_target_compression_overrides_survive_reimport(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut settings = TextureImportSettings {
+        texture_type: TextureImporterType::Sprite,
         srgb: true,
         max_size: 8,
         mipmaps: true,
@@ -964,6 +975,7 @@ fn per_target_texture_compression_overrides_survive_meta_round_trip_and_reimport
         wrap_mode: WrapMode::Clamp,
         filter_mode: FilterMode::Bilinear,
         platform_settings: Vec::new(),
+        sprite_slices: Vec::new(),
     };
     settings.set_platform_override(TexturePlatformSettings {
         build_target: "Standalone".to_string(),
@@ -1025,5 +1037,419 @@ fn per_target_texture_compression_overrides_survive_meta_round_trip_and_reimport
     let second_import =
         import_texture_for_target(&source, "atlas.jpg", &reimported_settings, Some("Android"))?;
     assert_eq!(first_import, second_import);
+    Ok(())
+}
+
+fn half_bits(value: f32) -> [u8; 2] {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = i32::try_from((bits >> 23) & 0xff).unwrap_or(0) - 127 + 15;
+    let mantissa = ((bits >> 13) & 0x03ff) as u16;
+    if exponent <= 0 {
+        return (sign | (mantissa >> 3)).to_le_bytes();
+    }
+    if exponent >= 31 {
+        return (sign | 0x7c00).to_le_bytes();
+    }
+    (sign | ((exponent as u16) << 10) | mantissa).to_le_bytes()
+}
+
+fn exr_zip_compress(raw: &[u8]) -> Vec<u8> {
+    let half = raw.len().div_ceil(2);
+    let mut reordered = vec![0u8; raw.len()];
+    let mut first = 0usize;
+    let mut second = half;
+    let mut index = 0usize;
+    while index < raw.len() {
+        reordered[first] = raw[index];
+        first += 1;
+        index += 1;
+        if index >= raw.len() {
+            break;
+        }
+        reordered[second] = raw[index];
+        second += 1;
+        index += 1;
+    }
+    let mut predicted = reordered.clone();
+    let mut previous = i32::from(reordered[0]);
+    for index in 1..predicted.len() {
+        let current = i32::from(reordered[index]);
+        predicted[index] = ((current - previous + 128 + 256) & 0xff) as u8;
+        previous = current;
+    }
+    zlib_stored(&predicted)
+}
+
+fn exr_attribute(bytes: &mut Vec<u8>, name: &str, kind: &str, value: &[u8]) {
+    bytes.extend_from_slice(name.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(kind.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(value);
+}
+
+fn build_exr_zip(width: u32, height: u32, pixels: &[(f32, f32, f32, f32)]) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for component in [3usize, 2, 1, 0] {
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let pixel = pixels[y * width as usize + x];
+                let value = match component {
+                    0 => pixel.0,
+                    1 => pixel.1,
+                    2 => pixel.2,
+                    _ => pixel.3,
+                };
+                raw.extend_from_slice(&half_bits(value));
+            }
+        }
+    }
+    let payload = exr_zip_compress(&raw);
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&[0x76u8, 0x2f, 0x31, 0x01]);
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+
+    let mut channels = Vec::new();
+    for name in ["A", "B", "G", "R"] {
+        channels.extend_from_slice(name.as_bytes());
+        channels.push(0);
+        channels.extend_from_slice(&1i32.to_le_bytes());
+        channels.push(0);
+        channels.extend_from_slice(&[0u8, 0, 0]);
+        channels.extend_from_slice(&1i32.to_le_bytes());
+        channels.extend_from_slice(&1i32.to_le_bytes());
+    }
+    channels.push(0);
+    exr_attribute(&mut bytes, "channels", "chlist", &channels);
+    exr_attribute(&mut bytes, "compression", "compression", &[3u8]);
+
+    let mut window = Vec::new();
+    window.extend_from_slice(&0i32.to_le_bytes());
+    window.extend_from_slice(&0i32.to_le_bytes());
+    window.extend_from_slice(&i32::try_from(width - 1).unwrap_or(0).to_le_bytes());
+    window.extend_from_slice(&i32::try_from(height - 1).unwrap_or(0).to_le_bytes());
+    exr_attribute(&mut bytes, "dataWindow", "box2i", &window);
+    exr_attribute(&mut bytes, "displayWindow", "box2i", &window);
+    exr_attribute(&mut bytes, "lineOrder", "lineOrder", &[0u8]);
+    exr_attribute(&mut bytes, "pixelAspectRatio", "float", &1.0f32.to_le_bytes());
+    let mut center = Vec::new();
+    center.extend_from_slice(&0.0f32.to_le_bytes());
+    center.extend_from_slice(&0.0f32.to_le_bytes());
+    exr_attribute(&mut bytes, "screenWindowCenter", "v2f", &center);
+    exr_attribute(&mut bytes, "screenWindowWidth", "float", &1.0f32.to_le_bytes());
+    bytes.push(0);
+
+    let offset_table = bytes.len();
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    let chunk = bytes.len();
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    let offset = u64::try_from(chunk - offset_table).unwrap_or(0);
+    bytes[offset_table..offset_table + 8].copy_from_slice(&offset.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn prj004_outcome14_exr_imports_with_its_float_channels(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pixels = [
+        (1.0f32, 0.0f32, 0.0f32, 1.0f32),
+        (0.0, 1.0, 0.0, 1.0),
+        (0.0, 0.0, 1.0, 1.0),
+        (2.0, 2.0, 2.0, 0.5),
+    ];
+    let bytes = build_exr_zip(2, 2, &pixels);
+
+    let decoded = decode_texture(&bytes, "Assets/Textures/sky.exr")?;
+    assert_eq!((decoded.width, decoded.height), (2, 2));
+    assert_eq!(decoded.format, TextureFormat::Rgba32F);
+    let first = decoded.pixel_f32(0, 0).unwrap_or([0.0; 4]);
+    assert_eq!(first, [1.0, 0.0, 0.0, 1.0]);
+    let second = decoded.pixel_f32(1, 0).unwrap_or([0.0; 4]);
+    assert_eq!(second, [0.0, 1.0, 0.0, 1.0]);
+    let third = decoded.pixel_f32(0, 1).unwrap_or([0.0; 4]);
+    assert_eq!(third, [0.0, 0.0, 1.0, 1.0]);
+    let fourth = decoded.pixel_f32(1, 1).unwrap_or([0.0; 4]);
+    assert_eq!(fourth, [2.0, 2.0, 2.0, 0.5]);
+
+    let settings = TextureImportSettings {
+        max_size: 1,
+        mipmaps: false,
+        ..TextureImportSettings::default()
+    };
+    let imported = import_texture(&bytes, "Assets/Textures/sky.exr", &settings)?;
+    assert_eq!(imported.source.format, TextureFormat::Rgba32F);
+    assert_eq!((imported.source.width, imported.source.height), (2, 2));
+    assert_eq!((imported.texture.width, imported.texture.height), (1, 1));
+    let averaged = imported.texture.pixel_f32(0, 0).unwrap_or([0.0; 4]);
+    assert!(
+        (averaged[0] - 0.75).abs() < 0.0001
+            && (averaged[1] - 0.75).abs() < 0.0001
+            && (averaged[2] - 0.75).abs() < 0.0001
+            && (averaged[3] - 0.875).abs() < 0.0001,
+        "expected the downscaled float pixel to average the four source pixels: {averaged:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome14_sprite_multiple_slices_keep_their_names_rects_pivots_and_identities(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let meta_text = "TextureImporter:\n  sRGBTexture: 1\n  maxTextureSize: 2048\n  mipmapEnabled: 1\n  spriteMode: 2\n  alphaIsTransparency: 1\n  wrapMode: 0\n  filterMode: 1\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n    - serializedVersion: 2\n      name: Hero_Slice_A\n      rect:\n        serializedVersion: 2\n        x: 0\n        y: 0\n        width: 8\n        height: 8\n      pivot: {x: 0.25, y: 0.75}\n      border: {x: 1, y: 2, z: 3, w: 4}\n    - serializedVersion: 2\n      name: Tile_Slice_B\n      rect:\n        serializedVersion: 2\n        x: 8\n        y: 0\n        width: 8\n        height: 8\n      pivot: {x: 0.5, y: 0.5}\n      border: {x: 0, y: 0, z: 0, w: 0}\n";
+    let settings = TextureImportSettings::from_meta_text(meta_text)?;
+    assert_eq!(settings.sprite_mode, SpriteMode::Multiple);
+    assert_eq!(settings.sprite_slices.len(), 2);
+    let hero = &settings.sprite_slices[0];
+    assert_eq!(hero.name, "Hero_Slice_A");
+    assert_eq!(hero.sub_asset_id(), "Hero_Slice_A");
+    assert!(hero.unity_local_file_id() >= 213_000_000);
+    assert_eq!((hero.x, hero.y, hero.width, hero.height), (0, 0, 8, 8));
+    assert!((hero.pivot_x - 0.25).abs() < 0.0001);
+    assert!((hero.pivot_y - 0.75).abs() < 0.0001);
+    assert!((hero.border_left - 1.0).abs() < 0.0001);
+    assert!((hero.border_top - 4.0).abs() < 0.0001);
+    let tile = &settings.sprite_slices[1];
+    assert_eq!(tile.name, "Tile_Slice_B");
+    assert_ne!(hero.unity_local_file_id(), tile.unity_local_file_id());
+    assert_eq!((tile.x, tile.y, tile.width, tile.height), (8, 0, 8, 8));
+
+    let restored = settings.round_trip()?;
+    assert_eq!(restored, settings);
+    assert_eq!(restored.sprite_slices[0].name, "Hero_Slice_A");
+
+    let rows = vec![vec![10u8, 20, 30, 40, 50, 60], vec![70, 80, 90, 100, 110, 120]];
+    let png = build_png(&PngOptions {
+        width: 2,
+        height: 2,
+        bit_depth: 8,
+        color_type: 2,
+        scanlines: filtered_scanlines(&rows, &[0, 0], 3),
+        ..PngOptions::default()
+    });
+    let imported = import_texture(&png, "Assets/Sprites/Hero.png", &settings)?;
+    assert_eq!(imported.sprites.len(), 2);
+    assert_eq!(imported.sprites[0].name, "Hero_Slice_A");
+    assert_eq!(imported.sprites[0].sub_asset_id(), "Hero_Slice_A");
+    assert_eq!(imported.sprites[1].name, "Tile_Slice_B");
+
+    let reimported = import_texture(&png, "Assets/Sprites/Hero.png", &restored)?;
+    assert_eq!(reimported.sprites, imported.sprites);
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome6_source_preview_and_runtime_texture_are_distinguishable(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rows = vec![
+        vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+        vec![0, 0, 255, 255, 255, 255, 0, 0, 255, 0, 255, 255],
+        vec![255, 255, 0, 0, 255, 255, 255, 0, 255, 255, 0, 0],
+        vec![0, 255, 255, 0, 0, 255, 0, 255, 255, 255, 255, 255],
+    ];
+    let png = build_png(&PngOptions {
+        width: 4,
+        height: 4,
+        bit_depth: 8,
+        color_type: 2,
+        scanlines: filtered_scanlines(&rows, &[0, 0, 0, 0], 3),
+        ..PngOptions::default()
+    });
+    let settings = TextureImportSettings {
+        max_size: 2,
+        mipmaps: false,
+        ..TextureImportSettings::default()
+    };
+    let imported = import_texture(&png, "Assets/Textures/Source.png", &settings)?;
+    assert_eq!((imported.source.width, imported.source.height), (4, 4));
+    assert_eq!(
+        imported.source.pixels,
+        rows.concat(),
+        "the source preview keeps every source pixel"
+    );
+    assert_eq!((imported.texture.width, imported.texture.height), (2, 2));
+    assert_ne!(
+        imported.texture.pixels,
+        imported.source.pixels,
+        "the runtime texture differs from the source preview"
+    );
+    Ok(())
+}
+
+fn import_candidate(path: &str, guid: &str, source: Vec<u8>) -> ImportCandidate {
+    ImportCandidate {
+        path: std::path::PathBuf::from(path),
+        guid: guid.to_string(),
+        source,
+        metadata: String::new(),
+        settings: "TextureImporter".to_string(),
+        importer_version: "1".to_string(),
+        dependencies: Vec::new(),
+    }
+}
+
+fn texture_importer(
+    candidate: &ImportCandidate,
+) -> ImportOutcome {
+    let path = candidate.path.display().to_string();
+    match import_texture(&candidate.source, &path, &TextureImportSettings::default()) {
+        Ok(imported) => texture_import_outcome(&path, Ok(&imported)),
+        Err(error) => texture_import_outcome(&path, Err(&error)),
+    }
+}
+
+#[test]
+fn prj004_outcome19_corrupt_textures_end_as_a_partial_success_and_an_interrupted_import_reuses_unchanged_results(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rows = vec![vec![1u8, 2, 3, 4, 5, 6], vec![7, 8, 9, 10, 11, 12]];
+    let good = build_png(&PngOptions {
+        width: 2,
+        height: 2,
+        bit_depth: 8,
+        color_type: 2,
+        scanlines: filtered_scanlines(&rows, &[0, 0], 3),
+        ..PngOptions::default()
+    });
+    let corrupt = vec![0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01];
+
+    let candidates = vec![
+        import_candidate("Assets/Textures/Good_A.png", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", good.clone()),
+        import_candidate("Assets/Textures/Corrupt_1.png", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", corrupt.clone()),
+        import_candidate("Assets/Textures/Corrupt_2.png", "cccccccccccccccccccccccccccccccc", corrupt.clone()),
+        import_candidate("Assets/Textures/Corrupt_3.png", "dddddddddddddddddddddddddddddddd", corrupt.clone()),
+        import_candidate("Assets/Textures/Good_B.png", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", good.clone()),
+    ];
+
+    let mut session = ImportSession::new();
+    let first = session.run(&candidates, &mut texture_importer);
+    assert_eq!(first.imported, 5, "the import continues past every failure");
+    assert_eq!(first.failed, 3);
+    assert_eq!(first.succeeded, 2);
+    assert!(
+        first.partial_success,
+        "expected the import to end as a partial success"
+    );
+    for path in [
+        "Assets/Textures/Corrupt_1.png",
+        "Assets/Textures/Corrupt_2.png",
+        "Assets/Textures/Corrupt_3.png",
+    ] {
+        let record = first
+            .record(std::path::Path::new(path))
+            .ok_or("expected a record for the corrupt texture")?;
+        assert_eq!(record.state, AssetImportState::Failed);
+        assert_eq!(record.state.label(), "failed");
+        assert!(
+            record.consequence().is_some(),
+            "expected a stated consequence for {path}"
+        );
+    }
+    let good_record = first
+        .record(std::path::Path::new("Assets/Textures/Good_A.png"))
+        .ok_or("expected a record for the imported texture")?;
+    assert_eq!(good_record.state, AssetImportState::Ready);
+    assert!(good_record.state.is_fully_usable());
+
+    let mut interrupted = ImportSession::new();
+    let first_batch = &candidates[..2];
+    let interrupted_report = interrupted.run(first_batch, &mut texture_importer);
+    assert_eq!(interrupted_report.imported, 2);
+    assert_eq!(interrupted_report.failed, 1);
+
+    let resumed = interrupted.run(&candidates, &mut texture_importer);
+    assert_eq!(resumed.reused, 2, "unchanged results are reused");
+    assert_eq!(resumed.imported, 3, "the remaining assets are imported again");
+    assert!(resumed.partial_success);
+    let reused = resumed
+        .record(std::path::Path::new("Assets/Textures/Good_A.png"))
+        .ok_or("expected a record for the reused texture")?;
+    assert!(reused.reused);
+    assert!(reused.reason.contains("unchanged"));
+    let reused_failure = resumed
+        .record(std::path::Path::new("Assets/Textures/Corrupt_1.png"))
+        .ok_or("expected a record for the reused failure")?;
+    assert!(reused_failure.reused);
+    assert_eq!(reused_failure.state, AssetImportState::Failed);
+    assert!(
+        reused_failure.consequence().is_some(),
+        "the retry keeps the prior diagnostic history"
+    );
+    let imported_again = resumed.imported_again();
+    assert_eq!(imported_again.len(), 3);
+    assert!(imported_again
+        .iter()
+        .all(|record| record.reason == "first import"));
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome5_every_asset_that_is_not_fully_usable_has_a_state_and_a_consequence(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gif = two_frame_animated_gif_2x2();
+    let corrupt = vec![0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01];
+    let candidates = vec![
+        import_candidate("Assets/Textures/Explosion.gif", "ffffffffffffffffffffffffffffffff", gif),
+        import_candidate("Assets/Textures/Broken.png", "11111111111111111111111111111111", corrupt),
+    ];
+
+    let mut session = ImportSession::new();
+    let report = session.run(&candidates, &mut texture_importer);
+    assert_eq!(report.failed, 1);
+
+    let limited = report
+        .record(std::path::Path::new("Assets/Textures/Explosion.gif"))
+        .ok_or("expected a record for the animated GIF")?;
+    assert_eq!(limited.state, AssetImportState::ReadyWithLimitations);
+    assert!(!limited.state.is_fully_usable());
+    assert_eq!(limited.state.label(), "ready with limitations");
+    assert!(
+        limited.consequence().is_some(),
+        "expected a stated consequence for the partially supported GIF"
+    );
+    assert!(limited
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.issue.contains("excluded")));
+
+    let failed = report
+        .record(std::path::Path::new("Assets/Textures/Broken.png"))
+        .ok_or("expected a record for the corrupt texture")?;
+    assert_eq!(failed.state, AssetImportState::Failed);
+    assert!(failed.consequence().is_some());
+
+    let missing = ImportOutcome::missing(ImportDiagnostic::new(
+        "Assets/Textures/Gone.png",
+        "the source file is missing",
+        "the asset cannot be imported until the source file returns",
+    ));
+    assert_eq!(missing.state, AssetImportState::Missing);
+    assert!(!missing.state.is_fully_usable());
+    let blocked = ImportOutcome::blocked_by_dependency(ImportDiagnostic::new(
+        "Assets/Textures/Dependent.png",
+        "the dependency of the asset did not import",
+        "the asset cannot be imported until its dependency imports",
+    ));
+    assert_eq!(blocked.state, AssetImportState::BlockedByDependency);
+    let trust = ImportOutcome::blocked_by_trust(ImportDiagnostic::new(
+        "Assets/Scripts/Tool.cs",
+        "the project is not trusted",
+        "the asset is not imported until the project is trusted",
+    ));
+    assert_eq!(trust.state, AssetImportState::BlockedByTrust);
+    for state in [
+        AssetImportState::NotYetEvaluated,
+        AssetImportState::Processing,
+        AssetImportState::Ready,
+        AssetImportState::ReadyWithLimitations,
+        AssetImportState::Failed,
+        AssetImportState::Missing,
+        AssetImportState::BlockedByDependency,
+        AssetImportState::BlockedByTrust,
+    ] {
+        assert!(!state.label().is_empty());
+    }
     Ok(())
 }

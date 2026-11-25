@@ -245,6 +245,8 @@ pub struct WheelCollider {
     is_grounded: bool,
     compression: f64,
     angular_velocity: f64,
+    rotation_angle: f64,
+    sprung_mass: f64,
     ground_hit: Option<GroundHit>,
 }
 
@@ -260,6 +262,8 @@ impl WheelCollider {
             is_grounded: false,
             compression: 0.0,
             angular_velocity: 0.0,
+            rotation_angle: 0.0,
+            sprung_mass: 0.0,
             ground_hit: None,
         })
     }
@@ -292,6 +296,10 @@ impl WheelCollider {
         self.angular_velocity * RAD_PER_MINUTE
     }
 
+    pub fn sprung_mass(&self) -> f64 {
+        self.sprung_mass
+    }
+
     pub fn ground_hit(&self) -> Option<&GroundHit> {
         self.ground_hit.as_ref()
     }
@@ -308,12 +316,19 @@ pub struct Vehicle {
     wheels: Vec<WheelCollider>,
     excluded_entity: Option<EntityId>,
     layer_mask: u32,
+    substep_speed_threshold: f64,
+    steps_below_threshold: usize,
+    steps_above_threshold: usize,
 }
 
 impl Vehicle {
-    pub fn new(mass: f64, wheels: Vec<WheelCollider>) -> Result<Self, WheelError> {
+    pub fn new(mass: f64, mut wheels: Vec<WheelCollider>) -> Result<Self, WheelError> {
         if !mass.is_finite() || mass <= 0.0 || wheels.is_empty() {
             return Err(WheelError::InvalidVehicle);
+        }
+        let per_wheel_sprung = mass / wheels.len() as f64;
+        for wheel in &mut wheels {
+            wheel.sprung_mass = per_wheel_sprung;
         }
         let inertia = body_inertia(mass, &wheels);
         Ok(Self {
@@ -326,7 +341,70 @@ impl Vehicle {
             wheels,
             excluded_entity: None,
             layer_mask: u32::MAX,
+            substep_speed_threshold: 5.0,
+            steps_below_threshold: 1,
+            steps_above_threshold: 1,
         })
+    }
+
+    pub fn configure_vehicle_substeps(
+        &mut self,
+        speed_threshold: f64,
+        steps_below_threshold: usize,
+        steps_above_threshold: usize,
+    ) -> Result<(), WheelError> {
+        if !speed_threshold.is_finite()
+            || speed_threshold < 0.0
+            || steps_below_threshold == 0
+            || steps_above_threshold == 0
+        {
+            return Err(WheelError::InvalidVehicle);
+        }
+        self.substep_speed_threshold = speed_threshold;
+        self.steps_below_threshold = steps_below_threshold;
+        self.steps_above_threshold = steps_above_threshold;
+        Ok(())
+    }
+
+    pub fn vehicle_substeps(&self) -> (f64, usize, usize) {
+        (
+            self.substep_speed_threshold,
+            self.steps_below_threshold,
+            self.steps_above_threshold,
+        )
+    }
+
+    pub fn wheel_world_pose(&self, index: usize) -> Option<([f64; 3], [f64; 4])> {
+        let wheel = self.wheels.get(index)?;
+        let attachment = add(
+            self.position,
+            rotate_vector(self.rotation, wheel.local_position),
+        );
+        let down = rotate_vector(self.rotation, [0.0, -1.0, 0.0]);
+        let extension = (wheel.desc.suspension_distance - wheel.compression).max(0.0);
+        let world_pos = add(attachment, scale(down, extension));
+        let steer_rad = if wheel.desc.has_steer {
+            wheel.desc.steer_angle_deg.to_radians()
+        } else {
+            0.0
+        };
+        let steer_quat = [
+            0.0,
+            (steer_rad * 0.5).sin(),
+            0.0,
+            (steer_rad * 0.5).cos(),
+        ];
+        let spin_quat = [
+            (wheel.rotation_angle * 0.5).sin(),
+            0.0,
+            0.0,
+            (wheel.rotation_angle * 0.5).cos(),
+        ];
+        let world_rot = normalize_rotation(multiply_rotation(
+            self.rotation,
+            multiply_rotation(steer_quat, spin_quat),
+        ));
+        Some((world_pos, world_rot))
     }
 
     pub fn with_position(mut self, position: [f64; 3]) -> Self {
@@ -530,6 +608,7 @@ fn step_wheel(
         wheel.ground_hit = None;
         let brake_torque = desc.brake_torque * sign_of(wheel.angular_velocity);
         wheel.angular_velocity += (motor_torque - brake_torque) / inertia * delta_seconds;
+        wheel.rotation_angle += wheel.angular_velocity * delta_seconds;
         return ([0.0; 3], [0.0; 3]);
     };
 
@@ -617,6 +696,7 @@ fn step_wheel(
     } else {
         wheel.angular_velocity = forward_speed / desc.radius;
     }
+    wheel.rotation_angle += wheel.angular_velocity * delta_seconds;
 
     wheel.is_grounded = true;
     wheel.compression = compression;

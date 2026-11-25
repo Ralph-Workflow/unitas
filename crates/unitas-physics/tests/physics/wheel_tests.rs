@@ -446,3 +446,71 @@ fn friction_curve_follows_the_authored_shape() {
     assert_eq!(curve.evaluate(4.0), 1.0);
     assert_eq!(curve.evaluate(-0.3), curve.evaluate(0.3));
 }
+
+#[test]
+fn phy_004_story_6_four_wheel_vehicle_accelerates_brakes_steers_and_reports_ground_hits_per_wheel(
+) -> Result<(), WheelError> {
+    let world = flat_ground_world();
+    let mut vehicle = four_wheel_vehicle()?;
+    vehicle.configure_vehicle_substeps(5.0, 4, 2)?;
+    assert_eq!(vehicle.vehicle_substeps(), (5.0, 4, 2));
+
+    settle(&mut vehicle, &world)?;
+    assert_eq!(
+        vehicle.grounded_wheel_count(),
+        4,
+        "PHY-004 story 6: all four wheels must be grounded after settling"
+    );
+    for (idx, wheel) in vehicle.wheels().iter().enumerate() {
+        assert!(
+            wheel.is_grounded() && wheel.ground_hit().is_some(),
+            "PHY-004 story 6: wheel {idx} must report a ground hit"
+        );
+        assert!(
+            wheel.sprung_mass() > 0.0,
+            "PHY-004 story 6: wheel {idx} must report positive sprung mass"
+        );
+        let (pose_pos, _pose_rot) = vehicle.wheel_world_pose(idx).ok_or(WheelError::InvalidVehicle)?;
+        assert!(pose_pos[1].is_finite());
+    }
+
+    set_motor_torque(&mut vehicle, 140.0);
+    for _ in 0..180 {
+        vehicle.step(&world, STEP)?;
+    }
+    let accelerated_speed = vehicle.velocity()[2];
+    assert!(
+        accelerated_speed > 0.8,
+        "PHY-004 story 6: four-wheel vehicle must accelerate under motor torque, got speed {accelerated_speed}"
+    );
+
+    set_steer_angle(&mut vehicle, true, 22.0);
+    for _ in 0..180 {
+        vehicle.step(&world, STEP)?;
+    }
+    let steered_heading = vehicle.forward_direction();
+    assert!(
+        steered_heading[0] > 0.05 && vehicle.velocity()[0] > 0.05,
+        "PHY-004 story 6: four-wheel vehicle must turn under steer angle, got heading {steered_heading:?}"
+    );
+
+    let pre_brake_speed = (vehicle.velocity()[0].powi(2) + vehicle.velocity()[2].powi(2)).sqrt();
+    set_motor_torque(&mut vehicle, 0.0);
+    set_brake_torque(&mut vehicle, 250.0);
+    for _ in 0..180 {
+        vehicle.step(&world, STEP)?;
+    }
+    let post_brake_speed = (vehicle.velocity()[0].powi(2) + vehicle.velocity()[2].powi(2)).sqrt();
+    assert!(
+        post_brake_speed < pre_brake_speed - 0.5,
+        "PHY-004 story 6: four-wheel vehicle must decelerate under brake torque ({pre_brake_speed} -> {post_brake_speed})"
+    );
+    for (idx, wheel) in vehicle.wheels().iter().enumerate() {
+        let hit = wheel.ground_hit().ok_or(WheelError::InvalidVehicle)?;
+        assert_eq!(
+            hit.entity, GROUND,
+            "PHY-004 story 6: wheel {idx} ground hit must identify the ground collider entity"
+        );
+    }
+    Ok(())
+}

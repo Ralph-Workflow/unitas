@@ -211,6 +211,8 @@ pub struct Rigidbody2D {
     pub(crate) sleep_timer: f32,
     pub(crate) previous_position: [f32; 2],
     pub(crate) previous_rotation: f32,
+    pub(crate) query_position: [f32; 2],
+    pub(crate) query_rotation: f32,
     pub(crate) move_target_position: Option<[f32; 2]>,
     pub(crate) move_target_rotation: Option<f32>,
 }
@@ -246,6 +248,8 @@ impl Rigidbody2D {
             sleep_timer: 0.0,
             previous_position: desc.position,
             previous_rotation: desc.rotation,
+            query_position: desc.position,
+            query_rotation: desc.rotation,
             move_target_position: None,
             move_target_rotation: None,
         }
@@ -359,4 +363,162 @@ impl Rigidbody2D {
             BodyType2D::Dynamic | BodyType2D::Kinematic | BodyType2D::Static => 0.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ConstantForce2D {
+    pub force: [f32; 2],
+    pub relative_force: [f32; 2],
+    pub torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JointId2D(u64);
+
+impl JointId2D {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JointMotor2D {
+    pub motor_speed: f32,
+    pub max_motor_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JointLimits2D {
+    pub min: f32,
+    pub max: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DistanceJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub anchor_a: [f32; 2],
+    pub anchor_b: [f32; 2],
+    pub distance: f32,
+    pub max_distance_only: bool,
+    pub break_force: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpringJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub anchor_a: [f32; 2],
+    pub anchor_b: [f32; 2],
+    pub distance: f32,
+    pub damping_ratio: f32,
+    pub frequency: f32,
+    pub break_force: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TargetJoint2D {
+    pub body: BodyId2D,
+    pub anchor: [f32; 2],
+    pub target: [f32; 2],
+    pub max_force: f32,
+    pub frequency: f32,
+    pub damping_ratio: f32,
+    pub break_force: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FixedJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub local_offset: [f32; 2],
+    pub reference_angle: f32,
+    pub damping_ratio: f32,
+    pub frequency: f32,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelativeJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub linear_offset: [f32; 2],
+    pub angular_offset: f32,
+    pub max_force: f32,
+    pub max_torque: f32,
+    pub correction_scale: f32,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrictionJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub max_force: f32,
+    pub max_torque: f32,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HingeJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub anchor_a: [f32; 2],
+    pub anchor_b: [f32; 2],
+    pub use_motor: bool,
+    pub motor: JointMotor2D,
+    pub use_limits: bool,
+    pub limits: JointLimits2D,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SliderJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub anchor_a: [f32; 2],
+    pub anchor_b: [f32; 2],
+    pub angle_degrees: f32,
+    pub use_motor: bool,
+    pub motor: JointMotor2D,
+    pub use_limits: bool,
+    pub limits: JointLimits2D,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelJoint2D {
+    pub body_a: BodyId2D,
+    pub body_b: Option<BodyId2D>,
+    pub anchor_a: [f32; 2],
+    pub anchor_b: [f32; 2],
+    pub suspension_angle_degrees: f32,
+    pub suspension_frequency: f32,
+    pub suspension_damping_ratio: f32,
+    pub use_motor: bool,
+    pub motor: JointMotor2D,
+    pub break_force: f32,
+    pub break_torque: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Joint2D {
+    Distance(DistanceJoint2D),
+    Fixed(FixedJoint2D),
+    Friction(FrictionJoint2D),
+    Hinge(HingeJoint2D),
+    Relative(RelativeJoint2D),
+    Slider(SliderJoint2D),
+    Spring(SpringJoint2D),
+    Target(TargetJoint2D),
+    Wheel(WheelJoint2D),
 }

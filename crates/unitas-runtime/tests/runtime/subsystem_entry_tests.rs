@@ -1,7 +1,8 @@
 use unitas_core::EntityId;
 use unitas_physics::matrix::{CollisionMessage, PhysicsObject};
 use unitas_physics::particles::{
-    Curve, EmitParams, ParticlePropertyCurves, ParticleShape, ParticleSystemState, StopAction,
+    Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, ParticlePropertyCurves,
+    ParticleShape, ParticleSystemForceField, ParticleSystemState, StopAction,
 };
 use unitas_physics::two_d::{
     BodyDesc2D, ColliderDesc2D, ContactFilter2D, MessageKind2D, PlatformEffector2D,
@@ -221,5 +222,99 @@ fn subsystem_entry_teleports_a_dynamic_body_and_syncs_its_transform(
     assert!((f64::from(transform.translation[0]) - target[0]).abs() < 1e-4);
     assert!((f64::from(transform.translation[1]) - target[1]).abs() < 1e-4);
     assert!((f64::from(transform.translation[2]) - target[2]).abs() < 1e-4);
+    Ok(())
+}
+
+#[test]
+fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_runtime_world(
+) -> Result<(), PhysicsError> {
+    let mut physics = PhysicsRuntimeWorld::new();
+    let trigger_zone = EntityId::new(77);
+    physics.add_body_3d(
+        trigger_zone,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Sphere { radius: 2.0 },
+            position: [1.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0, 0.0, 0.0],
+            use_gravity: false,
+            is_trigger: true,
+            layer: 1,
+            friction: 0.5,
+            restitution: 0.0,
+        },
+    )?;
+
+    let mut particles = ParticleRuntimeWorld::new();
+    let emitter = EntityId::new(88);
+    {
+        let system = particles.register_system(emitter, 314);
+        system.set_shape(ParticleShape::Point);
+        system.set_emit_position([0.0, 0.0, 0.0]);
+        system.set_emit_params(EmitParams {
+            start_speed: 0.0,
+            start_size: 0.5,
+            start_lifetime: 2.0,
+            start_color: [1.0, 1.0, 1.0, 1.0],
+        });
+        system.set_external_forces_enabled(true);
+    }
+    assert!(particles.emit_with_params(
+        emitter,
+        EmitParams {
+            start_speed: 0.0,
+            start_size: 0.5,
+            start_lifetime: 2.0,
+            start_color: [0.25, 0.5, 0.75, 1.0],
+        },
+        2,
+    ));
+    let stream_data = vec![[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]];
+    assert!(
+        particles.set_custom_particle_data(
+            emitter,
+            CustomParticleDataStream::Custom1,
+            &stream_data
+        ),
+        "REN-004 outcome 16: ParticleRuntimeWorld must accept custom particle data stream"
+    );
+    assert_eq!(
+        particles.get_custom_particle_data(emitter, CustomParticleDataStream::Custom1),
+        Some(stream_data.as_slice()),
+        "REN-004 outcome 16: ParticleRuntimeWorld must read back custom particle data stream"
+    );
+
+    assert!(
+        particles.add_force_field(
+            emitter,
+            ParticleSystemForceField {
+                position: [0.0, 0.0, 0.0],
+                shape: ForceFieldShape::Sphere { radius: 5.0 },
+                direction: [4.0, 0.0, 0.0],
+                gravity: [0.0, 0.0, 0.0],
+                gravity_focus: 0.0,
+                drag: 0.0,
+                layer: 0,
+            }
+        ),
+        "REN-004 outcome 16: ParticleRuntimeWorld must register ParticleSystemForceField"
+    );
+
+    particles.step_all(0.5, Some(physics.world_3d()));
+    let live = particles.particles(emitter).unwrap_or(&[]);
+    assert_eq!(live.len(), 2);
+    assert!(
+        (live[0].position[0] - 1.0).abs() < 1e-4,
+        "REN-004 outcome 16: force field in runtime world must move particle into trigger zone"
+    );
+    let triggers = particles.trigger_events(emitter).unwrap_or(&[]);
+    assert_eq!(
+        triggers.len(),
+        2,
+        "REN-004 outcome 16: runtime particle world must report OnParticleTrigger contacts"
+    );
+    assert_eq!(triggers[0].entity, trigger_zone);
     Ok(())
 }

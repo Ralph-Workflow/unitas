@@ -87,6 +87,24 @@ impl TransitionCondition {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendTree2DMode {
+    #[default]
+    SimpleDirectional,
+    FreeformDirectional,
+    FreeformCartesian,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InterruptionSource {
+    #[default]
+    None,
+    Source,
+    Destination,
+    SourceThenDestination,
+    DestinationThenSource,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum StateMotion {
     #[default]
@@ -95,6 +113,15 @@ pub enum StateMotion {
     BlendTree1D {
         parameter: String,
         thresholds: Vec<(f32, AnimationClip)>,
+    },
+    BlendTree2D {
+        mode: BlendTree2DMode,
+        parameter_x: String,
+        parameter_y: String,
+        children: Vec<([f32; 2], AnimationClip)>,
+    },
+    BlendTreeDirect {
+        children: Vec<(String, AnimationClip)>,
     },
 }
 
@@ -133,6 +160,12 @@ impl StateMotion {
                 }
                 sorted[0].1.effective_duration()
             }
+            Self::BlendTree2D { children, .. } => children
+                .first()
+                .map_or(0.0, |(_, clip)| clip.effective_duration()),
+            Self::BlendTreeDirect { children } => children
+                .first()
+                .map_or(0.0, |(_, clip)| clip.effective_duration()),
         }
     }
 }
@@ -143,6 +176,7 @@ pub struct AnimatorState {
     pub motion: StateMotion,
     pub speed: f32,
     pub is_exit: bool,
+    pub write_defaults: bool,
 }
 
 impl AnimatorState {
@@ -152,6 +186,7 @@ impl AnimatorState {
             motion,
             speed: 1.0,
             is_exit: false,
+            write_defaults: true,
         }
     }
 
@@ -161,6 +196,21 @@ impl AnimatorState {
             motion,
             speed,
             is_exit: false,
+            write_defaults: true,
+        }
+    }
+
+    pub fn with_write_defaults(
+        name: impl Into<String>,
+        motion: StateMotion,
+        write_defaults: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            motion,
+            speed: 1.0,
+            is_exit: false,
+            write_defaults,
         }
     }
 }
@@ -179,6 +229,7 @@ pub struct StateTransition {
     pub has_exit_time: bool,
     pub exit_time: f32,
     pub duration: f32,
+    pub interruption_source: InterruptionSource,
 }
 
 impl StateTransition {
@@ -201,6 +252,7 @@ impl StateTransition {
             } else {
                 0.0
             },
+            interruption_source: InterruptionSource::None,
         }
     }
 
@@ -362,6 +414,73 @@ impl AnimatorController {
                         validate_clip_bindings(clip, &mut diagnostics);
                     }
                 }
+                StateMotion::BlendTree2D {
+                    parameter_x,
+                    parameter_y,
+                    children,
+                    ..
+                } => {
+                    for parameter in [parameter_x, parameter_y] {
+                        match self.parameters.iter().find(|p| p.name == *parameter) {
+                            None => diagnostics.push(
+                                AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!("2D blend tree in state '{}'", state.name),
+                                },
+                            ),
+                            Some(param)
+                                if param.default_value.parameter_type() != ParameterType::Float =>
+                            {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!(
+                                        "2D blend tree in state '{}' requires Float parameter",
+                                        state.name
+                                    ),
+                                });
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    if children.is_empty() {
+                        diagnostics.push(AnimationDiagnostic::MissingMotion {
+                            state_name: state.name.clone(),
+                        });
+                    }
+                    for (_, clip) in children {
+                        validate_clip_bindings(clip, &mut diagnostics);
+                    }
+                }
+                StateMotion::BlendTreeDirect { children } => {
+                    if children.is_empty() {
+                        diagnostics.push(AnimationDiagnostic::MissingMotion {
+                            state_name: state.name.clone(),
+                        });
+                    }
+                    for (parameter, clip) in children {
+                        match self.parameters.iter().find(|p| p.name == *parameter) {
+                            None => diagnostics.push(
+                                AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!("Direct blend tree in state '{}'", state.name),
+                                },
+                            ),
+                            Some(param)
+                                if param.default_value.parameter_type() != ParameterType::Float =>
+                            {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!(
+                                        "Direct blend tree in state '{}' requires Float parameter",
+                                        state.name
+                                    ),
+                                });
+                            }
+                            Some(_) => {}
+                        }
+                        validate_clip_bindings(clip, &mut diagnostics);
+                    }
+                }
             }
         }
 
@@ -469,6 +588,51 @@ impl AnimatorController {
     }
 }
 
+fn sanitize_delta(delta: f32) -> f32 {
+    if delta.is_finite() && delta > 0.0 {
+        delta
+    } else {
+        0.0
+    }
+}
+
+fn state_clips(state: &AnimatorState) -> Vec<&AnimationClip> {
+    match &state.motion {
+        StateMotion::None => Vec::new(),
+        StateMotion::Clip(clip) => vec![clip],
+        StateMotion::BlendTree1D { thresholds, .. } => {
+            thresholds.iter().map(|(_, clip)| clip).collect()
+        }
+        StateMotion::BlendTree2D { children, .. } => {
+            children.iter().map(|(_, clip)| clip).collect()
+        }
+        StateMotion::BlendTreeDirect { children } => {
+            children.iter().map(|(_, clip)| clip).collect()
+        }
+    }
+}
+
+fn capture_defaults(controller: &AnimatorController) -> Vec<SampledBinding> {
+    let mut defaults: Vec<SampledBinding> = Vec::new();
+    for state in &controller.states {
+        for clip in state_clips(state) {
+            for binding in &clip.bindings {
+                if defaults
+                    .iter()
+                    .any(|existing| existing.target == binding.target)
+                {
+                    continue;
+                }
+                defaults.push(SampledBinding {
+                    target: binding.target.clone(),
+                    value: binding.curve.evaluate(0.0),
+                });
+            }
+        }
+    }
+    defaults
+}
+
 fn validate_clip_bindings(clip: &AnimationClip, diagnostics: &mut Vec<AnimationDiagnostic>) {
     for binding in &clip.bindings {
         if !binding.target.is_valid() {
@@ -508,6 +672,58 @@ pub struct AnimatorStepResult {
     pub bindings: Vec<SampledBinding>,
     pub fired_events: Vec<AnimationEvent>,
     pub diagnostics: Vec<AnimationDiagnostic>,
+    pub callbacks: Vec<StateMachineCallback>,
+    pub writes_transforms: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimatorUpdateMode {
+    Normal,
+    AnimatePhysics,
+    UnscaledTime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimatorCullingMode {
+    AlwaysAnimate,
+    CullUpdateTransforms,
+    CullCompletely,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimatorFrame {
+    pub scaled_delta: f32,
+    pub unscaled_delta: f32,
+    pub fixed_delta: f32,
+}
+
+impl AnimatorFrame {
+    pub fn new(scaled_delta: f32, unscaled_delta: f32, fixed_delta: f32) -> Self {
+        Self {
+            scaled_delta,
+            unscaled_delta,
+            fixed_delta,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateMachineCallbackKind {
+    OnStateEnter,
+    OnStateUpdate,
+    OnStateExit,
+    OnStateMove,
+    OnStateIK,
+    OnStateMachineEnter,
+    OnStateMachineExit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StateMachineCallback {
+    pub kind: StateMachineCallbackKind,
+    pub state_index: usize,
+    pub state_name: String,
+    pub machine: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -516,6 +732,13 @@ struct ActiveTransition {
     elapsed: f32,
     duration: f32,
     target_time: f32,
+    interruption_source: InterruptionSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AnimatorRequest {
+    Play(usize),
+    CrossFade(usize, f32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -527,6 +750,13 @@ pub struct Animator {
     active_transition: Option<ActiveTransition>,
     speed: f32,
     diagnostics: Vec<AnimationDiagnostic>,
+    update_mode: AnimatorUpdateMode,
+    culling_mode: AnimatorCullingMode,
+    visible: bool,
+    state_frames: u32,
+    machine_entered: bool,
+    pending_request: Option<AnimatorRequest>,
+    captured_defaults: Vec<SampledBinding>,
 }
 
 impl Animator {
@@ -542,6 +772,7 @@ impl Animator {
         } else {
             0
         };
+        let captured_defaults = capture_defaults(&controller);
         Self {
             controller,
             parameter_values,
@@ -550,6 +781,13 @@ impl Animator {
             active_transition: None,
             speed: 1.0,
             diagnostics,
+            update_mode: AnimatorUpdateMode::Normal,
+            culling_mode: AnimatorCullingMode::AlwaysAnimate,
+            visible: true,
+            state_frames: 0,
+            machine_entered: false,
+            pending_request: None,
+            captured_defaults,
         }
     }
 
@@ -752,19 +990,111 @@ impl Animator {
     }
 
     pub fn step(&mut self, dt_seconds: f32) -> AnimatorStepResult {
+        let dt = sanitize_delta(dt_seconds);
+        self.step_frame(&AnimatorFrame::new(dt, dt, dt))
+    }
+
+    pub fn step_frame(&mut self, frame: &AnimatorFrame) -> AnimatorStepResult {
+        if self.culling_mode == AnimatorCullingMode::CullCompletely && !self.visible {
+            return AnimatorStepResult {
+                state_info: self.current_state_info(),
+                bindings: Vec::new(),
+                fired_events: Vec::new(),
+                diagnostics: self.diagnostics.clone(),
+                callbacks: Vec::new(),
+                writes_transforms: false,
+            };
+        }
+        let dt = self.update_delta(frame);
+        let mut result = self.advance(dt);
+        if self.culling_mode == AnimatorCullingMode::CullUpdateTransforms && !self.visible {
+            result.writes_transforms = false;
+        }
+        result
+    }
+
+    fn update_delta(&self, frame: &AnimatorFrame) -> f32 {
+        match self.update_mode {
+            AnimatorUpdateMode::Normal => sanitize_delta(frame.scaled_delta),
+            AnimatorUpdateMode::UnscaledTime => sanitize_delta(frame.unscaled_delta),
+            AnimatorUpdateMode::AnimatePhysics => {
+                let fixed = sanitize_delta(frame.fixed_delta);
+                if fixed <= 1e-6 {
+                    return sanitize_delta(frame.scaled_delta);
+                }
+                let steps = (sanitize_delta(frame.scaled_delta) / fixed).floor();
+                steps * fixed
+            }
+        }
+    }
+
+    fn advance(&mut self, dt: f32) -> AnimatorStepResult {
         if self.controller.states.is_empty() {
             return AnimatorStepResult {
                 state_info: self.current_state_info(),
                 bindings: Vec::new(),
                 fired_events: Vec::new(),
                 diagnostics: self.diagnostics.clone(),
+                callbacks: Vec::new(),
+                writes_transforms: true,
             };
         }
-        let dt = if dt_seconds.is_finite() && dt_seconds >= 0.0 {
-            dt_seconds
-        } else {
-            0.0
-        };
+
+        let mut callbacks: Vec<StateMachineCallback> = Vec::new();
+        if !self.machine_entered {
+            self.machine_entered = true;
+            callbacks.push(self.machine_callback(StateMachineCallbackKind::OnStateMachineEnter));
+        }
+        let mut entered: Option<usize> = None;
+        let mut exited: Option<usize> = None;
+
+        if let Some(request) = self.pending_request.take() {
+            match request {
+                AnimatorRequest::Play(target) => {
+                    if target < self.controller.states.len() {
+                        exited = Some(self.current_state);
+                        self.current_state = target;
+                        self.state_time = 0.0;
+                        self.active_transition = None;
+                        self.state_frames = 0;
+                        entered = Some(target);
+                        let sample = self.sample_state(self.current_state, 0.0, 0.0);
+                        let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+                        return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+                    }
+                }
+                AnimatorRequest::CrossFade(target, duration) => {
+                    if target < self.controller.states.len() {
+                        if duration <= 1e-6 {
+                            exited = Some(self.current_state);
+                            self.current_state = target;
+                            self.state_time = 0.0;
+                            self.active_transition = None;
+                            self.state_frames = 0;
+                            entered = Some(target);
+                            let sample = self.sample_state(self.current_state, 0.0, 0.0);
+                            let bindings =
+                                self.apply_write_defaults(self.current_state, sample.bindings);
+                            return self.finish(
+                                callbacks,
+                                entered,
+                                exited,
+                                bindings,
+                                sample.fired_events,
+                            );
+                        }
+                        self.active_transition = Some(ActiveTransition {
+                            target_state: target,
+                            elapsed: 0.0,
+                            duration: sanitize_delta(duration),
+                            target_time: 0.0,
+                            interruption_source: InterruptionSource::None,
+                        });
+                        entered = Some(target);
+                    }
+                }
+            }
+        }
 
         let source_speed = self
             .controller
@@ -785,8 +1115,33 @@ impl Animator {
             0.0
         };
 
-        if self.active_transition.is_none() {
-            if let Some(tr_idx) = self.find_matching_transition(self.current_state, current_norm) {
+        if let Some(active) = self.active_transition {
+            let dst_len = self.state_duration(active.target_state);
+            let dst_norm = if dst_len > 1e-6 {
+                active.target_time / dst_len
+            } else {
+                0.0
+            };
+            let interrupt_tr_idx = match active.interruption_source {
+                InterruptionSource::None => None,
+                InterruptionSource::Source => {
+                    self.find_interrupting_transition(self.current_state, current_norm, active.target_state)
+                }
+                InterruptionSource::Destination => {
+                    self.find_interrupting_transition(active.target_state, dst_norm, active.target_state)
+                }
+                InterruptionSource::SourceThenDestination => self
+                    .find_interrupting_transition(self.current_state, current_norm, active.target_state)
+                    .or_else(|| {
+                        self.find_interrupting_transition(active.target_state, dst_norm, active.target_state)
+                    }),
+                InterruptionSource::DestinationThenSource => self
+                    .find_interrupting_transition(active.target_state, dst_norm, active.target_state)
+                    .or_else(|| {
+                        self.find_interrupting_transition(self.current_state, current_norm, active.target_state)
+                    }),
+            };
+            if let Some(tr_idx) = interrupt_tr_idx {
                 let transition = self.controller.transitions[tr_idx].clone();
                 self.consume_transition_triggers(&transition);
                 let target_idx = match transition.target {
@@ -797,8 +1152,11 @@ impl Animator {
                         .min(self.controller.states.len() - 1),
                 };
                 if transition.duration <= 1e-6 {
+                    exited = Some(self.current_state);
                     self.current_state = target_idx;
                     self.state_time = 0.0;
+                    self.active_transition = None;
+                    self.state_frames = 0;
                     if self
                         .controller
                         .states
@@ -810,21 +1168,57 @@ impl Animator {
                             .entry_state
                             .min(self.controller.states.len() - 1);
                     }
+                    entered = Some(self.current_state);
                     let sample = self.sample_state(self.current_state, 0.0, 0.0);
-                    return AnimatorStepResult {
-                        state_info: self.current_state_info(),
-                        bindings: sample.bindings,
-                        fired_events: sample.fired_events,
-                        diagnostics: self.diagnostics.clone(),
-                    };
+                    let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+                    return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
                 }
                 self.active_transition = Some(ActiveTransition {
                     target_state: target_idx,
                     elapsed: 0.0,
                     duration: transition.duration,
                     target_time: 0.0,
+                    interruption_source: transition.interruption_source,
                 });
+                entered = Some(target_idx);
             }
+        } else if let Some(tr_idx) = self.find_matching_transition(self.current_state, current_norm)
+        {
+            let transition = self.controller.transitions[tr_idx].clone();
+            self.consume_transition_triggers(&transition);
+            let target_idx = match transition.target {
+                TransitionTarget::State(idx) if idx < self.controller.states.len() => idx,
+                TransitionTarget::State(_) | TransitionTarget::Exit => {
+                    self.controller.entry_state.min(self.controller.states.len() - 1)
+                }
+            };
+            if transition.duration <= 1e-6 {
+                exited = Some(self.current_state);
+                self.current_state = target_idx;
+                self.state_time = 0.0;
+                self.state_frames = 0;
+                if self
+                    .controller
+                    .states
+                    .get(self.current_state)
+                    .is_some_and(|s| s.is_exit)
+                {
+                    self.current_state =
+                        self.controller.entry_state.min(self.controller.states.len() - 1);
+                }
+                entered = Some(self.current_state);
+                let sample = self.sample_state(self.current_state, 0.0, 0.0);
+                let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+                return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+            }
+            self.active_transition = Some(ActiveTransition {
+                target_state: target_idx,
+                elapsed: 0.0,
+                duration: transition.duration,
+                target_time: 0.0,
+                interruption_source: transition.interruption_source,
+            });
+            entered = Some(target_idx);
         }
 
         if let Some(mut tr) = self.active_transition {
@@ -839,9 +1233,11 @@ impl Animator {
             tr.elapsed += dt * self.speed;
 
             if tr.elapsed >= tr.duration {
+                exited = Some(self.current_state);
                 self.current_state = tr.target_state;
                 self.state_time = tr.target_time;
                 self.active_transition = None;
+                self.state_frames = 0;
                 if self
                     .controller
                     .states
@@ -854,14 +1250,9 @@ impl Animator {
                         .min(self.controller.states.len() - 1);
                     self.state_time = 0.0;
                 }
-                let sample =
-                    self.sample_state(self.current_state, prev_target_time, self.state_time);
-                return AnimatorStepResult {
-                    state_info: self.current_state_info(),
-                    bindings: sample.bindings,
-                    fired_events: sample.fired_events,
-                    diagnostics: self.diagnostics.clone(),
-                };
+                let sample = self.sample_state(self.current_state, prev_target_time, self.state_time);
+                let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+                return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
             }
 
             self.active_transition = Some(tr);
@@ -872,23 +1263,157 @@ impl Animator {
                 blend_sampled_bindings(&src_sample.bindings, &dst_sample.bindings, alpha);
             let mut fired_events = src_sample.fired_events;
             fired_events.extend(dst_sample.fired_events);
-            return AnimatorStepResult {
-                state_info: self.current_state_info(),
-                bindings,
-                fired_events,
-                diagnostics: self.diagnostics.clone(),
-            };
+            let bindings = self.apply_write_defaults(self.current_state, bindings);
+            return self.finish(callbacks, entered, exited, bindings, fired_events);
         }
 
         let sample = self.sample_state(self.current_state, prev_time, new_time);
+        let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+        self.finish(callbacks, entered, exited, bindings, sample.fired_events)
+    }
+
+    fn finish(
+        &mut self,
+        mut callbacks: Vec<StateMachineCallback>,
+        entered: Option<usize>,
+        exited: Option<usize>,
+        bindings: Vec<SampledBinding>,
+        fired_events: Vec<AnimationEvent>,
+    ) -> AnimatorStepResult {
+        self.state_frames += 1;
+        if let Some(index) = entered {
+            callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateEnter, index));
+        }
+        if self.state_frames >= 2 && exited != Some(self.current_state) {
+            callbacks.push(self.state_callback(
+                StateMachineCallbackKind::OnStateUpdate,
+                self.current_state,
+            ));
+        }
+        if let Some(index) = exited {
+            callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateExit, index));
+        }
         AnimatorStepResult {
             state_info: self.current_state_info(),
-            bindings: sample.bindings,
-            fired_events: sample.fired_events,
+            bindings,
+            fired_events,
             diagnostics: self.diagnostics.clone(),
+            callbacks,
+            writes_transforms: true,
         }
     }
 
+    fn apply_write_defaults(
+        &self,
+        state_index: usize,
+        bindings: Vec<SampledBinding>,
+    ) -> Vec<SampledBinding> {
+        let Some(state) = self.controller.states.get(state_index) else {
+            return bindings;
+        };
+        if !state.write_defaults {
+            return bindings;
+        }
+        let mut result = bindings;
+        for default in &self.captured_defaults {
+            if result.iter().any(|binding| binding.target == default.target) {
+                continue;
+            }
+            result.push(default.clone());
+        }
+        result
+    }
+
+    fn state_callback(
+        &self,
+        kind: StateMachineCallbackKind,
+        state_index: usize,
+    ) -> StateMachineCallback {
+        let state_name = self
+            .controller
+            .states
+            .get(state_index)
+            .map(|state| state.name.clone())
+            .unwrap_or_default();
+        StateMachineCallback {
+            kind,
+            state_index,
+            state_name,
+            machine: None,
+        }
+    }
+
+    fn machine_callback(&self, kind: StateMachineCallbackKind) -> StateMachineCallback {
+        StateMachineCallback {
+            kind,
+            state_index: self.current_state,
+            state_name: String::new(),
+            machine: Some(self.controller.name.clone()),
+        }
+    }
+
+    pub fn update_mode(&self) -> AnimatorUpdateMode {
+        self.update_mode
+    }
+
+    pub fn set_update_mode(&mut self, update_mode: AnimatorUpdateMode) {
+        self.update_mode = update_mode;
+    }
+
+    pub fn culling_mode(&self) -> AnimatorCullingMode {
+        self.culling_mode
+    }
+
+    pub fn set_culling_mode(&mut self, culling_mode: AnimatorCullingMode) {
+        self.culling_mode = culling_mode;
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    pub fn captured_defaults(&self) -> &[SampledBinding] {
+        &self.captured_defaults
+    }
+
+    pub fn state_index_by_name(&self, name: &str) -> Option<usize> {
+        self.controller
+            .states
+            .iter()
+            .position(|state| state.name == name)
+    }
+
+    pub fn play(&mut self, state_index: usize) {
+        self.pending_request = Some(AnimatorRequest::Play(state_index));
+    }
+
+    pub fn cross_fade(&mut self, state_index: usize, duration: f32) {
+        self.pending_request = Some(AnimatorRequest::CrossFade(state_index, duration));
+    }
+
+    pub fn reset(&mut self) {
+        let entry = if self.controller.entry_state < self.controller.states.len() {
+            self.controller.entry_state
+        } else {
+            0
+        };
+        self.current_state = entry;
+        self.state_time = 0.0;
+        self.active_transition = None;
+        self.pending_request = None;
+        self.state_frames = 0;
+        self.machine_entered = false;
+        self.parameter_values = self
+            .controller
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.name.clone(), parameter.default_value))
+            .collect();
+    }
     fn state_duration(&self, state_index: usize) -> f32 {
         let Some(state) = self.controller.states.get(state_index) else {
             return 0.0;
@@ -903,6 +1428,32 @@ impl Animator {
     fn find_matching_transition(&self, source_state: usize, normalized_time: f32) -> Option<usize> {
         for (idx, tr) in self.controller.transitions.iter().enumerate() {
             if tr.source_state != source_state {
+                continue;
+            }
+            if tr.has_exit_time && normalized_time + 1e-6 < tr.exit_time {
+                continue;
+            }
+            if !tr.has_exit_time && tr.conditions.is_empty() {
+                return Some(idx);
+            }
+            if tr.conditions.iter().all(|c| self.evaluate_condition(c)) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    fn find_interrupting_transition(
+        &self,
+        source_state: usize,
+        normalized_time: f32,
+        exclude_target: usize,
+    ) -> Option<usize> {
+        for (idx, tr) in self.controller.transitions.iter().enumerate() {
+            if tr.source_state != source_state {
+                continue;
+            }
+            if tr.target == TransitionTarget::State(exclude_target) {
                 continue;
             }
             if tr.has_exit_time && normalized_time + 1e-6 < tr.exit_time {
@@ -1018,6 +1569,109 @@ impl Animator {
                     }
                 }
                 sorted[0].1.sample(prev_time, current_time)
+            }
+            StateMotion::BlendTree2D {
+                parameter_x,
+                parameter_y,
+                children,
+                ..
+            } => {
+                if children.is_empty() {
+                    return ClipSample {
+                        bindings: Vec::new(),
+                        fired_events: Vec::new(),
+                        normalized_time: 0.0,
+                        wrapped_time: 0.0,
+                    };
+                }
+                let px = self.get_float(parameter_x).unwrap_or(0.0);
+                let py = self.get_float(parameter_y).unwrap_or(0.0);
+                let mut raw_weights = Vec::with_capacity(children.len());
+                for (pos, _) in children {
+                    let dx = px - pos[0];
+                    let dy = py - pos[1];
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq <= 1e-8 {
+                        raw_weights.clear();
+                        for (idx, _) in children.iter().enumerate() {
+                            raw_weights.push(if children[idx].0 == *pos { 1.0 } else { 0.0 });
+                        }
+                        break;
+                    }
+                    raw_weights.push(1.0 / dist_sq);
+                }
+                let sum: f32 = raw_weights.iter().sum();
+                let mut bindings = Vec::new();
+                let mut fired_events = Vec::new();
+                let mut acc_weight = 0.0_f32;
+                let mut norm_time = 0.0_f32;
+                let mut wrap_time = 0.0_f32;
+                for ((_, clip), w_raw) in children.iter().zip(raw_weights) {
+                    let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
+                    if w <= 1e-6 {
+                        continue;
+                    }
+                    let sample = clip.sample(prev_time, current_time);
+                    let frac = w / (acc_weight + w);
+                    bindings = if bindings.is_empty() {
+                        sample.bindings
+                    } else {
+                        blend_sampled_bindings(&bindings, &sample.bindings, frac)
+                    };
+                    fired_events.extend(sample.fired_events);
+                    norm_time += sample.normalized_time * w;
+                    wrap_time += sample.wrapped_time * w;
+                    acc_weight += w;
+                }
+                ClipSample {
+                    bindings,
+                    fired_events,
+                    normalized_time: norm_time,
+                    wrapped_time: wrap_time,
+                }
+            }
+            StateMotion::BlendTreeDirect { children } => {
+                if children.is_empty() {
+                    return ClipSample {
+                        bindings: Vec::new(),
+                        fired_events: Vec::new(),
+                        normalized_time: 0.0,
+                        wrapped_time: 0.0,
+                    };
+                }
+                let weights: Vec<f32> = children
+                    .iter()
+                    .map(|(param, _)| self.get_float(param).unwrap_or(0.0).max(0.0))
+                    .collect();
+                let sum: f32 = weights.iter().sum();
+                let mut bindings = Vec::new();
+                let mut fired_events = Vec::new();
+                let mut acc_weight = 0.0_f32;
+                let mut norm_time = 0.0_f32;
+                let mut wrap_time = 0.0_f32;
+                for ((_, clip), w_raw) in children.iter().zip(weights) {
+                    let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
+                    if w <= 1e-6 {
+                        continue;
+                    }
+                    let sample = clip.sample(prev_time, current_time);
+                    let frac = w / (acc_weight + w);
+                    bindings = if bindings.is_empty() {
+                        sample.bindings
+                    } else {
+                        blend_sampled_bindings(&bindings, &sample.bindings, frac)
+                    };
+                    fired_events.extend(sample.fired_events);
+                    norm_time += sample.normalized_time * w;
+                    wrap_time += sample.wrapped_time * w;
+                    acc_weight += w;
+                }
+                ClipSample {
+                    bindings,
+                    fired_events,
+                    normalized_time: norm_time,
+                    wrapped_time: wrap_time,
+                }
             }
         }
     }

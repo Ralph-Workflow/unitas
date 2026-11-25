@@ -1,6 +1,9 @@
 use std::error::Error;
 
-use unitas_asset::model::fbx::{import_fbx, import_fbx_bytes, FbxImportError};
+use unitas_asset::model::fbx::{
+    import_fbx, import_fbx_bytes, import_fbx_with_settings, FbxAnimationCompression,
+    FbxAnimationType, FbxClipDefinition, FbxImportError, FbxImportSettings, FbxMaterialLocation,
+};
 
 const FBX_VERSION_64: u32 = 7500;
 const FBX_VERSION_32: u32 = 7400;
@@ -318,12 +321,12 @@ fn imports_compressed_node_payload() -> TestResult {
 }
 
 #[test]
-fn reports_unsupported_rig_content() -> TestResult {
-    let bytes = fbx_file(
+fn prj004_outcome15_humanoid_rig_content_is_reported_unsupported() -> TestResult {
+    let rig_bytes = fbx_file(
         &objects_root(vec![node("Deformer", vec![prop_string("Skin")], vec![])]),
         FBX_VERSION_64,
     );
-    match import_fbx(&bytes) {
+    match import_fbx(&rig_bytes) {
         Err(FbxImportError::UnsupportedContent { feature }) => {
             assert_eq!(feature, "fbx_rig");
         }
@@ -333,12 +336,12 @@ fn reports_unsupported_rig_content() -> TestResult {
 }
 
 #[test]
-fn reports_unsupported_animation_content() -> TestResult {
-    let bytes = fbx_file(
+fn prj004_outcome15_humanoid_animation_content_is_reported_unsupported() -> TestResult {
+    let animation_bytes = fbx_file(
         &objects_root(vec![node("AnimationCurve", vec![], vec![])]),
         FBX_VERSION_64,
     );
-    match import_fbx(&bytes) {
+    match import_fbx(&animation_bytes) {
         Err(FbxImportError::UnsupportedContent { feature }) => {
             assert_eq!(feature, "fbx_animation");
         }
@@ -436,5 +439,178 @@ fn geometry_nodes_keep_their_own_mesh_identity() -> TestResult {
     assert_eq!(meshes[1].positions.len(), 4);
     assert_eq!(meshes[1].indices, vec![0, 1, 2, 0, 2, 3]);
     assert_eq!(meshes[1].sub_meshes[0].sub_asset_id, "Turret");
+    Ok(())
+}
+
+#[test]
+fn prj004_outcome15_humanoid_fbx_imports_avatar_split_clips_with_loop_pose_baked_root_rotation_optimal_compression_and_extracted_materials(
+) -> TestResult {
+    let body_geom = tri_quad_geometry();
+    let hips_bone = node(
+        "Model",
+        vec![prop_int(200), prop_string("Mixamo_Hips")],
+        vec![],
+    );
+    let spine_bone = node(
+        "Model",
+        vec![prop_int(201), prop_string("Mixamo_Spine")],
+        vec![],
+    );
+    let head_bone = node(
+        "Model",
+        vec![prop_int(202), prop_string("Mixamo_Head")],
+        vec![],
+    );
+    let armor_mat = node(
+        "Material",
+        vec![prop_int(300), prop_string("KnightArmor")],
+        vec![],
+    );
+    let cloth_mat = node(
+        "Material",
+        vec![prop_int(301), prop_string("KnightCape")],
+        vec![],
+    );
+    let curve_node = node(
+        "AnimationCurve",
+        vec![prop_double_array(&[
+            0.0, 10.0, 20.0, 30.0, 40.0, 95.0, 50.0, 60.0, 70.0, 80.0, 90.0,
+        ])],
+        vec![],
+    );
+
+    let fbx_bytes = fbx_file(
+        &objects_root(vec![
+            body_geom,
+            hips_bone,
+            spine_bone,
+            head_bone,
+            armor_mat,
+            cloth_mat,
+            curve_node,
+        ]),
+        FBX_VERSION_64,
+    );
+
+    let settings = FbxImportSettings {
+        animation_type: FbxAnimationType::Humanoid,
+        animation_compression: FbxAnimationCompression::Optimal,
+        rotation_error: 0.5,
+        position_error: 0.5,
+        scale_error: 0.5,
+        material_location: FbxMaterialLocation::External,
+        extract_materials: true,
+        clip_definitions: vec![
+            FbxClipDefinition {
+                name: "Idle".to_string(),
+                first_frame: 0.0,
+                last_frame: 4.0,
+                loop_time: true,
+                loop_pose: true,
+                bake_root_rotation: true,
+                bake_root_position_y: true,
+                bake_root_position_xz: false,
+            },
+            FbxClipDefinition {
+                name: "Run".to_string(),
+                first_frame: 4.0,
+                last_frame: 10.0,
+                loop_time: true,
+                loop_pose: false,
+                bake_root_rotation: true,
+                bake_root_position_y: true,
+                bake_root_position_xz: true,
+            },
+        ],
+    };
+
+    let bundle = import_fbx_with_settings(&fbx_bytes, "Assets/Models/Knight.fbx", &settings)?;
+    assert_eq!(bundle.meshes.len(), 1);
+    assert_eq!(bundle.meshes[0].name, "TriQuad");
+
+    let avatar = bundle
+        .avatar
+        .as_ref()
+        .ok_or("PRJ-004 Outcome 15 expected Humanoid avatar")?;
+    assert!(
+        avatar.is_humanoid,
+        "PRJ-004 Outcome 15 avatar must be Humanoid"
+    );
+    assert_eq!(avatar.name, "KnightAvatar");
+    assert_eq!(avatar.sub_asset_id, "KnightAvatar");
+    assert_eq!(avatar.root_bone, "Mixamo_Hips");
+    assert_eq!(avatar.human_bones.len(), 3);
+    assert_eq!(avatar.human_bones[0].human_name, "Hips");
+    assert_eq!(avatar.human_bones[1].human_name, "Spine");
+    assert_eq!(avatar.human_bones[2].human_name, "Head");
+
+    assert_eq!(
+        bundle.clips.len(),
+        2,
+        "PRJ-004 Outcome 15 split clips Idle and Run produced"
+    );
+    let idle = &bundle.clips[0];
+    assert_eq!(idle.name, "Idle");
+    assert_eq!(idle.sub_asset_id, "Idle");
+    assert_eq!((idle.first_frame, idle.last_frame), (0.0, 4.0));
+    assert!(idle.loop_time);
+    assert!(idle.loop_pose, "PRJ-004 Outcome 15 loop pose honored");
+    assert!(
+        idle.baked_root_rotation,
+        "PRJ-004 Outcome 15 baked root rotation honored"
+    );
+    assert_eq!(idle.compression, FbxAnimationCompression::Optimal);
+    let idle_first = idle
+        .root_rotation_keyframes
+        .first()
+        .ok_or("missing first keyframe")?
+        .value;
+    let idle_last = idle
+        .root_rotation_keyframes
+        .last()
+        .ok_or("missing last keyframe")?
+        .value;
+    assert!(
+        (idle_first - idle_last).abs() < 1e-5,
+        "PRJ-004 Outcome 15 loop_pose aligns end pose with start pose"
+    );
+
+    let run = &bundle.clips[1];
+    assert_eq!(run.name, "Run");
+    assert_eq!(run.sub_asset_id, "Run");
+    assert_eq!((run.first_frame, run.last_frame), (4.0, 10.0));
+    assert!(run.baked_root_rotation);
+    assert_eq!(run.compression, FbxAnimationCompression::Optimal);
+    assert!(
+        run.root_rotation_keyframes.len() < 7,
+        "PRJ-004 Outcome 15 Optimal compression reduces linear keyframes while keeping inflection points"
+    );
+    assert!(
+        run.root_rotation_keyframes
+            .iter()
+            .any(|kf| (kf.value - 95.0).abs() < 1e-4),
+        "PRJ-004 Outcome 15 Optimal compression retains non-linear peak keyframe"
+    );
+
+    assert_eq!(
+        bundle.materials.len(),
+        2,
+        "PRJ-004 Outcome 15 extracted materials produced"
+    );
+    assert_eq!(bundle.materials[0].name, "KnightArmor");
+    assert_eq!(
+        bundle.materials[0].extracted_path.as_deref(),
+        Some("Assets/Models/KnightArmor.mat")
+    );
+    assert_eq!(bundle.materials[1].name, "KnightCape");
+    assert_eq!(
+        bundle.materials[1].extracted_path.as_deref(),
+        Some("Assets/Models/KnightCape.mat")
+    );
+
+    let reimported = import_fbx_with_settings(&fbx_bytes, "Assets/Models/Knight.fbx", &settings)?;
+    assert_eq!(reimported.avatar, bundle.avatar);
+    assert_eq!(reimported.clips, bundle.clips);
+    assert_eq!(reimported.materials, bundle.materials);
     Ok(())
 }

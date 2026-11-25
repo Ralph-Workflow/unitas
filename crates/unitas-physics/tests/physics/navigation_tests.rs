@@ -1,7 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::navigation::{
-    NavMesh, NavMeshAgent, NavMeshArea, NavMeshLink, NavMeshTriangle, NavigationError,
-    PathQueryStatus, UnreachableReason,
+    NavMesh, NavMeshAgent, NavMeshArea, NavMeshLink, NavMeshObstacle, NavMeshQueryFilter,
+    NavMeshSurface, NavMeshTriangle, NavigationError, PathQueryStatus, UnreachableReason,
 };
 
 const TOLERANCE: f64 = 1e-6;
@@ -457,5 +457,179 @@ fn navigation_off_mesh_link_supports_one_way_cost_override_and_activation(
     assert!(navmesh.set_link_activated(1, false));
     let disabled_gap = navmesh.find_path([0.5, 0.0, 0.5], [10.5, 0.0, 0.5]);
     assert_eq!(disabled_gap.status, PathQueryStatus::Partial);
+    Ok(())
+}
+
+#[test]
+fn nav_001_story_9_carving_obstacle_detours_agent_and_reports_distinct_path_statuses(
+) -> Result<(), NavigationError> {
+    let mut navmesh = NavMesh::build(&two_strip_layout(), &[])?;
+    let direct = navmesh.find_path([0.5, 0.0, 0.5], [3.5, 0.0, 0.5]);
+    assert_eq!(
+        direct.status,
+        PathQueryStatus::Complete,
+        "NAV-001 Story 9: unobstructed path must be Complete"
+    );
+    assert!(
+        direct.corners.iter().all(|c| c[2] <= 1.0 + TOLERANCE),
+        "NAV-001 Story 9: unobstructed path takes direct near strip"
+    );
+
+    let obstacle_idx =
+        navmesh.add_obstacle(NavMeshObstacle::carving_box([1.5, 0.0, 0.5], [0.6, 1.0, 0.6]))?;
+    let detoured = navmesh.find_path([0.5, 0.0, 0.5], [3.5, 0.0, 0.5]);
+    assert_eq!(
+        detoured.status,
+        PathQueryStatus::Complete,
+        "NAV-001 Story 9: path around carving NavMeshObstacle must be Complete"
+    );
+    assert!(
+        detoured.corners.iter().any(|c| c[2] >= 2.0 - TOLERANCE),
+        "NAV-001 Story 9: carving NavMeshObstacle forces route around via far strip"
+    );
+
+    navmesh.add_obstacle(NavMeshObstacle::carving_box([1.5, 0.0, 2.5], [0.6, 1.0, 0.6]))?;
+    let mut agent = NavMeshAgent::new(EntityId::new(9), "Story9Runner", [0.5, 0.0, 0.5]);
+    let blocked = agent.set_destination(&navmesh, [3.5, 0.0, 0.5])?;
+    assert_eq!(
+        blocked.status,
+        PathQueryStatus::Partial,
+        "NAV-001 Story 9: completely severed route reports Partial"
+    );
+    assert_eq!(
+        agent.unreachable_reason(),
+        Some(UnreachableReason::NoRouteToGoal),
+        "NAV-001 Story 9: agent explains unreachable destination with NoRouteToGoal"
+    );
+
+    let invalid = agent.set_destination(&navmesh, [99.0, 0.0, 99.0]);
+    assert!(
+        invalid.is_err(),
+        "NAV-001 Story 9: off-navmesh destination returns error"
+    );
+    assert_eq!(
+        agent.path_status(),
+        Some(PathQueryStatus::Invalid),
+        "NAV-001 Story 9: off-navmesh destination sets agent path_status to Invalid"
+    );
+    assert_eq!(
+        agent.unreachable_reason(),
+        Some(UnreachableReason::GoalNotOnNavMesh),
+        "NAV-001 Story 9: agent explains off-mesh destination with GoalNotOnNavMesh"
+    );
+
+    assert!(navmesh.set_obstacle_enabled(obstacle_idx, false));
+    let reopened = agent.set_destination(&navmesh, [3.5, 0.0, 0.5])?;
+    assert_eq!(reopened.status, PathQueryStatus::Complete);
+    Ok(())
+}
+
+#[test]
+fn nav_001_story_10_surface_edit_time_build_and_runtime_rebuild_after_geometry_change(
+) -> Result<(), NavigationError> {
+    let mut surface = NavMeshSurface::new();
+    surface.set_geometry(row([0.0, 0.0, 0.0], 2, 1.0, 0));
+    surface.set_areas(vec![NavMeshArea::new(0, 1.0), NavMeshArea::new(1, 4.0)]);
+    let initial_mesh = surface.build_navmesh()?.clone();
+    assert!(!surface.is_stale());
+    assert_eq!(surface.build_count(), 1);
+
+    let mut agent = NavMeshAgent::new(EntityId::new(10), "BuilderAgent", [0.5, 0.0, 0.5]);
+    let unreachable = agent.set_destination(&initial_mesh, [5.5, 0.0, 0.5]);
+    assert!(
+        unreachable.is_err(),
+        "NAV-001 Story 10: unbuilt target region yields Invalid before runtime rebuild"
+    );
+    assert_eq!(agent.path_status(), Some(PathQueryStatus::Invalid));
+
+    let mut expanded = row([0.0, 0.0, 0.0], 2, 1.0, 0);
+    expanded.extend(row([4.0, 0.0, 0.0], 2, 1.0, 0));
+    surface.set_geometry(expanded.clone());
+    assert!(
+        surface.is_stale(),
+        "NAV-001 Story 10: geometry change marks NavMeshSurface stale until rebuilt"
+    );
+    surface.add_link(NavMeshLink::new([1.5, 0.0, 0.5], [4.5, 0.0, 0.5], true).with_area(0));
+    let rebuilt_mesh = surface.update_navmesh(expanded)?.clone();
+    assert!(!surface.is_stale());
+    assert_eq!(surface.build_count(), 2);
+
+    let after_rebuild = agent.set_destination(&rebuilt_mesh, [5.5, 0.0, 0.5])?;
+    assert_eq!(
+        after_rebuild.status,
+        PathQueryStatus::Complete,
+        "NAV-001 Story 10: runtime rebuild and NavMeshLink produce Complete path"
+    );
+    agent.speed = 10.0;
+    agent.step_with_navmesh(&rebuilt_mesh, 1.0);
+    assert!(
+        (agent.position()[0] - 5.5).abs() < TOLERANCE,
+        "NAV-001 Story 10: agent crosses NavMeshLink on rebuilt surface to destination"
+    );
+    Ok(())
+}
+
+#[test]
+fn nav_001_story_15_reciprocal_avoidance_and_query_filter_per_area_costs(
+) -> Result<(), NavigationError> {
+    let mut floor = row([0.0, 0.0, 0.0], 5, 1.0, 0);
+    floor.extend(row([0.0, 0.0, 1.0], 5, 1.0, 0));
+    floor.extend(row([0.0, 0.0, -1.0], 5, 1.0, 0));
+    let navmesh = NavMesh::build(&floor, &[])?;
+
+    let mut high_prio = NavMeshAgent::new(EntityId::new(15), "HighPrio", [0.5, 0.0, 0.5]);
+    high_prio.radius = 0.5;
+    high_prio.speed = 4.0;
+    high_prio.avoidance_priority = 10;
+    high_prio.set_destination(&navmesh, [4.5, 0.0, 0.5])?;
+
+    let mut low_prio = NavMeshAgent::new(EntityId::new(16), "LowPrio", [4.5, 0.0, 0.5]);
+    low_prio.radius = 0.5;
+    low_prio.speed = 4.0;
+    low_prio.avoidance_priority = 80;
+    low_prio.set_destination(&navmesh, [0.5, 0.0, 0.5])?;
+
+    let mut agents = vec![high_prio, low_prio];
+    for _ in 0..5 {
+        NavMeshAgent::step_agents_with_avoidance(&mut agents, &navmesh, 0.125);
+        let dx = agents[0].position()[0] - agents[1].position()[0];
+        let dz = agents[0].position()[2] - agents[1].position()[2];
+        let separation = (dx * dx + dz * dz).sqrt();
+        assert!(
+            separation >= agents[0].radius + agents[1].radius - 1e-4,
+            "NAV-001 Story 15: agents must not overlap during avoidance (separation={separation})"
+        );
+    }
+    assert!(
+        (agents[0].position()[2] - 0.5).abs() < TOLERANCE,
+        "NAV-001 Story 15: higher-priority (lower number) agent holds its line"
+    );
+    assert!(
+        (agents[1].position()[2] - 0.5).abs() > 0.1,
+        "NAV-001 Story 15: lower-priority agent yields laterally"
+    );
+
+    let two_strip = NavMesh::build(
+        &two_strip_layout(),
+        &[NavMeshArea::new(0, 1.0), NavMeshArea::new(1, 1.0)],
+    )?;
+    let mut filter = NavMeshQueryFilter::new(NavMesh::ALL_AREAS);
+    filter.set_area_cost(1, 10.0)?;
+    let filtered_path = two_strip.calculate_path([0.5, 0.0, 0.5], [3.5, 0.0, 0.5], &filter);
+    assert_eq!(filtered_path.status, PathQueryStatus::Complete);
+    assert!(
+        filtered_path
+            .corners
+            .iter()
+            .any(|c| c[2] >= 2.0 - TOLERANCE),
+        "NAV-001 Story 15: NavMesh.CalculatePath with NavMeshQueryFilter respects per-area cost override"
+    );
+
+    let mask_only_area_0 = 1 << 0;
+    let ray_hit = two_strip.raycast([0.5, 0.0, 2.5], [0.5, 0.0, 0.5], mask_only_area_0);
+    assert!(
+        ray_hit.hit,
+        "NAV-001 Story 15: NavMesh.Raycast stops at masked-out area boundary"
+    );
     Ok(())
 }

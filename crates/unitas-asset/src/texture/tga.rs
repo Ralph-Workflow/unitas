@@ -245,7 +245,9 @@ fn convert(
             }
         },
         Kind::Greyscale => {
-            pixels.extend_from_slice(&samples[..pixel_count]);
+            for sample in samples.iter().take(pixel_count) {
+                pixels.push(*sample);
+            }
             Ok((TextureFormat::R8, pixels))
         }
     }

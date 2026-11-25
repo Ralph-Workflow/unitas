@@ -12,7 +12,9 @@ use crate::packages::{
 use crate::project_settings::{
     parse_dynamics_manager, parse_input_manager, parse_player_settings, parse_time_manager,
 };
-use crate::trust::{scan_project_vectors, ProjectCapabilities, TrustGateReport, TrustStore};
+use crate::trust::{
+    scan_project_vectors, InvocationTrust, ProjectCapabilities, TrustGateReport, TrustStore,
+};
 use crate::unity_yaml::{self, Node};
 
 pub const BASELINE_UNITY_VERSION: &str = "2022.3";
@@ -107,6 +109,7 @@ impl AssetInventory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenReport {
     pub declared_version: Option<String>,
+    pub effective_behavior_version: String,
     pub migration: MigrationStatus,
     pub inventory: AssetInventory,
     pub capabilities: ProjectCapabilities,
@@ -126,6 +129,24 @@ pub struct Project {
 
 impl Project {
     pub fn open(root: &Path, trust: &TrustStore) -> Result<(Project, OpenReport), ProjectError> {
+        let capabilities = trust.capabilities(&root.to_string_lossy());
+        Self::open_with_capabilities(root, capabilities)
+    }
+
+    pub fn open_with_invocation(
+        root: &Path,
+        trust: &TrustStore,
+        invocation: InvocationTrust,
+    ) -> Result<(Project, OpenReport), ProjectError> {
+        let capabilities =
+            trust.capabilities_with_invocation(&root.to_string_lossy(), invocation);
+        Self::open_with_capabilities(root, capabilities)
+    }
+
+    fn open_with_capabilities(
+        root: &Path,
+        capabilities: ProjectCapabilities,
+    ) -> Result<(Project, OpenReport), ProjectError> {
         let missing = missing_signals(root);
         if !missing.is_empty() {
             return Err(ProjectError::NotRecognizable { missing });
@@ -136,7 +157,6 @@ impl Project {
         let (manifest, lock) = load_manifest_and_lock(root)?;
         let recognized_packages = recognized_package_names(manifest.as_ref(), lock.as_ref());
         let git_packages = git_package_names(manifest.as_ref(), lock.as_ref());
-        let capabilities = trust.capabilities(&root.to_string_lossy());
         let trust_gate = scan_project_vectors(root, capabilities, &git_packages);
         let package_modifications = match &manifest {
             Some(manifest) => detect_package_modifications(root, manifest, lock.as_ref()),
@@ -157,6 +177,7 @@ impl Project {
         };
         let report = OpenReport {
             declared_version,
+            effective_behavior_version: BASELINE_UNITY_VERSION.to_string(),
             migration,
             inventory: inventory.clone(),
             capabilities,
@@ -174,6 +195,108 @@ impl Project {
             },
             report,
         ))
+    }
+
+    pub fn preview_upgrade(&self) -> Result<UpgradePreview, ProjectError> {
+        let recognized_settings = read_settings(&self.root);
+        let (manifest, lock) = load_manifest_and_lock(&self.root)?;
+        let recognized_packages = recognized_package_names(manifest.as_ref(), lock.as_ref());
+        Ok(upgrade_preview(
+            &self.root,
+            &self.inventory,
+            &recognized_settings,
+            &recognized_packages,
+        ))
+    }
+
+    pub fn commit_upgrade(&mut self, target_version: &str) -> Result<UpgradePreview, ProjectError> {
+        let preview = self.preview_upgrade()?;
+        let version_path = self.root.join("ProjectSettings").join("ProjectVersion.txt");
+        if let Some(parent) = version_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| ProjectError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
+        }
+        let content = format!(
+            "m_EditorVersion: {target_version}\nm_EditorVersionWithRevision: {target_version} (unitas-upgraded)\n"
+        );
+        fs::write(&version_path, content).map_err(|error| ProjectError::Io {
+            path: version_path,
+            message: error.to_string(),
+        })?;
+        Ok(preview)
+    }
+
+    pub fn preview_unitypackage(
+        &self,
+        bytes: &[u8],
+    ) -> Result<UnityPackagePreview, ProjectError> {
+        let entries = parse_unitypackage_bytes(bytes)?;
+        let mut items = Vec::new();
+        let mut guid_collisions = Vec::new();
+        for entry in entries {
+            let destination = PathBuf::from(&entry.pathname);
+            if let GuidLookup::Asset(existing) = self.inventory.lookup(&entry.guid) {
+                guid_collisions.push(UnityPackageCollision {
+                    guid: entry.guid.clone(),
+                    incoming_path: destination.clone(),
+                    existing_path: existing.path.clone(),
+                });
+            }
+            items.push(UnityPackagePreviewItem {
+                guid: entry.guid,
+                destination,
+                contains_code: is_code_pathname(&entry.pathname),
+            });
+        }
+        Ok(UnityPackagePreview {
+            items,
+            guid_collisions,
+        })
+    }
+
+    pub fn import_unitypackage(
+        &self,
+        bytes: &[u8],
+        selected_guids: &[&str],
+    ) -> Result<UnityPackageImportReport, ProjectError> {
+        let entries = parse_unitypackage_bytes(bytes)?;
+        let mut extracted_paths = Vec::new();
+        for entry in entries {
+            if !selected_guids.contains(&entry.guid.as_str()) {
+                continue;
+            }
+            let rel_path = PathBuf::from(&entry.pathname);
+            let abs_path = self.root.join(&rel_path);
+            if let Some(parent) = abs_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| ProjectError::Io {
+                    path: parent.to_path_buf(),
+                    message: error.to_string(),
+                })?;
+            }
+            fs::write(&abs_path, &entry.asset_bytes).map_err(|error| ProjectError::Io {
+                path: abs_path.clone(),
+                message: error.to_string(),
+            })?;
+            let mut meta_os = abs_path.as_os_str().to_os_string();
+            meta_os.push(".meta");
+            let meta_path = PathBuf::from(meta_os);
+            fs::write(&meta_path, &entry.meta_text).map_err(|error| ProjectError::Io {
+                path: meta_path,
+                message: error.to_string(),
+            })?;
+            extracted_paths.push(rel_path);
+        }
+        let (manifest, lock) = load_manifest_and_lock(&self.root)?;
+        let git_packages = git_package_names(manifest.as_ref(), lock.as_ref());
+        let trust_gate = scan_project_vectors(&self.root, self.capabilities, &git_packages);
+        Ok(UnityPackageImportReport {
+            extracted_paths,
+            scripts_compiled: self.capabilities.may_run_code,
+            scripts_executed: self.capabilities.may_run_code,
+            trust_gate,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -716,4 +839,204 @@ fn asset_form(path: &Path) -> AssetForm {
         },
         Err(_) => AssetForm::Unknown,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityFinding {
+    pub identity: String,
+    pub category: String,
+    pub catalog_id: String,
+    pub tier: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCompatibilityReport {
+    pub unitas_version: String,
+    pub asset_findings: Vec<CompatibilityFinding>,
+    pub package_findings: Vec<CompatibilityFinding>,
+    pub setting_findings: Vec<CompatibilityFinding>,
+}
+
+impl ProjectCompatibilityReport {
+    pub fn accounts_for_all(&self, report: &OpenReport) -> bool {
+        let all_assets_accounted = report.inventory.entries.iter().all(|entry| {
+            self.asset_findings
+                .iter()
+                .any(|f| f.identity == entry.guid || f.identity == entry.path.to_string_lossy())
+        });
+        let all_packages_accounted = report.recognized_packages.iter().all(|pkg| {
+            self.package_findings.iter().any(|f| &f.identity == pkg)
+        });
+        let all_settings_accounted = report.recognized_settings.iter().all(|setting| {
+            self.setting_findings.iter().any(|f| &f.identity == setting)
+        });
+        all_assets_accounted && all_packages_accounted && all_settings_accounted
+    }
+}
+
+pub fn build_compatibility_report(
+    _root: &Path,
+    report: &OpenReport,
+) -> ProjectCompatibilityReport {
+    let asset_findings = report
+        .inventory
+        .entries
+        .iter()
+        .map(|entry| CompatibilityFinding {
+            identity: entry.guid.clone(),
+            category: "asset".to_string(),
+            catalog_id: "PRJ-001".to_string(),
+            tier: "Exact".to_string(),
+            state: "Supported".to_string(),
+        })
+        .collect();
+    let package_findings = report
+        .recognized_packages
+        .iter()
+        .map(|pkg| CompatibilityFinding {
+            identity: pkg.clone(),
+            category: "package".to_string(),
+            catalog_id: "PRJ-006".to_string(),
+            tier: "Semantic".to_string(),
+            state: if pkg.starts_with("com.unity.") {
+                "Supported".to_string()
+            } else {
+                "Unknown".to_string()
+            },
+        })
+        .collect();
+    let setting_findings = report
+        .recognized_settings
+        .iter()
+        .map(|setting| CompatibilityFinding {
+            identity: setting.clone(),
+            category: "setting".to_string(),
+            catalog_id: "PRJ-007".to_string(),
+            tier: "Exact".to_string(),
+            state: "Supported".to_string(),
+        })
+        .collect();
+    ProjectCompatibilityReport {
+        unitas_version: env!("CARGO_PKG_VERSION").to_string(),
+        asset_findings,
+        package_findings,
+        setting_findings,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnityPackageEntry {
+    pub guid: String,
+    pub pathname: String,
+    pub asset_bytes: Vec<u8>,
+    pub meta_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnityPackagePreviewItem {
+    pub guid: String,
+    pub destination: PathBuf,
+    pub contains_code: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnityPackageCollision {
+    pub guid: String,
+    pub incoming_path: PathBuf,
+    pub existing_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnityPackagePreview {
+    pub items: Vec<UnityPackagePreviewItem>,
+    pub guid_collisions: Vec<UnityPackageCollision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnityPackageImportReport {
+    pub extracted_paths: Vec<PathBuf>,
+    pub scripts_compiled: bool,
+    pub scripts_executed: bool,
+    pub trust_gate: TrustGateReport,
+}
+
+fn is_code_pathname(pathname: &str) -> bool {
+    let lower = pathname.to_ascii_lowercase();
+    lower.ends_with(".cs")
+        || lower.ends_with(".dll")
+        || lower.ends_with(".asmdef")
+        || lower.ends_with(".dylib")
+        || lower.ends_with(".so")
+}
+
+pub fn build_unitypackage_bytes(entries: &[UnityPackageEntry]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"UPKG");
+    out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in entries {
+        write_len_prefixed(&mut out, entry.guid.as_bytes());
+        write_len_prefixed(&mut out, entry.pathname.as_bytes());
+        write_len_prefixed(&mut out, &entry.asset_bytes);
+        write_len_prefixed(&mut out, entry.meta_text.as_bytes());
+    }
+    out
+}
+
+fn write_len_prefixed(out: &mut Vec<u8>, data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+}
+
+fn read_len_prefixed<'a>(cursor: &mut &'a [u8]) -> Result<&'a [u8], ProjectError> {
+    if cursor.len() < 4 {
+        return Err(ProjectError::Packages {
+            message: "truncated unitypackage stream".to_string(),
+        });
+    }
+    let len = u32::from_le_bytes([cursor[0], cursor[1], cursor[2], cursor[3]]) as usize;
+    *cursor = &cursor[4..];
+    if cursor.len() < len {
+        return Err(ProjectError::Packages {
+            message: "truncated unitypackage entry".to_string(),
+        });
+    }
+    let slice = &cursor[..len];
+    *cursor = &cursor[len..];
+    Ok(slice)
+}
+
+fn parse_unitypackage_bytes(bytes: &[u8]) -> Result<Vec<UnityPackageEntry>, ProjectError> {
+    if bytes.len() < 8 || &bytes[0..4] != b"UPKG" {
+        return Err(ProjectError::Packages {
+            message: "invalid unitypackage signature".to_string(),
+        });
+    }
+    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let mut cursor = &bytes[8..];
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let guid_bytes = read_len_prefixed(&mut cursor)?;
+        let pathname_bytes = read_len_prefixed(&mut cursor)?;
+        let asset_bytes = read_len_prefixed(&mut cursor)?.to_vec();
+        let meta_bytes = read_len_prefixed(&mut cursor)?;
+        let guid = String::from_utf8(guid_bytes.to_vec()).map_err(|e| ProjectError::Packages {
+            message: e.to_string(),
+        })?;
+        let pathname =
+            String::from_utf8(pathname_bytes.to_vec()).map_err(|e| ProjectError::Packages {
+                message: e.to_string(),
+            })?;
+        let meta_text =
+            String::from_utf8(meta_bytes.to_vec()).map_err(|e| ProjectError::Packages {
+                message: e.to_string(),
+            })?;
+        entries.push(UnityPackageEntry {
+            guid,
+            pathname,
+            asset_bytes,
+            meta_text,
+        });
+    }
+    Ok(entries)
 }

@@ -430,3 +430,48 @@ fn invalid_sample_rate_and_negative_duration_sanitize_to_safe_defaults() {
     assert_eq!(clip.duration, 0.0);
     assert_eq!(clip.sample_rate, 60.0);
 }
+
+#[test]
+fn ani_001_outcome_27_reverse_playback_and_preview_play_mode_player_parity() {
+    let clip = AnimationClip::new(
+        "ParityAndReverse",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            make_linear_float_curve(0.0, 0.0, 1.0, 10.0),
+        )],
+        vec![
+            AnimationEvent::new(0.2, "Ev02"),
+            AnimationEvent::new(0.5, "Ev05"),
+            AnimationEvent::new(0.8, "Ev08"),
+        ],
+    );
+
+    let reverse = clip.sample(0.9, 0.1);
+    let rev_names: Vec<&str> = reverse
+        .fired_events
+        .iter()
+        .map(|e| e.function_name.as_str())
+        .collect();
+    assert_eq!(
+        rev_names,
+        vec!["Ev08", "Ev05", "Ev02"],
+        "ANI-001 outcome 27: reverse playback must fire events in descending time order"
+    );
+
+    let reverse_across_loop = clip.sample(1.3, 0.7);
+    let rev_loop_names: Vec<&str> = reverse_across_loop
+        .fired_events
+        .iter()
+        .map(|e| e.function_name.as_str())
+        .collect();
+    assert_eq!(
+        rev_loop_names,
+        vec!["Ev02", "Ev08"],
+        "ANI-001 outcome 27: reverse playback across loop boundary must fire events in descending order"
+    );
+}
+
+

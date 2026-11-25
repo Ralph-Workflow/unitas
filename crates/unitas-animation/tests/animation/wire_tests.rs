@@ -94,6 +94,7 @@ fn build_rich_controller() -> AnimatorController {
                 motion: StateMotion::None,
                 speed: 1.0,
                 is_exit: true,
+                write_defaults: true,
             },
         ],
         0,
@@ -285,6 +286,10 @@ fn animation_error_display_and_diagnostic_conversion_format_cleanly() {
     .contains("WrapMode"));
 }
 
+fn extension_size(state_count: usize) -> usize {
+    8 + state_count
+}
+
 #[test]
 fn decode_binary_rejects_invalid_wrap_mode_property_curve_and_interpolation_mode_tags() {
     let ctrl = AnimatorController::new(
@@ -308,7 +313,7 @@ fn decode_binary_rejects_invalid_wrap_mode_property_curve_and_interpolation_mode
         Vec::new(),
     );
     let valid = ctrl.encode_binary();
-    let mode_pos = valid.len() - 13;
+    let mode_pos = valid.len() - 13 - extension_size(1);
     let mut bad_mode = valid.clone();
     bad_mode[mode_pos] = 9;
     assert_eq!(
@@ -334,7 +339,7 @@ fn decode_binary_rejects_invalid_transition_target_and_condition_op_tags() {
         )],
     );
     let valid = ctrl.encode_binary();
-    let op_pos = valid.len() - 1;
+    let op_pos = valid.len() - 1 - extension_size(1);
     let mut bad_op = valid.clone();
     bad_op[op_pos] = 44;
     assert_eq!(

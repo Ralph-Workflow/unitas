@@ -449,7 +449,8 @@ fn import_model_dispatches_on_the_file_name() -> Result<(), String> {
 }
 
 #[test]
-fn blend_files_report_unsupported_by_name_without_external_conversion() -> Result<(), String> {
+fn prj004_outcome15_blend_files_are_reported_unsupported_without_launching_anything(
+) -> Result<(), String> {
     let blender_header = b"BLENDER-v300REND";
     let error = match import_model(blender_header, "Assets/Models/character.blend") {
         Ok(_) => return Err("expected .blend import to be rejected".to_string()),

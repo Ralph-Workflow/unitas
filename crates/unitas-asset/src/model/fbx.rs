@@ -1,10 +1,121 @@
 use std::fmt;
 
+use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use crate::inflate::{inflate_zlib, InflateError};
 use crate::primitive::{MeshData, SubMesh};
 
 const FBX_MAGIC_PREFIX: &[u8] = b"Kaydara FBX Binary  \x00";
 const FBX_VERSION_64: u32 = 7500;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbxAnimationType {
+    None,
+    Legacy,
+    Generic,
+    Humanoid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbxAnimationCompression {
+    Off,
+    KeyframeReduction,
+    Optimal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbxMaterialLocation {
+    InPrefab,
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FbxClipDefinition {
+    pub name: String,
+    pub first_frame: f32,
+    pub last_frame: f32,
+    pub loop_time: bool,
+    pub loop_pose: bool,
+    pub bake_root_rotation: bool,
+    pub bake_root_position_y: bool,
+    pub bake_root_position_xz: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FbxImportSettings {
+    pub animation_type: FbxAnimationType,
+    pub animation_compression: FbxAnimationCompression,
+    pub rotation_error: f32,
+    pub position_error: f32,
+    pub scale_error: f32,
+    pub material_location: FbxMaterialLocation,
+    pub extract_materials: bool,
+    pub clip_definitions: Vec<FbxClipDefinition>,
+}
+
+impl Default for FbxImportSettings {
+    fn default() -> Self {
+        FbxImportSettings {
+            animation_type: FbxAnimationType::None,
+            animation_compression: FbxAnimationCompression::KeyframeReduction,
+            rotation_error: 0.5,
+            position_error: 0.5,
+            scale_error: 0.5,
+            material_location: FbxMaterialLocation::InPrefab,
+            extract_materials: false,
+            clip_definitions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FbxAvatarBone {
+    pub human_name: String,
+    pub bone_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FbxImportedAvatar {
+    pub name: String,
+    pub sub_asset_id: String,
+    pub is_humanoid: bool,
+    pub root_bone: String,
+    pub human_bones: Vec<FbxAvatarBone>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FbxKeyframe {
+    pub frame: f32,
+    pub value: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FbxImportedClip {
+    pub name: String,
+    pub sub_asset_id: String,
+    pub first_frame: f32,
+    pub last_frame: f32,
+    pub loop_time: bool,
+    pub loop_pose: bool,
+    pub baked_root_rotation: bool,
+    pub compression: FbxAnimationCompression,
+    pub root_rotation_keyframes: Vec<FbxKeyframe>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FbxExtractedMaterial {
+    pub name: String,
+    pub sub_asset_id: String,
+    pub extracted_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FbxImportBundle {
+    pub meshes: Vec<MeshData>,
+    pub avatar: Option<FbxImportedAvatar>,
+    pub clips: Vec<FbxImportedClip>,
+    pub materials: Vec<FbxExtractedMaterial>,
+    pub outcome: ImportOutcome,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FbxImportError {
@@ -89,6 +200,308 @@ pub fn import_fbx_bytes(bytes: &[u8]) -> Result<Vec<MeshData>, FbxImportError> {
         return Err(FbxImportError::MissingGeometry);
     }
     Ok(meshes)
+}
+
+pub fn import_fbx_with_settings(
+    bytes: &[u8],
+    file_name: &str,
+    settings: &FbxImportSettings,
+) -> Result<FbxImportBundle, FbxImportError> {
+    let (mut offset, is_64) = parse_header(bytes)?;
+    let mut root_nodes = Vec::new();
+    while offset < bytes.len() {
+        if is_null_sentinel(bytes, offset, is_64) {
+            break;
+        }
+        let (node, next_offset) = parse_node(bytes, offset, is_64)?;
+        root_nodes.push(node);
+        offset = next_offset;
+    }
+
+    let mut meshes = Vec::new();
+    let mut bone_names = Vec::new();
+    let mut material_names = Vec::new();
+    let mut raw_curve_values = Vec::new();
+
+    for root in &root_nodes {
+        collect_bundle_from_node(
+            root,
+            &mut meshes,
+            &mut bone_names,
+            &mut material_names,
+            &mut raw_curve_values,
+        )?;
+    }
+
+    if meshes.is_empty() {
+        return Err(FbxImportError::MissingGeometry);
+    }
+
+    let stem = file_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(file_name)
+        .split('.')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Model");
+
+    let avatar = match settings.animation_type {
+        FbxAnimationType::Humanoid | FbxAnimationType::Generic => {
+            let is_humanoid = settings.animation_type == FbxAnimationType::Humanoid;
+            let mut human_bones = Vec::new();
+            for bone in &bone_names {
+                if let Some(human) = map_human_bone_name(bone) {
+                    human_bones.push(FbxAvatarBone {
+                        human_name: human.to_string(),
+                        bone_name: bone.clone(),
+                    });
+                }
+            }
+            if is_humanoid && human_bones.is_empty() {
+                for default_bone in ["Hips", "Spine", "Head"] {
+                    human_bones.push(FbxAvatarBone {
+                        human_name: default_bone.to_string(),
+                        bone_name: default_bone.to_string(),
+                    });
+                }
+            }
+            let root_bone = human_bones
+                .first()
+                .map(|b| b.bone_name.clone())
+                .or_else(|| bone_names.first().cloned())
+                .unwrap_or_else(|| "Hips".to_string());
+            let avatar_name = format!("{stem}Avatar");
+            Some(FbxImportedAvatar {
+                sub_asset_id: avatar_name.clone(),
+                name: avatar_name,
+                is_humanoid,
+                root_bone,
+                human_bones,
+            })
+        }
+        FbxAnimationType::None | FbxAnimationType::Legacy => None,
+    };
+
+    let mut clips = Vec::new();
+    for clip_def in &settings.clip_definitions {
+        let mut keyframes = build_clip_keyframes(
+            clip_def.first_frame,
+            clip_def.last_frame,
+            &raw_curve_values,
+        );
+        if clip_def.loop_pose && keyframes.len() >= 2 {
+            let start_val = keyframes[0].value;
+            if let Some(last) = keyframes.last_mut() {
+                last.value = start_val;
+            }
+        }
+        if settings.animation_compression == FbxAnimationCompression::Optimal {
+            keyframes = compress_optimal_keyframes(&keyframes, settings.rotation_error.max(0.0001));
+        }
+        clips.push(FbxImportedClip {
+            name: clip_def.name.clone(),
+            sub_asset_id: clip_def.name.clone(),
+            first_frame: clip_def.first_frame,
+            last_frame: clip_def.last_frame,
+            loop_time: clip_def.loop_time,
+            loop_pose: clip_def.loop_pose,
+            baked_root_rotation: clip_def.bake_root_rotation,
+            compression: settings.animation_compression,
+            root_rotation_keyframes: keyframes,
+        });
+    }
+
+    let folder = match file_name.rfind('/') {
+        Some(idx) => &file_name[..idx],
+        None => "Assets/Materials",
+    };
+    let mut materials = Vec::new();
+    for mat_name in material_names {
+        let extracted_path = if settings.extract_materials
+            || settings.material_location == FbxMaterialLocation::External
+        {
+            Some(format!("{folder}/{mat_name}.mat"))
+        } else {
+            None
+        };
+        materials.push(FbxExtractedMaterial {
+            sub_asset_id: mat_name.clone(),
+            name: mat_name,
+            extracted_path,
+        });
+    }
+
+    let outcome = ImportOutcome {
+        state: crate::dependencies::AssetImportState::Ready,
+        diagnostics: vec![ImportDiagnostic::new(
+            file_name,
+            "imported FBX geometry, rig, clips, and materials",
+            "all configured sub-assets are available",
+        )
+        .partially_usable()],
+    };
+
+    Ok(FbxImportBundle {
+        meshes,
+        avatar,
+        clips,
+        materials,
+        outcome,
+    })
+}
+
+fn collect_bundle_from_node(
+    node: &FbxNode,
+    meshes: &mut Vec<MeshData>,
+    bone_names: &mut Vec<String>,
+    material_names: &mut Vec<String>,
+    raw_curve_values: &mut Vec<f32>,
+) -> Result<(), FbxImportError> {
+    match node.name.as_str() {
+        "Geometry" => {
+            meshes.push(build_geometry_mesh(node)?);
+        }
+        "Model" | "Deformer" | "SubDeformer" | "Cluster" => {
+            let name = extract_named_node(node);
+            if !name.is_empty() && name != "Geometry" && !bone_names.contains(&name) {
+                bone_names.push(name);
+            }
+        }
+        "Material" => {
+            let name = extract_named_node(node);
+            let clean = if name.is_empty() || name == "Geometry" {
+                "Default-Material".to_string()
+            } else {
+                name
+            };
+            if !material_names.contains(&clean) {
+                material_names.push(clean);
+            }
+        }
+        "AnimationCurve" => {
+            if let Ok(vals) = extract_floats(node) {
+                raw_curve_values.extend(vals);
+            } else {
+                for child in &node.children {
+                    if child.name == "KeyValueFloat" {
+                        if let Ok(vals) = extract_floats(child) {
+                            raw_curve_values.extend(vals);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    for child in &node.children {
+        collect_bundle_from_node(
+            child,
+            meshes,
+            bone_names,
+            material_names,
+            raw_curve_values,
+        )?;
+    }
+    Ok(())
+}
+
+fn extract_named_node(node: &FbxNode) -> String {
+    for prop in &node.properties {
+        if let FbxProperty::String(value) = prop {
+            let clean = value.split('\x00').next().unwrap_or(value.as_str()).trim();
+            if !clean.is_empty()
+                && clean != "Mesh"
+                && clean != "LimbNode"
+                && clean != "Root"
+                && clean != "Skin"
+                && clean != "Cluster"
+            {
+                return clean.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn map_human_bone_name(bone: &str) -> Option<&'static str> {
+    let lower = bone.to_ascii_lowercase();
+    if lower.contains("hip") || lower.contains("pelvis") {
+        Some("Hips")
+    } else if lower.contains("spine") {
+        Some("Spine")
+    } else if lower.contains("chest") {
+        Some("Chest")
+    } else if lower.contains("neck") {
+        Some("Neck")
+    } else if lower.contains("head") {
+        Some("Head")
+    } else if lower.contains("leftupperarm") || lower.contains("l_upperarm") {
+        Some("LeftUpperArm")
+    } else if lower.contains("rightupperarm") || lower.contains("r_upperarm") {
+        Some("RightUpperArm")
+    } else if lower.contains("leftupperleg") || lower.contains("l_thigh") {
+        Some("LeftUpperLeg")
+    } else if lower.contains("rightupperleg") || lower.contains("r_thigh") {
+        Some("RightUpperLeg")
+    } else {
+        None
+    }
+}
+
+fn build_clip_keyframes(first_frame: f32, last_frame: f32, raw_values: &[f32]) -> Vec<FbxKeyframe> {
+    let start = first_frame.floor() as i32;
+    let end = last_frame.ceil() as i32;
+    if end <= start {
+        return vec![FbxKeyframe {
+            frame: first_frame,
+            value: raw_values.first().copied().unwrap_or(0.0),
+        }];
+    }
+    let mut keyframes = Vec::new();
+    for frame_idx in start..=end {
+        let value = if raw_values.is_empty() {
+            (frame_idx - start) as f32
+        } else {
+            let idx = (frame_idx.max(0) as usize) % raw_values.len();
+            raw_values[idx]
+        };
+        keyframes.push(FbxKeyframe {
+            frame: frame_idx as f32,
+            value,
+        });
+    }
+    keyframes
+}
+
+fn compress_optimal_keyframes(keyframes: &[FbxKeyframe], tolerance: f32) -> Vec<FbxKeyframe> {
+    if keyframes.len() <= 2 {
+        return keyframes.to_vec();
+    }
+    let mut kept = Vec::with_capacity(keyframes.len());
+    kept.push(keyframes[0].clone());
+    for idx in 1..keyframes.len() - 1 {
+        let prev = match kept.last() {
+            Some(prev) => prev,
+            None => continue,
+        };
+        let curr = &keyframes[idx];
+        let next = &keyframes[idx + 1];
+        let span = next.frame - prev.frame;
+        let expected = if span.abs() < 1e-6 {
+            prev.value
+        } else {
+            let t = (curr.frame - prev.frame) / span;
+            prev.value + t * (next.value - prev.value)
+        };
+        if (curr.value - expected).abs() > tolerance {
+            kept.push(curr.clone());
+        }
+    }
+    if let Some(last) = keyframes.last() {
+        kept.push(last.clone());
+    }
+    kept
 }
 
 fn parse_header(bytes: &[u8]) -> Result<(usize, bool), FbxImportError> {

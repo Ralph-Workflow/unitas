@@ -90,7 +90,7 @@ fn slide(target: f64) -> ArticulationJoint {
 }
 
 #[test]
-fn articulated_arm_reaches_drive_targets_inside_authored_limits(
+fn phy_004_story_7_articulated_arm_reaches_drive_targets_inside_authored_limits(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut world = arm_world()?;
     let mut articulation = ArticulationBody::new(vec![shoulder(THIRD_PI), slide(FOREARM_SLIDE)])?;

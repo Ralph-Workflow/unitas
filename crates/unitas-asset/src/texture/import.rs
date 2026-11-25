@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::dependencies::{ImportDiagnostic, ImportOutcome};
+use crate::texture::exr::decode_exr;
 use crate::texture::jpeg::{decode_jpeg, has_jpeg_signature};
 use crate::texture::png::decode_png;
 use crate::texture::tga::decode_tga;
@@ -10,6 +12,7 @@ pub enum TextureFormat {
     Rg8,
     Rgb8,
     Rgba8,
+    Rgba32F,
 }
 
 impl TextureFormat {
@@ -19,7 +22,19 @@ impl TextureFormat {
             TextureFormat::Rg8 => 2,
             TextureFormat::Rgb8 => 3,
             TextureFormat::Rgba8 => 4,
+            TextureFormat::Rgba32F => 4,
         }
+    }
+
+    pub fn bytes_per_channel(self) -> usize {
+        match self {
+            TextureFormat::Rgba32F => 4,
+            _ => 1,
+        }
+    }
+
+    pub fn bytes_per_pixel(self) -> usize {
+        self.channels() * self.bytes_per_channel()
     }
 }
 
@@ -40,9 +55,24 @@ impl DecodedTexture {
         if x >= self.width || y >= self.height {
             return None;
         }
-        let channels = self.channels();
-        let start = ((y as usize) * (self.width as usize) + (x as usize)) * channels;
-        self.pixels.get(start..start + channels)
+        let bytes = self.format.bytes_per_pixel();
+        let start = ((y as usize) * (self.width as usize) + (x as usize)) * bytes;
+        self.pixels.get(start..start + bytes)
+    }
+
+    pub fn pixel_f32(&self, x: u32, y: u32) -> Option<[f32; 4]> {
+        let bytes = self.pixel(x, y)?;
+        if self.format != TextureFormat::Rgba32F {
+            return None;
+        }
+        let mut values = [0.0f32; 4];
+        for (index, value) in values.iter_mut().enumerate() {
+            let start = index * 4;
+            let mut raw = [0u8; 4];
+            raw.copy_from_slice(bytes.get(start..start + 4)?);
+            *value = f32::from_le_bytes(raw);
+        }
+        Some(values)
     }
 }
 
@@ -132,6 +162,53 @@ impl fmt::Display for TextureImportError {
 }
 
 impl std::error::Error for TextureImportError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureImporterType {
+    Default,
+    NormalMap,
+    Gui,
+    Sprite,
+    Cursor,
+    Cookie,
+    Lightmap,
+    DirectionalLightmap,
+    Shadowmask,
+    SingleChannel,
+}
+
+impl TextureImporterType {
+    pub fn code(self) -> u8 {
+        match self {
+            TextureImporterType::Default => 0,
+            TextureImporterType::NormalMap => 1,
+            TextureImporterType::Gui => 2,
+            TextureImporterType::Cookie => 4,
+            TextureImporterType::Lightmap => 6,
+            TextureImporterType::Cursor => 7,
+            TextureImporterType::Sprite => 8,
+            TextureImporterType::SingleChannel => 10,
+            TextureImporterType::Shadowmask => 11,
+            TextureImporterType::DirectionalLightmap => 12,
+        }
+    }
+
+    pub fn from_code(code: u8) -> Option<TextureImporterType> {
+        match code {
+            0 => Some(TextureImporterType::Default),
+            1 => Some(TextureImporterType::NormalMap),
+            2 => Some(TextureImporterType::Gui),
+            4 => Some(TextureImporterType::Cookie),
+            6 => Some(TextureImporterType::Lightmap),
+            7 => Some(TextureImporterType::Cursor),
+            8 => Some(TextureImporterType::Sprite),
+            10 => Some(TextureImporterType::SingleChannel),
+            11 => Some(TextureImporterType::Shadowmask),
+            12 => Some(TextureImporterType::DirectionalLightmap),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteMode {
@@ -318,8 +395,55 @@ impl Default for TexturePlatformSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpriteSlice {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub pivot_x: f32,
+    pub pivot_y: f32,
+    pub border_left: f32,
+    pub border_bottom: f32,
+    pub border_right: f32,
+    pub border_top: f32,
+}
+
+impl SpriteSlice {
+    pub fn new(name: impl Into<String>, x: i32, y: i32, width: i32, height: i32) -> Self {
+        SpriteSlice {
+            name: name.into(),
+            x,
+            y,
+            width,
+            height,
+            pivot_x: 0.5,
+            pivot_y: 0.5,
+            border_left: 0.0,
+            border_bottom: 0.0,
+            border_right: 0.0,
+            border_top: 0.0,
+        }
+    }
+
+    pub fn sub_asset_id(&self) -> &str {
+        &self.name
+    }
+
+    pub fn unity_local_file_id(&self) -> i64 {
+        let mut h: u32 = 2_166_136_261;
+        for byte in self.name.as_bytes() {
+            h ^= u32::from(*byte);
+            h = h.wrapping_mul(16_777_619);
+        }
+        213_000_000 + i64::from(h % 999_999)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextureImportSettings {
+    pub texture_type: TextureImporterType,
     pub srgb: bool,
     pub max_size: u32,
     pub mipmaps: bool,
@@ -328,11 +452,13 @@ pub struct TextureImportSettings {
     pub wrap_mode: WrapMode,
     pub filter_mode: FilterMode,
     pub platform_settings: Vec<TexturePlatformSettings>,
+    pub sprite_slices: Vec<SpriteSlice>,
 }
 
 impl Default for TextureImportSettings {
     fn default() -> Self {
         TextureImportSettings {
+            texture_type: TextureImporterType::Default,
             srgb: true,
             max_size: 2048,
             mipmaps: true,
@@ -341,12 +467,14 @@ impl Default for TextureImportSettings {
             wrap_mode: WrapMode::Repeat,
             filter_mode: FilterMode::Bilinear,
             platform_settings: Vec::new(),
+            sprite_slices: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextureImportResult {
+    pub source: DecodedTexture,
     pub texture: DecodedTexture,
     pub mips: Vec<DecodedTexture>,
     pub settings: TextureImportSettings,
@@ -355,12 +483,25 @@ pub struct TextureImportResult {
     pub applied_target: Option<String>,
     pub applied_format: Option<TexturePlatformFormat>,
     pub applied_compression: Option<TextureCompressionQuality>,
+    pub sprites: Vec<SpriteSlice>,
     pub notes: Vec<String>,
 }
 
 impl TextureImportSettings {
     pub fn is_linear(&self) -> bool {
         !self.srgb
+            || matches!(
+                self.texture_type,
+                TextureImporterType::NormalMap
+                    | TextureImporterType::Lightmap
+                    | TextureImporterType::DirectionalLightmap
+                    | TextureImporterType::Shadowmask
+                    | TextureImporterType::SingleChannel
+            )
+    }
+
+    pub fn is_normal_map(&self) -> bool {
+        self.texture_type == TextureImporterType::NormalMap
     }
 
     pub fn to_linear(&self, value: u8) -> f32 {
@@ -394,6 +535,7 @@ impl TextureImportSettings {
 
     pub fn to_meta_text(&self) -> String {
         let mut text = String::from("TextureImporter:\n");
+        text.push_str(&format!("  textureType: {}\n", self.texture_type.code()));
         text.push_str(&format!("  sRGBTexture: {}\n", u8::from(self.srgb)));
         text.push_str(&format!("  maxTextureSize: {}\n", self.max_size));
         text.push_str(&format!("  mipmapEnabled: {}\n", u8::from(self.mipmaps)));
@@ -404,6 +546,29 @@ impl TextureImportSettings {
         ));
         text.push_str(&format!("  wrapMode: {}\n", self.wrap_mode.code()));
         text.push_str(&format!("  filterMode: {}\n", self.filter_mode.code()));
+        if !self.sprite_slices.is_empty() {
+            text.push_str("  spriteSheet:\n");
+            text.push_str("    serializedVersion: 2\n");
+            text.push_str("    sprites:\n");
+            for slice in &self.sprite_slices {
+                text.push_str("    - serializedVersion: 2\n");
+                text.push_str(&format!("      name: {}\n", slice.name));
+                text.push_str("      rect:\n");
+                text.push_str("        serializedVersion: 2\n");
+                text.push_str(&format!("        x: {}\n", slice.x));
+                text.push_str(&format!("        y: {}\n", slice.y));
+                text.push_str(&format!("        width: {}\n", slice.width));
+                text.push_str(&format!("        height: {}\n", slice.height));
+                text.push_str(&format!(
+                    "      pivot: {{x: {}, y: {}}}\n",
+                    slice.pivot_x, slice.pivot_y
+                ));
+                text.push_str(&format!(
+                    "      border: {{x: {}, y: {}, z: {}, w: {}}}\n",
+                    slice.border_left, slice.border_bottom, slice.border_right, slice.border_top
+                ));
+            }
+        }
         if !self.platform_settings.is_empty() {
             text.push_str("  platformSettings:\n");
             for platform in &self.platform_settings {
@@ -435,6 +600,17 @@ impl TextureImportSettings {
     }
 
     pub fn from_meta_text(text: &str) -> Result<TextureImportSettings, TextureImportError> {
+        let texture_type = match meta_value(text, "textureType") {
+            Some(raw) => {
+                let code = raw.parse::<u8>().map_err(|_| {
+                    TextureImportError::InvalidMetaText("textureType".to_string())
+                })?;
+                TextureImporterType::from_code(code).ok_or_else(|| {
+                    TextureImportError::InvalidMetaText(format!("textureType {code}"))
+                })?
+            }
+            None => TextureImporterType::Default,
+        };
         let srgb = meta_bool(text, "sRGBTexture")?;
         let max_size = meta_u32(text, "maxTextureSize")?;
         let mipmaps = meta_bool(text, "mipmapEnabled")?;
@@ -465,7 +641,9 @@ impl TextureImportSettings {
             }
         };
         let platform_settings = parse_platform_settings(text)?;
+        let sprite_slices = parse_sprite_slices(text)?;
         Ok(TextureImportSettings {
+            texture_type,
             srgb,
             max_size,
             mipmaps,
@@ -474,6 +652,7 @@ impl TextureImportSettings {
             wrap_mode,
             filter_mode,
             platform_settings,
+            sprite_slices,
         })
     }
 
@@ -609,6 +788,154 @@ fn apply_platform_kv(
     Ok(())
 }
 
+fn parse_sprite_slices(text: &str) -> Result<Vec<SpriteSlice>, TextureImportError> {
+    let mut slices: Vec<SpriteSlice> = Vec::new();
+    let mut sprites_indent: Option<usize> = None;
+    let mut current: Option<SpriteSlice> = None;
+    let mut in_rect = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+        match sprites_indent {
+            None => {
+                if trimmed == "sprites:" {
+                    sprites_indent = Some(indent);
+                }
+                continue;
+            }
+            Some(list_indent) => {
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with('-') {
+                    if indent != list_indent {
+                        continue;
+                    }
+                    if let Some(slice) = current.take() {
+                        slices.push(slice);
+                    }
+                    current = Some(SpriteSlice::new(String::new(), 0, 0, 0, 0));
+                    in_rect = false;
+                    continue;
+                }
+                if indent <= list_indent {
+                    break;
+                }
+            }
+        }
+        let slice = match current.as_mut() {
+            Some(slice) => slice,
+            None => continue,
+        };
+        if trimmed == "rect:" {
+            in_rect = true;
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("name:") {
+            slice.name = value.trim().to_string();
+            in_rect = false;
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("pivot:") {
+            let (pivot_x, pivot_y) = parse_meta_pair(value)?;
+            slice.pivot_x = pivot_x;
+            slice.pivot_y = pivot_y;
+            in_rect = false;
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("border:") {
+            let (left, bottom, right, top) = parse_meta_quad(value)?;
+            slice.border_left = left;
+            slice.border_bottom = bottom;
+            slice.border_right = right;
+            slice.border_top = top;
+            in_rect = false;
+            continue;
+        }
+        if in_rect {
+            if let Some(value) = trimmed.strip_prefix("x:") {
+                slice.x = parse_meta_i32(value)?;
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("y:") {
+                slice.y = parse_meta_i32(value)?;
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("width:") {
+                slice.width = parse_meta_i32(value)?;
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("height:") {
+                slice.height = parse_meta_i32(value)?;
+            }
+        }
+    }
+    if let Some(slice) = current.take() {
+        slices.push(slice);
+    }
+    Ok(slices)
+}
+
+fn parse_meta_pair(value: &str) -> Result<(f32, f32), TextureImportError> {
+    let inner = value.trim().trim_start_matches('{').trim_end_matches('}');
+    let mut x = None;
+    let mut y = None;
+    for part in inner.split(',') {
+        let (key, raw) = match part.split_once(':') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let number = raw.trim().parse::<f32>().map_err(|_| {
+            TextureImportError::InvalidMetaText(format!("sprite {}", key.trim()))
+        })?;
+        match key.trim() {
+            "x" => x = Some(number),
+            "y" => y = Some(number),
+            _ => {}
+        }
+    }
+    match (x, y) {
+        (Some(x), Some(y)) => Ok((x, y)),
+        _ => Err(TextureImportError::InvalidMetaText(
+            "sprite pivot is incomplete".to_string(),
+        )),
+    }
+}
+
+fn parse_meta_quad(value: &str) -> Result<(f32, f32, f32, f32), TextureImportError> {
+    let inner = value.trim().trim_start_matches('{').trim_end_matches('}');
+    let mut values: Vec<(String, f32)> = Vec::new();
+    for part in inner.split(',') {
+        let (key, raw) = match part.split_once(':') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let number = raw.trim().parse::<f32>().map_err(|_| {
+            TextureImportError::InvalidMetaText(format!("sprite {}", key.trim()))
+        })?;
+        values.push((key.trim().to_string(), number));
+    }
+    if values.len() != 4 {
+        return Err(TextureImportError::InvalidMetaText(
+            "sprite border is incomplete".to_string(),
+        ));
+    }
+    Ok((
+        values[0].1,
+        values[1].1,
+        values[2].1,
+        values[3].1,
+    ))
+}
+
+fn parse_meta_i32(value: &str) -> Result<i32, TextureImportError> {
+    value
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| TextureImportError::InvalidMetaText("sprite rect".to_string()))
+}
+
 fn meta_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     for line in text.lines() {
         let trimmed = line.trim();
@@ -686,6 +1013,9 @@ pub fn apply_max_size(texture: &DecodedTexture, max_size: u32) -> DecodedTexture
 }
 
 fn downscale(texture: &DecodedTexture) -> DecodedTexture {
+    if texture.format == TextureFormat::Rgba32F {
+        return downscale_float(texture);
+    }
     let width = (texture.width / 2).max(1);
     let height = (texture.height / 2).max(1);
     let channels = texture.channels();
@@ -727,6 +1057,48 @@ fn downscale(texture: &DecodedTexture) -> DecodedTexture {
     }
 }
 
+fn downscale_float(texture: &DecodedTexture) -> DecodedTexture {
+    let width = (texture.width / 2).max(1);
+    let height = (texture.height / 2).max(1);
+    let mut pixels = vec![0u8; width as usize * height as usize * 16];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let mut sums = [0.0f32; 4];
+            let mut count = 0.0f32;
+            for offset_y in 0..2 {
+                for offset_x in 0..2 {
+                    let source_x = (x * 2 + offset_x).min(texture.width as usize - 1);
+                    let source_y = (y * 2 + offset_y).min(texture.height as usize - 1);
+                    let base = (source_y * texture.width as usize + source_x) * 16;
+                    for (channel, sum) in sums.iter_mut().enumerate() {
+                        let start = base + channel * 4;
+                        let mut raw = [0u8; 4];
+                        if let Some(slice) = texture.pixels.get(start..start + 4) {
+                            raw.copy_from_slice(slice);
+                        }
+                        *sum += f32::from_le_bytes(raw);
+                    }
+                    count += 1.0;
+                }
+            }
+            let target = (y * width as usize + x) * 16;
+            for (channel, sum) in sums.iter().enumerate() {
+                let value = sum / count;
+                let start = target + channel * 4;
+                if let Some(slice) = pixels.get_mut(start..start + 4) {
+                    slice.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+    }
+    DecodedTexture {
+        width,
+        height,
+        format: texture.format,
+        pixels,
+    }
+}
+
 pub fn decode_texture(bytes: &[u8], file_name: &str) -> Result<DecodedTexture, TextureImportError> {
     if is_pict_file(file_name) {
         return Err(TextureImportError::UnsupportedFormat(format!(
@@ -751,6 +1123,9 @@ pub fn decode_texture(bytes: &[u8], file_name: &str) -> Result<DecodedTexture, T
     }
     if lower.ends_with(".tga") || lower.ends_with(".targa") {
         return decode_tga(bytes);
+    }
+    if lower.ends_with(".exr") {
+        return decode_exr(bytes);
     }
     Err(TextureImportError::UnsupportedFormat(file_name.to_string()))
 }
@@ -807,7 +1182,12 @@ pub fn import_texture_for_target(
         .first()
         .cloned()
         .unwrap_or_else(|| apply_max_size(&decoded, settings.effective_max_size(build_target)));
+    let sprites = match settings.sprite_mode {
+        SpriteMode::Multiple => settings.sprite_slices.clone(),
+        _ => Vec::new(),
+    };
     Ok(TextureImportResult {
+        source: decoded,
         texture,
         mips,
         settings: settings.clone(),
@@ -816,8 +1196,33 @@ pub fn import_texture_for_target(
         applied_target,
         applied_format,
         applied_compression,
+        sprites,
         notes,
     })
+}
+
+pub fn texture_import_outcome(
+    path: &str,
+    result: Result<&TextureImportResult, &TextureImportError>,
+) -> ImportOutcome {
+    match result {
+        Ok(imported) => match imported.notes.first() {
+            None => ImportOutcome::ready(),
+            Some(note) => ImportOutcome::limited(
+                ImportDiagnostic::new(
+                    path,
+                    note.clone(),
+                    "the asset imports with the stated limitation; the excluded content stays unavailable",
+                )
+                .partially_usable(),
+            ),
+        },
+        Err(error) => ImportOutcome::failed(ImportDiagnostic::new(
+            path,
+            error.to_string(),
+            "the asset cannot be imported; the asset stays failed and its content is unavailable",
+        )),
+    }
 }
 
 fn is_pict_file(file_name: &str) -> bool {

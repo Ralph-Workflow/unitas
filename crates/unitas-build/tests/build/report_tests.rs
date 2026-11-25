@@ -49,8 +49,15 @@ fn finding(feature_id: &str, tier: Tier, state: CompatibilityState, asset_path: 
 fn content_catalog() -> ContentCatalog {
     ContentCatalog {
         format_version: CONTENT_CATALOG_FORMAT_VERSION,
+        catalog_id: "catalog-com.unitas.spacerunner-macos-aarch64".to_string(),
+        profile_name: None,
         unitas_version: "0.1.0".to_string(),
         player_compatibility_version: "1.4".to_string(),
+        compatible_player_versions: vec![
+            "1.4".to_string(),
+            "1.4.x".to_string(),
+            "1.4.2".to_string(),
+        ],
         target: BuildTarget::MACOS_ARM64,
         bundles: Vec::new(),
         total_content_bytes: 0,

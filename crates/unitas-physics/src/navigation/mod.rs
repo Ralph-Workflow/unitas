@@ -6,17 +6,19 @@ use std::fmt;
 
 use unitas_core::EntityId;
 
-pub use agent::NavMeshAgent;
+pub use agent::{NavMeshAgent, NavMeshQueryFilter};
 pub use mesh::{
-    NavMesh, NavMeshArea, NavMeshLink, NavMeshNeighbor, NavMeshPolygon, NavMeshTriangle,
+    NavMesh, NavMeshArea, NavMeshLink, NavMeshNeighbor, NavMeshObstacle, NavMeshPolygon,
+    NavMeshSurface, NavMeshTriangle,
 };
-pub use path::{PathQueryResult, PathQueryStatus, UnreachableReason};
+pub use path::{NavMeshHit, PathQueryResult, PathQueryStatus, UnreachableReason};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavigationError {
     DegenerateTriangle { index: usize },
     InvalidAreaCost { area: u32, cost: f64 },
     InvalidPosition { position: [f64; 3] },
+    InvalidObstacle { center: [f64; 3], half_extents: [f64; 3] },
     LinkEndpointOffNavMesh { position: [f64; 3] },
     DestinationOffNavMesh { position: [f64; 3] },
     AgentOffNavMesh { entity: EntityId, name: String },
@@ -34,6 +36,13 @@ impl fmt::Display for NavigationError {
             Self::InvalidPosition { position } => {
                 write!(formatter, "navmesh position {position:?} is not finite")
             }
+            Self::InvalidObstacle {
+                center,
+                half_extents,
+            } => write!(
+                formatter,
+                "navmesh obstacle at {center:?} has invalid half-extents {half_extents:?}"
+            ),
             Self::LinkEndpointOffNavMesh { position } => {
                 write!(
                     formatter,
@@ -48,7 +57,7 @@ impl fmt::Display for NavigationError {
             }
             Self::AgentOffNavMesh { entity, name } => write!(
                 formatter,
-                "navmesh agent '{name}' (entity {entity}) is not on the navmesh"
+                "navmesh agent '{name}' (entity {entity}) is not on the navmesh for SetDestination"
             ),
         }
     }

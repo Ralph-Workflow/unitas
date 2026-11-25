@@ -1,13 +1,15 @@
 use crate::clip::{AnimationClip, AnimationEvent, CurveBinding, CurveBindingTarget, WrapMode};
 use crate::controller::{
-    AnimatorController, AnimatorState, ConditionOp, ParameterDef, ParameterValue, StateMotion,
-    StateTransition, TransitionCondition, TransitionTarget,
+    AnimatorController, AnimatorState, BlendTree2DMode, ConditionOp, InterruptionSource,
+    ParameterDef, ParameterValue, StateMotion, StateTransition, TransitionCondition,
+    TransitionTarget,
 };
 use crate::curve::{FloatCurve, InterpolationMode, Keyframe, PropertyCurve};
 use crate::error::AnimationError;
 
 pub const WIRE_MAGIC: [u8; 4] = *b"UANC";
 pub const WIRE_VERSION: u32 = 1;
+const EXTENSION_MAGIC: u32 = 0x5744_0001;
 
 pub fn encode_controller_binary(controller: &AnimatorController) -> Vec<u8> {
     let mut out = Vec::new();
@@ -61,6 +63,36 @@ pub fn encode_controller_binary(controller: &AnimatorController) -> Vec<u8> {
                     write_clip(&mut out, clip);
                 }
             }
+            StateMotion::BlendTree2D {
+                mode,
+                parameter_x,
+                parameter_y,
+                children,
+            } => {
+                write_u8(&mut out, 3);
+                let mode_tag = match mode {
+                    BlendTree2DMode::SimpleDirectional => 0,
+                    BlendTree2DMode::FreeformDirectional => 1,
+                    BlendTree2DMode::FreeformCartesian => 2,
+                };
+                write_u8(&mut out, mode_tag);
+                write_str(&mut out, parameter_x);
+                write_str(&mut out, parameter_y);
+                write_u32(&mut out, children.len() as u32);
+                for (pos, clip) in children {
+                    write_f32(&mut out, pos[0]);
+                    write_f32(&mut out, pos[1]);
+                    write_clip(&mut out, clip);
+                }
+            }
+            StateMotion::BlendTreeDirect { children } => {
+                write_u8(&mut out, 4);
+                write_u32(&mut out, children.len() as u32);
+                for (param, clip) in children {
+                    write_str(&mut out, param);
+                    write_clip(&mut out, clip);
+                }
+            }
         }
     }
 
@@ -106,6 +138,12 @@ pub fn encode_controller_binary(controller: &AnimatorController) -> Vec<u8> {
                 }
             }
         }
+    }
+
+    write_u32(&mut out, EXTENSION_MAGIC);
+    write_u32(&mut out, controller.states.len() as u32);
+    for state in &controller.states {
+        write_bool(&mut out, state.write_defaults);
     }
 
     out
@@ -167,6 +205,46 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
                     thresholds,
                 }
             }
+            3 => {
+                let mode_tag = cursor.read_u8()?;
+                let mode = match mode_tag {
+                    0 => BlendTree2DMode::SimpleDirectional,
+                    1 => BlendTree2DMode::FreeformDirectional,
+                    2 => BlendTree2DMode::FreeformCartesian,
+                    other => {
+                        return Err(AnimationError::InvalidTag {
+                            section: "BlendTree2DMode",
+                            tag: other,
+                        })
+                    }
+                };
+                let parameter_x = cursor.read_str()?;
+                let parameter_y = cursor.read_str()?;
+                let count = cursor.read_u32()? as usize;
+                let mut children = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    let x = cursor.read_f32()?;
+                    let y = cursor.read_f32()?;
+                    let clip = read_clip(&mut cursor)?;
+                    children.push(([x, y], clip));
+                }
+                StateMotion::BlendTree2D {
+                    mode,
+                    parameter_x,
+                    parameter_y,
+                    children,
+                }
+            }
+            4 => {
+                let count = cursor.read_u32()? as usize;
+                let mut children = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    let param = cursor.read_str()?;
+                    let clip = read_clip(&mut cursor)?;
+                    children.push((param, clip));
+                }
+                StateMotion::BlendTreeDirect { children }
+            }
             other => {
                 return Err(AnimationError::InvalidTag {
                     section: "StateMotion",
@@ -179,6 +257,7 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
             motion,
             speed,
             is_exit,
+            write_defaults: true,
         });
     }
 
@@ -231,7 +310,22 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
             has_exit_time,
             exit_time,
             duration,
+            interruption_source: InterruptionSource::None,
         });
+    }
+
+    if cursor.remaining() >= 4 && cursor.peek_u32()? == EXTENSION_MAGIC {
+        cursor.skip(4);
+        let flag_count = cursor.read_u32()? as usize;
+        if flag_count != states.len() {
+            return Err(AnimationError::InvalidTag {
+                section: "StateExtension",
+                tag: flag_count.min(255) as u8,
+            });
+        }
+        for state in &mut states {
+            state.write_defaults = cursor.read_bool("AnimatorState.write_defaults")?;
+        }
     }
 
     Ok(AnimatorController {
@@ -495,6 +589,23 @@ impl<'a> Cursor<'a> {
     fn read_u32(&mut self) -> Result<u32, AnimationError> {
         let s = self.read_exact(4)?;
         Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.pos)
+    }
+
+    fn peek_u32(&self) -> Result<u32, AnimationError> {
+        let end = self.pos.checked_add(4).ok_or(AnimationError::UnexpectedEof)?;
+        if end > self.bytes.len() {
+            return Err(AnimationError::UnexpectedEof);
+        }
+        let slice = &self.bytes[self.pos..end];
+        Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+    }
+
+    fn skip(&mut self, len: usize) {
+        self.pos = self.pos.saturating_add(len).min(self.bytes.len());
     }
 
     fn read_i32(&mut self) -> Result<i32, AnimationError> {

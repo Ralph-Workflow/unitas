@@ -662,3 +662,150 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
     );
     Ok(())
 }
+
+#[test]
+fn phy_001_story_2_removing_layer_pair_stops_collision_and_trigger_callbacks_and_default_mask_queries(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let dynamic_l0 = EntityId::new(1);
+    let dynamic_l1 = EntityId::new(2);
+    let trigger_l1 = EntityId::new(3);
+
+    world.add_body(
+        dynamic_l0,
+        sphere_body([-0.3, 0.0, 0.0], [0.0, 0.0, 0.0], 0),
+    )?;
+    world.add_body(
+        dynamic_l1,
+        sphere_body([0.3, 0.0, 0.0], [0.0, 0.0, 0.0], 1),
+    )?;
+    world.add_body(
+        trigger_l1,
+        BodyDesc {
+            is_trigger: true,
+            role: BodyRole::Static,
+            mass: 0.0,
+            ..sphere_body([-0.2, 0.0, 0.0], [0.0, 0.0, 0.0], 1)
+        },
+    )?;
+
+    world.ignore_layer_collision(0, 1, true);
+    world.ignore_layer_collision(1, 1, true);
+    world.step(0.02)?;
+
+    assert!(
+        world.drain_events().is_empty(),
+        "PHY-001 story 2: removing layer pair (0, 1) must stop 3D collision callbacks"
+    );
+    assert!(
+        world.drain_trigger_events().is_empty(),
+        "PHY-001 story 2: removing layer pair (0, 1) must stop 3D trigger callbacks"
+    );
+    let ray_hits = world.raycast_default_layer([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 0);
+    assert_eq!(
+        ray_hits.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        vec![dynamic_l0],
+        "PHY-001 story 2: default-mask raycast from layer 0 must exclude layer 1 bodies"
+    );
+    let overlap_hits = world.overlap_sphere_default_layer([0.0, 0.0, 0.0], 5.0, 0);
+    assert_eq!(
+        overlap_hits,
+        vec![dynamic_l0],
+        "PHY-001 story 2: default-mask overlap query from layer 0 must exclude layer 1 bodies"
+    );
+    Ok(())
+}
+
+#[test]
+fn phy_001_story_13_kinematic_move_position_pushes_dynamic_body_and_both_receive_collision_messages_while_rigidbodyless_triggers_are_silent_and_disabled_monobehaviour_receives_on_trigger_enter(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let kinematic_id = EntityId::new(1);
+    let dynamic_id = EntityId::new(2);
+    world.add_body(
+        kinematic_id,
+        BodyDesc {
+            role: BodyRole::Kinematic,
+            mass: 0.0,
+            ..sphere_body([-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0)
+        },
+    )?;
+    world.add_body(dynamic_id, sphere_body([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0))?;
+
+    world.move_position(kinematic_id, [-0.5, 0.0, 0.0])?;
+    assert_eq!(
+        world.position(kinematic_id),
+        Some([-1.0, 0.0, 0.0]),
+        "PHY-001 story 13: MovePosition on kinematic body must defer movement until the next simulation step"
+    );
+
+    world.step(0.1)?;
+    assert_eq!(
+        world.position(kinematic_id),
+        Some([-0.5, 0.0, 0.0]),
+        "PHY-001 story 13: kinematic body reaches MovePosition target on the simulation step"
+    );
+    let dynamic_pos = world.position(dynamic_id).unwrap_or([0.0; 3]);
+    assert!(
+        dynamic_pos[0] > 0.49,
+        "PHY-001 story 13: kinematic body moved with MovePosition must push the dynamic body, got {dynamic_pos:?}"
+    );
+    let step_events = world.drain_events();
+    assert_eq!(
+        step_events,
+        vec![unitas_physics::CollisionEvent {
+            a: kinematic_id,
+            b: dynamic_id,
+            phase: unitas_physics::Phase::Enter,
+        }],
+        "PHY-001 story 13: kinematic MovePosition into dynamic body must emit OnCollisionEnter"
+    );
+
+    let kinematic_obj = kinematic(kinematic_id.as_u64(), 0);
+    let dynamic_obj = dynamic(dynamic_id.as_u64(), 0);
+    let mut tracker = MessageTracker::new();
+    let deliveries = tracker.update(
+        &[touching(&kinematic_obj, &dynamic_obj, false)],
+        world.collision_matrix(),
+        &FrameEvents::default(),
+    );
+    assert_eq!(
+        receivers(&deliveries),
+        vec![1, 2],
+        "PHY-001 story 13: both kinematic and dynamic bodies must receive OnCollisionEnter"
+    );
+    assert!(deliveries
+        .iter()
+        .all(|d| d.message == CollisionMessage::OnCollisionEnter));
+
+    let mut trigger_a = collider(10, 0);
+    trigger_a.is_trigger = true;
+    let mut trigger_b = collider(11, 0);
+    trigger_b.is_trigger = true;
+    let mut rigidbodyless_tracker = MessageTracker::new();
+    let silent = rigidbodyless_tracker.update(
+        &[touching(&trigger_a, &trigger_b, true)],
+        world.collision_matrix(),
+        &FrameEvents::default(),
+    );
+    assert!(
+        silent.is_empty(),
+        "PHY-001 story 13: trigger between two colliders without a Rigidbody must produce no trigger messages"
+    );
+
+    let mut disabled_trigger = collider(20, 0);
+    disabled_trigger.is_trigger = true;
+    disabled_trigger.behaviour_enabled = false;
+    let trigger_deliveries = tracker.update(
+        &[touching(&disabled_trigger, &dynamic_obj, true)],
+        world.collision_matrix(),
+        &FrameEvents::default(),
+    );
+    assert!(
+        trigger_deliveries.iter().any(|d| {
+            d.receiver_object_id == 20 && d.message == CollisionMessage::OnTriggerEnter
+        }),
+        "PHY-001 story 13: disabled MonoBehaviour on the trigger collider's GameObject must still receive OnTriggerEnter"
+    );
+    Ok(())
+}

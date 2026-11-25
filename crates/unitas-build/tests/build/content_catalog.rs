@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use unitas_build::bundle::{
+    build_addressables_content_for_host, build_addressables_content_update_for_host,
     build_content_catalog_for_host, build_content_update_for_host, validate_content_bundle,
-    ContentBuildMode, ContentBundleInput, ContentCatalog, ContentRejectionReason,
-    CONTENT_CATALOG_FILENAME,
+    AddressablesGroupConfig, AddressablesProfile, ContentBuildMode, ContentBundleInput,
+    ContentCatalog, ContentRejectionReason, CONTENT_CATALOG_FILENAME,
 };
+use unitas_build::player::apply_content_update_to_player;
 use unitas_build::report::{BuildDiagnostic, BuildOutcome, ContentBuildReport};
-use unitas_build::{BuildConfiguration, BuildMode, BuildTarget};
+use unitas_build::{build_project, launch_bundle, BuildConfiguration, BuildMode, BuildTarget};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -294,3 +296,201 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
     fs::remove_dir_all(&workspace)?;
     Ok(())
 }
+
+#[test]
+fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_content_update_without_rebuild(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = temp_dir("bld_005_story_25_addressables_and_player_update")?;
+    let scenes_dir = workspace.join("Project").join("Assets").join("Scenes");
+    fs::create_dir_all(&scenes_dir)?;
+
+    let boot_scene = scenes_dir.join("Boot.unity");
+    let arena_scene = scenes_dir.join("Arena.unity");
+    let boss_scene = scenes_dir.join("Boss.unity");
+
+    fs::write(&boot_scene, sample_unity_scene("BootRootV1"))?;
+    fs::write(&arena_scene, sample_unity_scene("ArenaRootV1"))?;
+    fs::write(&boss_scene, sample_unity_scene("BossRootV1"))?;
+
+    let host = BuildTarget::host();
+    let player_config = BuildConfiguration::new(
+        vec![boot_scene.clone(), arena_scene.clone(), boss_scene.clone()],
+        "Unitas",
+        "ShippedGame",
+        "com.unitas.shippedgame",
+        "1.0.0",
+        host,
+    )
+    .with_mode(BuildMode::Release);
+
+    let player_dir = workspace.join("shipped_player");
+    let (staged_player, _player_report) = match build_project(&player_config, &player_dir, 30) {
+        Ok(pair) => pair,
+        Err(boxed) => return Err(Box::new(boxed.0)),
+    };
+    let initial_launcher_bytes = fs::read(&staged_player.launch_artifact_path)?;
+    let initial_session = launch_bundle(&player_dir, 2, 1.0 / 60.0)?;
+    assert_eq!(initial_session.root_object_count, 1);
+
+    let mut profile = AddressablesProfile::new(
+        "ProductionCDN",
+        "ServerData/[BuildTarget]",
+        "https://cdn.unitas.example/content/[BuildTarget]",
+    );
+    profile.set_variable("Env", "prod");
+
+    let groups = vec![
+        AddressablesGroupConfig::new(
+            "core_shared",
+            vec![boot_scene.clone()],
+            "{BuildPath}/{Env}/core",
+            "{LoadPath}/{Env}/core",
+            Vec::new(),
+        ),
+        AddressablesGroupConfig::new(
+            "world_arena",
+            vec![arena_scene.clone()],
+            "{BuildPath}/{Env}/world",
+            "{LoadPath}/{Env}/world",
+            vec![String::from("core_shared")],
+        ),
+        AddressablesGroupConfig::new(
+            "world_boss",
+            vec![boss_scene.clone()],
+            "{BuildPath}/{Env}/boss",
+            "{LoadPath}/{Env}/boss",
+            vec![String::from("core_shared"), String::from("world_arena")],
+        ),
+    ];
+
+    let v1_content_dir = workspace.join("v1_addressables");
+    let v1_result = build_addressables_content_for_host(
+        &player_config,
+        &profile,
+        &groups,
+        &v1_content_dir,
+        Some(host),
+    )?;
+
+    assert_eq!(
+        v1_result.catalog.unitas_version,
+        env!("CARGO_PKG_VERSION"),
+        "BLD-005 story 25: catalog must record unitas version"
+    );
+    assert_eq!(
+        v1_result.catalog.target,
+        host,
+        "BLD-005 story 25: catalog must record target platform"
+    );
+    assert!(
+        v1_result
+            .catalog
+            .compatible_player_versions
+            .contains(&String::from("1.0.x")),
+        "BLD-005 story 25: catalog must state compatible shipped player versions"
+    );
+    assert_eq!(
+        v1_result.catalog.profile_name.as_deref(),
+        Some("ProductionCDN"),
+        "BLD-005 story 25: catalog must record Addressables profile identity"
+    );
+    assert!(
+        !v1_result.catalog.catalog_id.is_empty(),
+        "BLD-005 story 25: catalog must record catalog identity"
+    );
+
+    let target_id = host.identifier();
+    let boss_entry = v1_result
+        .catalog
+        .bundles
+        .iter()
+        .find(|entry| entry.group_name == "world_boss")
+        .ok_or("BLD-005 story 25: missing world_boss bundle entry")?;
+    assert_eq!(
+        boss_entry.build_path,
+        format!("ServerData/{target_id}/prod/boss/world_boss_000_Boss.bundle"),
+        "BLD-005 story 25: Addressables group build path must expand profile variables and [BuildTarget]"
+    );
+    assert_eq!(
+        boss_entry.load_path,
+        format!("https://cdn.unitas.example/content/{target_id}/prod/boss/world_boss_000_Boss.bundle"),
+        "BLD-005 story 25: Addressables group load path must expand profile variables and [BuildTarget]"
+    );
+    assert_eq!(
+        boss_entry.dependencies,
+        vec![String::from("core_shared"), String::from("world_arena")],
+        "BLD-005 story 25: bundle entry must record its dependencies"
+    );
+    assert!(
+        v1_content_dir.join(&boss_entry.staged_path).is_file(),
+        "BLD-005 story 25: bundle must be staged at its resolved profile build path"
+    );
+
+    let updated_boot_yaml = format!(
+        "{}\n--- !u!1 &200\nGameObject:\n  m_Name: LiveEventBanner\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_Father: {{fileID: 0}}\n  m_Children: []\n  m_LocalPosition: {{x: 1, y: 2, z: 3}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n",
+        sample_unity_scene("BootRootV2")
+    );
+    fs::write(&boot_scene, updated_boot_yaml)?;
+
+    let v2_update_dir = workspace.join("v2_addressables_update");
+    let v2_update = build_addressables_content_update_for_host(
+        &player_config,
+        &profile,
+        &groups,
+        &v1_result.catalog,
+        &v2_update_dir,
+        Some(host),
+    )?;
+
+    assert_eq!(
+        v2_update.emitted_bundles.len(),
+        1,
+        "BLD-005 story 25: post-release content update must emit only the changed bundle"
+    );
+    assert_eq!(v2_update.emitted_bundles[0].group_name, "core_shared");
+    assert_eq!(
+        v2_update.unchanged_bundles.len(),
+        2,
+        "BLD-005 story 25: unchanged bundles must not be re-emitted"
+    );
+    assert_ne!(
+        v2_update.catalog.catalog_hash,
+        v1_result.catalog.catalog_hash,
+        "BLD-005 story 25: content update must produce a new content catalog"
+    );
+
+    let v2_report =
+        ContentBuildReport::from_build_result(&v2_update, ContentBuildMode::ContentUpdate, 18);
+    assert_eq!(v2_report.catalog_id, v2_update.catalog.catalog_id);
+    assert_eq!(
+        v2_report.compatible_player_versions,
+        v2_update.catalog.compatible_player_versions
+    );
+    assert_eq!(
+        v2_report.bundles.len(),
+        3,
+        "BLD-005 story 25: content build report must record the bundle list with hashes and dependencies"
+    );
+    let report_json = v2_report.to_json();
+    let parsed_v2_report = ContentBuildReport::from_json(&report_json)?;
+    assert_eq!(parsed_v2_report, v2_report);
+
+    let reloaded_v2_catalog = ContentCatalog::load_from_dir(&v2_update_dir)?;
+    assert_eq!(reloaded_v2_catalog, v2_update.catalog);
+
+    let updated_session =
+        apply_content_update_to_player(&player_dir, &v2_update, 3, 1.0 / 60.0)?;
+    assert_eq!(
+        fs::read(&staged_player.launch_artifact_path)?,
+        initial_launcher_bytes,
+        "BLD-005 story 25: already-shipped player loads content update without rebuilding player binary"
+    );
+    assert_eq!(
+        updated_session.root_object_count, 2,
+        "BLD-005 story 25: shipped player must load the updated scene content from the content update"
+    );
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+

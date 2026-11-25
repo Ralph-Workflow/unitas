@@ -794,20 +794,110 @@ impl fmt::Display for ContentBuildMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressablesProfile {
+    pub name: String,
+    pub variables: BTreeMap<String, String>,
+}
+
+impl AddressablesProfile {
+    pub fn new(
+        name: impl Into<String>,
+        build_path: impl Into<String>,
+        load_path: impl Into<String>,
+    ) -> Self {
+        let mut variables = BTreeMap::new();
+        variables.insert(String::from("BuildPath"), build_path.into());
+        variables.insert(String::from("LoadPath"), load_path.into());
+        Self {
+            name: name.into(),
+            variables,
+        }
+    }
+
+    pub fn set_variable(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.variables.insert(key.into(), value.into());
+    }
+
+    pub fn resolve_template(&self, template: &str, target: BuildTarget) -> String {
+        let mut current = template.to_string();
+        for _ in 0..8 {
+            let mut next = current.replace("[BuildTarget]", &target.identifier());
+            next = next.replace("{BuildTarget}", &target.identifier());
+            for (key, value) in &self.variables {
+                let bracket_token = format!("[{key}]");
+                let brace_token = format!("{{{key}}}");
+                next = next.replace(&bracket_token, value);
+                next = next.replace(&brace_token, value);
+            }
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        current
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressablesGroupConfig {
+    pub group_name: String,
+    pub scenes: Vec<PathBuf>,
+    pub build_path_template: String,
+    pub load_path_template: String,
+    pub dependencies: Vec<String>,
+}
+
+impl AddressablesGroupConfig {
+    pub fn new(
+        group_name: impl Into<String>,
+        scenes: Vec<PathBuf>,
+        build_path_template: impl Into<String>,
+        load_path_template: impl Into<String>,
+        dependencies: Vec<String>,
+    ) -> Self {
+        Self {
+            group_name: group_name.into(),
+            scenes,
+            build_path_template: build_path_template.into(),
+            load_path_template: load_path_template.into(),
+            dependencies,
+        }
+    }
+}
+
+pub fn derive_compatible_player_versions(version: &str) -> Vec<String> {
+    let compat = derive_player_compatibility_version(version);
+    let trimmed = version.trim();
+    let wildcard = format!("{compat}.x");
+    let mut versions = vec![compat, wildcard];
+    if !trimmed.is_empty() && !versions.iter().any(|item| item == trimmed) {
+        versions.push(String::from(trimmed));
+    }
+    versions
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentCatalogEntry {
     pub bundle_name: String,
+    pub group_name: String,
     pub source_path: String,
     pub staged_path: String,
+    pub build_path: String,
+    pub load_path: String,
     pub content_hash: String,
     pub size_bytes: u64,
     pub root_object_count: usize,
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentCatalog {
     pub format_version: u32,
+    pub catalog_id: String,
+    pub profile_name: Option<String>,
     pub unitas_version: String,
     pub player_compatibility_version: String,
+    pub compatible_player_versions: Vec<String>,
     pub target: BuildTarget,
     pub bundles: Vec<ContentCatalogEntry>,
     pub total_content_bytes: u64,
@@ -827,18 +917,33 @@ impl ContentCatalog {
         if self.target != player_target {
             return false;
         }
-        let player_compat = derive_player_compatibility_version(player_version);
+        let trimmed = player_version.trim();
+        let player_compat = derive_player_compatibility_version(trimmed);
+        let wildcard = format!("{player_compat}.x");
         self.player_compatibility_version == player_compat
-            || self.player_compatibility_version == player_version.trim()
+            || self.player_compatibility_version == trimmed
+            || self
+                .compatible_player_versions
+                .iter()
+                .any(|v| v == trimmed || v == &player_compat || v == &wildcard)
     }
 
     fn canonical_body_without_hash(&self) -> String {
-        let mut lines = Vec::with_capacity(7 + self.bundles.len() * 6);
+        let mut lines = Vec::with_capacity(10 + self.bundles.len() * 10);
         lines.push(format!("format_version={}", self.format_version));
+        lines.push(format!("catalog_id={}", self.catalog_id));
+        lines.push(format!(
+            "profile_name={}",
+            self.profile_name.as_deref().unwrap_or("")
+        ));
         lines.push(format!("unitas_version={}", self.unitas_version));
         lines.push(format!(
             "player_compatibility_version={}",
             self.player_compatibility_version
+        ));
+        lines.push(format!(
+            "compatible_player_versions={}",
+            self.compatible_player_versions.join(",")
         ));
         lines.push(format!("target_os={}", self.target.os_name()));
         lines.push(format!("target_arch={}", self.target.arch_id()));
@@ -854,13 +959,20 @@ impl ContentCatalog {
 
         for (slot, entry) in sorted.iter().enumerate() {
             lines.push(format!("bundle.{slot}.bundle_name={}", entry.bundle_name));
+            lines.push(format!("bundle.{slot}.group_name={}", entry.group_name));
             lines.push(format!("bundle.{slot}.source_path={}", entry.source_path));
             lines.push(format!("bundle.{slot}.staged_path={}", entry.staged_path));
+            lines.push(format!("bundle.{slot}.build_path={}", entry.build_path));
+            lines.push(format!("bundle.{slot}.load_path={}", entry.load_path));
             lines.push(format!("bundle.{slot}.content_hash={}", entry.content_hash));
             lines.push(format!("bundle.{slot}.size_bytes={}", entry.size_bytes));
             lines.push(format!(
                 "bundle.{slot}.root_object_count={}",
                 entry.root_object_count
+            ));
+            lines.push(format!(
+                "bundle.{slot}.dependencies={}",
+                entry.dependencies.join(",")
             ));
         }
 
@@ -901,6 +1013,18 @@ impl ContentCatalog {
 
         let unitas_version = required_field(&map, "unitas_version")?;
         let player_compatibility_version = required_field(&map, "player_compatibility_version")?;
+        let compatible_player_versions = match map.get("compatible_player_versions") {
+            Some(raw) if !raw.trim().is_empty() => raw
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect(),
+            _ => derive_compatible_player_versions(&player_compatibility_version),
+        };
+        let profile_name = map
+            .get("profile_name")
+            .map(|val| val.trim().to_string())
+            .filter(|val| !val.is_empty());
         let target_os = required_field(&map, "target_os")?;
         let target_arch = required_field(&map, "target_arch")?;
         let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {
@@ -911,23 +1035,56 @@ impl ContentCatalog {
         let total_content_bytes = parse_u64_field(&map, "total_content_bytes")?;
         let bundle_count = parse_usize_field(&map, "bundle_count")?;
         let catalog_hash = required_field(&map, "catalog_hash")?;
+        let catalog_id = map
+            .get("catalog_id")
+            .cloned()
+            .filter(|val| !val.trim().is_empty())
+            .unwrap_or_else(|| format!("catalog-{}-{}", target.identifier(), player_compatibility_version));
 
         let mut bundles = Vec::with_capacity(bundle_count);
         for slot in 0..bundle_count {
             let bundle_name = required_field(&map, &format!("bundle.{slot}.bundle_name"))?;
+            let group_name = map
+                .get(&format!("bundle.{slot}.group_name"))
+                .cloned()
+                .filter(|val| !val.trim().is_empty())
+                .unwrap_or_else(|| String::from("default"));
             let source_path = required_field(&map, &format!("bundle.{slot}.source_path"))?;
             let staged_path = required_field(&map, &format!("bundle.{slot}.staged_path"))?;
+            let build_path = map
+                .get(&format!("bundle.{slot}.build_path"))
+                .cloned()
+                .filter(|val| !val.trim().is_empty())
+                .unwrap_or_else(|| staged_path.clone());
+            let load_path = map
+                .get(&format!("bundle.{slot}.load_path"))
+                .cloned()
+                .filter(|val| !val.trim().is_empty())
+                .unwrap_or_else(|| staged_path.clone());
             let content_hash = required_field(&map, &format!("bundle.{slot}.content_hash"))?;
             let size_bytes = parse_u64_field(&map, &format!("bundle.{slot}.size_bytes"))?;
             let root_object_count =
                 parse_usize_field(&map, &format!("bundle.{slot}.root_object_count"))?;
+            let dependencies = map
+                .get(&format!("bundle.{slot}.dependencies"))
+                .map(|raw| {
+                    raw.split(',')
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             bundles.push(ContentCatalogEntry {
                 bundle_name,
+                group_name,
                 source_path,
                 staged_path,
+                build_path,
+                load_path,
                 content_hash,
                 size_bytes,
                 root_object_count,
+                dependencies,
             });
         }
 
@@ -939,8 +1096,11 @@ impl ContentCatalog {
 
         let catalog = Self {
             format_version,
+            catalog_id,
+            profile_name,
             unitas_version,
             player_compatibility_version,
+            compatible_player_versions,
             target,
             bundles,
             total_content_bytes,
@@ -1060,9 +1220,13 @@ impl fmt::Display for RejectedContentBundle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentBundleInput {
     pub bundle_name: String,
+    pub group_name: String,
     pub source_path: PathBuf,
     pub target: BuildTarget,
     pub player_compatibility_version: String,
+    pub build_path: Option<String>,
+    pub load_path: Option<String>,
+    pub dependencies: Vec<String>,
 }
 
 impl ContentBundleInput {
@@ -1074,10 +1238,28 @@ impl ContentBundleInput {
     ) -> Self {
         Self {
             bundle_name: bundle_name.into(),
+            group_name: String::from("default"),
             source_path,
             target,
             player_compatibility_version: player_compatibility_version.into(),
+            build_path: None,
+            load_path: None,
+            dependencies: Vec::new(),
         }
+    }
+
+    pub fn with_group_profile_and_dependencies(
+        mut self,
+        group_name: impl Into<String>,
+        build_path: impl Into<String>,
+        load_path: impl Into<String>,
+        dependencies: Vec<String>,
+    ) -> Self {
+        self.group_name = group_name.into();
+        self.build_path = Some(build_path.into());
+        self.load_path = Some(load_path.into());
+        self.dependencies = dependencies;
+        self
     }
 }
 
@@ -1103,7 +1285,7 @@ pub fn build_content_catalog_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<ContentBuildResult, BundleError> {
-    build_content_with_optional_baseline(config, None, output_dir, host)
+    build_content_with_optional_baseline(config, None, None, None, output_dir, host)
 }
 
 pub fn build_content_update(
@@ -1125,11 +1307,80 @@ pub fn build_content_update_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<ContentBuildResult, BundleError> {
-    build_content_with_optional_baseline(config, Some(prior_catalog), output_dir, host)
+    build_content_with_optional_baseline(config, None, None, Some(prior_catalog), output_dir, host)
+}
+
+pub fn build_addressables_content(
+    config: &BuildConfiguration,
+    profile: &AddressablesProfile,
+    groups: &[AddressablesGroupConfig],
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
+    build_addressables_content_for_host(
+        config,
+        profile,
+        groups,
+        output_dir,
+        BuildTarget::current_host(),
+    )
+}
+
+pub fn build_addressables_content_for_host(
+    config: &BuildConfiguration,
+    profile: &AddressablesProfile,
+    groups: &[AddressablesGroupConfig],
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_with_optional_baseline(
+        config,
+        Some(profile),
+        Some(groups),
+        None,
+        output_dir,
+        host,
+    )
+}
+
+pub fn build_addressables_content_update(
+    config: &BuildConfiguration,
+    profile: &AddressablesProfile,
+    groups: &[AddressablesGroupConfig],
+    prior_catalog: &ContentCatalog,
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
+    build_addressables_content_update_for_host(
+        config,
+        profile,
+        groups,
+        prior_catalog,
+        output_dir,
+        BuildTarget::current_host(),
+    )
+}
+
+pub fn build_addressables_content_update_for_host(
+    config: &BuildConfiguration,
+    profile: &AddressablesProfile,
+    groups: &[AddressablesGroupConfig],
+    prior_catalog: &ContentCatalog,
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_with_optional_baseline(
+        config,
+        Some(profile),
+        Some(groups),
+        Some(prior_catalog),
+        output_dir,
+        host,
+    )
 }
 
 fn build_content_with_optional_baseline(
     config: &BuildConfiguration,
+    profile: Option<&AddressablesProfile>,
+    groups: Option<&[AddressablesGroupConfig]>,
     prior_catalog: Option<&ContentCatalog>,
     output_dir: &Path,
     host: Option<BuildTarget>,
@@ -1169,49 +1420,123 @@ fn build_content_with_optional_baseline(
         }
     }
 
-    let mut verified_bundles = Vec::with_capacity(config.scenes.len());
-    for (index, scene_path) in config.scenes.iter().enumerate() {
-        if !scene_path.is_file() {
-            return Err(BundleError::SceneMissing {
-                path: scene_path.clone(),
-            });
+    let mut verified_bundles = Vec::new();
+    if let (Some(active_profile), Some(group_list)) = (profile, groups) {
+        if group_list.is_empty() {
+            return Err(BundleError::Validation(vec![BuildValidationError::new(
+                "addressables_groups",
+                "no Addressables groups were provided for content build",
+                "configure at least one AddressablesGroupConfig with one or more scene/asset paths",
+            )]));
         }
-        let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-            path: scene_path.clone(),
-            message: error.to_string(),
-        })?;
-        let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-            BundleError::SceneAssembly {
+        for group in group_list {
+            let resolved_build_dir = active_profile
+                .resolve_template(&group.build_path_template, config.target)
+                .trim_end_matches('/')
+                .to_string();
+            let resolved_load_dir = active_profile
+                .resolve_template(&group.load_path_template, config.target)
+                .trim_end_matches('/')
+                .to_string();
+            for (index, scene_path) in group.scenes.iter().enumerate() {
+                if !scene_path.is_file() {
+                    return Err(BundleError::SceneMissing {
+                        path: scene_path.clone(),
+                    });
+                }
+                let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+                    path: scene_path.clone(),
+                    message: error.to_string(),
+                })?;
+                let scene_graph =
+                    unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+                        BundleError::SceneAssembly {
+                            path: scene_path.clone(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                let content_hash = content_hash_hex(&bytes);
+                let size_bytes = bytes.len() as u64;
+                let root_object_count = scene_graph.roots().len();
+                let file_name = scene_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("scene.unity");
+                let stem = scene_path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("scene");
+                let bundle_name = format!("{}_{index:03}_{stem}", group.group_name);
+                let build_path = format!("{resolved_build_dir}/{bundle_name}.bundle");
+                let load_path = format!("{resolved_load_dir}/{bundle_name}.bundle");
+                let staged_path = build_path.clone();
+                let source_path = normalize_scene_source_path(scene_path, file_name);
+
+                verified_bundles.push((
+                    ContentCatalogEntry {
+                        bundle_name,
+                        group_name: group.group_name.clone(),
+                        source_path,
+                        staged_path,
+                        build_path,
+                        load_path,
+                        content_hash,
+                        size_bytes,
+                        root_object_count,
+                        dependencies: group.dependencies.clone(),
+                    },
+                    bytes,
+                ));
+            }
+        }
+    } else {
+        for (index, scene_path) in config.scenes.iter().enumerate() {
+            if !scene_path.is_file() {
+                return Err(BundleError::SceneMissing {
+                    path: scene_path.clone(),
+                });
+            }
+            let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
                 path: scene_path.clone(),
                 message: error.to_string(),
-            }
-        })?;
-        let content_hash = content_hash_hex(&bytes);
-        let size_bytes = bytes.len() as u64;
-        let root_object_count = scene_graph.roots().len();
-        let file_name = scene_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("scene.unity");
-        let stem = scene_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or("scene");
-        let bundle_name = format!("scene_{index:03}_{stem}");
-        let staged_path = format!("ContentBundles/{bundle_name}.bundle");
-        let source_path = normalize_scene_source_path(scene_path, file_name);
+            })?;
+            let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+                BundleError::SceneAssembly {
+                    path: scene_path.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let content_hash = content_hash_hex(&bytes);
+            let size_bytes = bytes.len() as u64;
+            let root_object_count = scene_graph.roots().len();
+            let file_name = scene_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("scene.unity");
+            let stem = scene_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("scene");
+            let bundle_name = format!("scene_{index:03}_{stem}");
+            let staged_path = format!("ContentBundles/{bundle_name}.bundle");
+            let source_path = normalize_scene_source_path(scene_path, file_name);
 
-        verified_bundles.push((
-            ContentCatalogEntry {
-                bundle_name,
-                source_path,
-                staged_path,
-                content_hash,
-                size_bytes,
-                root_object_count,
-            },
-            bytes,
-        ));
+            verified_bundles.push((
+                ContentCatalogEntry {
+                    bundle_name,
+                    group_name: String::from("default"),
+                    source_path,
+                    staged_path: staged_path.clone(),
+                    build_path: staged_path.clone(),
+                    load_path: staged_path,
+                    content_hash,
+                    size_bytes,
+                    root_object_count,
+                    dependencies: Vec::new(),
+                },
+                bytes,
+            ));
+        }
     }
 
     fs::create_dir_all(output_dir).map_err(|error| BundleError::Io {
@@ -1267,10 +1592,28 @@ fn build_content_with_optional_baseline(
     });
     unchanged_bundles.sort();
 
+    let compatible_player_versions = derive_compatible_player_versions(&config.version);
+    let profile_name = profile.map(|p| p.name.clone());
+    let catalog_id = match &profile_name {
+        Some(prof) => format!(
+            "catalog-{}-{}-{prof}",
+            config.application_identifier,
+            config.target.identifier()
+        ),
+        None => format!(
+            "catalog-{}-{}",
+            config.application_identifier,
+            config.target.identifier()
+        ),
+    };
+
     let mut catalog = ContentCatalog {
         format_version: CONTENT_CATALOG_FORMAT_VERSION,
+        catalog_id,
+        profile_name,
         unitas_version: String::from(UNITAS_VERSION),
         player_compatibility_version,
+        compatible_player_versions,
         target: config.target,
         bundles,
         total_content_bytes,
@@ -1322,7 +1665,11 @@ pub fn validate_content_bundle(
             message: error.to_string(),
         })?;
 
-        let staged_rel = format!("ContentBundles/{}.bundle", input.bundle_name);
+        let staged_rel = input
+            .build_path
+            .clone()
+            .unwrap_or_else(|| format!("ContentBundles/{}.bundle", input.bundle_name));
+        let load_rel = input.load_path.clone().unwrap_or_else(|| staged_rel.clone());
         let staged_dest = output_dir.join(&staged_rel);
 
         if let Some(signature) = detect_unity_bundle_signature(&bytes) {
@@ -1423,11 +1770,15 @@ pub fn validate_content_bundle(
 
         let entry = ContentCatalogEntry {
             bundle_name: input.bundle_name.clone(),
+            group_name: input.group_name.clone(),
             source_path,
-            staged_path: staged_rel,
+            staged_path: staged_rel.clone(),
+            build_path: staged_rel,
+            load_path: load_rel,
             content_hash: content_hash_hex(&bytes),
             size_bytes,
             root_object_count: scene_graph.roots().len(),
+            dependencies: input.dependencies.clone(),
         };
         emitted_bundles.push(entry.clone());
         bundles.push(entry);
@@ -1446,8 +1797,15 @@ pub fn validate_content_bundle(
 
     let mut catalog = ContentCatalog {
         format_version: CONTENT_CATALOG_FORMAT_VERSION,
+        catalog_id: format!(
+            "catalog-validated-{}-{}",
+            expected_target.identifier(),
+            expected_compat
+        ),
+        profile_name: None,
         unitas_version: String::from(UNITAS_VERSION),
         player_compatibility_version: String::from(expected_compat),
+        compatible_player_versions: derive_compatible_player_versions(expected_compat),
         target: expected_target,
         bundles,
         total_content_bytes,

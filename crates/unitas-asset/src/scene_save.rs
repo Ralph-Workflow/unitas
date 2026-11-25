@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 
 use crate::binary_ser::SerializedAsset;
 use crate::prefab_variant::{PrefabVariantDefinition, ScenePrefabInstance};
+use crate::project::BASELINE_UNITY_VERSION;
 use crate::unity_yaml::{Node, Stream};
 
 const MAX_FLOW_ENTRIES: usize = 4;
 const FLOW_REFERENCE_KEY: &str = "fileID";
 const VECTOR_COMPONENTS: &str = "xyzwrgba";
 const TEMP_SUFFIX: &str = ".tmp";
+const SERIALIZED_VERSION_KEY: &str = "serializedVersion";
 
 pub fn emit_stream(stream: &Stream) -> String {
     let mut out = String::new();
@@ -39,6 +41,13 @@ pub struct SceneFile {
     pub stream: Stream,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveOutcome {
+    pub path: PathBuf,
+    pub written: bool,
+    pub upgraded: bool,
+}
+
 #[derive(Debug)]
 pub enum SceneSaveError {
     Io { path: PathBuf, message: String },
@@ -61,13 +70,120 @@ impl fmt::Display for SceneSaveError {
 impl std::error::Error for SceneSaveError {}
 
 pub fn save_stream(path: &Path, stream: &Stream) -> Result<(), SceneSaveError> {
-    write_atomic(path, emit_stream(stream).as_bytes())
+    save_text(path, stream, false).map(|_| ())
 }
 
 pub fn save_asset(path: &Path, asset: &SerializedAsset) -> Result<(), SceneSaveError> {
+    save_asset_form(path, asset, false).map(|_| ())
+}
+
+pub fn save_asset_upgraded(
+    path: &Path,
+    asset: &SerializedAsset,
+) -> Result<SaveOutcome, SceneSaveError> {
+    save_asset_form(path, asset, true)
+}
+
+pub fn emit_baseline_stream(stream: &Stream) -> String {
+    let mut baseline = stream.clone();
+    for document in &mut baseline.documents {
+        remove_serialized_version(&mut document.root);
+    }
+    emit_stream(&baseline)
+}
+
+pub fn upgrade_notice(assets: &[String]) -> String {
+    format!(
+        "Saving upgraded assets {assets:?} in Unity {BASELINE_UNITY_VERSION} form; these assets will require Unity {BASELINE_UNITY_VERSION} LTS to open in Unity."
+    )
+}
+
+fn save_asset_form(
+    path: &Path,
+    asset: &SerializedAsset,
+    upgrade: bool,
+) -> Result<SaveOutcome, SceneSaveError> {
     match asset {
-        SerializedAsset::Text { stream, .. } => save_stream(path, stream),
-        SerializedAsset::Binary(_) => write_atomic(path, &asset.write_back()),
+        SerializedAsset::Text { stream, .. } => save_text(path, stream, upgrade),
+        SerializedAsset::Binary(_) => {
+            let bytes = asset.write_back();
+            let written = write_if_changed(path, &bytes)?;
+            Ok(SaveOutcome {
+                path: path.to_path_buf(),
+                written,
+                upgraded: false,
+            })
+        }
+    }
+}
+
+fn save_text(
+    path: &Path,
+    stream: &Stream,
+    upgrade: bool,
+) -> Result<SaveOutcome, SceneSaveError> {
+    let rendered = emit_stream(stream);
+    if fs::read(path).ok().as_deref() == Some(rendered.as_bytes()) {
+        return Ok(SaveOutcome {
+            path: path.to_path_buf(),
+            written: false,
+            upgraded: false,
+        });
+    }
+    let upgraded = upgrade && has_serialized_version(stream);
+    let text = match upgraded {
+        true => emit_baseline_stream(stream),
+        false => rendered,
+    };
+    write_atomic(path, text.as_bytes())?;
+    Ok(SaveOutcome {
+        path: path.to_path_buf(),
+        written: true,
+        upgraded,
+    })
+}
+
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, SceneSaveError> {
+    if fs::read(path).ok().as_deref() == Some(bytes) {
+        return Ok(false);
+    }
+    write_atomic(path, bytes)?;
+    Ok(true)
+}
+
+fn has_serialized_version(stream: &Stream) -> bool {
+    stream
+        .documents
+        .iter()
+        .any(|document| contains_serialized_version(&document.root))
+}
+
+fn contains_serialized_version(node: &Node) -> bool {
+    match node {
+        Node::Mapping(entries) => {
+            entries.iter().any(|(key, value)| {
+                key == SERIALIZED_VERSION_KEY || contains_serialized_version(value)
+            })
+        }
+        Node::Sequence(items) => items.iter().any(contains_serialized_version),
+        Node::Scalar(_) => false,
+    }
+}
+
+fn remove_serialized_version(node: &mut Node) {
+    match node {
+        Node::Mapping(entries) => {
+            entries.retain(|(key, _)| key != SERIALIZED_VERSION_KEY);
+            for (_, value) in entries.iter_mut() {
+                remove_serialized_version(value);
+            }
+        }
+        Node::Sequence(items) => {
+            for item in items.iter_mut() {
+                remove_serialized_version(item);
+            }
+        }
+        Node::Scalar(_) => {}
     }
 }
 

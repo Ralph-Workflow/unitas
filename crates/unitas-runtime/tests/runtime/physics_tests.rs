@@ -674,3 +674,80 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
     );
     Ok(())
 }
+
+#[test]
+fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_objects_and_honors_action_matrix(
+) {
+    use unitas_physics::matrix::{CollisionMessage, PhysicsObject};
+    use unitas_runtime::physics::PhysicsRuntimeWorld;
+
+    let mut runtime_world = PhysicsRuntimeWorld::new();
+
+    let mut kinematic_platform = PhysicsObject::new(100, 0);
+    kinematic_platform.has_rigidbody = true;
+    kinematic_platform.is_kinematic = true;
+
+    let mut compound_dynamic = PhysicsObject::new(200, 1);
+    compound_dynamic.has_rigidbody = true;
+    compound_dynamic.collider_object_id = Some(201);
+    compound_dynamic.rigidbody_object_id = Some(200);
+
+    let collision_deliveries = runtime_world.route_3d_message(
+        CollisionMessage::OnCollisionEnter,
+        &kinematic_platform,
+        &compound_dynamic,
+    );
+    let mut collision_receivers: Vec<u64> = collision_deliveries
+        .iter()
+        .map(|d| d.receiver_object_id)
+        .collect();
+    collision_receivers.sort_unstable();
+    assert_eq!(
+        collision_receivers,
+        vec![100, 201, 200].into_iter().fold(Vec::new(), |mut acc, x| {
+            acc.push(x);
+            acc.sort_unstable();
+            acc
+        }),
+        "PHY-001 story 13: route_3d_message must deliver OnCollisionEnter to kinematic body and both child collider and parent Rigidbody GameObjects"
+    );
+
+    let mut trigger_a = PhysicsObject::new(300, 0);
+    trigger_a.is_trigger = true;
+    let mut trigger_b = PhysicsObject::new(301, 0);
+    trigger_b.is_trigger = true;
+    assert!(
+        runtime_world
+            .route_3d_message(CollisionMessage::OnTriggerEnter, &trigger_a, &trigger_b)
+            .is_empty(),
+        "PHY-001 story 13: trigger pair without a Rigidbody must route no trigger messages"
+    );
+
+    let mut disabled_trigger = PhysicsObject::new(400, 0);
+    disabled_trigger.is_trigger = true;
+    disabled_trigger.behaviour_enabled = false;
+    let trigger_deliveries = runtime_world.route_3d_message(
+        CollisionMessage::OnTriggerEnter,
+        &disabled_trigger,
+        &compound_dynamic,
+    );
+    assert!(
+        trigger_deliveries
+            .iter()
+            .any(|d| d.receiver_object_id == 400 && d.message == CollisionMessage::OnTriggerEnter),
+        "PHY-001 story 13: disabled MonoBehaviour on trigger collider GameObject must still receive OnTriggerEnter"
+    );
+
+    runtime_world.set_layer_collision_3d(0, 1, false);
+    assert!(!runtime_world.layer_collision_enabled_3d(0, 1));
+    assert!(
+        runtime_world
+            .route_3d_message(
+                CollisionMessage::OnTriggerEnter,
+                &disabled_trigger,
+                &compound_dynamic,
+            )
+            .is_empty(),
+        "PHY-001 story 2 & story 13: disabling layer pair in 3D matrix stops message routing"
+    );
+}

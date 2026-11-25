@@ -2,9 +2,12 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use unitas_asset::merge::{
-    diff_streams, merge_bytes, merge_files, merge_files_to_path, semantic_diff,
-    semantic_diff_bytes, semantic_diff_files, ConflictKind, DiffChangeKind, DiffOutcome,
-    MergeConflict, MergeError, MergeOutcome, OverrideSection, StructuralKind,
+    diff_streams, mcp_merge_asset, mcp_semantic_diff_asset, merge_bytes, merge_files,
+    merge_files_to_path, resolve_conflicts_bytes, resolve_conflicts_to_path, semantic_diff,
+    semantic_diff_bytes, semantic_diff_files, ConflictKind, ConflictResolution,
+    ConflictResolutionChoice, DiffChangeKind, DiffOutcome, FileAccountabilityState,
+    FileChangeOrigin, FileResolutionAction, MergeConflict, MergeError, MergeOutcome,
+    OverrideSection, StructuralKind, WorkspaceGuardError, WorkspaceMergeGuard,
 };
 use unitas_asset::unity_yaml;
 
@@ -692,3 +695,316 @@ fn semantic_diff_reports_binary_asset_as_not_semantically_diffable() -> TestResu
     ));
     Ok(())
 }
+
+#[test]
+fn edt_007_outcome_7_workspace_guard_accounts_for_unsaved_human_agent_and_conflicting_files_before_close_or_reload(
+) -> TestResult {
+    let mut guard = WorkspaceMergeGuard::new();
+    let human_scene = PathBuf::from("Assets/Scenes/Main.unity");
+    let agent_prefab = PathBuf::from("Assets/Prefabs/Turret.prefab");
+    let conflicted_scene = PathBuf::from("Assets/Scenes/BossArena.unity");
+
+    guard.record_saved(&human_scene, BASE_SCENE.as_bytes());
+    guard.record_saved(&agent_prefab, DIFF_PREFAB_OLD.as_bytes());
+    guard.record_saved(&conflicted_scene, BASE_SCENE.as_bytes());
+    assert!(
+        guard.can_close_workspace().is_ok(),
+        "EDT-007 outcome 7: clean workspace must allow close"
+    );
+
+    guard.record_unsaved_edit(
+        &human_scene,
+        FileChangeOrigin::Person,
+        OURS_LAYER.as_bytes(),
+    );
+    guard.record_unsaved_edit(
+        &agent_prefab,
+        FileChangeOrigin::AgentSession {
+            session_id: String::from("agent-session-alpha"),
+        },
+        DIFF_PREFAB_NEW.as_bytes(),
+    );
+    let conflict_outcome = merge_bytes(
+        BASE_SCENE.as_bytes(),
+        OURS_NAME_CONFLICT.as_bytes(),
+        THEIRS_NAME_CONFLICT.as_bytes(),
+    )?;
+    guard.record_external_change_or_conflict(
+        &conflicted_scene,
+        THEIRS_NAME_CONFLICT.as_bytes(),
+        conflict_outcome.conflicts.clone(),
+    );
+
+    let unaccounted = guard.unaccounted_files();
+    assert_eq!(
+        unaccounted.len(),
+        3,
+        "EDT-007 outcome 7: every unsaved human, agent, and conflicting file must be listed as unaccounted"
+    );
+    assert!(
+        unaccounted.iter().any(|entry| {
+            entry.path == human_scene
+                && entry.state == FileAccountabilityState::Unsaved
+                && entry.origins.contains(&FileChangeOrigin::Person)
+        }),
+        "EDT-007 outcome 7: human unsaved scene must be tracked"
+    );
+    assert!(
+        unaccounted.iter().any(|entry| {
+            entry.path == agent_prefab
+                && entry.state == FileAccountabilityState::Unsaved
+                && entry.origins.contains(&FileChangeOrigin::AgentSession {
+                    session_id: String::from("agent-session-alpha"),
+                })
+        }),
+        "EDT-007 outcome 7: agent session unsaved prefab edit must be tracked with session attribution"
+    );
+    assert!(
+        unaccounted.iter().any(|entry| {
+            entry.path == conflicted_scene
+                && entry.state == FileAccountabilityState::Conflicted
+                && entry.unresolved_conflicts.len() == 1
+        }),
+        "EDT-007 outcome 7: conflicted file must report unresolved conflicts"
+    );
+
+    let close_err = match guard.can_close_workspace() {
+        Ok(()) => {
+            return Err(String::from(
+                "EDT-007 outcome 7: expected close to be blocked while files are unaccounted",
+            )
+            .into())
+        }
+        Err(err) => err,
+    };
+    match close_err {
+        WorkspaceGuardError::UnaccountedFiles { files } => {
+            assert_eq!(
+                files.len(),
+                3,
+                "EDT-007 outcome 7: close error must name all three unaccounted files"
+            );
+        }
+        other => {
+            return Err(
+                format!("EDT-007 outcome 7: expected UnaccountedFiles, got {other:?}").into(),
+            )
+        }
+    }
+
+    assert!(
+        guard.can_reload_file(&agent_prefab).is_err(),
+        "EDT-007 outcome 7: reload of unsaved agent file must be blocked until accounted for"
+    );
+    assert!(
+        guard.can_reload_file(&conflicted_scene).is_err(),
+        "EDT-007 outcome 7: reload of conflicted file must be blocked until accounted for"
+    );
+
+    guard.account_for_file(&human_scene, FileResolutionAction::Save)?;
+    assert!(
+        guard.can_close_workspace().is_err(),
+        "EDT-007 outcome 7: workspace close must remain blocked while agent and conflicted files are unaccounted"
+    );
+
+    guard.account_for_file(&agent_prefab, FileResolutionAction::KeepUnsavedWork)?;
+    assert!(
+        guard.can_reload_file(&agent_prefab).is_err(),
+        "EDT-007 outcome 7: KeepUnsavedWork accounts for close/keep decision but still blocks silent reload over unsaved work"
+    );
+    guard.account_for_file(&agent_prefab, FileResolutionAction::DiscardAndReload)?;
+    assert!(
+        guard.can_reload_file(&agent_prefab).is_ok(),
+        "EDT-007 outcome 7: after DiscardAndReload, file reload is permitted"
+    );
+
+    let resolved_scene = resolve_conflicts_bytes(
+        BASE_SCENE.as_bytes(),
+        OURS_NAME_CONFLICT.as_bytes(),
+        THEIRS_NAME_CONFLICT.as_bytes(),
+        &[ConflictResolution {
+            file_id: 100,
+            property: Some(String::from("m_Name")),
+            choice: ConflictResolutionChoice::Theirs,
+        }],
+    )?;
+    let resolved_bytes = resolved_scene
+        .merged
+        .as_deref()
+        .ok_or("EDT-007 outcome 7: expected resolved merge text")?
+        .as_bytes()
+        .to_vec();
+    guard.account_for_file(
+        &conflicted_scene,
+        FileResolutionAction::ResolveConflict { resolved_bytes },
+    )?;
+    assert!(
+        guard.can_reload_file(&conflicted_scene).is_ok(),
+        "EDT-007 outcome 7: resolved conflict permits reload"
+    );
+    assert!(
+        guard.unaccounted_files().is_empty(),
+        "EDT-007 outcome 7: all files accounted for"
+    );
+    assert!(
+        guard.can_close_workspace().is_ok(),
+        "EDT-007 outcome 7: workspace close succeeds once every unsaved and conflicting file is accounted for"
+    );
+    Ok(())
+}
+
+#[test]
+fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_matches_mcp_entry_point(
+) -> TestResult {
+    let base_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 5\n--- !u!1 &200\nGameObject:\n  m_Name: Companion\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 0, z: 0}\n";
+    let ours_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 3\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 10, y: 0, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 8\n--- !u!1 &200\nGameObject:\n  m_Name: Companion\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 0, z: 0}\n";
+    let theirs_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 0, y: 5, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 5\n--- !u!1 &200\nGameObject:\n  m_Name: CompanionBot\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 2, z: 0}\n";
+
+    let direct_outcome = merge_bytes(
+        base_scene.as_bytes(),
+        ours_scene.as_bytes(),
+        theirs_scene.as_bytes(),
+    )?;
+    assert!(
+        direct_outcome.conflicts.is_empty(),
+        "EDT-007 outcome 13: disjoint property changes across two branches must merge cleanly"
+    );
+    assert!(
+        direct_outcome.references.is_empty(),
+        "EDT-007 outcome 13: all internal references in merged scene must resolve"
+    );
+    let merged_scene_text = merged_text(&direct_outcome);
+    assert_eq!(
+        file_ids(merged_scene_text),
+        vec![100, 110, 120, 200, 210],
+        "EDT-007 outcome 13: merged scene must preserve all file IDs"
+    );
+    assert_eq!(
+        property(merged_scene_text, 100, "GameObject.m_Layer"),
+        Some(String::from("3"))
+    );
+    assert_eq!(
+        property(merged_scene_text, 110, "Transform.m_LocalPosition.x"),
+        Some(String::from("10"))
+    );
+    assert_eq!(
+        property(merged_scene_text, 110, "Transform.m_LocalPosition.y"),
+        Some(String::from("5"))
+    );
+    assert_eq!(
+        property(merged_scene_text, 120, "MonoBehaviour.speed"),
+        Some(String::from("8"))
+    );
+    assert_eq!(
+        property(merged_scene_text, 200, "GameObject.m_Name"),
+        Some(String::from("CompanionBot"))
+    );
+
+    let merged_stream = unity_yaml::parse(merged_scene_text)?;
+    let assembled = unitas_asset::assemble_scene(&merged_stream)?;
+    assert_eq!(
+        assembled.len(),
+        2,
+        "EDT-007 outcome 13: merged scene must assemble with its GameObjects intact"
+    );
+
+    let mcp_outcome = mcp_merge_asset(base_scene, ours_scene, theirs_scene)?;
+    assert_eq!(
+        mcp_outcome, direct_outcome,
+        "EDT-007 outcome 13: agent calling MCP merge entry point must obtain the exact same MergeOutcome"
+    );
+
+    let base_prefab = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: CratePrefab\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 1010}\n--- !u!4 &1010\nTransform:\n  m_GameObject: {fileID: 1000}\n  m_Father: {fileID: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n";
+    let ours_prefab = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: CratePrefab\n  m_Layer: 6\n  m_Component:\n  - component: {fileID: 1010}\n--- !u!4 &1010\nTransform:\n  m_GameObject: {fileID: 1000}\n  m_Father: {fileID: 0}\n  m_LocalScale: {x: 2, y: 1, z: 1}\n";
+    let theirs_prefab = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: HeavyCratePrefab\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 1010}\n--- !u!4 &1010\nTransform:\n  m_GameObject: {fileID: 1000}\n  m_Father: {fileID: 0}\n  m_LocalScale: {x: 1, y: 1, z: 3}\n";
+
+    let prefab_direct = merge_bytes(
+        base_prefab.as_bytes(),
+        ours_prefab.as_bytes(),
+        theirs_prefab.as_bytes(),
+    )?;
+    let prefab_mcp = mcp_merge_asset(base_prefab, ours_prefab, theirs_prefab)?;
+    assert_eq!(
+        prefab_mcp, prefab_direct,
+        "EDT-007 outcome 13: prefab merge via MCP must match direct three-way merge"
+    );
+    assert!(prefab_direct.references.is_empty());
+    let prefab_stream = unity_yaml::parse(merged_text(&prefab_direct))?;
+    let assembled_prefab = unitas_asset::assemble_scene(&prefab_stream)?;
+    assert_eq!(assembled_prefab.len(), 1);
+
+    let theirs_conflict_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 0, y: 5, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 12\n--- !u!1 &200\nGameObject:\n  m_Name: CompanionBot\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 2, z: 0}\n";
+    let conflict_direct = merge_bytes(
+        base_scene.as_bytes(),
+        ours_scene.as_bytes(),
+        theirs_conflict_scene.as_bytes(),
+    )?;
+    let conflict_mcp = mcp_merge_asset(base_scene, ours_scene, theirs_conflict_scene)?;
+    assert_eq!(
+        conflict_mcp, conflict_direct,
+        "EDT-007 outcome 13: same-property conflict reported through MCP must equal direct merge conflict"
+    );
+    let speed_conflict = only_conflict(&conflict_mcp)?;
+    assert_eq!(speed_conflict.kind, ConflictKind::Property);
+    assert_eq!(speed_conflict.object_path, "Player/MonoBehaviour");
+    assert_eq!(speed_conflict.property.as_deref(), Some("speed"));
+    assert_eq!(speed_conflict.base.as_deref(), Some("5"));
+    assert_eq!(speed_conflict.ours.as_deref(), Some("8"));
+    assert_eq!(speed_conflict.theirs.as_deref(), Some("12"));
+
+    let resolved_custom = resolve_conflicts_bytes(
+        base_scene.as_bytes(),
+        ours_scene.as_bytes(),
+        theirs_conflict_scene.as_bytes(),
+        &[ConflictResolution {
+            file_id: 120,
+            property: Some(String::from("speed")),
+            choice: ConflictResolutionChoice::Custom(String::from("15")),
+        }],
+    )?;
+    assert!(resolved_custom.conflicts.is_empty());
+    assert!(resolved_custom.references.is_empty());
+    assert_eq!(
+        property(merged_text(&resolved_custom), 120, "MonoBehaviour.speed"),
+        Some(String::from("15"))
+    );
+
+    let temp = temp_dir("resolve_to_path");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(&temp)?;
+    let base_path = temp.join("base.unity");
+    let ours_path = temp.join("ours.unity");
+    let theirs_path = temp.join("theirs.unity");
+    let out_path = temp.join("out.unity");
+    std::fs::write(&base_path, base_scene)?;
+    std::fs::write(&ours_path, ours_scene)?;
+    std::fs::write(&theirs_path, theirs_conflict_scene)?;
+    let written_outcome = resolve_conflicts_to_path(
+        &base_path,
+        &ours_path,
+        &theirs_path,
+        &[ConflictResolution {
+            file_id: 120,
+            property: Some(String::from("speed")),
+            choice: ConflictResolutionChoice::Ours,
+        }],
+        &out_path,
+    )?;
+    let _ = std::fs::remove_dir_all(&temp);
+    assert!(written_outcome.conflicts.is_empty());
+    assert_eq!(
+        property(merged_text(&written_outcome), 120, "MonoBehaviour.speed"),
+        Some(String::from("8"))
+    );
+
+    let diff_direct = semantic_diff(base_scene, ours_scene)?;
+    let diff_mcp = mcp_semantic_diff_asset(base_scene, ours_scene)?;
+    assert_eq!(
+        diff_mcp, diff_direct,
+        "EDT-007 outcome 13: MCP semantic diff entry point must match direct semantic diff"
+    );
+    Ok(())
+}
+
+
+

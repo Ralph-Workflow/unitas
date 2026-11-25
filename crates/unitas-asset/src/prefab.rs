@@ -20,11 +20,104 @@ pub struct PrefabSource {
     pub file_id: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PrefabSourceReference {
+    pub file_id: i64,
+    pub guid: Option<String>,
+    pub ref_type: Option<i64>,
+}
+
+impl PrefabSourceReference {
+    pub fn local(file_id: i64) -> Self {
+        Self {
+            file_id,
+            guid: None,
+            ref_type: None,
+        }
+    }
+
+    pub fn external(file_id: i64, guid: impl Into<String>, ref_type: i64) -> Self {
+        Self {
+            file_id,
+            guid: Some(guid.into()),
+            ref_type: Some(ref_type),
+        }
+    }
+
+    pub fn to_node(&self) -> Node {
+        let mut entries = vec![(String::from("fileID"), Node::Scalar(self.file_id.to_string()))];
+        if let Some(guid) = &self.guid {
+            entries.push((String::from("guid"), Node::Scalar(guid.clone())));
+        }
+        if let Some(ref_type) = self.ref_type {
+            entries.push((String::from("type"), Node::Scalar(ref_type.to_string())));
+        }
+        Node::Mapping(entries)
+    }
+
+    pub fn from_node(node: &Node) -> Option<Self> {
+        let file_id = node.get("fileID").and_then(Node::as_i64)?;
+        let guid = node
+            .get("guid")
+            .and_then(Node::as_str)
+            .filter(|g| !g.is_empty())
+            .map(str::to_string);
+        let ref_type = node.get("type").and_then(Node::as_i64);
+        if file_id == 0 && guid.is_none() {
+            return None;
+        }
+        Some(Self {
+            file_id,
+            guid,
+            ref_type,
+        })
+    }
+
+    pub fn to_encoded_string(&self) -> String {
+        match (&self.guid, self.ref_type) {
+            (Some(guid), Some(ref_type)) => {
+                format!("{{fileID: {}, guid: {}, type: {}}}", self.file_id, guid, ref_type)
+            }
+            (Some(guid), None) => format!("{{fileID: {}, guid: {}}}", self.file_id, guid),
+            (None, _) => format!("{{fileID: {}}}", self.file_id),
+        }
+    }
+
+    pub fn from_encoded_string(text: &str) -> Option<Self> {
+        let trimmed = text.trim();
+        let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+        let mut file_id: Option<i64> = None;
+        let mut guid: Option<String> = None;
+        let mut ref_type: Option<i64> = None;
+        for part in inner.split(',') {
+            let (k, v) = part.split_once(':')?;
+            let key = k.trim();
+            let val = v.trim();
+            match key {
+                "fileID" => file_id = val.parse::<i64>().ok(),
+                "guid" if !val.is_empty() => guid = Some(val.to_string()),
+                "type" => ref_type = val.parse::<i64>().ok(),
+                _ => {}
+            }
+        }
+        let resolved_file_id = file_id?;
+        if resolved_file_id == 0 && guid.is_none() {
+            return None;
+        }
+        Some(Self {
+            file_id: resolved_file_id,
+            guid,
+            ref_type,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Modification {
     pub target_file_id: i64,
     pub property_path: String,
     pub value: String,
+    pub object_reference: Option<PrefabSourceReference>,
 }
 
 impl Modification {
@@ -37,6 +130,20 @@ impl Modification {
             target_file_id,
             property_path: property_path.into(),
             value: value.into(),
+            object_reference: None,
+        }
+    }
+
+    pub fn with_object_reference(
+        target_file_id: i64,
+        property_path: impl Into<String>,
+        object_reference: PrefabSourceReference,
+    ) -> Self {
+        Self {
+            target_file_id,
+            property_path: property_path.into(),
+            value: String::new(),
+            object_reference: Some(object_reference),
         }
     }
 }
@@ -207,14 +314,19 @@ fn parse_modifications(modification: Option<&Node>) -> Vec<Modification> {
             Some(path) => path.to_string(),
             None => continue,
         };
-        let value = match item.get("value").and_then(Node::as_str) {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
+        let value = item
+            .get("value")
+            .and_then(Node::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let object_reference = item
+            .get("objectReference")
+            .and_then(PrefabSourceReference::from_node);
         modifications.push(Modification {
             target_file_id,
             property_path,
             value,
+            object_reference,
         });
     }
     modifications
@@ -225,6 +337,13 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
         .modifications
         .iter()
         .map(|m| {
+            let obj_ref_node = match &m.object_reference {
+                Some(reference) => reference.to_node(),
+                None => Node::Mapping(vec![(
+                    String::from("fileID"),
+                    Node::Scalar(String::from("0")),
+                )]),
+            };
             Node::Mapping(vec![
                 (
                     String::from("target"),
@@ -245,13 +364,7 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
                     Node::Scalar(m.property_path.clone()),
                 ),
                 (String::from("value"), Node::Scalar(m.value.clone())),
-                (
-                    String::from("objectReference"),
-                    Node::Mapping(vec![(
-                        String::from("fileID"),
-                        Node::Scalar(String::from("0")),
-                    )]),
-                ),
+                (String::from("objectReference"), obj_ref_node),
             ])
         })
         .collect();

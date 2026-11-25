@@ -18,7 +18,8 @@ use unitas_runtime::{
     unitas_runtime_animator_set_speed, unitas_runtime_animator_set_trigger,
     unitas_runtime_animator_state_info, unitas_runtime_animator_state_name, unitas_runtime_destroy,
     unitas_runtime_error_message, unitas_runtime_new, unitas_runtime_path_buffer,
-    unitas_runtime_set_time_scale, unitas_runtime_tick, AnimationRuntimeDiagnostic, Runtime,
+    unitas_runtime_set_time_scale, unitas_runtime_tick, AnimationRuntimeDiagnostic, AnimationWorld,
+    Runtime,
 };
 
 const STATE_INFO_SIZE: usize = 80;
@@ -1079,3 +1080,405 @@ fn animation_without_a_move_hook_applies_root_motion_automatically() -> Result<(
     assert_eq!(transform.translation, [0.5, 0.0, 0.0]);
     Ok(())
 }
+
+#[test]
+fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_and_events(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_animation::AnimationEvent;
+    let clip = AnimationClip::new(
+        "ParityClip",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 10.0)]),
+        )],
+        vec![
+            AnimationEvent::new(0.25, "Quarter"),
+            AnimationEvent::new(0.75, "ThreeQuarter"),
+        ],
+    );
+    let controller = AnimatorController::new(
+        "ParityController",
+        Vec::new(),
+        vec![AnimatorState::new("Run", StateMotion::Clip(clip.clone()))],
+        0,
+        Vec::new(),
+    );
+
+    let frame_deltas = [0.3_f32, 0.5, 0.4, 0.6];
+
+    let mut preview_poses = Vec::new();
+    let mut preview_events = Vec::new();
+    let mut elapsed = 0.0_f32;
+    for dt in frame_deltas {
+        let sample = clip.sample(elapsed, elapsed + dt);
+        if let Some(b) = sample.bindings.first() {
+            if let unitas_animation::AnimatedValue::Float(x) = b.value {
+                preview_poses.push(x);
+            }
+        }
+        for ev in sample.fired_events {
+            preview_events.push(ev.function_name);
+        }
+        elapsed += dt;
+    }
+
+    let mut play_world = AnimationWorld::new();
+    let play_entity = EntityId::new(1);
+    play_world.ensure_animator(play_entity, unitas_core::Transform::default());
+    let ctrl_handle = play_world.register_controller(controller.clone());
+    play_world.set_controller(play_entity, ctrl_handle)?;
+    let mut play_poses = Vec::new();
+    for dt in frame_deltas {
+        play_world.tick(f64::from(dt));
+        let tr = play_world.transform(play_entity).ok_or("missing transform")?;
+        play_poses.push(tr.translation[0]);
+    }
+    let play_events: Vec<String> = play_world
+        .fired_events(play_entity)
+        .ok_or("missing events")?
+        .iter()
+        .map(|e| e.function_name.clone())
+        .collect();
+
+    let (player_handle, player_entity) = animator_runtime(&controller)?;
+    tick(player_handle, 0.0)?;
+    let mut player_poses = Vec::new();
+    for dt in frame_deltas {
+        tick(player_handle, f64::from(dt))?;
+        let info = state_info(player_handle, player_entity)?;
+        player_poses.push(info.position[0]);
+    }
+    let player_event_count = state_info(player_handle, player_entity)?.fired_event_count as usize;
+    assert_eq!(unitas_runtime_destroy(player_handle), 0);
+
+    for i in 0..frame_deltas.len() {
+        assert!(
+            (preview_poses[i] - play_poses[i]).abs() < 1e-5,
+            "ANI-001 outcome 27: preview vs play mode pose mismatch at frame {i}"
+        );
+        assert!(
+            (play_poses[i] - player_poses[i]).abs() < 1e-5,
+            "ANI-001 outcome 27: play mode vs built player pose mismatch at frame {i}"
+        );
+    }
+    assert_eq!(
+        preview_events, play_events,
+        "ANI-001 outcome 27: preview and play mode event sequences must match"
+    );
+    assert_eq!(
+        play_events.len(),
+        player_event_count,
+        "ANI-001 outcome 27: built player event count must match play mode and preview"
+    );
+    Ok(())
+}
+
+#[test]
+fn ani_001_outcome_29_disable_and_enable_resets_or_keeps_state_and_preserves_last_written_value(
+) -> Result<(), Box<dyn Error>> {
+    let clip_a = AnimationClip::new(
+        "A",
+        1.0,
+        60.0,
+        WrapMode::ClampForever,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 5.0)]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.y"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 2.0), Keyframe::linear(1.0, 9.0)]),
+            ),
+        ],
+        Vec::new(),
+    );
+    let clip_b = AnimationClip::new(
+        "B",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+        )],
+        Vec::new(),
+    );
+    let controller = AnimatorController::new(
+        "ResetAndWriteDefaults",
+        vec![ParameterDef::bool("next", false)],
+        vec![
+            AnimatorState::with_write_defaults("StateA", StateMotion::Clip(clip_a), true),
+            AnimatorState::with_write_defaults("StateB", StateMotion::Clip(clip_b), false),
+        ],
+        0,
+        vec![StateTransition::instant(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("next", ConditionOp::If)],
+        )],
+    );
+
+    let mut world = AnimationWorld::new();
+    let entity = EntityId::new(99);
+    world.ensure_animator(entity, unitas_core::Transform::default());
+    let handle = world.register_controller(controller);
+    world.set_controller(entity, handle)?;
+
+    world.tick(1.0);
+    let tr_a = world.transform(entity).ok_or("missing transform")?;
+    assert!((tr_a.translation[1] - 9.0).abs() < 1e-5);
+
+    world.set_bool(entity, "next", true)?;
+    world.tick(0.5);
+    assert_eq!(world.state_info(entity)?.state_index, 1);
+    let tr_b = world.transform(entity).ok_or("missing transform")?;
+    assert!(
+        (tr_b.translation[1] - 9.0).abs() < 1e-5,
+        "ANI-001 outcome 29: Write Defaults off must leave localPosition.y at last written value 9.0"
+    );
+
+    world.set_keep_state_on_disable(entity, true)?;
+    world.disable_animator(entity)?;
+    world.enable_animator(entity)?;
+    assert_eq!(
+        world.state_info(entity)?.state_index,
+        1,
+        "ANI-001 outcome 29: keepAnimatorStateOnDisable=true must preserve state across disable/enable"
+    );
+    assert!(world.get_bool(entity, "next")?);
+
+    world.set_keep_state_on_disable(entity, false)?;
+    world.disable_animator(entity)?;
+    world.enable_animator(entity)?;
+    assert_eq!(
+        world.state_info(entity)?.state_index,
+        0,
+        "ANI-001 outcome 29: keepAnimatorStateOnDisable=false must reset state to entry on disable"
+    );
+    assert!(!world.get_bool(entity, "next")?);
+    let tr_reset = world.transform(entity).ok_or("missing transform")?;
+    assert!(
+        (tr_reset.translation[1] - 2.0).abs() < 1e-5,
+        "ANI-001 outcome 29: reset must restore captured default localPosition.y=2.0"
+    );
+    Ok(())
+}
+
+#[test]
+fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_parameters(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_animation::{
+        AnimationEvent, AnimatorCullingMode, AnimatorFrame, AnimatorUpdateMode,
+    };
+
+    let clip_a = AnimationClip::new(
+        "A",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 10.0)]),
+        )],
+        vec![AnimationEvent::new(0.2, "StepEvt")],
+    );
+    let clip_b = AnimationClip::new(
+        "B",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 20.0), Keyframe::linear(1.0, 20.0)]),
+        )],
+        Vec::new(),
+    );
+    let controller = AnimatorController::new(
+        "TimingAndCulling",
+        vec![ParameterDef::float("speed_param", 1.0)],
+        vec![
+            AnimatorState::new("StateA", StateMotion::Clip(clip_a)),
+            AnimatorState::new("StateB", StateMotion::Clip(clip_b)),
+        ],
+        0,
+        Vec::new(),
+    );
+
+    let mut world = AnimationWorld::new();
+    let e_normal = EntityId::new(1);
+    let e_physics = EntityId::new(2);
+    let e_unscaled = EntityId::new(3);
+    for e in [e_normal, e_physics, e_unscaled] {
+        world.ensure_animator(e, unitas_core::Transform::default());
+        let h = world.register_controller(controller.clone());
+        world.set_controller(e, h)?;
+    }
+    world.set_update_mode(e_normal, AnimatorUpdateMode::Normal)?;
+    world.set_update_mode(e_physics, AnimatorUpdateMode::AnimatePhysics)?;
+    world.set_update_mode(e_unscaled, AnimatorUpdateMode::UnscaledTime)?;
+
+    let frame_ts0 = AnimatorFrame::new(0.0, 0.25, 0.05);
+    world.tick_frame(&frame_ts0);
+    assert!(
+        world.state_info(e_normal)?.normalized_time.abs() < 1e-6,
+        "ANI-001 outcome 30: Normal mode must not advance when timeScale=0"
+    );
+    assert!(
+        world.state_info(e_physics)?.normalized_time.abs() < 1e-6,
+        "ANI-001 outcome 30: AnimatePhysics mode must not advance when timeScale=0"
+    );
+    assert!(
+        (world.state_info(e_unscaled)?.normalized_time - 0.25).abs() < 1e-5,
+        "ANI-001 outcome 30: UnscaledTime mode must advance by unscaled delta when timeScale=0"
+    );
+
+    let frame_ts1 = AnimatorFrame::new(0.25, 0.25, 0.1);
+    world.tick_frame(&frame_ts1);
+    assert!((world.state_info(e_normal)?.normalized_time - 0.25).abs() < 1e-5);
+    assert!((world.state_info(e_physics)?.normalized_time - 0.20).abs() < 1e-5);
+    assert!((world.state_info(e_unscaled)?.normalized_time - 0.50).abs() < 1e-5);
+
+    let e_cull_tx = EntityId::new(4);
+    let e_cull_all = EntityId::new(5);
+    for e in [e_cull_tx, e_cull_all] {
+        world.ensure_animator(e, unitas_core::Transform::default());
+        let h = world.register_controller(controller.clone());
+        world.set_controller(e, h)?;
+        world.set_visible(e, false)?;
+    }
+    world.set_culling_mode(e_cull_tx, AnimatorCullingMode::CullUpdateTransforms)?;
+    world.set_culling_mode(e_cull_all, AnimatorCullingMode::CullCompletely)?;
+
+    world.tick_frame(&AnimatorFrame::new(0.3, 0.3, 0.1));
+    assert!(
+        (world.state_info(e_cull_tx)?.normalized_time - 0.3).abs() < 1e-5,
+        "ANI-001 outcome 30: CullUpdateTransforms must advance state off-screen"
+    );
+    assert_eq!(
+        world.fired_event_count(e_cull_tx),
+        Some(1),
+        "ANI-001 outcome 30: CullUpdateTransforms must fire events off-screen"
+    );
+    assert!(
+        world.transform(e_cull_tx).ok_or("no tx")?.translation[0].abs() < 1e-6,
+        "ANI-001 outcome 30: CullUpdateTransforms must skip transform writes off-screen"
+    );
+    assert!(
+        (world.root_motion(e_cull_tx).ok_or("no rm")?.delta_position[0] - 3.0).abs() < 1e-5,
+        "ANI-001 outcome 30: CullUpdateTransforms must compute root motion off-screen"
+    );
+
+    assert!(
+        world.state_info(e_cull_all)?.normalized_time.abs() < 1e-6,
+        "ANI-001 outcome 30: CullCompletely must stop advancing state off-screen"
+    );
+    assert_eq!(
+        world.fired_event_count(e_cull_all),
+        Some(0),
+        "ANI-001 outcome 30: CullCompletely must not fire events off-screen"
+    );
+
+    world.set_float(e_normal, "speed_param", 2.5)?;
+    let entry: &mut unitas_runtime::EntityAnimatorEntry =
+        world.entry_mut(e_normal).ok_or("missing entry")?;
+    if let Some(anim) = &mut entry.animator {
+        anim.cross_fade(1, 0.5);
+    }
+    assert!(
+        !world.state_info(e_normal)?.is_in_transition,
+        "ANI-001 outcome 30: before frame evaluation, state_info reports previous evaluation"
+    );
+    world.tick_frame(&AnimatorFrame::new(0.25, 0.25, 0.1));
+    let info_after = world.state_info(e_normal)?;
+    assert!(
+        info_after.is_in_transition,
+        "ANI-001 outcome 30: CrossFade called before tick is observed in that frame's evaluation"
+    );
+    assert_eq!(info_after.next_state_index, Some(1));
+    assert_eq!(world.get_float(e_normal, "speed_param")?, 2.5);
+    Ok(())
+}
+
+#[test]
+fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_clips(
+) -> Result<(), Box<dyn Error>> {
+    use unitas_runtime::animation::LegacyAnimationComponent;
+
+    let clip_walk = AnimationClip::new(
+        "Walk",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.0)]),
+        )],
+        Vec::new(),
+    );
+    let clip_run = AnimationClip::new(
+        "Run",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+        )],
+        Vec::new(),
+    );
+    let clip_non_legacy = AnimationClip::new(
+        "NonLegacy",
+        1.0,
+        60.0,
+        WrapMode::Once,
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let mut legacy = LegacyAnimationComponent::new();
+    legacy.add_clip("Walk", clip_walk, true);
+    legacy.add_clip("Run", clip_run, true);
+    legacy.add_clip("NonLegacy", clip_non_legacy, false);
+
+    assert!(
+        legacy.play("NonLegacy").is_err(),
+        "ANI-002 outcome 32: non-legacy clip assigned to legacy Animation must fail and report error"
+    );
+    assert!(legacy.errors()[0].contains("NonLegacy"));
+
+    legacy.play("Walk")?;
+    assert!(legacy.is_playing("Walk"));
+
+    let mut world = AnimationWorld::new();
+    let entity = EntityId::new(77);
+    world.ensure_animator(entity, unitas_core::Transform::default());
+    world.set_legacy_animation(entity, legacy);
+
+    world.tick(0.1);
+    let pos_walk = world.transform(entity).ok_or("missing transform")?.translation[0];
+    assert!(pos_walk.abs() < 1e-5);
+
+    world
+        .legacy_animation_mut(entity)
+        .ok_or("missing legacy")?
+        .cross_fade("Run", 1.0)?;
+    world.tick(0.5);
+    let pos_mid = world.transform(entity).ok_or("missing transform")?.translation[0];
+    assert!(
+        (pos_mid - 5.0).abs() < 1e-4,
+        "ANI-002 outcome 32: legacy Animation cross-fade at 50% must blend pose to 5.0, got {pos_mid}"
+    );
+
+    world.tick(0.5);
+    let pos_end = world.transform(entity).ok_or("missing transform")?.translation[0];
+    assert!(
+        (pos_end - 10.0).abs() < 1e-4,
+        "ANI-002 outcome 32: legacy Animation cross-fade at 100% must reach target pose 10.0, got {pos_end}"
+    );
+    Ok(())
+}
+

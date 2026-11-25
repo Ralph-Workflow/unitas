@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use unitas_core::EntityId;
 use unitas_physics::particles::{
-    Curve, EmitParams, Particle, ParticleShape, ParticleSystem, ParticleSystemState, StopAction,
+    Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, Particle, ParticleShape,
+    ParticleSystem, ParticleSystemForceField, ParticleSystemState, StopAction,
 };
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
@@ -420,4 +421,334 @@ fn set_emit_position_and_set_emit_rotation_transform_spawn_pose_and_velocity() {
     assert!((particles[0].velocity[0] - 4.0).abs() < 1e-5);
     assert!(particles[0].velocity[1].abs() < 1e-5);
     assert!(particles[0].velocity[2].abs() < 1e-5);
+}
+
+#[test]
+fn ren_004_outcome_15_playback_state_and_fixed_seed_parity_across_preview_play_mode_and_player_and_vfx_graph_unsupported(
+) {
+    let run_mode = |seed: u64| {
+        let mut system = ParticleSystem::new(seed);
+        system.set_shape(ParticleShape::Sphere { radius: 2.5 });
+        system.set_emission_rate(12.0);
+        system.set_emit_params(EmitParams {
+            start_speed: 3.5,
+            start_size: 0.4,
+            start_lifetime: 4.0,
+            start_color: [1.0, 0.5, 0.25, 1.0],
+        });
+        assert_eq!(
+            system.state(),
+            ParticleSystemState::Playing,
+            "REN-004 outcome 15: initial playback state must report Playing"
+        );
+        system.simulate(0.25);
+        system.pause();
+        assert_eq!(
+            system.state(),
+            ParticleSystemState::Paused,
+            "REN-004 outcome 15: paused system must report Paused state"
+        );
+        system.simulate(0.5);
+        system.play();
+        assert_eq!(
+            system.state(),
+            ParticleSystemState::Playing,
+            "REN-004 outcome 15: resumed system must report Playing state"
+        );
+        system.simulate(0.25);
+        let first_pass_count = system.get_particles().len();
+        let first_pass_positions: Vec<[f32; 3]> =
+            system.get_particles().iter().map(|p| p.position).collect();
+
+        system.stop(StopAction::None);
+        assert_eq!(
+            system.state(),
+            ParticleSystemState::Stopped,
+            "REN-004 outcome 15: stopped system must report Stopped state"
+        );
+        system.clear();
+        assert_eq!(
+            system.get_particles().len(),
+            0,
+            "REN-004 outcome 15: cleared system must have zero live particles"
+        );
+        system.play();
+        assert_eq!(
+            system.state(),
+            ParticleSystemState::Playing,
+            "REN-004 outcome 15: restarted system must report Playing state"
+        );
+        system.simulate(0.25);
+        system.simulate(0.25);
+        let restarted_count = system.get_particles().len();
+        let restarted_positions: Vec<[f32; 3]> =
+            system.get_particles().iter().map(|p| p.position).collect();
+        assert_eq!(
+            first_pass_count, restarted_count,
+            "REN-004 outcome 15: restart with fixed seed must produce identical particle count"
+        );
+        assert_eq!(
+            first_pass_positions, restarted_positions,
+            "REN-004 outcome 15: restart with fixed seed must produce identical particle positions"
+        );
+        (restarted_count, restarted_positions)
+    };
+
+    let preview = run_mode(202_203);
+    let play_mode = run_mode(202_203);
+    let built_player = run_mode(202_203);
+    assert!(
+        preview.0 > 0,
+        "REN-004 outcome 15: seeded simulation must emit live particles"
+    );
+    assert_eq!(
+        preview, play_mode,
+        "REN-004 outcome 15: preview and Play Mode must match particle count and positions under fixed seed"
+    );
+    assert_eq!(
+        play_mode, built_player,
+        "REN-004 outcome 15: Play Mode and built player must match particle count and positions under fixed seed"
+    );
+
+    let vfx_entry = unitas_core::compat::lookup_unsupported_family("Visual Effect Graph")
+        .or_else(|| unitas_core::compat::lookup_unsupported_family("com.unity.visualeffectgraph"));
+    assert!(
+        vfx_entry.is_some(),
+        "REN-004 outcome 15: Visual Effect Graph family must be recognized in compatibility catalog"
+    );
+    if let Some(entry) = vfx_entry {
+        assert_eq!(
+            entry.owning_feature_id, "REN-004",
+            "REN-004 outcome 15: Visual Effect Graph must be owned by REN-004"
+        );
+        assert_eq!(
+            entry.state,
+            unitas_core::compat::CompatibilityState::Unsupported,
+            "REN-004 outcome 15: Visual Effect Graph must be reported as Unsupported"
+        );
+    }
+}
+
+#[test]
+fn ren_004_outcome_16_custom_particle_data_and_force_field_and_scripted_emissions_and_callbacks(
+) -> Result<(), PhysicsError> {
+    let mut system = ParticleSystem::new(99);
+    system.set_emit_params(EmitParams {
+        start_speed: 0.0,
+        start_size: 1.0,
+        start_lifetime: 2.0,
+        start_color: [1.0, 1.0, 1.0, 1.0],
+    });
+    system.emit(2);
+    system.emit_with_params(
+        EmitParams {
+            start_speed: 0.0,
+            start_size: 1.0,
+            start_lifetime: 2.0,
+            start_color: [0.2, 0.4, 0.6, 1.0],
+        },
+        1,
+    );
+    assert_eq!(
+        system.get_particles().len(),
+        3,
+        "REN-004 outcome 16: Emit and Emit(EmitParams) must spawn exact particle count"
+    );
+    assert_eq!(
+        system.get_particles()[2].color,
+        [0.2, 0.4, 0.6, 1.0],
+        "REN-004 outcome 16: EmitParams start_color override must apply to spawned particles"
+    );
+
+    let custom1_input = vec![
+        [1.0, 2.0, 3.0, 4.0],
+        [5.0, 6.0, 7.0, 8.0],
+        [9.0, 10.0, 11.0, 12.0],
+    ];
+    let custom2_input = vec![
+        [0.1, 0.2, 0.3, 0.4],
+        [0.5, 0.6, 0.7, 0.8],
+        [0.9, 1.0, 1.1, 1.2],
+    ];
+    system.set_custom_particle_data(CustomParticleDataStream::Custom1, &custom1_input);
+    system.set_custom_particle_data(CustomParticleDataStream::Custom2, &custom2_input);
+    assert_eq!(
+        system.get_custom_particle_data(CustomParticleDataStream::Custom1),
+        custom1_input.as_slice(),
+        "REN-004 outcome 16: GetCustomParticleData(Custom1) must round-trip SetCustomParticleData"
+    );
+    assert_eq!(
+        system.get_custom_particle_data(CustomParticleDataStream::Custom2),
+        custom2_input.as_slice(),
+        "REN-004 outcome 16: GetCustomParticleData(Custom2) must round-trip SetCustomParticleData"
+    );
+
+    let mut replaced = system.get_particles().to_vec();
+    replaced[0].position = [0.0, 0.0, 0.0];
+    replaced[1].position = [1.0, 0.0, 0.0];
+    replaced[2].position = [50.0, 0.0, 0.0];
+    replaced[2].lifetime = 0.2;
+    system.set_particles(replaced);
+    assert_eq!(
+        system.get_particles()[2].position,
+        [50.0, 0.0, 0.0],
+        "REN-004 outcome 16: SetParticles must update live particle positions"
+    );
+
+    system.set_external_forces_enabled(true);
+    system.set_external_forces_multiplier(1.0);
+    system.set_external_forces_layer_mask(1 << 3);
+    system.add_force_field(ParticleSystemForceField {
+        position: [0.0, 0.0, 0.0],
+        shape: ForceFieldShape::Sphere { radius: 5.0 },
+        direction: [10.0, 0.0, 0.0],
+        gravity: [0.0, -4.0, 0.0],
+        gravity_focus: 0.0,
+        drag: 0.0,
+        layer: 3,
+    });
+    system.add_force_field(ParticleSystemForceField {
+        position: [0.0, 0.0, 0.0],
+        shape: ForceFieldShape::Sphere { radius: 5.0 },
+        direction: [100.0, 0.0, 0.0],
+        gravity: [0.0, 0.0, 0.0],
+        gravity_focus: 0.0,
+        drag: 0.0,
+        layer: 4,
+    });
+
+    system.simulate(0.5);
+    assert_eq!(
+        system.get_particles().len(),
+        2,
+        "REN-004 outcome 16: expired particle must be removed while keeping remaining custom data aligned"
+    );
+    assert_eq!(
+        system.get_custom_particle_data(CustomParticleDataStream::Custom1),
+        &[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]],
+        "REN-004 outcome 16: custom particle data stream must stay aligned with surviving particles"
+    );
+    assert!(
+        (system.get_particles()[0].velocity[0] - 5.0).abs() < 1e-4,
+        "REN-004 outcome 16: ParticleSystemForceField inside shape and layer mask must accelerate particle X velocity"
+    );
+    assert!(
+        (system.get_particles()[0].velocity[1] - (-2.0)).abs() < 1e-4,
+        "REN-004 outcome 16: ParticleSystemForceField gravity must accelerate particle Y velocity"
+    );
+
+    let mut world = World::new();
+    let solid = EntityId::new(10);
+    let trigger = EntityId::new(11);
+    world.add_body(
+        solid,
+        collider(
+            [
+                f64::from(system.get_particles()[0].position[0]),
+                f64::from(system.get_particles()[0].position[1]),
+                0.0,
+            ],
+            1.0,
+            false,
+        ),
+    )?;
+    world.add_body(
+        trigger,
+        collider(
+            [
+                f64::from(system.get_particles()[1].position[0]),
+                f64::from(system.get_particles()[1].position[1]),
+                0.0,
+            ],
+            1.0,
+            true,
+        ),
+    )?;
+    system.update_collisions(&world);
+    assert!(
+        system
+            .get_collision_events()
+            .iter()
+            .any(|e| e.entity == solid),
+        "REN-004 outcome 16: OnParticleCollision / GetCollisionEvents must record solid contact"
+    );
+    assert!(
+        system
+            .get_trigger_events()
+            .iter()
+            .any(|e| e.entity == trigger),
+        "REN-004 outcome 16: OnParticleTrigger / GetTriggerParticles must record trigger overlap"
+    );
+
+    let stopped_hits = Arc::new(AtomicUsize::new(0));
+    let stopped_sink = Arc::clone(&stopped_hits);
+    system.set_stopped_callback(Box::new(move || {
+        stopped_sink.fetch_add(1, Ordering::SeqCst);
+    }));
+    system.stop(StopAction::Callback);
+    assert_eq!(
+        stopped_hits.load(Ordering::SeqCst),
+        0,
+        "REN-004 outcome 16: Callback stop action must wait until live particles finish"
+    );
+    system.simulate(2.0);
+    assert_eq!(
+        stopped_hits.load(Ordering::SeqCst),
+        1,
+        "REN-004 outcome 16: Callback stop action must invoke OnParticleSystemStopped once particles expire"
+    );
+
+    let mut destroy_system = ParticleSystem::new(100);
+    destroy_system.set_emit_params(emit_params(0.25));
+    destroy_system.emit(1);
+    destroy_system.stop(StopAction::Destroy);
+    assert!(
+        !destroy_system.is_destroyed(),
+        "REN-004 outcome 16: Destroy stop action must wait while particles remain alive"
+    );
+    destroy_system.simulate(0.5);
+    assert!(
+        destroy_system.is_destroyed(),
+        "REN-004 outcome 16: Destroy stop action must mark system destroyed when last particle expires"
+    );
+
+    let mut box_field_system = ParticleSystem::new(101);
+    box_field_system.set_emit_params(EmitParams {
+        start_speed: 0.0,
+        start_size: 1.0,
+        start_lifetime: 5.0,
+        start_color: [1.0; 4],
+    });
+    box_field_system.set_emit_position([2.0, 0.0, 0.0]);
+    box_field_system.emit(1);
+    box_field_system.set_emit_position([10.0, 0.0, 0.0]);
+    box_field_system.emit(1);
+    box_field_system.set_external_forces_enabled(true);
+    box_field_system.set_external_forces_multiplier(2.0);
+    box_field_system.add_force_field(ParticleSystemForceField {
+        position: [0.0, 0.0, 0.0],
+        shape: ForceFieldShape::Box {
+            half_extents: [4.0, 4.0, 4.0],
+        },
+        direction: [0.0, 0.0, 0.0],
+        gravity: [0.0, 0.0, 0.0],
+        gravity_focus: 3.0,
+        drag: 0.5,
+        layer: 0,
+    });
+    assert_eq!(box_field_system.force_fields().len(), 1);
+    assert!(box_field_system.is_external_forces_enabled());
+    assert!((box_field_system.external_forces_multiplier() - 2.0).abs() < 1e-6);
+    box_field_system.simulate(0.5);
+    assert!(
+        box_field_system.get_particles()[0].velocity[0] < 0.0,
+        "REN-004 outcome 16: gravity_focus inside Box ForceFieldShape must pull particle toward field center"
+    );
+    assert!(
+        box_field_system.get_particles()[1].velocity[0].abs() < 1e-6,
+        "REN-004 outcome 16: particle outside Box ForceFieldShape must not be accelerated"
+    );
+    box_field_system.clear_force_fields();
+    assert!(box_field_system.force_fields().is_empty());
+    Ok(())
 }
