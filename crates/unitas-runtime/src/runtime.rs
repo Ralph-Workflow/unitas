@@ -15,7 +15,7 @@ use unitas_core::{
 };
 use unitas_physics::navigation::NavMesh;
 use unitas_physics::{
-    BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
+    BodyDesc, BodyRole, CharacterController, ForceMode, MoveResult, Phase, QueryHit, Shape, World,
 };
 use unitas_render::{
     Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, look_at, render_scene,
@@ -1356,6 +1356,16 @@ impl Runtime {
         velocity: [f64; 3],
     ) -> Result<(), RuntimeError> {
         self.physics.world_3d_mut().set_velocity(entity, velocity)?;
+        Ok(())
+    }
+
+    pub fn add_body_force(
+        &mut self,
+        entity: EntityId,
+        force: [f64; 3],
+        mode: ForceMode,
+    ) -> Result<(), RuntimeError> {
+        self.physics.world_3d_mut().add_force(entity, force, mode)?;
         Ok(())
     }
 

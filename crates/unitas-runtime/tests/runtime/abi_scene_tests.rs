@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use unitas_runtime::{
     AbiCharacterMoveInput, AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
     test_is_persistent_entity, test_read_path_buffer, test_write_path_buffer,
-    unitas_runtime_active_scene_index, unitas_runtime_body_position, unitas_runtime_body_velocity,
-    unitas_runtime_character_controller_config, unitas_runtime_character_move,
-    unitas_runtime_character_teleport, unitas_runtime_company_name, unitas_runtime_destroy,
-    unitas_runtime_dont_destroy_on_load, unitas_runtime_error_message,
+    unitas_runtime_active_scene_index, unitas_runtime_add_body_force, unitas_runtime_body_position,
+    unitas_runtime_body_velocity, unitas_runtime_character_controller_config,
+    unitas_runtime_character_move, unitas_runtime_character_teleport, unitas_runtime_company_name,
+    unitas_runtime_destroy, unitas_runtime_dont_destroy_on_load, unitas_runtime_error_message,
     unitas_runtime_load_scene_mode, unitas_runtime_new, unitas_runtime_path_buffer,
     unitas_runtime_product_name, unitas_runtime_project_version, unitas_runtime_scene_count,
     unitas_runtime_scene_name, unitas_runtime_set_active_scene, unitas_runtime_set_body_position,
@@ -400,6 +400,24 @@ fn write_vec3_to_path_buffer(handle: u64, value: [f64; 3]) -> Result<u64, Box<dy
     Ok(address)
 }
 
+fn write_force_to_path_buffer(
+    handle: u64,
+    force: [f64; 3],
+    mode: f64,
+) -> Result<u64, Box<dyn Error>> {
+    let address = unitas_runtime_path_buffer(handle, 32);
+    if address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    let mut bytes = [0u8; 32];
+    bytes[0..8].copy_from_slice(&force[0].to_le_bytes());
+    bytes[8..16].copy_from_slice(&force[1].to_le_bytes());
+    bytes[16..24].copy_from_slice(&force[2].to_le_bytes());
+    bytes[24..32].copy_from_slice(&mode.to_le_bytes());
+    test_write_path_buffer(handle, &bytes)?;
+    Ok(address)
+}
+
 #[test]
 fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs()
 -> Result<(), Box<dyn Error>> {
@@ -531,6 +549,91 @@ fn abi_set_body_velocity_and_position_update_simulation_and_reject_invalid_write
     assert_eq!(
         unitas_runtime_set_body_velocity(handle, 999_999, pos_buffer),
         -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn abi_add_body_force_applies_unity_force_mode_semantics() -> Result<(), Box<dyn Error>> {
+    // The ball mass is 1 and the fixed step is 0.02, so Force and Acceleration
+    // gain 2.0 * 0.02 of velocity per step while Impulse and VelocityChange
+    // gain 2.0 immediately; Acceleration matches Force numerically only
+    // because the mass is 1.
+    let cases: [(f64, f64, f64); 4] = [
+        (0.0, 0.0, 0.04),
+        (1.0, 2.0, 2.0),
+        (2.0, 0.0, 0.04),
+        (3.0, 2.0, 2.0),
+    ];
+    for (mode, immediate_dvx, stepped_dvx) in cases {
+        let handle = new_handle()?;
+        assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
+        let ball = entity_id_for(SCENE_B, "Ball")?;
+
+        let lift_buffer = write_vec3_to_path_buffer(handle, [0.0, 8.0, 0.0])?;
+        assert_eq!(
+            unitas_runtime_set_body_velocity(handle, ball, lift_buffer),
+            0
+        );
+
+        let force_buffer = write_force_to_path_buffer(handle, [2.0, 0.0, 0.0], mode)?;
+        assert_eq!(unitas_runtime_add_body_force(handle, ball, force_buffer), 0);
+        assert_eq!(unitas_runtime_error_message(handle), 0);
+
+        assert_eq!(unitas_runtime_body_velocity(handle, ball, force_buffer), 0);
+        let velocity = read_vec3_from_path_buffer(handle)?;
+        assert!(
+            (velocity[0] - immediate_dvx).abs() < 1e-9,
+            "mode {mode}: the immediate velocity gain must be {immediate_dvx}, got {velocity:?}"
+        );
+        assert!((velocity[1] - 8.0).abs() < 1e-9);
+
+        // The first tick only initializes scripts; the second runs one step.
+        assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+        assert_eq!(unitas_runtime_tick(handle, 0.02), 0);
+
+        assert_eq!(unitas_runtime_body_velocity(handle, ball, force_buffer), 0);
+        let velocity = read_vec3_from_path_buffer(handle)?;
+        assert!(
+            (velocity[0] - stepped_dvx).abs() < 1e-9,
+            "mode {mode}: the stepped velocity gain must be {stepped_dvx}, got {velocity:?}"
+        );
+        assert!(
+            velocity[1] < 8.0,
+            "mode {mode}: gravity must decelerate the lifted ball, got {velocity:?}"
+        );
+
+        assert_eq!(unitas_runtime_destroy(handle), 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn abi_add_body_force_rejects_invalid_buffers_handles_and_modes() -> Result<(), Box<dyn Error>> {
+    let handle = new_handle()?;
+    assert_eq!(load_scene_mode(handle, SCENE_B, 0)?, 0);
+    let ball = entity_id_for(SCENE_B, "Ball")?;
+    let force_buffer = write_force_to_path_buffer(handle, [1.0, 0.0, 0.0], 0.0)?;
+
+    assert_eq!(
+        unitas_runtime_add_body_force(u64::MAX, ball, force_buffer),
+        -1
+    );
+    assert_eq!(unitas_runtime_add_body_force(handle, ball, 0), -2);
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+    assert_eq!(
+        unitas_runtime_add_body_force(handle, 999_999, force_buffer),
+        -4
+    );
+    assert_ne!(unitas_runtime_error_message(handle), 0);
+
+    let bad_mode_buffer = write_force_to_path_buffer(handle, [1.0, 0.0, 0.0], 9.0)?;
+    assert_eq!(
+        unitas_runtime_add_body_force(handle, ball, bad_mode_buffer),
+        -2
     );
     assert_ne!(unitas_runtime_error_message(handle), 0);
 

@@ -18,6 +18,7 @@ use std::sync::{Mutex, OnceLock};
 use unitas_animation::decode_controller_binary;
 use unitas_audio::AudioClip;
 use unitas_core::EntityId;
+use unitas_physics::ForceMode;
 use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
@@ -695,6 +696,37 @@ pub extern "C" fn unitas_runtime_set_body_velocity(
 }
 }
 
+ffi_export! {
+pub extern "C" fn unitas_runtime_add_body_force(
+    handle: u64,
+    entity: u64,
+    in_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some((force, mode)) = read_force_from_path_buffer(state, in_buffer) else {
+            state.set_error("buffer address mismatch");
+            return -2;
+        };
+        match state
+            .runtime
+            .add_body_force(EntityId::new(entity), force, mode)
+        {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
 fn read_vec3_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f64; 3]> {
     if in_buffer == 0
         || in_buffer != state.path_buffer.as_ptr() as usize as u64
@@ -710,6 +742,37 @@ fn read_vec3_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f
         f64::from_le_bytes(y_bytes),
         f64::from_le_bytes(z_bytes),
     ])
+}
+
+fn read_force_from_path_buffer(
+    state: &RuntimeState,
+    in_buffer: u64,
+) -> Option<([f64; 3], ForceMode)> {
+    if in_buffer == 0
+        || in_buffer != state.path_buffer.as_ptr() as usize as u64
+        || state.path_buffer.len() < 32
+    {
+        return None;
+    }
+    let x_bytes: [u8; 8] = state.path_buffer[0..8].try_into().ok()?;
+    let y_bytes: [u8; 8] = state.path_buffer[8..16].try_into().ok()?;
+    let z_bytes: [u8; 8] = state.path_buffer[16..24].try_into().ok()?;
+    let mode_bytes: [u8; 8] = state.path_buffer[24..32].try_into().ok()?;
+    let mode = match f64::from_le_bytes(mode_bytes) {
+        0.0 => ForceMode::Force,
+        1.0 => ForceMode::Impulse,
+        2.0 => ForceMode::Acceleration,
+        3.0 => ForceMode::VelocityChange,
+        _ => return None,
+    };
+    Some((
+        [
+            f64::from_le_bytes(x_bytes),
+            f64::from_le_bytes(y_bytes),
+            f64::from_le_bytes(z_bytes),
+        ],
+        mode,
+    ))
 }
 
 pub fn test_write_path_buffer(handle: u64, data: &[u8]) -> Result<(), RuntimeError> {

@@ -1,5 +1,6 @@
 macro_rules! ffi_export {
     (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        #[unsafe(export_name = stringify!($name))]
         pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
             #[used]
             static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;

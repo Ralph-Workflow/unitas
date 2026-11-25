@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use unitas_core::EntityId;
-use unitas_physics::BodyRole;
+use unitas_physics::{BodyRole, ForceMode};
 use unitas_runtime::{Callbacks, Runtime};
 
 const SAMPLE_SCENE_RELATIVE: &str = "../../samples/RollABall/Assets/Scenes/Main.unity";
@@ -12,7 +12,7 @@ const TRIGGER_FIXTURE_RELATIVE: &str = "../unitas-asset/tests/fixtures/physics_t
 const BALL_NAME: &str = "Ball";
 const ARENA_HALF_EXTENT: f64 = 5.0;
 const BALL_RADIUS: f64 = 0.5;
-const DRIVE_SPEED: f64 = 6.0;
+const DRIVE_FORCE: f64 = 12.0;
 const REACH_DISTANCE: f64 = 0.3;
 const CONTAINMENT_TOLERANCE: f64 = 0.3;
 const FRAME_DELTAS: [f64; 3] = [0.0166, 0.033, 0.008];
@@ -442,18 +442,21 @@ impl Scenario {
         let offset_x = destination[0] - position[0];
         let offset_z = destination[2] - position[2];
         let distance = (offset_x * offset_x + offset_z * offset_z).sqrt();
-        if distance <= REACH_DISTANCE {
-            self.runtime.set_body_velocity(self.ball, [0.0; 3])?;
-            return Ok(());
-        }
-        let velocity = self.runtime.body_velocity(self.ball).unwrap_or([0.0; 3]);
-        self.runtime.set_body_velocity(
+        let axis_input = if distance <= REACH_DISTANCE {
+            [0.0, 0.0]
+        } else {
+            [offset_x / distance, offset_z / distance]
+        };
+        // The same computation PlayerController.FixedUpdate runs: the axis
+        // input scaled by the speed field, applied as a continuous force.
+        self.runtime.add_body_force(
             self.ball,
             [
-                offset_x / distance * DRIVE_SPEED,
-                velocity[1],
-                offset_z / distance * DRIVE_SPEED,
+                axis_input[0] * DRIVE_FORCE,
+                0.0,
+                axis_input[1] * DRIVE_FORCE,
             ],
+            ForceMode::Force,
         )?;
         Ok(())
     }
@@ -462,7 +465,8 @@ impl Scenario {
         for _ in 0..MAX_TICKS_PER_PICKUP {
             self.tick(delta)?;
             if self.collected.contains(&pickup) {
-                self.runtime.set_body_velocity(self.ball, [0.0; 3])?;
+                self.runtime
+                    .add_body_force(self.ball, [0.0; 3], ForceMode::Force)?;
                 return Ok(());
             }
             self.steer(pickup)?;
@@ -479,7 +483,8 @@ impl Scenario {
         for pickup in pickups {
             self.drive_to(pickup, delta)?;
         }
-        self.runtime.set_body_velocity(self.ball, [0.0; 3])?;
+        self.runtime
+            .add_body_force(self.ball, [0.0; 3], ForceMode::Force)?;
         for _ in 0..20 {
             self.tick(delta)?;
         }

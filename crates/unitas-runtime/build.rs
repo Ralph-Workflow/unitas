@@ -1,5 +1,6 @@
 fn main() {
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_active_scene_index");
+    println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_add_body_force");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_animator_attach");
     println!(
         "cargo:rustc-cdylib-link-arg=-Wl,-exported_symbol,_unitas_runtime_animator_controller_create"
