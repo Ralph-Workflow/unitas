@@ -61,32 +61,270 @@ namespace UnityEngine
 
         private static readonly List<string> SearchRoots = new List<string>();
 
+        private static readonly List<Object> RootRetainedAssets = new List<Object>();
+
+        private static readonly List<Object> AutoRetainedAssets = new List<Object>();
+
+        private static readonly List<(Object Holder, Object Asset)> OwnerRetainedAssets =
+            new List<(Object Holder, Object Asset)>();
+
+        private static readonly List<Action<Object, List<Object>>> ReferenceInspectors =
+            new List<Action<Object, List<Object>>>();
+
+        private static bool _referenceTrackingSeen;
+
         public static int ResidentAssetCount
         {
-            get
+            get => GetResidentAssets().Length;
+        }
+
+        public static int GetResidentAssetCount() => ResidentAssetCount;
+
+        public static bool IsResident(string path)
+        {
+            if (string.IsNullOrEmpty(path))
             {
-                int count = 0;
-                foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
-                {
-                    for (int i = 0; i < pair.Value.Count; i++)
-                    {
-                        if (pair.Value[i] != null)
-                        {
-                            count++;
-                        }
-                    }
-                }
-
-                foreach (KeyValuePair<string, Object> pair in DiskCache)
-                {
-                    if (pair.Value != null)
-                    {
-                        count++;
-                    }
-                }
-
-                return count;
+                return false;
             }
+
+            string key = NormalizeKey(path);
+            if (key.Length == 0)
+            {
+                return false;
+            }
+
+            if (RegisteredAssets.TryGetValue(key, out List<Object>? registered))
+            {
+                for (int i = 0; i < registered.Count; i++)
+                {
+                    if (registered[i] != null)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (DiskCache.TryGetValue(key, out Object? cached) && cached != null)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsResident(Object? asset)
+        {
+            if (asset == null)
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
+            {
+                for (int i = 0; i < pair.Value.Count; i++)
+                {
+                    Object candidate = pair.Value[i];
+                    if (candidate == null)
+                    {
+                        continue;
+                    }
+
+                    if (ReferenceEquals(candidate, asset))
+                    {
+                        return true;
+                    }
+
+                    if (candidate is GameObject go && asset is Component comp && ReferenceEquals(comp.OwnerOrNull, go))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            foreach (KeyValuePair<string, Object> pair in DiskCache)
+            {
+                Object candidate = pair.Value;
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(candidate, asset))
+                {
+                    return true;
+                }
+
+                if (candidate is GameObject go && asset is Component comp && ReferenceEquals(comp.OwnerOrNull, go))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static Object[] GetResidentAssets()
+        {
+            List<Object> results = new List<Object>();
+            foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
+            {
+                for (int i = 0; i < pair.Value.Count; i++)
+                {
+                    Object candidate = pair.Value[i];
+                    if (candidate != null && !ContainsReference(results, candidate))
+                    {
+                        results.Add(candidate);
+                    }
+                }
+            }
+
+            foreach (KeyValuePair<string, Object> pair in DiskCache)
+            {
+                Object candidate = pair.Value;
+                if (candidate != null && !ContainsReference(results, candidate))
+                {
+                    results.Add(candidate);
+                }
+            }
+
+            return results.ToArray();
+        }
+
+        public static string[] GetResidentAssetPaths()
+        {
+            List<string> paths = new List<string>();
+            foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
+            {
+                for (int i = 0; i < pair.Value.Count; i++)
+                {
+                    if (pair.Value[i] != null)
+                    {
+                        AddUniquePath(paths, pair.Key);
+                        break;
+                    }
+                }
+            }
+
+            foreach (KeyValuePair<string, Object> pair in DiskCache)
+            {
+                if (pair.Value != null)
+                {
+                    AddUniquePath(paths, pair.Key);
+                }
+            }
+
+            paths.Sort(StringComparer.OrdinalIgnoreCase);
+            return paths.ToArray();
+        }
+
+        public static void RetainRoot(Object? asset)
+        {
+            if (asset == null)
+            {
+                return;
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            if (!ContainsReference(RootRetainedAssets, asset))
+            {
+                RootRetainedAssets.Add(asset);
+            }
+        }
+
+        public static void ReleaseRoot(Object? asset)
+        {
+            if (asset is null)
+            {
+                return;
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            for (int i = RootRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(RootRetainedAssets[i], asset))
+                {
+                    RootRetainedAssets.RemoveAt(i);
+                }
+            }
+        }
+
+        public static void RetainAssetReference(Object? holder, Object? asset)
+        {
+            if (holder == null || asset == null)
+            {
+                return;
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            for (int i = 0; i < OwnerRetainedAssets.Count; i++)
+            {
+                if (ReferenceEquals(OwnerRetainedAssets[i].Holder, holder)
+                    && ReferenceEquals(OwnerRetainedAssets[i].Asset, asset))
+                {
+                    return;
+                }
+            }
+
+            OwnerRetainedAssets.Add((holder, asset));
+        }
+
+        public static void ReleaseAssetReference(Object? holder, Object? asset)
+        {
+            if (holder is null || asset is null)
+            {
+                return;
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            for (int i = OwnerRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(OwnerRetainedAssets[i].Holder, holder)
+                    && ReferenceEquals(OwnerRetainedAssets[i].Asset, asset))
+                {
+                    OwnerRetainedAssets.RemoveAt(i);
+                }
+            }
+        }
+
+        public static void ClearAssetReferences(Object? holder)
+        {
+            if (holder is null)
+            {
+                return;
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            for (int i = OwnerRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(OwnerRetainedAssets[i].Holder, holder))
+                {
+                    OwnerRetainedAssets.RemoveAt(i);
+                }
+            }
+        }
+
+        public static void RegisterReferenceInspector<THolder>(Action<THolder, List<Object>> inspector)
+            where THolder : Object
+        {
+            if (inspector == null)
+            {
+                throw new ArgumentNullException(nameof(inspector));
+            }
+
+            _referenceTrackingSeen = true;
+            AutoRetainedAssets.Clear();
+            ReferenceInspectors.Add((holder, results) =>
+            {
+                if (holder is THolder typed)
+                {
+                    inspector(typed, results);
+                }
+            });
         }
 
         public static void Register(string resourcePath, Object asset)
@@ -122,6 +360,8 @@ namespace UnityEngine
             }
 
             list.Add(asset);
+            AddAutoRetained(asset);
+            Object.RegisterLiveObject(asset);
         }
 
         public static void AddSearchRoot(string rootDirectory)
@@ -148,6 +388,11 @@ namespace UnityEngine
             RegisteredAssets.Clear();
             DiskCache.Clear();
             SearchRoots.Clear();
+            RootRetainedAssets.Clear();
+            AutoRetainedAssets.Clear();
+            OwnerRetainedAssets.Clear();
+            ReferenceInspectors.Clear();
+            _referenceTrackingSeen = false;
         }
 
         public static Object? Load(string path) => Load(path, typeof(Object));
@@ -199,6 +444,8 @@ namespace UnityEngine
             }
 
             DiskCache[key] = loaded;
+            AddAutoRetained(loaded);
+            Object.RegisterLiveObject(loaded);
             if (MatchesRequestedType(loaded, systemTypeInstance, out Object? match))
             {
                 return match;
@@ -317,14 +564,21 @@ namespace UnityEngine
 
         public static AsyncOperation UnloadUnusedAssets()
         {
+            List<Object> referencedAssets = CollectReferencedAssets();
+
             List<string> emptyRegisteredKeys = new List<string>();
             foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
             {
                 for (int i = pair.Value.Count - 1; i >= 0; i--)
                 {
-                    if (pair.Value[i] == null)
+                    Object candidate = pair.Value[i];
+                    if (candidate == null || !IsAssetRetainedBySet(candidate, referencedAssets))
                     {
                         pair.Value.RemoveAt(i);
+                        if (candidate != null && !(candidate is GameObject) && !(candidate is Component))
+                        {
+                            Object.DeregisterLiveObject(candidate);
+                        }
                     }
                 }
 
@@ -342,9 +596,14 @@ namespace UnityEngine
             List<string> deadCacheKeys = new List<string>();
             foreach (KeyValuePair<string, Object> pair in DiskCache)
             {
-                if (pair.Value == null)
+                Object candidate = pair.Value;
+                if (candidate == null || !IsAssetRetainedBySet(candidate, referencedAssets))
                 {
                     deadCacheKeys.Add(pair.Key);
+                    if (candidate != null && !(candidate is GameObject) && !(candidate is Component))
+                    {
+                        Object.DeregisterLiveObject(candidate);
+                    }
                 }
             }
 
@@ -364,8 +623,248 @@ namespace UnityEngine
         public static Object[] FindObjectsOfTypeAll(Type type) =>
             Object.FindObjectsOfType(type, true);
 
+        private static List<Object> CollectReferencedAssets()
+        {
+            List<Object> referenced = new List<Object>();
+            List<Object> liveSnapshot = Object.SnapshotLiveObjects();
+
+            for (int i = RootRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                Object rootAsset = RootRetainedAssets[i];
+                if (rootAsset == null)
+                {
+                    RootRetainedAssets.RemoveAt(i);
+                    continue;
+                }
+
+                AddRetainedTarget(referenced, rootAsset);
+            }
+
+            for (int i = OwnerRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                (Object holder, Object asset) = OwnerRetainedAssets[i];
+                if (holder == null || asset == null || !IsLiveSceneHolder(holder, liveSnapshot))
+                {
+                    OwnerRetainedAssets.RemoveAt(i);
+                    continue;
+                }
+
+                AddRetainedTarget(referenced, asset);
+            }
+
+            bool hasSceneReferences = RootRetainedAssets.Count > 0 || OwnerRetainedAssets.Count > 0;
+            List<Object> inspectorBuffer = new List<Object>();
+            for (int i = 0; i < liveSnapshot.Count; i++)
+            {
+                Object liveObj = liveSnapshot[i];
+                if (!IsLiveSceneHolder(liveObj, liveSnapshot))
+                {
+                    continue;
+                }
+
+                if (liveObj is AudioSource audioSource && audioSource.clip != null && IsManagedResourceAsset(audioSource.clip))
+                {
+                    hasSceneReferences = true;
+                    RemoveAutoRetained(audioSource.clip);
+                    AddRetainedTarget(referenced, audioSource.clip);
+                }
+                else if (liveObj is MeshFilter meshFilter && meshFilter.sharedMesh != null && IsManagedResourceAsset(meshFilter.sharedMesh))
+                {
+                    hasSceneReferences = true;
+                    RemoveAutoRetained(meshFilter.sharedMesh);
+                    AddRetainedTarget(referenced, meshFilter.sharedMesh);
+                }
+                else if (liveObj is MeshRenderer meshRenderer && meshRenderer.sharedMaterial != null && IsManagedResourceAsset(meshRenderer.sharedMaterial))
+                {
+                    hasSceneReferences = true;
+                    RemoveAutoRetained(meshRenderer.sharedMaterial);
+                    AddRetainedTarget(referenced, meshRenderer.sharedMaterial);
+                }
+
+                for (int r = 0; r < ReferenceInspectors.Count; r++)
+                {
+                    inspectorBuffer.Clear();
+                    ReferenceInspectors[r](liveObj, inspectorBuffer);
+                    for (int b = 0; b < inspectorBuffer.Count; b++)
+                    {
+                        if (inspectorBuffer[b] != null)
+                        {
+                            hasSceneReferences = true;
+                            RemoveAutoRetained(inspectorBuffer[b]);
+                            AddRetainedTarget(referenced, inspectorBuffer[b]);
+                        }
+                    }
+                }
+            }
+
+            if (hasSceneReferences)
+            {
+                _referenceTrackingSeen = true;
+            }
+
+            if (_referenceTrackingSeen)
+            {
+                AutoRetainedAssets.Clear();
+            }
+
+            for (int i = AutoRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                Object autoAsset = AutoRetainedAssets[i];
+                if (autoAsset == null)
+                {
+                    AutoRetainedAssets.RemoveAt(i);
+                    continue;
+                }
+
+                AddRetainedTarget(referenced, autoAsset);
+            }
+
+            return referenced;
+        }
+
+        private static bool IsManagedResourceAsset(Object? asset) =>
+            IsResident(asset);
+
+        private static bool IsLiveSceneHolder(Object holder, List<Object> liveSnapshot)
+        {
+            if (holder == null || !ContainsReference(liveSnapshot, holder))
+            {
+                return false;
+            }
+
+            if (holder is Component comp)
+            {
+                GameObject? owner = comp.OwnerOrNull;
+                if (owner != null && (owner == null || !ContainsReference(liveSnapshot, owner)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void AddRetainedTarget(List<Object> list, Object asset)
+        {
+            if (asset == null)
+            {
+                return;
+            }
+
+            if (!ContainsReference(list, asset))
+            {
+                list.Add(asset);
+            }
+
+            if (asset is Component comp && comp.OwnerOrNull != null && !ContainsReference(list, comp.OwnerOrNull))
+            {
+                list.Add(comp.OwnerOrNull);
+            }
+            else if (asset is GameObject go)
+            {
+                IReadOnlyList<Component> comps = go.Components;
+                for (int i = 0; i < comps.Count; i++)
+                {
+                    Component c = comps[i];
+                    if (c != null && !ContainsReference(list, c))
+                    {
+                        list.Add(c);
+                    }
+                }
+            }
+        }
+
+        private static bool IsAssetRetainedBySet(Object asset, List<Object> referencedAssets)
+        {
+            if (ContainsReference(referencedAssets, asset))
+            {
+                return true;
+            }
+
+            if (asset is GameObject go)
+            {
+                IReadOnlyList<Component> comps = go.Components;
+                for (int i = 0; i < comps.Count; i++)
+                {
+                    if (comps[i] != null && ContainsReference(referencedAssets, comps[i]))
+                    {
+                        return true;
+                    }
+                }
+            }
+            else if (asset is Component comp && comp.OwnerOrNull != null)
+            {
+                if (ContainsReference(referencedAssets, comp.OwnerOrNull))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void AddUniquePath(List<string> list, string path)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (string.Equals(list[i], path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            list.Add(path);
+        }
+
+        private static void AddAutoRetained(Object? asset)
+        {
+            if (asset == null || _referenceTrackingSeen)
+            {
+                return;
+            }
+
+            if (!ContainsReference(AutoRetainedAssets, asset))
+            {
+                AutoRetainedAssets.Add(asset);
+            }
+        }
+
+        private static void RemoveAutoRetained(Object? asset)
+        {
+            if (asset is null)
+            {
+                return;
+            }
+
+            for (int i = AutoRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(AutoRetainedAssets[i], asset))
+                {
+                    AutoRetainedAssets.RemoveAt(i);
+                }
+            }
+        }
+
         private static void RemoveAssetFromCaches(Object target)
         {
+            for (int i = RootRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(RootRetainedAssets[i], target))
+                {
+                    RootRetainedAssets.RemoveAt(i);
+                }
+            }
+
+            RemoveAutoRetained(target);
+            for (int i = OwnerRetainedAssets.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(OwnerRetainedAssets[i].Asset, target)
+                    || ReferenceEquals(OwnerRetainedAssets[i].Holder, target))
+                {
+                    OwnerRetainedAssets.RemoveAt(i);
+                }
+            }
+
             foreach (KeyValuePair<string, List<Object>> pair in RegisteredAssets)
             {
                 for (int i = pair.Value.Count - 1; i >= 0; i--)
@@ -478,6 +977,8 @@ namespace UnityEngine
                             if (loaded != null)
                             {
                                 DiskCache[relKey] = loaded;
+                                AddAutoRetained(loaded);
+                                Object.RegisterLiveObject(loaded);
                             }
                         }
                     }

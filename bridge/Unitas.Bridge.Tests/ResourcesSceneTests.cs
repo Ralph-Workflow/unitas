@@ -14,6 +14,8 @@ namespace Unitas.Bridge.Tests
     public sealed class ResourcePrefabComponent : MonoBehaviour
     {
         public int Power = 42;
+
+        public UnityEngine.Object? RetainedAsset { get; set; }
     }
 
     public sealed class CallbackSceneTriggerScript : MonoBehaviour
@@ -50,6 +52,7 @@ namespace Unitas.Bridge.Tests
             TestSceneAbsentFromBuildListAndUnloadOnlySceneRefused();
             TestResourcesLoadTextAssetPrefabInstantiateAndMissingPaths();
             TestResourcesUnloadUnusedAssetsAndUnloadAssetValidation();
+            TestResourcesUnloadUnusedAssetsReferenceTrackingAndResidencyVisibility();
             TestSessionStartScansResourcesViaNativeRuntimeEndToEnd();
             TestHeadlessApplicationScreenAndSystemInfoValues();
         }
@@ -517,6 +520,159 @@ namespace Unitas.Bridge.Tests
             }
         }
 
+        private static void TestResourcesUnloadUnusedAssetsReferenceTrackingAndResidencyVisibility()
+        {
+            Resources.Clear();
+            string tempRoot = Path.Combine(Path.GetTempPath(), "unitas_res_story19_" + Guid.NewGuid().ToString("N"));
+            string resDataDir = Path.Combine(tempRoot, "Assets", "Resources", "Data");
+            Directory.CreateDirectory(resDataDir);
+
+            string alphaPath = Path.Combine(resDataDir, "alpha.txt");
+            string betaPath = Path.Combine(resDataDir, "beta.txt");
+            string gammaPath = Path.Combine(resDataDir, "gamma.txt");
+            File.WriteAllText(alphaPath, "alpha_payload_v1");
+            File.WriteAllText(betaPath, "beta_payload_v1");
+            File.WriteAllText(gammaPath, "gamma_payload_v1");
+
+            List<UnityEngine.Object> cleanup = new List<UnityEngine.Object>();
+            try
+            {
+                Resources.AddSearchRoot(Path.Combine(tempRoot, "Assets"));
+
+                Check.Equal("Story 19 initial resident asset count is 0", 0, Resources.ResidentAssetCount);
+                Check.Equal("Story 19 initial GetResidentAssetCount is 0", 0, Resources.GetResidentAssetCount());
+                Check.That("Story 19 IsResident is false before loading Data/alpha", !Resources.IsResident("Data/alpha"));
+                Check.Equal("Story 19 initial GetResidentAssetPaths is empty", 0, Resources.GetResidentAssetPaths().Length);
+
+                TextAsset? alphaAsset = Resources.Load<TextAsset>("Data/alpha");
+                ResourceRequest betaReq = Resources.LoadAsync<TextAsset>("Data/beta");
+                TextAsset? betaAsset = betaReq.asset as TextAsset;
+                TextAsset? gammaAsset = Resources.Load<TextAsset>("Data/gamma");
+
+                Check.That("Story 19 alpha asset loaded", alphaAsset != null);
+                Check.That("Story 19 beta asset loaded via LoadAsync", betaAsset != null);
+                Check.That("Story 19 gamma asset loaded", gammaAsset != null);
+
+                Check.Equal("Story 19 resident asset count is 3 after loading 3 assets", 3, Resources.ResidentAssetCount);
+                Check.Equal("Story 19 GetResidentAssetCount is 3", 3, Resources.GetResidentAssetCount());
+                Check.That("Story 19 Data/alpha is resident by path", Resources.IsResident("Data/alpha"));
+                Check.That("Story 19 Data/beta is resident by path", Resources.IsResident("Data/beta"));
+                Check.That("Story 19 Data/gamma is resident by path", Resources.IsResident("Data/gamma"));
+                Check.That("Story 19 alphaAsset is resident by object reference", Resources.IsResident(alphaAsset));
+                Check.That("Story 19 betaAsset is resident by object reference", Resources.IsResident(betaAsset));
+                Check.That("Story 19 gammaAsset is resident by object reference", Resources.IsResident(gammaAsset));
+                Check.Equal("Story 19 GetResidentAssets returns 3 resident objects", 3, Resources.GetResidentAssets().Length);
+                Check.Equal(
+                    "Story 19 GetResidentAssetPaths lists loaded paths in deterministic order",
+                    "Data/alpha,Data/beta,Data/gamma",
+                    string.Join(",", Resources.GetResidentAssetPaths()));
+
+                GameObject holderGo = new GameObject("Story19AssetHolder");
+                cleanup.Add(holderGo);
+                ResourcePrefabComponent holderComp = holderGo.AddComponent<ResourcePrefabComponent>();
+
+                if (alphaAsset != null)
+                {
+                    holderComp.RetainedAsset = alphaAsset;
+                    Resources.RetainAssetReference(holderComp, alphaAsset);
+                }
+
+                if (betaAsset != null)
+                {
+                    Resources.RetainRoot(betaAsset);
+                }
+
+                TextAsset[] allTextAssetsBeforeUnload = Resources.FindObjectsOfTypeAll<TextAsset>();
+                Check.That("Story 19 FindObjectsOfTypeAll<TextAsset> includes resident gammaAsset before unload", ContainsReference(allTextAssetsBeforeUnload, gammaAsset));
+
+                GameObject audioGo = new GameObject("Story19AudioHolder");
+                cleanup.Add(audioGo);
+                AudioSource audioSource = audioGo.AddComponent<AudioSource>();
+                AudioClip synthClip = new AudioClip("SynthClip", 1.0f, 1, 44100, 0UL);
+                Resources.Register("Audio/synth", synthClip);
+                audioSource.clip = synthClip;
+                Check.Equal("Story 19 resident asset count is 4 with registered synthClip", 4, Resources.ResidentAssetCount);
+                Check.That("Story 19 Audio/synth is resident", Resources.IsResident("Audio/synth"));
+                Check.That("Story 19 synthClip is resident", Resources.IsResident(synthClip));
+
+                AsyncOperation firstUnload = Resources.UnloadUnusedAssets();
+                Check.That("Story 19 first UnloadUnusedAssets completes", firstUnload.isDone);
+                Check.Equal("Story 19 unreferenced gamma is evicted while referenced alpha, rooted beta, and AudioSource.clip remain", 3, Resources.ResidentAssetCount);
+                Check.That("Story 19 Data/alpha remains resident while component retains it", Resources.IsResident("Data/alpha"));
+                Check.That("Story 19 Data/beta remains resident while root retains it", Resources.IsResident("Data/beta"));
+                Check.That("Story 19 Audio/synth remains resident while AudioSource.clip references it", Resources.IsResident("Audio/synth"));
+                Check.That("Story 19 unreferenced Data/gamma is no longer resident by path", !Resources.IsResident("Data/gamma"));
+                Check.That("Story 19 unreferenced gammaAsset is no longer resident by instance", !Resources.IsResident(gammaAsset));
+                TextAsset[] allTextAssetsAfterFirstUnload = Resources.FindObjectsOfTypeAll<TextAsset>();
+                Check.That("Story 19 FindObjectsOfTypeAll<TextAsset> excludes evicted gammaAsset", !ContainsReference(allTextAssetsAfterFirstUnload, gammaAsset));
+                Check.That("Story 19 FindObjectsOfTypeAll<TextAsset> retains resident alphaAsset", ContainsReference(allTextAssetsAfterFirstUnload, alphaAsset));
+
+                audioSource.clip = null;
+                if (betaAsset != null)
+                {
+                    Resources.ReleaseRoot(betaAsset);
+                }
+
+                AsyncOperation secondUnload = Resources.UnloadUnusedAssets();
+                Check.That("Story 19 second UnloadUnusedAssets completes", secondUnload.isDone);
+                Check.Equal("Story 19 clearing AudioSource.clip and releasing root unloads synthClip and beta", 1, Resources.ResidentAssetCount);
+                Check.That("Story 19 Data/alpha still resident while component lives", Resources.IsResident("Data/alpha"));
+                Check.That("Story 19 Data/beta is no longer resident after ReleaseRoot", !Resources.IsResident("Data/beta"));
+                Check.That("Story 19 Audio/synth is no longer resident after audioSource.clip cleared", !Resources.IsResident("Audio/synth"));
+                Check.That("Story 19 synthClip is no longer resident", !Resources.IsResident(synthClip));
+
+                GameObject secondHolderGo = new GameObject("Story19SecondHolder");
+                cleanup.Add(secondHolderGo);
+                ResourcePrefabComponent secondHolderComp = secondHolderGo.AddComponent<ResourcePrefabComponent>();
+                if (alphaAsset != null)
+                {
+                    secondHolderComp.RetainedAsset = alphaAsset;
+                    Resources.RetainAssetReference(secondHolderComp, alphaAsset);
+                }
+
+                holderComp.RetainedAsset = null;
+                if (alphaAsset != null)
+                {
+                    Resources.ReleaseAssetReference(holderComp, alphaAsset);
+                }
+
+                AsyncOperation midUnload = Resources.UnloadUnusedAssets();
+                Check.That("Story 19 mid UnloadUnusedAssets completes", midUnload.isDone);
+                Check.Equal("Story 19 Data/alpha remains resident when first component releases it but second component still retains it", 1, Resources.ResidentAssetCount);
+                Check.That("Story 19 Data/alpha still resident via secondHolderComp", Resources.IsResident("Data/alpha"));
+
+                UnityEngine.Object.Destroy(holderGo);
+                UnityEngine.Object.Destroy(secondHolderGo);
+                AsyncOperation thirdUnload = Resources.UnloadUnusedAssets();
+                Check.That("Story 19 third UnloadUnusedAssets completes", thirdUnload.isDone);
+                Check.Equal("Story 19 destroying referencing GameObject releases alpha on UnloadUnusedAssets without Destroy(alphaAsset)", 0, Resources.ResidentAssetCount);
+                Check.That("Story 19 Data/alpha is no longer resident after holder GameObject is destroyed", !Resources.IsResident("Data/alpha"));
+                Check.That("Story 19 alphaAsset is no longer resident", !Resources.IsResident(alphaAsset));
+
+                File.WriteAllText(alphaPath, "alpha_payload_v2");
+                TextAsset? reloadedAlpha = Resources.Load<TextAsset>("Data/alpha");
+                Check.That("Story 19 reloading evicted Data/alpha succeeds", reloadedAlpha != null);
+                if (reloadedAlpha != null)
+                {
+                    Check.That("Story 19 reloaded Data/alpha is a fresh instance after eviction", !ReferenceEquals(alphaAsset, reloadedAlpha));
+                    Check.Equal("Story 19 reloaded Data/alpha reads updated disk content", "alpha_payload_v2", reloadedAlpha.text);
+                }
+            }
+            finally
+            {
+                for (int i = 0; i < cleanup.Count; i++)
+                {
+                    UnityEngine.Object.Destroy(cleanup[i]);
+                }
+
+                Resources.Clear();
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, true);
+                }
+            }
+        }
+
         private static void TestSessionStartScansResourcesViaNativeRuntimeEndToEnd()
         {
             Resources.Clear();
@@ -681,6 +837,24 @@ namespace Unitas.Bridge.Tests
             return File.Exists(relativePath)
                 ? Path.GetFullPath(relativePath)
                 : Path.GetFullPath("../../../../../" + relativePath);
+        }
+
+        private static bool ContainsReference<T>(T[] items, T? target) where T : class
+        {
+            if (target is null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (ReferenceEquals(items[i], target))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

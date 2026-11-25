@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace Unitas.Scripting
 {
@@ -9,7 +10,7 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|loop> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>]");
                 return 1;
             }
 
@@ -18,11 +19,21 @@ namespace Unitas.Scripting
             bool isGenerateIde = string.Equals(command, "generate-ide", StringComparison.OrdinalIgnoreCase);
             bool isDiagnose = string.Equals(command, "diagnose", StringComparison.OrdinalIgnoreCase);
             bool isSymbols = string.Equals(command, "symbols", StringComparison.OrdinalIgnoreCase);
+            bool isUsages = string.Equals(command, "usages", StringComparison.OrdinalIgnoreCase);
+            bool isAttachComponent = string.Equals(command, "attach-component", StringComparison.OrdinalIgnoreCase);
+            bool isPlay = string.Equals(command, "play", StringComparison.OrdinalIgnoreCase);
             bool isLoop = string.Equals(command, "loop", StringComparison.OrdinalIgnoreCase);
 
-            if (!isCompile && !isGenerateIde && !isDiagnose && !isSymbols && !isLoop)
+            if (!isCompile
+                && !isGenerateIde
+                && !isDiagnose
+                && !isSymbols
+                && !isUsages
+                && !isAttachComponent
+                && !isPlay
+                && !isLoop)
             {
-                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', or 'loop'.");
+                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', 'usages', 'attach-component', 'play', or 'loop'.");
                 return 1;
             }
 
@@ -35,6 +46,14 @@ namespace Unitas.Scripting
             string projectRoot = args[1];
             ScriptCompilationOptions options = new ScriptCompilationOptions();
             string? typeFilter = null;
+            string? scriptTarget = null;
+            string? prefabTarget = null;
+            string? targetObjectName = null;
+            string? usageQuery = null;
+            bool enterPlayMode = isPlay;
+            string? playTarget = null;
+            int playTicks = 2;
+            Dictionary<string, string> serializedFields = new Dictionary<string, string>(StringComparer.Ordinal);
 
             for (int i = 2; i < args.Length; i++)
             {
@@ -80,6 +99,64 @@ namespace Unitas.Scripting
                     i++;
                     typeFilter = args[i];
                 }
+                else if (string.Equals(arg, "--script", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    scriptTarget = args[i];
+                }
+                else if (string.Equals(arg, "--prefab", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    prefabTarget = args[i];
+                }
+                else if (string.Equals(arg, "--object", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    targetObjectName = args[i];
+                }
+                else if (string.Equals(arg, "--field", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    string pair = args[i];
+                    int eq = pair.IndexOf('=');
+                    if (eq > 0)
+                    {
+                        string k = pair.Substring(0, eq).Trim();
+                        string v = pair.Substring(eq + 1).Trim();
+                        if (!string.IsNullOrEmpty(k))
+                        {
+                            serializedFields[k] = v;
+                        }
+                    }
+                }
+                else if (string.Equals(arg, "--usages", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    usageQuery = args[i];
+                }
+                else if (string.Equals(arg, "--play", StringComparison.OrdinalIgnoreCase))
+                {
+                    enterPlayMode = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        i++;
+                        playTarget = args[i];
+                    }
+                }
+                else if (string.Equals(arg, "--scene", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    playTarget = args[i];
+                }
+                else if (string.Equals(arg, "--ticks", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    if (int.TryParse(args[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedTicks)
+                        && parsedTicks > 0)
+                    {
+                        playTicks = parsedTicks;
+                    }
+                }
             }
 
             if (isGenerateIde)
@@ -108,9 +185,61 @@ namespace Unitas.Scripting
                 return 0;
             }
 
+            if (isUsages)
+            {
+                string query = scriptTarget ?? usageQuery ?? typeFilter ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(query))
+                {
+                    Console.Error.WriteLine("Missing --script <ScriptOrGuid> argument for 'usages'.");
+                    return 1;
+                }
+
+                ContentUsageSearchResult usagesResult = CodeLoop.FindScriptUsages(projectRoot, query, options);
+                Console.WriteLine(usagesResult.ToJson());
+                return 0;
+            }
+
+            if (isAttachComponent)
+            {
+                if (string.IsNullOrWhiteSpace(prefabTarget) || string.IsNullOrWhiteSpace(scriptTarget))
+                {
+                    Console.Error.WriteLine("Missing --prefab <PrefabPath> or --script <ScriptOrGuid> for 'attach-component'.");
+                    return 1;
+                }
+
+                PrefabComponentAttachment attachment = CodeLoop.AttachComponentToPrefab(
+                    projectRoot,
+                    prefabTarget!,
+                    scriptTarget!,
+                    targetObjectName,
+                    serializedFields);
+                Console.WriteLine(attachment.ToJson());
+                return 0;
+            }
+
+            if (isPlay)
+            {
+                PlayModeExecutionReport playReport = CodeLoop.EnterPlayMode(
+                    projectRoot,
+                    playTarget ?? prefabTarget,
+                    playTicks,
+                    0.02,
+                    options);
+                Console.WriteLine(playReport.ToJson());
+                return playReport.Succeeded ? 0 : 1;
+            }
+
             if (isLoop)
             {
-                CodeLoopReport loopReport = CodeLoop.Run(projectRoot, options, typeFilter);
+                CodeLoopReport loopReport = CodeLoop.Run(
+                    projectRoot,
+                    options,
+                    typeFilter,
+                    testRunner: null,
+                    usageQuery: usageQuery ?? scriptTarget,
+                    enterPlayMode: enterPlayMode,
+                    playSceneOrPrefabPath: playTarget,
+                    playTickCount: playTicks);
                 Console.WriteLine(loopReport.ToJson());
                 return loopReport.Succeeded ? 0 : 1;
             }

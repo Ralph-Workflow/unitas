@@ -45,11 +45,19 @@ namespace Unitas.Bridge
         private bool _isQuitting;
         private bool _isFocused = true;
         private bool _isPaused;
+        private bool _pendingAfterSceneLoadRuntimeInit;
+        private bool _deferStartDuringSceneLoad;
+        private readonly List<ulong> _deferredStartHandles = new List<ulong>();
+        private readonly bool _isDomainReloadDisabled;
+        private readonly HashSet<RuntimeInitializeLoadType> _executedRuntimeInitTypes =
+            new HashSet<RuntimeInitializeLoadType>();
         private ApplicationBuildKind _buildKind = ApplicationBuildKind.Editor;
         private string _dataPath = string.Empty;
         private string _companyName = string.Empty;
         private string _productName = string.Empty;
         private string _projectVersion = string.Empty;
+
+        public static bool DomainReloadDisabled { get; set; }
 
         private readonly RuntimeInterop.CreateScriptCallback _createScriptCallback;
         private readonly RuntimeInterop.AwakeCallback _awakeCallback;
@@ -141,12 +149,54 @@ namespace Unitas.Bridge
             {
                 ScriptGlueRegistry.LoadGlueAssembly(glueAssemblyPath);
             }
+
+            _isDomainReloadDisabled = DomainReloadDisabled;
+            RunPreSceneRuntimeInitialization();
         }
 
         public void LoadGlueAssembly(string assemblyPath)
         {
             ThrowIfDisposed();
             ScriptGlueRegistry.LoadGlueAssembly(assemblyPath);
+            RunPreSceneRuntimeInitialization();
+        }
+
+        public bool IsDomainReloadDisabled => _isDomainReloadDisabled;
+
+        public void CompleteRuntimeInitializationForSession()
+        {
+            ThrowIfDisposed();
+            RunPreSceneRuntimeInitialization();
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.BeforeSceneLoad);
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+        }
+
+        private void RunPreSceneRuntimeInitialization()
+        {
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.SubsystemRegistration);
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterAssembliesLoaded);
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.BeforeSplashScreen);
+        }
+
+        private void RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType loadType)
+        {
+            if (!_executedRuntimeInitTypes.Add(loadType))
+            {
+                return;
+            }
+
+            List<Action> callbacks = RuntimeInitializeOnLoadMethodAttribute.GetCallbacksForLoadType(loadType);
+            for (int index = 0; index < callbacks.Count; index++)
+            {
+                try
+                {
+                    callbacks[index]();
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    Debug.LogException(ex);
+                }
+            }
         }
 
         public ulong Handle => _runtimeHandle;
@@ -227,6 +277,8 @@ namespace Unitas.Bridge
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(path);
+            RunPreSceneRuntimeInitialization();
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.BeforeSceneLoad);
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(path);
             IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
             if (buffer == IntPtr.Zero)
@@ -258,12 +310,45 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(path);
             DeregisterReplacedSceneObjects(loaded, LoadSceneMode.Single);
             SceneManager.RaiseSceneLoaded(loaded, LoadSceneMode.Single);
+            if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
+            {
+                _pendingAfterSceneLoadRuntimeInit = true;
+                _deferStartDuringSceneLoad = true;
+                try
+                {
+                    int initResult = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, 0.0);
+                    if (initResult != 0)
+                    {
+                        string? error = GetErrorMessage();
+                        if (string.IsNullOrEmpty(error))
+                        {
+                            throw new InvalidOperationException("Failed to initialize scene scripts (error code " + initResult.ToString(CultureInfo.InvariantCulture) + ").");
+                        }
+                        throw new InvalidOperationException("Failed to initialize scene scripts (error code " + initResult.ToString(CultureInfo.InvariantCulture) + "): " + error);
+                    }
+                }
+                finally
+                {
+                    _deferStartDuringSceneLoad = false;
+                }
+                if (_pendingAfterSceneLoadRuntimeInit)
+                {
+                    _pendingAfterSceneLoadRuntimeInit = false;
+                    RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+                }
+            }
+            else
+            {
+                RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+            }
         }
 
         public Scene LoadScene(string path, LoadSceneMode mode)
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(path);
+            RunPreSceneRuntimeInitialization();
+            RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.BeforeSceneLoad);
 
             try
             {
@@ -290,6 +375,37 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(path);
             DeregisterReplacedSceneObjects(loaded, mode);
             SceneManager.RaiseSceneLoaded(loaded, mode);
+            if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
+            {
+                _pendingAfterSceneLoadRuntimeInit = true;
+                _deferStartDuringSceneLoad = true;
+                try
+                {
+                    int initResult = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, 0.0);
+                    if (initResult != 0)
+                    {
+                        string? error = GetErrorMessage();
+                        if (string.IsNullOrEmpty(error))
+                        {
+                            throw new InvalidOperationException("Failed to initialize scene scripts (error code " + initResult.ToString(CultureInfo.InvariantCulture) + ").");
+                        }
+                        throw new InvalidOperationException("Failed to initialize scene scripts (error code " + initResult.ToString(CultureInfo.InvariantCulture) + "): " + error);
+                    }
+                }
+                finally
+                {
+                    _deferStartDuringSceneLoad = false;
+                }
+                if (_pendingAfterSceneLoadRuntimeInit)
+                {
+                    _pendingAfterSceneLoadRuntimeInit = false;
+                    RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+                }
+            }
+            else
+            {
+                RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+            }
             return loaded;
         }
 
@@ -620,6 +736,24 @@ namespace Unitas.Bridge
         public void Tick(double deltaSeconds)
         {
             ThrowIfDisposed();
+            if (_pendingAfterSceneLoadRuntimeInit)
+            {
+                _pendingAfterSceneLoadRuntimeInit = false;
+                RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+            }
+            if (_deferredStartHandles.Count > 0)
+            {
+                List<ulong> pendingStarts = new List<ulong>(_deferredStartHandles);
+                _deferredStartHandles.Clear();
+                SyncSimulatedTransforms();
+                for (int i = 0; i < pendingStarts.Count; i++)
+                {
+                    if (_scripts.TryGetValue(pendingStarts[i], out MonoBehaviour? script) && IsEligible(script))
+                    {
+                        InvokeWithOrigin(script!, script!.Start);
+                    }
+                }
+            }
             _fixedUpdateCallsInStep = 0;
             _lateUpdateCallsInTick = 0;
             SyncAudioBeforeTick();
@@ -2010,6 +2144,16 @@ namespace Unitas.Bridge
 
         private void OnStart(ulong scriptHandle)
         {
+            if (_pendingAfterSceneLoadRuntimeInit)
+            {
+                _pendingAfterSceneLoadRuntimeInit = false;
+                RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
+            }
+            if (_deferStartDuringSceneLoad)
+            {
+                _deferredStartHandles.Add(scriptHandle);
+                return;
+            }
             SyncSimulatedTransforms();
             if (_scripts.TryGetValue(scriptHandle, out MonoBehaviour? script) && IsEligible(script))
             {

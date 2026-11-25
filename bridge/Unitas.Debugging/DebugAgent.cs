@@ -83,6 +83,16 @@ namespace Unitas.Debugging
             }
         }
 
+        public static bool TrySetBreakpoint(string file, int line, string? condition, out string message)
+        {
+            if (!TryVerifyBreakpointLocation(file, line, out message))
+            {
+                return false;
+            }
+            SetBreakpoint(file, line, condition);
+            return true;
+        }
+
         public static void ClearBreakpoints(string file)
         {
             lock (Gate)
@@ -113,6 +123,57 @@ namespace Unitas.Debugging
             }
             server.Start();
             return session;
+        }
+
+        public static DebugSession BeginHeadlessSession(Action<DebugFrame> onStopped)
+        {
+            ArgumentNullException.ThrowIfNull(onStopped);
+            DebugSession session = new DebugSession(onStopped);
+            lock (Gate)
+            {
+                _session = session;
+                _callDepth = 0;
+            }
+            return session;
+        }
+
+        public static IReadOnlyDictionary<string, string> ReadCurrentLocals()
+        {
+            DebugFrame? frame = CurrentFrame;
+            Dictionary<string, string> rendered = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (frame == null)
+            {
+                return rendered;
+            }
+            for (int index = 0; index < frame.Locals.Length; index++)
+            {
+                string name = index < frame.LocalNames.Count
+                    ? frame.LocalNames[index]
+                    : "local" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                rendered[name] = DapServer.RenderValue(frame.Locals[index]);
+            }
+            return rendered;
+        }
+
+        public static void Continue()
+        {
+            Resume();
+        }
+
+        public static void HitLocation(string file, int line, object?[] locals)
+        {
+            SequencePoint? point;
+            int depth;
+            lock (Gate)
+            {
+                point = _sequencePoints.FindByLocation(file, line);
+                depth = _callDepth;
+            }
+            if (point == null)
+            {
+                return;
+            }
+            Hit(point.Id, locals, depth);
         }
 
         public static void Hit(int sequencePointId)

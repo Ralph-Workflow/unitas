@@ -33,6 +33,7 @@ namespace Unitas.Bridge.Tests
             TestStory6ReferenceCycleDiagnostic();
             TestStory6OverrideReferencesHonorsPrecompiledReferences();
             TestStory7TargetDefinesEditorAndPlayers();
+            TestStory29PlayerBuildRejectsUnguardedUnityEditorReference();
             TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile();
             TestStory10IncompatibleNativePluginDllImportDiagnostic();
             TestGeneratedGlueAndZeroReflectionMessageDispatch();
@@ -301,6 +302,123 @@ namespace Unitas.Bridge.Tests
             {
                 DeleteDirectoryIfExists(tempProject);
             }
+        }
+
+        private static void TestStory29PlayerBuildRejectsUnguardedUnityEditorReference()
+        {
+            string fixtureRoot = ResolveFixtureProject();
+            string tempProject = CloneProjectToTemp(fixtureRoot, "story29");
+            try
+            {
+                string guardedScriptPath = Path.Combine(tempProject, "Assets", "Scripts", "GuardedEditorUser.cs");
+                File.WriteAllText(
+                    guardedScriptPath,
+                    "using UnityEngine;\n"
+                        + "#if UNITY_EDITOR\n"
+                        + "using UnityEditor;\n"
+                        + "#endif\n"
+                        + "public class GuardedEditorUser : MonoBehaviour\n"
+                        + "{\n"
+                        + "    public void CheckGuard()\n"
+                        + "    {\n"
+                        + "#if UNITY_EDITOR\n"
+                        + "        UnityEditor.AssetDatabase.Refresh();\n"
+                        + "#endif\n"
+                        + "    }\n"
+                        + "}\n");
+                File.WriteAllText(
+                    guardedScriptPath + ".meta",
+                    "fileFormatVersion: 2\nguid: 80000000000000000000000000000001\nMonoImporter:\n  serializedVersion: 2\n");
+
+                ScriptCompilationOptions playerGuardedOpts = new ScriptCompilationOptions
+                {
+                    IsEditor = false,
+                    IsDevelopmentBuild = false,
+                    TargetPlatform = ScriptTargetPlatform.StandaloneOSX,
+                    TargetArchitecture = "x86_64",
+                    EmitGeneratedGlue = false,
+                    AutoLoadGeneratedGlue = false,
+                    OutputDirectory = Path.Combine(tempProject, "Library", "OutPlayerGuarded")
+                };
+                ScriptCompilationResult guardedPlayerRes = ScriptCompilation.CompileProject(tempProject, playerGuardedOpts);
+                Check.Equal(
+                    "Story 29 #if UNITY_EDITOR guarded reference compiles in editor build",
+                    true,
+                    guardedPlayerRes.Succeeded);
+                Check.Equal("Story 29 #if UNITY_EDITOR guarded reference compiles in player build", true, guardedPlayerRes.Succeeded);
+                Check.Equal(
+                    "Story 29 built player active assemblies contain no UnityEditor or Editor assembly",
+                    false,
+                    ContainsEditorAssemblyPath(guardedPlayerRes.ActiveAssemblyPaths));
+
+                string unguardedScriptPath = Path.Combine(tempProject, "Assets", "Scripts", "UnguardedEditorCaller.cs");
+                File.WriteAllText(
+                    unguardedScriptPath,
+                    "using UnityEngine;\n"
+                        + "using UnityEditor;\n"
+                        + "public class UnguardedEditorCaller : MonoBehaviour\n"
+                        + "{\n"
+                        + "    public void RefreshAssetsInPlayer()\n"
+                        + "    {\n"
+                        + "        UnityEditor.AssetDatabase.Refresh();\n"
+                        + "    }\n"
+                        + "}\n");
+                File.WriteAllText(
+                    unguardedScriptPath + ".meta",
+                    "fileFormatVersion: 2\nguid: 80000000000000000000000000000002\nMonoImporter:\n  serializedVersion: 2\n");
+
+                ScriptCompilationOptions playerUnguardedOpts = new ScriptCompilationOptions
+                {
+                    IsEditor = false,
+                    IsDevelopmentBuild = false,
+                    TargetPlatform = ScriptTargetPlatform.StandaloneOSX,
+                    TargetArchitecture = "x86_64",
+                    EmitGeneratedGlue = false,
+                    AutoLoadGeneratedGlue = false,
+                    OutputDirectory = Path.Combine(tempProject, "Library", "OutPlayerUnguarded")
+                };
+                ScriptCompilationResult unguardedPlayerRes = ScriptCompilation.CompileProject(tempProject, playerUnguardedOpts);
+                Check.Equal("Story 29 unguarded UnityEditor reference fails player build", false, unguardedPlayerRes.Succeeded);
+
+                bool foundMemberDiagnostic = false;
+                for (int i = 0; i < unguardedPlayerRes.Diagnostics.Count; i++)
+                {
+                    ScriptDiagnostic d = unguardedPlayerRes.Diagnostics[i];
+                    if (d.Severity == ScriptDiagnosticSeverity.Error
+                        && d.File.Contains("UnguardedEditorCaller.cs", StringComparison.Ordinal)
+                        && d.Line == 7
+                        && d.Message.Contains("UnguardedEditorCaller.cs", StringComparison.Ordinal)
+                        && d.Message.Contains("RefreshAssetsInPlayer", StringComparison.Ordinal)
+                        && d.Message.Contains("UnityEditor.AssetDatabase.Refresh", StringComparison.Ordinal))
+                    {
+                        foundMemberDiagnostic = true;
+                        break;
+                    }
+                }
+
+                Check.Equal(
+                    "Story 29 player diagnostic names file, calling member, and referenced UnityEditor member",
+                    true,
+                    foundMemberDiagnostic);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static bool ContainsEditorAssemblyPath(IReadOnlyList<string> paths)
+        {
+            for (int i = 0; i < paths.Count; i++)
+            {
+                string fileName = Path.GetFileName(paths[i]);
+                if (fileName.Contains("Editor", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile()

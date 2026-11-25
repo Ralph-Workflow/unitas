@@ -12,6 +12,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(NETCoreSdkBundledVersionsProps)/../Newtonsoft.Json.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Unitas.Bridge/Unitas.Bridge.csproj" />
     <ProjectReference Include="../Unitas.Debugging/Unitas.Debugging.csproj" />
     <ProjectReference Include="../Unitas.Scripting/Unitas.Scripting.csproj" />

@@ -343,6 +343,25 @@ namespace Unitas.Scripting
         public IReadOnlyList<ScriptSerializedField> Fields { get; }
     }
 
+    public sealed class RuntimeInitializeMethodBinding
+    {
+        public RuntimeInitializeMethodBinding(
+            string fullTypeName,
+            string methodName,
+            string loadTypeName)
+        {
+            FullTypeName = fullTypeName ?? string.Empty;
+            MethodName = methodName ?? string.Empty;
+            LoadTypeName = string.IsNullOrEmpty(loadTypeName) ? "AfterSceneLoad" : loadTypeName;
+        }
+
+        public string FullTypeName { get; }
+
+        public string MethodName { get; }
+
+        public string LoadTypeName { get; }
+    }
+
     public sealed class ScriptMethodSignature
     {
         public ScriptMethodSignature(

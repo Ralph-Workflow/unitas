@@ -29,6 +29,22 @@ namespace Unitas.Bridge.Scripting
         private static readonly ConditionalWeakTable<MonoBehaviour, IUnitasMessageHandler> Handlers =
             new ConditionalWeakTable<MonoBehaviour, IUnitasMessageHandler>();
 
+        private sealed class GuidPairBox
+        {
+            public GuidPairBox(ulong hi, ulong lo)
+            {
+                Hi = hi;
+                Lo = lo;
+            }
+
+            public ulong Hi { get; }
+
+            public ulong Lo { get; }
+        }
+
+        private static readonly ConditionalWeakTable<MonoBehaviour, GuidPairBox> InstanceGuids =
+            new ConditionalWeakTable<MonoBehaviour, GuidPairBox>();
+
         private static readonly List<Func<MonoBehaviour, IUnitasMessageHandler?>> TypeResolvers =
             new List<Func<MonoBehaviour, IUnitasMessageHandler?>>();
 
@@ -117,6 +133,7 @@ namespace Unitas.Bridge.Scripting
             }
 
             instance = created;
+            InstanceGuids.AddOrUpdate(created, new GuidPairBox(guidHi, guidLo));
             if (entry.HandlerFactory != null)
             {
                 handler = entry.HandlerFactory(created);
@@ -153,6 +170,20 @@ namespace Unitas.Bridge.Scripting
         {
             (ulong hi, ulong lo) = ParseGuid(guidHex);
             return Create(hi, lo);
+        }
+
+        public static bool TryGetRegisteredGuid(MonoBehaviour? instance, out ulong guidHi, out ulong guidLo)
+        {
+            guidHi = 0;
+            guidLo = 0;
+            if (instance != null && InstanceGuids.TryGetValue(instance, out GuidPairBox? box) && box != null)
+            {
+                guidHi = box.Hi;
+                guidLo = box.Lo;
+                return true;
+            }
+
+            return false;
         }
 
         public static bool TryGetHandler(MonoBehaviour? instance, out IUnitasMessageHandler? handler)
@@ -244,6 +275,7 @@ namespace Unitas.Bridge.Scripting
         {
             Entries.Clear();
             Handlers.Clear();
+            InstanceGuids.Clear();
             TypeResolvers.Clear();
         }
 

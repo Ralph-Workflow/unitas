@@ -44,6 +44,15 @@ namespace Unitas.Scripting
             @"(?:^|[;{}])\s*(?:(\[[^\]]*\]\s*)*)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|async)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|=>)",
             RegexOptions.Compiled | RegexOptions.Multiline);
 
+        private static readonly HashSet<string> InheritedVirtualLifecycleMethods = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Awake", "OnEnable", "Start", "FixedUpdate", "Update", "LateUpdate", "OnDisable", "OnDestroy"
+        };
+
+        private static readonly Regex RuntimeInitializeMethodRegex = new Regex(
+            @"\[\s*(?:UnityEngine\.)?RuntimeInitializeOnLoadMethod(?:Attribute)?\s*(?:\(\s*(?:(?:UnityEngine\.)?RuntimeInitializeLoadType\.)?(?<loadType>[A-Za-z_][A-Za-z0-9_]*)\s*\))?\s*\]\s*(?:(public|private|protected|internal)\s+)?static\s+void\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
         private static readonly Regex FieldDeclRegex = new Regex(
             @"^\s*((?:\[[^\]]*\]\s*)*)(?:(public|private|protected|internal)\s+)?((?:(?:static|const|readonly|volatile|new)\s+)*)([A-Za-z_][A-Za-z0-9_<>,.\[\]\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^;]*)?;\s*$",
             RegexOptions.Compiled);
@@ -270,12 +279,93 @@ namespace Unitas.Scripting
             return results;
         }
 
+        public static List<RuntimeInitializeMethodBinding> DiscoverRuntimeInitializeMethodsForAssembly(
+            IReadOnlyList<string> sourceFiles,
+            HashSet<string> activeDefines)
+        {
+            List<RuntimeInitializeMethodBinding> results = new List<RuntimeInitializeMethodBinding>();
+            for (int i = 0; i < sourceFiles.Count; i++)
+            {
+                string filePath = Path.GetFullPath(sourceFiles[i]);
+                if (!File.Exists(filePath))
+                {
+                    continue;
+                }
+
+                string rawText;
+                try
+                {
+                    rawText = File.ReadAllText(filePath);
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+
+                string activeText = FilterConditionalCompilation(rawText, activeDefines);
+                string ns = ExtractNamespace(activeText);
+                MatchCollection typeMatches = TypeDeclRegex.Matches(activeText);
+                for (int tIdx = 0; tIdx < typeMatches.Count; tIdx++)
+                {
+                    Match tm = typeMatches[tIdx];
+                    string visibility = tm.Groups[2].Success ? tm.Groups[2].Value : string.Empty;
+                    if (!string.Equals(visibility, "public", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    string typeName = tm.Groups[5].Value;
+                    string fullTypeName = string.IsNullOrEmpty(ns) ? typeName : string.Concat(ns, ".", typeName);
+                    string body = ExtractClassBody(activeText, tm.Index + tm.Length);
+                    MatchCollection methodMatches = RuntimeInitializeMethodRegex.Matches(body);
+                    for (int mIdx = 0; mIdx < methodMatches.Count; mIdx++)
+                    {
+                        Match mm = methodMatches[mIdx];
+                        string methodVisibility = mm.Groups[1].Success ? mm.Groups[1].Value : "private";
+                        bool isPublic = string.Equals(methodVisibility, "public", StringComparison.Ordinal);
+                        if (!isPublic)
+                        {
+                            continue;
+                        }
+
+                        string methodName = mm.Groups["method"].Value.Trim();
+                        string loadTypeToken = mm.Groups["loadType"].Success
+                            ? mm.Groups["loadType"].Value.Trim()
+                            : "AfterSceneLoad";
+                        if (!IsValidRuntimeInitializeLoadTypeToken(loadTypeToken))
+                        {
+                            loadTypeToken = "AfterSceneLoad";
+                        }
+
+                        results.Add(new RuntimeInitializeMethodBinding(fullTypeName, methodName, loadTypeToken));
+                    }
+                }
+            }
+
+            return results;
+        }
+
+        private static bool IsValidRuntimeInitializeLoadTypeToken(string token)
+        {
+            return string.Equals(token, "AfterSceneLoad", StringComparison.Ordinal)
+                || string.Equals(token, "BeforeSceneLoad", StringComparison.Ordinal)
+                || string.Equals(token, "AfterAssembliesLoaded", StringComparison.Ordinal)
+                || string.Equals(token, "BeforeSplashScreen", StringComparison.Ordinal)
+                || string.Equals(token, "SubsystemRegistration", StringComparison.Ordinal);
+        }
+
         public static string GenerateGlueSource(IReadOnlyList<ScriptGuidBinding> bindings) =>
-            GenerateGlueSource(bindings, Array.Empty<SerializableTypeBinding>());
+            GenerateGlueSource(bindings, Array.Empty<SerializableTypeBinding>(), Array.Empty<RuntimeInitializeMethodBinding>());
 
         public static string GenerateGlueSource(
             IReadOnlyList<ScriptGuidBinding> bindings,
-            IReadOnlyList<SerializableTypeBinding> serializableTypes)
+            IReadOnlyList<SerializableTypeBinding> serializableTypes) =>
+            GenerateGlueSource(bindings, serializableTypes, Array.Empty<RuntimeInitializeMethodBinding>());
+
+        public static string GenerateGlueSource(
+            IReadOnlyList<ScriptGuidBinding> bindings,
+            IReadOnlyList<SerializableTypeBinding> serializableTypes,
+            IReadOnlyList<RuntimeInitializeMethodBinding> runtimeInitializeMethods)
         {
             List<SerializableTypeBinding> allJsonTypes = new List<SerializableTypeBinding>();
             HashSet<string> seenJsonTypes = new HashSet<string>(StringComparer.Ordinal);
@@ -335,7 +425,10 @@ namespace Unitas.Scripting
                 for (int mIdx = 0; mIdx < b.Methods.Count; mIdx++)
                 {
                     ScriptMethodSignature method = b.Methods[mIdx];
-                    if (method.ParameterCount == 0 && !method.IsPublic && accessorZeroArg.Add(method.Name))
+                    if (method.ParameterCount == 0
+                        && !method.IsPublic
+                        && !InheritedVirtualLifecycleMethods.Contains(method.Name)
+                        && accessorZeroArg.Add(method.Name))
                     {
                         sb.AppendLine("        [UnsafeAccessor(UnsafeAccessorKind.Method, Name = \"" + method.Name + "\")]");
                         sb.AppendLine("        private static extern void Call0_" + method.Name + "(" + fullType + " target);");
@@ -370,7 +463,7 @@ namespace Unitas.Scripting
                     if (method.ParameterCount == 0 && emittedZeroArg.Add(method.Name))
                     {
                         sb.AppendLine("                case \"" + method.Name + "\":");
-                        if (method.IsPublic)
+                        if (method.IsPublic || InheritedVirtualLifecycleMethods.Contains(method.Name))
                         {
                             sb.AppendLine("                    _target." + method.Name + "();");
                         }
@@ -547,6 +640,18 @@ namespace Unitas.Scripting
                 sb.AppendLine("                () => new " + fullType + "(),");
                 sb.AppendLine("                " + serializerName + ".Write,");
                 sb.AppendLine("                " + serializerName + ".Read);");
+            }
+
+            if (runtimeInitializeMethods != null)
+            {
+                for (int i = 0; i < runtimeInitializeMethods.Count; i++)
+                {
+                    RuntimeInitializeMethodBinding rm = runtimeInitializeMethods[i];
+                    string fullType = "global::" + rm.FullTypeName;
+                    sb.AppendLine("            RuntimeInitializeOnLoadMethodAttribute.Register(");
+                    sb.AppendLine("                RuntimeInitializeLoadType." + rm.LoadTypeName + ",");
+                    sb.AppendLine("                " + fullType + "." + rm.MethodName + ");");
+                }
             }
 
             sb.AppendLine("        }");

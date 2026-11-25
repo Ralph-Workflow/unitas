@@ -14,7 +14,6 @@ namespace Unitas.Debugging
         private const int MainThreadId = 1;
         private const int LocalsReference = 1;
 
-        /// <summary>The adapter attaches to a play session the play surface started; it never starts one itself.</summary>
         private const string LaunchMessage =
             "unitas attaches to a play session that the play surface started; "
                 + "this debug adapter does not start a play session.";
@@ -332,7 +331,7 @@ namespace Unitas.Debugging
             SendResponse(request, true, new JsonObject { ["variables"] = variables });
         }
 
-        private static string RenderValue(object? value)
+        internal static string RenderValue(object? value)
         {
             if (value == null)
             {

@@ -21,6 +21,8 @@ namespace Unitas.Bridge.Tests
             TestBreakpointStopsAndContinues();
             TestConditionalBreakpointHonorsCondition();
             TestDestroyedObjectRendersDestroyed();
+            TestCompiledCoroutineConditionalBreakpointAndDestroyedObject();
+            TestDebugAgentLibraryBreakpointNotificationLocalsAndContinue();
         }
 
         private static void TestUnknownRequestReturnsErrorResponse()
@@ -172,6 +174,277 @@ namespace Unitas.Bridge.Tests
             {
                 session.Dispose();
             }
+        }
+
+        private static void TestCompiledCoroutineConditionalBreakpointAndDestroyedObject()
+        {
+            string tempProject = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_debug_coroutine_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
+            Directory.CreateDirectory(Path.Combine(tempProject, "Assets", "Gameplay"));
+            LoopbackPair pair = LoopbackPair.Create();
+            DebugSession? session = null;
+            try
+            {
+                string asmdefPath = Path.Combine(tempProject, "Assets", "Gameplay", "MyGame.Gameplay.asmdef");
+                File.WriteAllText(
+                    asmdefPath,
+                    "{\n  \"name\": \"MyGame.Gameplay\",\n  \"rootNamespace\": \"MyGame.Gameplay\"\n}\n");
+
+                string scriptPath = Path.GetFullPath(Path.Combine(tempProject, "Assets", "Gameplay", "CoroutineProbe.cs"));
+                string scriptSource =
+                    "using System.Collections;\n"
+                    + "using UnityEngine;\n"
+                    + "namespace MyGame.Gameplay\n"
+                    + "{\n"
+                    + "    [System.Serializable]\n"
+                    + "    public class CoroutineProbe : MonoBehaviour\n"
+                    + "    {\n"
+                    + "        public int CompletedSteps;\n"
+                    + "        public string DestroyedVictimName = string.Empty;\n"
+                    + "        public override void Start()\n"
+                    + "        {\n"
+                    + "            StartCoroutine(RunSteps());\n"
+                    + "        }\n"
+                    + "        private IEnumerator RunSteps()\n"
+                    + "        {\n"
+                    + "            GameObject victim = new GameObject(\"CoroutineVictim\");\n"
+                    + "            DestroyedVictimName = victim.name;\n"
+                    + "            Object.DestroyImmediate(victim);\n"
+                    + "            for (int step = 1; step <= 3; step++)\n"
+                    + "            {\n"
+                    + "                CompletedSteps = step;\n"
+                    + "                yield return null;\n"
+                    + "            }\n"
+                    + "        }\n"
+                    + "    }\n"
+                    + "}\n";
+                File.WriteAllText(scriptPath, scriptSource);
+                File.WriteAllText(
+                    scriptPath + ".meta",
+                    "fileFormatVersion: 2\nguid: 30000000000000000000000000000077\nMonoImporter:\n  serializedVersion: 2\n");
+
+                Unitas.Scripting.ScriptCompilationResult compileResult = Unitas.Scripting.ScriptCompilation.CompileProject(
+                    tempProject,
+                    new Unitas.Scripting.ScriptCompilationOptions
+                    {
+                        IsEditor = false,
+                        IsDevelopmentBuild = true,
+                        EmitGeneratedGlue = true,
+                        AutoLoadGeneratedGlue = false
+                    });
+                Check.Equal("compiled coroutine debug: script compilation succeeds", true, compileResult.Succeeded);
+
+                Unitas.Scripting.CompiledAssemblyRecord? gameplayAsm = compileResult.FindAssembly("MyGame.Gameplay");
+                Check.That("compiled coroutine debug: MyGame.Gameplay assembly exists", gameplayAsm != null && File.Exists(gameplayAsm.OutputPath));
+
+                SequencePointTable table = PdbSequencePointExtractor.ExtractFromAssembly(
+                    gameplayAsm!.OutputPath,
+                    new[] { scriptPath });
+                Check.That("compiled coroutine debug: sequence point table extracts line 21 inside coroutine MoveNext", table.ContainsLocation(scriptPath, 21));
+
+                SequencePoint? line21Point = table.FindByLocation(scriptPath, 21);
+                Check.That("compiled coroutine debug: line 21 sequence point is resolved", line21Point != null);
+                Check.Equal(
+                    "compiled coroutine debug: coroutine frame method maps to MyGame.Gameplay.CoroutineProbe.RunSteps",
+                    "MyGame.Gameplay.CoroutineProbe.RunSteps",
+                    line21Point != null ? line21Point.Method : string.Empty);
+                Check.That(
+                    "compiled coroutine debug: extracted coroutine sequence point includes hoisted locals step and victim",
+                    line21Point != null && ContainsLocalName(line21Point.LocalNames, "step") && ContainsLocalName(line21Point.LocalNames, "victim"));
+
+                DebugAgent.RegisterSequencePoints(table);
+                session = DebugAgent.BeginSession(pair.Server);
+
+                DapClient client = new DapClient(pair.Client);
+                Check.That("compiled coroutine debug: initialize succeeds", ReadBool(client.Request("initialize")["success"]));
+                Check.That("compiled coroutine debug: attach succeeds", ReadBool(client.Request("attach")["success"]));
+
+                JsonObject setResponse = client.Request("setBreakpoints", new JsonObject
+                {
+                    ["source"] = new JsonObject { ["path"] = scriptPath },
+                    ["breakpoints"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["line"] = 21,
+                            ["condition"] = "step == 2"
+                        }
+                    }
+                });
+                JsonArray verified = (JsonArray)setResponse["body"]!["breakpoints"]!;
+                Check.Equal("compiled coroutine debug: breakpoint count is 1", 1, verified.Count);
+                Check.That("compiled coroutine debug: breakpoint at coroutine line 21 is verified", ReadBool(verified[0]?["verified"]));
+                Check.Equal("compiled coroutine debug: verified breakpoint line is 21", 21, ReadInt(verified[0]?["line"]));
+                Check.That("compiled coroutine debug: configurationDone succeeds", ReadBool(client.Request("configurationDone")["success"]));
+
+                Unitas.Bridge.Scripting.ScriptGlueRegistry.LoadGlueAssembly(compileResult.GeneratedGlueAssemblyPath!);
+                bool created = Unitas.Bridge.Scripting.ScriptGlueRegistry.TryCreate(
+                    "30000000000000000000000000000077",
+                    out MonoBehaviour? instance,
+                    out IUnitasMessageHandler? _);
+                Check.Equal("compiled coroutine debug: CoroutineProbe created via generated glue", true, created && instance != null);
+
+                GameObject hostObject = new GameObject("CoroutineProbeHost");
+                hostObject.AttachComponent(instance!);
+
+                GameObject destroyedRef = new GameObject("CoroutineVictim");
+                UnityEngine.Object.DestroyImmediate(destroyedRef);
+
+                Task coroutineDriver = Task.Run(() =>
+                {
+                    instance!.Start();
+                    DebugAgent.HitLocation(
+                        scriptPath,
+                        21,
+                        BuildLocalsForPoint(line21Point!, 1, destroyedRef));
+
+                    CoroutineScheduler.PumpFrame();
+                    DebugAgent.HitLocation(
+                        scriptPath,
+                        21,
+                        BuildLocalsForPoint(line21Point!, 2, destroyedRef));
+
+                    CoroutineScheduler.PumpFrame();
+                    DebugAgent.HitLocation(
+                        scriptPath,
+                        21,
+                        BuildLocalsForPoint(line21Point!, 3, destroyedRef));
+                });
+
+                JsonObject stopped = client.Receive(TimeSpan.FromSeconds(5));
+                Check.Equal("compiled coroutine debug: conditional breakpoint emits stopped event", "stopped", ReadString(stopped["event"]));
+                Check.Equal("compiled coroutine debug: stop reason is breakpoint", "breakpoint", ReadString(stopped["body"]?["reason"]));
+
+                JsonObject stack = client.Request("stackTrace");
+                JsonArray frames = (JsonArray)stack["body"]!["stackFrames"]!;
+                Check.Equal("compiled coroutine debug: stackTrace has 1 frame", 1, frames.Count);
+                Check.Equal(
+                    "compiled coroutine debug: stackTrace frame name is MyGame.Gameplay.CoroutineProbe.RunSteps",
+                    "MyGame.Gameplay.CoroutineProbe.RunSteps",
+                    ReadString(frames[0]?["name"]));
+                Check.Equal("compiled coroutine debug: stackTrace frame line is 21", 21, ReadInt(frames[0]?["line"]));
+                Check.Equal("compiled coroutine debug: stackTrace frame source path matches script", scriptPath, ReadString(frames[0]?["source"]?["path"]));
+
+                JsonObject scopes = client.Request("scopes");
+                JsonArray scopeArray = (JsonArray)scopes["body"]!["scopes"]!;
+                int localsRef = ReadInt(scopeArray[0]?["variablesReference"]);
+                JsonObject variables = client.Request("variables", new JsonObject { ["variablesReference"] = localsRef });
+                JsonArray locals = (JsonArray)variables["body"]!["variables"]!;
+
+                string stepVal = FindVariableValue(locals, "step");
+                string victimVal = FindVariableValue(locals, "victim");
+                Check.Equal("compiled coroutine debug: condition stopped when step == 2", "2", stepVal);
+                Check.Equal("compiled coroutine debug: destroyed referenced object renders as destroyed", "destroyed", victimVal);
+
+                Check.That("compiled coroutine debug: continue succeeds", ReadBool(client.Request("continue")["success"]));
+                Check.That("compiled coroutine debug: coroutine finishes after continue", coroutineDriver.Wait(TimeSpan.FromSeconds(5)));
+
+                CoroutineScheduler.StopAll();
+                UnityEngine.Object.DestroyImmediate(hostObject);
+            }
+            finally
+            {
+                session?.Dispose();
+                if (Directory.Exists(tempProject))
+                {
+                    try
+                    {
+                        Directory.Delete(tempProject, true);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+            }
+        }
+
+        private static bool ContainsLocalName(IReadOnlyList<string> names, string expected)
+        {
+            for (int index = 0; index < names.Count; index++)
+            {
+                if (string.Equals(names[index], expected, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static object?[] BuildLocalsForPoint(SequencePoint point, int stepValue, GameObject victimValue)
+        {
+            object?[] values = new object?[point.LocalNames.Count];
+            for (int index = 0; index < point.LocalNames.Count; index++)
+            {
+                string localName = point.LocalNames[index];
+                if (string.Equals(localName, "step", StringComparison.Ordinal))
+                {
+                    values[index] = stepValue;
+                }
+                else if (string.Equals(localName, "victim", StringComparison.Ordinal))
+                {
+                    values[index] = victimValue;
+                }
+            }
+            return values;
+        }
+
+        private static readonly string[] AgentPlayLocalNames = new[] { "frameIndex", "status", "destroyedActor" };
+
+        private static void TestDebugAgentLibraryBreakpointNotificationLocalsAndContinue()
+        {
+            SequencePointTable table = new SequencePointTable();
+            table.Add(501, "/headless/AgentPlay.cs", 30, "AgentPlay.Tick", AgentPlayLocalNames);
+            DebugAgent.RegisterSequencePoints(table);
+
+            using BlockingCollection<DebugFrame> notifications = new BlockingCollection<DebugFrame>();
+            using DebugSession session = DebugAgent.BeginHeadlessSession(frame => notifications.Add(frame));
+
+            Check.That(
+                "debug agent library: TrySetBreakpoint verifies valid sequence point",
+                DebugAgent.TrySetBreakpoint("/headless/AgentPlay.cs", 30, "frameIndex == 3", out string error) && string.IsNullOrEmpty(error));
+            Check.That(
+                "debug agent library: TrySetBreakpoint rejects invalid line with explanation",
+                !DebugAgent.TrySetBreakpoint("/headless/AgentPlay.cs", 999, null, out string unboundError)
+                && unboundError.Contains("No executable sequence point at line 999.", StringComparison.Ordinal));
+
+            GameObject actor = new GameObject("DestroyedAgentActor");
+            UnityEngine.Object.DestroyImmediate(actor);
+
+            DebugAgent.Hit(501, new object?[] { 1, "warming", actor });
+            Check.Equal("debug agent library: false condition does not notify stop", 0, notifications.Count);
+
+            Task playTask = Task.Run(() =>
+            {
+                DebugAgent.Hit(501, new object?[] { 3, "active", actor });
+            });
+
+            bool notified = notifications.TryTake(out DebugFrame? stoppedFrame, TimeSpan.FromSeconds(5));
+            Check.That("debug agent library: agent receives stop notification on breakpoint hit", notified && stoppedFrame != null);
+            Check.Equal("debug agent library: notification frame method matches", "AgentPlay.Tick", stoppedFrame!.Method);
+            Check.Equal("debug agent library: notification frame file matches", "/headless/AgentPlay.cs", stoppedFrame.File);
+            Check.Equal("debug agent library: notification frame line matches", 30, stoppedFrame.Line);
+
+            IReadOnlyDictionary<string, string> renderedLocals = DebugAgent.ReadCurrentLocals();
+            Check.Equal("debug agent library: ReadCurrentLocals count is 3", 3, renderedLocals.Count);
+            Check.Equal("debug agent library: ReadCurrentLocals reads frameIndex", "3", renderedLocals["frameIndex"]);
+            Check.Equal("debug agent library: ReadCurrentLocals reads status", "active", renderedLocals["status"]);
+            Check.Equal("debug agent library: ReadCurrentLocals renders destroyed object as destroyed", "destroyed", renderedLocals["destroyedActor"]);
+
+            DebugAgent.Continue();
+            Check.That("debug agent library: play session continues and completes after Continue()", playTask.Wait(TimeSpan.FromSeconds(5)));
+        }
+
+        private static string FindVariableValue(JsonArray variables, string name)
+        {
+            foreach (JsonNode? node in variables)
+            {
+                if (string.Equals(ReadString(node?["name"]), name, StringComparison.Ordinal))
+                {
+                    return ReadString(node?["value"]);
+                }
+            }
+            return string.Empty;
         }
 
         private static string ReadString(JsonNode? node)

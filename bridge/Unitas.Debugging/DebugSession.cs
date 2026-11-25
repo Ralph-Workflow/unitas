@@ -13,7 +13,8 @@ namespace Unitas.Debugging
 
     public sealed class DebugSession : IDisposable
     {
-        private readonly DapServer _server;
+        private readonly DapServer? _server;
+        private readonly Action<DebugFrame>? _stoppedCallback;
         private readonly SemaphoreSlim _resume = new SemaphoreSlim(0, 1);
         private readonly object _stateGate = new object();
         private bool _pauseRequested;
@@ -25,7 +26,13 @@ namespace Unitas.Debugging
             _server = server;
         }
 
-        public DapServer Server => _server;
+        internal DebugSession(Action<DebugFrame> stoppedCallback)
+        {
+            _stoppedCallback = stoppedCallback;
+            IsAttached = true;
+        }
+
+        public DapServer? Server => _server;
 
         public DebugFrame? CurrentFrame { get; private set; }
 
@@ -122,7 +129,8 @@ namespace Unitas.Debugging
         internal void Stop(DebugFrame frame, string reason)
         {
             CurrentFrame = frame;
-            _server.NotifyStopped(frame, reason);
+            _server?.NotifyStopped(frame, reason);
+            _stoppedCallback?.Invoke(frame);
             _resume.Wait(TimeSpan.FromSeconds(30));
             CurrentFrame = null;
         }
@@ -139,7 +147,7 @@ namespace Unitas.Debugging
         {
             DebugAgent.ReleaseSession(this);
             Resume();
-            _server.Stop();
+            _server?.Stop();
         }
     }
 }

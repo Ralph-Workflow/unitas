@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Emit;
 using Unitas.Bridge.Scripting;
 
@@ -526,6 +527,7 @@ namespace Unitas.Scripting
                         externalRefs,
                         model.AllowUnsafeCode || assemblyRspMap[asmName].AllowUnsafe,
                         assemblyRspMap[asmName],
+                        !effectiveOptions.IsEditor,
                         diagnostics);
 
                     if (!compileOk || HasErrorDiagnostics(diagnostics))
@@ -548,6 +550,7 @@ namespace Unitas.Scripting
                 }
 
                 List<ScriptGuidBinding> allBindings = new List<ScriptGuidBinding>();
+                List<RuntimeInitializeMethodBinding> allRuntimeInitMethods = new List<RuntimeInitializeMethodBinding>();
                 for (int i = 0; i < topoOrder.Count; i++)
                 {
                     string asmName = topoOrder[i];
@@ -567,19 +570,27 @@ namespace Unitas.Scripting
                         assemblyDefinesMap[asmName],
                         pathToGuid);
                     allBindings.AddRange(asmBindings);
+
+                    List<RuntimeInitializeMethodBinding> asmInitMethods = ScriptAnalyzerAndGlueGenerator.DiscoverRuntimeInitializeMethodsForAssembly(
+                        sources,
+                        assemblyDefinesMap[asmName]);
+                    allRuntimeInitMethods.AddRange(asmInitMethods);
                 }
 
                 string? generatedGlueDllPath = null;
                 string? generatedGlueSourcePath = null;
 
-                if (effectiveOptions.EmitGeneratedGlue && allBindings.Count > 0)
+                if (effectiveOptions.EmitGeneratedGlue && (allBindings.Count > 0 || allRuntimeInitMethods.Count > 0))
                 {
                     string finalGlueDll = Path.Combine(outputDirectory, GeneratedGlueAssemblyName + ".dll");
                     string glueObjDir = Path.Combine(outputDirectory, "obj");
                     Directory.CreateDirectory(glueObjDir);
                     generatedGlueSourcePath = Path.Combine(glueObjDir, "Unitas.Generated.g.cs");
 
-                    string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(allBindings);
+                    string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(
+                        allBindings,
+                        Array.Empty<SerializableTypeBinding>(),
+                        allRuntimeInitMethods);
                     string stagedGlueSource = Path.Combine(stagingDir, "Unitas.Generated.g.cs");
                     File.WriteAllText(stagedGlueSource, glueSource, Encoding.UTF8);
 
@@ -612,6 +623,7 @@ namespace Unitas.Scripting
                             glueRefs,
                             false,
                             new ResponseFileOptions(),
+                            false,
                             glueDiagnostics);
 
                         if (!glueOk || HasErrorDiagnostics(glueDiagnostics))
@@ -1125,6 +1137,7 @@ namespace Unitas.Scripting
             IReadOnlyList<string> referencePaths,
             bool allowUnsafe,
             ResponseFileOptions rspOptions,
+            bool rejectUnguardedUnityEditorReferences,
             List<ScriptDiagnostic> diagnostics)
         {
             CSharpParseOptions parseOptions = new CSharpParseOptions(
@@ -1139,6 +1152,22 @@ namespace Unitas.Scripting
                 string fullSourcePath = Path.GetFullPath(sourceFiles[i]);
                 string sourceText = File.ReadAllText(fullSourcePath, Encoding.UTF8);
                 syntaxTrees.Add(CSharpSyntaxTree.ParseText(sourceText, parseOptions, fullSourcePath, Encoding.UTF8));
+            }
+
+            if (rejectUnguardedUnityEditorReferences && InspectUnguardedUnityEditorReferences(syntaxTrees, assemblyName, diagnostics))
+            {
+                if (File.Exists(outputDllPath))
+                {
+                    try
+                    {
+                        File.Delete(outputDllPath);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+
+                return false;
             }
 
             List<MetadataReference> metadataRefs = new List<MetadataReference>(referencePaths.Count);
@@ -1258,6 +1287,142 @@ namespace Unitas.Scripting
             }
 
             return true;
+        }
+
+        private static bool InspectUnguardedUnityEditorReferences(
+            List<SyntaxTree> syntaxTrees,
+            string assemblyName,
+            List<ScriptDiagnostic> diagnostics)
+        {
+            bool foundAny = false;
+            for (int t = 0; t < syntaxTrees.Count; t++)
+            {
+                SyntaxTree tree = syntaxTrees[t];
+                SyntaxNode root = tree.GetRoot();
+                string filePath = tree.FilePath ?? string.Empty;
+
+                foreach (SyntaxNode node in root.DescendantNodes())
+                {
+                    if (node is UsingDirectiveSyntax usingDirective && usingDirective.Name != null)
+                    {
+                        string usingName = NormalizeNameText(usingDirective.Name.ToString());
+                        if (IsUnityEditorName(usingName))
+                        {
+                            FileLinePositionSpan span = usingDirective.GetLocation().GetMappedLineSpan();
+                            int line = span.StartLinePosition.Line + 1;
+                            int col = span.StartLinePosition.Character + 1;
+                            string enclosingMember = FindEnclosingMemberName(usingDirective);
+                            string msg = string.IsNullOrEmpty(enclosingMember)
+                                ? "Unguarded reference to '" + usingName + "' in '" + filePath + "' is not permitted in a player build."
+                                : "Unguarded reference to '" + usingName + "' in member '" + enclosingMember + "' of '" + filePath + "' is not permitted in a player build.";
+                            diagnostics.Add(new ScriptDiagnostic(
+                                "UNITAS1030",
+                                ScriptDiagnosticSeverity.Error,
+                                msg,
+                                filePath,
+                                line,
+                                col,
+                                assemblyName));
+                            foundAny = true;
+                        }
+
+                        continue;
+                    }
+
+                    if (node is MemberAccessExpressionSyntax || node is QualifiedNameSyntax)
+                    {
+                        if (node.Parent is MemberAccessExpressionSyntax
+                            || node.Parent is QualifiedNameSyntax
+                            || node.Parent is UsingDirectiveSyntax)
+                        {
+                            continue;
+                        }
+
+                        string exprText = NormalizeNameText(node.ToString());
+                        if (IsUnityEditorName(exprText))
+                        {
+                            FileLinePositionSpan span = node.GetLocation().GetMappedLineSpan();
+                            int line = span.StartLinePosition.Line + 1;
+                            int col = span.StartLinePosition.Character + 1;
+                            string enclosingMember = FindEnclosingMemberName(node);
+                            string msg = string.IsNullOrEmpty(enclosingMember)
+                                ? "Unguarded UnityEditor member reference '" + exprText + "' in '" + filePath + "' is not permitted in a player build."
+                                : "Unguarded UnityEditor member reference '" + exprText + "' in member '" + enclosingMember + "' of '" + filePath + "' is not permitted in a player build.";
+                            diagnostics.Add(new ScriptDiagnostic(
+                                "UNITAS1030",
+                                ScriptDiagnosticSeverity.Error,
+                                msg,
+                                filePath,
+                                line,
+                                col,
+                                assemblyName));
+                            foundAny = true;
+                        }
+                    }
+                }
+            }
+
+            return foundAny;
+        }
+
+        private static string NormalizeNameText(string raw)
+        {
+            string trimmed = raw.Trim();
+            if (trimmed.StartsWith("global::", StringComparison.Ordinal))
+            {
+                trimmed = trimmed.Substring("global::".Length).Trim();
+            }
+
+            return trimmed;
+        }
+
+        private static bool IsUnityEditorName(string name)
+        {
+            return string.Equals(name, "UnityEditor", StringComparison.Ordinal)
+                || name.StartsWith("UnityEditor.", StringComparison.Ordinal);
+        }
+
+        private static string FindEnclosingMemberName(SyntaxNode node)
+        {
+            string? memberName = null;
+            string? typeName = null;
+            SyntaxNode? current = node.Parent;
+            while (current != null)
+            {
+                if (memberName == null)
+                {
+                    if (current is MethodDeclarationSyntax methodDecl)
+                    {
+                        memberName = methodDecl.Identifier.ValueText;
+                    }
+                    else if (current is PropertyDeclarationSyntax propDecl)
+                    {
+                        memberName = propDecl.Identifier.ValueText;
+                    }
+                    else if (current is ConstructorDeclarationSyntax ctorDecl)
+                    {
+                        memberName = ctorDecl.Identifier.ValueText;
+                    }
+                    else if (current is FieldDeclarationSyntax fieldDecl && fieldDecl.Declaration.Variables.Count > 0)
+                    {
+                        memberName = fieldDecl.Declaration.Variables[0].Identifier.ValueText;
+                    }
+                }
+
+                if (typeName == null && current is BaseTypeDeclarationSyntax typeDecl)
+                {
+                    typeName = typeDecl.Identifier.ValueText;
+                }
+
+                current = current.Parent;
+            }
+
+            if (!string.IsNullOrEmpty(typeName) && !string.IsNullOrEmpty(memberName))
+            {
+                return typeName + "." + memberName;
+            }
+
+            return memberName ?? typeName ?? string.Empty;
         }
 
         private static void ParseCscOutput(string output, string assemblyName, List<ScriptDiagnostic> diagnostics)

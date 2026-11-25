@@ -47,6 +47,7 @@ namespace Unitas.Bridge.Tests
             TestEndToEndRustPhysicsQuery();
             TimeDiagnosticsTests.Run();
             QuerySurfaceTests.Run();
+            RandomTests.Run();
             IntegrationTests.Run();
             CoroutineTests.Run();
             LifetimeTests.Run();
@@ -58,6 +59,7 @@ namespace Unitas.Bridge.Tests
             SceneManagementIntegrationTests.Run();
             SceneManagementPersistenceTests.Run();
             ApplicationTests.Run();
+            RuntimeInitializeTests.Run();
             PlayerPrefsTests.Run();
             ObjectDiscoveryTests.Run();
             GameObjectDiscoveryTests.Run();
@@ -84,8 +86,10 @@ namespace Unitas.Bridge.Tests
             PlayerPrefsPersistenceTests.Run();
             JsonUtilityTests.Run();
             JsonUtilityRoundTripTests.Run();
+            SerializerMatrixTests.Run();
             IdeGenerationTests.Run();
             AgentWorkflowTests.Run();
+            AgentCodeLoopTests.Run();
             UtfRunnerTests.Run();
             UtfHardeningTests.Run();
             DebuggingTests.Run();
