@@ -69,6 +69,39 @@ impl Image {
         }
     }
 
+    /// Bilinear sample with clamp-to-edge, matching the GPU sampler: `uv`
+    /// maps to texel centers at `(u * width - 0.5, v * height - 0.5)`.
+    pub fn sample_bilinear(&self, u: f32, v: f32) -> [f32; 3] {
+        let w = self.width as f32;
+        let h = self.height as f32;
+        if w < 1.0 || h < 1.0 {
+            return [0.0; 3];
+        }
+        let x = (u * w - 0.5).clamp(0.0, w - 1.0);
+        let y = (v * h - 0.5).clamp(0.0, h - 1.0);
+        let x0 = x.floor() as u32;
+        let y0 = y.floor() as u32;
+        let x1 = (x0 + 1).min(self.width - 1);
+        let y1 = (y0 + 1).min(self.height - 1);
+        let fx = x - x0 as f32;
+        let fy = y - y0 as f32;
+        let texel = |tx: u32, ty: u32| -> [f32; 3] {
+            let p = self.pixels[(ty as usize) * (self.width as usize) + (tx as usize)];
+            [f32::from(p[0]) / 255.0, f32::from(p[1]) / 255.0, f32::from(p[2]) / 255.0]
+        };
+        let c00 = texel(x0, y0);
+        let c10 = texel(x1, y0);
+        let c01 = texel(x0, y1);
+        let c11 = texel(x1, y1);
+        let mut out = [0.0f32; 3];
+        for channel in 0..3 {
+            let top = c00[channel] * (1.0 - fx) + c10[channel] * fx;
+            let bottom = c01[channel] * (1.0 - fx) + c11[channel] * fx;
+            out[channel] = top * (1.0 - fy) + bottom * fy;
+        }
+        out
+    }
+
     pub fn to_bmp_bytes(&self) -> Vec<u8> {
         let row_bytes = (self.width as usize) * 3;
         let row_stride = (row_bytes + 3) & !3;

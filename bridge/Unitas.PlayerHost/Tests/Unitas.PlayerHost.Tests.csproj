@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Unitas.PlayerHost.Tests</AssemblyName>
+    <RootNamespace>Unitas.PlayerHost.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Unitas.PlayerHost.csproj" />
+    <ProjectReference Include="../../Unitas.Scripting/Unitas.Scripting.csproj" />
+  </ItemGroup>
+
+</Project>

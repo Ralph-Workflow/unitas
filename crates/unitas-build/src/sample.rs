@@ -1,5 +1,4 @@
 use std::f32::consts::PI;
-use std::fs;
 use std::path::Path;
 
 use unitas_audio::{parse_wav, AudioClip, AudioClipId, AudioError};
@@ -312,23 +311,27 @@ pub fn stage_roll_a_ball_bundle(output_dir: &Path) -> Result<StagedBundle, Bundl
     stage_roll_a_ball_bundle_for_host(output_dir, BuildTarget::current_host())
 }
 
+/// Stages the real `samples/roll-a-ball` project — its committed scene,
+/// scripts compiled at build time, and the managed player-host payload —
+/// behind the signature the player shell already calls.
 pub fn stage_roll_a_ball_bundle_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<StagedBundle, BundleError> {
-    let source_dir = output_dir
-        .join("_sample_source")
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| BundleError::Io {
+            path: manifest_dir.to_path_buf(),
+            message: String::from("the crate directory has no repository root"),
+        })?;
+    let scene_path = workspace_root
+        .join("samples")
+        .join("roll-a-ball")
         .join("Assets")
-        .join("Scenes");
-    fs::create_dir_all(&source_dir).map_err(|error| BundleError::Io {
-        path: source_dir.clone(),
-        message: error.to_string(),
-    })?;
-    let scene_path = source_dir.join(ROLL_A_BALL_SCENE_FILENAME);
-    fs::write(&scene_path, roll_a_ball_scene_yaml()).map_err(|error| BundleError::Io {
-        path: scene_path.clone(),
-        message: error.to_string(),
-    })?;
+        .join("Scenes")
+        .join(ROLL_A_BALL_SCENE_FILENAME);
 
     let target = host.unwrap_or_else(BuildTarget::host);
     let config = BuildConfiguration::new(
@@ -1027,6 +1030,7 @@ impl RollABallController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use unitas_runtime::Runtime;

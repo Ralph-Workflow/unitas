@@ -2556,6 +2556,7 @@ name = "unitas-audio"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "lewton",
  "unitas-asset",
  "unitas-core",
 ]

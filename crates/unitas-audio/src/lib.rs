@@ -1,4 +1,6 @@
+use lewton::inside_ogg::OggStreamReader;
 use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::path::Path;
 use unitas_asset::audio_import::{decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav};
 use unitas_core::EntityId;
@@ -7,6 +9,122 @@ use unitas_core::EntityId;
 pub mod output;
 
 pub type AudioClipId = u64;
+pub type MusicStreamId = u64;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioMixerGroup {
+    #[default]
+    Sfx,
+    Music,
+    Menu,
+}
+
+impl AudioMixerGroup {
+    const fn index(self) -> usize {
+        match self {
+            Self::Sfx => 0,
+            Self::Music => 1,
+            Self::Menu => 2,
+        }
+    }
+}
+
+pub struct MusicStream {
+    data: Vec<u8>,
+    reader: OggStreamReader<Cursor<Vec<u8>>>,
+    channels: u16,
+    sample_rate: u32,
+    packet: Vec<f32>,
+    packet_pos: usize,
+}
+
+impl MusicStream {
+    fn new(bytes: &[u8]) -> Result<Self, AudioError> {
+        let data = bytes.to_vec();
+        let reader = OggStreamReader::new(Cursor::new(data.clone()))
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        let channels = u16::from(reader.ident_hdr.audio_channels);
+        let sample_rate = reader.ident_hdr.audio_sample_rate;
+        if channels == 0 || channels > 2 {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "{channels} channels (only mono or stereo supported)"
+            )));
+        }
+        if sample_rate == 0 {
+            return Err(AudioError::UnsupportedFormat(
+                "zero sample rate".to_string(),
+            ));
+        }
+        Ok(Self {
+            data,
+            reader,
+            channels,
+            sample_rate,
+            packet: Vec::new(),
+            packet_pos: 0,
+        })
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn restart(&mut self) -> Result<(), AudioError> {
+        self.reader = OggStreamReader::new(Cursor::new(self.data.clone()))
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        self.packet.clear();
+        self.packet_pos = 0;
+        Ok(())
+    }
+
+    fn pull_packet(&mut self) -> Result<bool, AudioError> {
+        match self.reader.read_dec_packet_itl() {
+            Ok(Some(samples)) => {
+                self.packet = samples
+                    .iter()
+                    .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
+                    .collect();
+                self.packet_pos = 0;
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(err) => Err(AudioError::UnsupportedFormat(err.to_string())),
+        }
+    }
+
+    pub fn next_frame(&mut self, looping: bool) -> Option<(f32, f32)> {
+        loop {
+            let channel_count = usize::from(self.channels);
+            if self.packet_pos + channel_count <= self.packet.len() {
+                if channel_count == 1 {
+                    let sample = self.packet[self.packet_pos];
+                    self.packet_pos += 1;
+                    return Some((sample, sample));
+                }
+                let left = self.packet[self.packet_pos];
+                let right = self.packet[self.packet_pos + 1];
+                self.packet_pos += 2;
+                return Some((left, right));
+            }
+            match self.pull_packet() {
+                Ok(true) => {}
+                Ok(false) => {
+                    if !looping {
+                        return None;
+                    }
+                    if self.restart().is_err() {
+                        return None;
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioError {
@@ -319,6 +437,8 @@ pub struct AudioSource {
     pub unsupported_clip: bool,
     pub wants_play: bool,
     pub sample_cursor: f64,
+    pub group: AudioMixerGroup,
+    pub music: Option<MusicStreamId>,
 }
 
 impl Default for AudioSource {
@@ -343,6 +463,8 @@ impl Default for AudioSource {
             unsupported_clip: false,
             wants_play: false,
             sample_cursor: 0.0,
+            group: AudioMixerGroup::Sfx,
+            music: None,
         }
     }
 }
@@ -355,6 +477,11 @@ pub struct AudioWorld {
     listener: Option<ListenerPose>,
     max_real_voices: usize,
     application_paused: bool,
+    master_volume: f32,
+    group_volumes: [f32; 3],
+    gameplay_paused: bool,
+    music_streams: BTreeMap<MusicStreamId, MusicStream>,
+    next_music_stream_id: MusicStreamId,
 }
 
 impl Default for AudioWorld {
@@ -376,6 +503,11 @@ impl AudioWorld {
             }),
             max_real_voices: 32,
             application_paused: false,
+            master_volume: 1.0,
+            group_volumes: [1.0; 3],
+            gameplay_paused: false,
+            music_streams: BTreeMap::new(),
+            next_music_stream_id: 1,
         }
     }
 
@@ -487,6 +619,94 @@ impl AudioWorld {
         self.application_paused
     }
 
+    pub fn set_master_volume(&mut self, volume: f32) {
+        self.master_volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn master_volume(&self) -> f32 {
+        self.master_volume
+    }
+
+    pub fn set_group_volume(&mut self, group: AudioMixerGroup, volume: f32) {
+        self.group_volumes[group.index()] = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn group_volume(&self, group: AudioMixerGroup) -> f32 {
+        self.group_volumes[group.index()]
+    }
+
+    pub fn set_gameplay_paused(&mut self, paused: bool) {
+        self.gameplay_paused = paused;
+    }
+
+    pub fn is_gameplay_paused(&self) -> bool {
+        self.gameplay_paused
+    }
+
+    pub fn set_source_group(&mut self, entity: EntityId, group: AudioMixerGroup) {
+        let source = self.ensure_source(entity);
+        source.group = group;
+    }
+
+    pub fn source_group(&self, entity: EntityId) -> AudioMixerGroup {
+        self.sources
+            .get(&entity)
+            .map(|s| s.group)
+            .unwrap_or_default()
+    }
+
+    fn bus_gain(&self, group: AudioMixerGroup) -> f32 {
+        if self.gameplay_paused && group != AudioMixerGroup::Menu {
+            return 0.0;
+        }
+        self.master_volume * self.group_volumes[group.index()]
+    }
+
+    pub fn load_music_bytes(&mut self, bytes: &[u8]) -> Result<MusicStreamId, AudioError> {
+        let stream = MusicStream::new(bytes)?;
+        let id = self.next_music_stream_id;
+        self.next_music_stream_id += 1;
+        self.music_streams.insert(id, stream);
+        Ok(id)
+    }
+
+    pub fn load_music_file(&mut self, path: &Path) -> Result<MusicStreamId, AudioError> {
+        let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
+        self.load_music_bytes(&bytes)
+    }
+
+    pub fn music_stream(&self, stream_id: MusicStreamId) -> Option<&MusicStream> {
+        self.music_streams.get(&stream_id)
+    }
+
+    pub fn set_source_music(&mut self, entity: EntityId, stream: Option<MusicStreamId>) {
+        let valid = stream
+            .map(|id| self.music_streams.contains_key(&id))
+            .unwrap_or(true);
+        let source = self.ensure_source(entity);
+        if !valid {
+            source.music = None;
+            return;
+        }
+        source.music = stream;
+        if stream.is_some() {
+            source.clip = None;
+        }
+        source.time = 0.0;
+        source.sample_cursor = 0.0;
+        if source.state == AudioSourceState::Completed {
+            source.state = AudioSourceState::Stopped;
+        }
+    }
+
     pub fn play(&mut self, entity: EntityId, one_shot: bool) {
         self.ensure_source(entity);
         let duration = self.effective_duration(entity);
@@ -497,6 +717,8 @@ impl AudioWorld {
             source.wants_play = false;
             return;
         }
+        let was_finished = source.state == AudioSourceState::Completed
+            || source.state == AudioSourceState::Stopped;
         if one_shot {
             source.time = 0.0;
             source.sample_cursor = 0.0;
@@ -514,6 +736,16 @@ impl AudioWorld {
         source.one_shot_active = one_shot;
         source.wants_play = true;
         source.state = AudioSourceState::Playing;
+        let restart_music = if was_finished { source.music } else { None };
+        if let Some(stream_id) = restart_music {
+            if let Some(stream) = self.music_streams.get_mut(&stream_id) {
+                if stream.restart().is_ok() {
+                    let source = self.ensure_source(entity);
+                    source.time = 0.0;
+                    source.sample_cursor = 0.0;
+                }
+            }
+        }
         self.recompute_virtualization();
     }
 
@@ -841,7 +1073,38 @@ impl AudioWorld {
             let Some((gain_l, gain_r)) = self.source_gains(entity) else {
                 continue;
             };
-            let Some(clip_id) = self.sources.get(&entity).and_then(|s| s.clip) else {
+            let Some(source_summary) = self.sources.get(&entity) else {
+                continue;
+            };
+            let bus = self.bus_gain(source_summary.group);
+            if bus <= 0.0 {
+                continue;
+            }
+            let (gain_l, gain_r) = (gain_l * bus, gain_r * bus);
+            if let Some(stream_id) = source_summary.music {
+                let Some(stream) = self.music_streams.get_mut(&stream_id) else {
+                    continue;
+                };
+                let Some(source) = self.sources.get_mut(&entity) else {
+                    continue;
+                };
+                let looping = source.looping && !source.one_shot_active;
+                for frame_out in 0..n_frames {
+                    let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
+                        source.wants_play = false;
+                        source.one_shot_active = false;
+                        source.state = AudioSourceState::Completed;
+                        any_completed = true;
+                        break;
+                    };
+                    output[frame_out * 2] += sample_l * gain_l;
+                    output[frame_out * 2 + 1] += sample_r * gain_r;
+                    source.sample_cursor += 1.0;
+                    source.time = source.sample_cursor / f64::from(stream.sample_rate());
+                }
+                continue;
+            }
+            let Some(clip_id) = source_summary.clip else {
                 continue;
             };
             let Some(clip) = self.clips.get(&clip_id).cloned() else {
@@ -1327,5 +1590,182 @@ mod tests {
             world.inaudible_reason(e),
             Some(SilenceReason::UnsupportedClip)
         );
+    }
+
+    const OGG_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.ogg");
+
+    fn reference_ogg_samples() -> Result<(u16, Vec<i16>), AudioError> {
+        let clip = decode_ogg_vorbis(OGG_FIXTURE)
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        Ok((clip.channels, clip.samples))
+    }
+
+    #[test]
+    fn streamed_ogg_loop_repeats_with_no_gap_or_overrun_at_the_seam() -> Result<(), AudioError> {
+        let (channels, reference) = reference_ogg_samples()?;
+        assert_eq!(channels, 1);
+        let total_frames = reference.len();
+        assert!(total_frames > 0);
+
+        let mut world = AudioWorld::new();
+        let stream_id = world.load_music_bytes(OGG_FIXTURE)?;
+        let entity = EntityId::new(1);
+        world.ensure_source(entity);
+        world.set_source_music(entity, Some(stream_id));
+        world.set_source_group(entity, AudioMixerGroup::Music);
+        world.set_looping(entity, true);
+        world.play(entity, false);
+
+        let mixed = world.mix(total_frames * 2);
+        assert_eq!(mixed.len(), total_frames * 4);
+        for frame in 0..total_frames * 2 {
+            let expected = (f32::from(reference[frame % total_frames]) / 32768.0).clamp(-1.0, 1.0);
+            assert_eq!(mixed[frame * 2], expected, "left sample at frame {frame}");
+            assert_eq!(
+                mixed[frame * 2 + 1],
+                expected,
+                "right sample at frame {frame}"
+            );
+        }
+        assert_eq!(world.source_state(entity), AudioSourceState::Playing);
+
+        world.set_gameplay_paused(true);
+        let silenced = world.mix(total_frames);
+        assert!(silenced.iter().all(|sample| *sample == 0.0));
+        world.set_gameplay_paused(false);
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_ogg_without_loop_completes_pads_silence_and_replays_from_start(
+    ) -> Result<(), AudioError> {
+        let (channels, reference) = reference_ogg_samples()?;
+        let total_frames = reference.len() / usize::from(channels);
+
+        let mut world = AudioWorld::new();
+        let stream_id = world.load_music_bytes(OGG_FIXTURE)?;
+        let entity = EntityId::new(2);
+        world.ensure_source(entity);
+        world.set_source_music(entity, Some(stream_id));
+        world.set_source_group(entity, AudioMixerGroup::Music);
+        world.play(entity, false);
+
+        let mixed = world.mix(total_frames + 8);
+        assert_eq!(mixed.len(), (total_frames + 8) * 2);
+        for tail in 0..8 {
+            let index = (total_frames + tail) * 2;
+            assert_eq!(mixed[index], 0.0);
+            assert_eq!(mixed[index + 1], 0.0);
+        }
+        assert_eq!(world.source_state(entity), AudioSourceState::Completed);
+
+        world.play(entity, false);
+        assert_eq!(world.source_state(entity), AudioSourceState::Playing);
+        let remixed = world.mix(4);
+        for frame in 0..4.min(total_frames) {
+            let expected = f32::from(reference[frame]) / 32768.0;
+            assert_eq!(remixed[frame * 2], expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn group_gains_apply_only_to_their_own_bus() {
+        let mut world = AudioWorld::new();
+        assert_eq!(world.master_volume(), 1.0);
+        assert_eq!(world.group_volume(AudioMixerGroup::Sfx), 1.0);
+
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 100,
+            samples: vec![0.5; 400],
+            duration: 4.0,
+        });
+        let sfx = EntityId::new(10);
+        let menu = EntityId::new(11);
+        for entity in [sfx, menu] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+            world.play(entity, false);
+        }
+        world.set_source_group(menu, AudioMixerGroup::Menu);
+        assert_eq!(world.source_group(menu), AudioMixerGroup::Menu);
+        assert_eq!(world.source_group(sfx), AudioMixerGroup::Sfx);
+
+        let baseline = world.mix(4);
+
+        world.set_group_volume(AudioMixerGroup::Music, 0.1);
+        world.set_group_volume(AudioMixerGroup::Menu, 0.5);
+        let after_menu = world.mix(4);
+        for frame in 0..4 {
+            assert!((after_menu[frame * 2] - 0.75).abs() < 1e-6);
+            assert!((after_menu[frame * 2 + 1] - 0.75).abs() < 1e-6);
+        }
+
+        world.set_group_volume(AudioMixerGroup::Sfx, 0.25);
+        let after_sfx = world.mix(4);
+        for frame in 0..4 {
+            assert!((after_sfx[frame * 2] - (0.125 + 0.25)).abs() < 1e-6);
+        }
+
+        world.set_master_volume(0.5);
+        let after_master = world.mix(4);
+        for frame in 0..4 {
+            assert!((after_master[frame * 2] - (0.0625 + 0.125)).abs() < 1e-6);
+        }
+
+        world.set_group_volume(AudioMixerGroup::Sfx, 1.0);
+        world.set_group_volume(AudioMixerGroup::Menu, 1.0);
+        world.set_master_volume(1.0);
+        let restored = world.mix(4);
+        for frame in 0..4 {
+            assert!((restored[frame * 2] - baseline[frame * 2]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn gameplay_pause_silences_music_and_sfx_keeps_menu_and_freezes_gameplay() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 100,
+            samples: vec![0.1, 0.2, 0.3, 0.4, 0.0, 0.0, 0.0, 0.0],
+            duration: 0.08,
+        });
+        let music_entity = EntityId::new(20);
+        let sfx_entity = EntityId::new(21);
+        let menu_entity = EntityId::new(22);
+        for entity in [music_entity, sfx_entity, menu_entity] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+        }
+        world.set_source_group(music_entity, AudioMixerGroup::Music);
+        world.set_source_group(menu_entity, AudioMixerGroup::Menu);
+        for entity in [music_entity, sfx_entity, menu_entity] {
+            world.play(entity, false);
+        }
+
+        let active = world.mix(2);
+        for frame in 0..2 {
+            let expected = 3.0 * [0.1f32, 0.2][frame];
+            assert!((active[frame * 2] - expected).abs() < 1e-6);
+        }
+
+        world.set_gameplay_paused(true);
+        assert!(world.is_gameplay_paused());
+        let paused = world.mix(2);
+        for frame in 0..2 {
+            let menu_expected = [0.3f32, 0.4][frame];
+            assert!((paused[frame * 2] - menu_expected).abs() < 1e-6);
+            assert!((paused[frame * 2 + 1] - menu_expected).abs() < 1e-6);
+        }
+
+        world.set_gameplay_paused(false);
+        assert!(!world.is_gameplay_paused());
+        let resumed = world.mix(2);
+        for frame in 0..2 {
+            let expected = 2.0 * [0.3f32, 0.4][frame];
+            assert!((resumed[frame * 2] - expected).abs() < 1e-6);
+        }
     }
 }

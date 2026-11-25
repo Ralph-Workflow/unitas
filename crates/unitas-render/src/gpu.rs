@@ -9,27 +9,34 @@ use crate::glyphs::{
 };
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
-use crate::mesh::Mesh;
-use crate::raster::{DirectionalLight, MeshInstance};
+use crate::mesh::{Mesh, MeshAttributes};
+use crate::raster::{BlendMode, DirectionalLight, Material, MeshInstance};
 
-const VERTEX_FLOATS: usize = 6;
-const VERTEX_STRIDE: u64 = 24;
+const VERTEX_FLOATS: usize = 11;
+const VERTEX_STRIDE: u64 = 44;
 const UNIFORM_SLOT: u64 = 256;
-const GLOBAL_FLOATS: usize = 24;
+const GLOBAL_FLOATS: usize = 28;
 const INSTANCE_FLOATS: usize = 24;
 const SLOT_FLOATS: usize = (UNIFORM_SLOT / 4) as usize;
 const COPY_ROW_ALIGNMENT: u64 = 256;
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 
+// Lit model shared with the CPU raster in raster.rs: ambient*albedo +
+// light_color * (lambert*diffuse + blinn_phong_spec) * intensity + emissive,
+// where specular is gated by metallic*smoothness and normal maps perturb the
+// shading normal in tangent space. Textures left unset sample 1x1
+// placeholders (white albedo/normal, black emissive).
 const SHADER_SOURCE: &str = r"
 struct Globals {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
     light_color: vec4<f32>,
+    camera_pos: vec4<f32>,
 };
 
 struct InstanceData {
@@ -38,47 +45,81 @@ struct InstanceData {
     flags: vec4<f32>,
 };
 
+struct MaterialParams {
+    params: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(1) @binding(0) var<uniform> inst: InstanceData;
+@group(2) @binding(0) var albedo_tex: texture_2d<f32>;
+@group(2) @binding(1) var normal_tex: texture_2d<f32>;
+@group(2) @binding(2) var emissive_tex: texture_2d<f32>;
+@group(2) @binding(3) var material_sampler: sampler;
+@group(2) @binding(4) var<uniform> material: MaterialParams;
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec3<f32>,
+    @location(4) world_pos: vec3<f32>,
 };
 
 @vertex
-fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> VertexOut {
+fn vs_main(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec3<f32>,
+) -> VertexOut {
     var out: VertexOut;
     let world = inst.model * vec4<f32>(position, 1.0);
     out.clip_position = globals.view_proj * world;
     let transformed = (inst.model * vec4<f32>(normal, 0.0)).xyz;
     let len = length(transformed);
     out.normal = select(vec3<f32>(0.0, 0.0, 0.0), transformed / len, len > 1e-8);
+    out.tangent = (inst.model * vec4<f32>(tangent, 0.0)).xyz;
     out.color = inst.color.rgb;
+    out.uv = uv;
+    out.world_pos = world.xyz;
     return out;
 }
 
-fn lit_color(surface_normal: vec3<f32>, color: vec3<f32>) -> vec4<f32> {
-    let len = length(surface_normal);
-    let normal = select(vec3<f32>(0.0, 0.0, 0.0), surface_normal / len, len > 1e-8);
-    let lambert = max(dot(normal, globals.light_dir.xyz), 0.0);
-    let shade = globals.light_color.w + globals.light_color.rgb * (lambert * globals.light_dir.w);
-    return vec4<f32>(color * shade, 1.0);
-}
-
-fn unlit_color(color: vec3<f32>) -> vec4<f32> {
-    return vec4<f32>(color, 1.0);
+fn surface_color(vs_out: VertexOut) -> vec4<f32> {
+    let n_len = length(vs_out.normal);
+    var n = select(vec3<f32>(0.0, 0.0, 0.0), vs_out.normal / n_len, n_len > 1e-8);
+    let t_len = length(vs_out.tangent);
+    if (t_len > 1e-4 && n_len > 1e-8) {
+        var t = vs_out.tangent / t_len;
+        t = normalize(t - n * dot(n, t));
+        let b = cross(n, t);
+        let nm = textureSample(normal_tex, material_sampler, vs_out.uv).xyz * 2.0 - 1.0;
+        n = normalize(t * nm.x + b * nm.y + n * nm.z);
+    }
+    let albedo = textureSample(albedo_tex, material_sampler, vs_out.uv).rgb * vs_out.color;
+    let emissive = textureSample(emissive_tex, material_sampler, vs_out.uv).rgb;
+    let metallic = material.params.x;
+    let smoothness = material.params.y;
+    let lambert = max(dot(n, globals.light_dir.xyz), 0.0);
+    let view_dir = normalize(globals.camera_pos.xyz - vs_out.world_pos);
+    let half_dir = normalize(globals.light_dir.xyz + view_dir);
+    let shininess = 8.0 + smoothness * 248.0;
+    let specular = pow(max(dot(n, half_dir), 0.0), shininess) * metallic * smoothness;
+    let diffuse = albedo * (1.0 - metallic);
+    let shade = globals.light_color.w * albedo
+        + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w;
+    return vec4<f32>(shade + emissive, material.params.z);
 }
 
 @fragment
 fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    return lit_color(vs_out.normal, vs_out.color);
+    return surface_color(vs_out);
 }
 
 @fragment
 fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    return unlit_color(vs_out.color);
+    return vec4<f32>(vs_out.color, material.params.z);
 }
 
 struct CaptureOut {
@@ -89,7 +130,7 @@ struct CaptureOut {
 @fragment
 fn fs_capture_lit(vs_out: VertexOut) -> CaptureOut {
     var out: CaptureOut;
-    out.color = lit_color(vs_out.normal, vs_out.color);
+    out.color = vec4<f32>(surface_color(vs_out).rgb, 1.0);
     out.id = u32(round(inst.flags.x));
     return out;
 }
@@ -97,13 +138,13 @@ fn fs_capture_lit(vs_out: VertexOut) -> CaptureOut {
 @fragment
 fn fs_capture_unlit(vs_out: VertexOut) -> CaptureOut {
     var out: CaptureOut;
-    out.color = unlit_color(vs_out.color);
+    out.color = vec4<f32>(vs_out.color, 1.0);
     out.id = u32(round(inst.flags.x));
     return out;
 }
 ";
 
-const ATTRIBUTES: [wgpu::VertexAttribute; 2] = [
+const ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x3,
         offset: 0,
@@ -113,6 +154,16 @@ const ATTRIBUTES: [wgpu::VertexAttribute; 2] = [
         format: wgpu::VertexFormat::Float32x3,
         offset: 12,
         shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 24,
+        shader_location: 2,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 32,
+        shader_location: 3,
     },
 ];
 
@@ -171,6 +222,18 @@ pub struct GpuInstance<'a> {
     pub lit: bool,
 }
 
+/// A mesh drawn with a lit [`Material`] (textures, metallic/smoothness, and
+/// optional alpha blending). Unlike [`GpuInstance`], unlit drawing is not
+/// offered: textured surfaces are lit by construction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuMaterialInstance<'a> {
+    pub mesh: &'a Mesh,
+    pub attributes: Option<&'a MeshAttributes>,
+    pub model: Mat4,
+    pub color: [f32; 3],
+    pub material: &'a Material,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RenderScene<'a> {
     pub camera: &'a Camera,
@@ -207,6 +270,8 @@ where
 struct Pipelines {
     lit: wgpu::RenderPipeline,
     unlit: wgpu::RenderPipeline,
+    blend_lit: wgpu::RenderPipeline,
+    blend_unlit: wgpu::RenderPipeline,
 }
 
 struct UniformState {
@@ -244,8 +309,14 @@ pub struct Renderer {
     queue: wgpu::Queue,
     global_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
+    material_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
+    sampler: wgpu::Sampler,
+    default_albedo: wgpu::TextureView,
+    default_normal: wgpu::TextureView,
+    default_emissive: wgpu::TextureView,
+    default_material_bind: wgpu::BindGroup,
     offscreen_pipelines: Pipelines,
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
@@ -268,6 +339,25 @@ fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
         blend: Some(wgpu::BlendState::REPLACE),
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
+fn blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
         write_mask: wgpu::ColorWrites::ALL,
     }
 }
@@ -316,36 +406,69 @@ fn build_pipelines(
     unlit_entry_point: &str,
     targets: &[Option<wgpu::ColorTargetState>],
 ) -> Pipelines {
+    let single_target = [targets[0].clone()];
+    let lit = build_pipeline(
+        device,
+        layout,
+        shader,
+        lit_entry_point,
+        targets,
+        true,
+        "lit",
+    );
+    let unlit = build_pipeline(
+        device,
+        layout,
+        shader,
+        unlit_entry_point,
+        targets,
+        true,
+        "unlit",
+    );
+    let blend_lit = build_pipeline(
+        device,
+        layout,
+        shader,
+        lit_entry_point,
+        &single_target,
+        false,
+        "blend-lit",
+    );
+    let blend_unlit = build_pipeline(
+        device,
+        layout,
+        shader,
+        unlit_entry_point,
+        &single_target,
+        false,
+        "blend-unlit",
+    );
+    Pipelines {
+        lit,
+        unlit,
+        blend_lit,
+        blend_unlit,
+    }
+}
+
+fn build_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    entry_point: &str,
+    targets: &[Option<wgpu::ColorTargetState>],
+    write_depth: bool,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
     let depth_stencil = wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
-        depth_write_enabled: Some(true),
+        depth_write_enabled: Some(write_depth),
         depth_compare: Some(wgpu::CompareFunction::Less),
         stencil: wgpu::StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
     };
-    let lit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("lit"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(VERTEX_LAYOUT)],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: Some(depth_stencil.clone()),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(lit_entry_point),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets,
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
-    let unlit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("unlit"),
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -358,14 +481,13 @@ fn build_pipelines(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(unlit_entry_point),
+            entry_point: Some(entry_point),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets,
         }),
         multiview_mask: None,
         cache: None,
-    });
-    Pipelines { lit, unlit }
+    })
 }
 
 impl Renderer {
@@ -418,7 +540,11 @@ impl Renderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
-            bind_group_layouts: &[Some(&global_layout), Some(&instance_layout)],
+            bind_group_layouts: &[
+                Some(&global_layout),
+                Some(&instance_layout),
+                Some(&material_layout),
+            ],
             immediate_size: 0,
         });
         let offscreen_pipelines =
@@ -430,6 +556,107 @@ impl Renderer {
             OFFSCREEN_FORMAT,
             ID_FORMAT,
         );
+        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let default_albedo = solid_texture(&device, &queue, [255, 255, 255, 255]);
+        let default_normal = solid_texture(&device, &queue, [128, 128, 255, 255]);
+        let default_emissive = solid_texture(&device, &queue, [0, 0, 0, 255]);
+        let default_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material-default"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &default_params,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&[0.0f32, 0.0, 1.0, 0.0]),
+        );
+        let default_material_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material-default"),
+            layout: &material_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&default_albedo),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&default_normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&default_emissive),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: default_params.as_entire_binding(),
+                },
+            ],
+        });
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
         fonts.load_system_fonts();
@@ -446,8 +673,14 @@ impl Renderer {
             queue,
             global_layout,
             instance_layout,
+            material_layout,
             pipeline_layout,
             shader,
+            sampler,
+            default_albedo,
+            default_normal,
+            default_emissive,
+            default_material_bind,
             offscreen_pipelines,
             capture_pipelines,
             uniforms: Mutex::new(uniforms),
@@ -531,6 +764,36 @@ impl Renderer {
         size: (u32, u32),
         overlay: &[TextOverlayItem],
     ) -> Result<Image, RenderError> {
+        self.render_offscreen_items(plain_draw_items(instances), scene, size, overlay)
+    }
+
+    /// Offscreen render of lit [`Material`] instances; shares the exact draw
+    /// path of [`Renderer::render_offscreen_with`] (no side path).
+    pub fn render_offscreen_materials(
+        &self,
+        instances: &[GpuMaterialInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+        size: (u32, u32),
+    ) -> Result<Image, RenderError> {
+        let scene = RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        };
+        self.render_offscreen_items(material_draw_items(instances), scene, size, &[])
+    }
+
+    fn render_offscreen_items(
+        &self,
+        items: Vec<DrawItem<'_>>,
+        scene: RenderScene<'_>,
+        size: (u32, u32),
+        overlay: &[TextOverlayItem],
+    ) -> Result<Image, RenderError> {
         let (width, height) = size;
         if width == 0 || height == 0 {
             return Ok(Image::new(width, height));
@@ -541,29 +804,6 @@ impl Renderer {
             light,
             background,
         } = scene;
-        if width == 0 || height == 0 {
-            return Ok(Image::new(width, height));
-        }
-        let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen-color"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let depth_texture = self.create_depth_texture(width, height);
-        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let items = plain_draw_items(instances);
-
-        let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("offscreen"),

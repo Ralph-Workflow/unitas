@@ -315,6 +315,9 @@ pub struct BuildReport {
     pub product_name: String,
     pub application_identifier: String,
     pub version: String,
+    /// Content-derived identifier shared with the bundle manifest; stamped by
+    /// `with_build_identifier` from the staged manifest.
+    pub build_identifier: String,
     pub included_scenes: Vec<String>,
     pub outcome: BuildOutcome,
     pub elapsed_ms: u64,
@@ -325,6 +328,9 @@ pub struct BuildReport {
     pub total_size_bytes: u64,
     pub category_sizes: Vec<SizeCategoryEntry>,
     pub major_contributors: Vec<SizeContributor>,
+    /// The staged `Managed/` payload (game assembly, player host, host
+    /// runtime configuration) with per-file sizes.
+    pub managed_payload: Vec<SizeContributor>,
     pub development_diagnostics_included: bool,
     pub unsupported_behaviors: Vec<String>,
     pub compatibility_findings: Vec<CompatibilityFinding>,
@@ -356,6 +362,7 @@ impl BuildReport {
             product_name: config.product_name.clone(),
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
+            build_identifier: String::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -370,6 +377,7 @@ impl BuildReport {
             total_size_bytes,
             category_sizes,
             major_contributors: sorted_contributors,
+            managed_payload: Vec::new(),
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
@@ -390,6 +398,7 @@ impl BuildReport {
             product_name: config.product_name.clone(),
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
+            build_identifier: String::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -404,6 +413,7 @@ impl BuildReport {
             total_size_bytes: 0,
             category_sizes: Vec::new(),
             major_contributors: Vec::new(),
+            managed_payload: Vec::new(),
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
@@ -432,6 +442,7 @@ impl BuildReport {
             product_name: config.product_name.clone(),
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
+            build_identifier: String::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -446,11 +457,25 @@ impl BuildReport {
             total_size_bytes: 0,
             category_sizes: Vec::new(),
             major_contributors: Vec::new(),
+            managed_payload: Vec::new(),
             development_diagnostics_included: config.include_diagnostics(),
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
             licensing: None,
         }
+    }
+
+    /// Stamps the content-derived build identifier from the staged bundle
+    /// manifest onto the report.
+    pub fn with_build_identifier(mut self, build_identifier: impl Into<String>) -> Self {
+        self.build_identifier = build_identifier.into();
+        self
+    }
+
+    /// Records the staged `Managed/` payload with per-file sizes.
+    pub fn with_managed_payload(mut self, payload: Vec<SizeContributor>) -> Self {
+        self.managed_payload = payload;
+        self
     }
 
     pub fn with_warnings(mut self, warnings: Vec<BuildDiagnostic>) -> Self {
@@ -499,6 +524,13 @@ impl BuildReport {
             true,
         );
         push_kv_str(&mut out, 2, "version", &self.version, true);
+        push_kv_str(
+            &mut out,
+            2,
+            "build_identifier",
+            &self.build_identifier,
+            true,
+        );
         push_kv_string_array(&mut out, 2, "included_scenes", &self.included_scenes, true);
         push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
         push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
@@ -548,6 +580,7 @@ impl BuildReport {
             &self.compatibility_findings,
             true,
         );
+        push_kv_contributors(&mut out, 2, "managed_payload", &self.managed_payload, true);
         push_kv_licensing(&mut out, 2, "licensing", self.licensing.as_ref(), false);
         out.push_str("}\n");
         out
@@ -569,6 +602,10 @@ impl BuildReport {
         let product_name = get_required_str(obj, "product_name")?.to_string();
         let application_identifier = get_required_str(obj, "application_identifier")?.to_string();
         let version = get_required_str(obj, "version")?.to_string();
+        let build_identifier = match obj.get("build_identifier") {
+            None | Some(JsonValue::Null) => String::new(),
+            Some(value) => value.as_str("build_identifier")?.to_string(),
+        };
         let included_scenes = get_required_string_list(obj, "included_scenes")?;
 
         let outcome_str = get_required_str(obj, "outcome")?;
@@ -584,6 +621,7 @@ impl BuildReport {
         let total_size_bytes = get_required_u64(obj, "total_size_bytes")?;
         let category_sizes = get_required_category_sizes(obj, "category_sizes")?;
         let major_contributors = get_required_contributors(obj, "major_contributors")?;
+        let managed_payload = get_optional_contributors(obj, "managed_payload")?;
         let development_diagnostics_included =
             get_required_bool(obj, "development_diagnostics_included")?;
         let unsupported_behaviors = get_required_string_list(obj, "unsupported_behaviors")?;
@@ -599,6 +637,7 @@ impl BuildReport {
             product_name,
             application_identifier,
             version,
+            build_identifier,
             included_scenes,
             outcome,
             elapsed_ms,
@@ -609,6 +648,7 @@ impl BuildReport {
             total_size_bytes,
             category_sizes,
             major_contributors,
+            managed_payload,
             development_diagnostics_included,
             unsupported_behaviors,
             compatibility_findings,
@@ -1471,11 +1511,10 @@ fn get_required_category_sizes(
     Ok(list)
 }
 
-fn get_required_contributors(
-    obj: &BTreeMap<String, JsonValue>,
+fn parse_contributors(
+    arr: &[JsonValue],
     key: &str,
 ) -> Result<Vec<SizeContributor>, ReportParseError> {
-    let arr = get_field(obj, key)?.as_array(key)?;
     let mut list = Vec::with_capacity(arr.len());
     for item in arr {
         let entry_obj = item.as_object(key)?;
@@ -1491,6 +1530,24 @@ fn get_required_contributors(
         });
     }
     Ok(list)
+}
+
+fn get_required_contributors(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<SizeContributor>, ReportParseError> {
+    let arr = get_field(obj, key)?.as_array(key)?;
+    parse_contributors(arr, key)
+}
+
+fn get_optional_contributors(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<SizeContributor>, ReportParseError> {
+    match obj.get(key) {
+        None | Some(JsonValue::Null) => Ok(Vec::new()),
+        Some(value) => parse_contributors(value.as_array(key)?, key),
+    }
 }
 
 fn get_optional_licensing(

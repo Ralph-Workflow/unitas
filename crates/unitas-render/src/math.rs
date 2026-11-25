@@ -212,6 +212,61 @@ impl Mat4 {
         }
     }
 
+    /// Inverse for an affine matrix (last row 0,0,0,1); `None` when the
+    /// linear part is singular.
+    pub fn inverse(&self) -> Option<Self> {
+        let m = &self.data;
+        // 3x3 linear part, column-major: a(c, r) = m[c * 4 + r].
+        let a = [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]];
+        let c0 = a[4] * a[8] - a[5] * a[7];
+        let c1 = a[2] * a[7] - a[1] * a[8];
+        let c2 = a[1] * a[5] - a[2] * a[4];
+        let det = a[0] * c0 + a[3] * c1 + a[6] * c2;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let inv_det = 1.0 / det;
+        // Adjugate (transposed cofactor matrix), row-major pairs (row, col).
+        let cof = [
+            c0,
+            c1,
+            c2,
+            a[5] * a[6] - a[3] * a[8],
+            a[0] * a[8] - a[2] * a[6],
+            a[2] * a[3] - a[0] * a[5],
+            a[3] * a[7] - a[4] * a[6],
+            a[1] * a[6] - a[0] * a[7],
+            a[0] * a[4] - a[1] * a[3],
+        ];
+        let b = |row: usize, col: usize| cof[col * 3 + row] * inv_det;
+        let tx = m[12];
+        let ty = m[13];
+        let tz = m[14];
+        let itx = -(b(0, 0) * tx + b(0, 1) * ty + b(0, 2) * tz);
+        let ity = -(b(1, 0) * tx + b(1, 1) * ty + b(1, 2) * tz);
+        let itz = -(b(2, 0) * tx + b(2, 1) * ty + b(2, 2) * tz);
+        Some(Self {
+            data: [
+                b(0, 0),
+                b(1, 0),
+                b(2, 0),
+                0.0,
+                b(0, 1),
+                b(1, 1),
+                b(2, 1),
+                0.0,
+                b(0, 2),
+                b(1, 2),
+                b(2, 2),
+                0.0,
+                itx,
+                ity,
+                itz,
+                1.0,
+            ],
+        })
+    }
+
     pub fn transform_point(&self, p: Vec3) -> Vec4 {
         self.mul_vec4(Vec4::from_point(p))
     }

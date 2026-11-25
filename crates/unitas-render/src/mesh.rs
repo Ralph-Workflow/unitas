@@ -23,6 +23,66 @@ impl Mesh {
             indices: indices.to_vec(),
         }
     }
+
+    /// Builds per-vertex UV/tangent attributes for this mesh; tangents are
+    /// derived from the positions, normals, and the supplied UV layout.
+    pub fn attributes_with_uvs(&self, uvs: Vec<[f32; 2]>) -> MeshAttributes {
+        MeshAttributes::compute(self, uvs)
+    }
+}
+
+/// Per-vertex shading attributes kept alongside a [`Mesh`] (the mesh struct
+/// itself stays positions/normals/indices so imported buffers remain cheap).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MeshAttributes {
+    pub uvs: Vec<[f32; 2]>,
+    pub tangents: Vec<Vec3>,
+}
+
+impl MeshAttributes {
+    /// Accumulates per-triangle UV-gradient tangents and normalizes them;
+    /// vertices that receive no tangent (or a degenerate UV triangle) get
+    /// `Vec3::ZERO`, which both render paths treat as "no normal map".
+    pub fn compute(mesh: &Mesh, uvs: Vec<[f32; 2]>) -> Self {
+        let mut tangents = vec![Vec3::ZERO; mesh.positions.len()];
+        for tri in mesh.indices.chunks_exact(3) {
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            let ( Some(p0), Some(p1), Some(p2) ) = (
+                mesh.positions.get(i0),
+                mesh.positions.get(i1),
+                mesh.positions.get(i2),
+            ) else {
+                continue;
+            };
+            let uv0 = uvs.get(i0).copied().unwrap_or([0.0, 0.0]);
+            let uv1 = uvs.get(i1).copied().unwrap_or([0.0, 0.0]);
+            let uv2 = uvs.get(i2).copied().unwrap_or([0.0, 0.0]);
+            let edge1 = *p1 - *p0;
+            let edge2 = *p2 - *p0;
+            let du1 = uv1[0] - uv0[0];
+            let dv1 = uv1[1] - uv0[1];
+            let du2 = uv2[0] - uv0[0];
+            let dv2 = uv2[1] - uv0[1];
+            let det = du1 * dv2 - du2 * dv1;
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            let tangent = (edge1 * dv2 - edge2 * dv1) * (1.0 / det);
+            for index in [i0, i1, i2] {
+                if let Some(slot) = tangents.get_mut(index) {
+                    *slot = *slot + tangent;
+                }
+            }
+        }
+        for tangent in &mut tangents {
+            if tangent.length_squared() > 1e-12 {
+                *tangent = tangent.normalize();
+            } else {
+                *tangent = Vec3::ZERO;
+            }
+        }
+        MeshAttributes { uvs, tangents }
+    }
 }
 
 pub fn cube(size: f32) -> Mesh {

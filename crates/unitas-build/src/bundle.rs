@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing;
@@ -12,6 +13,14 @@ pub const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME: &str = "development_diagnostics.marker";
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE: &str = "UNITAS_DEV_DIAGNOSTICS_ENABLED";
 pub const BUNDLE_MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANAGED_DIR_NAME: &str = "Managed";
+pub const MANAGED_GAME_ASSEMBLY_FILENAME: &str = "Assembly-CSharp.dll";
+pub const PLAYER_HOST_ASSEMBLY_FILENAME: &str = "Unitas.PlayerHost.dll";
+const PLAYER_HOST_PAYLOAD_FILENAMES: [&str; 3] = [
+    "Unitas.PlayerHost.dll",
+    "Unitas.PlayerHost.deps.json",
+    "Unitas.PlayerHost.runtimeconfig.json",
+];
 
 const SHA256_INITIAL_STATE: [u32; 8] = [
     0x6a09_e667,
@@ -191,6 +200,7 @@ pub struct BundleManifest {
     pub product_name: String,
     pub application_identifier: String,
     pub version: String,
+    pub build_identifier: String,
     pub target: BuildTarget,
     pub mode: BuildMode,
     pub development_diagnostics: bool,
@@ -206,7 +216,17 @@ impl BundleManifest {
         content_hash_hex(self.canonical_body_without_hash().as_bytes())
     }
 
-    fn canonical_body_without_hash(&self) -> String {
+    /// The identifier stamped on every build: the first 16 hex digits of the
+    /// content hash of the manifest body (scenes, managed payload, metadata),
+    /// so identical inputs always produce the same identifier.
+    pub fn compute_build_identifier(&self) -> String {
+        let hash = content_hash_hex(self.canonical_body_core().as_bytes());
+        hash.chars().take(16).collect()
+    }
+
+    /// The canonical manifest body without the build identifier and hash
+    /// lines; the base from which the build identifier is derived.
+    fn canonical_body_core(&self) -> String {
         let mut lines = Vec::with_capacity(13 + self.entries.len() * 6);
         lines.push(format!("format_version={}", self.format_version));
         lines.push(format!("company_name={}", self.company_name));
@@ -256,6 +276,12 @@ impl BundleManifest {
         lines.join("\n")
     }
 
+    fn canonical_body_without_hash(&self) -> String {
+        let mut text = self.canonical_body_core();
+        text.push_str(&format!("\nbuild_identifier={}", self.build_identifier));
+        text
+    }
+
     pub fn to_canonical_string(&self) -> String {
         let mut text = self.canonical_body_without_hash();
         text.push_str(&format!("\nmanifest_hash={}\n", self.manifest_hash));
@@ -292,6 +318,7 @@ impl BundleManifest {
         let product_name = required_field(&map, "product_name")?;
         let application_identifier = required_field(&map, "application_identifier")?;
         let version = required_field(&map, "version")?;
+        let build_identifier = required_field(&map, "build_identifier")?;
         let target_os = required_field(&map, "target_os")?;
         let target_arch = required_field(&map, "target_arch")?;
         let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {
@@ -355,6 +382,7 @@ impl BundleManifest {
             product_name,
             application_identifier,
             version,
+            build_identifier,
             target,
             mode,
             development_diagnostics,
@@ -442,6 +470,10 @@ pub struct StagedBundle {
     pub application_bundle_path: Option<PathBuf>,
     pub diagnostics_marker_path: Option<PathBuf>,
     pub manifest: BundleManifest,
+    /// Non-fatal staging problems (for example a managed payload file that is
+    /// not built yet); the bundle is complete without them, but the player
+    /// cannot run scripts until they are resolved.
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,6 +619,25 @@ pub fn stage_bundle_for_host(
         });
     }
 
+    let mut diagnostics: Vec<String> = Vec::new();
+    if let Some(project_root) = config
+        .scenes
+        .first()
+        .and_then(|scene_path| unity_project_root(scene_path))
+    {
+        // Only projects that actually carry scripts get a Managed/ payload;
+        // scene-only fixture projects stage content alone.
+        if project_has_scripts(&project_root) {
+            stage_managed_payload(
+                &project_root,
+                output_dir,
+                &mut entries,
+                &mut total_content_bytes,
+                &mut diagnostics,
+            )?;
+        }
+    }
+
     entries.sort_by(|left, right| {
         left.staged_path
             .cmp(&right.staged_path)
@@ -624,6 +675,7 @@ pub fn stage_bundle_for_host(
         product_name: config.product_name.clone(),
         application_identifier: config.application_identifier.clone(),
         version: config.version.clone(),
+        build_identifier: String::new(),
         target: config.target,
         mode: config.mode(),
         development_diagnostics: include_diagnostics,
@@ -633,6 +685,7 @@ pub fn stage_bundle_for_host(
         total_content_bytes,
         manifest_hash: String::new(),
     };
+    manifest.build_identifier = manifest.compute_build_identifier();
     manifest.manifest_hash = manifest.compute_manifest_hash();
 
     let manifest_path = output_dir.join(BUNDLE_MANIFEST_FILENAME);
@@ -687,7 +740,183 @@ pub fn stage_bundle_for_host(
         application_bundle_path,
         diagnostics_marker_path,
         manifest,
+        diagnostics,
     })
+}
+
+/// The Unity-style project root a scene belongs to: the nearest ancestor
+/// directory that contains an `Assets` folder. Returns `None` for scenes
+/// that do not live inside a project (for example test fixtures).
+fn unity_project_root(scene_path: &Path) -> Option<PathBuf> {
+    let mut directory = scene_path.parent()?;
+    loop {
+        if directory.join("Assets").is_dir() {
+            return Some(directory.to_path_buf());
+        }
+        directory = directory.parent()?;
+    }
+}
+
+/// Whether a Unity-style project directory has any C# scripts under
+/// `Assets/` (searched a few levels deep).
+fn project_has_scripts(project_root: &Path) -> bool {
+    fn dir_contains_cs(directory: &Path, depth: usize) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Ok(entries) = fs::read_dir(directory) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                dir_contains_cs(&path, depth - 1)
+            } else {
+                path.extension().is_some_and(|extension| extension == "cs")
+            }
+        })
+    }
+    dir_contains_cs(&project_root.join("Assets"), 8)
+}
+
+/// Stages the `Managed/` payload for a project: the game assembly compiled
+/// from the project's `Assets` scripts at build time through the existing
+/// bridge compile pipeline, plus the `Unitas.PlayerHost` host files. The
+/// payload list comes from the build outputs; anything that is not built yet
+/// (for example `Unitas.PlayerHost` before its owning unit lands) degrades
+/// to a diagnostic instead of failing the build.
+fn stage_managed_payload(
+    project_root: &Path,
+    output_dir: &Path,
+    entries: &mut Vec<BundleManifestEntry>,
+    total_content_bytes: &mut u64,
+    diagnostics: &mut Vec<String>,
+) -> Result<(), BundleError> {
+    let mut sources: Vec<(String, PathBuf)> = Vec::new();
+
+    let build_dir = output_dir.join("_managed_build");
+    match compile_project_scripts(project_root, &build_dir) {
+        Ok(true) => {
+            let mut game_assemblies: Vec<PathBuf> = fs::read_dir(&build_dir)
+                .map_err(|error| BundleError::Io {
+                    path: build_dir.clone(),
+                    message: error.to_string(),
+                })?
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file() && path.extension().is_some_and(|extension| extension == "dll")
+                })
+                .collect();
+            game_assemblies.sort();
+            if game_assemblies.is_empty() {
+                diagnostics.push(format!(
+                    "script compilation for '{}' produced no game assemblies",
+                    project_root.display()
+                ));
+            }
+            for assembly in game_assemblies {
+                if let Some(name) = assembly.file_name().and_then(|name| name.to_str()) {
+                    sources.push((name.to_string(), assembly));
+                }
+            }
+        }
+        Ok(false) => diagnostics.push(format!(
+            "script compilation for '{}' was skipped: bridge/Unitas.Scripting is not built; \
+             run the dotnet-build gate first",
+            project_root.display()
+        )),
+        Err(message) => diagnostics.push(format!(
+            "script compilation for '{}' failed: {message}",
+            project_root.display()
+        )),
+    }
+
+    if let Some(workspace_root) = licensing::workspace_root() {
+        let host_output_dir = workspace_root
+            .join("bridge")
+            .join("Unitas.PlayerHost")
+            .join("bin")
+            .join("Release")
+            .join("net8.0");
+        for filename in PLAYER_HOST_PAYLOAD_FILENAMES {
+            let path = host_output_dir.join(filename);
+            if path.is_file() {
+                sources.push((filename.to_string(), path));
+            } else {
+                diagnostics.push(format!(
+                    "managed payload '{filename}' is missing at '{}'; the packaged player \
+                     cannot host scripts until Unitas.PlayerHost is built",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if sources.is_empty() {
+        return Ok(());
+    }
+
+    let managed_dir = output_dir.join(MANAGED_DIR_NAME);
+    fs::create_dir_all(&managed_dir).map_err(|error| BundleError::Io {
+        path: managed_dir.clone(),
+        message: error.to_string(),
+    })?;
+    for (filename, source) in sources {
+        let bytes = fs::read(&source).map_err(|error| BundleError::Io {
+            path: source.clone(),
+            message: error.to_string(),
+        })?;
+        let staged_path = format!("{MANAGED_DIR_NAME}/{filename}");
+        fs::write(managed_dir.join(&filename), &bytes).map_err(|error| BundleError::Io {
+            path: managed_dir.join(&filename),
+            message: error.to_string(),
+        })?;
+        *total_content_bytes = total_content_bytes.saturating_add(bytes.len() as u64);
+        entries.push(BundleManifestEntry {
+            index: entries.len(),
+            source_path: source.to_string_lossy().replace('\\', "/"),
+            staged_path,
+            content_hash: content_hash_hex(&bytes),
+            size_bytes: bytes.len() as u64,
+            root_object_count: 0,
+        });
+    }
+    let _ = fs::remove_dir_all(&build_dir);
+    Ok(())
+}
+
+/// Compiles a project's scripts through the bridge compile pipeline
+/// (`Unitas.Scripting compile <projectRoot> --player`). Returns `Ok(false)`
+/// when the bridge tooling has not been built yet.
+fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<bool, String> {
+    let Some(workspace_root) = licensing::workspace_root() else {
+        return Ok(false);
+    };
+    let scripting_assembly = workspace_root
+        .join("bridge")
+        .join("Unitas.Scripting")
+        .join("bin")
+        .join("Release")
+        .join("net8.0")
+        .join("Unitas.Scripting.dll");
+    if !scripting_assembly.is_file() {
+        return Ok(false);
+    }
+    fs::create_dir_all(output_dir).map_err(|error| error.to_string())?;
+    let output = Command::new("dotnet")
+        .arg(&scripting_assembly)
+        .arg("compile")
+        .arg(project_root)
+        .arg("--player")
+        .arg("--out")
+        .arg(output_dir)
+        .output()
+        .map_err(|error| format!("failed to launch dotnet: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(true)
 }
 
 /// The macOS application bundle a staged bundle is packaged as, when the
