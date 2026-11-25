@@ -22,4 +22,3 @@ unitas-runtime = { path = "../unitas-runtime" }
 [[bin]]
 name = "unitas-player"
 path = "src/bin/unitas-player.rs"
-required-features = ["device"]

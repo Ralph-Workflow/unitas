@@ -425,18 +425,15 @@ mod tests {
         );
         let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
         let licensing = licensing_record("com.unitas.packaged");
-        let error = match package_macos_app(
+        let Err(error) = package_macos_app(
             &staged.manifest,
             &output_dir,
             &output_dir.join("PackagedGame.app"),
             Path::new("target/does-not-exist/unitas-player"),
             &licensing,
             None,
-        ) {
-            Ok(_) => {
-                return Err("packaging without a player binary unexpectedly succeeded".into());
-            }
-            Err(error) => error,
+        ) else {
+            return Err("packaging without a player binary unexpectedly succeeded".into());
         };
         assert!(matches!(error, PackageError::MissingPlayerBinary { .. }));
         Ok(())

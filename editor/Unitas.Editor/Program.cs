@@ -19,7 +19,14 @@ namespace Unitas.Editor
             if (HeadlessCli.IsCliInvocation(args))
             {
                 using McpHost cliHost = BuiltinDefaults.CreateStartupHost(args);
-                return HeadlessCli.Run(cliHost, args);
+                try
+                {
+                    return HeadlessCli.Run(cliHost, args);
+                }
+                finally
+                {
+                    cliHost.DisposeOwnedResources();
+                }
             }
 
             if (args.Length == 1 && string.Equals(args[0], "--stdio", StringComparison.Ordinal))

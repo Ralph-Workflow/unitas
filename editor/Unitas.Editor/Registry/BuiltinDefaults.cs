@@ -54,7 +54,9 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(host);
             Register(host);
             AuditTools.Register(host);
-            CaptureTool.Register(host, PlayTools.Register(host));
+            PlaySessionManager playSessionManager = PlayTools.Register(host);
+            host.OwnResource(playSessionManager);
+            CaptureTool.Register(host, playSessionManager);
             host.TryRegisterNativeLibrary();
         }
 

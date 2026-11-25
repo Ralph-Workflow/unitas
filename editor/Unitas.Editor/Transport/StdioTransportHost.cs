@@ -109,7 +109,14 @@ namespace Unitas.Editor.Mcp
             }
             finally
             {
-                await transport.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await transport.DisposeAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    host.DisposeOwnedResources();
+                }
             }
         }
 

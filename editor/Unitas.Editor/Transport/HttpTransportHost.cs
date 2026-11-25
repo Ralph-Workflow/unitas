@@ -161,7 +161,14 @@ namespace Unitas.Editor.Mcp
 
         public async ValueTask DisposeAsync()
         {
-            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                host.DisposeOwnedResources();
+            }
         }
 
         public static McpProtocolException MapError(McpError error)

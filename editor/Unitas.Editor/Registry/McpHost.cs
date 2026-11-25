@@ -20,6 +20,8 @@ namespace Unitas.Editor.Mcp
         // if the Authorizer grows a session getter.
         private readonly Dictionary<string, SessionIdentity> identities =
             new Dictionary<string, SessionIdentity>(StringComparer.Ordinal);
+        private readonly List<IDisposable> ownedResources = new List<IDisposable>();
+        private readonly object ownedResourcesLock = new object();
         private string? currentSessionId;
 
         public McpHost()
@@ -161,6 +163,30 @@ namespace Unitas.Editor.Mcp
         public void RegisterResource(ResourceDefinition definition, ResourceReader reader)
         {
             resources.Register(definition, reader);
+        }
+
+        public void OwnResource(IDisposable resource)
+        {
+            ArgumentNullException.ThrowIfNull(resource);
+            lock (ownedResourcesLock)
+            {
+                ownedResources.Add(resource);
+            }
+        }
+
+        public void DisposeOwnedResources()
+        {
+            List<IDisposable> resources;
+            lock (ownedResourcesLock)
+            {
+                resources = new List<IDisposable>(ownedResources);
+                ownedResources.Clear();
+            }
+
+            foreach (IDisposable resource in resources)
+            {
+                resource.Dispose();
+            }
         }
 
         public IReadOnlyList<ToolDefinition> ListTools()
