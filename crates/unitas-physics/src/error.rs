@@ -1,11 +1,15 @@
 use unitas_core::EntityId;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PhysicsError {
     DuplicateEntity(EntityId),
     InvalidBody(EntityId),
     InvalidDeltaTime(f64),
     InvalidCharacterController,
+    NonConvexMeshColliderOnDynamicBody {
+        entity: EntityId,
+        object_name: String,
+    },
 }
 
 impl std::fmt::Display for PhysicsError {
@@ -24,6 +28,13 @@ impl std::fmt::Display for PhysicsError {
             Self::InvalidCharacterController => {
                 write!(formatter, "invalid character controller configuration")
             }
+            Self::NonConvexMeshColliderOnDynamicBody {
+                entity,
+                object_name,
+            } => write!(
+                formatter,
+                "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{object_name}' (entity {entity})"
+            ),
         }
     }
 }

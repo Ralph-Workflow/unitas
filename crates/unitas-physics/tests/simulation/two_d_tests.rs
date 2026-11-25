@@ -311,3 +311,226 @@ fn fixed_timestep_accumulator_sleeping_and_simulated_flag() {
         Some(Shape2D::Circle { .. })
     ));
 }
+
+#[test]
+fn composite_collider_merges_child_colliders_and_manual_generation_gates_rebuild() {
+    use unitas_physics::two_d::{
+        CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D,
+    };
+
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let comp_go = EntityId::new(200);
+    let comp_body = world.add_body(BodyDesc2D::static_body(comp_go, [0.0, 0.0]));
+    let comp_col = world.add_collider(
+        ColliderDesc2D::box_collider(comp_go, [0.0, 0.0]).with_attached_body(comp_body),
+    );
+    world.attach_composite(
+        comp_col,
+        CompositeCollider2D::new(
+            CompositeGeometryType2D::Polygons,
+            CompositeGenerationType2D::Synchronous,
+        ),
+    );
+
+    let left_col = world.add_collider(
+        ColliderDesc2D::box_collider(comp_go, [0.5, 0.5])
+            .with_attached_body(comp_body)
+            .with_offset([-0.5, 0.0])
+            .with_used_by_composite(true),
+    );
+    let right_col = world.add_collider(
+        ColliderDesc2D::box_collider(comp_go, [0.5, 0.5])
+            .with_attached_body(comp_body)
+            .with_offset([0.5, 0.0])
+            .with_used_by_composite(true),
+    );
+
+    let hits = world.raycast([0.0, 2.0], [0.0, -1.0], 5.0, ContactFilter2D::no_filter());
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].collider, comp_col);
+    assert!(!hits.iter().any(|h| h.collider == left_col || h.collider == right_col));
+
+    world.set_composite_generation_type(comp_col, CompositeGenerationType2D::Manual);
+    let extra_col = world.add_collider(
+        ColliderDesc2D::box_collider(comp_go, [0.5, 0.5])
+            .with_attached_body(comp_body)
+            .with_offset([2.5, 0.0])
+            .with_used_by_composite(true),
+    );
+    assert!(
+        world
+            .overlap_point([2.5, 0.0], ContactFilter2D::no_filter())
+            .is_empty(),
+        "manual generation must not include new child collider until regenerate_composite"
+    );
+
+    world.regenerate_composite(comp_col);
+    assert_eq!(
+        world.overlap_point([2.5, 0.0], ContactFilter2D::no_filter()),
+        vec![comp_col]
+    );
+    let _ = extra_col;
+}
+
+#[test]
+fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way_platform() {
+    use unitas_physics::two_d::{
+        CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D,
+        PlatformEffector2D, TileColliderType2D, TilemapCollider2D,
+    };
+
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let tilemap_go = EntityId::new(300);
+    let tilemap_body = world.add_body(BodyDesc2D::static_body(tilemap_go, [0.0, 0.0]));
+    let comp_col = world.add_collider(
+        ColliderDesc2D::box_collider(tilemap_go, [0.0, 0.0])
+            .with_attached_body(tilemap_body)
+            .with_used_by_effector(true),
+    );
+    world.attach_composite(
+        comp_col,
+        CompositeCollider2D::new(
+            CompositeGeometryType2D::Outlines,
+            CompositeGenerationType2D::Synchronous,
+        ),
+    );
+    world.attach_effector(comp_col, PlatformEffector2D::default());
+
+    let mut tilemap = TilemapCollider2D::new([1.0, 0.5]).with_used_by_composite(true);
+    tilemap.set_tile([-1, 0], TileColliderType2D::Grid);
+    tilemap.set_tile([0, 0], TileColliderType2D::Grid);
+    tilemap.set_tile([1, 0], TileColliderType2D::Grid);
+    world.attach_tilemap(comp_col, tilemap);
+
+    assert_eq!(
+        world.overlap_point([0.5, 0.25], ContactFilter2D::no_filter()),
+        vec![comp_col]
+    );
+
+    let player_go = EntityId::new(301);
+    let player_body = world.add_body(
+        BodyDesc2D::dynamic(player_go, [0.5, -1.2]).with_velocity([0.0, 12.0]),
+    );
+    let player_col = world.add_collider(
+        ColliderDesc2D::box_collider(player_go, [0.3, 0.3]).with_attached_body(player_body),
+    );
+
+    let mut passed_up = false;
+    for _ in 0..35 {
+        world.step(0.02);
+        let y = world.body(player_body).map_or(-1.2, |b| b.position[1]);
+        let vy = world.body(player_body).map_or(0.0, |b| b.linear_velocity[1]);
+        if vy > 0.0 {
+            assert!(
+                world.drain_messages().is_empty(),
+                "jumping upward through composite one-way tilemap platform must fire no events"
+            );
+        }
+        if y > 1.0 {
+            passed_up = true;
+            break;
+        }
+    }
+    assert!(passed_up, "player must jump up through one-way composite tilemap");
+
+    let mut landed_enter = false;
+    for _ in 0..120 {
+        world.step(0.02);
+        for msg in world.drain_messages() {
+            if msg.recipient == player_go && msg.kind == MessageKind2D::CollisionEnter2D {
+                landed_enter = true;
+            }
+        }
+    }
+    assert!(landed_enter, "player landing on composite tilemap must receive OnCollisionEnter2D");
+    assert!(world.is_touching(player_col, comp_col));
+
+    world.remove_tilemap_tile(comp_col, [0, 0]);
+    assert!(
+        world
+            .overlap_point([0.5, 0.25], ContactFilter2D::no_filter())
+            .is_empty(),
+        "removing tile [0, 0] must remove collision at that tile cell"
+    );
+    assert_eq!(
+        world.overlap_point([-0.5, 0.25], ContactFilter2D::no_filter()),
+        vec![comp_col],
+        "neighboring tile [-1, 0] must remain solid in composite"
+    );
+    assert_eq!(
+        world.overlap_point([1.5, 0.25], ContactFilter2D::no_filter()),
+        vec![comp_col],
+        "neighboring tile [1, 0] must remain solid in composite"
+    );
+
+    if let Some(b) = world.body_mut(player_body) {
+        b.wake_up();
+    }
+    for _ in 0..40 {
+        world.step(0.02);
+    }
+    let y_after_remove = world.body(player_body).map_or(1.0, |b| b.position[1]);
+    assert!(
+        y_after_remove < -0.5,
+        "player standing over removed tile [0, 0] must fall through gap, got y={y_after_remove}"
+    );
+}
+
+#[test]
+fn separate_tilemap_collider_supports_grid_sprite_and_none_tile_types_and_feeds_composite() {
+    use unitas_physics::two_d::{
+        CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D, TileColliderType2D,
+        TilemapCollider2D,
+    };
+
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    let parent_go = EntityId::new(400);
+    let child_tm_go = EntityId::new(401);
+    let body = world.add_body(BodyDesc2D::static_body(parent_go, [0.0, 0.0]));
+
+    let comp_col = world.add_collider(
+        ColliderDesc2D::box_collider(parent_go, [0.0, 0.0]).with_attached_body(body),
+    );
+    world.attach_composite(
+        comp_col,
+        CompositeCollider2D::new(
+            CompositeGeometryType2D::Polygons,
+            CompositeGenerationType2D::Synchronous,
+        ),
+    );
+
+    let tm_col = world.add_collider(
+        ColliderDesc2D::box_collider(child_tm_go, [0.0, 0.0]).with_attached_body(body),
+    );
+    let mut tilemap = TilemapCollider2D::new([2.0, 2.0]).with_used_by_composite(true);
+    tilemap.set_tile([0, 0], TileColliderType2D::Grid);
+    tilemap.set_tile(
+        [2, 0],
+        TileColliderType2D::Sprite {
+            vertices: vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+        },
+    );
+    world.attach_tilemap(tm_col, tilemap);
+
+    assert_eq!(
+        world.overlap_point([1.0, 1.0], ContactFilter2D::no_filter()),
+        vec![comp_col]
+    );
+    assert_eq!(
+        world.overlap_point([5.0, 0.5], ContactFilter2D::no_filter()),
+        vec![comp_col]
+    );
+
+    world.set_tilemap_tile(tm_col, [0, 0], TileColliderType2D::None);
+    assert!(
+        world
+            .overlap_point([1.0, 1.0], ContactFilter2D::no_filter())
+            .is_empty(),
+        "setting tile collider type to None must clear tile collision in composite"
+    );
+    assert_eq!(
+        world.overlap_point([5.0, 0.5], ContactFilter2D::no_filter()),
+        vec![comp_col],
+        "sprite tile at [2, 0] must remain active in composite"
+    );
+}

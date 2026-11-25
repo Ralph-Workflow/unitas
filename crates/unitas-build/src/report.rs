@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::bundle::{
+    ContentBuildMode, ContentBuildResult, ContentRejectionReason, RejectedContentBundle,
+};
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::targets::{BuildTarget, TargetArch, TargetOs};
 
@@ -94,6 +97,32 @@ impl BuildDiagnostic {
             message: message.into(),
             source: Some(content_path.into()),
             remedy,
+        }
+    }
+
+    pub fn from_rejected_content_bundle(rejected: &RejectedContentBundle) -> Self {
+        let remedy = match &rejected.reason {
+            ContentRejectionReason::UnityBuiltArchive { .. } => {
+                "rebuild the AssetBundle or Addressables group from project sources with unitas"
+            }
+            ContentRejectionReason::TargetMismatch { .. } => {
+                "rebuild the content bundle for the active player target"
+            }
+            ContentRejectionReason::IncompatiblePlayerVersion { .. } => {
+                "rebuild the content bundle against the shipped player's compatibility version"
+            }
+            ContentRejectionReason::UnreadableScene { .. } => {
+                "fix the corrupted or unsupported serialized scene/asset data and rebuild"
+            }
+        };
+        Self {
+            code: String::from(rejected.reason.code()),
+            message: format!(
+                "bundle '{}' rejected: {}",
+                rejected.bundle_name, rejected.reason
+            ),
+            source: Some(rejected.bundle_name.clone()),
+            remedy: Some(String::from(remedy)),
         }
     }
 }
@@ -1107,6 +1136,227 @@ fn parse_build_mode(raw: &str) -> Result<BuildMode, ReportParseError> {
             "unrecognized build configuration mode '{raw}'"
         ))),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedBundleReportEntry {
+    pub bundle_name: String,
+    pub source_path: String,
+    pub code: String,
+    pub reason: String,
+}
+
+impl RejectedBundleReportEntry {
+    pub fn from_rejected_bundle(rejected: &RejectedContentBundle) -> Self {
+        Self {
+            bundle_name: rejected.bundle_name.clone(),
+            source_path: rejected.source_path.to_string_lossy().into_owned(),
+            code: String::from(rejected.reason.code()),
+            reason: rejected.reason.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentBuildReport {
+    pub mode: ContentBuildMode,
+    pub unitas_version: String,
+    pub player_compatibility_version: String,
+    pub target: BuildTarget,
+    pub architecture: TargetArch,
+    pub outcome: BuildOutcome,
+    pub elapsed_ms: u64,
+    pub catalog_path: Option<PathBuf>,
+    pub catalog_hash: String,
+    pub emitted_bundles: Vec<String>,
+    pub unchanged_bundles: Vec<String>,
+    pub rejected_bundles: Vec<RejectedBundleReportEntry>,
+    pub errors: Vec<BuildDiagnostic>,
+}
+
+impl ContentBuildReport {
+    pub fn from_build_result(
+        result: &ContentBuildResult,
+        mode: ContentBuildMode,
+        elapsed_ms: u64,
+    ) -> Self {
+        let outcome = if result.rejected_bundles.is_empty() {
+            BuildOutcome::Succeeded
+        } else {
+            BuildOutcome::Failed
+        };
+        let emitted_bundles = result
+            .emitted_bundles
+            .iter()
+            .map(|entry| entry.bundle_name.clone())
+            .collect();
+        let rejected_bundles = result
+            .rejected_bundles
+            .iter()
+            .map(RejectedBundleReportEntry::from_rejected_bundle)
+            .collect();
+        let errors = result
+            .rejected_bundles
+            .iter()
+            .map(BuildDiagnostic::from_rejected_content_bundle)
+            .collect();
+
+        Self {
+            mode,
+            unitas_version: result.catalog.unitas_version.clone(),
+            player_compatibility_version: result.catalog.player_compatibility_version.clone(),
+            target: result.catalog.target,
+            architecture: result.catalog.target.arch(),
+            outcome,
+            elapsed_ms,
+            catalog_path: Some(result.catalog_path.clone()),
+            catalog_hash: result.catalog.catalog_hash.clone(),
+            emitted_bundles,
+            unchanged_bundles: result.unchanged_bundles.clone(),
+            rejected_bundles,
+            errors,
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        let mut out = String::from("{\n");
+        push_kv_str(&mut out, 2, "mode", self.mode.as_str(), true);
+        push_kv_str(&mut out, 2, "unitas_version", &self.unitas_version, true);
+        push_kv_str(
+            &mut out,
+            2,
+            "player_compatibility_version",
+            &self.player_compatibility_version,
+            true,
+        );
+        push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
+        push_kv_str(&mut out, 2, "architecture", self.architecture.as_str(), true);
+        push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
+        push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
+        push_kv_opt_path(
+            &mut out,
+            2,
+            "catalog_path",
+            self.catalog_path.as_deref(),
+            true,
+        );
+        push_kv_str(&mut out, 2, "catalog_hash", &self.catalog_hash, true);
+        push_kv_string_array(&mut out, 2, "emitted_bundles", &self.emitted_bundles, true);
+        push_kv_string_array(
+            &mut out,
+            2,
+            "unchanged_bundles",
+            &self.unchanged_bundles,
+            true,
+        );
+        push_kv_rejected_bundles(
+            &mut out,
+            2,
+            "rejected_bundles",
+            &self.rejected_bundles,
+            true,
+        );
+        push_kv_diagnostics(&mut out, 2, "errors", &self.errors, false);
+        out.push_str("}\n");
+        out
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, ReportParseError> {
+        let root = JsonParser::parse(json)?;
+        let obj = root.as_object("root")?;
+
+        let mode_str = get_required_str(obj, "mode")?;
+        let mode = ContentBuildMode::from_name(mode_str).ok_or_else(|| {
+            ReportParseError::new(format!("unrecognized content build mode '{mode_str}'"))
+        })?;
+        let unitas_version = get_required_str(obj, "unitas_version")?.to_string();
+        let player_compatibility_version =
+            get_required_str(obj, "player_compatibility_version")?.to_string();
+        let target_str = get_required_str(obj, "target")?;
+        let architecture_str = get_required_str(obj, "architecture")?;
+        let architecture = parse_target_arch(architecture_str)?;
+        let target = parse_build_target(target_str, architecture)?;
+        let outcome_str = get_required_str(obj, "outcome")?;
+        let outcome = BuildOutcome::from_name(outcome_str).ok_or_else(|| {
+            ReportParseError::new(format!("unrecognized build outcome '{outcome_str}'"))
+        })?;
+        let elapsed_ms = get_required_u64(obj, "elapsed_ms")?;
+        let catalog_path = get_optional_path(obj, "catalog_path")?;
+        let catalog_hash = get_required_str(obj, "catalog_hash")?.to_string();
+        let emitted_bundles = get_required_string_list(obj, "emitted_bundles")?;
+        let unchanged_bundles = get_required_string_list(obj, "unchanged_bundles")?;
+        let rejected_bundles = get_required_rejected_bundles(obj, "rejected_bundles")?;
+        let errors = get_required_diagnostics(obj, "errors")?;
+
+        Ok(Self {
+            mode,
+            unitas_version,
+            player_compatibility_version,
+            target,
+            architecture,
+            outcome,
+            elapsed_ms,
+            catalog_path,
+            catalog_hash,
+            emitted_bundles,
+            unchanged_bundles,
+            rejected_bundles,
+            errors,
+        })
+    }
+}
+
+fn push_kv_rejected_bundles(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[RejectedBundleReportEntry],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "bundle_name", &item.bundle_name, true);
+        push_kv_str(out, indent + 4, "source_path", &item.source_path, true);
+        push_kv_str(out, indent + 4, "code", &item.code, true);
+        push_kv_str(out, indent + 4, "reason", &item.reason, false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
+fn get_required_rejected_bundles(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<RejectedBundleReportEntry>, ReportParseError> {
+    let arr = get_field(obj, key)?.as_array(key)?;
+    let mut list = Vec::with_capacity(arr.len());
+    for item in arr {
+        let entry_obj = item.as_object(key)?;
+        let bundle_name = get_required_str(entry_obj, "bundle_name")?.to_string();
+        let source_path = get_required_str(entry_obj, "source_path")?.to_string();
+        let code = get_required_str(entry_obj, "code")?.to_string();
+        let reason = get_required_str(entry_obj, "reason")?.to_string();
+        list.push(RejectedBundleReportEntry {
+            bundle_name,
+            source_path,
+            code,
+            reason,
+        });
+    }
+    Ok(list)
 }
 
 #[cfg(test)]

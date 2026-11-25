@@ -733,3 +733,295 @@ fn package_key(feature_id: &str) -> &str {
         None => feature_id,
     }
 }
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PackageSource {
+    Registry,
+    ScopedRegistry,
+    Git,
+    LocalPath,
+    Embedded,
+    Tarball,
+    BuiltInModule,
+    AssetStoreFolder,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectPackageEntry {
+    pub package_id: String,
+    pub version: String,
+    pub source: PackageSource,
+    pub is_locally_modified_embedded: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectAssetEntry {
+    pub family: String,
+    pub content: ContentIdentity,
+    pub owning_feature_id: Option<String>,
+    pub tier: Option<Tier>,
+    pub state: Option<CompatibilityState>,
+    pub observable_consequence: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectSettingEntry {
+    pub setting_name: String,
+    pub family: String,
+    pub owning_feature_id: Option<String>,
+    pub tier: Option<Tier>,
+    pub state: Option<CompatibilityState>,
+    pub observable_consequence: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectContent {
+    pub unitas_version: String,
+    pub declared_unity_version: Option<String>,
+    pub packages: Vec<ProjectPackageEntry>,
+    pub assets: Vec<ProjectAssetEntry>,
+    pub settings: Vec<ProjectSettingEntry>,
+    pub additional_findings: Vec<Finding>,
+    pub track_absent_catalog_features: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProjectCompatibilityAssessment {
+    pub report: CompatibilityReport,
+    pub effective_baseline_unity_version: String,
+    pub migrated_from_earlier_lts: bool,
+    pub overall_state: CompatibilityState,
+    pub assessed_packages: Vec<AssessedPackage>,
+    pub present_supported_features: Vec<String>,
+    pub partially_supported_features: Vec<String>,
+    pub unsupported_features: Vec<String>,
+    pub unknown_features: Vec<String>,
+    pub absent_features: Vec<String>,
+    pub playable_scenes: Vec<String>,
+}
+
+pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessment {
+    let migrated_from_earlier_lts = content
+        .declared_unity_version
+        .as_deref()
+        .is_some_and(|version| version.starts_with("2020.3") || version.starts_with("2021.3"));
+
+    let mut assessed_packages: Vec<AssessedPackage> = Vec::new();
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut playable_scenes: Vec<String> = Vec::new();
+
+    for pkg in &content.packages {
+        let assessed = if pkg.source == PackageSource::BuiltInModule
+            || pkg.package_id.starts_with("com.unity.modules.")
+        {
+            AssessedPackage {
+                package_id: pkg.package_id.clone(),
+                resolved_version: pkg.version.clone(),
+                tier: Some(Tier::Semantic),
+                state: CompatibilityState::Supported,
+                owning_spec: Some("scripting-runtime.md".to_string()),
+                owning_feature_id: Some("RUN-002".to_string()),
+                notes: "built-in engine module".to_string(),
+            }
+        } else {
+            assess_package(
+                &pkg.package_id,
+                &pkg.version,
+                pkg.is_locally_modified_embedded,
+            )
+        };
+        let feature_id = assessed
+            .owning_feature_id
+            .clone()
+            .unwrap_or_else(|| "PRJ-006".to_string());
+        let tier = assessed.tier.unwrap_or(Tier::Native);
+        findings.push(Finding {
+            feature_id,
+            tier,
+            state: assessed.state,
+            content: ContentIdentity {
+                guid: None,
+                asset_path: Some(format!("Packages/{}", pkg.package_id)),
+                sub_asset_id: None,
+                object_name: Some(format!("{}@{}", pkg.package_id, pkg.version)),
+            },
+            behavior: format!("package {} ({})", pkg.package_id, pkg.version),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: assessed.notes.clone(),
+            conditions: vec!["package resolved in project manifest".to_string()],
+            related_findings: Vec::new(),
+        });
+        assessed_packages.push(assessed);
+    }
+
+    for asset in &content.assets {
+        let unsupported_entry = lookup_unsupported_family(&asset.family);
+        let state = asset.state.unwrap_or_else(|| {
+            unsupported_entry.map_or(CompatibilityState::Unknown, |entry| entry.state)
+        });
+        let feature_id = asset.owning_feature_id.clone().unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || "PRJ-004".to_string(),
+                |entry| entry.owning_feature_id.to_string(),
+            )
+        });
+        let tier = asset.tier.unwrap_or(Tier::Native);
+        let consequence = asset.observable_consequence.clone().unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || match state {
+                    CompatibilityState::Supported => {
+                        "content is editable and playable".to_string()
+                    }
+                    CompatibilityState::PartiallySupported => {
+                        "content is usable with stated exclusions".to_string()
+                    }
+                    CompatibilityState::Unsupported => {
+                        "recognized content is unsupported; unrelated content remains usable"
+                            .to_string()
+                    }
+                    CompatibilityState::Unknown
+                    | CompatibilityState::PlatformLimited
+                    | CompatibilityState::ExternallyUnavailable => {
+                        "content compatibility requires target or behavioral classification"
+                            .to_string()
+                    }
+                },
+                |entry| entry.observable_consequence.to_string(),
+            )
+        });
+        if state == CompatibilityState::Supported {
+            if let Some(path) = &asset.content.asset_path {
+                if path.ends_with(".unity") && !playable_scenes.contains(path) {
+                    playable_scenes.push(path.clone());
+                }
+            }
+        }
+        findings.push(Finding {
+            feature_id,
+            tier,
+            state,
+            content: asset.content.clone(),
+            behavior: format!("asset family {}", asset.family),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: consequence,
+            conditions: vec!["asset is present in project".to_string()],
+            related_findings: Vec::new(),
+        });
+    }
+
+    for setting in &content.settings {
+        let unsupported_entry = lookup_unsupported_family(&setting.family);
+        let state = setting.state.unwrap_or_else(|| {
+            unsupported_entry.map_or(CompatibilityState::Supported, |entry| entry.state)
+        });
+        let feature_id = setting.owning_feature_id.clone().unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || "PRJ-007".to_string(),
+                |entry| entry.owning_feature_id.to_string(),
+            )
+        });
+        let tier = setting.tier.unwrap_or(Tier::Exact);
+        let consequence = setting.observable_consequence.clone().unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || "project setting is represented and honored".to_string(),
+                |entry| entry.observable_consequence.to_string(),
+            )
+        });
+        findings.push(Finding {
+            feature_id,
+            tier,
+            state,
+            content: ContentIdentity {
+                guid: None,
+                asset_path: Some(setting.setting_name.clone()),
+                sub_asset_id: None,
+                object_name: Some(setting.family.clone()),
+            },
+            behavior: format!("project setting {}", setting.family),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: consequence,
+            conditions: vec!["setting is configured in ProjectSettings".to_string()],
+            related_findings: Vec::new(),
+        });
+    }
+
+    for extra in &content.additional_findings {
+        if is_present(extra) && extra.state == CompatibilityState::Supported {
+            if let Some(path) = &extra.content.asset_path {
+                if path.ends_with(".unity") && !playable_scenes.contains(path) {
+                    playable_scenes.push(path.clone());
+                }
+            }
+        }
+        findings.push(extra.clone());
+    }
+
+    let mut present_supported_features: Vec<String> = Vec::new();
+    let mut partially_supported_features: Vec<String> = Vec::new();
+    let mut unsupported_features: Vec<String> = Vec::new();
+    let mut unknown_features: Vec<String> = Vec::new();
+    let mut absent_features: Vec<String> = Vec::new();
+    let mut present_states: Vec<CompatibilityState> = Vec::new();
+
+    for finding in &findings {
+        if !is_present(finding) {
+            push_unique(&mut absent_features, &finding.feature_id);
+            continue;
+        }
+        present_states.push(finding.state);
+        match finding.state {
+            CompatibilityState::Supported => {
+                push_unique(&mut present_supported_features, &finding.feature_id);
+            }
+            CompatibilityState::PartiallySupported => {
+                push_unique(&mut partially_supported_features, &finding.feature_id);
+            }
+            CompatibilityState::Unsupported => {
+                push_unique(&mut unsupported_features, &finding.feature_id);
+            }
+            CompatibilityState::Unknown
+            | CompatibilityState::PlatformLimited
+            | CompatibilityState::ExternallyUnavailable => {
+                push_unique(&mut unknown_features, &finding.feature_id);
+            }
+        }
+    }
+
+    for tracked in &content.track_absent_catalog_features {
+        let is_any_present = findings
+            .iter()
+            .any(|f| is_present(f) && &f.feature_id == tracked);
+        if !is_any_present {
+            push_unique(&mut absent_features, tracked);
+            let already_has_absence = findings
+                .iter()
+                .any(|f| !is_present(f) && &f.feature_id == tracked);
+            if !already_has_absence {
+                findings.push(absence_finding(tracked));
+            }
+        }
+    }
+
+    let overall_state = least_supported_state(&present_states);
+    let report = build_report(&content.unitas_version, findings);
+
+    ProjectCompatibilityAssessment {
+        report,
+        effective_baseline_unity_version: "2022.3 LTS".to_string(),
+        migrated_from_earlier_lts,
+        overall_state,
+        assessed_packages,
+        present_supported_features,
+        partially_supported_features,
+        unsupported_features,
+        unknown_features,
+        absent_features,
+        playable_scenes,
+    }
+}
+
+fn push_unique(list: &mut Vec<String>, item: &str) {
+    if !list.iter().any(|existing| existing == item) {
+        list.push(item.to_string());
+    }
+}

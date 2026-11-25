@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+jpeg-decoder = { version = "0.3.2", default-features = false }
+lewton = "0.10.2"
+minimp3 = "0.6.1"
 unitas-core = { path = "../unitas-core" }

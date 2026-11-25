@@ -6,8 +6,12 @@ use crate::event::Phase;
 use crate::matrix::{CollisionMatrix, LAYER_COUNT};
 use crate::two_d::body::{BodyDesc2D, BodyId2D, BodyType2D, Rigidbody2D};
 use crate::two_d::collider::{
-    compute_contact2d, dot2, length2, normalize2, point_in_shape2d, raycast_shape2d, rotate_vec2,
-    sub2, transform_point2, Collider2D, ColliderDesc2D, ColliderId2D, PhysicsMaterial2D, Shape2D,
+    compute_contact2d, dot2, inverse_transform_point2, length2, normalize2, point_in_shape2d,
+    raycast_shape2d, rotate_vec2, shape_to_local_shapes_in_frame, sub2, transform_point2,
+    Collider2D, ColliderDesc2D, ColliderId2D, PhysicsMaterial2D, Shape2D,
+};
+use crate::two_d::composite::{
+    CompositeCollider2D, CompositeGenerationType2D, TileColliderType2D, TilemapCollider2D,
 };
 use crate::two_d::effector::{Effector2D, PlatformEffector2D, SurfaceEffector2D};
 use crate::two_d::event::{
@@ -125,6 +129,8 @@ pub struct World2D {
     accumulator: f32,
     bodies: BTreeMap<BodyId2D, Rigidbody2D>,
     colliders: BTreeMap<ColliderId2D, Collider2D>,
+    composites: BTreeMap<ColliderId2D, CompositeCollider2D>,
+    tilemaps: BTreeMap<ColliderId2D, TilemapCollider2D>,
     effectors: BTreeMap<ColliderId2D, Vec<Effector2D>>,
     next_body_id: u64,
     next_collider_id: u64,
@@ -157,6 +163,8 @@ impl World2D {
             accumulator: 0.0,
             bodies: BTreeMap::new(),
             colliders: BTreeMap::new(),
+            composites: BTreeMap::new(),
+            tilemaps: BTreeMap::new(),
             effectors: BTreeMap::new(),
             next_body_id: 1,
             next_collider_id: 1,
@@ -288,8 +296,14 @@ impl World2D {
     pub fn add_collider(&mut self, desc: ColliderDesc2D) -> ColliderId2D {
         let id = ColliderId2D::new(self.next_collider_id);
         self.next_collider_id += 1;
+        let used_by_composite = desc.used_by_composite;
+        let attached_body = desc.attached_body;
+        let game_object = desc.game_object;
         let collider = Collider2D::from_desc(id, desc);
         self.colliders.insert(id, collider);
+        if used_by_composite {
+            self.sync_composites_for_owner(attached_body, game_object);
+        }
         id
     }
 
@@ -302,8 +316,11 @@ impl World2D {
     }
 
     pub fn remove_collider(&mut self, id: ColliderId2D) -> bool {
-        let existed = self.colliders.remove(&id).is_some();
-        if existed {
+        let removed = self.colliders.remove(&id);
+        let existed = removed.is_some();
+        if let Some(col) = removed {
+            self.composites.remove(&id);
+            self.tilemaps.remove(&id);
             self.effectors.remove(&id);
             self.ignored_pairs
                 .retain(|(a, b)| *a != id && *b != id);
@@ -311,8 +328,196 @@ impl World2D {
                 .retain(|(a, b), _| *a != id && *b != id);
             self.pass_through_pairs
                 .retain(|(a, b)| *a != id && *b != id);
+            if col.used_by_composite {
+                self.sync_composites_for_owner(col.attached_body, col.game_object);
+            }
         }
         existed
+    }
+
+    pub fn attach_composite(&mut self, collider: ColliderId2D, composite: CompositeCollider2D) {
+        let is_sync = composite.generation_type == CompositeGenerationType2D::Synchronous;
+        self.composites.insert(collider, composite);
+        if is_sync {
+            self.regenerate_composite(collider);
+        }
+    }
+
+    pub fn composite(&self, collider: ColliderId2D) -> Option<&CompositeCollider2D> {
+        self.composites.get(&collider)
+    }
+
+    pub fn set_composite_generation_type(
+        &mut self,
+        collider: ColliderId2D,
+        generation_type: CompositeGenerationType2D,
+    ) {
+        if let Some(comp) = self.composites.get_mut(&collider) {
+            comp.generation_type = generation_type;
+            if generation_type == CompositeGenerationType2D::Synchronous {
+                self.regenerate_composite(collider);
+            }
+        }
+    }
+
+    pub fn regenerate_composite(&mut self, composite_collider: ColliderId2D) -> bool {
+        if !self.composites.contains_key(&composite_collider) {
+            return false;
+        }
+        let Some(comp_col) = self.colliders.get(&composite_collider).cloned() else {
+            return false;
+        };
+        let (comp_center, comp_angle) = self.collider_world_pose(&comp_col);
+        let mut merged_shapes: Vec<Shape2D> = Vec::new();
+
+        if let Some(own_tilemap) = self.tilemaps.get(&composite_collider) {
+            if own_tilemap.used_by_composite {
+                merged_shapes.extend(own_tilemap.build_shapes());
+            }
+        }
+
+        let all_ids: Vec<ColliderId2D> = self.colliders.keys().copied().collect();
+        for other_id in all_ids {
+            if other_id == composite_collider {
+                continue;
+            }
+            let Some(other_col) = self.colliders.get(&other_id) else {
+                continue;
+            };
+            if !other_col.enabled || !other_col.active {
+                continue;
+            }
+            let same_owner = if comp_col.attached_body.is_some() {
+                other_col.attached_body == comp_col.attached_body
+            } else {
+                other_col.attached_body.is_none() && other_col.game_object == comp_col.game_object
+            };
+            if !same_owner {
+                continue;
+            }
+            let (other_center, other_angle) = self.collider_world_pose(other_col);
+            let rel_offset = inverse_transform_point2(other_center, comp_center, comp_angle);
+            let rel_angle = other_angle - comp_angle;
+
+            if let Some(tm) = self.tilemaps.get(&other_id) {
+                if tm.used_by_composite || other_col.used_by_composite {
+                    for tm_shape in tm.build_shapes() {
+                        merged_shapes.extend(shape_to_local_shapes_in_frame(
+                            &tm_shape, rel_offset, rel_angle,
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            if other_col.used_by_composite {
+                merged_shapes.extend(shape_to_local_shapes_in_frame(
+                    &other_col.shape,
+                    rel_offset,
+                    rel_angle,
+                ));
+            }
+        }
+
+        if let Some(col_mut) = self.colliders.get_mut(&composite_collider) {
+            col_mut.shape = Shape2D::Composite {
+                shapes: merged_shapes,
+            };
+        }
+        true
+    }
+
+    pub fn attach_tilemap(&mut self, collider: ColliderId2D, tilemap: TilemapCollider2D) {
+        let used_by_comp = tilemap.used_by_composite;
+        if let Some(col) = self.colliders.get_mut(&collider) {
+            if used_by_comp && ! self.composites.contains_key(&collider) {
+                col.used_by_composite = true;
+            }
+        }
+        self.tilemaps.insert(collider, tilemap);
+        self.rebuild_tilemap_and_composites(collider);
+    }
+
+    pub fn tilemap(&self, collider: ColliderId2D) -> Option<&TilemapCollider2D> {
+        self.tilemaps.get(&collider)
+    }
+
+    pub fn set_tilemap_tile(
+        &mut self,
+        collider: ColliderId2D,
+        cell: [i32; 2],
+        collider_type: TileColliderType2D,
+    ) -> bool {
+        let Some(tilemap) = self.tilemaps.get_mut(&collider) else {
+            return false;
+        };
+        tilemap.set_tile(cell, collider_type);
+        self.rebuild_tilemap_and_composites(collider);
+        true
+    }
+
+    pub fn remove_tilemap_tile(&mut self, collider: ColliderId2D, cell: [i32; 2]) -> bool {
+        let Some(tilemap) = self.tilemaps.get_mut(&collider) else {
+            return false;
+        };
+        let existed = tilemap.remove_tile(cell);
+        if existed {
+            self.rebuild_tilemap_and_composites(collider);
+        }
+        existed
+    }
+
+    fn rebuild_tilemap_and_composites(&mut self, collider: ColliderId2D) {
+        let Some(tilemap) = self.tilemaps.get(&collider).cloned() else {
+            return;
+        };
+        let is_also_composite = self.composites.contains_key(&collider);
+        if !tilemap.used_by_composite && !is_also_composite {
+            let shapes = tilemap.build_shapes();
+            if let Some(col) = self.colliders.get_mut(&collider) {
+                col.shape = Shape2D::Composite { shapes };
+            }
+            return;
+        }
+        if is_also_composite {
+            let is_sync = self
+                .composites
+                .get(&collider)
+                .is_some_and(|c| c.generation_type == CompositeGenerationType2D::Synchronous);
+            if is_sync {
+                self.regenerate_composite(collider);
+            }
+            return;
+        }
+        if let Some(col) = self.colliders.get(&collider) {
+            self.sync_composites_for_owner(col.attached_body, col.game_object);
+        }
+    }
+
+    fn sync_composites_for_owner(&mut self, attached_body: Option<BodyId2D>, game_object: EntityId) {
+        let comp_ids: Vec<ColliderId2D> = self
+            .composites
+            .iter()
+            .filter_map(|(id, comp)| {
+                if comp.generation_type == CompositeGenerationType2D::Synchronous {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for comp_id in comp_ids {
+            let matches_owner = self.colliders.get(&comp_id).is_some_and(|c| {
+                if attached_body.is_some() {
+                    c.attached_body == attached_body
+                } else {
+                    c.attached_body.is_none() && c.game_object == game_object
+                }
+            });
+            if matches_owner {
+                self.regenerate_composite(comp_id);
+            }
+        }
     }
 
     pub fn attach_effector(&mut self, collider: ColliderId2D, effector: impl Into<Effector2D>) {
@@ -545,6 +750,14 @@ impl World2D {
     fn is_collider_simulated(&self, collider: &Collider2D) -> bool {
         if !collider.enabled || !collider.active {
             return false;
+        }
+        if collider.used_by_composite && !self.composites.contains_key(&collider.id) {
+            return false;
+        }
+        if let Some(tm) = self.tilemaps.get(&collider.id) {
+            if tm.used_by_composite && !self.composites.contains_key(&collider.id) {
+                return false;
+            }
         }
         if let Some(body_id) = collider.attached_body {
             if let Some(body) = self.bodies.get(&body_id) {

@@ -392,3 +392,287 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
     assert!(lookup_unsupported_family("Enlighten realtime global illumination").is_some());
     assert!(lookup_unsupported_family("Unity-built AssetBundles and Addressables content").is_some());
 }
+
+#[test]
+fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unlisted_or_preview() {
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        unitas_version: "0.1.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![
+            ProjectPackageEntry {
+                package_id: "com.unity.render-pipelines.universal".to_string(),
+                version: "14.0.10".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.unity.inputsystem".to_string(),
+                version: "1.7.0".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.vendor.unlisted".to_string(),
+                version: "2.0.0".to_string(),
+                source: PackageSource::ScopedRegistry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.unity.addressables".to_string(),
+                version: "1.22.0-pre.1".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+        ],
+        assets: vec![ProjectAssetEntry {
+            family: "URP Scene".to_string(),
+            content: ContentIdentity {
+                guid: Some("guid-main-scene".to_string()),
+                asset_path: Some("Assets/Scenes/Main.unity".to_string()),
+                sub_asset_id: None,
+                object_name: Some("Main".to_string()),
+            },
+            owning_feature_id: Some("SER-002".to_string()),
+            tier: Some(Tier::Exact),
+            state: Some(CompatibilityState::Supported),
+            observable_consequence: None,
+        }],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/GraphicsSettings.asset".to_string(),
+            family: "Graphics".to_string(),
+            owning_feature_id: Some("REN-006".to_string()),
+            tier: Some(Tier::Native),
+            state: Some(CompatibilityState::Supported),
+            observable_consequence: None,
+        }],
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: vec!["PHY-004".to_string(), "ENV-001".to_string()],
+    };
+
+    let assessment = assess_project(&content);
+
+    assert_eq!(assessment.report.produced_by_unitas_version, "0.1.0");
+    assert_eq!(
+        assessment.effective_baseline_unity_version,
+        "2022.3 LTS".to_string()
+    );
+    assert!(!assessment.migrated_from_earlier_lts);
+
+    let urp = assessment
+        .assessed_packages
+        .iter()
+        .find(|pkg| pkg.package_id == "com.unity.render-pipelines.universal");
+    assert!(urp.is_some());
+    if let Some(urp) = urp {
+        assert_eq!(urp.state, CompatibilityState::Supported);
+        assert_eq!(urp.tier, Some(Tier::Native));
+        assert_eq!(urp.owning_spec.as_deref(), Some("rendering-and-animation.md"));
+        assert_eq!(urp.owning_feature_id.as_deref(), Some("REN-006"));
+    }
+
+    let input = assessment
+        .assessed_packages
+        .iter()
+        .find(|pkg| pkg.package_id == "com.unity.inputsystem");
+    assert!(input.is_some());
+    if let Some(input) = input {
+        assert_eq!(input.state, CompatibilityState::Supported);
+        assert_eq!(input.tier, Some(Tier::Familiar));
+        assert_eq!(input.owning_spec.as_deref(), Some("ui-audio-input.md"));
+        assert_eq!(input.owning_feature_id.as_deref(), Some("INP-002"));
+    }
+
+    let unlisted = assessment
+        .assessed_packages
+        .iter()
+        .find(|pkg| pkg.package_id == "com.vendor.unlisted");
+    assert!(unlisted.is_some());
+    if let Some(unlisted) = unlisted {
+        assert_eq!(unlisted.state, CompatibilityState::Unknown);
+    }
+
+    let preview = assessment
+        .assessed_packages
+        .iter()
+        .find(|pkg| pkg.package_id == "com.unity.addressables");
+    assert!(preview.is_some());
+    if let Some(preview) = preview {
+        assert_eq!(preview.state, CompatibilityState::Unknown);
+    }
+
+    assert!(assessment
+        .absent_features
+        .contains(&"PHY-004".to_string()));
+    assert!(assessment
+        .absent_features
+        .contains(&"ENV-001".to_string()));
+    assert!(!assessment
+        .present_supported_features
+        .contains(&"PHY-004".to_string()));
+    assert!(assessment
+        .present_supported_features
+        .contains(&"REN-006".to_string()));
+    assert!(assessment
+        .present_supported_features
+        .contains(&"INP-002".to_string()));
+}
+
+#[test]
+fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_remain_playable_and_updates_on_removal()
+{
+    use unitas_core::compat::{
+        assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
+        ProjectSettingEntry,
+    };
+
+    let urp_scene = ProjectAssetEntry {
+        family: "URP Scene".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-urp-scene".to_string()),
+            asset_path: Some("Assets/Scenes/GameplayUrp.unity".to_string()),
+            sub_asset_id: None,
+            object_name: Some("GameplayUrp".to_string()),
+        },
+        owning_feature_id: Some("REN-006".to_string()),
+        tier: Some(Tier::Native),
+        state: Some(CompatibilityState::Supported),
+        observable_consequence: None,
+    };
+    let hdrp_asset = ProjectAssetEntry {
+        family: "High Definition Render Pipeline".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-hdrp-mat".to_string()),
+            asset_path: Some("Assets/HDRP/SkyVolume.asset".to_string()),
+            sub_asset_id: None,
+            object_name: Some("SkyVolume".to_string()),
+        },
+        owning_feature_id: None,
+        tier: None,
+        state: None,
+        observable_consequence: None,
+    };
+    let vs_graph = ProjectAssetEntry {
+        family: "Visual Scripting".to_string(),
+        content: ContentIdentity {
+            guid: Some("guid-vs-graph".to_string()),
+            asset_path: Some("Assets/Graphs/EnemyBrain.asset".to_string()),
+            sub_asset_id: None,
+            object_name: Some("EnemyBrain".to_string()),
+        },
+        owning_feature_id: None,
+        tier: None,
+        state: None,
+        observable_consequence: None,
+    };
+
+    let initial_content = ProjectContent {
+        unitas_version: "0.1.0".to_string(),
+        declared_unity_version: Some("2021.3.35f1".to_string()),
+        packages: vec![
+            ProjectPackageEntry {
+                package_id: "com.unity.render-pipelines.universal".to_string(),
+                version: "14.0.10".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+            ProjectPackageEntry {
+                package_id: "com.unity.ide.rider".to_string(),
+                version: "3.0.28".to_string(),
+                source: PackageSource::Registry,
+                is_locally_modified_embedded: false,
+            },
+        ],
+        assets: vec![urp_scene.clone(), hdrp_asset, vs_graph],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/LightingSettings.lighting".to_string(),
+            family: "Enlighten realtime global illumination".to_string(),
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        additional_findings: vec![finding(
+            "PHY-001",
+            Tier::Semantic,
+            CompatibilityState::Supported,
+            "Assets/Prefabs/PlayerRB.prefab",
+        )],
+        track_absent_catalog_features: vec!["NET-001".to_string()],
+    };
+
+    let initial = assess_project(&initial_content);
+
+    assert!(initial.migrated_from_earlier_lts);
+    assert_eq!(initial.overall_state, CompatibilityState::Unsupported);
+    assert!(initial.playable_scenes.contains(&"Assets/Scenes/GameplayUrp.unity".to_string()));
+
+    let hdrp_finding = initial.report.findings.iter().find(|f| {
+        f.content.asset_path.as_deref() == Some("Assets/HDRP/SkyVolume.asset")
+    });
+    assert!(hdrp_finding.is_some());
+    if let Some(f) = hdrp_finding {
+        assert_eq!(f.state, CompatibilityState::Unsupported);
+        assert_eq!(f.feature_id, "REN-006");
+        assert!(f
+            .observable_consequence
+            .contains("URP and Built-in scenes remain editable and playable"));
+    }
+
+    let vs_finding = initial.report.findings.iter().find(|f| {
+        f.content.asset_path.as_deref() == Some("Assets/Graphs/EnemyBrain.asset")
+    });
+    assert!(vs_finding.is_some());
+    if let Some(f) = vs_finding {
+        assert_eq!(f.state, CompatibilityState::Unsupported);
+        assert_eq!(f.feature_id, "RUN-002");
+        assert!(f
+            .observable_consequence
+            .contains("C# MonoBehaviours remain playable"));
+    }
+
+    let enlighten_finding = initial.report.findings.iter().find(|f| {
+        f.content.asset_path.as_deref() == Some("ProjectSettings/LightingSettings.lighting")
+    });
+    assert!(enlighten_finding.is_some());
+    if let Some(f) = enlighten_finding {
+        assert_eq!(f.state, CompatibilityState::Unsupported);
+        assert_eq!(f.feature_id, "REN-003");
+    }
+
+    let phy_finding = initial.report.findings.iter().find(|f| f.feature_id == "PHY-001");
+    assert!(phy_finding.is_some());
+
+    let cleaned_content = ProjectContent {
+        unitas_version: "0.1.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: vec![ProjectPackageEntry {
+            package_id: "com.unity.render-pipelines.universal".to_string(),
+            version: "14.0.10".to_string(),
+            source: PackageSource::Registry,
+            is_locally_modified_embedded: false,
+        }],
+        assets: vec![urp_scene],
+        settings: Vec::new(),
+        additional_findings: vec![finding(
+            "PHY-001",
+            Tier::Semantic,
+            CompatibilityState::Supported,
+            "Assets/Prefabs/PlayerRB.prefab",
+        )],
+        track_absent_catalog_features: vec!["NET-001".to_string()],
+    };
+
+    let cleaned = assess_project(&cleaned_content);
+    assert_eq!(cleaned.overall_state, CompatibilityState::Supported);
+    assert!(cleaned
+        .report
+        .findings
+        .iter()
+        .all(|f| f.state == CompatibilityState::Supported || !is_present(f)));
+    assert!(cleaned.absent_features.contains(&"NET-001".to_string()));
+}

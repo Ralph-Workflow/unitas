@@ -1,4 +1,10 @@
 use std::fmt;
+use std::io::Cursor;
+
+use lewton::header::HeaderReadError;
+use lewton::inside_ogg::OggStreamReader;
+use lewton::{OggReadError, VorbisError};
+use minimp3::{Decoder as Mp3Decoder, Error as Mp3Error};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioImportState {
@@ -76,6 +82,10 @@ pub struct AudioImportResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioImportError {
     NotAiff,
+    NotOgg,
+    NotMp3,
+    CorruptOgg(String),
+    CorruptMp3(String),
     MissingChunk(&'static str),
     UnsupportedSampleSize(u16),
     UnsupportedCompression(String),
@@ -88,6 +98,14 @@ impl fmt::Display for AudioImportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AudioImportError::NotAiff => formatter.write_str("file is not an AIFF or AIFF-C container"),
+            AudioImportError::NotOgg => formatter.write_str("file is not an OGG container"),
+            AudioImportError::NotMp3 => formatter.write_str("file is not an MP3 stream"),
+            AudioImportError::CorruptOgg(detail) => {
+                write!(formatter, "corrupt OGG Vorbis stream: {detail}")
+            }
+            AudioImportError::CorruptMp3(detail) => {
+                write!(formatter, "corrupt MP3 stream: {detail}")
+            }
             AudioImportError::MissingChunk(name) => write!(formatter, "missing {name} chunk"),
             AudioImportError::UnsupportedSampleSize(bits) => {
                 write!(formatter, "unsupported sample size {bits} bits")
@@ -294,17 +312,164 @@ fn decode_extended80(bytes: &[u8]) -> Result<u32, AudioImportError> {
     Ok(value as u32)
 }
 
+pub fn decode_ogg_vorbis(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
+    if bytes.len() < 4 {
+        return Err(AudioImportError::Truncated);
+    }
+    if !is_ogg(bytes) {
+        return Err(AudioImportError::NotOgg);
+    }
+    if bytes.len() < 27 {
+        return Err(AudioImportError::Truncated);
+    }
+
+    let mut reader = OggStreamReader::new(Cursor::new(bytes)).map_err(map_vorbis_error)?;
+    let channels = u16::from(reader.ident_hdr.audio_channels);
+    let sample_rate = reader.ident_hdr.audio_sample_rate;
+    if channels == 0 {
+        return Err(AudioImportError::CorruptOgg(
+            "zero audio channels".to_string(),
+        ));
+    }
+    if sample_rate == 0 {
+        return Err(AudioImportError::InvalidSampleRate);
+    }
+
+    let mut samples = Vec::new();
+    while let Some(packet) = reader.read_dec_packet_itl().map_err(map_vorbis_error)? {
+        samples.extend_from_slice(&packet);
+    }
+
+    Ok(PcmClip {
+        channels,
+        sample_rate,
+        samples,
+    })
+}
+
+fn map_vorbis_error(error: VorbisError) -> AudioImportError {
+    match error {
+        VorbisError::BadHeader(HeaderReadError::NotVorbisHeader) => {
+            AudioImportError::NotYetSupported("non-Vorbis OGG codec is not yet supported")
+        }
+        VorbisError::BadHeader(HeaderReadError::EndOfPacket) => AudioImportError::Truncated,
+        VorbisError::OggError(OggReadError::ReadError(ref io_err))
+            if io_err.kind() == std::io::ErrorKind::UnexpectedEof =>
+        {
+            AudioImportError::Truncated
+        }
+        other => AudioImportError::CorruptOgg(other.to_string()),
+    }
+}
+
+pub fn decode_mp3(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
+    if bytes.len() < 3 {
+        return Err(AudioImportError::Truncated);
+    }
+    if !is_mp3(bytes) {
+        return Err(AudioImportError::NotMp3);
+    }
+    if bytes.starts_with(b"ID3") {
+        if bytes.len() < 10 {
+            return Err(AudioImportError::Truncated);
+        }
+        let tag_size = ((usize::from(bytes[6] & 0x7f)) << 21)
+            | ((usize::from(bytes[7] & 0x7f)) << 14)
+            | ((usize::from(bytes[8] & 0x7f)) << 7)
+            | usize::from(bytes[9] & 0x7f);
+        let footer_size = if bytes[5] & 0x10 != 0 { 10usize } else { 0usize };
+        let header_end = 10usize
+            .checked_add(tag_size)
+            .and_then(|end| end.checked_add(footer_size))
+            .ok_or(AudioImportError::Truncated)?;
+        if bytes.len() <= header_end {
+            return Err(AudioImportError::Truncated);
+        }
+    } else if bytes.len() < 4 {
+        return Err(AudioImportError::Truncated);
+    }
+
+    let mut decoder = Mp3Decoder::new(Cursor::new(bytes));
+    let mut channels: Option<u16> = None;
+    let mut sample_rate: Option<u32> = None;
+    let mut samples = Vec::new();
+
+    loop {
+        match decoder.next_frame() {
+            Ok(frame) => {
+                let frame_channels = u16::try_from(frame.channels).map_err(|_| {
+                    AudioImportError::CorruptMp3("invalid channel count".to_string())
+                })?;
+                if frame_channels == 0 {
+                    return Err(AudioImportError::CorruptMp3(
+                        "zero audio channels".to_string(),
+                    ));
+                }
+                let frame_rate =
+                    u32::try_from(frame.sample_rate).map_err(|_| AudioImportError::InvalidSampleRate)?;
+                if frame_rate == 0 {
+                    return Err(AudioImportError::InvalidSampleRate);
+                }
+                if channels.is_none() {
+                    channels = Some(frame_channels);
+                }
+                if sample_rate.is_none() {
+                    sample_rate = Some(frame_rate);
+                }
+                samples.extend_from_slice(&frame.data);
+            }
+            Err(Mp3Error::Eof) => break,
+            Err(Mp3Error::InsufficientData) => return Err(AudioImportError::Truncated),
+            Err(other) => return Err(AudioImportError::CorruptMp3(other.to_string())),
+        }
+    }
+
+    let Some(channels) = channels else {
+        return Err(AudioImportError::CorruptMp3(
+            "no valid MPEG audio frames decoded".to_string(),
+        ));
+    };
+    let Some(sample_rate) = sample_rate else {
+        return Err(AudioImportError::InvalidSampleRate);
+    };
+    if samples.is_empty() {
+        return Err(AudioImportError::CorruptMp3(
+            "decoded MP3 stream produced zero samples".to_string(),
+        ));
+    }
+
+    Ok(PcmClip {
+        channels,
+        sample_rate,
+        samples,
+    })
+}
+
 pub fn detect_audio_state(bytes: &[u8], file_name: &str) -> AudioImportState {
-    if is_aiff(bytes) {
+    if recognized_unsupported(bytes, file_name).is_some() {
+        return AudioImportState::NotYetSupported;
+    }
+    let extension = extension_of(file_name).to_ascii_lowercase();
+    if is_aiff(bytes) || matches!(extension.as_str(), "aif" | "aiff" | "aifc") {
         return match decode_aiff(bytes) {
             Ok(_) => AudioImportState::Imported,
             Err(_) => AudioImportState::ImportFailed,
         };
     }
-    match recognized_unsupported(bytes, file_name) {
-        Some(_) => AudioImportState::NotYetSupported,
-        None => AudioImportState::UnsupportedContainer,
+    if is_ogg(bytes) || extension == "ogg" {
+        return match decode_ogg_vorbis(bytes) {
+            Ok(_) => AudioImportState::Imported,
+            Err(AudioImportError::NotYetSupported(_)) => AudioImportState::NotYetSupported,
+            Err(_) => AudioImportState::ImportFailed,
+        };
     }
+    if is_mp3(bytes) || extension == "mp3" {
+        return match decode_mp3(bytes) {
+            Ok(_) => AudioImportState::Imported,
+            Err(_) => AudioImportState::ImportFailed,
+        };
+    }
+    AudioImportState::UnsupportedContainer
 }
 
 pub fn import_audio(
@@ -330,7 +495,16 @@ pub fn import_audio(
         return Err(AudioImportError::NotAiff);
     }
 
-    let clip = decode_aiff(bytes)?;
+    let extension = extension_of(file_name).to_ascii_lowercase();
+    let clip = if is_aiff(bytes) || matches!(extension.as_str(), "aif" | "aiff" | "aifc") {
+        decode_aiff(bytes)?
+    } else if is_ogg(bytes) || extension == "ogg" {
+        decode_ogg_vorbis(bytes)?
+    } else if is_mp3(bytes) || extension == "mp3" {
+        decode_mp3(bytes)?
+    } else {
+        return Err(AudioImportError::NotAiff);
+    };
     let mut notes = Vec::new();
     let mut clip = clip;
 
@@ -384,9 +558,8 @@ fn is_ogg(bytes: &[u8]) -> bool {
 }
 
 fn is_mp3(bytes: &[u8]) -> bool {
-    bytes.len() >= 3
-        && (&bytes[0..3] == b"ID3"
-            || (bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0))
+    (bytes.len() >= 3 && &bytes[0..3] == b"ID3")
+        || (bytes.len() >= 2 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0)
 }
 
 fn is_wav(bytes: &[u8]) -> bool {
@@ -403,16 +576,12 @@ fn extension_of(file_name: &str) -> &str {
 fn recognized_unsupported(bytes: &[u8], file_name: &str) -> Option<&'static str> {
     let extension = extension_of(file_name).to_ascii_lowercase();
     match extension.as_str() {
-        "ogg" | "oga" | "ogv" | "opus" => Some("OGG Vorbis import is not yet supported"),
-        "mp3" | "mp2" => Some("MP3 import is not yet supported"),
+        "oga" | "ogv" | "opus" => Some("non-Vorbis OGG codec is not yet supported"),
+        "mp2" => Some("MP2 import is not yet supported"),
         "mod" | "it" | "s3m" | "xm" => Some("tracker module import is not yet supported"),
         "wav" | "wave" => Some("WAV import is not yet supported by the AIFF decoder"),
         _ => {
-            if is_ogg(bytes) {
-                Some("OGG Vorbis import is not yet supported")
-            } else if is_mp3(bytes) {
-                Some("MP3 import is not yet supported")
-            } else if is_wav(bytes) {
+            if is_wav(bytes) {
                 Some("WAV import is not yet supported by the AIFF decoder")
             } else {
                 None
@@ -422,8 +591,15 @@ fn recognized_unsupported(bytes: &[u8], file_name: &str) -> Option<&'static str>
 }
 
 fn unsupported_reason(bytes: &[u8], file_name: &str) -> &'static str {
-    recognized_unsupported(bytes, file_name)
-        .unwrap_or("audio container is not yet supported")
+    if let Some(reason) = recognized_unsupported(bytes, file_name) {
+        return reason;
+    }
+    if is_ogg(bytes) {
+        if let Err(AudioImportError::NotYetSupported(reason)) = decode_ogg_vorbis(bytes) {
+            return reason;
+        }
+    }
+    "audio container is not yet supported"
 }
 
 fn read_u16(bytes: &[u8]) -> u16 {

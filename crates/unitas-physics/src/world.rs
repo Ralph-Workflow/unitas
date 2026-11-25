@@ -12,8 +12,98 @@ const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
 const SOLVER_ITERATIONS: usize = 4;
 const DEFAULT_SLEEP_THRESHOLD: f64 = 0.05;
 const DEFAULT_TIME_TO_SLEEP: f64 = 0.5;
+const MAX_CONVEX_MESH_HULL_TRIANGLES: usize = 255;
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
+
+/// Material properties applied to a 3D collider, or the world's default material
+/// when a collider has no explicit material assigned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhysicsMaterial3D {
+    pub friction: f64,
+    pub restitution: f64,
+}
+
+impl Default for PhysicsMaterial3D {
+    fn default() -> Self {
+        Self {
+            friction: 0.6,
+            restitution: 0.0,
+        }
+    }
+}
+
+impl PhysicsMaterial3D {
+    pub fn new(friction: f64, restitution: f64) -> Self {
+        Self {
+            friction: friction.max(0.0),
+            restitution: restitution.max(0.0),
+        }
+    }
+}
+
+/// Description of a 3D `MeshCollider` attached to a body or static/kinematic object.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshColliderDesc {
+    pub object_name: String,
+    pub mesh_name: String,
+    pub convex: bool,
+    pub is_trigger: bool,
+    pub triangle_count: usize,
+    pub bounds_half_extents: [f64; 3],
+}
+
+impl MeshColliderDesc {
+    pub fn non_convex(
+        object_name: impl Into<String>,
+        mesh_name: impl Into<String>,
+        bounds_half_extents: [f64; 3],
+    ) -> Self {
+        Self {
+            object_name: object_name.into(),
+            mesh_name: mesh_name.into(),
+            convex: false,
+            is_trigger: false,
+            triangle_count: 12,
+            bounds_half_extents,
+        }
+    }
+
+    pub fn convex(
+        object_name: impl Into<String>,
+        mesh_name: impl Into<String>,
+        bounds_half_extents: [f64; 3],
+    ) -> Self {
+        Self {
+            object_name: object_name.into(),
+            mesh_name: mesh_name.into(),
+            convex: true,
+            is_trigger: false,
+            triangle_count: 12,
+            bounds_half_extents,
+        }
+    }
+
+    pub fn with_trigger(mut self, is_trigger: bool) -> Self {
+        self.is_trigger = is_trigger;
+        self
+    }
+
+    pub fn with_triangle_count(mut self, triangle_count: usize) -> Self {
+        self.triangle_count = triangle_count;
+        self
+    }
+}
+
+/// Unity-compatible diagnostic produced by 3D physics validation (such as attaching a
+/// non-convex `MeshCollider` to a dynamic `Rigidbody`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhysicsDiagnostic {
+    pub entity: EntityId,
+    pub object_name: String,
+    pub code: &'static str,
+    pub message: String,
+}
 
 fn speed_of(body: &Body) -> f64 {
     let sum = body.velocity[0] * body.velocity[0]
@@ -32,14 +122,18 @@ struct Body {
     is_trigger: bool,
     position: [f64; 3],
     rotation: [f64; 4],
+    query_position: [f64; 3],
+    query_rotation: [f64; 4],
     velocity: [f64; 3],
     layer: u32,
     friction: f64,
     restitution: f64,
+    uses_default_material: bool,
     previous_position: [f64; 3],
     sweep_velocity: [f64; 3],
     sleeping: bool,
     sleep_timer: f64,
+    simulated: bool,
 }
 
 impl Body {
@@ -71,6 +165,9 @@ pub struct World {
     collision_matrix: CollisionMatrix,
     sleep_threshold: f64,
     time_to_sleep: f64,
+    auto_sync_transforms: bool,
+    default_material: PhysicsMaterial3D,
+    diagnostics: Vec<PhysicsDiagnostic>,
 }
 
 impl Default for World {
@@ -97,6 +194,9 @@ impl World {
             collision_matrix: CollisionMatrix::new(),
             sleep_threshold: DEFAULT_SLEEP_THRESHOLD,
             time_to_sleep: DEFAULT_TIME_TO_SLEEP,
+            auto_sync_transforms: true,
+            default_material: PhysicsMaterial3D::default(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -112,6 +212,291 @@ impl World {
     /// The layer collision matrix that gates the collision and trigger callbacks.
     pub fn collision_matrix(&self) -> &CollisionMatrix {
         &self.collision_matrix
+    }
+
+    /// Physics.IgnoreLayerCollision: disables or enables collisions, triggers,
+    /// and default-mask queries between `layer_a` and `layer_b`.
+    pub fn ignore_layer_collision(&mut self, layer_a: usize, layer_b: usize, ignore: bool) {
+        self.collision_matrix
+            .ignore_layer_collision(layer_a, layer_b, ignore);
+    }
+
+    /// Physics.GetIgnoreLayerCollision: whether collisions between `layer_a` and
+    /// `layer_b` are ignored.
+    pub fn get_ignore_layer_collision(&self, layer_a: usize, layer_b: usize) -> bool {
+        !self.collision_matrix.is_enabled(layer_a, layer_b)
+    }
+
+    /// Returns the bitmask of layers enabled to collide with `layer` in the
+    /// collision matrix.
+    pub fn layer_mask_for_layer(&self, layer: usize) -> u32 {
+        self.collision_matrix.layer_mask_for_layer(layer)
+    }
+
+    /// Whether transform changes (`set_position`, `set_rotation`,
+    /// `teleport_position`, `teleport_rotation`) are immediately visible to
+    /// spatial queries, or deferred until `sync_transforms()` or `step()`.
+    pub fn auto_sync_transforms(&self) -> bool {
+        self.auto_sync_transforms
+    }
+
+    /// Sets `Physics.autoSyncTransforms`. When switched from `false` to `true`,
+    /// any pending transform changes are synchronized immediately.
+    pub fn set_auto_sync_transforms(&mut self, auto_sync: bool) {
+        self.auto_sync_transforms = auto_sync;
+        if auto_sync {
+            self.sync_transforms();
+        }
+    }
+
+    /// `Physics.SyncTransforms`: synchronizes all pending transform changes into
+    /// the query spatial state so subsequent queries observe the latest poses.
+    pub fn sync_transforms(&mut self) {
+        for body in &mut self.bodies {
+            body.query_position = body.position;
+            body.query_rotation = body.rotation;
+        }
+    }
+
+    /// The default 3D physics material applied to colliders with no explicit material.
+    pub fn default_material(&self) -> PhysicsMaterial3D {
+        self.default_material
+    }
+
+    /// Replaces the default 3D physics material and updates any bodies that use
+    /// the default material.
+    pub fn set_default_material(&mut self, material: PhysicsMaterial3D) {
+        let clamped = PhysicsMaterial3D::new(material.friction, material.restitution);
+        self.default_material = clamped;
+        for body in &mut self.bodies {
+            if body.uses_default_material {
+                body.friction = clamped.friction;
+                body.restitution = clamped.restitution;
+            }
+        }
+    }
+
+    /// Returns the effective physics material (friction, restitution) of `entity`.
+    pub fn body_material(&self, entity: EntityId) -> Option<PhysicsMaterial3D> {
+        self.indices.get(&entity).map(|index| {
+            let body = &self.bodies[*index];
+            PhysicsMaterial3D {
+                friction: body.friction,
+                restitution: body.restitution,
+            }
+        })
+    }
+
+    /// Adds a body that inherits the world's `default_material()` instead of an
+    /// explicit per-collider material.
+    pub fn add_body_with_default_material(
+        &mut self,
+        entity: EntityId,
+        mut desc: BodyDesc,
+    ) -> Result<(), PhysicsError> {
+        desc.friction = self.default_material.friction;
+        desc.restitution = self.default_material.restitution;
+        self.add_body(entity, desc)?;
+        if let Some(index) = self.indices.get(&entity).copied() {
+            self.bodies[index].uses_default_material = true;
+        }
+        Ok(())
+    }
+
+    /// Adds a body with an optional explicit material; when `material` is `None`,
+    /// the world's `default_material()` is applied and tracked.
+    pub fn add_body_with_material(
+        &mut self,
+        entity: EntityId,
+        mut desc: BodyDesc,
+        material: Option<PhysicsMaterial3D>,
+    ) -> Result<(), PhysicsError> {
+        match material {
+            Some(mat) => {
+                desc.friction = mat.friction;
+                desc.restitution = mat.restitution;
+                self.add_body(entity, desc)
+            }
+            None => self.add_body_with_default_material(entity, desc),
+        }
+    }
+
+    /// Attaches or ingests a `MeshCollider` on an entity with the given `BodyDesc`.
+    ///
+    /// * A non-convex `MeshCollider` on a dynamic `Rigidbody` produces the
+    ///   Unity-compatible diagnostic naming the object, disables physical
+    ///   participation as a dynamic shape, and returns
+    ///   `Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { .. })`.
+    /// * A non-convex `MeshCollider` marked as a trigger produces a diagnostic
+    ///   naming the object and does not participate as a trigger shape.
+    /// * A convex `MeshCollider` whose triangle count exceeds Unity's 255-triangle
+    ///   hull limit records a diagnostic naming the object and mesh and simulates
+    ///   with the reduced hull.
+    pub fn add_mesh_collider_body(
+        &mut self,
+        entity: EntityId,
+        mut body_desc: BodyDesc,
+        mesh_desc: MeshColliderDesc,
+    ) -> Result<(), PhysicsError> {
+        if self.indices.contains_key(&entity) {
+            return Err(PhysicsError::DuplicateEntity(entity));
+        }
+        body_desc.shape = Shape::Box {
+            half_extents: mesh_desc.bounds_half_extents,
+        };
+        body_desc.is_trigger = mesh_desc.is_trigger;
+        if !body_desc.is_valid() {
+            return Err(PhysicsError::InvalidBody(entity));
+        }
+        let effective_role = body_desc.effective_role();
+        if !mesh_desc.convex && effective_role == BodyRole::Dynamic {
+            let message = format!(
+                "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{}' (mesh '{}', entity {})",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name.clone(),
+                code: "PHY-MESH-NONCONVEX-DYNAMIC",
+                message,
+            });
+            return Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
+                entity,
+                object_name: mesh_desc.object_name,
+            });
+        }
+        if !mesh_desc.convex && mesh_desc.is_trigger {
+            let message = format!(
+                "A non-convex MeshCollider cannot be used as a trigger on '{}' (mesh '{}', entity {}); enable Convex to use a trigger MeshCollider.",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name.clone(),
+                code: "PHY-MESH-NONCONVEX-TRIGGER",
+                message,
+            });
+            body_desc.is_trigger = false;
+            self.add_body(entity, body_desc)?;
+            if let Some(index) = self.indices.get(&entity).copied() {
+                self.bodies[index].simulated = false;
+            }
+            return Ok(());
+        }
+        if mesh_desc.convex && mesh_desc.triangle_count > MAX_CONVEX_MESH_HULL_TRIANGLES {
+            let message = format!(
+                "Convex MeshCollider on '{}' (mesh '{}', entity {}) has {} triangles, exceeding the 255-triangle hull limit; using reduced convex hull.",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity, mesh_desc.triangle_count
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name,
+                code: "PHY-MESH-CONVEX-HULL-LIMIT",
+                message,
+            });
+        }
+        self.add_body(entity, body_desc)
+    }
+
+    /// Attaches a `MeshCollider` to an already-registered body in the world.
+    /// If the body is dynamic and `mesh_desc.convex` is `false`, records the
+    /// Unity-compatible diagnostic naming the object, disables dynamic shape
+    /// simulation for that body, and returns
+    /// `Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { .. })`.
+    pub fn attach_mesh_collider(
+        &mut self,
+        entity: EntityId,
+        mesh_desc: MeshColliderDesc,
+    ) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&entity).copied() else {
+            return Err(PhysicsError::InvalidBody(entity));
+        };
+        let new_shape = Shape::Box {
+            half_extents: mesh_desc.bounds_half_extents,
+        };
+        if !new_shape.is_valid() {
+            return Err(PhysicsError::InvalidBody(entity));
+        }
+        let role = self.bodies[index].role;
+        if !mesh_desc.convex && role == BodyRole::Dynamic {
+            let message = format!(
+                "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{}' (mesh '{}', entity {})",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name.clone(),
+                code: "PHY-MESH-NONCONVEX-DYNAMIC",
+                message,
+            });
+            self.bodies[index].simulated = false;
+            self.bodies[index].velocity = [0.0; 3];
+            self.overlapping
+                .retain(|(first, second)| *first != entity && *second != entity);
+            self.resolved_contacts
+                .retain(|(first, second)| *first != entity && *second != entity);
+            self.overlapping_triggers
+                .retain(|(first, second)| *first != entity && *second != entity);
+            return Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
+                entity,
+                object_name: mesh_desc.object_name,
+            });
+        }
+        if !mesh_desc.convex && mesh_desc.is_trigger {
+            let message = format!(
+                "A non-convex MeshCollider cannot be used as a trigger on '{}' (mesh '{}', entity {}); enable Convex to use a trigger MeshCollider.",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name,
+                code: "PHY-MESH-NONCONVEX-TRIGGER",
+                message,
+            });
+            self.bodies[index].simulated = false;
+            return Ok(());
+        }
+        if mesh_desc.convex && mesh_desc.triangle_count > MAX_CONVEX_MESH_HULL_TRIANGLES {
+            let message = format!(
+                "Convex MeshCollider on '{}' (mesh '{}', entity {}) has {} triangles, exceeding the 255-triangle hull limit; using reduced convex hull.",
+                mesh_desc.object_name, mesh_desc.mesh_name, entity, mesh_desc.triangle_count
+            );
+            self.diagnostics.push(PhysicsDiagnostic {
+                entity,
+                object_name: mesh_desc.object_name,
+                code: "PHY-MESH-CONVEX-HULL-LIMIT",
+                message,
+            });
+        }
+        self.bodies[index].shape = new_shape;
+        self.bodies[index].is_trigger = mesh_desc.is_trigger;
+        self.bodies[index].simulated = true;
+        Ok(())
+    }
+
+    /// Recorded 3D physics diagnostics in chronological order.
+    pub fn diagnostics(&self) -> &[PhysicsDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Diagnostics recorded for a specific entity.
+    pub fn entity_diagnostics(&self, entity: EntityId) -> Vec<&PhysicsDiagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|diag| diag.entity == entity)
+            .collect()
+    }
+
+    /// Drains all recorded 3D physics diagnostics.
+    pub fn drain_diagnostics(&mut self) -> Vec<PhysicsDiagnostic> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    /// Whether `entity` is currently active in physical simulation and queries.
+    pub fn is_body_simulated(&self, entity: EntityId) -> bool {
+        self.indices
+            .get(&entity)
+            .is_some_and(|index| self.bodies[*index].simulated)
     }
 
     pub fn add_body(&mut self, entity: EntityId, desc: BodyDesc) -> Result<(), PhysicsError> {
@@ -131,14 +516,18 @@ impl World {
             is_trigger: desc.is_trigger,
             position: desc.position,
             rotation: desc.rotation,
+            query_position: desc.position,
+            query_rotation: desc.rotation,
             velocity: desc.velocity,
             layer: desc.layer,
             friction: desc.friction,
             restitution: desc.restitution,
+            uses_default_material: false,
             previous_position: desc.position,
             sweep_velocity: [0.0; 3],
             sleeping: false,
             sleep_timer: 0.0,
+            simulated: true,
         });
         self.indices.insert(entity, index);
         Ok(())
@@ -170,6 +559,7 @@ impl World {
         self.resolved_contacts = next_resolved;
         self.overlapping_triggers = overlapping_triggers;
         self.commit_positions();
+        self.sync_transforms();
         Ok(())
     }
 
@@ -185,6 +575,24 @@ impl World {
         self.indices
             .get(&entity)
             .map(|index| self.bodies[*index].position)
+    }
+
+    pub fn rotation(&self, entity: EntityId) -> Option<[f64; 4]> {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].rotation)
+    }
+
+    pub fn query_position(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].query_position)
+    }
+
+    pub fn query_rotation(&self, entity: EntityId) -> Option<[f64; 4]> {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].query_rotation)
     }
 
     pub fn velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
@@ -221,10 +629,37 @@ impl World {
         if !p.iter().all(|value| value.is_finite()) {
             return Err(PhysicsError::InvalidBody(body));
         }
+        let auto_sync = self.auto_sync_transforms;
         let slot = &mut self.bodies[index];
         slot.position = p;
         slot.previous_position = p;
+        if auto_sync {
+            slot.query_position = p;
+        }
         slot.sweep_velocity = [0.0; 3];
+        slot.sleeping = false;
+        slot.sleep_timer = 0.0;
+        Ok(())
+    }
+
+    /// Teleports a body of any role to orientation `rotation` without sweeping.
+    pub fn teleport_rotation(
+        &mut self,
+        body: EntityId,
+        rotation: [f64; 4],
+    ) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !rotation.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let auto_sync = self.auto_sync_transforms;
+        let slot = &mut self.bodies[index];
+        slot.rotation = rotation;
+        if auto_sync {
+            slot.query_rotation = rotation;
+        }
         slot.sleeping = false;
         slot.sleep_timer = 0.0;
         Ok(())
@@ -293,6 +728,26 @@ impl World {
             return Err(PhysicsError::InvalidBody(body));
         }
         self.bodies[index].position = p;
+        if self.auto_sync_transforms {
+            self.bodies[index].query_position = p;
+        }
+        Ok(())
+    }
+
+    pub fn set_rotation(&mut self, body: EntityId, rotation: [f64; 4]) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !rotation.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        if self.bodies[index].role == BodyRole::Dynamic {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        self.bodies[index].rotation = rotation;
+        if self.auto_sync_transforms {
+            self.bodies[index].query_rotation = rotation;
+        }
         Ok(())
     }
 
@@ -420,6 +875,52 @@ impl World {
         )
     }
 
+    pub fn raycast_default_layer(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        query_layer: usize,
+    ) -> Vec<QueryHit> {
+        let mask = self.layer_mask_for_layer(query_layer);
+        self.cast_with_layer_mode(
+            CastShape::Point,
+            origin,
+            direction,
+            max_distance,
+            (mask, false, true),
+        )
+    }
+
+    pub fn overlap_sphere_default_layer(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        query_layer: usize,
+    ) -> Vec<EntityId> {
+        let mask = self.layer_mask_for_layer(query_layer);
+        let probe = Shape::Sphere { radius };
+        let mut entities: Vec<EntityId> = self
+            .bodies
+            .iter()
+            .filter(|body| body.simulated)
+            .filter(|body| Self::layer_index_matches_mask(body.layer, mask))
+            .filter(|body| !body.is_trigger)
+            .filter(|body| {
+                probe.overlaps(
+                    center,
+                    IDENTITY_ROTATION,
+                    &body.shape,
+                    body.query_position,
+                    body.query_rotation,
+                )
+            })
+            .map(|body| body.entity)
+            .collect();
+        entities.sort();
+        entities
+    }
+
     pub fn overlap_sphere(&self, center: [f64; 3], radius: f64, layer_mask: u32) -> Vec<EntityId> {
         self.overlap_sphere_with_triggers(center, radius, layer_mask, false)
     }
@@ -435,6 +936,7 @@ impl World {
         let mut entities: Vec<EntityId> = self
             .bodies
             .iter()
+            .filter(|body| body.simulated)
             .filter(|body| body.layer & layer_mask != 0)
             .filter(|body| !body.is_trigger || include_triggers)
             .filter(|body| {
@@ -442,14 +944,18 @@ impl World {
                     center,
                     IDENTITY_ROTATION,
                     &body.shape,
-                    body.position,
-                    body.rotation,
+                    body.query_position,
+                    body.query_rotation,
                 )
             })
             .map(|body| body.entity)
             .collect();
         entities.sort();
         entities
+    }
+
+    fn layer_index_matches_mask(body_layer: u32, layer_mask: u32) -> bool {
+        body_layer < 32 && (layer_mask & (1u32 << body_layer)) != 0
     }
 
     fn cast(
@@ -461,6 +967,24 @@ impl World {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryHit> {
+        self.cast_with_layer_mode(
+            cast_shape,
+            origin,
+            direction,
+            max_distance,
+            (layer_mask, include_triggers, false),
+        )
+    }
+
+    fn cast_with_layer_mode(
+        &self,
+        cast_shape: CastShape,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        filter: (u32, bool, bool),
+    ) -> Vec<QueryHit> {
+        let (layer_mask, include_triggers, use_layer_index) = filter;
         if max_distance <= 0.0 || max_distance.is_nan() {
             return Vec::new();
         }
@@ -469,7 +993,15 @@ impl World {
         };
         let mut hits = Vec::new();
         for body in &self.bodies {
-            if body.layer & layer_mask == 0 {
+            if !body.simulated {
+                continue;
+            }
+            let layer_ok = if use_layer_index {
+                Self::layer_index_matches_mask(body.layer, layer_mask)
+            } else {
+                body.layer & layer_mask != 0
+            };
+            if !layer_ok {
                 continue;
             }
             if body.is_trigger && !include_triggers {
@@ -478,8 +1010,8 @@ impl World {
             let Some(hit) = cast_against(
                 origin,
                 direction,
-                body.position,
-                body.rotation,
+                body.query_position,
+                body.query_rotation,
                 &body.shape,
                 cast_shape,
             ) else {
@@ -506,7 +1038,7 @@ impl World {
 
     fn integrate(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
-            if body.role != BodyRole::Dynamic || body.sleeping {
+            if !body.simulated || body.role != BodyRole::Dynamic || body.sleeping {
                 continue;
             }
             if body.use_gravity {
@@ -522,7 +1054,7 @@ impl World {
 
     fn update_sweep_velocities(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
-            if body.role != BodyRole::Kinematic {
+            if !body.simulated || body.role != BodyRole::Kinematic {
                 continue;
             }
             if delta_seconds <= 0.0 {
@@ -567,7 +1099,7 @@ impl World {
         let threshold = self.sleep_threshold;
         let time_to_sleep = self.time_to_sleep;
         for body in &mut self.bodies {
-            if body.role != BodyRole::Dynamic || body.sleeping {
+            if !body.simulated || body.role != BodyRole::Dynamic || body.sleeping {
                 continue;
             }
             if speed_of(body) <= threshold {
@@ -590,7 +1122,16 @@ impl World {
                 for second_index in (first_index + 1)..count {
                     let first = self.bodies[first_index];
                     let second = self.bodies[second_index];
+                    if !first.simulated || !second.simulated {
+                        continue;
+                    }
                     if first.is_trigger || second.is_trigger {
+                        continue;
+                    }
+                    if !self
+                        .collision_matrix
+                        .is_enabled(first.layer as usize, second.layer as usize)
+                    {
                         continue;
                     }
                     let inv_a = first.inverse_mass();
@@ -688,7 +1229,13 @@ impl World {
         let mut pairs = BTreeSet::new();
         let mut trigger_pairs = BTreeSet::new();
         for (index, first) in self.bodies.iter().enumerate() {
+            if !first.simulated {
+                continue;
+            }
             for second in self.bodies.iter().skip(index + 1) {
+                if !second.simulated {
+                    continue;
+                }
                 if first.shape.in_contact(
                     first.position,
                     first.rotation,

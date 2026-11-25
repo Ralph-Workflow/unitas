@@ -1,6 +1,7 @@
 use unitas_asset::audio_import::{
-    decode_aiff, detect_audio_state, import_audio, AudioCompressionFormat, AudioImportError,
-    AudioImportSettings, AudioImportState, AudioLoadType,
+    decode_aiff, decode_mp3, decode_ogg_vorbis, detect_audio_state, import_audio,
+    AudioCompressionFormat, AudioImportError, AudioImportSettings, AudioImportState,
+    AudioLoadType,
 };
 
 fn extended80(rate: u32) -> [u8; 10] {
@@ -265,15 +266,14 @@ fn detects_imported_aiff() {
 
 #[test]
 fn detects_not_yet_supported_containers() {
-    let ogg = b"OggS-not-a-real-stream";
-    let mp3 = b"ID3-not-a-real-frame";
+    let opus_ogg = [
+        b'O', b'g', b'g', b'S', 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86, 0x99, 0x62, 0x35, 0x01, 0x08, b'O', b'p',
+        b'u', b's', b'H', b'e', b'a', b'd',
+    ];
     assert!(
-        detect_audio_state(ogg, "music.ogg") == AudioImportState::NotYetSupported,
-        "expected OGG to be reported as not yet supported"
-    );
-    assert!(
-        detect_audio_state(mp3, "music.mp3") == AudioImportState::NotYetSupported,
-        "expected MP3 to be reported as not yet supported"
+        detect_audio_state(&opus_ogg, "voice.opus") == AudioImportState::NotYetSupported,
+        "expected non-Vorbis Opus OGG to be reported as not yet supported"
     );
     assert!(
         detect_audio_state(b"not-audio", "tune.xm") == AudioImportState::NotYetSupported,
@@ -286,6 +286,135 @@ fn detects_not_yet_supported_containers() {
     assert!(
         detect_audio_state(b"not-audio", "tune.mod") == AudioImportState::NotYetSupported,
         "expected a tracker module to be reported as not yet supported"
+    );
+}
+
+#[test]
+fn decodes_mono_ogg_vorbis_fixture() {
+    let bytes = include_bytes!("../fixtures/sine_mono.ogg");
+    assert!(
+        matches!(decode_ogg_vorbis(bytes), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 44100
+                && !clip.samples.is_empty()
+                && clip.samples.iter().any(|sample| *sample != 0)),
+        "expected mono OGG Vorbis fixture to decode non-silent PCM samples at 44100 Hz"
+    );
+    assert!(
+        detect_audio_state(bytes, "sine_mono.ogg") == AudioImportState::Imported,
+        "expected mono OGG Vorbis fixture to be detected as imported"
+    );
+}
+
+#[test]
+fn decodes_stereo_ogg_vorbis_fixture_and_applies_import_settings() {
+    let bytes = include_bytes!("../fixtures/sine_stereo.ogg");
+    assert!(
+        matches!(decode_ogg_vorbis(bytes), Ok(clip)
+            if clip.channels == 2
+                && clip.sample_rate == 48000
+                && clip.samples.len() >= 64
+                && clip.samples.len() % 2 == 0
+                && clip.samples.iter().any(|sample| *sample != 0)),
+        "expected stereo OGG Vorbis fixture to decode interleaved non-silent PCM samples at 48000 Hz"
+    );
+    let settings = AudioImportSettings {
+        force_to_mono: true,
+        compression_format: AudioCompressionFormat::Vorbis,
+        ..AudioImportSettings::default()
+    };
+    assert!(
+        matches!(import_audio(bytes, "sine_stereo.ogg", &settings), Ok(result)
+            if result.state == AudioImportState::Imported
+                && result.clip.channels == 1
+                && result.clip.sample_rate == 48000
+                && !result.clip.samples.is_empty()
+                && result.clip.samples.iter().any(|sample| *sample != 0)),
+        "expected import_audio to decode stereo OGG Vorbis and apply force_to_mono"
+    );
+}
+
+#[test]
+fn decodes_mono_mp3_fixture() {
+    let bytes = include_bytes!("../fixtures/sine_mono.mp3");
+    assert!(
+        matches!(decode_mp3(bytes), Ok(clip)
+            if clip.channels == 1
+                && clip.sample_rate == 44100
+                && !clip.samples.is_empty()
+                && clip.samples.iter().any(|sample| *sample != 0)),
+        "expected mono MP3 fixture to decode non-silent PCM samples at 44100 Hz"
+    );
+    assert!(
+        detect_audio_state(bytes, "sine_mono.mp3") == AudioImportState::Imported,
+        "expected mono MP3 fixture to be detected as imported"
+    );
+}
+
+#[test]
+fn decodes_stereo_mp3_fixture_and_applies_import_settings() {
+    let bytes = include_bytes!("../fixtures/sine_stereo.mp3");
+    assert!(
+        matches!(decode_mp3(bytes), Ok(clip)
+            if clip.channels == 2
+                && clip.sample_rate == 48000
+                && !clip.samples.is_empty()
+                && clip.samples.len() % 2 == 0
+                && clip.samples.iter().any(|sample| *sample != 0)),
+        "expected stereo MP3 fixture to decode interleaved non-silent PCM samples at 48000 Hz"
+    );
+    let settings = AudioImportSettings {
+        force_to_mono: true,
+        compression_format: AudioCompressionFormat::MP3,
+        ..AudioImportSettings::default()
+    };
+    assert!(
+        matches!(import_audio(bytes, "sine_stereo.mp3", &settings), Ok(result)
+            if result.state == AudioImportState::Imported
+                && result.clip.channels == 1
+                && result.clip.sample_rate == 48000
+                && !result.clip.samples.is_empty()
+                && result.clip.samples.iter().any(|sample| *sample != 0)),
+        "expected import_audio to decode stereo MP3 and apply force_to_mono"
+    );
+}
+
+#[test]
+fn rejects_corrupt_and_truncated_ogg_and_mp3_streams() {
+    let ogg = include_bytes!("../fixtures/sine_mono.ogg");
+    assert!(
+        matches!(decode_ogg_vorbis(&ogg[..16]), Err(AudioImportError::Truncated)),
+        "expected truncated OGG header to report Truncated"
+    );
+    assert!(
+        matches!(
+            decode_ogg_vorbis(b"OggS-not-a-valid-page-header-at-all"),
+            Err(AudioImportError::CorruptOgg(_)) | Err(AudioImportError::Truncated)
+        ),
+        "expected corrupt OGG stream to return a diagnostic error"
+    );
+    assert!(
+        detect_audio_state(b"OggS-not-a-real-stream", "music.ogg")
+            == AudioImportState::ImportFailed,
+        "expected corrupt OGG to report ImportFailed"
+    );
+
+    let mp3 = include_bytes!("../fixtures/sine_mono.mp3");
+    assert!(
+        matches!(decode_mp3(&mp3[..8]), Err(AudioImportError::Truncated)),
+        "expected truncated ID3 header to report Truncated"
+    );
+    assert!(
+        matches!(
+            decode_mp3(b"ID3-not-a-real-frame"),
+            Err(AudioImportError::Truncated) | Err(AudioImportError::CorruptMp3(_))
+        ),
+        "expected corrupt MP3 stream to return a diagnostic error"
+    );
+    assert!(
+        detect_audio_state(b"ID3-not-a-real-frame", "music.mp3")
+            == AudioImportState::ImportFailed,
+        "expected corrupt MP3 to report ImportFailed"
     );
 }
 

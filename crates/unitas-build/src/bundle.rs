@@ -687,6 +687,738 @@ fn normalize_scene_source_path(scene_path: &Path, fallback_name: &str) -> String
     fallback_name.to_string()
 }
 
+pub const CONTENT_CATALOG_FILENAME: &str = "content.catalog";
+pub const CONTENT_CATALOG_FORMAT_VERSION: u32 = 1;
+pub const UNITAS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn derive_player_compatibility_version(version: &str) -> String {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return String::from("0.1");
+    }
+    let mut parts = trimmed.split('.');
+    let major = parts.next().unwrap_or("0");
+    let minor = parts.next().unwrap_or("0");
+    format!("{major}.{minor}")
+}
+
+pub fn detect_unity_bundle_signature(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"UnityFS") {
+        Some("UnityFS")
+    } else if bytes.starts_with(b"UnityWeb") {
+        Some("UnityWeb")
+    } else if bytes.starts_with(b"UnityRaw") {
+        Some("UnityRaw")
+    } else if bytes.starts_with(b"UnityArchive") {
+        Some("UnityArchive")
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContentBuildMode {
+    FullCatalog,
+    ContentUpdate,
+}
+
+impl ContentBuildMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ContentBuildMode::FullCatalog => "full_catalog",
+            ContentBuildMode::ContentUpdate => "content_update",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "full_catalog" => Some(ContentBuildMode::FullCatalog),
+            "content_update" => Some(ContentBuildMode::ContentUpdate),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ContentBuildMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentCatalogEntry {
+    pub bundle_name: String,
+    pub source_path: String,
+    pub staged_path: String,
+    pub content_hash: String,
+    pub size_bytes: u64,
+    pub root_object_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentCatalog {
+    pub format_version: u32,
+    pub unitas_version: String,
+    pub player_compatibility_version: String,
+    pub target: BuildTarget,
+    pub bundles: Vec<ContentCatalogEntry>,
+    pub total_content_bytes: u64,
+    pub catalog_hash: String,
+}
+
+impl ContentCatalog {
+    pub fn compute_catalog_hash(&self) -> String {
+        content_hash_hex(self.canonical_body_without_hash().as_bytes())
+    }
+
+    pub fn is_compatible_with_player(&self, player_version: &str, player_target: BuildTarget) -> bool {
+        if self.target != player_target {
+            return false;
+        }
+        let player_compat = derive_player_compatibility_version(player_version);
+        self.player_compatibility_version == player_compat
+            || self.player_compatibility_version == player_version.trim()
+    }
+
+    fn canonical_body_without_hash(&self) -> String {
+        let mut lines = Vec::with_capacity(7 + self.bundles.len() * 6);
+        lines.push(format!("format_version={}", self.format_version));
+        lines.push(format!("unitas_version={}", self.unitas_version));
+        lines.push(format!(
+            "player_compatibility_version={}",
+            self.player_compatibility_version
+        ));
+        lines.push(format!("target_os={}", self.target.os_name()));
+        lines.push(format!("target_arch={}", self.target.arch_id()));
+        lines.push(format!("total_content_bytes={}", self.total_content_bytes));
+        lines.push(format!("bundle_count={}", self.bundles.len()));
+
+        let mut sorted = self.bundles.clone();
+        sorted.sort_by(|left, right| {
+            left.bundle_name
+                .cmp(&right.bundle_name)
+                .then_with(|| left.staged_path.cmp(&right.staged_path))
+        });
+
+        for (slot, entry) in sorted.iter().enumerate() {
+            lines.push(format!("bundle.{slot}.bundle_name={}", entry.bundle_name));
+            lines.push(format!("bundle.{slot}.source_path={}", entry.source_path));
+            lines.push(format!("bundle.{slot}.staged_path={}", entry.staged_path));
+            lines.push(format!("bundle.{slot}.content_hash={}", entry.content_hash));
+            lines.push(format!("bundle.{slot}.size_bytes={}", entry.size_bytes));
+            lines.push(format!(
+                "bundle.{slot}.root_object_count={}",
+                entry.root_object_count
+            ));
+        }
+
+        lines.join("\n")
+    }
+
+    pub fn to_canonical_string(&self) -> String {
+        let mut text = self.canonical_body_without_hash();
+        text.push_str(&format!("\ncatalog_hash={}\n", self.catalog_hash));
+        text
+    }
+
+    pub fn from_canonical_str(text: &str) -> Result<Self, BundleError> {
+        let mut map = BTreeMap::new();
+        for (line_number, raw_line) in text.lines().enumerate() {
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let (key, value) = trimmed
+                .split_once('=')
+                .ok_or_else(|| BundleError::ManifestParse {
+                    message: format!(
+                        "line {} is missing '=' separator: '{trimmed}'",
+                        line_number + 1
+                    ),
+                })?;
+            map.insert(key.to_string(), value.to_string());
+        }
+
+        let format_version = parse_u32_field(&map, "format_version")?;
+        if format_version != CONTENT_CATALOG_FORMAT_VERSION {
+            return Err(BundleError::ManifestParse {
+                message: format!("unsupported content catalog format_version '{format_version}'"),
+            });
+        }
+
+        let unitas_version = required_field(&map, "unitas_version")?;
+        let player_compatibility_version =
+            required_field(&map, "player_compatibility_version")?;
+        let target_os = required_field(&map, "target_os")?;
+        let target_arch = required_field(&map, "target_arch")?;
+        let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {
+            BundleError::ManifestParse {
+                message: format!("unrecognized target '{target_os}-{target_arch}'"),
+            }
+        })?;
+        let total_content_bytes = parse_u64_field(&map, "total_content_bytes")?;
+        let bundle_count = parse_usize_field(&map, "bundle_count")?;
+        let catalog_hash = required_field(&map, "catalog_hash")?;
+
+        let mut bundles = Vec::with_capacity(bundle_count);
+        for slot in 0..bundle_count {
+            let bundle_name = required_field(&map, &format!("bundle.{slot}.bundle_name"))?;
+            let source_path = required_field(&map, &format!("bundle.{slot}.source_path"))?;
+            let staged_path = required_field(&map, &format!("bundle.{slot}.staged_path"))?;
+            let content_hash = required_field(&map, &format!("bundle.{slot}.content_hash"))?;
+            let size_bytes = parse_u64_field(&map, &format!("bundle.{slot}.size_bytes"))?;
+            let root_object_count =
+                parse_usize_field(&map, &format!("bundle.{slot}.root_object_count"))?;
+            bundles.push(ContentCatalogEntry {
+                bundle_name,
+                source_path,
+                staged_path,
+                content_hash,
+                size_bytes,
+                root_object_count,
+            });
+        }
+
+        bundles.sort_by(|left, right| {
+            left.bundle_name
+                .cmp(&right.bundle_name)
+                .then_with(|| left.staged_path.cmp(&right.staged_path))
+        });
+
+        let catalog = Self {
+            format_version,
+            unitas_version,
+            player_compatibility_version,
+            target,
+            bundles,
+            total_content_bytes,
+            catalog_hash,
+        };
+
+        let expected_hash = catalog.compute_catalog_hash();
+        if catalog.catalog_hash != expected_hash {
+            return Err(BundleError::ManifestParse {
+                message: format!(
+                    "catalog_hash mismatch: expected '{expected_hash}', found '{}'",
+                    catalog.catalog_hash
+                ),
+            });
+        }
+
+        Ok(catalog)
+    }
+
+    pub fn load_from_file(catalog_path: &Path) -> Result<Self, BundleError> {
+        let content = fs::read_to_string(catalog_path).map_err(|error| BundleError::Io {
+            path: catalog_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        Self::from_canonical_str(&content)
+    }
+
+    pub fn load_from_dir(output_dir: &Path) -> Result<Self, BundleError> {
+        Self::load_from_file(&output_dir.join(CONTENT_CATALOG_FILENAME))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentRejectionReason {
+    UnityBuiltArchive {
+        signature: String,
+    },
+    TargetMismatch {
+        bundle_target: BuildTarget,
+        expected_target: BuildTarget,
+    },
+    IncompatiblePlayerVersion {
+        bundle_version: String,
+        expected_version: String,
+    },
+    UnreadableScene {
+        message: String,
+    },
+}
+
+impl ContentRejectionReason {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            ContentRejectionReason::UnityBuiltArchive { .. } => "content.unity_built_bundle",
+            ContentRejectionReason::TargetMismatch { .. } => "content.target_mismatch",
+            ContentRejectionReason::IncompatiblePlayerVersion { .. } => {
+                "content.incompatible_player_version"
+            }
+            ContentRejectionReason::UnreadableScene { .. } => "content.unreadable_bundle",
+        }
+    }
+}
+
+impl fmt::Display for ContentRejectionReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentRejectionReason::UnityBuiltArchive { signature } => {
+                write!(
+                    formatter,
+                    "bundle was built by Unity (detected '{signature}' archive signature); rebuild content from project sources with unitas"
+                )
+            }
+            ContentRejectionReason::TargetMismatch {
+                bundle_target,
+                expected_target,
+            } => {
+                write!(
+                    formatter,
+                    "bundle target '{bundle_target}' does not match player target '{expected_target}'"
+                )
+            }
+            ContentRejectionReason::IncompatiblePlayerVersion {
+                bundle_version,
+                expected_version,
+            } => {
+                write!(
+                    formatter,
+                    "bundle player-compatibility version '{bundle_version}' is incompatible with player compatibility version '{expected_version}'"
+                )
+            }
+            ContentRejectionReason::UnreadableScene { message } => {
+                write!(formatter, "bundle content cannot be assembled: {message}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedContentBundle {
+    pub bundle_name: String,
+    pub source_path: PathBuf,
+    pub reason: ContentRejectionReason,
+}
+
+impl fmt::Display for RejectedContentBundle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "rejected bundle '{}' ('{}'): {}",
+            self.bundle_name,
+            self.source_path.display(),
+            self.reason
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentBundleInput {
+    pub bundle_name: String,
+    pub source_path: PathBuf,
+    pub target: BuildTarget,
+    pub player_compatibility_version: String,
+}
+
+impl ContentBundleInput {
+    pub fn new(
+        bundle_name: impl Into<String>,
+        source_path: PathBuf,
+        target: BuildTarget,
+        player_compatibility_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            bundle_name: bundle_name.into(),
+            source_path,
+            target,
+            player_compatibility_version: player_compatibility_version.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentBuildResult {
+    pub output_dir: PathBuf,
+    pub catalog_path: PathBuf,
+    pub catalog: ContentCatalog,
+    pub emitted_bundles: Vec<ContentCatalogEntry>,
+    pub unchanged_bundles: Vec<String>,
+    pub rejected_bundles: Vec<RejectedContentBundle>,
+}
+
+pub fn build_content_catalog(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_catalog_for_host(config, output_dir, BuildTarget::current_host())
+}
+
+pub fn build_content_catalog_for_host(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_with_optional_baseline(config, None, output_dir, host)
+}
+
+pub fn build_content_update(
+    config: &BuildConfiguration,
+    prior_catalog: &ContentCatalog,
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_update_for_host(
+        config,
+        prior_catalog,
+        output_dir,
+        BuildTarget::current_host(),
+    )
+}
+
+pub fn build_content_update_for_host(
+    config: &BuildConfiguration,
+    prior_catalog: &ContentCatalog,
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<ContentBuildResult, BundleError> {
+    build_content_with_optional_baseline(config, Some(prior_catalog), output_dir, host)
+}
+
+fn build_content_with_optional_baseline(
+    config: &BuildConfiguration,
+    prior_catalog: Option<&ContentCatalog>,
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<ContentBuildResult, BundleError> {
+    config
+        .validate_with_host(host)
+        .map_err(BundleError::Validation)?;
+
+    let player_compatibility_version = derive_player_compatibility_version(&config.version);
+    if let Some(prior) = prior_catalog {
+        if prior.target != config.target {
+            return Err(BundleError::Validation(vec![BuildValidationError::new(
+                "target",
+                format!(
+                    "content update target '{}' does not match prior catalog target '{}'",
+                    config.target, prior.target
+                ),
+                "build the content update for the same target as the baseline content catalog",
+            )]));
+        }
+        if prior.player_compatibility_version != player_compatibility_version {
+            return Err(BundleError::Validation(vec![BuildValidationError::new(
+                "version",
+                format!(
+                    "content update player-compatibility version '{}' does not match prior catalog compatibility version '{}'",
+                    player_compatibility_version, prior.player_compatibility_version
+                ),
+                "keep the same major.minor player-compatibility version for post-release content updates or ship a new full player build",
+            )]));
+        }
+    }
+
+    let mut prior_hashes = BTreeMap::new();
+    if let Some(prior) = prior_catalog {
+        for entry in &prior.bundles {
+            prior_hashes.insert(entry.bundle_name.as_str(), entry.content_hash.as_str());
+        }
+    }
+
+    let mut verified_bundles = Vec::with_capacity(config.scenes.len());
+    for (index, scene_path) in config.scenes.iter().enumerate() {
+        if !scene_path.is_file() {
+            return Err(BundleError::SceneMissing {
+                path: scene_path.clone(),
+            });
+        }
+        let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+            path: scene_path.clone(),
+            message: error.to_string(),
+        })?;
+        let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+            BundleError::SceneAssembly {
+                path: scene_path.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let content_hash = content_hash_hex(&bytes);
+        let size_bytes = bytes.len() as u64;
+        let root_object_count = scene_graph.roots().len();
+        let file_name = scene_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scene.unity");
+        let stem = scene_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scene");
+        let bundle_name = format!("scene_{index:03}_{stem}");
+        let staged_path = format!("ContentBundles/{bundle_name}.bundle");
+        let source_path = normalize_scene_source_path(scene_path, file_name);
+
+        verified_bundles.push((
+            ContentCatalogEntry {
+                bundle_name,
+                source_path,
+                staged_path,
+                content_hash,
+                size_bytes,
+                root_object_count,
+            },
+            bytes,
+        ));
+    }
+
+    fs::create_dir_all(output_dir).map_err(|error| BundleError::Io {
+        path: output_dir.to_path_buf(),
+        message: error.to_string(),
+    })?;
+
+    let mut bundles = Vec::with_capacity(verified_bundles.len());
+    let mut emitted_bundles = Vec::new();
+    let mut unchanged_bundles = Vec::new();
+    let mut total_content_bytes = 0u64;
+
+    for (entry, bytes) in verified_bundles {
+        total_content_bytes = total_content_bytes.saturating_add(entry.size_bytes);
+        let is_unchanged = prior_hashes
+            .get(entry.bundle_name.as_str())
+            .is_some_and(|prior_hash| *prior_hash == entry.content_hash);
+
+        let dest_path = output_dir.join(&entry.staged_path);
+        if is_unchanged {
+            if dest_path.exists() {
+                fs::remove_file(&dest_path).map_err(|error| BundleError::Io {
+                    path: dest_path,
+                    message: error.to_string(),
+                })?;
+            }
+            unchanged_bundles.push(entry.bundle_name.clone());
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| BundleError::Io {
+                    path: parent.to_path_buf(),
+                    message: error.to_string(),
+                })?;
+            }
+            fs::write(&dest_path, &bytes).map_err(|error| BundleError::Io {
+                path: dest_path,
+                message: error.to_string(),
+            })?;
+            emitted_bundles.push(entry.clone());
+        }
+        bundles.push(entry);
+    }
+
+    bundles.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+    emitted_bundles.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+    unchanged_bundles.sort();
+
+    let mut catalog = ContentCatalog {
+        format_version: CONTENT_CATALOG_FORMAT_VERSION,
+        unitas_version: String::from(UNITAS_VERSION),
+        player_compatibility_version,
+        target: config.target,
+        bundles,
+        total_content_bytes,
+        catalog_hash: String::new(),
+    };
+    catalog.catalog_hash = catalog.compute_catalog_hash();
+
+    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
+    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
+        path: catalog_path.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(ContentBuildResult {
+        output_dir: output_dir.to_path_buf(),
+        catalog_path,
+        catalog,
+        emitted_bundles,
+        unchanged_bundles,
+        rejected_bundles: Vec::new(),
+    })
+}
+
+pub fn validate_content_bundle(
+    inputs: &[ContentBundleInput],
+    expected_target: BuildTarget,
+    expected_player_compatibility_version: &str,
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
+    fs::create_dir_all(output_dir).map_err(|error| BundleError::Io {
+        path: output_dir.to_path_buf(),
+        message: error.to_string(),
+    })?;
+
+    let expected_compat = expected_player_compatibility_version.trim();
+    let mut bundles = Vec::new();
+    let mut emitted_bundles = Vec::new();
+    let mut rejected_bundles = Vec::new();
+    let mut total_content_bytes = 0u64;
+
+    for input in inputs {
+        if !input.source_path.is_file() {
+            return Err(BundleError::SceneMissing {
+                path: input.source_path.clone(),
+            });
+        }
+        let bytes = fs::read(&input.source_path).map_err(|error| BundleError::Io {
+            path: input.source_path.clone(),
+            message: error.to_string(),
+        })?;
+
+        let staged_rel = format!("ContentBundles/{}.bundle", input.bundle_name);
+        let staged_dest = output_dir.join(&staged_rel);
+
+        if let Some(signature) = detect_unity_bundle_signature(&bytes) {
+            if staged_dest.exists() {
+                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
+                    path: staged_dest,
+                    message: error.to_string(),
+                })?;
+            }
+            rejected_bundles.push(RejectedContentBundle {
+                bundle_name: input.bundle_name.clone(),
+                source_path: input.source_path.clone(),
+                reason: ContentRejectionReason::UnityBuiltArchive {
+                    signature: String::from(signature),
+                },
+            });
+            continue;
+        }
+
+        if input.target != expected_target {
+            if staged_dest.exists() {
+                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
+                    path: staged_dest,
+                    message: error.to_string(),
+                })?;
+            }
+            rejected_bundles.push(RejectedContentBundle {
+                bundle_name: input.bundle_name.clone(),
+                source_path: input.source_path.clone(),
+                reason: ContentRejectionReason::TargetMismatch {
+                    bundle_target: input.target,
+                    expected_target,
+                },
+            });
+            continue;
+        }
+
+        let input_compat = input.player_compatibility_version.trim();
+        if input_compat != expected_compat
+            && derive_player_compatibility_version(input_compat) != expected_compat
+        {
+            if staged_dest.exists() {
+                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
+                    path: staged_dest,
+                    message: error.to_string(),
+                })?;
+            }
+            rejected_bundles.push(RejectedContentBundle {
+                bundle_name: input.bundle_name.clone(),
+                source_path: input.source_path.clone(),
+                reason: ContentRejectionReason::IncompatiblePlayerVersion {
+                    bundle_version: input.player_compatibility_version.clone(),
+                    expected_version: String::from(expected_compat),
+                },
+            });
+            continue;
+        }
+
+        let scene_graph = match unitas_asset::assemble_scene_file(&input.source_path) {
+            Ok(graph) => graph,
+            Err(error) => {
+                if staged_dest.exists() {
+                    fs::remove_file(&staged_dest).map_err(|io_err| BundleError::Io {
+                        path: staged_dest,
+                        message: io_err.to_string(),
+                    })?;
+                }
+                rejected_bundles.push(RejectedContentBundle {
+                    bundle_name: input.bundle_name.clone(),
+                    source_path: input.source_path.clone(),
+                    reason: ContentRejectionReason::UnreadableScene {
+                        message: error.to_string(),
+                    },
+                });
+                continue;
+            }
+        };
+
+        if let Some(parent) = staged_dest.parent() {
+            fs::create_dir_all(parent).map_err(|error| BundleError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
+        }
+        fs::write(&staged_dest, &bytes).map_err(|error| BundleError::Io {
+            path: staged_dest,
+            message: error.to_string(),
+        })?;
+
+        let file_name = input
+            .source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("bundle.unity");
+        let source_path = normalize_scene_source_path(&input.source_path, file_name);
+        let size_bytes = bytes.len() as u64;
+        total_content_bytes = total_content_bytes.saturating_add(size_bytes);
+
+        let entry = ContentCatalogEntry {
+            bundle_name: input.bundle_name.clone(),
+            source_path,
+            staged_path: staged_rel,
+            content_hash: content_hash_hex(&bytes),
+            size_bytes,
+            root_object_count: scene_graph.roots().len(),
+        };
+        emitted_bundles.push(entry.clone());
+        bundles.push(entry);
+    }
+
+    bundles.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+    emitted_bundles.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+
+    let mut catalog = ContentCatalog {
+        format_version: CONTENT_CATALOG_FORMAT_VERSION,
+        unitas_version: String::from(UNITAS_VERSION),
+        player_compatibility_version: String::from(expected_compat),
+        target: expected_target,
+        bundles,
+        total_content_bytes,
+        catalog_hash: String::new(),
+    };
+    catalog.catalog_hash = catalog.compute_catalog_hash();
+
+    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
+    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
+        path: catalog_path.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(ContentBuildResult {
+        output_dir: output_dir.to_path_buf(),
+        catalog_path,
+        catalog,
+        emitted_bundles,
+        unchanged_bundles: Vec::new(),
+        rejected_bundles,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

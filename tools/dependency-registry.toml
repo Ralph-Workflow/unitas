@@ -1859,3 +1859,87 @@ version = "1.0.23"
 license = "MIT"
 advisory_reviewed = "2026-11-25"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+license = "Unlicense OR MIT"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+license = "MIT OR Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "lewton"
+version = "0.10.2"
+license = "MIT OR Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "mach2"
+version = "0.4.3"
+license = "BSD-2-Clause OR MIT OR Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "minimp3"
+version = "0.6.1"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "minimp3-sys"
+version = "0.6.0"
+license = "MIT"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "ogg"
+version = "0.8.0"
+license = "BSD-3-Clause"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "slice-ring-buffer"
+version = "0.3.4"
+license = "MIT/Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "tinyvec"
+version = "1.13.3"
+license = "Zlib OR Apache-2.0 OR MIT"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "winapi"
+version = "0.3.9"
+license = "MIT/Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+license = "MIT/Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+license = "MIT/Apache-2.0"
+advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"

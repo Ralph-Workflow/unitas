@@ -1,66 +1,20 @@
-//! Reader for Unity's binary `SerializedFile` container.
-//!
-//! Only format version 22 (written by Unity 2022.3 LTS) is accepted; any other
-//! version is reported as [`BinarySerError::UnsupportedVersion`] instead of
-//! being parsed with a guessed layout.
-//!
-//! # Byte layout
-//!
-//! The 20-byte header is always big-endian. The metadata block and the object
-//! table that follow it use the host endianness recorded in the header, the
-//! way Unity writes them.
-//!
-//! ```text
-//! header (20 bytes, big-endian)
-//!   0   u32   metadata_size   byte length of the metadata block
-//!   4   u32   file_size       total file length the producer wrote
-//!   8   u32   version         format version (22)
-//!  12   u32   data_offset     absolute offset of the first object payload
-//!  16   u8    endianness      0 = little-endian host, 1 = big-endian host
-//!  17   3 bytes               reserved, ignored
-//!
-//! metadata block (metadata_size bytes, host endianness)
-//!   u32   unity_version length, then that many UTF-8 bytes
-//!   i32   target_platform
-//!   u8    enable_type_tree (0 or 1)
-//!   u32   type_count
-//!   u32   type_table_bytes  length of the opaque type table + type tree blob
-//!   ...   type_table_bytes opaque bytes, not interpreted
-//!   u32   object_count
-//!   object_count entries, each
-//!     i64 path_id
-//!     i32 class_id
-//!     u64 byte_offset  absolute offset of the payload in the file
-//!     u32 byte_size    payload length in bytes
-//!     u8  is_stripped  (0 or 1)
-//! ```
-//!
-//! Object payloads follow the metadata block at `data_offset`. Every byte of
-//! the input is kept in [`SerializedFile::raw`], so an unedited file is written
-//! back byte for byte and content this reader does not interpret survives a
-//! round trip.
-//!
-//! The type table is length-prefixed here because the type trees inside it
-//! carry their own, version-specific layout. Unity writes that region without
-//! a length, so a file produced by Unity itself needs a type-tree walk that
-//! this reader does not implement yet.
-
+use crate::unity_yaml::{self, Stream, YamlError};
 use std::fmt;
 
-/// The only Unity binary format version this reader accepts.
 pub const SUPPORTED_VERSION: u32 = 22;
 
 const HEADER_SIZE: usize = 20;
 const OBJECT_ENTRY_SIZE: usize = 25;
+const MONOBEHAVIOUR_CLASS_ID: i32 = 114;
+const TYPE_HASH_SIZE: usize = 16;
+const TYPE_TREE_NODE_SIZE: usize = 32;
 
-/// Byte order of the metadata block and the object table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endianness {
     Big,
     Little,
 }
 
-/// The fixed-size header of a binary serialized file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedFileHeader {
     pub metadata_size: u32,
@@ -68,11 +22,9 @@ pub struct SerializedFileHeader {
     pub version: u32,
     pub data_offset: u32,
     pub endianness: Endianness,
-    /// Bytes consumed by the header block itself.
     pub header_size: u32,
 }
 
-/// The descriptive fields of the metadata block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedFileMetadata {
     pub unity_version: String,
@@ -81,31 +33,69 @@ pub struct SerializedFileMetadata {
     pub type_count: u32,
 }
 
-/// One entry of the object table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedObject {
     pub path_id: i64,
     pub class_id: i32,
-    /// Absolute offset of the payload in the file.
     pub byte_offset: u64,
     pub byte_size: u32,
     pub is_stripped: bool,
 }
 
-/// A parsed binary serialized file with its original bytes kept verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedFile {
     pub header: SerializedFileHeader,
     pub metadata: SerializedFileMetadata,
     pub objects: Vec<SerializedObject>,
-    /// The whole original file, preserved byte for byte.
     pub raw: Vec<u8>,
 }
 
-/// Every failure this reader reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SerializedAsset {
+    Text {
+        stream: Stream,
+        raw: Vec<u8>,
+    },
+    Binary(SerializedFile),
+}
+
+impl SerializedAsset {
+    pub fn read(bytes: &[u8]) -> Result<Self, BinarySerError> {
+        read_serialized(bytes)
+    }
+
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+
+    pub fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary(_))
+    }
+
+    pub fn as_text(&self) -> Option<&Stream> {
+        match self {
+            Self::Text { stream, .. } => Some(stream),
+            Self::Binary(_) => None,
+        }
+    }
+
+    pub fn as_binary(&self) -> Option<&SerializedFile> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Binary(file) => Some(file),
+        }
+    }
+
+    pub fn write_back(&self) -> Vec<u8> {
+        match self {
+            Self::Text { raw, .. } => raw.clone(),
+            Self::Binary(file) => file.write_back(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinarySerError {
-    /// The file ends before the data at `at` bytes could be read.
     Truncated {
         at: usize,
     },
@@ -116,6 +106,7 @@ pub enum BinarySerError {
     },
     UnsupportedEndianness,
     InvalidObjectTable(&'static str),
+    InvalidText(YamlError),
 }
 
 impl fmt::Display for BinarySerError {
@@ -137,14 +128,45 @@ impl fmt::Display for BinarySerError {
             Self::InvalidObjectTable(message) => {
                 write!(f, "invalid serialized file object table: {message}")
             }
+            Self::InvalidText(error) => {
+                write!(f, "invalid text serialized asset: {error}")
+            }
         }
     }
 }
 
 impl std::error::Error for BinarySerError {}
 
-/// Reads a binary serialized file, keeping every input byte in
-/// [`SerializedFile::raw`].
+pub fn is_text_serialized(bytes: &[u8]) -> bool {
+    let trimmed = strip_utf8_bom_and_ascii_whitespace(bytes);
+    trimmed.starts_with(b"%YAML") || trimmed.starts_with(b"%TAG") || trimmed.starts_with(b"---")
+}
+
+fn strip_utf8_bom_and_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let without_bom = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let first_non_ws = without_bom
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(without_bom.len());
+    &without_bom[first_non_ws..]
+}
+
+pub fn read_serialized(bytes: &[u8]) -> Result<SerializedAsset, BinarySerError> {
+    if is_text_serialized(bytes) {
+        let without_bom = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+        let text = std::str::from_utf8(without_bom)
+            .map_err(|_| BinarySerError::InvalidHeader("text asset is not valid UTF-8"))?;
+        let stream = unity_yaml::parse(text).map_err(BinarySerError::InvalidText)?;
+        Ok(SerializedAsset::Text {
+            stream,
+            raw: bytes.to_vec(),
+        })
+    } else {
+        let file = read_serialized_file(bytes)?;
+        Ok(SerializedAsset::Binary(file))
+    }
+}
+
 pub fn read_serialized_file(bytes: &[u8]) -> Result<SerializedFile, BinarySerError> {
     let header = read_header(bytes)?;
     if header.file_size > 0 && bytes.len() < header.file_size as usize {
@@ -170,9 +192,7 @@ pub fn read_serialized_file(bytes: &[u8]) -> Result<SerializedFile, BinarySerErr
         }
     };
     let type_count = cursor.u32()?;
-    skip_type_region(&mut cursor)?;
-    let object_count = cursor.u32()?;
-    let objects = read_object_table(&mut cursor, object_count)?;
+    let objects = read_types_and_object_table(&mut cursor, type_count, enable_type_tree)?;
 
     Ok(SerializedFile {
         header,
@@ -188,7 +208,6 @@ pub fn read_serialized_file(bytes: &[u8]) -> Result<SerializedFile, BinarySerErr
 }
 
 impl SerializedFile {
-    /// The payload bytes of the object at `index`.
     pub fn object_bytes(&self, index: usize) -> Result<&[u8], BinarySerError> {
         let object = self
             .objects
@@ -204,12 +223,10 @@ impl SerializedFile {
             .ok_or(BinarySerError::Truncated { at: end })
     }
 
-    /// The object with the given local file identifier, if the file has one.
     pub fn object_by_path_id(&self, path_id: i64) -> Option<&SerializedObject> {
         self.objects.iter().find(|object| object.path_id == path_id)
     }
 
-    /// The original file bytes, byte-identical for an unedited file.
     pub fn write_back(&self) -> Vec<u8> {
         self.raw.clone()
     }
@@ -254,6 +271,34 @@ fn read_be_u32(bytes: &[u8], offset: usize) -> u32 {
 }
 
 fn read_unity_version(cursor: &mut Cursor<'_>) -> Result<String, BinarySerError> {
+    let saved = cursor.pos;
+    if let Ok(length) = cursor.u32() {
+        let len = length as usize;
+        if len > 0 && len <= 64 && len <= cursor.remaining() {
+            let raw = cursor.take(len)?;
+            if !raw.contains(&0) {
+                if let Ok(version) = String::from_utf8(raw.to_vec()) {
+                    if version
+                        .bytes()
+                        .all(|byte| (0x20..=0x7E).contains(&byte))
+                    {
+                        return Ok(version);
+                    }
+                }
+            }
+        }
+    }
+    cursor.pos = saved;
+    let remaining = &cursor.bytes[cursor.pos..];
+    if let Some(nul_offset) = remaining.iter().position(|byte| *byte == 0) {
+        if nul_offset > 0 && nul_offset <= 64 {
+            let raw = cursor.take(nul_offset)?;
+            let _ = cursor.u8()?;
+            return String::from_utf8(raw.to_vec())
+                .map_err(|_| BinarySerError::InvalidHeader("unity_version is not valid UTF-8"));
+        }
+    }
+    cursor.pos = saved;
     let length = cursor.u32()? as usize;
     if length > cursor.remaining() {
         return Err(BinarySerError::InvalidHeader(
@@ -265,8 +310,141 @@ fn read_unity_version(cursor: &mut Cursor<'_>) -> Result<String, BinarySerError>
         .map_err(|_| BinarySerError::InvalidHeader("unity_version is not valid UTF-8"))
 }
 
-/// Skips the type table and its type trees, which this reader does not
-/// interpret but keeps verbatim in the raw bytes.
+fn read_types_and_object_table(
+    cursor: &mut Cursor<'_>,
+    type_count: u32,
+    enable_type_tree: bool,
+) -> Result<Vec<SerializedObject>, BinarySerError> {
+    let saved = cursor.pos;
+    if skip_unity_v22_type_table(cursor, type_count, enable_type_tree, false).is_ok() {
+        let after_types = cursor.pos;
+        if let Ok(objects) = read_unity_v22_objects_from_type_end(cursor) {
+            if cursor.remaining() == 0 {
+                return Ok(objects);
+            }
+        }
+        cursor.pos = after_types;
+        if let Ok(object_count) = cursor.u32() {
+            if let Ok(objects) = read_object_table(cursor, object_count) {
+                if cursor.remaining() == 0 {
+                    return Ok(objects);
+                }
+            }
+        }
+    }
+
+    cursor.pos = saved;
+    cursor.object_table = false;
+    if skip_unity_v22_type_table(cursor, type_count, enable_type_tree, true).is_ok() {
+        let after_types = cursor.pos;
+        if let Ok(objects) = read_unity_v22_objects_from_type_end(cursor) {
+            if cursor.remaining() == 0 {
+                return Ok(objects);
+            }
+        }
+        cursor.pos = after_types;
+        if let Ok(object_count) = cursor.u32() {
+            if let Ok(objects) = read_object_table(cursor, object_count) {
+                if cursor.remaining() == 0 {
+                    return Ok(objects);
+                }
+            }
+        }
+    }
+
+    cursor.pos = saved;
+    cursor.object_table = false;
+    skip_type_region(cursor)?;
+    let object_count = cursor.u32()?;
+    read_object_table(cursor, object_count)
+}
+
+fn skip_unity_v22_type_table(
+    cursor: &mut Cursor<'_>,
+    type_count: u32,
+    enable_type_tree: bool,
+    with_type_dependencies: bool,
+) -> Result<(), BinarySerError> {
+    for _ in 0..type_count {
+        let class_id = cursor.i32()?;
+        let is_stripped_type = cursor.u8()?;
+        if is_stripped_type > 1 {
+            return Err(BinarySerError::InvalidHeader(
+                "is_stripped_type must be 0 or 1",
+            ));
+        }
+        let _script_type_index = cursor.i16()?;
+        if class_id == MONOBEHAVIOUR_CLASS_ID || class_id < 0 {
+            let _script_id = cursor.take(TYPE_HASH_SIZE)?;
+        }
+        let _old_type_hash = cursor.take(TYPE_HASH_SIZE)?;
+        if enable_type_tree {
+            skip_v22_type_tree_blob(cursor, with_type_dependencies)?;
+        }
+    }
+    Ok(())
+}
+
+fn skip_v22_type_tree_blob(
+    cursor: &mut Cursor<'_>,
+    with_type_dependencies: bool,
+) -> Result<(), BinarySerError> {
+    let node_count = cursor.i32()?;
+    let string_buffer_size = cursor.i32()?;
+    if node_count < 0 || string_buffer_size < 0 {
+        return Err(BinarySerError::InvalidHeader(
+            "negative type tree node or string buffer size",
+        ));
+    }
+    let nodes_bytes = (node_count as usize).saturating_mul(TYPE_TREE_NODE_SIZE);
+    let total_blob = nodes_bytes.saturating_add(string_buffer_size as usize);
+    if total_blob > cursor.remaining() {
+        return Err(BinarySerError::InvalidHeader(
+            "type tree blob exceeds metadata block",
+        ));
+    }
+    let _ = cursor.take(total_blob)?;
+    if with_type_dependencies {
+        let dep_count = cursor.i32()?;
+        if dep_count < 0 {
+            return Err(BinarySerError::InvalidHeader(
+                "negative type dependency count",
+            ));
+        }
+        let dep_bytes = (dep_count as usize).saturating_mul(4);
+        if dep_bytes > cursor.remaining() {
+            return Err(BinarySerError::InvalidHeader(
+                "type dependencies exceed metadata block",
+            ));
+        }
+        let _ = cursor.take(dep_bytes)?;
+    }
+    Ok(())
+}
+
+fn read_unity_v22_objects_from_type_end(
+    cursor: &mut Cursor<'_>,
+) -> Result<Vec<SerializedObject>, BinarySerError> {
+    let object_count = cursor.u32()?;
+    let after_count = cursor.pos;
+    if let Ok(objects) = read_object_table(cursor, object_count) {
+        if cursor.remaining() == 0 {
+            return Ok(objects);
+        }
+    }
+    cursor.pos = after_count;
+    cursor.object_table = false;
+    cursor.align4()?;
+    let aligned_pos = cursor.pos;
+    if let Ok(objects) = read_object_table(cursor, object_count) {
+        if cursor.remaining() == 0 {
+            return Ok(objects);
+        }
+    }
+    cursor.pos = aligned_pos;
+    read_object_table(cursor, object_count)
+}
+
 fn skip_type_region(cursor: &mut Cursor<'_>) -> Result<(), BinarySerError> {
     let length = cursor.u32()? as usize;
     if length > cursor.remaining() {
@@ -335,6 +513,15 @@ impl<'a> Cursor<'a> {
         self.bytes.len().saturating_sub(self.pos)
     }
 
+    fn align4(&mut self) -> Result<(), BinarySerError> {
+        let aligned = (self.pos.saturating_add(3)) & !3;
+        if aligned > self.bytes.len() {
+            return Err(self.overrun());
+        }
+        self.pos = aligned;
+        Ok(())
+    }
+
     fn take(&mut self, length: usize) -> Result<&'a [u8], BinarySerError> {
         let end = self.pos.saturating_add(length);
         if end > self.bytes.len() {
@@ -355,6 +542,16 @@ impl<'a> Cursor<'a> {
 
     fn u8(&mut self) -> Result<u8, BinarySerError> {
         Ok(self.take(1)?[0])
+    }
+
+    fn i16(&mut self) -> Result<i16, BinarySerError> {
+        let bytes = self.take(2)?;
+        let mut value = [0u8; 2];
+        value.copy_from_slice(bytes);
+        Ok(match self.endian {
+            Endianness::Big => i16::from_be_bytes(value),
+            Endianness::Little => i16::from_le_bytes(value),
+        })
     }
 
     fn u32(&mut self) -> Result<u32, BinarySerError> {

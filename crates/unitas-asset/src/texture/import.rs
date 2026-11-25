@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::texture::jpeg::{decode_jpeg, has_jpeg_signature};
 use crate::texture::png::decode_png;
 use crate::texture::tga::decode_tga;
 
@@ -421,9 +422,15 @@ fn downscale(texture: &DecodedTexture) -> DecodedTexture {
 }
 
 pub fn decode_texture(bytes: &[u8], file_name: &str) -> Result<DecodedTexture, TextureImportError> {
+    if has_jpeg_signature(bytes) {
+        return decode_jpeg(bytes);
+    }
     let lower = file_name.to_ascii_lowercase();
     if lower.ends_with(".png") {
         return decode_png(bytes);
+    }
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        return decode_jpeg(bytes);
     }
     if lower.ends_with(".tga") || lower.ends_with(".targa") {
         return decode_tga(bytes);

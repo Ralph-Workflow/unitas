@@ -47,7 +47,24 @@ impl CollisionMatrix {
     pub fn ignore_layer_collision(&mut self, a: usize, b: usize, ignore: bool) {
         self.set_enabled(a, b, !ignore);
     }
+
+    /// Returns the bitmask of layers enabled to collide/query against `layer`
+    /// under this matrix (0 when `layer >= LAYER_COUNT`).
+    pub fn layer_mask_for_layer(&self, layer: usize) -> u32 {
+        if layer >= LAYER_COUNT {
+            return 0;
+        }
+        let mut mask = 0u32;
+        for other in 0..LAYER_COUNT {
+            if self.is_enabled(layer, other) {
+                mask |= 1u32 << other;
+            }
+        }
+        mask
+    }
 }
+
+pub use crate::world::{MeshColliderDesc, PhysicsDiagnostic, PhysicsMaterial3D};
 
 impl Default for CollisionMatrix {
     fn default() -> Self {

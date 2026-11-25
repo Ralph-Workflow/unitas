@@ -1,7 +1,8 @@
 use unitas_core::EntityId;
 use unitas_physics::matrix::{
     message_is_eligible, route_message, CollisionMatrix, CollisionMessage, FrameEvents,
-    MessageDelivery, MessageTracker, PhysicsObject, TouchingPair, LAYER_COUNT,
+    MeshColliderDesc, MessageDelivery, MessageTracker, PhysicsMaterial3D, PhysicsObject,
+    TouchingPair, LAYER_COUNT,
 };
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
@@ -352,5 +353,329 @@ fn matrix_world_layer_matrix_stops_collision_callbacks() -> Result<(), PhysicsEr
     world.step(1.0)?;
     assert_eq!(world.drain_events().len(), 1);
     assert!(world.collision_matrix().is_enabled(0, 1));
+    Ok(())
+}
+
+#[test]
+fn matrix_removed_layer_pair_stops_default_mask_queries_and_default_material_applies(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    let body_l0 = EntityId::new(10);
+    let body_l1 = EntityId::new(11);
+    let body_l2 = EntityId::new(12);
+
+    world.add_body_with_default_material(
+        body_l0,
+        sphere_body([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0),
+    )?;
+    world.add_body_with_material(
+        body_l1,
+        sphere_body([3.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1),
+        None,
+    )?;
+    world.add_body_with_material(
+        body_l2,
+        sphere_body([6.0, 0.0, 0.0], [0.0, 0.0, 0.0], 2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9)),
+    )?;
+
+    assert_eq!(
+        world.body_material(body_l0),
+        Some(PhysicsMaterial3D::default())
+    );
+    assert_eq!(
+        world.body_material(body_l1),
+        Some(PhysicsMaterial3D::default())
+    );
+    assert_eq!(
+        world.body_material(body_l2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9))
+    );
+
+    world.set_default_material(PhysicsMaterial3D::new(0.8, 0.4));
+    assert_eq!(
+        world.body_material(body_l0),
+        Some(PhysicsMaterial3D::new(0.8, 0.4))
+    );
+    assert_eq!(
+        world.body_material(body_l1),
+        Some(PhysicsMaterial3D::new(0.8, 0.4))
+    );
+    assert_eq!(
+        world.body_material(body_l2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9))
+    );
+
+    let initial_hits = world.raycast_default_layer([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 0);
+    let initial_entities: Vec<EntityId> = initial_hits.iter().map(|h| h.entity).collect();
+    assert_eq!(initial_entities, vec![body_l0, body_l1, body_l2]);
+
+    world.ignore_layer_collision(0, 1, true);
+    assert!(world.get_ignore_layer_collision(0, 1));
+    assert!(world.get_ignore_layer_collision(1, 0));
+
+    let filtered_hits = world.raycast_default_layer([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 0);
+    let filtered_entities: Vec<EntityId> = filtered_hits.iter().map(|h| h.entity).collect();
+    assert_eq!(filtered_entities, vec![body_l0, body_l2]);
+    assert!(
+        !world
+            .overlap_sphere_default_layer([3.0, 0.0, 0.0], 1.0, 0)
+            .contains(&body_l1)
+    );
+    assert!(
+        world
+            .overlap_sphere_default_layer([6.0, 0.0, 0.0], 1.0, 0)
+            .contains(&body_l2)
+    );
+    Ok(())
+}
+
+#[test]
+fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transforms_or_step(
+) -> Result<(), PhysicsError> {
+    let mut world = World::with_gravity([0.0, 0.0, 0.0]);
+    assert!(world.auto_sync_transforms());
+
+    let wall = EntityId::new(1);
+    let crate_body = EntityId::new(2);
+    world.add_body(
+        wall,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            position: [0.0, 10.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0, 0.0, 0.0],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 1,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+    world.add_body(
+        crate_body,
+        BodyDesc {
+            role: BodyRole::Dynamic,
+            shape: Shape::Sphere { radius: 0.5 },
+            position: [0.0, -10.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 1.0,
+            velocity: [0.0, 0.0, 0.0],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 1,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+
+    world.set_auto_sync_transforms(false);
+    assert!(!world.auto_sync_transforms());
+
+    world.set_position(wall, [2.0, 0.0, 0.0])?;
+    assert_eq!(world.position(wall), Some([2.0, 0.0, 0.0]));
+    assert_eq!(world.query_position(wall), Some([0.0, 10.0, 0.0]));
+    assert!(
+        world
+            .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1)
+            .is_empty(),
+        "with auto_sync_transforms off, raycast must not see moved static collider before sync_transforms"
+    );
+    assert!(
+        world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1).is_empty(),
+        "with auto_sync_transforms off, overlap_sphere must not see moved static collider before sync_transforms"
+    );
+    assert_eq!(
+        world.overlap_sphere([0.0, 10.0, 0.0], 0.25, 1),
+        vec![wall],
+        "before sync_transforms, queries still observe the last synchronized position"
+    );
+
+    world.sync_transforms();
+    assert_eq!(world.query_position(wall), Some([2.0, 0.0, 0.0]));
+    let hits_after_sync = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1);
+    assert_eq!(hits_after_sync.len(), 1);
+    assert_eq!(hits_after_sync[0].entity, wall);
+    assert_eq!(world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1), vec![wall]);
+
+    world.teleport_position(crate_body, [4.0, 0.0, 0.0])?;
+    assert_eq!(world.position(crate_body), Some([4.0, 0.0, 0.0]));
+    assert_eq!(world.query_position(crate_body), Some([0.0, -10.0, 0.0]));
+    let hits_before_step = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1);
+    assert_eq!(
+        hits_before_step.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        vec![wall],
+        "teleported dynamic body is not visible along the ray before sync_transforms or step"
+    );
+
+    world.step(0.02)?;
+    let hits_after_step = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1);
+    assert_eq!(
+        hits_after_step.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        vec![wall, crate_body],
+        "simulation step synchronizes pending transforms into query visibility"
+    );
+
+    world.set_auto_sync_transforms(true);
+    world.set_position(wall, [0.0, 20.0, 0.0])?;
+    assert!(
+        world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1).is_empty(),
+        "with auto_sync_transforms on, moving collider updates query visibility immediately"
+    );
+    assert_eq!(
+        world.overlap_sphere([0.0, 20.0, 0.0], 0.25, 1),
+        vec![wall]
+    );
+    Ok(())
+}
+
+#[test]
+fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_not_simulate(
+) -> Result<(), PhysicsError> {
+    let mut world = World::new();
+    let floor = EntityId::new(1);
+    let invalid_dynamic_mesh = EntityId::new(2);
+    let valid_convex_dynamic = EntityId::new(3);
+    let valid_non_convex_static = EntityId::new(4);
+
+    world.add_body(
+        floor,
+        BodyDesc {
+            role: BodyRole::Static,
+            shape: Shape::Box {
+                half_extents: [10.0, 0.5, 10.0],
+            },
+            position: [0.0, -0.5, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0, 0.0, 0.0],
+            use_gravity: false,
+            is_trigger: false,
+            layer: 1,
+            friction: 0.6,
+            restitution: 0.0,
+        },
+    )?;
+
+    let dynamic_desc = BodyDesc {
+        role: BodyRole::Dynamic,
+        shape: Shape::Box {
+            half_extents: [0.5, 0.5, 0.5],
+        },
+        position: [0.0, 2.0, 0.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: 1.0,
+        velocity: [0.0, -1.0, 0.0],
+        use_gravity: true,
+        is_trigger: false,
+        layer: 1,
+        friction: 0.6,
+        restitution: 0.0,
+    };
+
+    let err = world.add_mesh_collider_body(
+        invalid_dynamic_mesh,
+        dynamic_desc,
+        MeshColliderDesc::non_convex("ConcaveCrate", "ConcaveCrateMesh", [0.5, 0.5, 0.5]),
+    );
+    assert_eq!(
+        err,
+        Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
+            entity: invalid_dynamic_mesh,
+            object_name: String::from("ConcaveCrate"),
+        })
+    );
+    assert!(!world.is_body_simulated(invalid_dynamic_mesh));
+    assert_eq!(world.position(invalid_dynamic_mesh), None);
+
+    let diags = world.entity_diagnostics(invalid_dynamic_mesh);
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].object_name, "ConcaveCrate");
+    assert_eq!(diags[0].code, "PHY-MESH-NONCONVEX-DYNAMIC");
+    assert!(
+        diags[0].message.contains("Non-convex MeshCollider"),
+        "diagnostic must state non-convex MeshCollider cause: {}",
+        diags[0].message
+    );
+    assert!(
+        diags[0].message.contains("ConcaveCrate"),
+        "diagnostic must name the offending object: {}",
+        diags[0].message
+    );
+
+    world.add_mesh_collider_body(
+        valid_convex_dynamic,
+        BodyDesc {
+            position: [2.0, 2.0, 0.0],
+            ..dynamic_desc
+        },
+        MeshColliderDesc::convex("ConvexBoulder", "BoulderMesh", [0.5, 0.5, 0.5])
+            .with_triangle_count(512),
+    )?;
+    assert!(world.is_body_simulated(valid_convex_dynamic));
+    let hull_diags = world.entity_diagnostics(valid_convex_dynamic);
+    assert_eq!(hull_diags.len(), 1);
+    assert_eq!(hull_diags[0].code, "PHY-MESH-CONVEX-HULL-LIMIT");
+    assert!(hull_diags[0].message.contains("ConvexBoulder"));
+    assert!(hull_diags[0].message.contains("255"));
+
+    world.add_mesh_collider_body(
+        valid_non_convex_static,
+        BodyDesc {
+            role: BodyRole::Static,
+            mass: 0.0,
+            use_gravity: false,
+            position: [-3.0, 0.5, 0.0],
+            ..dynamic_desc
+        },
+        MeshColliderDesc::non_convex("StaticArch", "ArchMesh", [1.0, 1.0, 1.0]),
+    )?;
+    assert!(world.is_body_simulated(valid_non_convex_static));
+    assert!(world.entity_diagnostics(valid_non_convex_static).is_empty());
+
+    world.step(0.1)?;
+    assert!(
+        world
+            .overlap_sphere([0.0, 2.0, 0.0], 1.0, 1)
+            .into_iter()
+            .all(|e| e != invalid_dynamic_mesh),
+        "rejected non-convex dynamic mesh collider must not appear in spatial queries"
+    );
+    let convex_y = world.position(valid_convex_dynamic).map_or(2.0, |p| p[1]);
+    assert!(convex_y < 2.0, "convex dynamic mesh collider simulates normally");
+
+    let attach_err = world.attach_mesh_collider(
+        valid_convex_dynamic,
+        MeshColliderDesc::non_convex("ConvexBoulder", "ConcaveReplacementMesh", [0.5, 0.5, 0.5]),
+    );
+    assert_eq!(
+        attach_err,
+        Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
+            entity: valid_convex_dynamic,
+            object_name: String::from("ConvexBoulder"),
+        })
+    );
+    assert!(
+        !world.is_body_simulated(valid_convex_dynamic),
+        "attaching non-convex mesh collider to existing dynamic body disables dynamic shape simulation"
+    );
+    let frozen_pos = world.position(valid_convex_dynamic);
+    world.step(0.1)?;
+    assert_eq!(
+        world.position(valid_convex_dynamic),
+        frozen_pos,
+        "disabled body must not move as a dynamic non-convex shape"
+    );
+    assert!(
+        world
+            .overlap_sphere(frozen_pos.unwrap_or([2.0, 2.0, 0.0]), 1.0, 1)
+            .into_iter()
+            .all(|e| e != valid_convex_dynamic),
+        "disabled body must not participate in queries"
+    );
     Ok(())
 }

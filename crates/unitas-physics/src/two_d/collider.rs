@@ -35,6 +35,7 @@ pub enum Shape2D {
     Circle { radius: f32 },
     Edge { start: [f32; 2], end: [f32; 2] },
     Polygon { vertices: Vec<[f32; 2]> },
+    Composite { shapes: Vec<Shape2D> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,6 +70,7 @@ pub struct ColliderDesc2D {
     pub is_trigger: bool,
     pub material: PhysicsMaterial2D,
     pub used_by_effector: bool,
+    pub used_by_composite: bool,
     pub game_object: EntityId,
     pub attached_body: Option<BodyId2D>,
     pub layer: u8,
@@ -89,6 +91,7 @@ impl Default for ColliderDesc2D {
             is_trigger: false,
             material: PhysicsMaterial2D::default(),
             used_by_effector: false,
+            used_by_composite: false,
             game_object: EntityId::new(0),
             attached_body: None,
             layer: 0,
@@ -163,6 +166,11 @@ impl ColliderDesc2D {
         self
     }
 
+    pub fn with_used_by_composite(mut self, used_by_composite: bool) -> Self {
+        self.used_by_composite = used_by_composite;
+        self
+    }
+
     pub fn with_layer(mut self, layer: u8) -> Self {
         self.layer = layer;
         self
@@ -189,6 +197,7 @@ pub struct Collider2D {
     pub is_trigger: bool,
     pub material: PhysicsMaterial2D,
     pub used_by_effector: bool,
+    pub used_by_composite: bool,
     pub game_object: EntityId,
     pub attached_body: Option<BodyId2D>,
     pub layer: u8,
@@ -208,6 +217,7 @@ impl Collider2D {
             is_trigger: desc.is_trigger,
             material: desc.material,
             used_by_effector: desc.used_by_effector,
+            used_by_composite: desc.used_by_composite,
             game_object: desc.game_object,
             attached_body: desc.attached_body,
             layer: desc.layer,
@@ -298,7 +308,66 @@ fn shape_vertices_world(shape: &Shape2D, center: [f32; 2], angle: f32) -> Option
                     .collect(),
             )
         }
-        Shape2D::Circle { .. } => None,
+        Shape2D::Circle { .. } | Shape2D::Composite { .. } => None,
+    }
+}
+
+pub(crate) fn shape_to_local_shapes_in_frame(
+    shape: &Shape2D,
+    rel_offset: [f32; 2],
+    rel_angle: f32,
+) -> Vec<Shape2D> {
+    match shape {
+        Shape2D::Box { half_extents } => {
+            if half_extents[0] <= 0.0 || half_extents[1] <= 0.0 {
+                return Vec::new();
+            }
+            let hx = half_extents[0];
+            let hy = half_extents[1];
+            let locals = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]];
+            let vertices = locals
+                .iter()
+                .map(|p| transform_point2(*p, rel_offset, rel_angle))
+                .collect();
+            vec![Shape2D::Polygon { vertices }]
+        }
+        Shape2D::Edge { start, end } => vec![Shape2D::Edge {
+            start: transform_point2(*start, rel_offset, rel_angle),
+            end: transform_point2(*end, rel_offset, rel_angle),
+        }],
+        Shape2D::Polygon { vertices } => {
+            if vertices.len() < 2 {
+                return Vec::new();
+            }
+            let mapped = vertices
+                .iter()
+                .map(|p| transform_point2(*p, rel_offset, rel_angle))
+                .collect();
+            vec![Shape2D::Polygon { vertices: mapped }]
+        }
+        Shape2D::Circle { radius } => {
+            if *radius <= 0.0 {
+                return Vec::new();
+            }
+            if rel_offset[0].abs() <= EPSILON && rel_offset[1].abs() <= EPSILON {
+                vec![Shape2D::Circle { radius: *radius }]
+            } else {
+                let mut vertices = Vec::with_capacity(12);
+                for k in 0..12 {
+                    let theta = (k as f32) * (std::f32::consts::TAU / 12.0);
+                    let (s, c) = theta.sin_cos();
+                    vertices.push([rel_offset[0] + c * radius, rel_offset[1] + s * radius]);
+                }
+                vec![Shape2D::Polygon { vertices }]
+            }
+        }
+        Shape2D::Composite { shapes } => {
+            let mut out = Vec::new();
+            for sub in shapes {
+                out.extend(shape_to_local_shapes_in_frame(sub, rel_offset, rel_angle));
+            }
+            out
+        }
     }
 }
 
@@ -369,6 +438,32 @@ pub(crate) fn compute_contact2d(
     angle_b: f32,
 ) -> Option<RawContact2D> {
     match (shape_a, shape_b) {
+        (Shape2D::Composite { shapes }, _) => {
+            let mut best: Option<RawContact2D> = None;
+            for sub in shapes {
+                if let Some(c) =
+                    compute_contact2d(sub, center_a, angle_a, shape_b, center_b, angle_b)
+                {
+                    if best.is_none_or(|b| c.depth > b.depth) {
+                        best = Some(c);
+                    }
+                }
+            }
+            best
+        }
+        (_, Shape2D::Composite { shapes }) => {
+            let mut best: Option<RawContact2D> = None;
+            for sub in shapes {
+                if let Some(c) =
+                    compute_contact2d(shape_a, center_a, angle_a, sub, center_b, angle_b)
+                {
+                    if best.is_none_or(|b| c.depth > b.depth) {
+                        best = Some(c);
+                    }
+                }
+            }
+            best
+        }
         (Shape2D::Circle { radius: ra }, Shape2D::Circle { radius: rb }) => {
             circle_circle_contact(center_a, *ra, center_b, *rb)
         }
@@ -591,6 +686,9 @@ pub(crate) fn point_in_shape2d(
             };
             point_inside_convex_polygon(point, &verts)
         }
+        Shape2D::Composite { shapes } => shapes
+            .iter()
+            .any(|sub| point_in_shape2d(point, sub, center, angle)),
     }
 }
 
@@ -606,6 +704,25 @@ pub(crate) fn raycast_shape2d(
     let dir = normalize2(direction)?;
     if max_distance < 0.0 || !max_distance.is_finite() {
         return None;
+    }
+    if let Shape2D::Composite { shapes } = shape {
+        let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
+        for sub in shapes {
+            if let Some(hit) = raycast_shape2d(
+                origin,
+                dir,
+                max_distance,
+                sub,
+                center,
+                angle,
+                queries_start_in_colliders,
+            ) {
+                if best.is_none_or(|(best_t, _, _)| hit.0 < best_t) {
+                    best = Some(hit);
+                }
+            }
+        }
+        return best;
     }
     if point_in_shape2d(origin, shape, center, angle) {
         if !queries_start_in_colliders {
@@ -685,6 +802,7 @@ pub(crate) fn raycast_shape2d(
             }
             best
         }
+        Shape2D::Composite { .. } => None,
     }
 }
 

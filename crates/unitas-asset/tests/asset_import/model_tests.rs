@@ -1,5 +1,6 @@
+use unitas_asset::model::fbx::FbxImportError;
 use unitas_asset::model::{
-    import_gltf, import_model, import_obj, import_obj_bytes, ModelImportError,
+    import_fbx, import_gltf, import_model, import_obj, import_obj_bytes, ModelImportError,
 };
 
 const CUBE_OBJ: &str = "\
@@ -399,13 +400,249 @@ fn import_model_dispatches_on_the_file_name() -> Result<(), String> {
     };
     assert_eq!(mesh.sub_meshes.len(), 1);
 
-    let error = match import_model(CUBE_OBJ.as_bytes(), "scene.fbx") {
+    let fbx_bytes = make_fbx(&[make_fbx_geometry(
+        "TriQuad",
+        &[
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0,
+            1.0, 0.0, 1.0, 1.0,
+        ],
+        &[0, 1, -2, 3, 4, 5, -6],
+    )]);
+    let mesh = match import_model(&fbx_bytes, "scene.fbx") {
+        Ok(mesh) => mesh,
+        Err(error) => return Err(format!("import failed: {error:?}")),
+    };
+    assert_eq!(mesh.name, "TriQuad");
+    assert_eq!(mesh.positions.len(), 7);
+    assert_eq!(mesh.indices, vec![0, 1, 2, 3, 4, 5, 3, 5, 6]);
+    assert_eq!(mesh.sub_meshes.len(), 1);
+    assert_eq!(mesh.sub_meshes[0].sub_asset_id, "TriQuad");
+
+    let error = match import_model(CUBE_OBJ.as_bytes(), "scene.blend") {
         Ok(_) => return Err("expected an unsupported file type error".to_string()),
         Err(error) => error,
     };
     match error {
-        ModelImportError::UnsupportedFileType { file_name } => assert_eq!(file_name, "fbx"),
+        ModelImportError::UnsupportedFileType { file_name } => assert_eq!(file_name, "blend"),
         other => return Err(format!("unexpected error: {other:?}")),
+    }
+    Ok(())
+}
+
+struct FbxTestNode<'a> {
+    name: &'a str,
+    properties: Vec<Vec<u8>>,
+    children: Vec<FbxTestNode<'a>>,
+}
+
+fn fbx_prop_string(value: &str) -> Vec<u8> {
+    let mut out = vec![b'S'];
+    out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    out.extend_from_slice(value.as_bytes());
+    out
+}
+
+fn fbx_prop_int(value: i32) -> Vec<u8> {
+    let mut out = vec![b'I'];
+    out.extend_from_slice(&value.to_le_bytes());
+    out
+}
+
+fn fbx_prop_double_array(values: &[f64]) -> Vec<u8> {
+    let mut out = vec![b'd'];
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&((values.len() * 8) as u32).to_le_bytes());
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+fn fbx_prop_int_array(values: &[i32]) -> Vec<u8> {
+    let mut out = vec![b'i'];
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&((values.len() * 4) as u32).to_le_bytes());
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+fn build_fbx_node(base: u64, spec: &FbxTestNode) -> Vec<u8> {
+    let property_bytes: Vec<u8> = spec.properties.concat();
+    let name_len = spec.name.len();
+    let header_len = 8 + 4 + 8 + 1 + name_len;
+    let children_base = base + header_len as u64 + property_bytes.len() as u64;
+    let mut child_bytes: Vec<Vec<u8>> = Vec::new();
+    let mut offset = children_base;
+    for child in &spec.children {
+        let bytes = build_fbx_node(offset, child);
+        offset += bytes.len() as u64;
+        child_bytes.push(bytes);
+    }
+    let content_len: usize = property_bytes.len()
+        + child_bytes
+            .iter()
+            .map(|bytes| bytes.len())
+            .sum::<usize>();
+    let end_offset = base + header_len as u64 + content_len as u64;
+    let mut out = Vec::new();
+    out.extend_from_slice(&end_offset.to_le_bytes());
+    out.extend_from_slice(&(spec.properties.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(property_bytes.len() as u64).to_le_bytes());
+    out.push(name_len as u8);
+    out.extend_from_slice(spec.name.as_bytes());
+    out.extend_from_slice(&property_bytes);
+    for bytes in child_bytes {
+        out.extend_from_slice(&bytes);
+    }
+    out
+}
+
+fn make_fbx(objects_children: &[FbxTestNode]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"Kaydara FBX Binary  \x00");
+    bytes.extend_from_slice(&7500u32.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 16]);
+    let mut children = Vec::with_capacity(objects_children.len());
+    for child in objects_children {
+        children.push(clone_fbx_node(child));
+    }
+    let root = FbxTestNode {
+        name: "Objects",
+        properties: Vec::new(),
+        children,
+    };
+    let root_bytes = build_fbx_node(bytes.len() as u64, &root);
+    bytes.extend_from_slice(&root_bytes);
+    bytes
+}
+
+fn clone_fbx_node<'a>(node: &FbxTestNode<'a>) -> FbxTestNode<'a> {
+    FbxTestNode {
+        name: node.name,
+        properties: node.properties.clone(),
+        children: node.children.iter().map(clone_fbx_node).collect(),
+    }
+}
+
+fn make_fbx_geometry<'a>(name: &'a str, vertices: &[f64], polygons: &[i32]) -> FbxTestNode<'a> {
+    FbxTestNode {
+        name: "Geometry",
+        properties: vec![fbx_prop_int(124), fbx_prop_string(name)],
+        children: vec![
+            FbxTestNode {
+                name: "Vertices",
+                properties: vec![fbx_prop_double_array(vertices)],
+                children: Vec::new(),
+            },
+            FbxTestNode {
+                name: "PolygonVertexIndex",
+                properties: vec![fbx_prop_int_array(polygons)],
+                children: Vec::new(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn import_model_combines_multiple_fbx_geometry_nodes_with_stable_sub_asset_ids() -> Result<(), String>
+{
+    let first = make_fbx_geometry(
+        "Hull",
+        &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        &[0, 1, -2],
+    );
+    let second = make_fbx_geometry(
+        "Turret",
+        &[0.0, 0.0, 2.0, 1.0, 0.0, 2.0, 1.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+        &[0, 1, 2, -3],
+    );
+    let fbx_bytes = make_fbx(&[first, second]);
+    let direct = match import_fbx(&fbx_bytes) {
+        Ok(meshes) => meshes,
+        Err(error) => return Err(format!("direct import_fbx failed: {error:?}")),
+    };
+    assert_eq!(direct.len(), 2);
+
+    let mesh = match import_model(&fbx_bytes, "tank.FBX") {
+        Ok(mesh) => mesh,
+        Err(error) => return Err(format!("import_model failed: {error:?}")),
+    };
+    assert_eq!(mesh.name, "Hull");
+    assert_eq!(mesh.positions.len(), 7);
+    assert_eq!(mesh.indices, vec![0, 1, 2, 3, 4, 5, 3, 5, 6]);
+    assert_eq!(mesh.sub_meshes.len(), 2);
+    assert_eq!(mesh.sub_meshes[0].sub_asset_id, "Hull");
+    assert_eq!(mesh.sub_meshes[0].index_offset, 0);
+    assert_eq!(mesh.sub_meshes[0].index_count, 3);
+    assert_eq!(mesh.sub_meshes[1].sub_asset_id, "Turret");
+    assert_eq!(mesh.sub_meshes[1].index_offset, 3);
+    assert_eq!(mesh.sub_meshes[1].index_count, 6);
+    Ok(())
+}
+
+#[test]
+fn import_model_maps_fbx_rig_and_animation_rejection_and_malformed_errors() -> Result<(), String> {
+    let rig_bytes = make_fbx(&[FbxTestNode {
+        name: "Deformer",
+        properties: vec![fbx_prop_string("Skin")],
+        children: Vec::new(),
+    }]);
+    let error = match import_model(&rig_bytes, "rigged.fbx") {
+        Ok(_) => return Err("expected an unsupported FBX rig error".to_string()),
+        Err(error) => error,
+    };
+    match &error {
+        ModelImportError::Fbx(FbxImportError::UnsupportedContent { feature }) => {
+            assert_eq!(feature, "fbx_rig");
+        }
+        other => return Err(format!("unexpected error for rig: {other:?}")),
+    }
+    assert!(
+        error.to_string().contains("fbx_rig"),
+        "display diagnostic names fbx_rig: {error}"
+    );
+
+    let anim_bytes = make_fbx(&[FbxTestNode {
+        name: "AnimationStack",
+        properties: Vec::new(),
+        children: Vec::new(),
+    }]);
+    let error = match import_model(&anim_bytes, "animated.fbx") {
+        Ok(_) => return Err("expected an unsupported FBX animation error".to_string()),
+        Err(error) => error,
+    };
+    match &error {
+        ModelImportError::Fbx(FbxImportError::UnsupportedContent { feature }) => {
+            assert_eq!(feature, "fbx_animation");
+        }
+        other => return Err(format!("unexpected error for animation: {other:?}")),
+    }
+    assert!(
+        error.to_string().contains("fbx_animation"),
+        "display diagnostic names fbx_animation: {error}"
+    );
+
+    let error = match import_model(b"not an fbx stream", "corrupt.fbx") {
+        Ok(_) => return Err("expected an invalid FBX signature error".to_string()),
+        Err(error) => error,
+    };
+    match error {
+        ModelImportError::Fbx(FbxImportError::InvalidSignature) => {}
+        other => return Err(format!("unexpected error for invalid signature: {other:?}")),
+    }
+
+    let empty_fbx = make_fbx(&[]);
+    let error = match import_model(&empty_fbx, "empty.fbx") {
+        Ok(_) => return Err("expected a missing FBX geometry error".to_string()),
+        Err(error) => error,
+    };
+    match error {
+        ModelImportError::Fbx(FbxImportError::MissingGeometry) => {}
+        other => return Err(format!("unexpected error for missing geometry: {other:?}")),
     }
     Ok(())
 }

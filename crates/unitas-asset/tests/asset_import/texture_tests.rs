@@ -2,6 +2,7 @@ use unitas_asset::texture::import::{
     apply_max_size, decode_texture, generate_mip_chain, srgb_to_linear, DecodedTexture,
     FilterMode, SpriteMode, TextureFormat, TextureImportError, TextureImportSettings, WrapMode,
 };
+use unitas_asset::texture::jpeg::decode_jpeg;
 use unitas_asset::texture::png::decode_png;
 use unitas_asset::texture::tga::decode_tga;
 
@@ -568,7 +569,250 @@ fn dispatches_decoding_by_file_name() -> Result<(), Box<dyn std::error::Error>> 
     tga.extend_from_slice(&[77]);
     let texture = decode_texture(&tga, "hero.tga")?;
     assert_eq!(texture.pixels, vec![77]);
-    let error = decode_error(decode_texture(&png, "hero.jpg"));
+    let jpeg = baseline_jpeg_4x4();
+    let texture = decode_texture(&jpeg, "hero.jpg")?;
+    assert_eq!((texture.width, texture.height), (4, 4));
+    assert_eq!(texture.format, TextureFormat::Rgba8);
+    let texture_jpeg = decode_texture(&jpeg, "hero.JPEG")?;
+    assert_eq!(texture_jpeg, texture);
+    let texture_by_signature = decode_texture(&jpeg, "hero.bin")?;
+    assert_eq!(texture_by_signature, texture);
+    let error = decode_error(decode_texture(&png, "hero.bmp"));
     assert!(matches!(error, TextureImportError::UnsupportedFormat(_)));
+    Ok(())
+}
+
+fn baseline_jpeg_4x4() -> Vec<u8> {
+    vec![
+        255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 219, 0, 67,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 255, 219, 0, 67, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 255, 192, 0, 17, 8, 0, 4, 0, 4, 3, 1, 17,
+        0, 2, 17, 1, 3, 17, 1, 255, 196, 0, 31, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181, 16, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5,
+        4, 4, 0, 0, 1, 125, 1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34, 113, 20,
+        50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36, 51, 98, 114, 130, 9, 10, 22,
+        23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72,
+        73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116,
+        117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149,
+        150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181,
+        182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213,
+        214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 241, 242, 243,
+        244, 245, 246, 247, 248, 249, 250, 255, 196, 0, 31, 1, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181, 17, 0, 2, 1, 2, 4, 4,
+        3, 4, 7, 5, 4, 4, 0, 1, 2, 119, 0, 1, 2, 3, 17, 4, 5, 33, 49, 6, 18, 65, 81, 7, 97, 113,
+        19, 34, 50, 129, 8, 20, 66, 145, 161, 177, 193, 9, 35, 51, 82, 240, 21, 98, 114, 209, 10,
+        22, 36, 52, 225, 37, 241, 23, 24, 25, 26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67,
+        68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104,
+        105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 130, 131, 132, 133, 134, 135, 136, 137,
+        138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169,
+        170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201,
+        202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 226, 227, 228, 229, 230, 231, 232, 233,
+        234, 242, 243, 244, 245, 246, 247, 248, 249, 250, 255, 218, 0, 12, 3, 1, 0, 2, 17, 3, 17,
+        0, 63, 0, 252, 51, 253, 164, 63, 224, 171, 255, 0, 183, 255, 0, 236, 55, 241, 103, 89, 248,
+        75, 240, 11, 246, 136, 241, 39, 133, 124, 35, 226, 61, 31, 194, 31, 19, 245, 123, 93, 15,
+        71, 240, 183, 195, 136, 111, 60, 85, 226, 191, 9, 104, 182, 87, 215, 19, 104, 159, 5, 52,
+        63, 133, 190, 19, 150, 27, 13, 43, 66, 209, 124, 59, 160, 121, 222, 28, 150, 239, 64, 240,
+        134, 135, 225, 207, 4, 105, 87, 150, 222, 13, 240, 167, 133, 116, 29, 16, 225, 159, 115,
+        192, 223, 163, 94, 26, 143, 238, 50, 236, 187, 194, 44, 207, 40, 202, 50, 202, 95, 238,
+        121, 86, 93, 147, 120, 207, 226, 230, 85, 78, 149, 9, 212, 231, 198, 227, 113, 217, 182,
+        35, 7, 137, 226, 110, 42, 226, 12, 231, 23, 154, 113, 47, 25, 113, 190, 123, 196, 252, 107,
+        197, 121, 206, 115, 196, 252, 71, 155, 230, 152, 179, 52, 255, 0, 105, 241, 19, 199, 28,
+        234, 191, 189, 154, 103, 127, 72, 31, 27, 222, 119, 138, 143, 238, 163, 154, 230, 92, 47,
+        226, 87, 17, 112, 7, 250, 195, 138, 193, 209, 246, 121, 125, 62, 35, 226, 140, 7, 8, 96,
+        120, 151, 143, 179, 156, 30, 19, 11, 140, 227, 223, 17, 179, 110, 47, 241, 51, 139, 39,
+        154, 241, 223, 26, 241, 94, 127, 155, 255, 0, 255, 217,
+    ]
+}
+
+fn progressive_jpeg_4x4() -> Vec<u8> {
+    vec![
+        255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 219, 0, 67,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 255, 219, 0, 67, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 255, 194, 0, 17, 8, 0, 4, 0, 4, 3, 1, 17,
+        0, 2, 17, 1, 3, 17, 1, 255, 196, 0, 20, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        8, 255, 196, 0, 20, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 218, 0, 12,
+        3, 1, 0, 2, 16, 3, 16, 0, 0, 1, 12, 159, 255, 196, 0, 22, 16, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 6, 5, 7, 255, 218, 0, 8, 1, 1, 0, 1, 5, 2, 73, 171, 191, 13, 91, 255,
+        196, 0, 32, 17, 0, 2, 2, 2, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 3, 6, 1, 2, 7, 18,
+        20, 21, 33, 34, 35, 255, 218, 0, 8, 1, 3, 1, 1, 63, 1, 43, 233, 98, 188, 27, 191, 146, 141,
+        226, 5, 223, 173, 151, 30, 184, 40, 149, 118, 86, 40, 59, 132, 176, 233, 202, 62, 172, 90,
+        64, 162, 6, 79, 204, 134, 40, 166, 125, 99, 45, 189, 153, 182, 74, 122, 233, 169, 229, 255,
+        0, 255, 196, 0, 30, 17, 0, 2, 3, 0, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 2, 3, 6, 1,
+        7, 17, 33, 34, 51, 255, 218, 0, 8, 1, 2, 1, 1, 63, 1, 89, 227, 13, 211, 90, 225, 232, 56,
+        249, 18, 68, 16, 104, 252, 69, 28, 61, 158, 184, 88, 198, 28, 203, 189, 215, 94, 93, 148,
+        216, 205, 171, 3, 45, 41, 147, 151, 103, 51, 116, 212, 195, 25, 177, 44, 171, 127, 255,
+        196, 0, 26, 16, 0, 3, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 4, 5, 1, 6, 17, 255,
+        218, 0, 8, 1, 1, 0, 6, 63, 2, 118, 78, 7, 162, 166, 89, 40, 76, 154, 109, 20, 38, 92, 238,
+        29, 85, 72, 144, 50, 234, 113, 81, 151, 39, 120, 10, 66, 103, 71, 217, 250, 72, 145, 19,
+        196, 163, 24, 229, 149, 9, 255, 196, 0, 20, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 255, 218, 0, 8, 1, 1, 0, 1, 63, 33, 49, 29, 227, 106, 233, 159, 118, 63, 255, 218,
+        0, 12, 3, 1, 0, 2, 0, 3, 0, 0, 0, 16, 31, 255, 196, 0, 21, 17, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 65, 255, 218, 0, 8, 1, 3, 1, 1, 63, 16, 170, 157, 40, 96, 90, 164,
+        159, 255, 0, 255, 196, 0, 20, 17, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255,
+        218, 0, 8, 1, 2, 1, 1, 63, 16, 37, 255, 0, 122, 238, 17, 175, 253, 255, 196, 0, 20, 16, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 218, 0, 8, 1, 1, 0, 1, 63, 16, 54,
+        133, 198, 52, 98, 229, 247, 83, 255, 217,
+    ]
+}
+
+fn grayscale_jpeg_2x2() -> Vec<u8> {
+    vec![
+        255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 219, 0, 67,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 255, 192, 0, 11, 8, 0, 2, 0, 2, 1, 1, 17, 0, 255, 196, 0, 31, 0, 0, 1, 5, 1,
+        1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181,
+        16, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125, 1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65,
+        6, 19, 81, 97, 7, 34, 113, 20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240,
+        36, 51, 98, 114, 130, 9, 10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55,
+        56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101,
+        102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135,
+        136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167,
+        168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199,
+        200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230,
+        231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 255, 218, 0, 8, 1, 1,
+        0, 0, 63, 0, 254, 171, 190, 17, 254, 198, 159, 178, 4, 127, 10, 126, 24, 199, 31, 236,
+        167, 251, 54, 162, 39, 195, 223, 5, 162, 34, 124, 12, 248, 96, 168, 136, 190, 27, 211, 85,
+        85, 85, 124, 46, 2, 170, 128, 2, 168, 0, 0, 0, 3, 21, 255, 217,
+    ]
+}
+
+fn assert_rgba_within_tolerance(actual: &[u8], expected: [u8; 4], tolerance: u8) {
+    assert_eq!(actual.len(), 4);
+    for channel in 0..4 {
+        let diff = actual[channel].abs_diff(expected[channel]);
+        assert!(
+            diff <= tolerance,
+            "channel {channel}: actual {} vs expected {} (diff {diff} > {tolerance})",
+            actual[channel],
+            expected[channel]
+        );
+    }
+}
+
+#[test]
+fn decodes_baseline_jpeg_to_rgba8() -> Result<(), Box<dyn std::error::Error>> {
+    let jpeg = baseline_jpeg_4x4();
+    let texture = decode_jpeg(&jpeg)?;
+    assert_eq!(texture.width, 4);
+    assert_eq!(texture.height, 4);
+    assert_eq!(texture.format, TextureFormat::Rgba8);
+    assert_eq!(texture.pixels.len(), 4 * 4 * 4);
+    let expected = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+        [255, 255, 0, 255],
+        [255, 0, 255, 255],
+        [0, 255, 255, 255],
+        [128, 128, 128, 255],
+        [64, 0, 0, 255],
+        [0, 64, 0, 255],
+        [0, 0, 64, 255],
+        [64, 64, 64, 255],
+        [192, 64, 32, 255],
+        [32, 192, 64, 255],
+        [64, 32, 192, 255],
+        [0, 0, 0, 255],
+    ];
+    for (index, target) in expected.iter().enumerate() {
+        let x = (index % 4) as u32;
+        let y = (index / 4) as u32;
+        let pixel = texture.pixel(x, y).unwrap_or(&[]);
+        assert_rgba_within_tolerance(pixel, *target, 4);
+    }
+    Ok(())
+}
+
+#[test]
+fn decodes_progressive_jpeg_to_rgba8() -> Result<(), Box<dyn std::error::Error>> {
+    let jpeg = progressive_jpeg_4x4();
+    let texture = decode_jpeg(&jpeg)?;
+    assert_eq!(texture.width, 4);
+    assert_eq!(texture.height, 4);
+    assert_eq!(texture.format, TextureFormat::Rgba8);
+    let baseline = decode_jpeg(&baseline_jpeg_4x4())?;
+    assert_eq!(texture.pixels, baseline.pixels);
+    Ok(())
+}
+
+#[test]
+fn decodes_grayscale_jpeg_to_rgba8() -> Result<(), Box<dyn std::error::Error>> {
+    let jpeg = grayscale_jpeg_2x2();
+    let texture = decode_jpeg(&jpeg)?;
+    assert_eq!(texture.width, 2);
+    assert_eq!(texture.height, 2);
+    assert_eq!(texture.format, TextureFormat::Rgba8);
+    let expected = [16u8, 96, 176, 240];
+    for (index, luma) in expected.iter().enumerate() {
+        let x = (index % 2) as u32;
+        let y = (index / 2) as u32;
+        let pixel = texture.pixel(x, y).unwrap_or(&[]);
+        assert_rgba_within_tolerance(pixel, [*luma, *luma, *luma, 255], 3);
+    }
+    Ok(())
+}
+
+#[test]
+fn applies_srgb_mipmaps_and_sprite_settings_to_decoded_jpeg(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let texture = decode_texture(&baseline_jpeg_4x4(), "atlas.jpg")?;
+    let settings = TextureImportSettings {
+        srgb: true,
+        max_size: 4,
+        mipmaps: true,
+        sprite_mode: SpriteMode::Multiple,
+        alpha_is_transparency: true,
+        wrap_mode: WrapMode::Clamp,
+        filter_mode: FilterMode::Bilinear,
+    };
+    assert!(!settings.is_linear());
+    let red_pixel = texture.pixel(0, 0).unwrap_or(&[0, 0, 0, 0]);
+    assert!((settings.to_linear(red_pixel[0]) - 1.0).abs() < 0.05);
+    assert!(settings.to_linear(red_pixel[1]) < 0.01);
+    let mips = settings.build_mip_chain(&texture);
+    assert_eq!(mips.len(), 3);
+    assert_eq!((mips[0].width, mips[0].height), (4, 4));
+    assert_eq!((mips[1].width, mips[1].height), (2, 2));
+    assert_eq!((mips[2].width, mips[2].height), (1, 1));
+    assert_eq!(mips[2].format, TextureFormat::Rgba8);
+    let restored = settings.round_trip()?;
+    assert_eq!(restored.sprite_mode, SpriteMode::Multiple);
+    Ok(())
+}
+
+#[test]
+fn reports_malformed_and_truncated_jpeg_errors() -> Result<(), Box<dyn std::error::Error>> {
+    let non_jpeg = decode_error(decode_jpeg(&[0x89, b'P', b'N', b'G']));
+    assert!(matches!(non_jpeg, TextureImportError::InvalidSignature));
+
+    let too_short = decode_error(decode_jpeg(&[0xFF, 0xD8]));
+    assert!(matches!(too_short, TextureImportError::InvalidSignature));
+
+    let signature_only = decode_error(decode_jpeg(&[0xFF, 0xD8, 0xFF]));
+    assert!(matches!(
+        signature_only,
+        TextureImportError::Truncated | TextureImportError::CorruptData(_)
+    ));
+
+    let valid = baseline_jpeg_4x4();
+    let truncated = decode_error(decode_jpeg(&valid[..40]));
+    assert!(matches!(
+        truncated,
+        TextureImportError::Truncated | TextureImportError::CorruptData(_)
+    ));
+
+    let corrupt = decode_error(decode_texture(&[0xFF, 0xD8, 0xFF, 0x00, 0x12, 0x34], "bad.jpg"));
+    assert!(matches!(
+        corrupt,
+        TextureImportError::Truncated | TextureImportError::CorruptData(_)
+    ));
     Ok(())
 }
