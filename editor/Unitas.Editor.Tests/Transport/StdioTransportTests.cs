@@ -276,8 +276,6 @@ namespace Unitas.Editor.Tests
 
         private static async Task StdioProductionToolSetAndCaptureEndToEnd()
         {
-            // The audit store lives under unitas-owned state outside project content (AUT-008);
-            // point it at a temp directory so the gate never writes into the developer's home.
             string? previousStateDir = Environment.GetEnvironmentVariable(AuditStore.StateDirectoryEnvironmentVariable);
             string stateDir = Path.Combine(
                 Path.GetTempPath(),
@@ -308,8 +306,6 @@ namespace Unitas.Editor.Tests
 
         private static async Task StdioProductionToolSetAndCaptureEndToEndCore()
         {
-            // The production stdio server is StdioTransportHost over BuiltinDefaults.CreateStartupHost(),
-            // which registers the full tool set exactly once (RegisterAll).
             using McpHost host = BuiltinDefaults.CreateStartupHost();
             StdioTransportHost transportHost = new StdioTransportHost(host);
             Pipe clientToServer = new Pipe();
@@ -361,7 +357,6 @@ namespace Unitas.Editor.Tests
                 Check.That(
                     "stdio_production: stdio session is created and active",
                     !string.IsNullOrEmpty(sessionId));
-                // Out-of-band person grant: an stdio agent may never widen its own scopes (AUT-007).
                 host.GrantScope(sessionId, Scope.ExecuteProjectCode, GrantAuthority.Person);
 
                 CallToolResult enterResult = await client.CallToolAsync(
@@ -419,9 +414,6 @@ namespace Unitas.Editor.Tests
                 }
                 catch (McpProtocolException refusal)
                 {
-                    // The default-gate player is built without the device feature; the
-                    // named refusal is the honest outcome there (GPU capture evidence
-                    // lives in the device lane).
                     Check.That(
                         "stdio_production: a player without the device feature refuses the capture and names the requirement",
                         refusal.Message.Contains("capture requires the device feature", StringComparison.Ordinal));
@@ -477,7 +469,6 @@ namespace Unitas.Editor.Tests
                     }
                     catch (Exception)
                     {
-                        // Best effort: the worker must not keep the test process alive.
                     }
                 }
 
