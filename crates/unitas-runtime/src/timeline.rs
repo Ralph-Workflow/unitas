@@ -178,7 +178,9 @@ pub enum TimelineError {
 impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownSequence(handle) => write!(formatter, "timeline sequence {handle} not found"),
+            Self::UnknownSequence(handle) => {
+                write!(formatter, "timeline sequence {handle} not found")
+            }
             Self::UnknownPlayer(handle) => write!(formatter, "timeline player {handle} not found"),
         }
     }

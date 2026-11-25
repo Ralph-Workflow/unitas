@@ -2,21 +2,15 @@ use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, TriggerEvent};
 use crate::world::World;
 
-/// The fixed timestep a scene advances by when its mode is `FixedUpdate`.
 pub const DEFAULT_FIXED_TIMESTEP: f64 = 0.02;
 
-/// When a physics scene advances.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimulationMode {
-    /// Physics advances once per fixed step.
     FixedUpdate,
-    /// Physics advances once per frame by that frame's delta time.
     Update,
-    /// Physics advances only when a script calls `simulate`.
     Script,
 }
 
-/// The outcome of one simulation step.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StepResult {
     pub delta_seconds: f64,
@@ -24,14 +18,10 @@ pub struct StepResult {
     pub trigger_events: Vec<TriggerEvent>,
 }
 
-/// Why a simulation request did not advance the scene.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SimulationError {
-    /// `simulate` was called while the scene was not in `Script` mode.
     NotScriptMode(SimulationMode),
-    /// The fixed timestep is not a finite positive number.
     InvalidFixedTimestep(f64),
-    /// The world rejected the step.
     World(PhysicsError),
 }
 
@@ -41,10 +31,6 @@ impl From<PhysicsError> for SimulationError {
     }
 }
 
-/// A physics scene that owns a world and decides when that world advances.
-///
-/// The default scene and a scene-local scene are separate scenes: each owns its
-/// own world, so stepping one never moves the bodies of the other.
 pub struct Simulation {
     world: World,
     mode: SimulationMode,
@@ -52,7 +38,6 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    /// The default physics scene, which advances on the fixed step.
     pub fn new(world: World) -> Self {
         Self {
             world,
@@ -61,7 +46,6 @@ impl Simulation {
         }
     }
 
-    /// A scene-local physics scene, which advances only when a script asks it to.
     pub fn local(world: World) -> Self {
         Self {
             mode: SimulationMode::Script,
@@ -85,12 +69,10 @@ impl Simulation {
         self.mode = mode;
     }
 
-    /// Whether the engine advances this scene without a script asking it to.
     pub fn auto_simulation(&self) -> bool {
         self.mode != SimulationMode::Script
     }
 
-    /// Selects `FixedUpdate` when enabled and `Script` when disabled.
     pub fn set_auto_simulation(&mut self, enabled: bool) {
         self.mode = if enabled {
             SimulationMode::FixedUpdate
@@ -111,11 +93,6 @@ impl Simulation {
         Ok(())
     }
 
-    /// Advances the scene the way the engine's frame loop drives it.
-    ///
-    /// A `FixedUpdate` scene advances by its fixed timestep and an `Update`
-    /// scene by the frame delta. A `Script` scene does not advance; the
-    /// returned result is `None`.
     pub fn advance(
         &mut self,
         frame_delta_seconds: f64,
@@ -128,10 +105,6 @@ impl Simulation {
         Ok(Some(self.step(delta_seconds)?))
     }
 
-    /// Advances the scene by `delta_seconds` as an explicit script request.
-    ///
-    /// Only a `Script` scene advances; another mode reports an error and
-    /// leaves the scene where it was.
     pub fn simulate(&mut self, delta_seconds: f64) -> Result<StepResult, SimulationError> {
         if self.mode != SimulationMode::Script {
             return Err(SimulationError::NotScriptMode(self.mode));

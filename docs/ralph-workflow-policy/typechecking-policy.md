@@ -132,15 +132,15 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: typechecker_per_language: mypy in strict mode for Python, cargo check for Rust, and the .NET compiler for C#
-RALPH-FACT: strictness_level: strict — mypy strict = true in pyproject.toml
-RALPH-FACT: excluded_paths: none — mypy checks the whole tools package and cargo check covers every workspace crate
+RALPH-FACT: typechecker_per_language: mypy in strict mode for Python, cargo check (rustc with warnings denied) for Rust, and the .NET C# compiler (dotnet build with Nullable=enable and TreatWarningsAsErrors=true) for C#
+RALPH-FACT: strictness_level: strict across all three languages — Python runs mypy with strict = true in pyproject.toml over every tracked .py file (tests included); Rust sets [workspace.lints.rust] warnings = "deny" and unsafe_code = "forbid" in the root Cargo.toml with every member crate on lints.workspace = true; C# sets Nullable=enable, TreatWarningsAsErrors=true, AnalysisMode=All, AnalysisLevel=latest-all, and EnforceCodeStyleInBuild=true in the root Directory.Build.props for every project in bridge/Unitas.sln
+RALPH-FACT: excluded_paths: Python: none — mypy checks every tracked .py file under tools/; Rust: none — cargo check --workspace --all-targets covers every workspace crate and target; C#: bridge/Unitas.Bridge.Tests/Fixtures/** (test-input C# fixtures excluded via Compile Remove in bridge/Unitas.Bridge.Tests/Unitas.Bridge.Tests.csproj)
 RALPH-FACT: stubbed_dependencies: none — the tooling imports the standard library only
 RALPH-FACT: suppression_rationale_policy: no type suppression exists; a type error is fixed in the code
 RALPH-FACT: suppression_inventory_and_baseline: zero suppressions — the bypass audit reports every suppression marker it finds
-RALPH-FACT: ci_gate_integration: make typecheck runs in the default gate through the Makefile verify target
-RALPH-FACT: maintenance_evidence: the type check report the last make verify run printed
-RALPH-FACT: first_party_languages: Python for the repository tooling; Rust for the product crates; C# for the UnityEngine bridge
+RALPH-FACT: ci_gate_integration: make typecheck runs mypy, cargo check --workspace --all-targets, and dotnet build bridge/Unitas.sln --configuration Release, and make verify runs all three in the default gate
+RALPH-FACT: maintenance_evidence: Python: mypy 1.19.1 (Python typing project https://mypy.readthedocs.io/, compatible with Python 3.11+ and checking all tracked tools/*.py files, selected 2026-11-25, recheck trigger: major Python or mypy upgrade, incompatibility, abandonment, or security signal); Rust: rustc / cargo check 1.93.0 (Rust Project official toolchain https://doc.rust-lang.org/, checking all workspace crates and targets, selected 2026-11-25, recheck trigger: Rust toolchain or edition upgrade, incompatibility, abandonment, or security signal); C#: .NET SDK 8.0.428 csc via dotnet build (Microsoft official .NET 8 SDK, checking all 9 projects in bridge/Unitas.sln across bridge/ and editor/, selected 2026-11-25, recheck trigger: .NET SDK major upgrade, incompatibility, abandonment, or security signal)
+RALPH-FACT: first_party_languages: Python for the repository verification and CLA tooling (tools/); Rust for the engine, runtime, editor-abi, and build crates (crates/); C# for the UnityEngine bridge, scripting/testing/debugging assemblies, and editor host (bridge/ and editor/)
 RALPH-FACT: excluded_language_evidence: none — no language is excluded from the type check
 RALPH-FACT: type_modeling_conventions: every function is annotated, and a value crossing a module boundary carries a concrete type
 RALPH-FACT: sanctioned_dynamic_boundaries: none — the tooling performs no dynamic dispatch

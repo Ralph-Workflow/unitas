@@ -5,20 +5,35 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REFERENCE_BMP = REPO_ROOT / "tools" / "approved_gpu_reference.bmp"
 DEFAULT_TOLERANCE = 4.0
+TOLERANCE_EPSILON = 1e-6
 DEFAULT_BUDGET_SECONDS = 120.0
 BUILD_BUDGET_SECONDS = 600.0
 BMP_HEADER_SIZE = 54
+BMP_MIN_DIB_HEADER_SIZE = 40
+BMP_BPP_24 = 24
 DEVICE_FRAMES = 12
+COMPARE_ARG_COUNT = 3
+COMPARE_WITH_TOLERANCE_ARG_COUNT = 5
+ACTUAL_ARG_COUNT = 2
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 TIMEOUT_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Default requirements"
+DEVICE_PACKAGES: tuple[str, ...] = (
+    "unitas-render",
+    "unitas-audio",
+    "unitas-runtime",
+    "unitas-build",
+)
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
     ("owner", "wt-03"),
@@ -60,26 +75,29 @@ def metadata_text() -> str:
 
 def parse_bmp_rgb(data: bytes) -> tuple[int, int, list[tuple[int, int, int]]]:
     if len(data) < BMP_HEADER_SIZE or data[:2] != b"BM":
-        raise ValueError("invalid BMP header signature")
+        message = "invalid BMP header signature"
+        raise ValueError(message)
     pixel_offset = struct.unpack_from("<I", data, 10)[0]
     dib_size = struct.unpack_from("<I", data, 14)[0]
-    if dib_size < 40:
-        raise ValueError(f"unsupported BMP DIB header size {dib_size}")
+    if dib_size < BMP_MIN_DIB_HEADER_SIZE:
+        message = f"unsupported BMP DIB header size {dib_size}"
+        raise ValueError(message)
     width, raw_height = struct.unpack_from("<ii", data, 18)
     planes, bpp = struct.unpack_from("<HH", data, 26)
     compression = struct.unpack_from("<I", data, 30)[0]
-    if planes != 1 or bpp != 24 or compression != 0:
-        raise ValueError(
-            f"unsupported BMP format planes={planes} bpp={bpp} compression={compression}"
-        )
+    if planes != 1 or bpp != BMP_BPP_24 or compression != 0:
+        message = f"unsupported BMP format planes={planes} bpp={bpp} compression={compression}"
+        raise ValueError(message)
     if width <= 0 or raw_height == 0:
-        raise ValueError(f"invalid BMP dimensions {width}x{raw_height}")
+        message = f"invalid BMP dimensions {width}x{raw_height}"
+        raise ValueError(message)
     top_down = raw_height < 0
     height = abs(raw_height)
     row_stride = ((width * 3) + 3) & ~3
     required_size = pixel_offset + (row_stride * height)
     if len(data) < required_size:
-        raise ValueError(f"truncated BMP payload: {len(data)} < {required_size}")
+        message = f"truncated BMP payload: {len(data)} < {required_size}"
+        raise ValueError(message)
     pixels: list[tuple[int, int, int]] = [(0, 0, 0)] * (width * height)
     for row_index in range(height):
         src_row = row_index if top_down else (height - 1 - row_index)
@@ -122,8 +140,7 @@ def compare_bmp_files(
         for actual_c, ref_c in zip(actual_rgb, ref_rgb, strict=True):
             diff = abs(actual_c - ref_c)
             total_diff += diff
-            if diff > max_diff:
-                max_diff = diff
+            max_diff = max(max_diff, diff)
     mean_error = (total_diff / channel_count) if channel_count > 0 else 0.0
     if mean_error > tolerance:
         summary = (
@@ -197,25 +214,83 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
     if report is None:
         return "the player reported no device verification line"
     frames = int(report["frames_presented"])
-    if frames < 1:
-        return f"the window presented {frames} frames; at least 1 is required"
     tolerance = float(report["tolerance"])
-    if abs(tolerance - DEFAULT_TOLERANCE) > 1e-6:
-        return (
-            f"the player compared at tolerance {tolerance:.4f}; "
-            f"the lane declares {DEFAULT_TOLERANCE:.4f}"
-        )
     mean_error = float(report["mean_error"])
-    if mean_error > tolerance:
-        return f"GPU frame mean channel error {mean_error:.4f} exceeds tolerance {tolerance:.4f}"
-    if report["audio_active"] != "true":
-        return "the default audio output device was not active"
     audio_frames = int(report["audio_frames"])
-    if audio_frames < 1:
-        return f"the tone pushed {audio_frames} frames to the audio device; at least 1 is required"
-    if report["ball_moved"] != "true":
-        return "the synthetic input events did not move the sample scene ball"
+    checks: tuple[tuple[bool, str], ...] = (
+        (frames < 1, f"the window presented {frames} frames; at least 1 is required"),
+        (
+            abs(tolerance - DEFAULT_TOLERANCE) > TOLERANCE_EPSILON,
+            f"the player compared at tolerance {tolerance:.4f}; "
+            f"the lane declares {DEFAULT_TOLERANCE:.4f}",
+        ),
+        (
+            mean_error > tolerance,
+            f"GPU frame mean channel error {mean_error:.4f} exceeds tolerance {tolerance:.4f}",
+        ),
+        (
+            report["audio_active"] != "true",
+            "the default audio output device was not active",
+        ),
+        (
+            audio_frames < 1,
+            f"the tone pushed {audio_frames} frames to the audio device; at least 1 is required",
+        ),
+        (
+            report["ball_moved"] != "true",
+            "the synthetic input events did not move the sample scene ball",
+        ),
+    )
+    for failed, reason in checks:
+        if failed:
+            return reason
     return None
+
+
+def run_package_device_gates(budget_seconds: float) -> int:
+    for package in DEVICE_PACKAGES:
+        label = f"{package.removeprefix('unitas-')}-device"
+        rc, _ = run_step(
+            label,
+            ("cargo", "test", "-p", package, "--features", "device"),
+            budget_seconds,
+        )
+        if rc != 0:
+            return rc
+    for package in DEVICE_PACKAGES:
+        label = f"{package.removeprefix('unitas-')}-clippy"
+        rc, _ = run_step(
+            label,
+            (
+                "cargo",
+                "clippy",
+                "-p",
+                package,
+                "--features",
+                "device",
+                "--all-targets",
+                "--",
+                "-D",
+                "clippy::correctness",
+                "-D",
+                "clippy::suspicious",
+            ),
+            budget_seconds,
+        )
+        if rc != 0:
+            return rc
+    return 0
+
+
+def prepare_actual_capture(actual_capture: Path | None, budget_seconds: float) -> tuple[int, Path]:
+    if actual_capture is not None:
+        return 0, actual_capture
+    rc, _ = run_step(
+        "capture-gpu-frame",
+        (str(PLAYER_BINARY), "--capture-reference", str(ACTUAL_CAPTURE_PATH)),
+        budget_seconds,
+    )
+    return rc, ACTUAL_CAPTURE_PATH
 
 
 def run_device_lane(
@@ -240,15 +315,9 @@ def run_device_lane(
     if rc != 0:
         return rc
 
-    actual = ACTUAL_CAPTURE_PATH if actual_capture is None else actual_capture
-    if actual_capture is None:
-        rc, _ = run_step(
-            "capture-gpu-frame",
-            (str(PLAYER_BINARY), "--capture-reference", str(actual)),
-            budget_seconds,
-        )
-        if rc != 0:
-            return rc
+    rc, actual = prepare_actual_capture(actual_capture, budget_seconds)
+    if rc != 0:
+        return rc
 
     ok, _mean, _max, summary = compare_bmp_files(
         actual,
@@ -283,48 +352,33 @@ def run_device_lane(
         "and the synthetic input events moved the sample scene\n"
     )
 
-    for label, package in (
-        ("render-device", "unitas-render"),
-        ("audio-device", "unitas-audio"),
-        ("runtime-device", "unitas-runtime"),
-        ("build-device", "unitas-build"),
-    ):
-        rc, _ = run_step(
-            label,
-            ("cargo", "test", "-p", package, "--features", "device"),
-            budget_seconds,
-        )
-        if rc != 0:
-            return rc
+    rc = run_package_device_gates(budget_seconds)
+    if rc == 0:
+        sys.stdout.write("OK verify-device\n")
+    return rc
 
-    for label, package in (
-        ("render-clippy", "unitas-render"),
-        ("audio-clippy", "unitas-audio"),
-        ("runtime-clippy", "unitas-runtime"),
-        ("build-clippy", "unitas-build"),
-    ):
-        rc, _ = run_step(
-            label,
-            (
-                "cargo",
-                "clippy",
-                "-p",
-                package,
-                "--features",
-                "device",
-                "--all-targets",
-                "--",
-                "-D",
-                "clippy::correctness",
-                "-D",
-                "clippy::suspicious",
-            ),
-            budget_seconds,
-        )
-        if rc != 0:
-            return rc
 
-    sys.stdout.write("OK verify-device\n")
+def run_compare_command(args: Sequence[str]) -> int:
+    if len(args) not in (COMPARE_ARG_COUNT, COMPARE_WITH_TOLERANCE_ARG_COUNT):
+        sys.stderr.write(help_text() + "\n")
+        return 2
+    actual = Path(args[1])
+    reference = Path(args[2])
+    tolerance = DEFAULT_TOLERANCE
+    if len(args) == COMPARE_WITH_TOLERANCE_ARG_COUNT:
+        if args[3] != "--tolerance":
+            sys.stderr.write(help_text() + "\n")
+            return 2
+        try:
+            tolerance = float(args[4])
+        except ValueError:
+            sys.stderr.write(f"invalid tolerance: {args[4]}\n")
+            return 2
+    ok, _mean, _max, summary = compare_bmp_files(actual, reference, tolerance)
+    if not ok:
+        sys.stderr.write(f"FAIL verify-device (compare): {summary} ({POLICY_CITATION})\n")
+        return 1
+    sys.stdout.write(f"OK verify-device (compare): {summary}\n")
     return 0
 
 
@@ -338,30 +392,10 @@ def main(argv: Sequence[str]) -> int:
     if args == ["--metadata"]:
         sys.stdout.write(metadata_text() + "\n")
         return 0
-    if args[0] == "--actual" and len(args) == 2:
+    if args[0] == "--actual" and len(args) == ACTUAL_ARG_COUNT:
         return run_device_lane(actual_capture=Path(args[1]))
     if args[0] == "--compare":
-        if len(args) not in (3, 5):
-            sys.stderr.write(help_text() + "\n")
-            return 2
-        actual = Path(args[1])
-        reference = Path(args[2])
-        tolerance = DEFAULT_TOLERANCE
-        if len(args) == 5:
-            if args[3] != "--tolerance":
-                sys.stderr.write(help_text() + "\n")
-                return 2
-            try:
-                tolerance = float(args[4])
-            except ValueError:
-                sys.stderr.write(f"invalid tolerance: {args[4]}\n")
-                return 2
-        ok, _mean, _max, summary = compare_bmp_files(actual, reference, tolerance)
-        if not ok:
-            sys.stderr.write(f"FAIL verify-device (compare): {summary} ({POLICY_CITATION})\n")
-            return 1
-        sys.stdout.write(f"OK verify-device (compare): {summary}\n")
-        return 0
+        return run_compare_command(args)
     sys.stderr.write(help_text() + "\n")
     return 2
 

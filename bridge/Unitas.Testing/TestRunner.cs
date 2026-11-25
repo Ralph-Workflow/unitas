@@ -650,16 +650,7 @@ namespace Unitas.Testing
                 CoroutineScheduler.StopAll();
                 InvokeScheduler.StopAll();
                 Time.timeScale = savedTimeScale;
-                if (playHost != null)
-                {
-                    try
-                    {
-                        playHost.Dispose();
-                    }
-                    catch (Exception ex) when (!(ex is OutOfMemoryException))
-                    {
-                    }
-                }
+                playHost?.Dispose();
 
                 SceneManager.Host = previousSceneHost;
                 Application.Host = previousAppHost ?? new EditTimeApplicationHost(Path.Combine(fullProjectRoot, "Assets"), string.Empty);
@@ -1136,7 +1127,7 @@ namespace Unitas.Testing
                 return false;
             }
 
-            if (pattern.IndexOf('*') >= 0 || pattern.IndexOf('?') >= 0)
+            if (pattern.Contains('*', StringComparison.Ordinal) || pattern.Contains('?', StringComparison.Ordinal))
             {
                 StringBuilder rxBuilder = new StringBuilder();
                 rxBuilder.Append('^');
@@ -1491,19 +1482,19 @@ namespace Unitas.Testing
             string candidate = rawArg.Trim();
             if (candidate.StartsWith("typeof", StringComparison.Ordinal))
             {
-                int open = candidate.IndexOf('(');
+                int open = candidate.IndexOf('(', StringComparison.Ordinal);
                 int close = candidate.LastIndexOf(')');
                 if (open >= 0 && close > open)
                 {
                     candidate = candidate.Substring(open + 1, close - open - 1).Trim();
                 }
             }
-            else if (candidate.StartsWith("\"", StringComparison.Ordinal) && candidate.EndsWith("\"", StringComparison.Ordinal) && candidate.Length >= 2)
+            else if (candidate.StartsWith('\"') && candidate.EndsWith('\"') && candidate.Length >= 2)
             {
                 candidate = candidate.Substring(1, candidate.Length - 2).Trim();
             }
 
-            int comma = candidate.IndexOf(',');
+            int comma = candidate.IndexOf(',', StringComparison.Ordinal);
             if (comma > 0)
             {
                 candidate = candidate.Substring(0, comma).Trim();

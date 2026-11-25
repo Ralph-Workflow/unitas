@@ -1,7 +1,3 @@
-//! Save path for scenes and prefabs: renders a parsed stream back to Unity
-//! YAML, writes a document without losing the previous file, and saves one
-//! scene of an additive scene set without touching its neighbours.
-
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,10 +11,6 @@ const FLOW_REFERENCE_KEY: &str = "fileID";
 const VECTOR_COMPONENTS: &str = "xyzwrgba";
 const TEMP_SUFFIX: &str = ".tmp";
 
-/// Renders a parsed stream as Unity YAML: the `%YAML` and `%TAG` directives,
-/// then one `--- !u!<class id> &<file id>` document per parsed document with
-/// its body written as plain scalars, flow mappings for references and
-/// vectors, and block sequences.
 pub fn emit_stream(stream: &Stream) -> String {
     let mut out = String::new();
     if let Some(header) = &stream.header {
@@ -28,7 +20,10 @@ pub fn emit_stream(stream: &Stream) -> String {
         }
     }
     for document in &stream.documents {
-        out.push_str(&format!("--- !u!{} &{}", document.class_id, document.file_id));
+        out.push_str(&format!(
+            "--- !u!{} &{}",
+            document.class_id, document.file_id
+        ));
         if document.stripped {
             out.push_str(" stripped");
         }
@@ -38,8 +33,6 @@ pub fn emit_stream(stream: &Stream) -> String {
     out
 }
 
-/// One scene of an additive scene set: the file it was read from and its
-/// parsed content.
 #[derive(Debug, Clone)]
 pub struct SceneFile {
     pub path: PathBuf,
@@ -67,14 +60,10 @@ impl fmt::Display for SceneSaveError {
 
 impl std::error::Error for SceneSaveError {}
 
-/// Writes a text scene or prefab, keeping the previous file content when the
-/// write fails.
 pub fn save_stream(path: &Path, stream: &Stream) -> Result<(), SceneSaveError> {
     write_atomic(path, emit_stream(stream).as_bytes())
 }
 
-/// Writes a document in the form it was read in: a text document is written
-/// back as text and a binary document is written back as binary.
 pub fn save_asset(path: &Path, asset: &SerializedAsset) -> Result<(), SceneSaveError> {
     match asset {
         SerializedAsset::Text { stream, .. } => save_stream(path, stream),
@@ -82,12 +71,14 @@ pub fn save_asset(path: &Path, asset: &SerializedAsset) -> Result<(), SceneSaveE
     }
 }
 
-/// Saves the edited scene of an additive scene set and leaves every other
-/// scene of the set untouched.
 pub fn save_scene_set(scenes: &[SceneFile], edited: &Path) -> Result<(), SceneSaveError> {
     let scene = match scenes.iter().find(|scene| scene.path == edited) {
         Some(scene) => scene,
-        None => return Err(SceneSaveError::UnknownScene { path: edited.to_path_buf() }),
+        None => {
+            return Err(SceneSaveError::UnknownScene {
+                path: edited.to_path_buf(),
+            })
+        }
     };
     save_stream(&scene.path, &scene.stream)
 }
@@ -112,17 +103,21 @@ pub fn save_scene_prefab_instance(
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), SceneSaveError> {
     let temp = temp_path(path)?;
     if let Err(error) = fs::write(&temp, bytes) {
-        return Err(SceneSaveError::Io { path: temp, message: error.to_string() });
+        return Err(SceneSaveError::Io {
+            path: temp,
+            message: error.to_string(),
+        });
     }
     if let Err(error) = fs::rename(&temp, path) {
         let _ = fs::remove_file(&temp);
-        return Err(SceneSaveError::Io { path: path.to_path_buf(), message: error.to_string() });
+        return Err(SceneSaveError::Io {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        });
     }
     Ok(())
 }
 
-// shortcut: one fixed temp name per target, so concurrent saves of the same
-// file clash; use a unique name when saves can overlap.
 fn temp_path(path: &Path) -> Result<PathBuf, SceneSaveError> {
     let name = match path.file_name() {
         Some(name) => name,
@@ -237,14 +232,20 @@ fn is_flow_mapping(entries: &[(String, Node)]) -> bool {
     if entries.is_empty() || entries.len() > MAX_FLOW_ENTRIES {
         return false;
     }
-    if !entries.iter().all(|(_, value)| matches!(value, Node::Scalar(_))) {
+    if !entries
+        .iter()
+        .all(|(_, value)| matches!(value, Node::Scalar(_)))
+    {
         return false;
     }
     if entries.iter().any(|(key, _)| key == FLOW_REFERENCE_KEY) {
         return true;
     }
     entries.iter().all(|(key, _)| {
-        key.len() == 1 && key.chars().all(|character| VECTOR_COMPONENTS.contains(character))
+        key.len() == 1
+            && key
+                .chars()
+                .all(|character| VECTOR_COMPONENTS.contains(character))
     })
 }
 

@@ -12,8 +12,9 @@ changed surface triggers. The corpus names its own triggers; load nothing else.
 
 `make verify` is the authoritative entry point. It runs the policy self-check, the
 bypass audit, the ban-catalog gate, the comment audit, the dependency gate, the
-secret scan, the lint gate, the type check, and the test suite, and it fails when
-the run exceeds the budget the Makefile declares.
+secret scan, the lint and format checks, the type checks, and the Python, Rust,
+and C# test suites, and it fails when the run exceeds the budget the Makefile
+declares.
 
 Run the declared `RALPH-COMMAND:` gates and report the real exit status. A gate
 that cannot run is a red gate.

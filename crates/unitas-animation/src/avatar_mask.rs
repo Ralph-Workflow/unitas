@@ -54,7 +54,5 @@ fn path_matches(masked: &str, path: &str) -> bool {
     if masked.is_empty() {
         return false;
     }
-    path.len() > masked.len()
-        && path.starts_with(masked)
-        && path.as_bytes()[masked.len()] == b'/'
+    path.len() > masked.len() && path.starts_with(masked) && path.as_bytes()[masked.len()] == b'/'
 }

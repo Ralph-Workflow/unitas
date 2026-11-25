@@ -106,10 +106,7 @@ namespace Unitas.Scripting
 
         public static DiagnoseReport FromCompilationResult(ScriptCompilationResult result)
         {
-            if (result == null)
-            {
-                throw new ArgumentNullException(nameof(result));
-            }
+            ArgumentNullException.ThrowIfNull(result);
 
             string running = result.ActiveState switch
             {

@@ -69,8 +69,7 @@ impl PlatformEffector2D {
         let up = self.surface_up(platform_angle_radians);
         let half_arc_rad = (self.surface_arc.clamp(0.0, 360.0) * 0.5).to_radians();
         let cos_threshold = half_arc_rad.cos();
-        let normal =
-            normalize2(outward_normal_from_platform_to_other).unwrap_or([0.0, 1.0]);
+        let normal = normalize2(outward_normal_from_platform_to_other).unwrap_or([0.0, 1.0]);
         let normal_alignment = dot2(normal, up);
         if normal_alignment < cos_threshold - 1e-5 {
             return true;

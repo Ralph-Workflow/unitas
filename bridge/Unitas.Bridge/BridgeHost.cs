@@ -343,16 +343,16 @@ namespace Unitas.Bridge
             }
         }
 
-        public Scene LoadScene(string path, LoadSceneMode mode)
+        public Scene LoadScene(string scenePath, LoadSceneMode mode)
         {
             ThrowIfDisposed();
-            ArgumentNullException.ThrowIfNull(path);
+            ArgumentNullException.ThrowIfNull(scenePath);
             RunPreSceneRuntimeInitialization();
             RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.BeforeSceneLoad);
 
             try
             {
-                Backend.LoadScene(path, mode);
+                Backend.LoadScene(scenePath, mode);
             }
             catch (SceneManagementException)
             {
@@ -360,7 +360,7 @@ namespace Unitas.Bridge
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
-                throw new SceneManagementException("Failed to load scene '" + path + "': " + ex.Message, ex);
+                throw new SceneManagementException("Failed to load scene '" + scenePath + "': " + ex.Message, ex);
             }
 
             if (mode == LoadSceneMode.Single)
@@ -368,11 +368,11 @@ namespace Unitas.Bridge
                 DropReplacedScripts();
             }
 
-            ParseLoadedSceneRigidbodies(path, mode);
-            _defaultSceneProvider.SetSceneRoot(path);
-            UpdateProjectMetadata(path);
-            RegisterLoadedScene(path, mode);
-            Scene loaded = FindLoadedScene(path);
+            ParseLoadedSceneRigidbodies(scenePath, mode);
+            _defaultSceneProvider.SetSceneRoot(scenePath);
+            UpdateProjectMetadata(scenePath);
+            RegisterLoadedScene(scenePath, mode);
+            Scene loaded = FindLoadedScene(scenePath);
             DeregisterReplacedSceneObjects(loaded, mode);
             SceneManager.RaiseSceneLoaded(loaded, mode);
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
@@ -409,14 +409,14 @@ namespace Unitas.Bridge
             return loaded;
         }
 
-        public void UnloadScene(string name)
+        public void UnloadScene(string sceneName)
         {
             ThrowIfDisposed();
-            ArgumentNullException.ThrowIfNull(name);
-            Scene scene = GetSceneByName(name);
+            ArgumentNullException.ThrowIfNull(sceneName);
+            Scene scene = GetSceneByName(sceneName);
             try
             {
-                Backend.UnloadScene(name);
+                Backend.UnloadScene(sceneName);
             }
             catch (SceneManagementException)
             {
@@ -424,10 +424,10 @@ namespace Unitas.Bridge
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
-                throw new SceneManagementException("Failed to unload scene '" + name + "': " + ex.Message, ex);
+                throw new SceneManagementException("Failed to unload scene '" + sceneName + "': " + ex.Message, ex);
             }
 
-            RemoveLoadedScene(name);
+            RemoveLoadedScene(sceneName);
             DeregisterUnloadedSceneObjects(scene);
             SceneManager.RaiseSceneUnloaded(scene);
         }
@@ -1808,10 +1808,7 @@ namespace Unitas.Bridge
 
         public void InjectMouseButton(int button, bool pressed)
         {
-            if (button < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(button));
-            }
+            ArgumentOutOfRangeException.ThrowIfNegative(button);
             int result = RuntimeInterop.unitas_runtime_input_mouse_button_event(_runtimeHandle, (uint)button, pressed ? 1u : 0u);
             if (result != 0)
             {

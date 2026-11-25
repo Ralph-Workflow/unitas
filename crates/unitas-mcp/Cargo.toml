@@ -1,3 +1,4 @@
+# Governed by docs/ralph-workflow-policy/linting-policy.md and docs/ralph-workflow-policy/typechecking-policy.md
 [package]
 name = "unitas-mcp"
 version = "0.1.0"
@@ -6,3 +7,6 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
+
+[lints]
+workspace = true

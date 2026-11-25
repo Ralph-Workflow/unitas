@@ -191,10 +191,7 @@ namespace Unitas.Testing
                 throw new ArgumentException("Test id must be non-empty.", nameof(id));
             }
 
-            if (execute == null)
-            {
-                throw new ArgumentNullException(nameof(execute));
-            }
+            ArgumentNullException.ThrowIfNull(execute);
 
             Bindings[id] = new RegisteredTestExecutionBinding(id, execute, null, tearDown);
         }
@@ -206,10 +203,7 @@ namespace Unitas.Testing
                 throw new ArgumentException("Test id must be non-empty.", nameof(id));
             }
 
-            if (execute == null)
-            {
-                throw new ArgumentNullException(nameof(execute));
-            }
+            ArgumentNullException.ThrowIfNull(execute);
 
             Bindings[id] = new RegisteredTestExecutionBinding(id, null, execute, tearDown);
         }

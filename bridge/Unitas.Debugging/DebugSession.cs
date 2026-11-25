@@ -148,6 +148,7 @@ namespace Unitas.Debugging
             DebugAgent.ReleaseSession(this);
             Resume();
             _server?.Stop();
+            _resume.Dispose();
         }
     }
 }

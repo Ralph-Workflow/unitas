@@ -138,9 +138,7 @@ pub fn parse_dynamics_manager_stream(
     let z = parse_finite_f64(gravity_node, "z")
         .ok_or(ProjectSettingsError::MissingDocument("PhysicsManager"))?;
 
-    Ok(DynamicsSettings {
-        gravity: [x, y, z],
-    })
+    Ok(DynamicsSettings { gravity: [x, y, z] })
 }
 
 pub fn parse_input_manager(
@@ -208,9 +206,7 @@ pub fn parse_input_manager_stream(
     Ok(InputManagerSettings { axes, skipped_axes })
 }
 
-pub fn parse_player_settings(
-    path: &Path,
-) -> Result<Option<ProjectIdentity>, ProjectSettingsError> {
+pub fn parse_player_settings(path: &Path) -> Result<Option<ProjectIdentity>, ProjectSettingsError> {
     if !path.exists() {
         return Ok(None);
     }
@@ -250,11 +246,7 @@ fn parse_optional_string(node: &Node, key: &str) -> String {
     }
 }
 
-fn parse_optional_f64(
-    node: &Node,
-    key: &str,
-    default: f64,
-) -> Result<f64, ProjectSettingsError> {
+fn parse_optional_f64(node: &Node, key: &str, default: f64) -> Result<f64, ProjectSettingsError> {
     match node.get(key) {
         Some(child) => child
             .as_f64()

@@ -116,18 +116,32 @@ pub enum SceneError {
 impl fmt::Display for SceneError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SceneError::MissingGameObject { transform_file_id, game_object_file_id } => write!(
+            SceneError::MissingGameObject {
+                transform_file_id,
+                game_object_file_id,
+            } => write!(
                 formatter,
                 "transform {transform_file_id} references unknown game object {game_object_file_id}"
             ),
-            SceneError::DuplicateTransformOwner { game_object_file_id } => {
-                write!(formatter, "more than one transform owns game object {game_object_file_id}")
+            SceneError::DuplicateTransformOwner {
+                game_object_file_id,
+            } => {
+                write!(
+                    formatter,
+                    "more than one transform owns game object {game_object_file_id}"
+                )
             }
-            SceneError::MissingFather { transform_file_id, father_file_id } => write!(
+            SceneError::MissingFather {
+                transform_file_id,
+                father_file_id,
+            } => write!(
                 formatter,
                 "transform {transform_file_id} references unknown father {father_file_id}"
             ),
-            SceneError::MissingChild { transform_file_id, child_file_id } => write!(
+            SceneError::MissingChild {
+                transform_file_id,
+                child_file_id,
+            } => write!(
                 formatter,
                 "transform {transform_file_id} references unknown child {child_file_id}"
             ),
@@ -140,7 +154,10 @@ impl fmt::Display for SceneError {
                 write!(formatter, "prefab with guid {guid} refers to itself")
             }
             SceneError::MissingPrefabSource { file_id } => {
-                write!(formatter, "prefab instance {file_id} has no source prefab reference")
+                write!(
+                    formatter,
+                    "prefab instance {file_id} has no source prefab reference"
+                )
             }
             SceneError::PrefabWithoutRoot { guid } => {
                 write!(formatter, "prefab with guid {guid} has no root transform")
@@ -466,7 +483,10 @@ fn assemble_stream(
         check_external_references(stream, index)?;
     }
     let mut graph = SceneGraph::new();
-    let mut context = PrefabContext { index, stack: Vec::new() };
+    let mut context = PrefabContext {
+        index,
+        stack: Vec::new(),
+    };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
     let diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
     Ok(AssembledScene {
@@ -482,9 +502,10 @@ fn assemble_stream(
 fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<AssembledScene, SceneError> {
     let stream = unity_yaml::parse_file(path)?;
     let expand = has_prefab_instances(&stream);
-    let resolve_guids =
-        expand || has_material_references(&stream) || has_audio_references(&stream)
-            || has_render_references(&stream);
+    let resolve_guids = expand
+        || has_material_references(&stream)
+        || has_audio_references(&stream)
+        || has_render_references(&stream);
     let discovered = match index {
         Some(_) => None,
         None => {
@@ -622,8 +643,14 @@ fn assemble_documents(
         };
         let entity = graph.add_entity(name.clone());
         let layer = yaml_u32(body.and_then(|body| body.get("m_Layer")), 0);
-        set.game_objects
-            .insert(document.file_id, GameObjectRecord { entity, name, layer });
+        set.game_objects.insert(
+            document.file_id,
+            GameObjectRecord {
+                entity,
+                name,
+                layer,
+            },
+        );
     }
     let mut owners: HashMap<i64, i64> = HashMap::new();
     let mut records: Vec<TransformRecord> = Vec::new();
@@ -657,7 +684,9 @@ fn assemble_documents(
             }
         };
         if owners.contains_key(&game_object_file_id) {
-            return Err(SceneError::DuplicateTransformOwner { game_object_file_id });
+            return Err(SceneError::DuplicateTransformOwner {
+                game_object_file_id,
+            });
         }
         owners.insert(game_object_file_id, document.file_id);
         let father = match reference_id(body.get("m_Father"))? {
@@ -667,7 +696,12 @@ fn assemble_documents(
         let children = child_ids(body.get("m_Children"))?;
         apply_local_transform(graph, entity, body);
         set.transforms.insert(document.file_id, entity);
-        records.push(TransformRecord { file_id: document.file_id, entity, father, children });
+        records.push(TransformRecord {
+            file_id: document.file_id,
+            entity,
+            father,
+            children,
+        });
     }
     for record in &records {
         if let Some(father_file_id) = record.father {
@@ -729,7 +763,7 @@ fn assemble_documents(
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
                     game_object_file_id,
-                })
+                });
             }
         };
         let script_node = match body.get("m_Script") {
@@ -743,8 +777,7 @@ fn assemble_documents(
         set.scripts.push(ScriptBinding { entity, guid });
     }
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
-    set.audio_bindings =
-        collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     set.render = collect_render(stream, &set.game_objects, &instance_roots, context.index)?;
     if expand {
         for document in &stream.documents {
@@ -758,7 +791,9 @@ fn assemble_documents(
             let instance = match prefab::parse_instance(body) {
                 Some(instance) => instance,
                 None => {
-                    return Err(SceneError::MissingPrefabSource { file_id: document.file_id })
+                    return Err(SceneError::MissingPrefabSource {
+                        file_id: document.file_id,
+                    })
                 }
             };
             expand_instance(&instance, document.file_id, &mut set, graph, context)?;
@@ -774,7 +809,10 @@ fn expand_instance(
     graph: &mut SceneGraph,
     context: &mut PrefabContext,
 ) -> Result<(), SceneError> {
-    let path = match context.index.and_then(|index| index.get(&instance.source.guid)) {
+    let path = match context
+        .index
+        .and_then(|index| index.get(&instance.source.guid))
+    {
         Some(path) => path.to_path_buf(),
         None => {
             return Err(SceneError::UnresolvedExternalReference {
@@ -784,7 +822,9 @@ fn expand_instance(
         }
     };
     if context.stack.contains(&instance.source.guid) {
-        return Err(SceneError::CyclicPrefabReference { guid: instance.source.guid.clone() });
+        return Err(SceneError::CyclicPrefabReference {
+            guid: instance.source.guid.clone(),
+        });
     }
     let stream = unity_yaml::parse_file(&path)?;
     context.stack.push(instance.source.guid.clone());
@@ -794,7 +834,9 @@ fn expand_instance(
     let root = match prefab_set.root {
         Some(root) => root,
         None => {
-            return Err(SceneError::PrefabWithoutRoot { guid: instance.source.guid.clone() })
+            return Err(SceneError::PrefabWithoutRoot {
+                guid: instance.source.guid.clone(),
+            })
         }
     };
     prefab::apply_modifications(
@@ -889,27 +931,26 @@ fn collect_physics(
                 return Err(SceneError::MissingGameObject {
                     transform_file_id: document.file_id,
                     game_object_file_id,
-                })
+                });
             }
         };
-        let component = match document.class_id {
-            RIGIDBODY_CLASS => PhysicsComponent::Rigidbody(rigidbody_component(body)),
-            BOX_COLLIDER_CLASS => {
-                PhysicsComponent::BoxCollider(box_collider_component(body, &record.name, index))
-            }
-            SPHERE_COLLIDER_CLASS => PhysicsComponent::SphereCollider(sphere_collider_component(
-                body,
-                &record.name,
-                index,
-            )),
-            CAPSULE_COLLIDER_CLASS => PhysicsComponent::CapsuleCollider(
-                capsule_collider_component(body, &record.name, index),
-            ),
-            CHARACTER_CONTROLLER_CLASS | MONO_BEHAVIOUR_CLASS => {
-                PhysicsComponent::CharacterController(character_controller_component(body))
-            }
-            _ => continue,
-        };
+        let component =
+            match document.class_id {
+                RIGIDBODY_CLASS => PhysicsComponent::Rigidbody(rigidbody_component(body)),
+                BOX_COLLIDER_CLASS => {
+                    PhysicsComponent::BoxCollider(box_collider_component(body, &record.name, index))
+                }
+                SPHERE_COLLIDER_CLASS => PhysicsComponent::SphereCollider(
+                    sphere_collider_component(body, &record.name, index),
+                ),
+                CAPSULE_COLLIDER_CLASS => PhysicsComponent::CapsuleCollider(
+                    capsule_collider_component(body, &record.name, index),
+                ),
+                CHARACTER_CONTROLLER_CLASS | MONO_BEHAVIOUR_CLASS => {
+                    PhysicsComponent::CharacterController(character_controller_component(body))
+                }
+                _ => continue,
+            };
         let entity = record.entity;
         let layer = record.layer;
         let position = match positions.get(&entity) {
@@ -936,7 +977,7 @@ fn collect_physics(
             PhysicsComponent::SphereCollider(value) => binding.sphere_collider = Some(value),
             PhysicsComponent::CapsuleCollider(value) => binding.capsule_collider = Some(value),
             PhysicsComponent::CharacterController(value) => {
-                binding.character_controller = Some(value)
+                binding.character_controller = Some(value);
             }
         }
     }
@@ -1156,7 +1197,7 @@ fn resolve_collider_material(
                 )),
             )
         }
-        (None, Some(guid)) | (Some(_), Some(guid)) => guid,
+        (None | Some(_), Some(guid)) => guid,
     };
 
     let path = match index.and_then(|guids| guids.get(guid)) {
@@ -1284,8 +1325,7 @@ fn audio_source_component(
     game_object_name: &str,
     index: Option<&GuidIndex>,
 ) -> AudioSourceComponent {
-    let (clip_guid, clip_path, clip_diagnostic) =
-        resolve_audio_clip(body, game_object_name, index);
+    let (clip_guid, clip_path, clip_diagnostic) = resolve_audio_clip(body, game_object_name, index);
     let volume = yaml_f32(body.get("m_Volume"), DEFAULT_AUDIO_VOLUME, |value| {
         (0.0..=1.0).contains(&value)
     });
@@ -1302,28 +1342,27 @@ fn audio_source_component(
         DEFAULT_AUDIO_PRIORITY,
     );
     let spatial_blend_node = body.get("m_SpatialBlend").or_else(|| {
-        body.get("panLevelCustomCurve")
-            .and_then(|curve| {
-                curve
-                    .get("m_Curve")
-                    .and_then(Node::as_sequence)
-                    .and_then(|seq| seq.first())
-                    .and_then(|point| point.get("value"))
-                    .or(Some(curve))
-            })
+        body.get("panLevelCustomCurve").and_then(|curve| {
+            curve
+                .get("m_Curve")
+                .and_then(Node::as_sequence)
+                .and_then(|seq| seq.first())
+                .and_then(|point| point.get("value"))
+                .or(Some(curve))
+        })
     });
-    let spatial_blend = yaml_f32(
-        spatial_blend_node,
-        DEFAULT_AUDIO_SPATIAL_BLEND,
-        |value| (0.0..=1.0).contains(&value),
-    );
+    let spatial_blend = yaml_f32(spatial_blend_node, DEFAULT_AUDIO_SPATIAL_BLEND, |value| {
+        (0.0..=1.0).contains(&value)
+    });
     let min_distance = yaml_f32(
-        body.get("m_MinDistance").or_else(|| body.get("MinDistance")),
+        body.get("m_MinDistance")
+            .or_else(|| body.get("MinDistance")),
         DEFAULT_AUDIO_MIN_DISTANCE,
         |value| value >= 0.0,
     );
     let max_distance = yaml_f32(
-        body.get("m_MaxDistance").or_else(|| body.get("MaxDistance")),
+        body.get("m_MaxDistance")
+            .or_else(|| body.get("MaxDistance")),
         DEFAULT_AUDIO_MAX_DISTANCE,
         |value| value > 0.0,
     );
@@ -1375,7 +1414,7 @@ fn resolve_audio_clip(
                 )),
             )
         }
-        (None, Some(guid)) | (Some(_), Some(guid)) => guid.to_string(),
+        (None | Some(_), Some(guid)) => guid.to_string(),
     };
 
     let path = match index.and_then(|guids| guids.get(&guid)) {
@@ -1385,8 +1424,8 @@ fn resolve_audio_clip(
                 Some(guid.clone()),
                 None,
                 Some(format!(
-                    "AudioSource on '{game_object_name}' references unresolved AudioClip guid {guid}"
-                )),
+                "AudioSource on '{game_object_name}' references unresolved AudioClip guid {guid}"
+            )),
             )
         }
     };
@@ -1476,7 +1515,7 @@ fn collect_render(
                     .push(mesh_renderer_component(entity, body, mesh_filter, index));
             }
             LIGHT_CLASS => binding.lights.push(light_component(entity, body)),
-            _ => continue,
+            _ => {}
         }
     }
     Ok(binding)
@@ -1506,7 +1545,10 @@ fn camera_component(entity: EntityId, body: &Node) -> CameraComponent {
             DEFAULT_CAMERA_FAR_CLIP_PLANE,
             |value| value > 0.0,
         ),
-        background_color: color3_or(body.get("m_BackGroundColor"), DEFAULT_CAMERA_BACKGROUND_COLOR),
+        background_color: color3_or(
+            body.get("m_BackGroundColor"),
+            DEFAULT_CAMERA_BACKGROUND_COLOR,
+        ),
     }
 }
 
@@ -1582,7 +1624,9 @@ fn resolve_mesh_reference(
             )
         }
     };
-    let path = index.and_then(|guids| guids.get(&guid)).map(Path::to_path_buf);
+    let path = index
+        .and_then(|guids| guids.get(&guid))
+        .map(Path::to_path_buf);
     (Some(guid), path, None)
 }
 
@@ -1622,7 +1666,9 @@ fn resolve_material_reference(
             );
         }
     };
-    let path = index.and_then(|guids| guids.get(&guid)).map(Path::to_path_buf);
+    let path = index
+        .and_then(|guids| guids.get(&guid))
+        .map(Path::to_path_buf);
     (Some(guid), path, None)
 }
 
@@ -1800,7 +1846,10 @@ fn check_external_references(stream: &Stream, index: Option<&GuidIndex>) -> Resu
         if !index.contains(guid) {
             return Err(SceneError::UnresolvedExternalReference {
                 guid: guid.to_string(),
-                file_id: source.get("fileID").and_then(Node::as_i64).unwrap_or(ROOT_FILE_ID),
+                file_id: source
+                    .get("fileID")
+                    .and_then(Node::as_i64)
+                    .unwrap_or(ROOT_FILE_ID),
             });
         }
     }

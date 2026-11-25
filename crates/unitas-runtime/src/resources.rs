@@ -116,8 +116,7 @@ impl ResourcesIndex {
             let included = if prefix.is_empty() || *key == prefix {
                 true
             } else {
-                key.starts_with(&prefix)
-                    && key.as_bytes().get(prefix.len()) == Some(&b'/')
+                key.starts_with(&prefix) && key.as_bytes().get(prefix.len()) == Some(&b'/')
             };
             if included {
                 for entry in list {
@@ -355,7 +354,10 @@ mod tests {
             &meta_path,
             "fileFormatVersion: 2\nguid: 10000000000000000000000000000001\n",
         )?;
-        fs::write(&prefab_path, "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Enemy\n")?;
+        fs::write(
+            &prefab_path,
+            "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Enemy\n",
+        )?;
         fs::write(&outside_path, "not in resources")?;
 
         let index = ResourcesIndex::scan(&root)?;

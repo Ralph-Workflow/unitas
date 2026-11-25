@@ -1,5 +1,3 @@
-//! Package manifest and lock resolution for UPM-style project packages.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -130,7 +128,9 @@ pub fn detect_package_modifications(
             | PackageSource::Git(_)
             | PackageSource::Tarball(_)
             | PackageSource::BuiltIn => {
-                if let Some(pkg_cache_dir) = find_cached_package_dir(&cache_dir, &dep.name, version.as_deref()) {
+                if let Some(pkg_cache_dir) =
+                    find_cached_package_dir(&cache_dir, &dep.name, version.as_deref())
+                {
                     let modified_paths = detect_modified_files_in_dir(&pkg_cache_dir, locked);
                     if !modified_paths.is_empty() {
                         findings.push(PackageModificationFinding {
@@ -208,10 +208,7 @@ fn find_cached_package_dir(
     None
 }
 
-fn detect_modified_files_in_dir(
-    dir: &Path,
-    locked: Option<&LockedPackage>,
-) -> Vec<String> {
+fn detect_modified_files_in_dir(dir: &Path, locked: Option<&LockedPackage>) -> Vec<String> {
     let mut files = Vec::new();
     collect_relative_files(dir, dir, &mut files);
     files.sort();
@@ -226,7 +223,8 @@ fn detect_modified_files_in_dir(
         if let Ok(pkg_json_text) = fs::read_to_string(dir.join("package.json")) {
             if let Ok(root) = parse(&pkg_json_text) {
                 let disk_version = root.get("version").and_then(|v| v.as_str());
-                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref()) {
+                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref())
+                {
                     if disk_v != lock_v {
                         return vec!["package.json".to_string()];
                     }
@@ -237,10 +235,7 @@ fn detect_modified_files_in_dir(
     Vec::new()
 }
 
-fn detect_embedded_divergence(
-    dir: &Path,
-    locked: Option<&LockedPackage>,
-) -> Vec<String> {
+fn detect_embedded_divergence(dir: &Path, locked: Option<&LockedPackage>) -> Vec<String> {
     let mut files = Vec::new();
     collect_relative_files(dir, dir, &mut files);
     files.sort();
@@ -248,7 +243,8 @@ fn detect_embedded_divergence(
         if let Ok(root) = parse(&pkg_json_text) {
             let disk_version = root.get("version").and_then(|v| v.as_str());
             if let Some(lock_entry) = locked {
-                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref()) {
+                if let (Some(disk_v), Some(lock_v)) = (disk_version, lock_entry.version.as_deref())
+                {
                     if disk_v != lock_v {
                         return files;
                     }
@@ -372,7 +368,6 @@ impl fmt::Display for PackageError {
 
 impl std::error::Error for PackageError {}
 
-/// One request for a package version, with the chain of packages that asked for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionRequest {
     pub version: String,
@@ -438,11 +433,13 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
     let mut manifest = PackageManifest::default();
 
     if let Some(registries) = root.get("scopedRegistries") {
-        let entries = registries.as_array().ok_or_else(|| PackageError::InvalidValue {
-            context: "manifest.json".to_string(),
-            field: "scopedRegistries".to_string(),
-            value: "not an array".to_string(),
-        })?;
+        let entries = registries
+            .as_array()
+            .ok_or_else(|| PackageError::InvalidValue {
+                context: "manifest.json".to_string(),
+                field: "scopedRegistries".to_string(),
+                value: "not an array".to_string(),
+            })?;
         for entry in entries {
             let name = entry
                 .get("name")
@@ -465,20 +462,20 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
                         .collect()
                 })
                 .unwrap_or_default();
-            manifest.scoped_registries.push(ScopedRegistry {
-                name,
-                url,
-                scopes,
-            });
+            manifest
+                .scoped_registries
+                .push(ScopedRegistry { name, url, scopes });
         }
     }
 
     if let Some(testables) = root.get("testables") {
-        let entries = testables.as_array().ok_or_else(|| PackageError::InvalidValue {
-            context: "manifest.json".to_string(),
-            field: "testables".to_string(),
-            value: "not an array".to_string(),
-        })?;
+        let entries = testables
+            .as_array()
+            .ok_or_else(|| PackageError::InvalidValue {
+                context: "manifest.json".to_string(),
+                field: "testables".to_string(),
+                value: "not an array".to_string(),
+            })?;
         manifest.testables = entries
             .iter()
             .filter_map(|item| item.as_str())
@@ -503,11 +500,13 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
     }
 
     if let Some(dependencies) = root.get("dependencies") {
-        let entries = dependencies.as_object().ok_or_else(|| PackageError::InvalidValue {
-            context: "manifest.json".to_string(),
-            field: "dependencies".to_string(),
-            value: "not an object".to_string(),
-        })?;
+        let entries = dependencies
+            .as_object()
+            .ok_or_else(|| PackageError::InvalidValue {
+                context: "manifest.json".to_string(),
+                field: "dependencies".to_string(),
+                value: "not an object".to_string(),
+            })?;
         for (name, value) in entries {
             manifest.dependencies.push(parse_dependency(name, value)?);
         }
@@ -517,11 +516,12 @@ pub fn parse_manifest(text: &str) -> Result<PackageManifest, PackageError> {
         if dependency.source != PackageSource::Registry {
             continue;
         }
-        if let Some(registry) = manifest
-            .scoped_registries
-            .iter()
-            .find(|registry| registry.scopes.iter().any(|scope| scope == &dependency.name))
-        {
+        if let Some(registry) = manifest.scoped_registries.iter().find(|registry| {
+            registry
+                .scopes
+                .iter()
+                .any(|scope| scope == &dependency.name)
+        }) {
             dependency.source = PackageSource::ScopedRegistry(registry.url.clone());
             dependency.scoped_registry = Some(registry.url.clone());
         }
@@ -536,15 +536,20 @@ pub fn parse_lock(text: &str) -> Result<PackageLock, PackageError> {
         dependencies: Vec::new(),
     };
     let dependencies = match root.get("dependencies") {
-        Some(value) => value.as_object().ok_or_else(|| PackageError::InvalidValue {
-            context: "packages-lock.json".to_string(),
-            field: "dependencies".to_string(),
-            value: "not an object".to_string(),
-        })?,
+        Some(value) => value
+            .as_object()
+            .ok_or_else(|| PackageError::InvalidValue {
+                context: "packages-lock.json".to_string(),
+                field: "dependencies".to_string(),
+                value: "not an object".to_string(),
+            })?,
         None => return Ok(lock),
     };
     for (name, entry) in dependencies {
-        let url = entry.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let url = entry
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let kind = entry
             .get("source")
             .and_then(|v| v.as_str())
@@ -577,8 +582,14 @@ pub fn parse_lock(text: &str) -> Result<PackageLock, PackageError> {
                 .unwrap_or(0)
                 .max(0) as u32,
             source,
-            version: entry.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            hash: entry.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            version: entry
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            hash: entry
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             dependencies: requirements,
         });
     }
@@ -586,16 +597,21 @@ pub fn parse_lock(text: &str) -> Result<PackageLock, PackageError> {
 }
 
 fn parse_requirements(value: &JsonValue) -> Result<Vec<PackageRequirement>, PackageError> {
-    let entries = value.as_object().ok_or_else(|| PackageError::InvalidValue {
-        context: "package dependencies".to_string(),
-        field: "dependencies".to_string(),
-        value: "not an object".to_string(),
-    })?;
+    let entries = value
+        .as_object()
+        .ok_or_else(|| PackageError::InvalidValue {
+            context: "package dependencies".to_string(),
+            field: "dependencies".to_string(),
+            value: "not an object".to_string(),
+        })?;
     let mut requirements = Vec::new();
     for (name, entry) in entries {
         let version = match entry {
             JsonValue::String(text) => Some(text.clone()),
-            JsonValue::Object(_) => entry.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            JsonValue::Object(_) => entry
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             _ => None,
         };
         requirements.push(PackageRequirement {
@@ -669,8 +685,6 @@ fn parse_dependency(name: &str, value: &JsonValue) -> Result<PackageDependency, 
     Ok(dependency)
 }
 
-/// A bare `file:` name is an embedded package under `Packages/`; a path with a
-/// separator is a local package; an archive is a tarball.
 fn source_for_file(path: &str) -> PackageSource {
     let trimmed = path.strip_prefix("file:").unwrap_or(path);
     if trimmed.ends_with(".tgz") || trimmed.ends_with(".tar.gz") {
@@ -699,7 +713,10 @@ impl PackageManifest {
                     fields.push(("file".to_string(), JsonValue::String(path.clone())));
                 }
                 PackageSource::Embedded => {
-                    fields.push(("file".to_string(), JsonValue::String(dependency.name.clone())));
+                    fields.push((
+                        "file".to_string(),
+                        JsonValue::String(dependency.name.clone()),
+                    ));
                 }
                 PackageSource::Tarball(url) => {
                     fields.push(("url".to_string(), JsonValue::String(url.clone())));
@@ -721,10 +738,8 @@ impl PackageManifest {
             }
             dependencies.push((dependency.name.clone(), JsonValue::Object(fields)));
         }
-        let mut root: Vec<(String, JsonValue)> = vec![(
-            "dependencies".to_string(),
-            JsonValue::Object(dependencies),
-        )];
+        let mut root: Vec<(String, JsonValue)> =
+            vec![("dependencies".to_string(), JsonValue::Object(dependencies))];
         if !self.scoped_registries.is_empty() {
             let mut registries = Vec::new();
             for registry in &self.scoped_registries {
@@ -811,7 +826,6 @@ impl PackageLock {
     }
 }
 
-/// Resolves the manifest, using the lock file when one is available.
 pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     let requests = collect_requests(manifest, lock);
@@ -833,10 +847,11 @@ pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> Resolu
     let conflicted = detect_conflicts(&groups, &direct, &mut report);
 
     for dependency in &manifest.dependencies {
-        let version = dependency
-            .version
-            .clone()
-            .or_else(|| locked.get(dependency.name.as_str()).and_then(|e| e.version.clone()));
+        let version = dependency.version.clone().or_else(|| {
+            locked
+                .get(dependency.name.as_str())
+                .and_then(|e| e.version.clone())
+        });
         match version {
             Some(version) => report.resolved.push(ResolvedPackage {
                 name: dependency.name.clone(),
@@ -894,7 +909,6 @@ pub fn resolve(manifest: &PackageManifest, lock: Option<&PackageLock>) -> Resolu
     report
 }
 
-/// Opens a project from the lock file alone, as an offline open does.
 pub fn open_offline(manifest: &PackageManifest, lock: &PackageLock) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     let requests = collect_requests(manifest, Some(lock));
@@ -977,7 +991,6 @@ fn collect_requests(manifest: &PackageManifest, lock: Option<&PackageLock>) -> V
     requests
 }
 
-/// Walks the locked dependency graph so a request names the chain that asked for it.
 fn lock_paths(lock: &PackageLock) -> BTreeMap<&str, Vec<String>> {
     let mut entries: Vec<&LockedPackage> = lock.dependencies.iter().collect();
     entries.sort_by(|left, right| (left.depth, &left.name).cmp(&(right.depth, &right.name)));
@@ -987,7 +1000,9 @@ fn lock_paths(lock: &PackageLock) -> BTreeMap<&str, Vec<String>> {
             .get(entry.name.as_str())
             .cloned()
             .unwrap_or_else(|| vec![entry.name.clone()]);
-        paths.entry(entry.name.as_str()).or_insert(parent_path.clone());
+        paths
+            .entry(entry.name.as_str())
+            .or_insert(parent_path.clone());
         for requirement in &entry.dependencies {
             let mut child_path = parent_path.clone();
             child_path.push(requirement.name.clone());
@@ -1008,7 +1023,6 @@ fn group_requests(requests: &[Request]) -> BTreeMap<&str, Vec<&Request>> {
     groups
 }
 
-/// A manifest dependency takes precedence over any indirect request for it.
 fn detect_conflicts(
     groups: &BTreeMap<&str, Vec<&Request>>,
     direct: &BTreeMap<&str, &PackageDependency>,
@@ -1038,12 +1052,10 @@ fn detect_conflicts(
             })
             .collect();
         requests.sort_by(|left, right| left.version.cmp(&right.version));
-        report
-            .conflicts
-            .push(ResolutionConflict::VersionMismatch {
-                package: (*name).to_string(),
-                requests,
-            });
+        report.conflicts.push(ResolutionConflict::VersionMismatch {
+            package: (*name).to_string(),
+            requests,
+        });
         conflicted.insert((*name).to_string());
     }
     conflicted

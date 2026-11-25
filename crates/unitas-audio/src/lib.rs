@@ -18,7 +18,9 @@ pub enum AudioError {
 impl std::fmt::Display for AudioError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedFormat(detail) => write!(formatter, "unsupported audio format: {detail}"),
+            Self::UnsupportedFormat(detail) => {
+                write!(formatter, "unsupported audio format: {detail}")
+            }
             Self::InvalidWav(detail) => write!(formatter, "invalid wav data: {detail}"),
             Self::Io(detail) => write!(formatter, "audio io error: {detail}"),
             Self::Device(detail) => write!(formatter, "audio device error: {detail}"),
@@ -124,7 +126,10 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     if bytes.starts_with(b"ID3")
         || (bytes.len() >= 2
             && bytes[0] == 0xFF
-            && (bytes[1] == 0xFB || bytes[1] == 0xF3 || bytes[1] == 0xF2 || (bytes[1] & 0xE0) == 0xE0))
+            && (bytes[1] == 0xFB
+                || bytes[1] == 0xF3
+                || bytes[1] == 0xF2
+                || (bytes[1] & 0xE0) == 0xE0))
     {
         return Err(AudioError::UnsupportedFormat("MP3 audio".to_string()));
     }
@@ -132,10 +137,14 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         return Err(AudioError::UnsupportedFormat("FLAC audio".to_string()));
     }
     if bytes.len() < 12 {
-        return Err(AudioError::InvalidWav("buffer shorter than 12-byte RIFF header".to_string()));
+        return Err(AudioError::InvalidWav(
+            "buffer shorter than 12-byte RIFF header".to_string(),
+        ));
     }
     if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err(AudioError::InvalidWav("missing RIFF/WAVE header".to_string()));
+        return Err(AudioError::InvalidWav(
+            "missing RIFF/WAVE header".to_string(),
+        ));
     }
 
     let mut offset = 12usize;
@@ -155,24 +164,36 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
             return Err(AudioError::InvalidWav("chunk size overflow".to_string()));
         };
         if payload_end > bytes.len() {
-            return Err(AudioError::InvalidWav("chunk extends past end of buffer".to_string()));
+            return Err(AudioError::InvalidWav(
+                "chunk extends past end of buffer".to_string(),
+            ));
         }
 
         if chunk_id == b"fmt " {
             if chunk_size < 16 {
-                return Err(AudioError::InvalidWav("fmt chunk smaller than 16 bytes".to_string()));
+                return Err(AudioError::InvalidWav(
+                    "fmt chunk smaller than 16 bytes".to_string(),
+                ));
             }
             let Some(audio_format) = read_u16_le(bytes, payload_start) else {
-                return Err(AudioError::InvalidWav("failed to read audio_format".to_string()));
+                return Err(AudioError::InvalidWav(
+                    "failed to read audio_format".to_string(),
+                ));
             };
             let Some(channels) = read_u16_le(bytes, payload_start + 2) else {
-                return Err(AudioError::InvalidWav("failed to read channels".to_string()));
+                return Err(AudioError::InvalidWav(
+                    "failed to read channels".to_string(),
+                ));
             };
             let Some(sample_rate) = read_u32_le(bytes, payload_start + 4) else {
-                return Err(AudioError::InvalidWav("failed to read sample_rate".to_string()));
+                return Err(AudioError::InvalidWav(
+                    "failed to read sample_rate".to_string(),
+                ));
             };
             let Some(bits_per_sample) = read_u16_le(bytes, payload_start + 14) else {
-                return Err(AudioError::InvalidWav("failed to read bits_per_sample".to_string()));
+                return Err(AudioError::InvalidWav(
+                    "failed to read bits_per_sample".to_string(),
+                ));
             };
             fmt_fields = Some((audio_format, channels, sample_rate, bits_per_sample));
         } else if chunk_id == b"data" {
@@ -202,7 +223,9 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         )));
     }
     if sample_rate == 0 {
-        return Err(AudioError::InvalidWav("WAV sample_rate must be positive".to_string()));
+        return Err(AudioError::InvalidWav(
+            "WAV sample_rate must be positive".to_string(),
+        ));
     }
 
     let Some(raw_data) = data_slice else {
@@ -210,7 +233,9 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     };
     let bytes_per_frame = usize::from(channels) * 2;
     if raw_data.len() % bytes_per_frame != 0 {
-        return Err(AudioError::InvalidWav("data chunk not aligned to frame size".to_string()));
+        return Err(AudioError::InvalidWav(
+            "data chunk not aligned to frame size".to_string(),
+        ));
     }
 
     let sample_count = raw_data.len() / 2;
@@ -499,10 +524,7 @@ impl AudioWorld {
     }
 
     pub fn volume(&self, entity: EntityId) -> f32 {
-        self.sources
-            .get(&entity)
-            .map(|s| s.volume)
-            .unwrap_or(1.0)
+        self.sources.get(&entity).map(|s| s.volume).unwrap_or(1.0)
     }
 
     pub fn set_pitch(&mut self, entity: EntityId, pitch: f32) {
@@ -513,10 +535,7 @@ impl AudioWorld {
     }
 
     pub fn pitch(&self, entity: EntityId) -> f32 {
-        self.sources
-            .get(&entity)
-            .map(|s| s.pitch)
-            .unwrap_or(1.0)
+        self.sources.get(&entity).map(|s| s.pitch).unwrap_or(1.0)
     }
 
     pub fn set_mute(&mut self, entity: EntityId, mute: bool) {
@@ -525,10 +544,7 @@ impl AudioWorld {
     }
 
     pub fn mute(&self, entity: EntityId) -> bool {
-        self.sources
-            .get(&entity)
-            .map(|s| s.mute)
-            .unwrap_or(false)
+        self.sources.get(&entity).map(|s| s.mute).unwrap_or(false)
     }
 
     pub fn set_looping(&mut self, entity: EntityId, looping: bool) {
@@ -562,10 +578,7 @@ impl AudioWorld {
     }
 
     pub fn priority(&self, entity: EntityId) -> u8 {
-        self.sources
-            .get(&entity)
-            .map(|s| s.priority)
-            .unwrap_or(128)
+        self.sources.get(&entity).map(|s| s.priority).unwrap_or(128)
     }
 
     pub fn set_spatial_blend(&mut self, entity: EntityId, blend: f32) {
@@ -626,10 +639,7 @@ impl AudioWorld {
     }
 
     pub fn source_time(&self, entity: EntityId) -> f64 {
-        self.sources
-            .get(&entity)
-            .map(|s| s.time)
-            .unwrap_or(0.0)
+        self.sources.get(&entity).map(|s| s.time).unwrap_or(0.0)
     }
 
     pub fn set_source_position(&mut self, entity: EntityId, position: [f32; 3]) {
@@ -675,9 +685,9 @@ impl AudioWorld {
         match source.state {
             AudioSourceState::Paused => return Some(SilenceReason::Paused),
             AudioSourceState::Virtualized => return Some(SilenceReason::Virtualized),
-            AudioSourceState::Stopped
-            | AudioSourceState::Scheduled
-            | AudioSourceState::Loading => return Some(SilenceReason::Stopped),
+            AudioSourceState::Stopped | AudioSourceState::Scheduled | AudioSourceState::Loading => {
+                return Some(SilenceReason::Stopped)
+            }
             AudioSourceState::Completed => return Some(SilenceReason::Completed),
             AudioSourceState::Failed => return Some(SilenceReason::UnsupportedClip),
             AudioSourceState::Playing => {}
@@ -956,8 +966,7 @@ mod tests {
         pcm_samples: &[i16],
         extra_chunk: Option<(&[u8; 4], &[u8])>,
     ) -> Vec<u8> {
-        let byte_rate =
-            sample_rate * u32::from(channels) * (u32::from(bits_per_sample) / 8);
+        let byte_rate = sample_rate * u32::from(channels) * (u32::from(bits_per_sample) / 8);
         let block_align = channels * (bits_per_sample / 8);
         let data_size = (pcm_samples.len() * 2) as u32;
         let extra_len = extra_chunk

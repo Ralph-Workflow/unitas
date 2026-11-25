@@ -118,7 +118,7 @@ namespace Unitas.Scripting
                 {
                     i++;
                     string pair = args[i];
-                    int eq = pair.IndexOf('=');
+                    int eq = pair.IndexOf('=', StringComparison.Ordinal);
                     if (eq > 0)
                     {
                         string k = pair.Substring(0, eq).Trim();

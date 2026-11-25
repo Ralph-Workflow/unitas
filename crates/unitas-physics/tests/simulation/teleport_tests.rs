@@ -29,7 +29,6 @@ fn teleport_moves_a_dynamic_body_and_keeps_its_velocity() -> Result<(), PhysicsE
     assert_eq!(world.position(ball), Some([5.0, 2.0, -4.0]));
     assert_eq!(world.velocity(ball), Some([3.0, 0.0, 0.0]));
 
-    // The teleport is not swept motion, so the next step only applies velocity.
     world.step(0.5)?;
     assert_eq!(world.position(ball), Some([6.5, 2.0, -4.0]));
     Ok(())

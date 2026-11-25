@@ -1,5 +1,3 @@
-//! Binary FBX geometry import tests (PRJ-004).
-
 use std::error::Error;
 
 use unitas_asset::model::fbx::{import_fbx, import_fbx_bytes, FbxImportError};
@@ -7,7 +5,6 @@ use unitas_asset::model::fbx::{import_fbx, import_fbx_bytes, FbxImportError};
 const FBX_VERSION_64: u32 = 7500;
 const FBX_VERSION_32: u32 = 7400;
 
-/// A node record to emit: name, encoded properties, nested records.
 struct NodeSpec<'a> {
     name: &'a str,
     properties: Vec<Vec<u8>>,
@@ -57,7 +54,6 @@ fn prop_int_array(values: &[i32]) -> Vec<u8> {
     out
 }
 
-/// An array property whose payload is a zlib stream, as FBX writes for deflate arrays.
 fn prop_compressed_double_array(values: &[f64]) -> Vec<u8> {
     let mut raw = Vec::new();
     for value in values {
@@ -72,7 +68,6 @@ fn prop_compressed_double_array(values: &[f64]) -> Vec<u8> {
     out
 }
 
-/// A deflate array whose payload is not a zlib stream.
 fn prop_broken_compressed_array() -> Vec<u8> {
     let mut out = vec![b'd'];
     out.extend_from_slice(&3u32.to_le_bytes());
@@ -82,7 +77,6 @@ fn prop_broken_compressed_array() -> Vec<u8> {
     out
 }
 
-/// zlib container holding one stored (uncompressed) deflate block.
 fn zlib_stored(payload: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01, 0x01];
     out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
@@ -102,7 +96,6 @@ fn adler32(data: &[u8]) -> u32 {
     (high << 16) | low
 }
 
-/// Encodes one node record; `base` is the absolute offset the record is written at.
 fn build_node(base: u64, spec: &NodeSpec, is_64: bool) -> Vec<u8> {
     let property_bytes: Vec<u8> = spec.properties.concat();
     let name_len = spec.name.len();
@@ -119,11 +112,8 @@ fn build_node(base: u64, spec: &NodeSpec, is_64: bool) -> Vec<u8> {
         offset += bytes.len() as u64;
         child_bytes.push(bytes);
     }
-    let content_len: usize = property_bytes.len()
-        + child_bytes
-            .iter()
-            .map(|bytes| bytes.len())
-            .sum::<usize>();
+    let content_len: usize =
+        property_bytes.len() + child_bytes.iter().map(|bytes| bytes.len()).sum::<usize>();
     let end_offset = base + header_len as u64 + content_len as u64;
     let mut out = Vec::new();
     if is_64 {
@@ -144,7 +134,6 @@ fn build_node(base: u64, spec: &NodeSpec, is_64: bool) -> Vec<u8> {
     out
 }
 
-/// Writes a binary FBX file whose root record is `root`.
 fn fbx_file(root: &NodeSpec, version: u32) -> Vec<u8> {
     let is_64 = version >= FBX_VERSION_64;
     let mut bytes = Vec::new();
@@ -171,14 +160,9 @@ fn geometry_node<'a>(
         node("PolygonVertexIndex", polygons, vec![]),
     ];
     children.extend(layers);
-    node(
-        "Geometry",
-        vec![prop_int(124), prop_string(name)],
-        children,
-    )
+    node("Geometry", vec![prop_int(124), prop_string(name)], children)
 }
 
-/// One triangle and one quad over seven control points.
 fn tri_quad_geometry() -> NodeSpec<'static> {
     let vertices = [
         0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
@@ -193,7 +177,7 @@ fn tri_quad_geometry() -> NodeSpec<'static> {
     )
 }
 
-fn objects_root<'a>(children: Vec<NodeSpec<'a>>) -> NodeSpec<'a> {
+fn objects_root(children: Vec<NodeSpec<'_>>) -> NodeSpec<'_> {
     node("Objects", vec![], children)
 }
 
@@ -253,9 +237,7 @@ fn imports_direct_mapped_normals() -> TestResult {
 
 #[test]
 fn imports_index_to_direct_uvs() -> TestResult {
-    let vertices = [
-        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
-    ];
+    let vertices = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
     let uvs = [0.0, 0.0, 1.0, 1.0];
     let layer = node(
         "LayerElementUV",
@@ -306,11 +288,7 @@ fn imports_compressed_node_payload() -> TestResult {
     let vertices = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let vertices_node = build_node(
         0,
-        &node(
-            "Vertices",
-            vec![prop_double_array(&vertices)],
-            vec![],
-        ),
+        &node("Vertices", vec![prop_double_array(&vertices)], vec![]),
         true,
     );
     let polygons_node = build_node(
@@ -433,7 +411,9 @@ fn reports_invalid_signature() -> TestResult {
 fn geometry_nodes_keep_their_own_mesh_identity() -> TestResult {
     let hull = geometry_node(
         "Hull",
-        vec![prop_double_array(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])],
+        vec![prop_double_array(&[
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ])],
         vec![prop_int_array(&[0, 1, -2])],
         vec![],
     );

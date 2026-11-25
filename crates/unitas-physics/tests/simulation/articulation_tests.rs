@@ -90,7 +90,8 @@ fn slide(target: f64) -> ArticulationJoint {
 }
 
 #[test]
-fn articulated_arm_reaches_drive_targets_inside_authored_limits() -> Result<(), Box<dyn std::error::Error>> {
+fn articulated_arm_reaches_drive_targets_inside_authored_limits(
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut world = arm_world()?;
     let mut articulation = ArticulationBody::new(vec![shoulder(THIRD_PI), slide(FOREARM_SLIDE)])?;
 
@@ -103,7 +104,9 @@ fn articulated_arm_reaches_drive_targets_inside_authored_limits() -> Result<(), 
         articulation.step(&mut world, TIMESTEP)?;
         world.step(TIMESTEP)?;
 
-        let shoulder_state = articulation.joint_state(0).ok_or("missing shoulder state")?;
+        let shoulder_state = articulation
+            .joint_state(0)
+            .ok_or("missing shoulder state")?;
         let slide_state = articulation.joint_state(1).ok_or("missing slide state")?;
         shoulder_low = shoulder_low.min(shoulder_state.value);
         shoulder_high = shoulder_high.max(shoulder_state.value);
@@ -111,7 +114,9 @@ fn articulated_arm_reaches_drive_targets_inside_authored_limits() -> Result<(), 
         slide_high = slide_high.max(slide_state.value);
     }
 
-    let shoulder_state = articulation.joint_state(0).ok_or("missing shoulder state")?;
+    let shoulder_state = articulation
+        .joint_state(0)
+        .ok_or("missing shoulder state")?;
     assert!(
         (shoulder_state.value - THIRD_PI).abs() < 1e-3,
         "revolute joint reached {} instead of the authored target",
@@ -135,7 +140,9 @@ fn articulated_arm_reaches_drive_targets_inside_authored_limits() -> Result<(), 
 
     let reach = ARM_CENTER_OFFSET + ARM_HALF_SEGMENT + FOREARM_SLIDE + FOREARM_CENTER_OFFSET;
     let expected = [reach * THIRD_PI.cos(), reach * THIRD_PI.sin(), 0.0];
-    let forearm = world.position(EntityId::new(3)).ok_or("missing forearm body")?;
+    let forearm = world
+        .position(EntityId::new(3))
+        .ok_or("missing forearm body")?;
     assert!(
         (forearm[0] - expected[0]).abs() < 1e-2 && (forearm[1] - expected[1]).abs() < 1e-2,
         "forearm ended at {forearm:?} instead of following the arm to {expected:?}"
@@ -147,13 +154,16 @@ fn articulated_arm_reaches_drive_targets_inside_authored_limits() -> Result<(), 
 #[test]
 fn joint_drive_never_leaves_the_authored_limits() -> Result<(), Box<dyn std::error::Error>> {
     let mut world = arm_world()?;
-    let mut articulation = ArticulationBody::new(vec![shoulder(HALF_PI + 1.0), slide(FOREARM_SLIDE)])?;
+    let mut articulation =
+        ArticulationBody::new(vec![shoulder(HALF_PI + 1.0), slide(FOREARM_SLIDE)])?;
 
     for _ in 0..STEPS {
         articulation.step(&mut world, TIMESTEP)?;
         world.step(TIMESTEP)?;
 
-        let shoulder_state = articulation.joint_state(0).ok_or("missing shoulder state")?;
+        let shoulder_state = articulation
+            .joint_state(0)
+            .ok_or("missing shoulder state")?;
         assert!(
             shoulder_state.value <= HALF_PI + 1e-9,
             "revolute joint drove past its upper limit to {}",
@@ -166,7 +176,9 @@ fn joint_drive_never_leaves_the_authored_limits() -> Result<(), Box<dyn std::err
         );
     }
 
-    let shoulder_state = articulation.joint_state(0).ok_or("missing shoulder state")?;
+    let shoulder_state = articulation
+        .joint_state(0)
+        .ok_or("missing shoulder state")?;
     assert!(
         (shoulder_state.value - HALF_PI).abs() < 1e-6,
         "revolute joint rested at {} instead of its upper limit",
@@ -199,8 +211,7 @@ fn articulation_rejects_a_cycle_between_links() {
 fn joint_state_reports_stepped_value_and_velocity_and_none_out_of_bounds(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut world = arm_world()?;
-    let mut articulation =
-        ArticulationBody::new(vec![shoulder(THIRD_PI), slide(FOREARM_SLIDE)])?;
+    let mut articulation = ArticulationBody::new(vec![shoulder(THIRD_PI), slide(FOREARM_SLIDE)])?;
 
     assert_eq!(
         articulation.joint_state(0),
@@ -222,7 +233,9 @@ fn joint_state_reports_stepped_value_and_velocity_and_none_out_of_bounds(
 
     let expected_shoulder_vel = 100.0 * THIRD_PI * TIMESTEP;
     let expected_shoulder_val = expected_shoulder_vel * TIMESTEP;
-    let shoulder_after_one = articulation.joint_state(0).ok_or("missing shoulder state")?;
+    let shoulder_after_one = articulation
+        .joint_state(0)
+        .ok_or("missing shoulder state")?;
     assert!((shoulder_after_one.velocity - expected_shoulder_vel).abs() < 1e-12);
     assert!((shoulder_after_one.value - expected_shoulder_val).abs() < 1e-12);
 

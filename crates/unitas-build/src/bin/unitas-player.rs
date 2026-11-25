@@ -71,7 +71,9 @@ where
                     .parse::<u32>()
                     .map_err(|err| format!("invalid '--width' value '{raw}': {err}"))?;
                 if width == 0 {
-                    return Err(String::from("invalid '--width' value '0': must be positive"));
+                    return Err(String::from(
+                        "invalid '--width' value '0': must be positive",
+                    ));
                 }
             }
             "--height" => {
@@ -82,7 +84,9 @@ where
                     .parse::<u32>()
                     .map_err(|err| format!("invalid '--height' value '{raw}': {err}"))?;
                 if height == 0 {
-                    return Err(String::from("invalid '--height' value '0': must be positive"));
+                    return Err(String::from(
+                        "invalid '--height' value '0': must be positive",
+                    ));
                 }
             }
             "--sample" => {
@@ -111,18 +115,16 @@ where
             }
             positional => {
                 if bundle_dir.is_some() {
-                    return Err(format!("unexpected extra positional argument '{positional}'"));
+                    return Err(format!(
+                        "unexpected extra positional argument '{positional}'"
+                    ));
                 }
                 bundle_dir = Some(PathBuf::from(positional));
             }
         }
     }
 
-    if bundle_dir.is_none()
-        && !sample
-        && capture_reference.is_none()
-        && verify_device.is_none()
-    {
+    if bundle_dir.is_none() && !sample && capture_reference.is_none() && verify_device.is_none() {
         return Err(String::from(
             "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>]",
         ));

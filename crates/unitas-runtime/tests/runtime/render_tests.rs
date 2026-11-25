@@ -3,9 +3,9 @@ use std::path::Path;
 
 use unitas_render::cube;
 use unitas_runtime::{
-    test_read_error_message, test_read_path_buffer, test_read_render_buffer, test_write_path_buffer,
-    unitas_runtime_load_scene, unitas_runtime_new, unitas_runtime_path_buffer,
-    unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
+    test_read_error_message, test_read_path_buffer, test_read_render_buffer,
+    test_write_path_buffer, unitas_runtime_load_scene, unitas_runtime_new,
+    unitas_runtime_path_buffer, unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
     unitas_runtime_render_camera_screen_point_to_ray, unitas_runtime_render_camera_update,
     unitas_runtime_render_camera_world_to_screen_point, unitas_runtime_render_frame,
     unitas_runtime_render_light_create, unitas_runtime_render_light_update,
@@ -321,8 +321,7 @@ fn camera_update_rejects_short_blob() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn render_frame_produces_bmp_for_scene_with_camera_and_renderer(
-) -> Result<(), Box<dyn Error>> {
+fn render_frame_produces_bmp_for_scene_with_camera_and_renderer() -> Result<(), Box<dyn Error>> {
     let scene = write_render_scene("frame")?;
     let scene_text = scene_path_text(&scene)?;
     let handle = new_handle()?;
@@ -341,7 +340,10 @@ fn render_frame_produces_bmp_for_scene_with_camera_and_renderer(
     assert_eq!(unitas_runtime_render_camera_update(handle, camera, blob), 0);
     let renderer = unitas_runtime_render_renderer_create(handle, cube_entity, mesh, material);
     assert_ne!(renderer, 0);
-    assert_eq!(unitas_runtime_render_renderer_set_enabled(handle, renderer, 1), 0);
+    assert_eq!(
+        unitas_runtime_render_renderer_set_enabled(handle, renderer, 1),
+        0
+    );
     let light = unitas_runtime_render_light_create(handle, light_entity);
     assert_ne!(light, 0);
     assert_eq!(
@@ -473,18 +475,24 @@ fn screen_point_to_ray_points_from_the_camera() -> Result<(), Box<dyn Error>> {
     );
     let mut result = [0u8; 24];
     test_read_path_buffer(handle, &mut result)?;
-    let origin = [read_f32(&result, 0), read_f32(&result, 4), read_f32(&result, 8)];
+    let origin = [
+        read_f32(&result, 0),
+        read_f32(&result, 4),
+        read_f32(&result, 8),
+    ];
     let direction = [
         read_f32(&result, 12),
         read_f32(&result, 16),
         read_f32(&result, 20),
     ];
     assert_eq!(origin, [0.0, 0.0, -10.0]);
-    let length = (direction[0] * direction[0]
-        + direction[1] * direction[1]
-        + direction[2] * direction[2])
-        .sqrt();
-    assert!((length - 1.0).abs() <= 1e-4, "ray direction must be normalised: {length}");
+    let length =
+        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
+            .sqrt();
+    assert!(
+        (length - 1.0).abs() <= 1e-4,
+        "ray direction must be normalised: {length}"
+    );
     let _ = std::fs::remove_dir_all(scene.parent().unwrap_or(&scene));
     Ok(())
 }

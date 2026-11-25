@@ -1,4 +1,8 @@
+# Governed by docs/ralph-workflow-policy/linting-policy.md and docs/ralph-workflow-policy/typechecking-policy.md
 [package]
 name = "unitas-core"
 version = "0.1.0"
 edition = "2021"
+
+[lints]
+workspace = true

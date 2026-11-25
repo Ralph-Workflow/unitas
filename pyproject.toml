@@ -1,9 +1,26 @@
+# Governed by docs/ralph-workflow-policy/linting-policy.md and docs/ralph-workflow-policy/typechecking-policy.md.
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["B", "C4", "E", "F", "I", "RUF", "SIM", "UP", "W"]
+select = ["ALL"]
+ignore = [
+    "COM812", # reason: conflicts with ruff format trailing-comma handling
+    "D100", # reason: clean-code-policy.md bans module docstrings in Python source
+    "D101", # reason: clean-code-policy.md bans class docstrings in Python source
+    "D102", # reason: clean-code-policy.md bans method docstrings in Python source
+    "D103", # reason: clean-code-policy.md bans function docstrings in Python source
+    "D104", # reason: clean-code-policy.md bans package docstrings in Python source
+    "D105", # reason: clean-code-policy.md bans magic-method docstrings in Python source
+    "D106", # reason: clean-code-policy.md bans nested-class docstrings in Python source
+    "D107", # reason: clean-code-policy.md bans __init__ docstrings in Python source
+    "D203", # reason: conflicts with D211 (no-blank-line-before-class)
+    "D213", # reason: conflicts with D212 (multi-line-summary-first-line)
+    "ISC001", # reason: conflicts with ruff format implicit string concatenation
+    "S101", # reason: pytest uses assert and make banned-constructs bans assert outside test modules
+    "S603", # reason: repository verification gates execute declared command argument lists via subprocess
+]
 
 [tool.mypy]
 strict = true
@@ -11,3 +28,4 @@ files = ["tools"]
 
 [tool.pytest.ini_options]
 testpaths = ["tools"]
+

@@ -29,10 +29,8 @@ const BUILTIN_MESH_GUID: &str = "0000000000000000e000000000000000";
 const BUILTIN_MATERIAL_GUID: &str = "0000000000000000f000000000000000";
 const PROJECT_MATERIAL_GUID: &str = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
 const PROJECT_DIR: &str = "tests/fixtures/project";
-const PREFAB_SCENE_FIXTURE: &str =
-    "tests/fixtures/prefab_project/Assets/Scenes/PrefabScene.unity";
-const PREFAB_CYCLE_FIXTURE: &str =
-    "tests/fixtures/prefab_project/Assets/Scenes/CycleScene.unity";
+const PREFAB_SCENE_FIXTURE: &str = "tests/fixtures/prefab_project/Assets/Scenes/PrefabScene.unity";
+const PREFAB_CYCLE_FIXTURE: &str = "tests/fixtures/prefab_project/Assets/Scenes/CycleScene.unity";
 const PREFAB_UNKNOWN_FIXTURE: &str =
     "tests/fixtures/prefab_project/Assets/Scenes/UnknownScene.unity";
 const PREFAB_UNITY_SCENE_FIXTURE: &str =
@@ -329,10 +327,7 @@ fn scene_local_rotation_is_applied() -> TestResult {
     let graph = assemble_scene(&stream)?;
     let rotated = entity_named(&graph, "Rotated")?;
     let transform = graph.transform(rotated).ok_or("entity has no transform")?;
-    assert_eq!(
-        transform.rotation,
-        [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]
-    );
+    assert_eq!(transform.rotation, [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]);
     Ok(())
 }
 
@@ -360,7 +355,9 @@ fn scene_missing_local_rotation_stays_at_the_identity() -> TestResult {
 
 #[test]
 fn scene_malformed_local_rotation_stays_at_the_identity() -> TestResult {
-    let stream = unity_yaml::parse(&scene_with_local_rotation(Some("{x: 0.5, y: -0.5, z: 0.25}")))?;
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some(
+        "{x: 0.5, y: -0.5, z: 0.25}",
+    )))?;
     let graph = assemble_scene(&stream)?;
     let rotated = entity_named(&graph, "Rotated")?;
     let transform = graph.transform(rotated).ok_or("entity has no transform")?;
@@ -370,7 +367,9 @@ fn scene_malformed_local_rotation_stays_at_the_identity() -> TestResult {
 
 #[test]
 fn scene_non_finite_local_rotation_stays_at_the_identity() -> TestResult {
-    let stream = unity_yaml::parse(&scene_with_local_rotation(Some("{x: inf, y: 0, z: 0, w: 1}")))?;
+    let stream = unity_yaml::parse(&scene_with_local_rotation(Some(
+        "{x: inf, y: 0, z: 0, w: 1}",
+    )))?;
     let graph = assemble_scene(&stream)?;
     let rotated = entity_named(&graph, "Rotated")?;
     let transform = graph.transform(rotated).ok_or("entity has no transform")?;
@@ -386,7 +385,10 @@ fn scene_depth_first_order_follows_the_hierarchy() -> TestResult {
     let child = entity_named(&graph, "Child")?;
     let grandchild = entity_named(&graph, "Grandchild")?;
     let sibling = entity_named(&graph, "Sibling")?;
-    assert_eq!(graph.depth_first_order(), vec![root, child, grandchild, sibling]);
+    assert_eq!(
+        graph.depth_first_order(),
+        vec![root, child, grandchild, sibling]
+    );
     Ok(())
 }
 
@@ -402,7 +404,10 @@ fn scene_missing_game_object_is_an_error() -> TestResult {
 fn scene_two_transforms_claiming_one_game_object_is_an_error() -> TestResult {
     let stream = unity_yaml::parse(DUPLICATE_TRANSFORM_OWNER)?;
     let result = assemble_scene(&stream);
-    assert!(matches!(result, Err(SceneError::DuplicateTransformOwner { .. })));
+    assert!(matches!(
+        result,
+        Err(SceneError::DuplicateTransformOwner { .. })
+    ));
     Ok(())
 }
 
@@ -452,7 +457,10 @@ fn prefab_source_reference_without_a_match_is_an_error() -> TestResult {
     let index = GuidIndex::default();
     let stream = unity_yaml::parse_file(Path::new(PREFAB_FIXTURE))?;
     let result = assemble_scene_with_guids(&stream, &index);
-    assert!(matches!(result, Err(SceneError::UnresolvedExternalReference { .. })));
+    assert!(matches!(
+        result,
+        Err(SceneError::UnresolvedExternalReference { .. })
+    ));
     Ok(())
 }
 
@@ -465,19 +473,31 @@ fn physics_components_bind_to_their_game_object_entity() -> TestResult {
     let defaults = entity_named(&graph, "Defaults")?;
     assert!(scripts.is_empty());
     assert_eq!(
-        bindings.iter().map(|binding| binding.entity).collect::<Vec<_>>(),
+        bindings
+            .iter()
+            .map(|binding| binding.entity)
+            .collect::<Vec<_>>(),
         vec![ball, crate_entity, defaults]
     );
     let ball_binding = &bindings[0];
-    let rigidbody = ball_binding.rigidbody.as_ref().ok_or("Ball has no rigidbody")?;
+    let rigidbody = ball_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("Ball has no rigidbody")?;
     assert_eq!(rigidbody.mass, 2.5);
     assert!(!rigidbody.use_gravity);
-    let sphere = ball_binding.sphere_collider.as_ref().ok_or("Ball has no sphere collider")?;
+    let sphere = ball_binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("Ball has no sphere collider")?;
     assert_eq!(sphere.radius, 0.75);
     assert_eq!(sphere.center, [0.0, 1.0, 0.0]);
     assert!(ball_binding.box_collider.is_none());
     let crate_binding = &bindings[1];
-    let box_collider = crate_binding.box_collider.as_ref().ok_or("Crate has no box collider")?;
+    let box_collider = crate_binding
+        .box_collider
+        .as_ref()
+        .ok_or("Crate has no box collider")?;
     assert_eq!(box_collider.size, [2.0, 3.0, 4.0]);
     assert_eq!(box_collider.center, [0.5, 0.0, -0.5]);
     assert!(crate_binding.rigidbody.is_none());
@@ -494,16 +514,25 @@ fn physics_defaults_apply_when_a_field_is_absent() -> TestResult {
         .iter()
         .find(|binding| binding.entity == defaults)
         .ok_or("no physics binding for Defaults")?;
-    let rigidbody = binding.rigidbody.as_ref().ok_or("Defaults has no rigidbody")?;
+    let rigidbody = binding
+        .rigidbody
+        .as_ref()
+        .ok_or("Defaults has no rigidbody")?;
     assert_eq!(rigidbody.mass, 1.0);
     assert!(rigidbody.use_gravity);
     assert!(!rigidbody.is_trigger);
     assert!(!rigidbody.is_kinematic);
-    let box_collider = binding.box_collider.as_ref().ok_or("Defaults has no box collider")?;
+    let box_collider = binding
+        .box_collider
+        .as_ref()
+        .ok_or("Defaults has no box collider")?;
     assert_eq!(box_collider.size, [1.0, 1.0, 1.0]);
     assert_eq!(box_collider.center, [0.0, 0.0, 0.0]);
     assert!(!box_collider.is_trigger);
-    let sphere = binding.sphere_collider.as_ref().ok_or("Defaults has no sphere collider")?;
+    let sphere = binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("Defaults has no sphere collider")?;
     assert_eq!(sphere.radius, 0.5);
     assert_eq!(sphere.center, [0.0, 0.0, 0.0]);
     assert!(!sphere.is_trigger);
@@ -641,7 +670,11 @@ fn physics_documents_do_not_change_the_plain_scene_assembly() -> TestResult {
     let graph = assemble_scene(&stream)?;
     assert_eq!(
         entity_names(&graph),
-        vec![String::from("Ball"), String::from("Crate"), String::from("Defaults")]
+        vec![
+            String::from("Ball"),
+            String::from("Crate"),
+            String::from("Defaults")
+        ]
     );
     Ok(())
 }
@@ -705,7 +738,9 @@ fn prefab_instance_is_expanded_into_the_scene_graph() -> TestResult {
 fn prefab_instance_applies_name_and_transform_modifications() -> TestResult {
     let graph = assemble_scene_file(Path::new(PREFAB_SCENE_FIXTURE))?;
     let guard = entity_named(&graph, "GuardTower")?;
-    let transform = graph.transform(guard).ok_or("prefab root has no transform")?;
+    let transform = graph
+        .transform(guard)
+        .ok_or("prefab root has no transform")?;
     assert_eq!(transform.translation, [5.0, 2.0, 0.0]);
     assert_eq!(transform.scale, [1.0, 1.0, 4.0]);
     Ok(())
@@ -724,14 +759,20 @@ fn prefab_instance_merges_script_and_physics_records() -> TestResult {
         .iter()
         .find(|binding| binding.entity == guard)
         .ok_or("no physics binding for GuardTower")?;
-    let rigidbody = guard_binding.rigidbody.as_ref().ok_or("GuardTower has no rigidbody")?;
+    let rigidbody = guard_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("GuardTower has no rigidbody")?;
     assert_eq!(rigidbody.mass, 3.5);
     assert!(!rigidbody.use_gravity);
     let barrel_binding = bindings
         .iter()
         .find(|binding| binding.entity == barrel)
         .ok_or("no physics binding for Barrel")?;
-    let collider = barrel_binding.box_collider.as_ref().ok_or("Barrel has no box collider")?;
+    let collider = barrel_binding
+        .box_collider
+        .as_ref()
+        .ok_or("Barrel has no box collider")?;
     assert_eq!(collider.size, [1.0, 2.0, 3.0]);
     assert_eq!(collider.center, [0.0, 0.5, 0.0]);
     Ok(())
@@ -740,14 +781,20 @@ fn prefab_instance_merges_script_and_physics_records() -> TestResult {
 #[test]
 fn cyclic_prefab_reference_is_an_error() -> TestResult {
     let result = assemble_scene_file(Path::new(PREFAB_CYCLE_FIXTURE));
-    assert!(matches!(result, Err(SceneError::CyclicPrefabReference { .. })));
+    assert!(matches!(
+        result,
+        Err(SceneError::CyclicPrefabReference { .. })
+    ));
     Ok(())
 }
 
 #[test]
 fn prefab_instance_with_an_unknown_source_is_an_error() -> TestResult {
     let result = assemble_scene_file(Path::new(PREFAB_UNKNOWN_FIXTURE));
-    assert!(matches!(result, Err(SceneError::UnresolvedExternalReference { .. })));
+    assert!(matches!(
+        result,
+        Err(SceneError::UnresolvedExternalReference { .. })
+    ));
     Ok(())
 }
 
@@ -781,7 +828,10 @@ fn unity_prefab_instance_root_is_assembled_once() -> TestResult {
 #[test]
 fn prefab_instance_without_a_source_is_an_error() -> TestResult {
     let result = assemble_scene_file(Path::new(PREFAB_NO_SOURCE_FIXTURE));
-    assert!(matches!(result, Err(SceneError::MissingPrefabSource { .. })));
+    assert!(matches!(
+        result,
+        Err(SceneError::MissingPrefabSource { .. })
+    ));
     Ok(())
 }
 
@@ -1265,7 +1315,8 @@ fn character_controller_invalid_values_fall_back_to_defaults() -> TestResult {
 }
 
 #[test]
-fn audio_source_parses_explicit_and_default_fields_and_ignores_audio_clip_documents() -> TestResult {
+fn audio_source_parses_explicit_and_default_fields_and_ignores_audio_clip_documents() -> TestResult
+{
     assert_eq!(AUDIO_SOURCE_CLASS, 82);
     assert_eq!(AUDIO_CLIP_CLASS, 83);
     let clip_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1275,7 +1326,10 @@ fn audio_source_parses_explicit_and_default_fields_and_ignores_audio_clip_docume
     ))?;
 
     let mut index = GuidIndex::default();
-    index.insert(clip_guid.to_string(), PathBuf::from("Assets/Audio/beep.wav"))?;
+    index.insert(
+        clip_guid.to_string(),
+        PathBuf::from("Assets/Audio/beep.wav"),
+    )?;
     index.insert(alt_guid.to_string(), PathBuf::from("Assets/Audio/alt.WAV"))?;
 
     let assembled: AssembledScene = assemble_scene_bundle_with_guids(&stream, &index)?;
@@ -1353,10 +1407,8 @@ fn audio_source_parses_explicit_and_default_fields_and_ignores_audio_clip_docume
 #[test]
 fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_unsupported_clips(
 ) -> TestResult {
-    let temp = std::env::temp_dir().join(format!(
-        "unitas_audio_clip_resolve_{}",
-        std::process::id()
-    ));
+    let temp =
+        std::env::temp_dir().join(format!("unitas_audio_clip_resolve_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp);
     let settings = temp.join("ProjectSettings");
     let assets = temp.join("Assets");
@@ -1499,7 +1551,11 @@ fn audio_source_missing_game_object_is_an_error_and_in_memory_bundle_reports_uni
 #[test]
 fn render_fixture_parses_camera_values() -> TestResult {
     let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
-    let camera = assembled.render.cameras.first().ok_or("missing camera component")?;
+    let camera = assembled
+        .render
+        .cameras
+        .first()
+        .ok_or("missing camera component")?;
     let name = assembled
         .graph
         .entity(camera.entity)
@@ -1520,7 +1576,11 @@ fn render_fixture_parses_camera_values() -> TestResult {
 #[test]
 fn render_fixture_parses_directional_light() -> TestResult {
     let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
-    let light = assembled.render.lights.first().ok_or("missing light component")?;
+    let light = assembled
+        .render
+        .lights
+        .first()
+        .ok_or("missing light component")?;
     let name = assembled
         .graph
         .entity(light.entity)
@@ -1551,7 +1611,10 @@ fn render_fixture_parses_mesh_renderer() -> TestResult {
         .ok_or("missing renderer entity")?;
     assert_eq!(name, "Cube");
     assert_eq!(renderer.mesh_guid.as_deref(), Some(BUILTIN_MESH_GUID));
-    assert_eq!(renderer.material_guid.as_deref(), Some(BUILTIN_MATERIAL_GUID));
+    assert_eq!(
+        renderer.material_guid.as_deref(),
+        Some(BUILTIN_MATERIAL_GUID)
+    );
     assert_eq!(renderer.mesh_path, None);
     assert_eq!(renderer.material_path, None);
     assert_eq!(renderer.mesh_diagnostic, None);
@@ -1575,12 +1638,18 @@ fn unsupported_lights_produce_diagnostics() -> TestResult {
         .unsupported_diagnostic
         .as_deref()
         .ok_or("missing point light diagnostic")?;
-    assert!(point_message.contains("point light on entity 0"), "{point_message}");
+    assert!(
+        point_message.contains("point light on entity 0"),
+        "{point_message}"
+    );
     let spot_message = spot
         .unsupported_diagnostic
         .as_deref()
         .ok_or("missing spot light diagnostic")?;
-    assert!(spot_message.contains("spot light on entity 1"), "{spot_message}");
+    assert!(
+        spot_message.contains("spot light on entity 1"),
+        "{spot_message}"
+    );
     assert!(assembled
         .diagnostics
         .iter()
@@ -1636,8 +1705,7 @@ fn render_binding_exposes_camera_renderer_and_light_components() -> TestResult {
     let assembled = assemble_scene_file_bundle(Path::new(RENDER_FIXTURE))?;
     let binding: &RenderBinding = &assembled.render;
     let camera: &CameraComponent = binding.cameras.first().ok_or("missing camera")?;
-    let renderer: &MeshRendererComponent =
-        binding.renderers.first().ok_or("missing renderer")?;
+    let renderer: &MeshRendererComponent = binding.renderers.first().ok_or("missing renderer")?;
     let light: &LightComponent = binding.lights.first().ok_or("missing light")?;
     assert_eq!(binding.cameras.len(), 1);
     assert_eq!(binding.renderers.len(), 1);
@@ -1670,7 +1738,10 @@ fn renderer_material_color_comes_from_the_project_material() -> TestResult {
         .renderers
         .first()
         .ok_or("missing renderer component")?;
-    assert_eq!(renderer.material_guid.as_deref(), Some(PROJECT_MATERIAL_GUID));
+    assert_eq!(
+        renderer.material_guid.as_deref(),
+        Some(PROJECT_MATERIAL_GUID)
+    );
     assert!(!renderer.enabled);
     let path = renderer
         .material_path

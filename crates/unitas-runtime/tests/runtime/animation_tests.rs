@@ -696,7 +696,10 @@ fn run_scenario() -> Result<Vec<Observation>, Box<dyn Error>> {
 fn animator_abi_scenario_is_repeatable() -> Result<(), Box<dyn Error>> {
     let first = run_scenario()?;
     let second = run_scenario()?;
-    assert_eq!(first, second, "identical inputs must produce identical outputs");
+    assert_eq!(
+        first, second,
+        "identical inputs must produce identical outputs"
+    );
     assert!(
         first.iter().any(|observation| observation.0 == 1),
         "the trigger must move the animator into the Run state: {first:?}"
@@ -975,10 +978,7 @@ fn hook_position_clip() -> AnimationClip {
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::new("", "Transform", "localPosition.x"),
-            FloatCurve::new(vec![
-                Keyframe::linear(0.0, 0.0),
-                Keyframe::linear(1.0, 1.0),
-            ]),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)]),
         )],
         Vec::new(),
     )
@@ -988,7 +988,10 @@ fn hook_controller() -> AnimatorController {
     AnimatorController::new(
         "Hook",
         Vec::new(),
-        vec![AnimatorState::new("Move", StateMotion::Clip(hook_position_clip()))],
+        vec![AnimatorState::new(
+            "Move",
+            StateMotion::Clip(hook_position_clip()),
+        )],
         0,
         Vec::new(),
     )
@@ -1026,7 +1029,9 @@ fn animation_ik_hook_alters_the_pose_after_the_layer_pose_is_evaluated(
     world.tick_with_hooks(0.5, &mut hooks);
 
     assert_eq!(state.borrow().ik_layers, vec![0]);
-    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    let transform = world
+        .transform(entity)
+        .ok_or("missing animator transform")?;
     assert_eq!(transform.translation, [1.0, 2.0, 3.0]);
     assert!(hooks.detach(entity));
     assert!(!hooks.is_attached(entity));
@@ -1054,7 +1059,9 @@ fn animation_move_hook_receives_root_motion_and_suppresses_the_automatic_applica
     assert_eq!(moves.len(), 1);
     assert_eq!(moves[0].delta_position, [0.5, 0.0, 0.0]);
     assert_eq!(moves[0].delta_rotation, [0.0, 0.0, 0.0, 1.0]);
-    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    let transform = world
+        .transform(entity)
+        .ok_or("missing animator transform")?;
     assert_eq!(transform.translation, [0.0, 0.0, 0.0]);
     Ok(())
 }
@@ -1066,7 +1073,9 @@ fn animation_without_a_move_hook_applies_root_motion_automatically() -> Result<(
 
     world.tick_with_hooks(0.5, &mut hooks);
 
-    let transform = world.transform(entity).ok_or("missing animator transform")?;
+    let transform = world
+        .transform(entity)
+        .ok_or("missing animator transform")?;
     assert_eq!(transform.translation, [0.5, 0.0, 0.0]);
     Ok(())
 }

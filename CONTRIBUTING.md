@@ -4,7 +4,16 @@ Thank you for helping build unitas. Before you open a pull request:
 
 1. Read `AGENTS.md` and the policy files it points to under
    `docs/ralph-workflow-policy/`.
-2. Run `make verify` and make sure every gate passes.
+2. Run `make verify` and make sure every gate passes. You need a Rust toolchain
+   with `cargo`, `clippy`, and `rustfmt`, the .NET 8 SDK (in `~/.dotnet`), and
+   Python 3.11 or later with `ruff`, `mypy`, `pytest`, and `detect-secrets`.
+   `make verify` runs the policy self-check (`policy-validate`), the bypass
+   audit (`bypass-audit`), the ban-catalog gate (`banned-constructs`), the
+   comment audit (`comment-audit`), the dependency gate (`deps`), the secret
+   scan (`secret-scan`), the linting and format checks (`ruff check`,
+   `ruff format --check`, `cargo fmt --check`, `cargo clippy`,
+   `dotnet-format`), the type checks (`mypy`, `cargo check`, `dotnet-build`),
+   and the test suites (`pytest`, `cargo test`, `dotnet-test`).
 3. Keep pull requests small and focused, with tests for every behavior change.
 
 ## Independent implementation

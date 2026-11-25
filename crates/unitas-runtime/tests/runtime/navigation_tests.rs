@@ -4,7 +4,6 @@ use unitas_runtime::navigation::{NavigationRuntimeError, NavigationRuntimeWorld}
 
 const TOLERANCE: f64 = 1e-6;
 
-/// Two triangles covering one square cell of the floor.
 fn cell(origin: [f64; 3], size: f64, area: u32) -> Vec<NavMeshTriangle> {
     let (x, y, z) = (origin[0], origin[1], origin[2]);
     vec![
@@ -16,7 +15,6 @@ fn cell(origin: [f64; 3], size: f64, area: u32) -> Vec<NavMeshTriangle> {
     ]
 }
 
-/// A row of cells along the x axis.
 fn row(origin: [f64; 3], cells: usize, size: f64, area: u32) -> Vec<NavMeshTriangle> {
     let mut triangles = Vec::new();
     for index in 0..cells {

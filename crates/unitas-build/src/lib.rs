@@ -19,9 +19,7 @@ pub use player::{
     BUILD_REPORT_FILENAME, DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
 };
 #[cfg(feature = "device")]
-pub use player::{
-    capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,
-};
+pub use player::{capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification};
 pub use report::{
     BuildDiagnostic, BuildOutcome, BuildReport, ReportParseError, SizeCategoryEntry,
     SizeContributor,

@@ -218,7 +218,7 @@ namespace UnityEngine
 
         public bool Equals(Vector4 other) => x == other.x && y == other.y && z == other.z && w == other.w;
 
-        public override bool Equals(object? other) => other is Vector4 v && Equals(v);
+        public override bool Equals(object? obj) => obj is Vector4 v && Equals(v);
 
         public override int GetHashCode() => HashCode.Combine(x, y, z, w);
 

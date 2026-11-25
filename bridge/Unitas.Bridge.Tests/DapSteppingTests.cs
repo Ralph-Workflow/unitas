@@ -34,7 +34,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 Check.That("dap stepping: initialize succeeds", ReadBool(client.Request("initialize")["success"]));
                 JsonObject launchResponse = client.Request("launch");
                 Check.That("dap stepping: launch succeeds", ReadBool(launchResponse["success"]));
@@ -60,7 +60,7 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("dap stepping: unbound breakpoint line matches", 99, ReadInt(breakpoints[1]?["line"]));
                 Check.That(
                     "dap stepping: unbound breakpoint explains missing sequence point",
-                    ReadString(breakpoints[1]?["message"]).Contains("No executable sequence point at line 99."));
+                    ReadString(breakpoints[1]?["message"]).Contains("No executable sequence point at line 99.", StringComparison.Ordinal));
             }
             finally
             {
@@ -82,7 +82,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 client.Request("initialize");
                 client.Request("launch");
                 client.Request("setBreakpoints", new JsonObject
@@ -141,7 +141,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 client.Request("initialize");
                 client.Request("attach");
                 Check.That("dap stepping: pause request succeeds", ReadBool(client.Request("pause")["success"]));
@@ -169,7 +169,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 client.Request("initialize");
                 client.Request("launch");
                 client.Request("setBreakpoints", new JsonObject
@@ -201,7 +201,7 @@ namespace Unitas.Bridge.Tests
                 Check.That("dap stepping: evaluate assignment is rejected", !ReadBool(evalMutation["success"]));
                 Check.That(
                     "dap stepping: evaluate assignment rejection explains read-only policy",
-                    ReadString(evalMutation["message"]).Contains("Side-effecting"));
+                    ReadString(evalMutation["message"]).Contains("Side-effecting", StringComparison.Ordinal));
 
                 client.Request("continue");
                 Check.That("dap stepping: evaluate worker resumes", worker.Wait(TimeSpan.FromSeconds(5)));
@@ -224,7 +224,7 @@ namespace Unitas.Bridge.Tests
             }
             catch (InvalidOperationException exception)
             {
-                anyRejected = exception.Message.Contains("loopback");
+                anyRejected = exception.Message.Contains("loopback", StringComparison.Ordinal);
             }
             Check.That("dap stepping: IPAddress.Any is rejected by loopback guard", anyRejected);
 
@@ -235,7 +235,7 @@ namespace Unitas.Bridge.Tests
             }
             catch (InvalidOperationException exception)
             {
-                externalRejected = exception.Message.Contains("loopback");
+                externalRejected = exception.Message.Contains("loopback", StringComparison.Ordinal);
             }
             Check.That("dap stepping: external IPv4 address is rejected by loopback guard", externalRejected);
 
@@ -372,7 +372,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private sealed class DapClient
+        private sealed class DapClient : IDisposable
         {
             private readonly Stream _stream;
             private readonly BlockingCollection<JsonObject> _messages = new BlockingCollection<JsonObject>();
@@ -382,6 +382,12 @@ namespace Unitas.Bridge.Tests
             {
                 _stream = stream;
                 _ = Task.Run(ReadLoopAsync);
+            }
+
+            public void Dispose()
+            {
+                _messages.Dispose();
+                _stream.Dispose();
             }
 
             public JsonObject Request(string command, JsonObject? arguments = null)

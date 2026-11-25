@@ -705,8 +705,8 @@ namespace Unitas.Scripting
                 return false;
             }
 
-            return ulong.TryParse(trimmed.Substring(0, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hi)
-                && ulong.TryParse(trimmed.Substring(16, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out lo);
+            return ulong.TryParse(trimmed.AsSpan(0, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hi)
+                && ulong.TryParse(trimmed.AsSpan(16, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out lo);
         }
 
         private static bool IsMetaStructuralKey(string key)
@@ -784,7 +784,7 @@ namespace Unitas.Scripting
         {
             key = string.Empty;
             val = string.Empty;
-            int colon = line.IndexOf(':');
+            int colon = line.IndexOf(':', StringComparison.Ordinal);
             if (colon < 0)
             {
                 return false;

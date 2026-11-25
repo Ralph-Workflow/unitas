@@ -62,14 +62,24 @@ fn build_fixture(root: &Path) -> std::io::Result<()> {
     write_file(&root.join("Assets/Materials/Brick.mat"), MATERIAL)?;
     write_file(
         &root.join("Assets/Materials/Brick.mat.meta"),
-        &meta_with_labels(MATERIAL_GUID, "NativeFormatImporter:", &["architecture", "masonry"]),
+        &meta_with_labels(
+            MATERIAL_GUID,
+            "NativeFormatImporter:",
+            &["architecture", "masonry"],
+        ),
     )?;
-    write_file(&root.join("Assets/Materials/StoneBrick.mat"), STONE_MATERIAL)?;
+    write_file(
+        &root.join("Assets/Materials/StoneBrick.mat"),
+        STONE_MATERIAL,
+    )?;
     write_file(
         &root.join("Assets/Materials/StoneBrick.mat.meta"),
         &meta_with_labels(STONE_MATERIAL_GUID, "NativeFormatImporter:", &["nature"]),
     )?;
-    write_file(&root.join("Assets/Textures/BrickSheet.png"), "not a real png")?;
+    write_file(
+        &root.join("Assets/Textures/BrickSheet.png"),
+        "not a real png",
+    )?;
     write_file(
         &root.join("Assets/Textures/BrickSheet.png.meta"),
         &texture_meta(TEXTURE_GUID),
@@ -122,14 +132,23 @@ fn move_preserves_guid_and_reference() -> TestResult {
     )?;
 
     assert!(!project_root.join("Assets/Materials/Brick.mat").exists());
-    assert!(!project_root.join("Assets/Materials/Brick.mat.meta").exists());
-    assert!(project_root.join("Assets/Moved/Walls/BrickWall.mat").is_file());
-    assert!(project_root.join("Assets/Moved/Walls/BrickWall.mat.meta").is_file());
+    assert!(!project_root
+        .join("Assets/Materials/Brick.mat.meta")
+        .exists());
+    assert!(project_root
+        .join("Assets/Moved/Walls/BrickWall.mat")
+        .is_file());
+    assert!(project_root
+        .join("Assets/Moved/Walls/BrickWall.mat.meta")
+        .is_file());
 
     match project.inventory().lookup(&ref_guid) {
         GuidLookup::Asset(entry) => {
             assert_eq!(entry.guid, MATERIAL_GUID);
-            assert_eq!(entry.path, PathBuf::from("Assets/Moved/Walls/BrickWall.mat"));
+            assert_eq!(
+                entry.path,
+                PathBuf::from("Assets/Moved/Walls/BrickWall.mat")
+            );
         }
         other => return Err(format!("expected moved asset, got {other:?}").into()),
     }
@@ -162,7 +181,9 @@ fn delete_exposes_missing_reference() -> TestResult {
     project.delete_asset(Path::new("Assets/Materials/Brick.mat"))?;
 
     assert!(!project_root.join("Assets/Materials/Brick.mat").exists());
-    assert!(!project_root.join("Assets/Materials/Brick.mat.meta").exists());
+    assert!(!project_root
+        .join("Assets/Materials/Brick.mat.meta")
+        .exists());
     assert!(project_root
         .join(".unitas/trash/Assets/Materials/Brick.mat")
         .is_file());
@@ -173,7 +194,10 @@ fn delete_exposes_missing_reference() -> TestResult {
     assert_eq!(project.inventory().lookup(&ref_guid), GuidLookup::Missing);
 
     let (_, reopened_report) = Project::open(&project_root, &store)?;
-    assert_eq!(reopened_report.inventory.lookup(&ref_guid), GuidLookup::Missing);
+    assert_eq!(
+        reopened_report.inventory.lookup(&ref_guid),
+        GuidLookup::Missing
+    );
 
     fs::remove_dir_all(&root)?;
     Ok(())
@@ -195,7 +219,9 @@ fn restore_re_resolves_reference() -> TestResult {
     project.restore_asset(Path::new("Assets/Materials/Brick.mat"))?;
 
     assert!(project_root.join("Assets/Materials/Brick.mat").is_file());
-    assert!(project_root.join("Assets/Materials/Brick.mat.meta").is_file());
+    assert!(project_root
+        .join("Assets/Materials/Brick.mat.meta")
+        .is_file());
     assert!(!project_root
         .join(".unitas/trash/Assets/Materials/Brick.mat")
         .exists());
@@ -238,7 +264,9 @@ fn search_combines_filters_and_distinguishes_sub_assets() -> TestResult {
         include_sub_assets: false,
     });
     assert_eq!(all_brick_main.len(), 3);
-    assert!(all_brick_main.iter().all(|entry| entry.kind == AssetKind::Main));
+    assert!(all_brick_main
+        .iter()
+        .all(|entry| entry.kind == AssetKind::Main));
 
     let all_brick_with_subs = project.search_assets(&AssetFilter {
         name_contains: Some("Brick".to_string()),

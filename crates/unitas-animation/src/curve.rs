@@ -258,7 +258,9 @@ impl PropertyCurve {
                 cs[1].evaluate(time),
                 cs[2].evaluate(time),
             ]),
-            Self::Quaternion(cs) => AnimatedValue::Quaternion(evaluate_quaternion_channels(cs, time)),
+            Self::Quaternion(cs) => {
+                AnimatedValue::Quaternion(evaluate_quaternion_channels(cs, time))
+            }
             Self::Color(cs) => AnimatedValue::Color([
                 cs[0].evaluate(time),
                 cs[1].evaluate(time),
@@ -272,11 +274,7 @@ impl PropertyCurve {
 fn evaluate_quaternion_channels(channels: &[FloatCurve; 4], time: f32) -> [f32; 4] {
     let mut aligned = channels.clone();
     let count = aligned[0].keys.len();
-    if count >= 2
-        && aligned
-            .iter()
-            .all(|c| c.keys.len() == count)
-    {
+    if count >= 2 && aligned.iter().all(|c| c.keys.len() == count) {
         for i in 1..count {
             let dot = aligned[0].keys[i - 1].value * aligned[0].keys[i].value
                 + aligned[1].keys[i - 1].value * aligned[1].keys[i].value

@@ -4,19 +4,12 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>9.0</LangVersion>
-    <Nullable>enable</Nullable>
     <AssemblyName>Unitas.Testing</AssemblyName>
     <RootNamespace>Unitas.Testing</RootNamespace>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Shim/**" />
-    <Compile Remove="Fixtures/**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="Shim/Unitas.Testing.NUnit.csproj" />
+    <ProjectReference Include="../Unitas.Testing.NUnit/Unitas.Testing.NUnit.csproj" />
     <ProjectReference Include="../UnityEngine/UnityEngine.csproj" />
     <ProjectReference Include="../Unitas.Bridge/Unitas.Bridge.csproj" />
     <ProjectReference Include="../Unitas.Scripting/Unitas.Scripting.csproj" />

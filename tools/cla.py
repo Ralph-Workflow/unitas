@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
-from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCUMENT_NAME = "CLA.md"
@@ -34,12 +35,16 @@ COAUTHOR_PATTERN = re.compile(
     r"^\s*co-authored-by:\s*(?P<name>.*?)\s*<(?P<email>[^<>\s]+)>\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-API_ROOT = "https://api.github.com"
+API_HOST = "api.github.com"
 API_TIMEOUT_SECONDS = 30
 COMMITS_PER_PAGE = 100
 MAX_LISTED_COMMITS = 250
 WRITE_ATTEMPTS = 3
 STATUS_DESCRIPTION_LIMIT = 140
+HTTP_REDIRECT_THRESHOLD = 300
+HTTP_NOT_FOUND = 404
+HTTP_CONFLICT = 409
+COMMENTS_PER_PAGE = 100
 
 JsonObject = dict[str, object]
 
@@ -50,7 +55,8 @@ class ClaError(Exception):
 
 def as_object(value: object, where: str) -> JsonObject:
     if not isinstance(value, dict):
-        raise ClaError(f"expected a JSON object at {where}")
+        message = f"expected a JSON object at {where}"
+        raise ClaError(message)
     return {str(key): item for key, item in value.items()}
 
 
@@ -62,19 +68,22 @@ def as_optional_object(value: object, where: str) -> JsonObject | None:
 
 def as_list(value: object, where: str) -> list[object]:
     if not isinstance(value, list):
-        raise ClaError(f"expected a JSON array at {where}")
+        message = f"expected a JSON array at {where}"
+        raise ClaError(message)
     return list(value)
 
 
 def as_text(value: object, where: str) -> str:
     if not isinstance(value, str):
-        raise ClaError(f"expected a string at {where}")
+        message = f"expected a string at {where}"
+        raise ClaError(message)
     return value
 
 
 def as_int(value: object, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ClaError(f"expected an integer at {where}")
+        message = f"expected an integer at {where}"
+        raise ClaError(message)
     return value
 
 
@@ -287,7 +296,8 @@ def record_signature(api: GitHub, signature: Signature) -> bool:
         message = f"Record CLA signature of @{signature.login} from #{signature.pull_request}"
         if api.write_signatures([*signatures, signature], sha, message):
             return True
-    raise ClaError(f"could not record the signature of {signature.login}: the store kept changing")
+    failure = f"could not record the signature of {signature.login}: the store kept changing"
+    raise ClaError(failure)
 
 
 def status_description(verdict: Verdict) -> str:
@@ -390,7 +400,8 @@ def target_pull_request(event_name: str, event: JsonObject) -> tuple[int, JsonOb
         pull = as_object(event.get("pull_request"), "event.pull_request")
         return as_int(pull.get("number"), "event.pull_request.number"), None
     if event_name != "issue_comment":
-        raise ClaError(f"unsupported event {event_name}")
+        message = f"unsupported event {event_name}"
+        raise ClaError(message)
     issue = as_object(event.get("issue"), "event.issue")
     if issue.get("pull_request") is None:
         return None
@@ -415,10 +426,11 @@ def handle(
     pull = api.pull(number)
     commits = api.commits(number)
     if as_int(pull.get("commits"), "pull.commits") > len(commits):
-        raise ClaError(
+        message = (
             f"pull request #{number} has more commits than the API lists "
             f"({MAX_LISTED_COMMITS}); split it into smaller pull requests"
         )
+        raise ClaError(message)
     requirement = required_signers(pull, commits, api.user_id)
     if comment is not None:
         signature = signature_from_comment(comment, requirement, number, document, now)
@@ -444,28 +456,26 @@ class RestGitHub:
 
     def call(self, method: str, path: str, payload: JsonObject | None = None) -> tuple[int, object]:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            API_ROOT + path,
-            data=data,
-            method=method,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-                "User-Agent": "unitas-cla-check",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "User-Agent": "unitas-cla-check",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        connection = http.client.HTTPSConnection(API_HOST, timeout=API_TIMEOUT_SECONDS)
         try:
-            with urllib.request.urlopen(request, timeout=API_TIMEOUT_SECONDS) as response:
-                return response.status, decode_body(response.read())
-        except urllib.error.HTTPError as error:
-            return error.code, decode_body(error.read())
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+            return response.status, decode_body(response.read())
+        finally:
+            connection.close()
 
     def expect(self, method: str, path: str, payload: JsonObject | None = None) -> object:
         status, body = self.call(method, path, payload)
-        if status >= 300:
-            raise ClaError(f"{method} {path} failed with HTTP {status}: {body}")
+        if status >= HTTP_REDIRECT_THRESHOLD:
+            message = f"{method} {path} failed with HTTP {status}: {body}"
+            raise ClaError(message)
         return body
 
     def repo_path(self, suffix: str) -> str:
@@ -489,19 +499,21 @@ class RestGitHub:
 
     def user_id(self, login: str) -> int | None:
         status, body = self.call("GET", f"/users/{urllib.parse.quote(login)}")
-        if status == 404:
+        if status == HTTP_NOT_FOUND:
             return None
-        if status >= 300:
-            raise ClaError(f"looking up user {login} failed with HTTP {status}: {body}")
+        if status >= HTTP_REDIRECT_THRESHOLD:
+            message = f"looking up user {login} failed with HTTP {status}: {body}"
+            raise ClaError(message)
         return as_int(as_object(body, "user").get("id"), "user.id")
 
     def signatures(self) -> tuple[list[Signature], str | None]:
         query = f"?ref={SIGNATURES_BRANCH}"
         status, body = self.call("GET", self.repo_path(f"/contents/{SIGNATURES_PATH}{query}"))
-        if status == 404:
+        if status == HTTP_NOT_FOUND:
             return [], None
-        if status >= 300:
-            raise ClaError(f"reading {SIGNATURES_PATH} failed with HTTP {status}: {body}")
+        if status >= HTTP_REDIRECT_THRESHOLD:
+            message = f"reading {SIGNATURES_PATH} failed with HTTP {status}: {body}"
+            raise ClaError(message)
         content = as_object(body, "contents")
         raw = base64.b64decode(as_text(content.get("content"), "contents.content"))
         return parse_signatures(raw), as_text(content.get("sha"), "contents.sha")
@@ -515,13 +527,14 @@ class RestGitHub:
         if sha is not None:
             payload["sha"] = sha
         status, body = self.call("PUT", self.repo_path(f"/contents/{SIGNATURES_PATH}"), payload)
-        if status == 409:
+        if status == HTTP_CONFLICT:
             return False
-        if status >= 300:
-            raise ClaError(
+        if status >= HTTP_REDIRECT_THRESHOLD:
+            failure = (
                 f"writing {SIGNATURES_PATH} to branch {SIGNATURES_BRANCH} failed "
                 f"with HTTP {status}: {body}"
             )
+            raise ClaError(failure)
         return True
 
     def set_status(self, sha: str, state: str, description: str, target_url: str) -> None:
@@ -537,11 +550,11 @@ class RestGitHub:
         listed: list[JsonObject] = []
         page = 1
         while True:
-            query = f"?per_page=100&page={page}"
+            query = f"?per_page={COMMENTS_PER_PAGE}&page={page}"
             body = self.expect("GET", self.repo_path(f"/issues/{number}/comments{query}"))
             batch = [as_object(item, "comment") for item in as_list(body, "comments")]
             listed.extend(batch)
-            if len(batch) < 100:
+            if len(batch) < COMMENTS_PER_PAGE:
                 return listed
             page += 1
 
@@ -562,7 +575,8 @@ def decode_body(raw: bytes) -> object:
 def required_setting(name: str) -> str:
     value = os.getenv(name)
     if not value:
-        raise ClaError(f"environment variable {name} is not set")
+        message = f"environment variable {name} is not set"
+        raise ClaError(message)
     return value
 
 

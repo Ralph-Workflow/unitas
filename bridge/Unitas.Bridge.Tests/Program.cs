@@ -997,12 +997,12 @@ namespace Unitas.Bridge.Tests
                     Check.Equal("GetAudioTime is unchanged while application is paused", timeAfterZeroScaleTick, timeWhileAppPaused);
                     host.SetPaused(false);
 
-                    AudioClip? createdNativeClip = AudioClip.Create("GeneratedTone", 200, 1, 1000);
-                    Check.That("AudioClip.Create with active provider registers non-zero NativeClipId", createdNativeClip != null && createdNativeClip.NativeClipId != 0UL);
+                    AudioClip createdNativeClip = AudioClip.Create("GeneratedTone", 200, 1, 1000);
+                    Check.That("AudioClip.Create with active provider registers non-zero NativeClipId", createdNativeClip.NativeClipId != 0UL);
                     AudioClip? loadedFileClip = AudioClip.LoadFromFile(wavPath);
                     Check.That("AudioClip.LoadFromFile loads WAV clip with non-zero NativeClipId", loadedFileClip != null && loadedFileClip.NativeClipId != 0UL);
                     Check.Equal("AudioClip.LoadFromFile duration is 0.5s", 0.5f, loadedFileClip!.length);
-                    UnityEngine.Object.Destroy(createdNativeClip!);
+                    UnityEngine.Object.Destroy(createdNativeClip);
                     UnityEngine.Object.Destroy(loadedFileClip);
 
                     host.Tick(0.5);
@@ -1062,7 +1062,7 @@ namespace Unitas.Bridge.Tests
 
                 Check.Equal("Animator default speed", 1f, animator.speed);
                 Check.That("Animator has no controller by default", animator.runtimeAnimatorController == null);
-                Check.That("Animator state info is empty without a provider", animator.GetCurrentAnimatorStateInfo().name == string.Empty);
+                Check.That("Animator state info is empty without a provider", string.IsNullOrEmpty(animator.GetCurrentAnimatorStateInfo().name));
 
                 animator.SetFloat("Speed", 1f);
                 animator.SetInteger("Count", 2);

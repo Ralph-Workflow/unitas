@@ -103,12 +103,8 @@ pub fn content_hash_hex(bytes: &[u8]) -> String {
     for chunk in padded.chunks_exact(64) {
         let mut schedule = [0u32; 64];
         for (word_index, word_bytes) in chunk.chunks_exact(4).enumerate() {
-            schedule[word_index] = u32::from_be_bytes([
-                word_bytes[0],
-                word_bytes[1],
-                word_bytes[2],
-                word_bytes[3],
-            ]);
+            schedule[word_index] =
+                u32::from_be_bytes([word_bytes[0], word_bytes[1], word_bytes[2], word_bytes[3]]);
         }
         for index in 16..64 {
             let s0 = schedule[index - 15].rotate_right(7)
@@ -271,14 +267,15 @@ impl BundleManifest {
             if trimmed.is_empty() {
                 continue;
             }
-            let (key, value) = trimmed
-                .split_once('=')
-                .ok_or_else(|| BundleError::ManifestParse {
-                    message: format!(
-                        "line {} is missing '=' separator: '{trimmed}'",
-                        line_number + 1
-                    ),
-                })?;
+            let (key, value) =
+                trimmed
+                    .split_once('=')
+                    .ok_or_else(|| BundleError::ManifestParse {
+                        message: format!(
+                            "line {} is missing '=' separator: '{trimmed}'",
+                            line_number + 1
+                        ),
+                    })?;
             map.insert(key.to_string(), value.to_string());
         }
 
@@ -402,16 +399,18 @@ fn required_field(map: &BTreeMap<String, String>, key: &str) -> Result<String, B
 
 fn parse_u32_field(map: &BTreeMap<String, String>, key: &str) -> Result<u32, BundleError> {
     let raw = required_field(map, key)?;
-    raw.parse::<u32>().map_err(|error| BundleError::ManifestParse {
-        message: format!("invalid u32 value for '{key}' ('{raw}'): {error}"),
-    })
+    raw.parse::<u32>()
+        .map_err(|error| BundleError::ManifestParse {
+            message: format!("invalid u32 value for '{key}' ('{raw}'): {error}"),
+        })
 }
 
 fn parse_u64_field(map: &BTreeMap<String, String>, key: &str) -> Result<u64, BundleError> {
     let raw = required_field(map, key)?;
-    raw.parse::<u64>().map_err(|error| BundleError::ManifestParse {
-        message: format!("invalid u64 value for '{key}' ('{raw}'): {error}"),
-    })
+    raw.parse::<u64>()
+        .map_err(|error| BundleError::ManifestParse {
+            message: format!("invalid u64 value for '{key}' ('{raw}'): {error}"),
+        })
 }
 
 fn parse_usize_field(map: &BTreeMap<String, String>, key: &str) -> Result<usize, BundleError> {
@@ -517,11 +516,12 @@ pub fn stage_bundle_for_host(
                 path: scene_path.clone(),
             });
         }
-        let scene_graph =
-            unitas_asset::assemble_scene_file(scene_path).map_err(|error| BundleError::SceneAssembly {
+        let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+            BundleError::SceneAssembly {
                 path: scene_path.clone(),
                 message: error.to_string(),
-            })?;
+            }
+        })?;
         let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
             path: scene_path.clone(),
             message: error.to_string(),
@@ -771,7 +771,11 @@ impl ContentCatalog {
         content_hash_hex(self.canonical_body_without_hash().as_bytes())
     }
 
-    pub fn is_compatible_with_player(&self, player_version: &str, player_target: BuildTarget) -> bool {
+    pub fn is_compatible_with_player(
+        &self,
+        player_version: &str,
+        player_target: BuildTarget,
+    ) -> bool {
         if self.target != player_target {
             return false;
         }
@@ -828,14 +832,15 @@ impl ContentCatalog {
             if trimmed.is_empty() {
                 continue;
             }
-            let (key, value) = trimmed
-                .split_once('=')
-                .ok_or_else(|| BundleError::ManifestParse {
-                    message: format!(
-                        "line {} is missing '=' separator: '{trimmed}'",
-                        line_number + 1
-                    ),
-                })?;
+            let (key, value) =
+                trimmed
+                    .split_once('=')
+                    .ok_or_else(|| BundleError::ManifestParse {
+                        message: format!(
+                            "line {} is missing '=' separator: '{trimmed}'",
+                            line_number + 1
+                        ),
+                    })?;
             map.insert(key.to_string(), value.to_string());
         }
 
@@ -847,8 +852,7 @@ impl ContentCatalog {
         }
 
         let unitas_version = required_field(&map, "unitas_version")?;
-        let player_compatibility_version =
-            required_field(&map, "player_compatibility_version")?;
+        let player_compatibility_version = required_field(&map, "player_compatibility_version")?;
         let target_os = required_field(&map, "target_os")?;
         let target_arch = required_field(&map, "target_arch")?;
         let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {

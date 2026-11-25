@@ -17,7 +17,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 
-const SHADER_SOURCE: &str = r#"
+const SHADER_SOURCE: &str = r"
 struct Globals {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
@@ -64,7 +64,7 @@ fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
 fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vs_out.color, 1.0);
 }
-"#;
+";
 
 const ATTRIBUTES: [wgpu::VertexAttribute; 2] = [
     wgpu::VertexAttribute {
@@ -412,8 +412,8 @@ impl Renderer {
             view_formats: &[],
         });
         let depth_texture = self.create_depth_texture(width, height);
-        let color_view = color_texture.create_view(&Default::default());
-        let depth_view = depth_texture.create_view(&Default::default());
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self
             .device
@@ -580,8 +580,12 @@ impl Renderer {
         }
         let mut camera = *camera;
         camera.aspect = size.0 as f32 / size.1 as f32;
-        let color_view = surface_texture.texture.create_view(&Default::default());
-        let depth_view = surface_state.depth.create_view(&Default::default());
+        let color_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = surface_state
+            .depth
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

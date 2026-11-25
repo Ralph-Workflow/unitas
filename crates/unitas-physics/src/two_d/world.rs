@@ -16,9 +16,7 @@ use crate::two_d::composite::{
     CompositeCollider2D, CompositeGenerationType2D, TileColliderType2D, TilemapCollider2D,
 };
 use crate::two_d::effector::{Effector2D, PlatformEffector2D, SurfaceEffector2D};
-use crate::two_d::event::{
-    route_pair_messages_2d, ContactPoint2D, Endpoint2D, RoutedMessage2D,
-};
+use crate::two_d::event::{route_pair_messages_2d, ContactPoint2D, Endpoint2D, RoutedMessage2D};
 
 const DEFAULT_GRAVITY_2D: [f32; 2] = [0.0, -9.81];
 const DEFAULT_FIXED_TIMESTEP_2D: f32 = 0.02;
@@ -326,10 +324,8 @@ impl World2D {
             self.composites.remove(&id);
             self.tilemaps.remove(&id);
             self.effectors.remove(&id);
-            self.ignored_pairs
-                .retain(|(a, b)| *a != id && *b != id);
-            self.touching_pairs
-                .retain(|(a, b), _| *a != id && *b != id);
+            self.ignored_pairs.retain(|(a, b)| *a != id && *b != id);
+            self.touching_pairs.retain(|(a, b), _| *a != id && *b != id);
             self.pass_through_pairs
                 .retain(|(a, b)| *a != id && *b != id);
             if col.used_by_composite {
@@ -434,7 +430,7 @@ impl World2D {
     pub fn attach_tilemap(&mut self, collider: ColliderId2D, tilemap: TilemapCollider2D) {
         let used_by_comp = tilemap.used_by_composite;
         if let Some(col) = self.colliders.get_mut(&collider) {
-            if used_by_comp && ! self.composites.contains_key(&collider) {
+            if used_by_comp && !self.composites.contains_key(&collider) {
                 col.used_by_composite = true;
             }
         }
@@ -498,7 +494,11 @@ impl World2D {
         }
     }
 
-    fn sync_composites_for_owner(&mut self, attached_body: Option<BodyId2D>, game_object: EntityId) {
+    fn sync_composites_for_owner(
+        &mut self,
+        attached_body: Option<BodyId2D>,
+        game_object: EntityId,
+    ) {
         let comp_ids: Vec<ColliderId2D> = self
             .composites
             .iter()
@@ -760,8 +760,15 @@ impl World2D {
                 continue;
             }
             let (center, angle) = self.collider_world_pose(collider);
-            if compute_contact2d(probe, probe_center, probe_angle, &collider.shape, center, angle)
-                .is_some()
+            if compute_contact2d(
+                probe,
+                probe_center,
+                probe_angle,
+                &collider.shape,
+                center,
+                angle,
+            )
+            .is_some()
             {
                 out.push(collider.id);
             }
@@ -942,8 +949,11 @@ impl World2D {
                                 continue;
                             }
                             let surface_y = eff_center[1] + buoyancy.surface_level;
-                            let (min_y, max_y, area) =
-                                shape_vertical_bounds_and_area(&other_col.shape, other_center, other_angle);
+                            let (min_y, max_y, area) = shape_vertical_bounds_and_area(
+                                &other_col.shape,
+                                other_center,
+                                other_angle,
+                            );
                             if min_y >= surface_y || area <= 0.0 {
                                 continue;
                             }
@@ -954,8 +964,8 @@ impl World2D {
                             let effective_g = if grav_mag > 1e-5 { grav_mag } else { 9.81 };
                             let upward_buoyancy =
                                 buoyancy.density.max(0.0) * displaced_volume * effective_g;
-                            let step_phase =
-                                (self.step_count as f32) * 0.7 + (other_body_id.as_u64() as f32) * 1.3;
+                            let step_phase = (self.step_count as f32) * 0.7
+                                + (other_body_id.as_u64() as f32) * 1.3;
                             let flow = buoyancy.flow_force_vector(step_phase);
                             let total_force = [
                                 flow[0] * submerged_fraction,
@@ -1003,10 +1013,10 @@ impl World2D {
                         continue;
                     }
                     let inv_mass = body.inverse_mass();
-                    let ax = self.gravity[0] * body.gravity_scale
-                        + body.accumulated_force[0] * inv_mass;
-                    let ay = self.gravity[1] * body.gravity_scale
-                        + body.accumulated_force[1] * inv_mass;
+                    let ax =
+                        self.gravity[0] * body.gravity_scale + body.accumulated_force[0] * inv_mass;
+                    let ay =
+                        self.gravity[1] * body.gravity_scale + body.accumulated_force[1] * inv_mass;
                     body.linear_velocity[0] += ax * dt;
                     body.linear_velocity[1] += ay * dt;
                     if body.linear_drag > 0.0 {
@@ -1302,8 +1312,7 @@ impl World2D {
                             let from_below = dot2(rel_prev, up_b) < 0.0;
                             let normal_from_b_to_a =
                                 [-raw_contact.normal[0], -raw_contact.normal[1]];
-                            let rel_vel_a_minus_b =
-                                [-rel_vel_b_minus_a[0], -rel_vel_b_minus_a[1]];
+                            let rel_vel_a_minus_b = [-rel_vel_b_minus_a[0], -rel_vel_b_minus_a[1]];
                             if from_below
                                 || plat_b.should_pass_through(
                                     angle_b,
@@ -1505,7 +1514,10 @@ impl World2D {
         if !body.is_dynamic() || !body.simulated {
             return;
         }
-        let mut tangent = [outward_normal_from_surface[1], -outward_normal_from_surface[0]];
+        let mut tangent = [
+            outward_normal_from_surface[1],
+            -outward_normal_from_surface[0],
+        ];
         let local_right = rotate_vec2([1.0, 0.0], surface_angle);
         if dot2(tangent, local_right) < 0.0 {
             tangent = [-tangent[0], -tangent[1]];
@@ -1633,11 +1645,7 @@ fn shape_vertical_bounds_and_area(
     match shape {
         Shape2D::Circle { radius } => {
             let r = radius.max(0.0);
-            (
-                center[1] - r,
-                center[1] + r,
-                std::f32::consts::PI * r * r,
-            )
+            (center[1] - r, center[1] + r, std::f32::consts::PI * r * r)
         }
         Shape2D::Box { half_extents } => {
             let hx = half_extents[0].max(0.0);

@@ -1,21 +1,3 @@
-//! Deterministic particle system core.
-//!
-//! Simulation is driven only by the caller's delta time and the system's random
-//! seed, so a fixed seed and a fixed call sequence always produce the same
-//! particle count, positions and velocities on every platform. No wall-clock
-//! time, no thread-local random source and no hash-map iteration is used.
-//!
-//! Property semantics (all sampled at the particle's normalised age
-//! `age / lifetime`):
-//!
-//! * `velocity` over lifetime replaces the emitted velocity,
-//! * `size` over lifetime replaces the emitted size,
-//! * `color` over lifetime replaces the emitted colour,
-//! * `force` over lifetime is an acceleration added to the velocity.
-//!
-//! Emission accumulates `rate * delta_time` and emits the whole part of that
-//! sum, carrying the fraction into the next step.
-
 use std::f32::consts::FRAC_PI_2;
 
 use unitas_core::{rotate_vector, EntityId};
@@ -28,7 +10,6 @@ const DEFAULT_DURATION: f32 = 5.0;
 const IDENTITY_ROTATION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const ALL_LAYERS: u32 = u32::MAX;
 
-/// Playback state of a particle system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParticleSystemState {
     Playing,
@@ -36,7 +17,6 @@ pub enum ParticleSystemState {
     Stopped,
 }
 
-/// What a stopped system does once it has no live particles left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopAction {
     None,
@@ -45,18 +25,15 @@ pub enum StopAction {
     Callback,
 }
 
-/// Shape the emission module samples spawn positions from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ParticleShape {
     Point,
     Sphere { radius: f32 },
     Cone { angle: f32, radius: f32 },
     Box { size: [f32; 3] },
-    /// Mesh emission placeholder: spawns inside the mesh bounding box.
     Mesh { bounds: [f32; 3] },
 }
 
-/// A live particle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
     pub position: [f32; 3],
@@ -67,7 +44,6 @@ pub struct Particle {
     pub age: f32,
 }
 
-/// Per-emission overrides.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EmitParams {
     pub start_speed: f32,
@@ -87,7 +63,6 @@ impl Default for EmitParams {
     }
 }
 
-/// A linear curve between two keyframes, sampled over the normalised lifetime.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Curve<const N: usize> {
     pub start: [f32; N],
@@ -100,7 +75,11 @@ impl<const N: usize> Curve<N> {
     }
 
     pub fn sample(&self, t: f32) -> [f32; N] {
-        let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let mut sampled = [0.0f32; N];
         for (index, slot) in sampled.iter_mut().enumerate() {
             *slot = self.start[index] + (self.end[index] - self.start[index]) * t;
@@ -109,7 +88,6 @@ impl<const N: usize> Curve<N> {
     }
 }
 
-/// Per-particle property curves. A missing curve leaves the property untouched.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParticlePropertyCurves {
     pub velocity: Option<Curve<3>>,
@@ -118,7 +96,6 @@ pub struct ParticlePropertyCurves {
     pub size: Option<Curve<1>>,
 }
 
-/// A particle contact with a physics body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleCollisionEvent {
     pub particle_index: usize,
@@ -127,7 +104,6 @@ pub struct ParticleCollisionEvent {
     pub normal: [f32; 3],
 }
 
-/// A particle entering a trigger body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleTriggerEvent {
     pub particle_index: usize,
@@ -141,7 +117,6 @@ struct ParticleRuntime {
     force_velocity: [f32; 3],
 }
 
-/// SplitMix64: a deterministic, platform independent random source.
 struct SplitMix64 {
     state: u64,
 }
@@ -160,12 +135,10 @@ impl SplitMix64 {
     }
 
     fn next_f32(&mut self) -> f32 {
-        // 24 random bits map exactly onto the f32 mantissa, so the result is identical everywhere.
         (self.next_u64() >> 40) as f32 / 16_777_216.0
     }
 }
 
-/// A particle system with deterministic emission and simulation.
 pub struct ParticleSystem {
     seed: u64,
     rng: SplitMix64,
@@ -235,7 +208,11 @@ impl ParticleSystem {
     }
 
     pub fn set_duration(&mut self, seconds: f32) {
-        self.duration = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
+        self.duration = if seconds.is_finite() {
+            seconds.max(0.0)
+        } else {
+            0.0
+        };
     }
 
     pub fn duration(&self) -> f32 {
@@ -320,12 +297,10 @@ impl ParticleSystem {
         self.collision_layer_mask
     }
 
-    /// Registers the callback invoked when a `StopAction::Callback` stop completes.
     pub fn set_stopped_callback(&mut self, callback: Box<dyn FnMut()>) {
         self.stopped_callback = Some(callback);
     }
 
-    /// Number of times the system reported that it stopped.
     pub fn stopped_count(&self) -> u32 {
         self.stopped_count
     }
@@ -357,7 +332,6 @@ impl ParticleSystem {
                 self.state = ParticleSystemState::Playing;
             }
             ParticleSystemState::Stopped => {
-                // A restart replays the seeded sequence so a replay matches the first run.
                 self.rng = SplitMix64::new(self.seed);
                 self.system_time = 0.0;
                 self.emission_accumulator = 0.0;
@@ -373,7 +347,6 @@ impl ParticleSystem {
         }
     }
 
-    /// Stops emission and applies `action` once the system has no live particles.
     pub fn stop(&mut self, action: StopAction) {
         self.emitting = false;
         self.state = ParticleSystemState::Stopped;
@@ -391,7 +364,6 @@ impl ParticleSystem {
         }
     }
 
-    /// Advances the simulation by `delta_time` seconds.
     pub fn simulate(&mut self, delta_time: f32) {
         if !delta_time.is_finite() || delta_time <= 0.0 {
             return;
@@ -402,13 +374,11 @@ impl ParticleSystem {
         self.advance(delta_time);
     }
 
-    /// Spawns `count` particles immediately with the system's emit parameters.
     pub fn emit(&mut self, count: u32) {
         let params = self.emit_params;
         self.spawn(count, params);
     }
 
-    /// Spawns `count` particles immediately with the given overrides.
     pub fn emit_with_params(&mut self, params: EmitParams, count: u32) {
         self.spawn(count, params);
     }
@@ -428,7 +398,6 @@ impl ParticleSystem {
         self.particles = particles;
     }
 
-    /// Refreshes the collision and trigger events against the physics world.
     pub fn update_collisions(&mut self, world: &World) {
         self.collision_events.clear();
         self.trigger_events.clear();
@@ -447,12 +416,8 @@ impl ParticleSystem {
                 particle.position[2] as f64,
             ];
             let solid = world.overlap_sphere(center, radius, self.collision_layer_mask);
-            let overlapping = world.overlap_sphere_with_triggers(
-                center,
-                radius,
-                self.collision_layer_mask,
-                true,
-            );
+            let overlapping =
+                world.overlap_sphere_with_triggers(center, radius, self.collision_layer_mask, true);
             for entity in overlapping {
                 if solid.contains(&entity) {
                     self.collision_events.push(ParticleCollisionEvent {
@@ -484,7 +449,11 @@ impl ParticleSystem {
         let Some(collider) = world.position(entity) else {
             return [0.0, 1.0, 0.0];
         };
-        let offset = [center[0] - collider[0], center[1] - collider[1], center[2] - collider[2]];
+        let offset = [
+            center[0] - collider[0],
+            center[1] - collider[1],
+            center[2] - collider[2],
+        ];
         let length = (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
         if length > 0.0 {
             [
@@ -525,7 +494,6 @@ impl ParticleSystem {
         if self.looping || self.duration <= 0.0 {
             return delta_time;
         }
-        // A non-looping system stops emitting at its duration.
         (self.duration - self.system_time).clamp(0.0, delta_time)
     }
 
@@ -545,7 +513,6 @@ impl ParticleSystem {
     fn integrate(&mut self, delta_time: f32) {
         for index in 0..self.particles.len() {
             let lifetime = self.particles[index].lifetime;
-            // The curves are sampled at the age the particle reaches in this step.
             let age = self.particles[index].age + delta_time;
             let progress = if lifetime > 0.0 {
                 (age / lifetime).clamp(0.0, 1.0)
@@ -656,11 +623,19 @@ impl ParticleSystem {
         let (offset, direction) = match self.shape {
             ParticleShape::Point => ([0.0; 3], [0.0, 0.0, 1.0]),
             ParticleShape::Sphere { radius } => {
-                let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+                let radius = if radius.is_finite() {
+                    radius.max(0.0)
+                } else {
+                    0.0
+                };
                 (self.random_point_in_ball(radius), self.random_unit_vector())
             }
             ParticleShape::Cone { angle, radius } => {
-                let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+                let radius = if radius.is_finite() {
+                    radius.max(0.0)
+                } else {
+                    0.0
+                };
                 let half_angle = if angle.is_finite() {
                     (angle * 0.5).to_radians().clamp(0.0, FRAC_PI_2 - 0.001)
                 } else {
@@ -671,15 +646,20 @@ impl ParticleSystem {
                 } else {
                     0.0
                 };
-                // The base disc grows with the height, so the sample stays inside the cone.
                 let fraction = cube_root(self.rng.next_f32());
                 let disc = self.random_disc_point();
                 (
-                    [disc[0] * radius * fraction, height * fraction, disc[1] * radius * fraction],
+                    [
+                        disc[0] * radius * fraction,
+                        height * fraction,
+                        disc[1] * radius * fraction,
+                    ],
                     [0.0, 1.0, 0.0],
                 )
             }
-            ParticleShape::Box { size } => (self.random_point_in_box(size), self.random_unit_vector()),
+            ParticleShape::Box { size } => {
+                (self.random_point_in_box(size), self.random_unit_vector())
+            }
             ParticleShape::Mesh { bounds } => {
                 (self.random_point_in_box(bounds), self.random_unit_vector())
             }
@@ -691,7 +671,6 @@ impl ParticleSystem {
     }
 
     fn random_unit_vector(&mut self) -> [f32; 3] {
-        // Marsaglia's method: only sqrt and multiplication, so every platform agrees bit for bit.
         loop {
             let x = self.rng.next_f32() * 2.0 - 1.0;
             let y = self.rng.next_f32() * 2.0 - 1.0;
@@ -716,14 +695,30 @@ impl ParticleSystem {
     fn random_point_in_ball(&mut self, radius: f32) -> [f32; 3] {
         let direction = self.random_unit_vector();
         let distance = radius * cube_root(self.rng.next_f32());
-        [direction[0] * distance, direction[1] * distance, direction[2] * distance]
+        [
+            direction[0] * distance,
+            direction[1] * distance,
+            direction[2] * distance,
+        ]
     }
 
     fn random_point_in_box(&mut self, size: [f32; 3]) -> [f32; 3] {
         let half = [
-            if size[0].is_finite() { size[0].abs() * 0.5 } else { 0.0 },
-            if size[1].is_finite() { size[1].abs() * 0.5 } else { 0.0 },
-            if size[2].is_finite() { size[2].abs() * 0.5 } else { 0.0 },
+            if size[0].is_finite() {
+                size[0].abs() * 0.5
+            } else {
+                0.0
+            },
+            if size[1].is_finite() {
+                size[1].abs() * 0.5
+            } else {
+                0.0
+            },
+            if size[2].is_finite() {
+                size[2].abs() * 0.5
+            } else {
+                0.0
+            },
         ];
         [
             (self.rng.next_f32() * 2.0 - 1.0) * half[0],
@@ -733,7 +728,6 @@ impl ParticleSystem {
     }
 }
 
-/// Cube root by Newton iteration: only exactly rounded operations, so the value is the same everywhere.
 fn cube_root(value: f32) -> f32 {
     if !value.is_finite() || value <= 0.0 {
         return 0.0;
@@ -757,11 +751,10 @@ impl std::fmt::Debug for ParticleSystem {
             .field("particle_count", &self.particles.len())
             .field("disabled", &self.disabled)
             .field("destroyed", &self.destroyed)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-/// A particle contact with a two-dimensional collider.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleCollisionEvent2D {
     pub particle_index: usize,
@@ -770,7 +763,6 @@ pub struct ParticleCollisionEvent2D {
     pub normal: [f32; 2],
 }
 
-/// A particle entering a two-dimensional trigger collider.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleTriggerEvent2D {
     pub particle_index: usize,
@@ -778,7 +770,6 @@ pub struct ParticleTriggerEvent2D {
     pub position: [f32; 2],
 }
 
-/// A particle system that reports its contacts against a two-dimensional physics world.
 pub struct ParticleSystem2D {
     system: ParticleSystem,
     collision_events: Vec<ParticleCollisionEvent2D>,
@@ -798,7 +789,6 @@ impl ParticleSystem2D {
         &self.system
     }
 
-    /// The particle data, emission and simulation shared with the three-dimensional system.
     pub fn system_mut(&mut self) -> &mut ParticleSystem {
         &mut self.system
     }
@@ -819,7 +809,6 @@ impl ParticleSystem2D {
         self.system.is_destroyed()
     }
 
-    /// Refreshes the collision and trigger events against the two-dimensional physics world.
     pub fn update_collisions(&mut self, world: &World2D) {
         self.collision_events.clear();
         self.trigger_events.clear();

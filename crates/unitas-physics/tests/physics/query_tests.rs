@@ -300,7 +300,8 @@ fn a_ray_grazing_a_box_edge_does_not_hit() -> Result<(), PhysicsError> {
 }
 
 #[test]
-fn a_ray_starting_inside_a_sphere_hits_the_exit_surface_with_inward_normal() -> Result<(), PhysicsError> {
+fn a_ray_starting_inside_a_sphere_hits_the_exit_surface_with_inward_normal(
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     let entity = EntityId::new(1);
     world.add_body(entity, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;

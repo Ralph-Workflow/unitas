@@ -660,7 +660,8 @@ extern "C" fn settings_fixed_update(_handle: u64, step: f64) {
 }
 
 #[test]
-fn runtime_load_scene_applies_project_settings_timestep_and_gravity() -> Result<(), Box<dyn Error>> {
+fn runtime_load_scene_applies_project_settings_timestep_and_gravity() -> Result<(), Box<dyn Error>>
+{
     if let Ok(mut steps) = SETTINGS_FIXED_STEPS.lock() {
         steps.clear();
     }
@@ -935,8 +936,8 @@ fn runtime_time_scale_halves_the_simulated_time_of_a_falling_body() -> Result<()
 }
 
 #[test]
-fn runtime_zero_time_scale_freezes_the_world_while_update_still_runs(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_zero_time_scale_freezes_the_world_while_update_still_runs() -> Result<(), Box<dyn Error>>
+{
     let frozen = run_time_scale_scene(0.0, 51)?;
     assert_eq!(frozen.fixed_steps, 0);
     assert_eq!(frozen.fall_distance, 0.0);
@@ -1038,7 +1039,10 @@ fn runtime_single_load_replaces_the_loaded_scene_set() -> Result<(), Box<dyn Err
     assert_eq!(runtime.scene_count(), 1);
     assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
     assert_eq!(runtime.scripts().len(), 1);
-    assert_eq!(runtime.scripts()[0].guid, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        runtime.scripts()[0].guid,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     let graph = match runtime.scene_graph() {
         Some(graph) => graph,
         None => return Err(String::from("no scene graph found").into()),
@@ -1053,7 +1057,10 @@ fn runtime_single_load_replaces_the_loaded_scene_set() -> Result<(), Box<dyn Err
     assert_eq!(runtime.scene_name(0), Some("scene_beta"));
     assert_eq!(runtime.scene_name(1), None);
     assert_eq!(runtime.scripts().len(), 1);
-    assert_eq!(runtime.scripts()[0].guid, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert_eq!(
+        runtime.scripts()[0].guid,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
     let graph = match runtime.scene_graph() {
         Some(graph) => graph,
         None => return Err(String::from("no scene graph found").into()),
@@ -1071,7 +1078,8 @@ fn runtime_additive_load_keeps_both_scenes_alive() -> Result<(), Box<dyn Error>>
     let mut runtime = Runtime::new()?;
     runtime.set_callbacks(scene_callbacks());
     runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
-    let count = runtime.load_scene_with_mode(Path::new(BETA_FIXTURE_PATH), LoadSceneMode::Additive)?;
+    let count =
+        runtime.load_scene_with_mode(Path::new(BETA_FIXTURE_PATH), LoadSceneMode::Additive)?;
     assert_eq!(count, 2);
     assert_eq!(runtime.scene_count(), 2);
     assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
@@ -1114,7 +1122,7 @@ fn runtime_active_scene_selection_rejects_out_of_range_indexes() -> Result<(), B
     match runtime.set_active_scene(5) {
         Err(RuntimeError::InvalidSceneIndex(index)) => assert_eq!(index, 5),
         Err(_) => return Err(String::from("unexpected error variant").into()),
-        Ok(_) => return Err(String::from("out of range scene index accepted").into()),
+        Ok(()) => return Err(String::from("out of range scene index accepted").into()),
     }
     assert_eq!(runtime.active_scene_index(), Some(1));
     assert_eq!(runtime.scene_count(), 2);
@@ -1123,14 +1131,14 @@ fn runtime_active_scene_selection_rejects_out_of_range_indexes() -> Result<(), B
 }
 
 #[test]
-fn runtime_unload_of_an_unknown_scene_is_an_error_and_changes_nothing(
-) -> Result<(), Box<dyn Error>> {
+fn runtime_unload_of_an_unknown_scene_is_an_error_and_changes_nothing() -> Result<(), Box<dyn Error>>
+{
     let mut runtime = Runtime::new()?;
     runtime.load_scene(Path::new(ALPHA_FIXTURE_PATH))?;
     match runtime.unload_scene("scene_missing") {
         Err(RuntimeError::SceneNotFound(name)) => assert_eq!(name, "scene_missing"),
         Err(_) => return Err(String::from("unexpected error variant").into()),
-        Ok(_) => return Err(String::from("unload of an unknown scene succeeded").into()),
+        Ok(()) => return Err(String::from("unload of an unknown scene succeeded").into()),
     }
     assert_eq!(runtime.scene_count(), 1);
     assert_eq!(runtime.scene_name(0), Some("scene_alpha"));
@@ -1546,11 +1554,17 @@ fn runtime_audio_time_scale_and_application_pause_control_audio_advancement(
     assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.5), 0);
     assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.5).abs() < 1e-9);
 
-    assert_eq!(unitas_runtime::unitas_runtime_audio_set_paused(handle, 1), 0);
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_paused(handle, 1),
+        0
+    );
     assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.5), 0);
     assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.5).abs() < 1e-9);
 
-    assert_eq!(unitas_runtime::unitas_runtime_audio_set_paused(handle, 0), 0);
+    assert_eq!(
+        unitas_runtime::unitas_runtime_audio_set_paused(handle, 0),
+        0
+    );
     assert_eq!(unitas_runtime::unitas_runtime_tick(handle, 0.25), 0);
     assert!((unitas_runtime::unitas_runtime_audio_time(handle, entity) - 0.75).abs() < 1e-9);
 
@@ -1634,10 +1648,8 @@ fn runtime_audio_unsupported_or_invalid_clip_emits_diagnostic_and_fails_source(
 
 #[test]
 fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_abi_audio_{}",
-        std::process::id()
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("unitas_runtime_abi_audio_{}", std::process::id()));
     let assets_dir = temp_dir.join("Assets");
     std::fs::create_dir_all(&assets_dir)?;
     let wav_guid = "44444444444444444444444444444444";

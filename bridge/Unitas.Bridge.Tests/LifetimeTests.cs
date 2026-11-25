@@ -40,7 +40,7 @@ namespace Unitas.Bridge.Tests
             Check.That("live object is not null", live != null);
             Check.That("live object is truthy", (bool)live);
             Check.That("live object is not equal to null", !(live == null));
-            Check.That("live object equals itself", live.Equals(live));
+            Check.That("live object equals itself", live!.Equals(live));
             Check.That("live object does not equal null", !live.Equals(null));
             Check.That("two live objects are different", !new GameObject("Other").Equals(live));
 
@@ -53,13 +53,13 @@ namespace Unitas.Bridge.Tests
             Check.That("destroyed object equals null", doomed == null);
             Check.That("destroyed object does not differ from null", !(doomed != null));
             Check.That("destroyed object is falsy", !(bool)doomed);
-            Check.That("destroyed object equals null through Equals", doomed.Equals(null));
-            Check.Equal("destroyed object stringifies as null", "null", doomed.ToString());
+            Check.That("destroyed object equals null through Equals", doomed!.Equals(null));
+            Check.Equal("destroyed object stringifies as null", "null", doomed!.ToString());
             Check.That("live object does not equal destroyed object", !(live == doomed));
             Check.That("destroyed object does not equal live object", !(doomed == live));
             Check.That("live object differs from destroyed object", live != doomed);
             Check.That("destroyed object differs from live object", doomed != live);
-            Check.That("live object does not equal destroyed object through Equals", !live.Equals(doomed));
+            Check.That("live object does not equal destroyed object through Equals", !live!.Equals(doomed));
             Check.That("destroyed object does not equal live object through Equals", !doomed.Equals(live));
 
             GameObject secondDoomed = new GameObject("SecondDoomed");
@@ -85,7 +85,7 @@ namespace Unitas.Bridge.Tests
             Object.Destroy(probe);
             Check.That("destroyed script equals null", probe == null);
             Check.That("destroyed script is falsy", !(bool)probe);
-            Check.Equal("destroyed script fires OnDisable then OnDestroy", "OnDisable, OnDestroy", probe.ObservedOrder);
+            Check.Equal("destroyed script fires OnDisable then OnDestroy", "OnDisable, OnDestroy", probe!.ObservedOrder);
             Object.Destroy(probe);
             Check.Equal("double destroy is a no-op", "OnDisable, OnDestroy", probe.ObservedOrder);
             Object.Destroy(probeOwner);

@@ -512,11 +512,7 @@ fn boundary_edge_normal(
     if perp_len <= AREA_EPSILON {
         return [0.0, 0.0, 1.0];
     }
-    [
-        perp[0] / perp_len,
-        perp[1] / perp_len,
-        perp[2] / perp_len,
-    ]
+    [perp[0] / perp_len, perp[1] / perp_len, perp[2] / perp_len]
 }
 
 fn intersect_segments_xz(

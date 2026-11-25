@@ -11,7 +11,8 @@ use unitas_runtime::particles::ParticleRuntimeWorld;
 use unitas_runtime::physics::PhysicsRuntimeWorld;
 
 #[test]
-fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Result<(), PhysicsError> {
+fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Result<(), PhysicsError>
+{
     let mut runtime_physics = PhysicsRuntimeWorld::new();
     let floor = EntityId::new(1);
     let crate_box = EntityId::new(2);
@@ -100,10 +101,8 @@ fn subsystem_entry_physics_2d_steps_and_enforces_one_way_platform_effector() {
     let mut platform_collider_desc = ColliderDesc2D::box_collider(platform_entity, [2.0, 0.2]);
     platform_collider_desc.attached_body = Some(platform_body);
     let platform_collider = runtime_physics.add_collider_2d(platform_collider_desc);
-    assert!(runtime_physics.set_platform_effector_2d(
-        platform_collider,
-        PlatformEffector2D::new(180.0),
-    ));
+    assert!(runtime_physics
+        .set_platform_effector_2d(platform_collider, PlatformEffector2D::new(180.0),));
 
     let mut upward_actor = BodyDesc2D::dynamic(actor_entity, [0.0, -0.5]);
     upward_actor.linear_velocity = [0.0, 8.0];
@@ -125,12 +124,7 @@ fn subsystem_entry_physics_2d_steps_and_enforces_one_way_platform_effector() {
         .iter()
         .any(|msg| msg.kind == MessageKind2D::CollisionEnter2D && msg.recipient == actor_entity));
 
-    let hits = runtime_physics.raycast_2d(
-        [0.0, 2.0],
-        [0.0, -1.0],
-        5.0,
-        ContactFilter2D::default(),
-    );
+    let hits = runtime_physics.raycast_2d([0.0, 2.0], [0.0, -1.0], 5.0, ContactFilter2D::default());
     assert!(!hits.is_empty());
 }
 

@@ -199,7 +199,6 @@ impl ParticleRuntimeWorld {
     }
 }
 
-/// The two-dimensional counterpart of `ParticleRuntimeWorld`.
 #[derive(Default)]
 pub struct ParticleRuntimeWorld2D {
     systems: BTreeMap<EntityId, ParticleSystem2D>,

@@ -5,16 +5,15 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use unitas_runtime::{
     test_is_persistent_entity, test_read_path_buffer, test_write_path_buffer,
     unitas_runtime_active_scene_index, unitas_runtime_body_position, unitas_runtime_body_velocity,
-    unitas_runtime_company_name, unitas_runtime_destroy, unitas_runtime_dont_destroy_on_load,
-    unitas_runtime_error_message, unitas_runtime_load_scene_mode, unitas_runtime_new,
-    unitas_runtime_path_buffer, unitas_runtime_product_name, unitas_runtime_project_version,
-    unitas_runtime_scene_count, unitas_runtime_scene_name, unitas_runtime_set_active_scene,
-    unitas_runtime_set_body_position, unitas_runtime_set_body_velocity,
-    unitas_runtime_set_callbacks, unitas_runtime_set_time_scale, unitas_runtime_tick,
-    unitas_runtime_time_scale, unitas_runtime_unload_scene, AbiCharacterMoveInput,
-    AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
     unitas_runtime_character_controller_config, unitas_runtime_character_move,
-    unitas_runtime_character_teleport,
+    unitas_runtime_character_teleport, unitas_runtime_company_name, unitas_runtime_destroy,
+    unitas_runtime_dont_destroy_on_load, unitas_runtime_error_message,
+    unitas_runtime_load_scene_mode, unitas_runtime_new, unitas_runtime_path_buffer,
+    unitas_runtime_product_name, unitas_runtime_project_version, unitas_runtime_scene_count,
+    unitas_runtime_scene_name, unitas_runtime_set_active_scene, unitas_runtime_set_body_position,
+    unitas_runtime_set_body_velocity, unitas_runtime_set_callbacks, unitas_runtime_set_time_scale,
+    unitas_runtime_tick, unitas_runtime_time_scale, unitas_runtime_unload_scene,
+    AbiCharacterMoveInput, AbiCharacterMoveOutput, CharacterMoveRequest, Runtime,
 };
 
 const SCENE_A: &str = "tests/fixtures/scene_with_script.unity";
@@ -298,7 +297,10 @@ fn abi_scene_teardown_callbacks_can_call_back_into_the_runtime() -> Result<(), B
 const SETTINGS_SCENE: &str =
     "tests/fixtures/project_with_settings/Assets/Scenes/SettingsScene.unity";
 
-fn read_nul_terminated_from_path_buffer(handle: u64, length: i32) -> Result<String, Box<dyn Error>> {
+fn read_nul_terminated_from_path_buffer(
+    handle: u64,
+    length: i32,
+) -> Result<String, Box<dyn Error>> {
     let byte_len = usize::try_from(length)?;
     let mut bytes = vec![0u8; byte_len + 1];
     test_read_path_buffer(handle, &mut bytes)?;
@@ -438,14 +440,8 @@ fn abi_body_position_and_velocity_report_live_state_and_reject_invalid_inputs(
     let crate_pos = read_vec3_from_path_buffer(handle)?;
     assert_eq!(crate_pos, [0.0, 0.0, 0.0]);
 
-    assert_eq!(
-        unitas_runtime_body_position(u64::MAX, ball, out_buffer),
-        -1
-    );
-    assert_eq!(
-        unitas_runtime_body_velocity(u64::MAX, ball, out_buffer),
-        -1
-    );
+    assert_eq!(unitas_runtime_body_position(u64::MAX, ball, out_buffer), -1);
+    assert_eq!(unitas_runtime_body_velocity(u64::MAX, ball, out_buffer), -1);
 
     assert_eq!(unitas_runtime_body_position(handle, ball, 0), -2);
     assert_ne!(unitas_runtime_error_message(handle), 0);
@@ -576,10 +572,8 @@ fn write_character_scene(temp_dir: &Path) -> Result<std::path::PathBuf, Box<dyn 
 #[test]
 fn abi_character_move_resolves_ground_and_wall_collisions_and_excludes_self_collider(
 ) -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_abi_character_move_{}",
-        std::process::id()
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("unitas_abi_character_move_{}", std::process::id()));
     let scene_path = write_character_scene(&temp_dir)?;
     let scene_str = match scene_path.to_str() {
         Some(s) => s.to_string(),
@@ -625,8 +619,7 @@ fn abi_character_move_resolves_ground_and_wall_collisions_and_excludes_self_coll
     assert_eq!(down_output.ground_entity_id, floor_id);
     assert!((down_output.position[1] - 1.08).abs() < 1e-4);
 
-    let wall_input =
-        default_abi_character_input(player_id, down_output.position, [3.0, -0.1, 0.0]);
+    let wall_input = default_abi_character_input(player_id, down_output.position, [3.0, -0.1, 0.0]);
     let mut wall_output = AbiCharacterMoveOutput::default();
     assert_eq!(
         unitas_runtime_character_move(handle, Some(&wall_input), Some(&mut wall_output)),

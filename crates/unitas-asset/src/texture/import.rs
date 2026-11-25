@@ -439,9 +439,14 @@ impl TextureImportSettings {
         let max_size = meta_u32(text, "maxTextureSize")?;
         let mipmaps = meta_bool(text, "mipmapEnabled")?;
         let sprite_code = meta_u32(text, "spriteMode")?;
-        let sprite_mode = match SpriteMode::from_code(u8::try_from(sprite_code).unwrap_or(u8::MAX)) {
+        let sprite_mode = match SpriteMode::from_code(u8::try_from(sprite_code).unwrap_or(u8::MAX))
+        {
             Some(mode) => mode,
-            None => return Err(TextureImportError::InvalidMetaText("spriteMode".to_string())),
+            None => {
+                return Err(TextureImportError::InvalidMetaText(
+                    "spriteMode".to_string(),
+                ))
+            }
         };
         let alpha_is_transparency = meta_bool(text, "alphaIsTransparency")?;
         let wrap_code = meta_u32(text, "wrapMode")?;
@@ -450,9 +455,14 @@ impl TextureImportSettings {
             None => return Err(TextureImportError::InvalidMetaText("wrapMode".to_string())),
         };
         let filter_code = meta_u32(text, "filterMode")?;
-        let filter_mode = match FilterMode::from_code(u8::try_from(filter_code).unwrap_or(u8::MAX)) {
+        let filter_mode = match FilterMode::from_code(u8::try_from(filter_code).unwrap_or(u8::MAX))
+        {
             Some(mode) => mode,
-            None => return Err(TextureImportError::InvalidMetaText("filterMode".to_string())),
+            None => {
+                return Err(TextureImportError::InvalidMetaText(
+                    "filterMode".to_string(),
+                ))
+            }
         };
         let platform_settings = parse_platform_settings(text)?;
         Ok(TextureImportSettings {
@@ -537,7 +547,9 @@ fn apply_platform_kv(
     match key {
         "buildTarget" => {
             if raw_val.is_empty() {
-                return Err(TextureImportError::InvalidMetaText("buildTarget".to_string()));
+                return Err(TextureImportError::InvalidMetaText(
+                    "buildTarget".to_string(),
+                ));
             }
             item.build_target = raw_val.to_string();
         }
@@ -547,9 +559,9 @@ fn apply_platform_kv(
             })?;
         }
         "format" => {
-            let code = raw_val.parse::<i32>().map_err(|_| {
-                TextureImportError::InvalidMetaText("platform format".to_string())
-            })?;
+            let code = raw_val
+                .parse::<i32>()
+                .map_err(|_| TextureImportError::InvalidMetaText("platform format".to_string()))?;
             item.format = TexturePlatformFormat::from_code(code).ok_or_else(|| {
                 TextureImportError::InvalidMetaText(format!("platform format {code}"))
             })?;
@@ -691,7 +703,11 @@ fn downscale(texture: &DecodedTexture) -> DecodedTexture {
                     let base = (source_y * source_width + source_x) * channels;
                     for (channel, sum) in sums.iter_mut().enumerate().take(channels) {
                         *sum += u32::from(
-                            texture.pixels.get(base + channel).copied().unwrap_or_default(),
+                            texture
+                                .pixels
+                                .get(base + channel)
+                                .copied()
+                                .unwrap_or_default(),
                         );
                     }
                     count += 1;
@@ -813,9 +829,7 @@ fn has_gif_signature(bytes: &[u8]) -> bool {
     bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a")
 }
 
-pub fn decode_gif_first_frame(
-    bytes: &[u8],
-) -> Result<(DecodedTexture, usize), TextureImportError> {
+pub fn decode_gif_first_frame(bytes: &[u8]) -> Result<(DecodedTexture, usize), TextureImportError> {
     if bytes.len() < 6 {
         return Err(TextureImportError::Truncated);
     }

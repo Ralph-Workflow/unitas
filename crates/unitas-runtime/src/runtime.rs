@@ -16,7 +16,9 @@ use unitas_core::{
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, MoveResult, Phase, QueryHit, Shape, World,
 };
-use unitas_render::{look_at, render_scene, Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3};
+use unitas_render::{
+    look_at, render_scene, Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3,
+};
 
 use crate::animation::{apply_transform_property, AnimationRuntimeDiagnostic, AnimationWorld};
 use crate::error::{RenderError, RuntimeError};
@@ -400,11 +402,7 @@ impl Runtime {
         self.unload_scene_with_hook(name, |_, f| f())
     }
 
-    pub fn unload_scene_with_hook<H>(
-        &mut self,
-        name: &str,
-        mut hook: H,
-    ) -> Result<(), RuntimeError>
+    pub fn unload_scene_with_hook<H>(&mut self, name: &str, mut hook: H) -> Result<(), RuntimeError>
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
@@ -431,7 +429,9 @@ impl Runtime {
             }
         }
         for entity in &scene.animators {
-            if !self.persistent_entities.contains(entity) && !self.persistent_animators.contains(entity) {
+            if !self.persistent_entities.contains(entity)
+                && !self.persistent_animators.contains(entity)
+            {
                 self.animation.remove_animator(*entity);
             }
         }
@@ -620,7 +620,9 @@ impl Runtime {
                 }
             }
             for entity in &scene.animators {
-                if !self.persistent_entities.contains(entity) && !self.persistent_animators.contains(entity) {
+                if !self.persistent_entities.contains(entity)
+                    && !self.persistent_animators.contains(entity)
+                {
                     self.animation.remove_animator(*entity);
                 }
             }
@@ -878,16 +880,24 @@ impl Runtime {
                 return Some(script);
             }
         }
-        self.persistent.iter().find(|script| script.entity == entity)
+        self.persistent
+            .iter()
+            .find(|script| script.entity == entity)
     }
 
     fn find_script_mut(&mut self, entity: EntityId) -> Option<&mut ScriptInstance> {
         for scene in &mut self.scenes {
-            if let Some(script) = scene.scripts.iter_mut().find(|script| script.entity == entity) {
+            if let Some(script) = scene
+                .scripts
+                .iter_mut()
+                .find(|script| script.entity == entity)
+            {
                 return Some(script);
             }
         }
-        self.persistent.iter_mut().find(|script| script.entity == entity)
+        self.persistent
+            .iter_mut()
+            .find(|script| script.entity == entity)
     }
 
     fn init_pending_scripts<H>(&mut self, callbacks: Callbacks, hook: &mut H)
@@ -963,6 +973,7 @@ impl Runtime {
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
+        const EPSILON: f64 = 1e-9;
         if self.is_shutdown {
             return Err(RuntimeError::AlreadyShutdown);
         }
@@ -982,7 +993,6 @@ impl Runtime {
         self.input.begin_frame(scaled_delta);
         self.accumulator += scaled_delta;
         let fixed_step = self.fixed_timestep;
-        const EPSILON: f64 = 1e-9;
         while self.accumulator >= fixed_step - EPSILON {
             self.sync_kinematic_transforms();
             self.world.step(fixed_step)?;
@@ -1265,8 +1275,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// Teleports a body of any role, including a dynamic body whose simulated
-    /// position the simulation otherwise owns. The body's velocity is unchanged.
     pub fn teleport_body_position(
         &mut self,
         entity: EntityId,
@@ -1319,7 +1327,11 @@ impl Runtime {
             self.fixed_timestep
         };
         let mut controller = match request.entity {
-            Some(entity) => self.character_states.get(&entity).copied().unwrap_or_default(),
+            Some(entity) => self
+                .character_states
+                .get(&entity)
+                .copied()
+                .unwrap_or_default(),
             None => self.default_character_state,
         };
         controller.radius = request.radius;
@@ -1482,7 +1494,9 @@ impl Runtime {
                     .parent(*entity)
                     .and_then(|parent| scene.graph.world_transform(parent))
                 {
-                    Some(parent_world) => world_to_local_translation(&parent_world, world_translation),
+                    Some(parent_world) => {
+                        world_to_local_translation(&parent_world, world_translation)
+                    }
                     None => world_translation,
                 };
                 if let Some(transform) = scene.graph.transform_mut(*entity) {
@@ -1628,9 +1642,7 @@ fn find_project_settings_dir(scene_path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn build_script_instances(
-    bindings: &[ScriptBinding],
-) -> Result<Vec<ScriptInstance>, RuntimeError> {
+fn build_script_instances(bindings: &[ScriptBinding]) -> Result<Vec<ScriptInstance>, RuntimeError> {
     let mut scripts = Vec::new();
     for binding in bindings {
         if binding.guid.len() != 32 {
@@ -1904,16 +1916,11 @@ fn layer_bits(layer: u32) -> u32 {
 }
 
 fn normalized(vector: [f64; 3]) -> Option<[f64; 3]> {
-    let length =
-        (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
     if !length.is_finite() || length <= 0.0 {
         return None;
     }
-    Some([
-        vector[0] / length,
-        vector[1] / length,
-        vector[2] / length,
-    ])
+    Some([vector[0] / length, vector[1] / length, vector[2] / length])
 }
 
 fn phase_code(phase: Phase) -> u32 {
@@ -1997,9 +2004,14 @@ impl Runtime {
         indices: Vec<u32>,
     ) -> u64 {
         let handle = self.render.allocate();
-        self.render
-            .meshes
-            .insert(handle, Mesh { positions, normals, indices });
+        self.render.meshes.insert(
+            handle,
+            Mesh {
+                positions,
+                normals,
+                indices,
+            },
+        );
         handle
     }
 
@@ -2455,12 +2467,10 @@ impl Runtime {
             )
         } else {
             let half = (state.params.field_of_view.to_radians() * 0.5).tan();
-            (
-                ndc_x * near * half * aspect,
-                ndc_y * near * half,
-            )
+            (ndc_x * near * half * aspect, ndc_y * near * half)
         };
-        let direction = (basis.right * view_x + basis.up * view_y + basis.forward * near).normalize();
+        let direction =
+            (basis.right * view_x + basis.up * view_y + basis.forward * near).normalize();
         Ok([
             basis.eye.x,
             basis.eye.y,

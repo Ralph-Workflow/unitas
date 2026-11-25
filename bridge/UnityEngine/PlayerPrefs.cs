@@ -396,7 +396,7 @@ namespace UnityEngine
             entries = new Dictionary<string, PrefEntry>(StringComparer.Ordinal);
             reason = string.Empty;
 
-            string normalized = content.Replace("\r\n", "\n");
+            string normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
             string[] lines = normalized.Split('\n');
             if (lines.Length == 0 || !string.Equals(lines[0], HeaderLine, StringComparison.Ordinal))
             {
@@ -418,7 +418,7 @@ namespace UnityEngine
                     return false;
                 }
 
-                int firstSep = line.IndexOf('|');
+                int firstSep = line.IndexOf('|', StringComparison.Ordinal);
                 int secondSep = firstSep >= 0 ? line.IndexOf('|', firstSep + 1) : -1;
                 if (firstSep < 0 || secondSep < 0 || line.IndexOf('|', secondSep + 1) >= 0)
                 {

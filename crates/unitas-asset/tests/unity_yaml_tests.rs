@@ -7,12 +7,16 @@ mod unity_yaml {
     const PREFAB_FIXTURE: &str = "tests/fixtures/sample.prefab";
 
     fn missing(text: &str) -> YamlError {
-        YamlError::UnexpectedContent { line: 0, text: text.to_string() }
+        YamlError::UnexpectedContent {
+            line: 0,
+            text: text.to_string(),
+        }
     }
 
     #[test]
     fn yaml_header_directives_are_parsed() -> Result<(), YamlError> {
-        let text = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: Cube\n";
+        let text =
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: Cube\n";
         let stream = yaml::parse(text)?;
         let header = match &stream.header {
             Some(header) => header,
@@ -20,7 +24,10 @@ mod unity_yaml {
         };
         assert_eq!(header.yaml_version, "1.1");
         assert_eq!(header.tag_handle, Some(String::from("!u!")));
-        assert_eq!(header.tag_prefix, Some(String::from("tag:unity3d.com,2011:")));
+        assert_eq!(
+            header.tag_prefix,
+            Some(String::from("tag:unity3d.com,2011:"))
+        );
         assert_eq!(stream.documents.len(), 1);
         Ok(())
     }
@@ -77,13 +84,22 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("GameObject")),
         };
-        assert_eq!(game_object.get("m_Layer").and_then(Node::as_scalar), Some("0"));
-        assert_eq!(game_object.get("m_Name").and_then(Node::as_scalar), Some("Main Camera"));
+        assert_eq!(
+            game_object.get("m_Layer").and_then(Node::as_scalar),
+            Some("0")
+        );
+        assert_eq!(
+            game_object.get("m_Name").and_then(Node::as_scalar),
+            Some("Main Camera")
+        );
         let settings = match game_object.get("m_Settings") {
             Some(node) => node,
             None => return Err(missing("m_Settings")),
         };
-        assert_eq!(settings.get("m_Enabled").and_then(Node::as_scalar), Some("1"));
+        assert_eq!(
+            settings.get("m_Enabled").and_then(Node::as_scalar),
+            Some("1")
+        );
         Ok(())
     }
 
@@ -109,12 +125,18 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("component")),
         };
-        assert_eq!(first.get("fileID").and_then(Node::as_scalar), Some("1311639322"));
+        assert_eq!(
+            first.get("fileID").and_then(Node::as_scalar),
+            Some("1311639322")
+        );
         let second = match components.get(1).and_then(|node| node.get("component")) {
             Some(node) => node,
             None => return Err(missing("component")),
         };
-        assert_eq!(second.get("fileID").and_then(Node::as_scalar), Some("1311639323"));
+        assert_eq!(
+            second.get("fileID").and_then(Node::as_scalar),
+            Some("1311639323")
+        );
         Ok(())
     }
 
@@ -170,9 +192,18 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("GameObject")),
         };
-        assert_eq!(game_object.get("m_Name").and_then(Node::as_scalar), Some("Camera (Main)"));
-        assert_eq!(game_object.get("m_Tag").and_then(Node::as_scalar), Some("It's tagged"));
-        assert_eq!(game_object.get("m_Note").and_then(Node::as_scalar), Some("first\nsecond"));
+        assert_eq!(
+            game_object.get("m_Name").and_then(Node::as_scalar),
+            Some("Camera (Main)")
+        );
+        assert_eq!(
+            game_object.get("m_Tag").and_then(Node::as_scalar),
+            Some("It's tagged")
+        );
+        assert_eq!(
+            game_object.get("m_Note").and_then(Node::as_scalar),
+            Some("first\nsecond")
+        );
         Ok(())
     }
 
@@ -196,8 +227,20 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("Transform")),
         };
-        assert_eq!(transform_body.get("m_Father").and_then(|node| node.get("fileID")).and_then(Node::as_scalar), Some("0"));
-        assert_eq!(transform_body.get("m_Children").and_then(Node::as_sequence).map(<[Node]>::len), Some(0));
+        assert_eq!(
+            transform_body
+                .get("m_Father")
+                .and_then(|node| node.get("fileID"))
+                .and_then(Node::as_scalar),
+            Some("0")
+        );
+        assert_eq!(
+            transform_body
+                .get("m_Children")
+                .and_then(Node::as_sequence)
+                .map(<[Node]>::len),
+            Some(0)
+        );
         let child_transform = match stream.documents.get(3) {
             Some(document) => document,
             None => return Err(missing("child transform document")),
@@ -211,7 +254,10 @@ mod unity_yaml {
             None => return Err(missing("m_Children")),
         };
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].get("fileID").and_then(Node::as_scalar), Some("1311639325"));
+        assert_eq!(
+            children[0].get("fileID").and_then(Node::as_scalar),
+            Some("1311639325")
+        );
         let scene_settings = match stream.documents.first() {
             Some(document) => document,
             None => return Err(missing("scene settings document")),
@@ -225,7 +271,10 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("m_OcclusionBakeSettings")),
         };
-        assert_eq!(bake.get("smallestHole").and_then(Node::as_scalar), Some("0.25"));
+        assert_eq!(
+            bake.get("smallestHole").and_then(Node::as_scalar),
+            Some("0.25")
+        );
         Ok(())
     }
 
@@ -254,8 +303,14 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("modification")),
         };
-        assert_eq!(modification.get("propertyPath").and_then(Node::as_scalar), Some("m_Name"));
-        assert_eq!(modification.get("value").and_then(Node::as_scalar), Some("Cube"));
+        assert_eq!(
+            modification.get("propertyPath").and_then(Node::as_scalar),
+            Some("m_Name")
+        );
+        assert_eq!(
+            modification.get("value").and_then(Node::as_scalar),
+            Some("Cube")
+        );
         let target = match modification.get("target") {
             Some(node) => node,
             None => return Err(missing("target")),
@@ -286,14 +341,21 @@ mod unity_yaml {
             None => return Err(missing("m_Children")),
         };
         assert_eq!(children.len(), 2);
-        assert_eq!(children[0].get("fileID").and_then(Node::as_scalar), Some("1311639323"));
-        assert_eq!(children[1].get("fileID").and_then(Node::as_scalar), Some("1311639324"));
+        assert_eq!(
+            children[0].get("fileID").and_then(Node::as_scalar),
+            Some("1311639323")
+        );
+        assert_eq!(
+            children[1].get("fileID").and_then(Node::as_scalar),
+            Some("1311639324")
+        );
         Ok(())
     }
 
     #[test]
     fn yaml_plain_scalar_with_colon_and_empty_value_are_parsed() -> Result<(), YamlError> {
-        let text = "--- !u!1 &1\nGameObject:\n  m_Name: Camera: Main\n  m_EditorClassIdentifier: \n";
+        let text =
+            "--- !u!1 &1\nGameObject:\n  m_Name: Camera: Main\n  m_EditorClassIdentifier: \n";
         let stream = yaml::parse(text)?;
         let document = match stream.documents.first() {
             Some(document) => document,
@@ -303,9 +365,14 @@ mod unity_yaml {
             Some(node) => node,
             None => return Err(missing("GameObject")),
         };
-        assert_eq!(game_object.get("m_Name").and_then(Node::as_scalar), Some("Camera: Main"));
         assert_eq!(
-            game_object.get("m_EditorClassIdentifier").and_then(Node::as_scalar),
+            game_object.get("m_Name").and_then(Node::as_scalar),
+            Some("Camera: Main")
+        );
+        assert_eq!(
+            game_object
+                .get("m_EditorClassIdentifier")
+                .and_then(Node::as_scalar),
             Some("")
         );
         Ok(())
@@ -313,7 +380,8 @@ mod unity_yaml {
 
     #[test]
     fn yaml_nested_flow_mapping_is_parsed() -> Result<(), YamlError> {
-        let text = "--- !u!1001 &1\nPrefabAsset:\n  m_Modification: {m_TransformParent: {fileID: 0}}\n";
+        let text =
+            "--- !u!1001 &1\nPrefabAsset:\n  m_Modification: {m_TransformParent: {fileID: 0}}\n";
         let stream = yaml::parse(text)?;
         let document = match stream.documents.first() {
             Some(document) => document,
@@ -352,7 +420,10 @@ mod unity_yaml {
     #[test]
     fn yaml_invalid_document_header_is_an_error() -> Result<(), YamlError> {
         let result = yaml::parse("--- GameObject:\n  m_Name: Cube\n");
-        assert!(matches!(result, Err(YamlError::InvalidDocumentHeader { .. })));
+        assert!(matches!(
+            result,
+            Err(YamlError::InvalidDocumentHeader { .. })
+        ));
         Ok(())
     }
 
@@ -401,7 +472,10 @@ mod unity_yaml {
         assert_eq!(non_numeric.as_i64(), None);
         assert_eq!(non_numeric.as_f64(), None);
 
-        let mapping = Node::Mapping(vec![(String::from("key"), Node::Scalar(String::from("100")))]);
+        let mapping = Node::Mapping(vec![(
+            String::from("key"),
+            Node::Scalar(String::from("100")),
+        )]);
         assert_eq!(mapping.as_str(), None);
         assert_eq!(mapping.as_i64(), None);
         assert_eq!(mapping.as_f64(), None);
@@ -424,7 +498,10 @@ mod unity_yaml {
         };
         assert_eq!(doc.file_id_u64(), Some(1000));
         let root: &unitas_asset::YamlNode = &doc.root;
-        let name = match root.get("GameObject").and_then(|game_object| game_object.get("m_Name")) {
+        let name = match root
+            .get("GameObject")
+            .and_then(|game_object| game_object.get("m_Name"))
+        {
             Some(node) => node.as_str(),
             None => None,
         };

@@ -57,7 +57,7 @@ player, and most of the [feature catalog](docs/product-specification/feature-cat
 
 You need:
 
-* a Rust toolchain with `cargo`
+* a Rust toolchain with `cargo`, `clippy`, and `rustfmt`
 * the .NET 8 SDK (the Makefile looks for it in `~/.dotnet`)
 * Python 3.11 or later, with `ruff`, `mypy`, `pytest`, and `detect-secrets`
 
@@ -67,10 +67,15 @@ Run every gate:
 make verify
 ```
 
-That runs the policy checks, the secret scan, linting, type checks, the Rust
-and Python test suites, and the C# build, format check, and tests, all within a
-fixed time budget. The C# test step loads the runtime as a `.dylib`, so the full
-gate currently runs on macOS only.
+That runs the policy self-check (`policy-validate`), the bypass audit
+(`bypass-audit`), the ban-catalog gate (`banned-constructs`), the comment audit
+(`comment-audit`), the dependency gate (`deps`), the secret scan
+(`secret-scan`), the linting and format checks (`ruff check`,
+`ruff format --check`, `cargo fmt --check`, `cargo clippy`, `dotnet-format`),
+the type checks (`mypy`, `cargo check`, `dotnet-build`), and the test suites
+(`pytest`, `cargo test`, `dotnet-test`), all within a fixed time budget. The C#
+test step loads the runtime as a `.dylib`, so the full gate currently runs on
+macOS only.
 
 ## Contributing
 

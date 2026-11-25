@@ -24,8 +24,9 @@ namespace Unitas.Bridge.Tests
     {
         public string playerName = string.Empty;
         public int level = 1;
-        public float experience = 0f;
+        public float experience;
         public bool isVip;
+        [NonSerialized]
         public Vector3 spawnPosition;
         [SerializeField]
         private int _secretToken = 777;

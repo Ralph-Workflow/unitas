@@ -395,10 +395,7 @@ impl Vehicle {
     }
 
     pub fn grounded_wheel_count(&self) -> usize {
-        self.wheels
-            .iter()
-            .filter(|wheel| wheel.is_grounded)
-            .count()
+        self.wheels.iter().filter(|wheel| wheel.is_grounded).count()
     }
 
     pub fn step(&mut self, world: &World, delta_seconds: f64) -> Result<(), WheelError> {
@@ -421,7 +418,7 @@ impl Vehicle {
             frame.mass * gravity[2],
         ];
         let mut torque = [0.0; 3];
-        for wheel in self.wheels.iter_mut() {
+        for wheel in &mut self.wheels {
             let (wheel_force, wheel_torque) = step_wheel(wheel, &frame, world, delta_seconds);
             force = add(force, wheel_force);
             torque = add(torque, wheel_torque);
@@ -522,7 +519,11 @@ fn step_wheel(
         .into_iter()
         .find(|candidate| Some(candidate.entity) != frame.excluded_entity);
 
-    let motor_torque = if desc.has_motor { desc.motor_torque } else { 0.0 };
+    let motor_torque = if desc.has_motor {
+        desc.motor_torque
+    } else {
+        0.0
+    };
     let Some(hit) = hit else {
         wheel.is_grounded = false;
         wheel.compression = 0.0;
@@ -535,17 +536,14 @@ fn step_wheel(
     let up = [-down[0], -down[1], -down[2]];
     let contact_normal = normalize(hit.normal).unwrap_or(up);
     let normal = if dot(contact_normal, up) < 0.0 {
-        [
-            -contact_normal[0],
-            -contact_normal[1],
-            -contact_normal[2],
-        ]
+        [-contact_normal[0], -contact_normal[1], -contact_normal[2]]
     } else {
         contact_normal
     };
     let surface_height = dot(subtract(hit.point, attachment), down);
     let suspension_length = hit.distance.clamp(0.0, desc.suspension_distance);
-    let compression = (desc.suspension_distance - suspension_length).clamp(0.0, desc.suspension_distance);
+    let compression =
+        (desc.suspension_distance - suspension_length).clamp(0.0, desc.suspension_distance);
 
     let steer_radians = if desc.has_steer {
         desc.steer_angle_deg.to_radians()
@@ -556,26 +554,20 @@ fn step_wheel(
         frame.rotation,
         [steer_radians.sin(), 0.0, steer_radians.cos()],
     );
-    let forward_dir = normalize(subtract(steered, scale(normal, dot(steered, normal))))
-        .unwrap_or(steered);
+    let forward_dir =
+        normalize(subtract(steered, scale(normal, dot(steered, normal)))).unwrap_or(steered);
     let sideways_dir = normalize(cross(normal, forward_dir)).unwrap_or([1.0, 0.0, 0.0]);
 
     let contact_point = hit.point;
     let contact_lever = subtract(contact_point, frame.position);
-    let contact_velocity = add(
-        frame.velocity,
-        cross(frame.angular_velocity, contact_lever),
-    );
+    let contact_velocity = add(frame.velocity, cross(frame.angular_velocity, contact_lever));
     let attachment_lever = subtract(attachment, frame.position);
     let attachment_velocity = add(
         frame.velocity,
         cross(frame.angular_velocity, attachment_lever),
     );
     let ground_velocity = world.velocity(hit.entity).unwrap_or([0.0; 3]);
-    let compression_rate = dot(
-        subtract(attachment_velocity, ground_velocity),
-        down,
-    );
+    let compression_rate = dot(subtract(attachment_velocity, ground_velocity), down);
 
     let rest_compression = desc.suspension_spring.target_position * desc.suspension_distance;
     let penetration = (desc.radius - surface_height).max(0.0);
@@ -599,9 +591,8 @@ fn step_wheel(
     };
     let brake_force = -motion_sign * desc.brake_torque / desc.radius;
     let requested = motor_torque / desc.radius + brake_force;
-    let grip = desc.forward_friction.evaluate(forward_slip.abs())
-        * load
-        * desc.forward_friction.stiffness;
+    let grip =
+        desc.forward_friction.evaluate(forward_slip.abs()) * load * desc.forward_friction.stiffness;
     let sliding = requested.abs() > grip;
     let longitudinal = if sliding {
         let slip_sign = sign_of(forward_slip);
@@ -641,7 +632,10 @@ fn step_wheel(
     });
 
     let force = add(
-        add(scale(forward_dir, longitudinal), scale(sideways_dir, lateral)),
+        add(
+            scale(forward_dir, longitudinal),
+            scale(sideways_dir, lateral),
+        ),
         scale(normal, normal_force),
     );
     let torque = cross(contact_lever, force);
@@ -653,7 +647,12 @@ fn rotation_derivative(rotation: [f64; 4], angular_velocity: [f64; 3]) -> [f64; 
         return [0.0; 4];
     }
     multiply_rotation(
-        [angular_velocity[0], angular_velocity[1], angular_velocity[2], 0.0],
+        [
+            angular_velocity[0],
+            angular_velocity[1],
+            angular_velocity[2],
+            0.0,
+        ],
         rotation,
     )
 }

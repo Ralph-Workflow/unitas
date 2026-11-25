@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from tools import cla
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 DOCUMENT = cla.Document(url="https://example.test/CLA.md", sha256="0" * 64)
 NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
+EXPECTED_COMMENT_COUNT_WITH_FORGERY = 2
 
 
 def user(login: str, user_id: int, kind: str = "User") -> cla.JsonObject:
@@ -32,16 +36,18 @@ def pull(opener: cla.JsonObject, commit_count: int, number: int = 7) -> cla.Json
 
 
 def assert_cla_error(action: Callable[[], object], fragment: str) -> None:
+    caught: str | None = None
     try:
         action()
     except cla.ClaError as error:
-        assert fragment in str(error)
-        return
-    raise AssertionError(f"expected ClaError mentioning {fragment!r}")
+        caught = str(error)
+    assert caught is not None
+    assert fragment in caught
 
 
 def no_lookup(login: str) -> int | None:
-    raise AssertionError(f"unexpected lookup of {login}")
+    message = f"unexpected lookup of {login}"
+    raise AssertionError(message)
 
 
 @dataclass
@@ -56,10 +62,10 @@ class FakeGitHub:
     posted: list[cla.JsonObject] = field(default_factory=list)
     edits: list[tuple[int, str]] = field(default_factory=list)
 
-    def pull(self, number: int) -> cla.JsonObject:
+    def pull(self, _number: int) -> cla.JsonObject:
         return self.pull_request
 
-    def commits(self, number: int) -> list[cla.JsonObject]:
+    def commits(self, _number: int) -> list[cla.JsonObject]:
         return self.pull_commits
 
     def user_id(self, login: str) -> int | None:
@@ -69,7 +75,7 @@ class FakeGitHub:
         return list(self.stored), self.store_sha
 
     def write_signatures(
-        self, signatures: list[cla.Signature], sha: str | None, message: str
+        self, signatures: list[cla.Signature], sha: str | None, _message: str
     ) -> bool:
         assert sha == self.store_sha
         if self.conflicts:
@@ -84,10 +90,10 @@ class FakeGitHub:
         assert target_url == DOCUMENT.url
         self.statuses.append((sha, state, description))
 
-    def comments(self, number: int) -> list[cla.JsonObject]:
+    def comments(self, _number: int) -> list[cla.JsonObject]:
         return self.posted
 
-    def create_comment(self, number: int, body: str) -> None:
+    def create_comment(self, _number: int, body: str) -> None:
         self.posted.append(
             {"id": len(self.posted) + 1, "user": user(cla.COMMENT_AUTHOR, 1), "body": body}
         )
@@ -161,18 +167,17 @@ def test_commit_without_linked_account_is_unresolved() -> None:
 
 
 def test_coauthors_resolve_through_noreply_known_emails_or_lookup() -> None:
-    message = "\n".join(
-        [
-            "Change",
-            "",
-            "Co-authored-by: Bob <bob@example.org>",
-            "Co-authored-by: Carol <303+carol@users.noreply.github.com>",
-            "Co-authored-by: Dan <dan@users.noreply.github.com>",
-            "Co-authored-by: Claude <noreply@anthropic.com>",
-            "Co-authored-by: Helper <99+helper[bot]@users.noreply.github.com>",
-            "Co-authored-by: Erin <erin@example.org>",
-        ]
-    )
+    lines = [
+        "Change",
+        "",
+        "Co-authored-by: Bob <bob@example.org>",
+        "Co-authored-by: Carol <303+carol@users.noreply.github.com>",
+        "Co-authored-by: Dan <dan@users.noreply.github.com>",
+        "Co-authored-by: Claude <noreply@anthropic.com>",
+        "Co-authored-by: Helper <99+helper[bot]@users.noreply.github.com>",
+        "Co-authored-by: Erin <erin@example.org>",
+    ]
+    message = "\n".join(lines)
     commits = [
         commit("1" * 40, "bob@example.org", BOB),
         commit("2" * 40, "alice@example.org", ALICE, message),
@@ -189,46 +194,53 @@ def test_coauthors_resolve_through_noreply_known_emails_or_lookup() -> None:
 def test_unknown_noreply_login_is_unresolved() -> None:
     message = "Change\n\nCo-authored-by: Gone <gone@users.noreply.github.com>"
     commits = [commit("3" * 40, "alice@example.org", ALICE, message)]
-    requirement = cla.required_signers(pull(ALICE, 1), commits, lambda login: None)
+    requirement = cla.required_signers(pull(ALICE, 1), commits, lambda _login: None)
     assert list(requirement.unresolved) == ["gone@users.noreply.github.com"]
 
 
 def test_unsigned_pull_request_fails_status_and_explains_how_to_sign() -> None:
     api = FakeGitHub(pull(ALICE, 1), [commit("4" * 40, "alice@example.org", ALICE)])
     verdict = cla.handle("pull_request_target", pr_event(), api, DOCUMENT, NOW)
-    assert verdict is not None and not verdict.accepted
+    assert verdict is not None
+    assert not verdict.accepted
     assert api.statuses == [("head-sha", "failure", "1 contributor needs to sign the CLA.")]
     assert len(api.posted) == 1
     body = str(api.posted[0]["body"])
     assert body.startswith(cla.COMMENT_MARKER)
-    assert cla.SIGN_PHRASE in body and "- [ ] @alice" in body
+    assert cla.SIGN_PHRASE in body
+    assert "- [ ] @alice" in body
 
 
 def test_signing_comment_records_signature_and_passes() -> None:
     api = FakeGitHub(pull(ALICE, 1), [commit("5" * 40, "alice@example.org", ALICE)])
     cla.handle("pull_request_target", pr_event(), api, DOCUMENT, NOW)
     verdict = cla.handle("issue_comment", comment_event(cla.SIGN_PHRASE, ALICE), api, DOCUMENT, NOW)
-    assert verdict is not None and verdict.accepted
+    assert verdict is not None
+    assert verdict.accepted
     assert [(item.login, item.user_id, item.pull_request) for item in api.stored] == [
         ("alice", 101, 7)
     ]
     assert api.stored[0].signed_at == "2026-11-24T12:00:00+00:00"
     assert api.stored[0].document_sha256 == DOCUMENT.sha256
     assert api.statuses[-1] == ("head-sha", "success", "All contributors have signed the CLA.")
-    assert len(api.posted) == 1 and api.edits and "Thank you!" in api.edits[-1][1]
+    assert len(api.posted) == 1
+    assert api.edits
+    assert "Thank you!" in api.edits[-1][1]
 
 
 def test_signature_from_someone_outside_the_pull_request_is_ignored() -> None:
     api = FakeGitHub(pull(ALICE, 1), [commit("6" * 40, "alice@example.org", ALICE)])
     verdict = cla.handle("issue_comment", comment_event(cla.SIGN_PHRASE, BOB), api, DOCUMENT, NOW)
-    assert verdict is not None and not verdict.accepted
+    assert verdict is not None
+    assert not verdict.accepted
     assert api.stored == []
 
 
 def test_signature_write_retries_after_a_concurrent_update() -> None:
     api = FakeGitHub(pull(ALICE, 1), [commit("7" * 40, "alice@example.org", ALICE)], conflicts=2)
     verdict = cla.handle("issue_comment", comment_event(cla.SIGN_PHRASE, ALICE), api, DOCUMENT, NOW)
-    assert verdict is not None and verdict.accepted
+    assert verdict is not None
+    assert verdict.accepted
     assert len(api.stored) == 1
 
 
@@ -256,7 +268,8 @@ def test_partially_signed_pull_request_lists_remaining_signers() -> None:
     assert verdict is not None
     assert [person.login for person in verdict.missing] == ["bob"]
     body = str(api.posted[0]["body"])
-    assert "- [x] @alice" in body and "- [ ] @bob" in body
+    assert "- [x] @alice" in body
+    assert "- [ ] @bob" in body
 
 
 def test_signed_pull_request_without_prior_comment_stays_quiet() -> None:
@@ -267,7 +280,8 @@ def test_signed_pull_request_without_prior_comment_stays_quiet() -> None:
         store_sha="s",
     )
     verdict = cla.handle("pull_request_target", pr_event(), api, DOCUMENT, NOW)
-    assert verdict is not None and verdict.accepted
+    assert verdict is not None
+    assert verdict.accepted
     assert api.posted == []
     assert api.statuses == [("head-sha", "success", "All contributors have signed the CLA.")]
 
@@ -277,7 +291,7 @@ def test_status_comment_from_another_author_is_not_reused() -> None:
     api.posted.append({"id": 50, "user": BOB, "body": cla.COMMENT_MARKER + "\nforged"})
     cla.handle("pull_request_target", pr_event(), api, DOCUMENT, NOW)
     assert api.edits == []
-    assert len(api.posted) == 2
+    assert len(api.posted) == EXPECTED_COMMENT_COUNT_WITH_FORGERY
 
 
 def test_unresolved_identity_blocks_even_when_everyone_signed() -> None:
@@ -287,7 +301,8 @@ def test_unresolved_identity_blocks_even_when_everyone_signed() -> None:
     ]
     api = FakeGitHub(pull(ALICE, 2), commits, stored=[signature_for(ALICE)], store_sha="s")
     verdict = cla.handle("pull_request_target", pr_event(), api, DOCUMENT, NOW)
-    assert verdict is not None and not verdict.accepted
+    assert verdict is not None
+    assert not verdict.accepted
     assert api.statuses[-1][1] == "failure"
     assert "`ghost@example.org` (author of commit eeeeeee)" in str(api.posted[0]["body"])
 

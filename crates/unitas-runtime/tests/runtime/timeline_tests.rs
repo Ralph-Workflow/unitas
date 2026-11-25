@@ -5,7 +5,7 @@ use unitas_runtime::animation::AnimationWorld;
 use unitas_runtime::cinemachine::{CameraBlend, CinemachineWorld, VirtualCamera};
 use unitas_runtime::timeline::{
     PlaybackState, TimelineClip, TimelineClipPayload, TimelineDiagnostic, TimelineError,
-    TimelineSequence, TimelineTrack, TimelineTrackKind, TimelineWrapMode, TimelineWorld,
+    TimelineSequence, TimelineTrack, TimelineTrackKind, TimelineWorld, TimelineWrapMode,
 };
 
 fn sequence_with(tracks: Vec<TimelineTrack>) -> TimelineSequence {
@@ -84,7 +84,12 @@ fn animation_track(entity: EntityId, start: f64, duration: f64) -> TimelineTrack
     }
 }
 
-fn shot_track(camera: &str, start: f64, duration: f64, blend: Option<CameraBlend>) -> TimelineTrack {
+fn shot_track(
+    camera: &str,
+    start: f64,
+    duration: f64,
+    blend: Option<CameraBlend>,
+) -> TimelineTrack {
     TimelineTrack {
         kind: TimelineTrackKind::CinemachineShot,
         clips: vec![TimelineClip {
@@ -118,7 +123,11 @@ fn state_of(world: &TimelineWorld, player: u64) -> Result<PlaybackState, Box<dyn
 }
 
 fn signal_count(world: &TimelineWorld, player: u64) -> Result<usize, Box<dyn Error>> {
-    Ok(world.player(player).ok_or("player missing")?.signal_events().len())
+    Ok(world
+        .player(player)
+        .ok_or("player missing")?
+        .signal_events()
+        .len())
 }
 
 #[test]
@@ -134,7 +143,10 @@ fn timeline_sequence_duration_is_the_latest_clip_end() -> Result<(), Box<dyn Err
 
 #[test]
 fn timeline_play_advances_the_playhead_and_pause_holds_it() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::Once)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::Once,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 0.5)?;
     assert_eq!(time_of(&world, player)?, 0.5);
@@ -147,7 +159,10 @@ fn timeline_play_advances_the_playhead_and_pause_holds_it() -> Result<(), Box<dy
 
 #[test]
 fn timeline_seek_positions_the_playhead_within_the_sequence() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::Once)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::Once,
+    )?;
     world.player_mut(player).ok_or("player missing")?.seek(2.5);
     assert_eq!(time_of(&world, player)?, 2.5);
     world.player_mut(player).ok_or("player missing")?.seek(9.0);
@@ -159,7 +174,10 @@ fn timeline_seek_positions_the_playhead_within_the_sequence() -> Result<(), Box<
 
 #[test]
 fn timeline_once_wrap_mode_completes_and_raises_stopped() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::Once)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::Once,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 3.0)?;
     world.update(player, 2.0)?;
@@ -170,19 +188,34 @@ fn timeline_once_wrap_mode_completes_and_raises_stopped() -> Result<(), Box<dyn 
     assert_eq!(timeline.time(), 4.0);
     assert_eq!(timeline.stopped_count(), 1);
     world.update(player, 1.0)?;
-    assert_eq!(world.player(player).ok_or("player missing")?.stopped_count(), 1);
+    assert_eq!(
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .stopped_count(),
+        1
+    );
     Ok(())
 }
 
 #[test]
 fn timeline_hold_wrap_mode_keeps_the_last_frame_without_stopping() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::Hold)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::Hold,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 3.0)?;
     world.update(player, 2.0)?;
     assert_eq!(time_of(&world, player)?, 4.0);
     assert!(world.player(player).ok_or("player missing")?.at_end());
-    assert_eq!(world.player(player).ok_or("player missing")?.stopped_count(), 0);
+    assert_eq!(
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .stopped_count(),
+        0
+    );
     world.update(player, 1.0)?;
     assert_eq!(time_of(&world, player)?, 4.0);
     Ok(())
@@ -190,7 +223,10 @@ fn timeline_hold_wrap_mode_keeps_the_last_frame_without_stopping() -> Result<(),
 
 #[test]
 fn timeline_loop_wrap_mode_restarts_from_zero() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::Loop)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::Loop,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 3.0)?;
     world.update(player, 2.0)?;
@@ -203,7 +239,10 @@ fn timeline_loop_wrap_mode_restarts_from_zero() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn timeline_pingpong_wrap_mode_reverses_at_the_ends() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("music", 0.0, 4.0, 1.0)], TimelineWrapMode::PingPong)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("music", 0.0, 4.0, 1.0)],
+        TimelineWrapMode::PingPong,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 3.0)?;
     assert_eq!(time_of(&world, player)?, 3.0);
@@ -236,7 +275,10 @@ fn timeline_signal_fires_once_per_crossing() -> Result<(), Box<dyn Error>> {
     assert_eq!(signal_count(&world, player)?, 0);
     world.update(player, 1.0)?;
     assert_eq!(signal_count(&world, player)?, 1);
-    let events = world.player(player).ok_or("player missing")?.signal_events();
+    let events = world
+        .player(player)
+        .ok_or("player missing")?
+        .signal_events();
     assert_eq!(events[0].signal, "open");
     assert_eq!(events[0].receiver, "door");
     assert_eq!(events[0].time, 1.0);
@@ -317,7 +359,10 @@ fn timeline_activation_track_activates_and_deactivates_its_target() -> Result<()
         .is_empty());
     world.update(player, 1.0)?;
     assert_eq!(
-        world.player(player).ok_or("player missing")?.active_activation_clips(),
+        world
+            .player(player)
+            .ok_or("player missing")?
+            .active_activation_clips(),
         vec![(entity, false)]
     );
     world.update(player, 1.0)?;
@@ -331,10 +376,16 @@ fn timeline_activation_track_activates_and_deactivates_its_target() -> Result<()
 
 #[test]
 fn timeline_audio_track_reports_the_playing_clip_and_volume() -> Result<(), Box<dyn Error>> {
-    let (mut world, player) = timeline_of(vec![audio_track("ambience", 0.0, 2.0, 0.5)], TimelineWrapMode::Once)?;
+    let (mut world, player) = timeline_of(
+        vec![audio_track("ambience", 0.0, 2.0, 0.5)],
+        TimelineWrapMode::Once,
+    )?;
     world.player_mut(player).ok_or("player missing")?.play();
     world.update(player, 0.5)?;
-    let audio = world.player(player).ok_or("player missing")?.active_audio_clips();
+    let audio = world
+        .player(player)
+        .ok_or("player missing")?
+        .active_audio_clips();
     assert_eq!(audio.len(), 1);
     assert_eq!(audio[0].clip, "ambience");
     assert_eq!(audio[0].volume, 0.5);
@@ -350,7 +401,10 @@ fn timeline_audio_track_reports_the_playing_clip_and_volume() -> Result<(), Box<
 #[test]
 fn timeline_animation_track_gates_the_bound_animator() -> Result<(), Box<dyn Error>> {
     let entity = EntityId::new(11);
-    let (mut world, player) = timeline_of(vec![animation_track(entity, 1.0, 1.0)], TimelineWrapMode::Once)?;
+    let (mut world, player) = timeline_of(
+        vec![animation_track(entity, 1.0, 1.0)],
+        TimelineWrapMode::Once,
+    )?;
     let mut animations = AnimationWorld::new();
     animations.ensure_animator(entity, Transform::default());
     world.drive_animation(player, &mut animations)?;
@@ -359,7 +413,10 @@ fn timeline_animation_track_gates_the_bound_animator() -> Result<(), Box<dyn Err
     world.update(player, 1.5)?;
     world.drive_animation(player, &mut animations)?;
     assert_eq!(animations.speed(entity), Some(1.0));
-    let states = world.player(player).ok_or("player missing")?.active_animation_clips();
+    let states = world
+        .player(player)
+        .ok_or("player missing")?
+        .active_animation_clips();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].entity, entity);
     assert_eq!(states[0].local_time, 0.5);
@@ -377,13 +434,22 @@ fn timeline_cinemachine_shot_track_drives_the_live_camera() -> Result<(), Box<dy
     cameras.add_camera(VirtualCamera::new("Shot", 0));
     cameras.set_active(main, true);
     cameras.update(0.0);
-    assert_eq!(cameras.live_camera().map(|camera| camera.name.as_str()), Some("Main"));
+    assert_eq!(
+        cameras.live_camera().map(|camera| camera.name.as_str()),
+        Some("Main")
+    );
     world.player_mut(player).ok_or("player missing")?.play();
     world.drive_cinemachine(player, &mut cameras)?;
-    assert_eq!(cameras.live_camera().map(|camera| camera.name.as_str()), Some("Shot"));
+    assert_eq!(
+        cameras.live_camera().map(|camera| camera.name.as_str()),
+        Some("Shot")
+    );
     world.update(player, 3.0)?;
     world.drive_cinemachine(player, &mut cameras)?;
-    assert_eq!(cameras.live_camera().map(|camera| camera.name.as_str()), Some("Main"));
+    assert_eq!(
+        cameras.live_camera().map(|camera| camera.name.as_str()),
+        Some("Main")
+    );
     Ok(())
 }
 

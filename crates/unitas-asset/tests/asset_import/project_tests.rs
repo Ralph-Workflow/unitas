@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,10 +84,7 @@ fn texture_meta(guid: &str) -> String {
 }
 
 fn build_project(root: &Path, version: &str) -> std::io::Result<()> {
-    write_file(
-        &root.join("Assets/Materials/Brick.mat"),
-        MATERIAL,
-    )?;
+    write_file(&root.join("Assets/Materials/Brick.mat"), MATERIAL)?;
     write_file(
         &root.join("Assets/Materials/Brick.mat.meta"),
         &meta(MATERIAL_GUID, "NativeFormatImporter:"),
@@ -103,7 +99,10 @@ fn build_project(root: &Path, version: &str) -> std::io::Result<()> {
         &root.join("Assets/Scenes/Main.unity.meta"),
         &meta(SCENE_GUID, "NativeFormatImporter:"),
     )?;
-    write_file(&root.join("Assets/Editor/EditorBootstrap.cs"), EDITOR_SCRIPT)?;
+    write_file(
+        &root.join("Assets/Editor/EditorBootstrap.cs"),
+        EDITOR_SCRIPT,
+    )?;
     write_file(
         &root.join("Assets/Editor/EditorBootstrap.cs.meta"),
         &meta(SCRIPT_GUID, "MonoImporter:"),
@@ -111,7 +110,9 @@ fn build_project(root: &Path, version: &str) -> std::io::Result<()> {
 
     write_file(
         &root.join("ProjectSettings/ProjectVersion.txt"),
-        &format!("m_EditorVersion: {version}\nm_EditorVersionWithRevision: {version} (0cf5a3b0e6a3)\n"),
+        &format!(
+            "m_EditorVersion: {version}\nm_EditorVersionWithRevision: {version} (0cf5a3b0e6a3)\n"
+        ),
     )?;
     write_file(
         &root.join("ProjectSettings/ProjectSettings.asset"),
@@ -177,11 +178,7 @@ fn guid_references(root: &Path) -> Vec<(String, String)> {
                 None => continue,
             };
             let value = line[index + "guid:".len()..].trim();
-            let value = value
-                .split([',', '}'])
-                .next()
-                .unwrap_or(value)
-                .trim();
+            let value = value.split([',', '}']).next().unwrap_or(value).trim();
             if value.len() == 32 && value.chars().all(|character| character.is_ascii_hexdigit()) {
                 references.push((value.to_string(), path.to_string_lossy().to_string()));
             }
@@ -232,7 +229,10 @@ fn project_open_twice_yields_identical_identities() -> TestResult {
 
     assert_eq!(first_report.inventory, second_report.inventory);
     assert_eq!(first.inventory(), second.inventory());
-    assert_eq!(first_report.declared_version, second_report.declared_version);
+    assert_eq!(
+        first_report.declared_version,
+        second_report.declared_version
+    );
     assert_eq!(first_report.migration, second_report.migration);
     assert_eq!(first_report.migration, MigrationStatus::Current);
 
@@ -261,10 +261,7 @@ fn project_open_ignores_library_folder() -> TestResult {
     let (_, without_library) = Project::open(&project_root, &store)?;
 
     write_file(&project_root.join("Library/ArtifactDB"), "cache")?;
-    write_file(
-        &project_root.join("Library/Cached.asset"),
-        "cached",
-    )?;
+    write_file(&project_root.join("Library/Cached.asset"), "cached")?;
     write_file(
         &project_root.join("Library/Cached.asset.meta"),
         &meta("99999999999999999999999999999999", "NativeFormatImporter:"),
@@ -377,7 +374,10 @@ fn open_report_enumerates_assets_packages_settings() -> TestResult {
         .collect();
     assert_eq!(
         sub_paths,
-        vec!["Assets/Textures/Tile.png".to_string(), "Assets/Textures/Tile.png".to_string()]
+        vec![
+            "Assets/Textures/Tile.png".to_string(),
+            "Assets/Textures/Tile.png".to_string()
+        ]
     );
 
     assert_eq!(
@@ -482,7 +482,7 @@ fn duplicate_guids_are_reported_not_resolved() -> TestResult {
 
     match report.inventory.lookup(TEXTURE_GUID) {
         GuidLookup::Asset(entry) => {
-            assert_eq!(entry.path, PathBuf::from("Assets/Textures/Tile.png"))
+            assert_eq!(entry.path, PathBuf::from("Assets/Textures/Tile.png"));
         }
         other => return Err(format!("expected the texture asset, got {other:?}").into()),
     }

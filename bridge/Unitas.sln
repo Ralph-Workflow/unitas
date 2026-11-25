@@ -9,7 +9,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Bridge", "Unitas.Bri
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Scripting", "Unitas.Scripting\Unitas.Scripting.csproj", "{D38A1B44-72E9-4B1C-9B2D-6E8F90A1B2C3}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Testing.NUnit", "Unitas.Testing\Shim\Unitas.Testing.NUnit.csproj", "{5E9C2A11-8B34-4D62-9F10-1A2B3C4D5E6F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Testing.NUnit", "Unitas.Testing.NUnit\Unitas.Testing.NUnit.csproj", "{5E9C2A11-8B34-4D62-9F10-1A2B3C4D5E6F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Testing", "Unitas.Testing\Unitas.Testing.csproj", "{7F1D3B22-9C45-4E73-8A21-2B3C4D5E6F70}"
 EndProject

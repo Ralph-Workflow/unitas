@@ -8,11 +8,9 @@ use unitas_render::Image;
 #[cfg(feature = "device")]
 use unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE;
 #[cfg(feature = "device")]
-use unitas_runtime::KEY_RIGHT_ARROW;
+use unitas_runtime::window::{run_windowed_gpu, FramePresenter, GpuFramePresenter, WindowConfig};
 #[cfg(feature = "device")]
-use unitas_runtime::window::{
-    run_windowed_gpu, FramePresenter, GpuFramePresenter, WindowConfig,
-};
+use unitas_runtime::KEY_RIGHT_ARROW;
 
 use crate::bundle::{
     content_hash_hex, stage_bundle_for_host, BundleError, BundleManifest, StagedBundle,
@@ -234,12 +232,12 @@ pub fn launch_bundle(
             message: error.to_string(),
         })?;
 
-    runtime
-        .load_scene(&startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+    runtime.load_scene(&startup_scene_path).map_err(|error| {
+        PlayerStartupError::SceneLoadFailed {
             scene_path: startup_scene_path.clone(),
             message: error.to_string(),
-        })?;
+        }
+    })?;
 
     for frame in 0..frames {
         runtime
@@ -251,9 +249,7 @@ pub fn launch_bundle(
     }
 
     let loaded_scene_count = runtime.scene_count();
-    let root_object_count = runtime
-        .scene_graph()
-        .map_or(0, |graph| graph.roots().len());
+    let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
     let development_diagnostics_enabled = manifest.development_diagnostics;
 
     let _ = runtime.shutdown();
@@ -280,12 +276,12 @@ pub fn launch_bundle_windowed(
             message: error.to_string(),
         })?;
 
-    runtime
-        .load_scene(&startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+    runtime.load_scene(&startup_scene_path).map_err(|error| {
+        PlayerStartupError::SceneLoadFailed {
             scene_path: startup_scene_path.clone(),
             message: error.to_string(),
-        })?;
+        }
+    })?;
 
     let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
         PlayerStartupError::RenderFailed {
@@ -302,11 +298,12 @@ pub fn launch_bundle_windowed(
         (false, String::from("disabled"))
     };
 
-    let mut controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(
-        |error| PlayerStartupError::AudioFailed {
-            message: error.to_string(),
-        },
-    )?;
+    let mut controller =
+        RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(|error| {
+            PlayerStartupError::AudioFailed {
+                message: error.to_string(),
+            }
+        })?;
     let total_pickups = controller.total_pickups;
 
     let width = options.width.max(1);
@@ -400,9 +397,7 @@ pub fn launch_bundle_windowed(
         .unwrap_or([0.0, 0.5, 0.0]);
 
     let loaded_scene_count = runtime.scene_count();
-    let root_object_count = runtime
-        .scene_graph()
-        .map_or(0, |graph| graph.roots().len());
+    let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
     let development_diagnostics_enabled = manifest.development_diagnostics;
     let audio_frames_pushed = presenter.total_audio_frames_pushed();
 
@@ -451,11 +446,9 @@ fn run_windowed_with_controller(
             rt.input_mut()
                 .inject_pointer_move((frame.frame_index as f64) * 6.0, 3.0);
         }
-        if let (Ok(mut ctrl), Ok(mut meshes), Ok(mut cam)) = (
-            cb_controller.lock(),
-            cb_meshes.lock(),
-            cb_camera.lock(),
-        ) {
+        if let (Ok(mut ctrl), Ok(mut meshes), Ok(mut cam)) =
+            (cb_controller.lock(), cb_meshes.lock(), cb_camera.lock())
+        {
             ctrl.step_on_bindings(rt, &mut meshes, &mut cam, frame.delta_seconds)
                 .map_err(|error| unitas_runtime::window::WindowError::Runtime(error.to_string()))?;
         }
@@ -484,8 +477,7 @@ pub fn decode_bmp_bytes(bytes: &[u8]) -> Result<Image, String> {
     if &bytes[0..2] != b"BM" {
         return Err(String::from("missing 'BM' signature"));
     }
-    let data_offset =
-        u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]) as usize;
+    let data_offset = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]) as usize;
     let width_i32 = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
     let height_i32 = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
     let bpp = u16::from_le_bytes([bytes[28], bytes[29]]);
@@ -493,7 +485,9 @@ pub fn decode_bmp_bytes(bytes: &[u8]) -> Result<Image, String> {
         return Err(format!("invalid BMP dimensions {width_i32}x{height_i32}"));
     }
     if bpp != 24 {
-        return Err(format!("unsupported BMP bits_per_pixel {bpp} (expected 24)"));
+        return Err(format!(
+            "unsupported BMP bits_per_pixel {bpp} (expected 24)"
+        ));
     }
     let width = width_i32 as u32;
     let top_down = height_i32 < 0;
@@ -550,10 +544,8 @@ pub fn capture_sample_reference_bmp(
     width: u32,
     height: u32,
 ) -> Result<Image, PlayerStartupError> {
-    let temp_bundle_dir = std::env::temp_dir().join(format!(
-        "unitas_sample_ref_capture_{}",
-        std::process::id()
-    ));
+    let temp_bundle_dir =
+        std::env::temp_dir().join(format!("unitas_sample_ref_capture_{}", std::process::id()));
     let staged = stage_roll_a_ball_bundle(&temp_bundle_dir).map_err(|source| {
         PlayerStartupError::ManifestLoad {
             bundle_dir: temp_bundle_dir.clone(),
@@ -566,20 +558,22 @@ pub fn capture_sample_reference_bmp(
         unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
             message: error.to_string(),
         })?;
-    runtime
-        .load_scene(&startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+    runtime.load_scene(&startup_scene_path).map_err(|error| {
+        PlayerStartupError::SceneLoadFailed {
             scene_path: startup_scene_path.clone(),
             message: error.to_string(),
-        })?;
+        }
+    })?;
     let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
         PlayerStartupError::RenderFailed {
             message: error.to_string(),
         }
     })?;
-    let mut controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter)
-        .map_err(|error| PlayerStartupError::AudioFailed {
-            message: error.to_string(),
+    let mut controller =
+        RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(|error| {
+            PlayerStartupError::AudioFailed {
+                message: error.to_string(),
+            }
         })?;
 
     runtime
@@ -608,14 +602,14 @@ pub fn capture_sample_reference_bmp(
             ),
         })?;
     }
-    image
-        .write_bmp(reference_bmp_path)
-        .map_err(|error| PlayerStartupError::VerificationFailed {
+    image.write_bmp(reference_bmp_path).map_err(|error| {
+        PlayerStartupError::VerificationFailed {
             message: format!(
                 "failed to write reference BMP '{}': {error}",
                 reference_bmp_path.display()
             ),
-        })?;
+        }
+    })?;
 
     let _ = runtime.shutdown();
     let _ = fs::remove_dir_all(&temp_bundle_dir);
@@ -627,14 +621,13 @@ pub fn run_device_verification(
     reference_bmp_path: &Path,
     frames: u64,
 ) -> Result<DeviceVerifyReport, PlayerStartupError> {
-    let reference_bytes = fs::read(reference_bmp_path).map_err(|error| {
-        PlayerStartupError::VerificationFailed {
+    let reference_bytes =
+        fs::read(reference_bmp_path).map_err(|error| PlayerStartupError::VerificationFailed {
             message: format!(
                 "failed to read approved reference BMP '{}': {error}",
                 reference_bmp_path.display()
             ),
-        }
-    })?;
+        })?;
     let reference_image = decode_bmp_bytes(&reference_bytes).map_err(|message| {
         PlayerStartupError::VerificationFailed {
             message: format!(
@@ -663,21 +656,23 @@ pub fn run_device_verification(
         unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
             message: error.to_string(),
         })?;
-    runtime
-        .load_scene(&startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+    runtime.load_scene(&startup_scene_path).map_err(|error| {
+        PlayerStartupError::SceneLoadFailed {
             scene_path: startup_scene_path,
             message: error.to_string(),
-        })?;
+        }
+    })?;
 
     let mut presenter = GpuFramePresenter::from_new_renderer().map_err(|error| {
         PlayerStartupError::RenderFailed {
             message: error.to_string(),
         }
     })?;
-    let mut controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter)
-        .map_err(|error| PlayerStartupError::AudioFailed {
-            message: error.to_string(),
+    let mut controller =
+        RollABallController::bind_to_scene(&mut runtime, &mut presenter).map_err(|error| {
+            PlayerStartupError::AudioFailed {
+                message: error.to_string(),
+            }
         })?;
 
     let initial_ball_position = controller
@@ -703,10 +698,8 @@ pub fn run_device_verification(
         .map_err(|error| PlayerStartupError::RenderFailed {
             message: error.to_string(),
         })?;
-    let mean_channel_error =
-        mean_image_channel_error(&first_gpu_frame, &reference_image).map_err(|message| {
-            PlayerStartupError::VerificationFailed { message }
-        })?;
+    let mean_channel_error = mean_image_channel_error(&first_gpu_frame, &reference_image)
+        .map_err(|message| PlayerStartupError::VerificationFailed { message })?;
 
     let tolerance = GPU_CPU_MEAN_ERROR_TOLERANCE;
     if mean_channel_error > tolerance {
@@ -932,7 +925,9 @@ pub fn diagnostics_from_bundle_error(error: &BundleError) -> Vec<BuildDiagnostic
             "bundle.manifest_parse",
             message.clone(),
             None,
-            Some(String::from("rebuild the output bundle to regenerate a valid manifest")),
+            Some(String::from(
+                "rebuild the output bundle to regenerate a valid manifest",
+            )),
         )],
     }
 }

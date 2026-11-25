@@ -1,7 +1,7 @@
 use jpeg_decoder::{Decoder, Error as JpegError, PixelFormat};
 
-pub use crate::texture::import::{DecodedTexture, TextureImportError};
 use crate::texture::import::TextureFormat;
+pub use crate::texture::import::{DecodedTexture, TextureImportError};
 
 pub const SIGNATURE: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
@@ -26,7 +26,9 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
     let width = u32::from(info.width);
     let height = u32::from(info.height);
     if width == 0 || height == 0 {
-        return Err(TextureImportError::CorruptData("zero image size".to_string()));
+        return Err(TextureImportError::CorruptData(
+            "zero image size".to_string(),
+        ));
     }
     let pixel_count = (width as usize).saturating_mul(height as usize);
     let pixels = to_rgba8(info.pixel_format, &samples, pixel_count)?;

@@ -264,7 +264,11 @@ fn extract_guid_token(after_colon: &str) -> &str {
 
 fn normalize_guid(candidate: &str) -> Option<String> {
     let trimmed = candidate.trim();
-    if trimmed.len() == 32 && trimmed.chars().all(|character| character.is_ascii_hexdigit()) {
+    if trimmed.len() == 32
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
         let lower = trimmed.to_ascii_lowercase();
         if lower.chars().any(|character| character != '0') {
             return Some(lower);

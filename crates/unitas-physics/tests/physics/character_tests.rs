@@ -21,11 +21,7 @@ fn static_box(position: [f64; 3], half_extents: [f64; 3]) -> BodyDesc {
     }
 }
 
-fn oriented_static_box(
-    position: [f64; 3],
-    rotation: [f64; 4],
-    half_extents: [f64; 3],
-) -> BodyDesc {
+fn oriented_static_box(position: [f64; 3], rotation: [f64; 4], half_extents: [f64; 3]) -> BodyDesc {
     BodyDesc {
         rotation,
         ..static_box(position, half_extents)
@@ -254,7 +250,8 @@ fn narrow_step_too_thin_to_support_tread_is_rejected() -> Result<(), PhysicsErro
 }
 
 #[test]
-fn kinematic_platform_moved_via_set_position_carries_grounded_character() -> Result<(), PhysicsError> {
+fn kinematic_platform_moved_via_set_position_carries_grounded_character() -> Result<(), PhysicsError>
+{
     let mut world = World::new();
     let platform = EntityId::new(1);
     world.add_body(
@@ -277,14 +274,16 @@ fn kinematic_platform_moved_via_set_position_carries_grounded_character() -> Res
     )?;
 
     let mut controller = CharacterController::new(0.5, 2.0)?;
-    let landed = controller.move_character_with_dt(&world, [0.0, 1.2, 0.0], [0.0, -0.3, 0.0], 0.1)?;
+    let landed =
+        controller.move_character_with_dt(&world, [0.0, 1.2, 0.0], [0.0, -0.3, 0.0], 0.1)?;
     assert!(landed.is_grounded);
     assert_eq!(landed.ground_entity, Some(platform));
 
     world.set_position(platform, [0.5, -0.5, -0.25])?;
     world.step(0.1)?;
 
-    let carried = controller.move_character_with_dt(&world, landed.position, [0.0, -0.05, 0.0], 0.1)?;
+    let carried =
+        controller.move_character_with_dt(&world, landed.position, [0.0, -0.05, 0.0], 0.1)?;
     assert!(carried.is_grounded);
     assert!((carried.position[0] - 0.5).abs() < 1e-2);
     assert!((carried.position[2] - (-0.25)).abs() < 1e-2);
@@ -504,7 +503,8 @@ fn invalid_controller_configurations_return_physics_error() {
 }
 
 #[test]
-fn triggers_excluded_entity_and_layer_mask_are_ignored_by_character_move() -> Result<(), PhysicsError> {
+fn triggers_excluded_entity_and_layer_mask_are_ignored_by_character_move(
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     world.add_body(
         EntityId::new(1),
@@ -525,10 +525,7 @@ fn triggers_excluded_entity_and_layer_mask_are_ignored_by_character_move() -> Re
         },
     )?;
     let self_entity = EntityId::new(4);
-    world.add_body(
-        self_entity,
-        static_box([0.0, 1.08, 0.0], [0.5, 1.0, 0.5]),
-    )?;
+    world.add_body(self_entity, static_box([0.0, 1.08, 0.0], [0.5, 1.0, 0.5]))?;
 
     let mut controller = CharacterController::new(0.5, 2.0)?;
     controller.layer_mask = ALL_LAYERS;
@@ -562,4 +559,3 @@ fn collision_flags_bit_operations_compose_and_mask() {
         CollisionFlags::SIDES | CollisionFlags::ABOVE | CollisionFlags::BELOW
     );
 }
-

@@ -48,10 +48,7 @@ namespace Unitas.Bridge.Playtest
 
         public static ScenarioDocument Parse(string json)
         {
-            if (json is null)
-            {
-                throw new ArgumentNullException(nameof(json));
-            }
+            ArgumentNullException.ThrowIfNull(json);
 
             JsonDocument document;
             try
@@ -178,7 +175,7 @@ namespace Unitas.Bridge.Playtest
             }
         }
 
-        private static ScenarioStep ParseLoadSceneStep(JsonElement body, string path)
+        private static LoadSceneStep ParseLoadSceneStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "path", "mode");
             string scenePath = ReadRequiredString(body, "path", path + ".path");
@@ -208,7 +205,7 @@ namespace Unitas.Bridge.Playtest
             return new LoadSceneStep(scenePath, mode);
         }
 
-        private static ScenarioStep ParseTickStep(JsonElement body, string path)
+        private static TickStep ParseTickStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "frames", "delta_seconds");
             int frames = ReadOptionalInt(body, "frames", path + ".frames", 1);
@@ -226,7 +223,7 @@ namespace Unitas.Bridge.Playtest
             return new TickStep(frames, deltaSeconds);
         }
 
-        private static ScenarioStep ParseInjectKeyStep(JsonElement body, string path)
+        private static InjectKeyStep ParseInjectKeyStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "key", "pressed");
             string key = ReadRequiredString(body, "key", path + ".key");
@@ -239,7 +236,7 @@ namespace Unitas.Bridge.Playtest
             return new InjectKeyStep(key, pressed);
         }
 
-        private static ScenarioStep ParseInjectMouseButtonStep(JsonElement body, string path)
+        private static InjectMouseButtonStep ParseInjectMouseButtonStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "button", "pressed");
             int button = ReadRequiredInt(body, "button", path + ".button");
@@ -252,7 +249,7 @@ namespace Unitas.Bridge.Playtest
             return new InjectMouseButtonStep(button, pressed);
         }
 
-        private static ScenarioStep ParseInjectPointerStep(JsonElement body, string path)
+        private static InjectPointerStep ParseInjectPointerStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "x", "y");
             double x = ReadRequiredNumber(body, "x", path + ".x");
@@ -260,7 +257,7 @@ namespace Unitas.Bridge.Playtest
             return new InjectPointerStep(x, y);
         }
 
-        private static ScenarioStep ParseInjectScrollStep(JsonElement body, string path)
+        private static InjectScrollStep ParseInjectScrollStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "x", "y");
             double x = ReadOptionalNumber(body, "x", path + ".x", 0.0);
@@ -268,7 +265,7 @@ namespace Unitas.Bridge.Playtest
             return new InjectScrollStep(x, y);
         }
 
-        private static ScenarioStep ParseSetTimeScaleStep(JsonElement body, string path)
+        private static SetTimeScaleStep ParseSetTimeScaleStep(JsonElement body, string path)
         {
             RejectUnknownProperties(body, path, "value");
             double value = ReadRequiredNumber(body, "value", path + ".value");

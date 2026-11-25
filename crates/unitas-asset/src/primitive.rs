@@ -1,11 +1,7 @@
-//! Built-in primitive meshes and the identity table of Unity's built-in resources.
-
 use std::f32::consts::PI;
 
-/// Unity's `unity_builtin_extra` resource GUID, shared by every built-in primitive.
 pub const BUILTIN_EXTRA_GUID: &str = "0000000000000000e000000000000000";
 
-/// The six meshes Unity ships as built-in resources.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinPrimitive {
     Cube,
@@ -16,7 +12,6 @@ pub enum BuiltinPrimitive {
     Quad,
 }
 
-/// Vertex data of one mesh, in Unity's component order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshData {
     pub name: String,
@@ -27,7 +22,6 @@ pub struct MeshData {
     pub sub_meshes: Vec<SubMesh>,
 }
 
-/// One index range of a mesh, addressable by a sub-asset id that survives reimport.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubMesh {
     pub name: String,
@@ -36,7 +30,6 @@ pub struct SubMesh {
     pub sub_asset_id: String,
 }
 
-/// Built-in identity data: primitive, resource GUID and local file id.
 const IDENTITY_TABLE: [(BuiltinPrimitive, &str, i64); 6] = [
     (BuiltinPrimitive::Cube, BUILTIN_EXTRA_GUID, 10202),
     (BuiltinPrimitive::Cylinder, BUILTIN_EXTRA_GUID, 10206),
@@ -48,7 +41,6 @@ const IDENTITY_TABLE: [(BuiltinPrimitive, &str, i64); 6] = [
 
 const CUBE_HALF_EXTENT: f32 = 0.5;
 const QUAD_HALF_EXTENT: f32 = 0.5;
-/// Unity's built-in Plane spans ten units, unlike the unit-sized cube and quad.
 const PLANE_HALF_EXTENT: f32 = 5.0;
 const SPHERE_RADIUS: f32 = 1.0;
 const SPHERE_SIDES: usize = 24;
@@ -61,7 +53,6 @@ const CAPSULE_HALF_BODY: f32 = 0.5;
 const CAPSULE_SIDES: usize = 24;
 const CAPSULE_CAP_RINGS: usize = 6;
 
-/// The local file id Unity assigns to a built-in primitive.
 pub fn builtin_file_id(p: BuiltinPrimitive) -> i64 {
     IDENTITY_TABLE
         .iter()
@@ -69,7 +60,6 @@ pub fn builtin_file_id(p: BuiltinPrimitive) -> i64 {
         .map_or(0, |(_, _, file_id)| *file_id)
 }
 
-/// The resource GUID a built-in primitive is addressed by.
 pub fn builtin_guid(p: BuiltinPrimitive) -> &'static str {
     IDENTITY_TABLE
         .iter()
@@ -77,7 +67,6 @@ pub fn builtin_guid(p: BuiltinPrimitive) -> &'static str {
         .map_or(BUILTIN_EXTRA_GUID, |(_, guid, _)| *guid)
 }
 
-/// The primitive Unity names `name`, if it is one of the built-ins.
 pub fn builtin_primitive_by_name(name: &str) -> Option<BuiltinPrimitive> {
     match name {
         "Cube" => Some(BuiltinPrimitive::Cube),
@@ -90,7 +79,6 @@ pub fn builtin_primitive_by_name(name: &str) -> Option<BuiltinPrimitive> {
     }
 }
 
-/// The primitive Unity addresses with local file id `file_id`, if any.
 pub fn builtin_primitive_by_file_id(file_id: i64) -> Option<BuiltinPrimitive> {
     IDENTITY_TABLE
         .iter()
@@ -98,11 +86,6 @@ pub fn builtin_primitive_by_file_id(file_id: i64) -> Option<BuiltinPrimitive> {
         .map(|(entry, _, _)| *entry)
 }
 
-/// The primitive whose identity pair matches both `file_id` and `guid`.
-///
-/// A file id alone identifies every built-in in the table, so the GUID is
-/// checked as well: a caller holding a resolved identity only accepts the
-/// primitive when both halves agree.
 pub fn builtin_primitive_by_identity(file_id: i64, guid: &str) -> Option<BuiltinPrimitive> {
     let primitive = builtin_primitive_by_file_id(file_id)?;
     if builtin_guid(primitive).eq_ignore_ascii_case(guid) {
@@ -112,7 +95,6 @@ pub fn builtin_primitive_by_identity(file_id: i64, guid: &str) -> Option<Builtin
     }
 }
 
-/// The mesh of a built-in primitive, identical on every call.
 pub fn primitive_mesh(p: BuiltinPrimitive) -> MeshData {
     let mut mesh = match p {
         BuiltinPrimitive::Cube => cube(),
@@ -168,7 +150,6 @@ fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-/// A closed ring of `sides + 1` vertices, the seam duplicated so `u` reaches one.
 fn build_ring(
     builder: &mut Builder,
     sides: usize,
@@ -183,7 +164,6 @@ fn build_ring(
         .collect()
 }
 
-/// Connects a lower ring to the ring above it, wound so faces point outward.
 fn stitch(builder: &mut Builder, lower: &[u32], upper: &[u32]) {
     for step in 0..lower.len() - 1 {
         builder.triangle(lower[step], upper[step], upper[step + 1]);
@@ -191,7 +171,6 @@ fn stitch(builder: &mut Builder, lower: &[u32], upper: &[u32]) {
     }
 }
 
-/// One cube face: outward normal, corner and the two edges leaving that corner.
 struct Face {
     normal: [f32; 3],
     corner: [f32; 3],
@@ -201,7 +180,6 @@ struct Face {
 
 fn cube() -> MeshData {
     let h = CUBE_HALF_EXTENT;
-    // cross(first, second) is the outward normal of the face.
     let faces = [
         Face {
             normal: [1.0, 0.0, 0.0],
@@ -266,12 +244,7 @@ fn cube() -> MeshData {
 fn quad() -> MeshData {
     let h = QUAD_HALF_EXTENT;
     let normal = [0.0, 0.0, -1.0];
-    let corners = [
-        [-h, -h, 0.0],
-        [-h, h, 0.0],
-        [h, h, 0.0],
-        [h, -h, 0.0],
-    ];
+    let corners = [[-h, -h, 0.0], [-h, h, 0.0], [h, h, 0.0], [h, -h, 0.0]];
     let uvs = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
     let mut builder = Builder::default();
     for (step, position) in corners.iter().enumerate() {
@@ -285,12 +258,7 @@ fn quad() -> MeshData {
 fn plane() -> MeshData {
     let e = PLANE_HALF_EXTENT;
     let normal = [0.0, 1.0, 0.0];
-    let corners = [
-        [-e, 0.0, -e],
-        [-e, 0.0, e],
-        [e, 0.0, e],
-        [e, 0.0, -e],
-    ];
+    let corners = [[-e, 0.0, -e], [-e, 0.0, e], [e, 0.0, e], [e, 0.0, -e]];
     let uvs = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
     let mut builder = Builder::default();
     for (step, position) in corners.iter().enumerate() {
@@ -340,11 +308,7 @@ fn cylinder() -> MeshData {
             let theta = u * 2.0 * PI;
             let (sin_theta, cos_theta) = theta.sin_cos();
             (
-                [
-                    CYLINDER_RADIUS * cos_theta,
-                    y,
-                    CYLINDER_RADIUS * sin_theta,
-                ],
+                [CYLINDER_RADIUS * cos_theta, y, CYLINDER_RADIUS * sin_theta],
                 normal,
                 [0.5 + 0.5 * cos_theta, 0.5 + 0.5 * sin_theta],
             )
@@ -440,12 +404,20 @@ fn capsule() -> MeshData {
         let (sin_theta, cos_theta) = theta.sin_cos();
         let normal = [cos_theta, 0.0, sin_theta];
         lower.push(builder.vertex(
-            [CAPSULE_RADIUS * cos_theta, -CAPSULE_HALF_BODY, CAPSULE_RADIUS * sin_theta],
+            [
+                CAPSULE_RADIUS * cos_theta,
+                -CAPSULE_HALF_BODY,
+                CAPSULE_RADIUS * sin_theta,
+            ],
             normal,
             [u, (0.0 - bottom) / (top - bottom)],
         ));
         upper.push(builder.vertex(
-            [CAPSULE_RADIUS * cos_theta, CAPSULE_HALF_BODY, CAPSULE_RADIUS * sin_theta],
+            [
+                CAPSULE_RADIUS * cos_theta,
+                CAPSULE_HALF_BODY,
+                CAPSULE_RADIUS * sin_theta,
+            ],
             normal,
             [u, (CAPSULE_HALF_BODY - bottom) / (top - bottom)],
         ));

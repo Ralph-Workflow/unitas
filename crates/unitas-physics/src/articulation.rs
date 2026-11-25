@@ -1,13 +1,11 @@
-//! Articulation bodies: rigid links joined by revolute and prismatic joints.
-
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use unitas_core::EntityId;
 
 use crate::body::{
-    add, dot, inverse_rotation, multiply_rotation, rotate_vector, subtract, to_local, vector_length,
-    BodyRole,
+    add, dot, inverse_rotation, multiply_rotation, rotate_vector, subtract, to_local,
+    vector_length, BodyRole,
 };
 use crate::world::World;
 
@@ -46,22 +44,18 @@ impl std::fmt::Display for ArticulationError {
 
 impl std::error::Error for ArticulationError {}
 
-/// The motion a joint allows between a parent link and a child link.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JointKind {
     Revolute,
     Prismatic,
 }
 
-/// The authored limits of the motion a joint allows: radians for a revolute
-/// joint and meters for a prismatic joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointLimits {
     pub lower: f64,
     pub upper: f64,
 }
 
-/// The drive that pulls a joint toward its target.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointDrive {
     pub target: f64,
@@ -69,10 +63,6 @@ pub struct JointDrive {
     pub damping: f64,
 }
 
-/// A joint that links a parent body to a child body inside an articulation.
-///
-/// The anchor and the axis are expressed in the parent's local frame, the child
-/// anchor in the child's local frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArticulationJoint {
     pub parent: EntityId,
@@ -86,7 +76,6 @@ pub struct ArticulationJoint {
 }
 
 impl ArticulationJoint {
-    /// A revolute joint that turns the child link about its axis.
     pub fn revolute(parent: EntityId, child: EntityId) -> Self {
         Self {
             parent,
@@ -107,7 +96,6 @@ impl ArticulationJoint {
         }
     }
 
-    /// A prismatic joint that slides the child link along its axis.
     pub fn prismatic(parent: EntityId, child: EntityId) -> Self {
         Self {
             parent,
@@ -128,37 +116,31 @@ impl ArticulationJoint {
         }
     }
 
-    /// Sets the joint location in the parent's local frame.
     pub fn with_anchor(mut self, anchor: [f64; 3]) -> Self {
         self.anchor = anchor;
         self
     }
 
-    /// Sets the joint location in the child's local frame.
     pub fn with_child_anchor(mut self, child_anchor: [f64; 3]) -> Self {
         self.child_anchor = child_anchor;
         self
     }
 
-    /// Sets the joint axis in the parent's local frame.
     pub fn with_axis(mut self, axis: [f64; 3]) -> Self {
         self.axis = axis;
         self
     }
 
-    /// Sets the authored limits of the joint motion.
     pub fn with_limits(mut self, lower: f64, upper: f64) -> Self {
         self.limits = JointLimits { lower, upper };
         self
     }
 
-    /// Sets the value the drive pulls the joint toward.
     pub fn with_target(mut self, target: f64) -> Self {
         self.drive.target = target;
         self
     }
 
-    /// Sets the stiffness and the damping of the drive.
     pub fn with_drive(mut self, stiffness: f64, damping: f64) -> Self {
         self.drive.stiffness = stiffness;
         self.drive.damping = damping;
@@ -166,8 +148,6 @@ impl ArticulationJoint {
     }
 }
 
-/// The live state of a joint after a step: the angle in radians for a
-/// revolute joint and the offset in meters for a prismatic joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointState {
     pub value: f64,
@@ -184,10 +164,6 @@ struct JointRuntime {
     perpendicular: [f64; 3],
 }
 
-/// A chain of bodies linked by joints, driven toward the authored targets.
-///
-/// The links are driven kinematically: every child link follows the pose of
-/// its parent link, so a joint chain moves as one body.
 pub struct ArticulationBody {
     joints: Vec<ArticulationJoint>,
     runtime: Vec<JointRuntime>,
@@ -196,7 +172,6 @@ pub struct ArticulationBody {
 }
 
 impl ArticulationBody {
-    /// Builds an articulation from its joints.
     pub fn new(joints: Vec<ArticulationJoint>) -> Result<Self, ArticulationError> {
         for joint in &joints {
             if joint.parent == joint.child {
@@ -244,12 +219,10 @@ impl ArticulationBody {
         })
     }
 
-    /// The joints of the articulation, in authored order.
     pub fn joints(&self) -> &[ArticulationJoint] {
         &self.joints
     }
 
-    /// The live state of the joint at `index`, in authored order.
     pub fn joint_state(&self, index: usize) -> Option<JointState> {
         self.runtime.get(index).map(|runtime| JointState {
             value: runtime.value,
@@ -257,12 +230,7 @@ impl ArticulationBody {
         })
     }
 
-    /// Drives every joint toward its target and writes the link poses back.
-    pub fn step(
-        &mut self,
-        world: &mut World,
-        delta_seconds: f64,
-    ) -> Result<(), ArticulationError> {
+    pub fn step(&mut self, world: &mut World, delta_seconds: f64) -> Result<(), ArticulationError> {
         if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
             return Err(ArticulationError::InvalidDeltaTime(delta_seconds));
         }
@@ -360,19 +328,13 @@ impl ArticulationBody {
                     multiply_rotation(turn, runtime.rest_relative),
                     add(
                         joint.anchor,
-                        rotate_vector(
-                            turn,
-                            subtract(runtime.anchor_rest, joint.anchor),
-                        ),
+                        rotate_vector(turn, subtract(runtime.anchor_rest, joint.anchor)),
                     ),
                 )
             }
             JointKind::Prismatic => (
                 runtime.rest_relative,
-                add(
-                    add(joint.anchor, scale(axis, value)),
-                    runtime.perpendicular,
-                ),
+                add(add(joint.anchor, scale(axis, value)), runtime.perpendicular),
             ),
         };
         let child_rotation = multiply_rotation(parent_rotation, relative_rotation);
@@ -432,12 +394,7 @@ fn normalized_axis(axis: [f64; 3]) -> [f64; 3] {
 fn axis_angle(axis: [f64; 3], angle: f64) -> [f64; 4] {
     let half = angle * 0.5;
     let sine = half.sin();
-    [
-        axis[0] * sine,
-        axis[1] * sine,
-        axis[2] * sine,
-        half.cos(),
-    ]
+    [axis[0] * sine, axis[1] * sine, axis[2] * sine, half.cos()]
 }
 
 fn revolute_angle(relative: [f64; 4], axis: [f64; 3]) -> f64 {
@@ -446,9 +403,5 @@ fn revolute_angle(relative: [f64; 4], axis: [f64; 3]) -> f64 {
 }
 
 fn scale(vector: [f64; 3], factor: f64) -> [f64; 3] {
-    [
-        vector[0] * factor,
-        vector[1] * factor,
-        vector[2] * factor,
-    ]
+    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
 }

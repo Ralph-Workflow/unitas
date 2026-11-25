@@ -15,9 +15,8 @@ fn dynamic_body_hitting_static_box_delivers_enter_touching_and_ignore_collision(
         ColliderDesc2D::box_collider(floor_go, [5.0, 0.5]).with_attached_body(floor_body),
     );
 
-    let dyn_body = world.add_body(
-        BodyDesc2D::dynamic(box_go, [0.0, 0.9]).with_velocity([0.0, -2.0]),
-    );
+    let dyn_body =
+        world.add_body(BodyDesc2D::dynamic(box_go, [0.0, 0.9]).with_velocity([0.0, -2.0]));
     let dyn_col = world.add_collider(
         ColliderDesc2D::box_collider(box_go, [0.5, 0.5]).with_attached_body(dyn_body),
     );
@@ -170,9 +169,7 @@ fn message_routing_follows_action_matrix_and_child_collider_game_objects() {
 
     let k_go = EntityId::new(3);
     let k_body = world.add_body(BodyDesc2D::kinematic(k_go, [0.0, 0.0]));
-    world.add_collider(
-        ColliderDesc2D::box_collider(k_go, [1.0, 1.0]).with_attached_body(k_body),
-    );
+    world.add_collider(ColliderDesc2D::box_collider(k_go, [1.0, 1.0]).with_attached_body(k_body));
     world.step(0.02);
     assert!(world.drain_messages().is_empty());
 
@@ -199,9 +196,8 @@ fn trigger_events_fire_enter_stay_exit_only_when_rigidbody_present() {
     let trig_go = EntityId::new(10);
     let mover_go = EntityId::new(11);
 
-    let trig_col = world.add_collider(
-        ColliderDesc2D::box_collider(trig_go, [1.0, 1.0]).with_trigger(true),
-    );
+    let trig_col =
+        world.add_collider(ColliderDesc2D::box_collider(trig_go, [1.0, 1.0]).with_trigger(true));
     let mover_body = world.add_body(BodyDesc2D::dynamic(mover_go, [-2.0, 0.0]));
     let mover_col = world.add_collider(
         ColliderDesc2D::circle_collider(mover_go, 0.5).with_attached_body(mover_body),
@@ -336,10 +332,7 @@ fn fixed_timestep_accumulator_sleeping_and_simulated_flag() {
     }
     let frozen_y = y_after;
     world.step(0.1);
-    assert_eq!(
-        world.body(body_id).map(|b| b.position[1]),
-        Some(frozen_y)
-    );
+    assert_eq!(world.body(body_id).map(|b| b.position[1]), Some(frozen_y));
     assert!(world
         .overlap_point([0.0, frozen_y], ContactFilter2D::no_filter())
         .is_empty());
@@ -405,7 +398,9 @@ fn composite_collider_merges_child_colliders_and_manual_generation_gates_rebuild
     let hits = world.raycast([0.0, 2.0], [0.0, -1.0], 5.0, ContactFilter2D::no_filter());
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].collider, comp_col);
-    assert!(!hits.iter().any(|h| h.collider == left_col || h.collider == right_col));
+    assert!(!hits
+        .iter()
+        .any(|h| h.collider == left_col || h.collider == right_col));
 
     world.set_composite_generation_type(comp_col, CompositeGenerationType2D::Manual);
     let extra_col = world.add_collider(
@@ -465,9 +460,8 @@ fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way
     );
 
     let player_go = EntityId::new(301);
-    let player_body = world.add_body(
-        BodyDesc2D::dynamic(player_go, [0.5, -1.2]).with_velocity([0.0, 12.0]),
-    );
+    let player_body =
+        world.add_body(BodyDesc2D::dynamic(player_go, [0.5, -1.2]).with_velocity([0.0, 12.0]));
     let player_col = world.add_collider(
         ColliderDesc2D::box_collider(player_go, [0.3, 0.3]).with_attached_body(player_body),
     );
@@ -476,7 +470,9 @@ fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way
     for _ in 0..35 {
         world.step(0.02);
         let y = world.body(player_body).map_or(-1.2, |b| b.position[1]);
-        let vy = world.body(player_body).map_or(0.0, |b| b.linear_velocity[1]);
+        let vy = world
+            .body(player_body)
+            .map_or(0.0, |b| b.linear_velocity[1]);
         if vy > 0.0 {
             assert!(
                 world.drain_messages().is_empty(),
@@ -488,7 +484,10 @@ fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way
             break;
         }
     }
-    assert!(passed_up, "player must jump up through one-way composite tilemap");
+    assert!(
+        passed_up,
+        "player must jump up through one-way composite tilemap"
+    );
 
     let mut landed_enter = false;
     for _ in 0..120 {
@@ -499,7 +498,10 @@ fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way
             }
         }
     }
-    assert!(landed_enter, "player landing on composite tilemap must receive OnCollisionEnter2D");
+    assert!(
+        landed_enter,
+        "player landing on composite tilemap must receive OnCollisionEnter2D"
+    );
     assert!(world.is_touching(player_col, comp_col));
 
     world.remove_tilemap_tile(comp_col, [0, 0]);
@@ -536,8 +538,8 @@ fn tilemap_collider_merged_into_composite_updates_when_tile_removed_with_one_way
 #[test]
 fn separate_tilemap_collider_supports_grid_sprite_and_none_tile_types_and_feeds_composite() {
     use unitas_physics::two_d::{
-        CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D, TileColliderType2D,
-        TilemapCollider2D,
+        CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D,
+        TileColliderType2D, TilemapCollider2D,
     };
 
     let mut world = World2D::with_gravity([0.0, 0.0]);
@@ -545,9 +547,8 @@ fn separate_tilemap_collider_supports_grid_sprite_and_none_tile_types_and_feeds_
     let child_tm_go = EntityId::new(401);
     let body = world.add_body(BodyDesc2D::static_body(parent_go, [0.0, 0.0]));
 
-    let comp_col = world.add_collider(
-        ColliderDesc2D::box_collider(parent_go, [0.0, 0.0]).with_attached_body(body),
-    );
+    let comp_col = world
+        .add_collider(ColliderDesc2D::box_collider(parent_go, [0.0, 0.0]).with_attached_body(body));
     world.attach_composite(
         comp_col,
         CompositeCollider2D::new(
@@ -745,4 +746,3 @@ fn rigidbody2d_sleep_modes_and_interpolation_modes_behave_per_mode() {
         extrap_pos[0]
     );
 }
-

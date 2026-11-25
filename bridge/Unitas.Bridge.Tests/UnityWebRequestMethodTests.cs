@@ -231,12 +231,13 @@ namespace Unitas.Bridge.Tests
 
             string url = "http://127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) + "/custom/raw";
             byte[] payload = Encoding.UTF8.GetBytes("{\"op\":\"patch\"}");
-            UploadHandlerRaw uploadHandler = new UploadHandlerRaw(payload)
+            using UploadHandlerRaw uploadHandler = new UploadHandlerRaw(payload)
             {
                 contentType = "application/merge-patch+json",
             };
+            using DownloadHandlerBuffer downloadHandler = new DownloadHandlerBuffer();
 
-            UnityWebRequest request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST, new DownloadHandlerBuffer(), uploadHandler);
+            UnityWebRequest request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST, downloadHandler, uploadHandler);
             request.SetRequestHeader("X-Custom-Trace", "trace-99");
             request.SetRequestHeader("X-Api-Key", "top-secret-key");
             request.timeout = 5;
@@ -328,11 +329,13 @@ namespace Unitas.Bridge.Tests
                 });
 
                 string url = "http://127.0.0.1:" + server.Port.ToString(CultureInfo.InvariantCulture) + "/files/sync";
+                using DownloadHandlerFile downloadHandler = new DownloadHandlerFile(downloadFilePath);
+                using UploadHandlerFile uploadHandler = new UploadHandlerFile(uploadFilePath);
                 using UnityWebRequest request = new UnityWebRequest(
                     url,
                     UnityWebRequest.kHttpVerbPUT,
-                    new DownloadHandlerFile(downloadFilePath),
-                    new UploadHandlerFile(uploadFilePath));
+                    downloadHandler,
+                    uploadHandler);
                 request.timeout = 5;
                 request.SendWebRequest();
 

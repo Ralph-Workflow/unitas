@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -91,7 +90,11 @@ pub enum GuidLookup<'a> {
 
 impl AssetInventory {
     pub fn lookup(&self, guid: &str) -> GuidLookup<'_> {
-        if let Some(duplicate) = self.duplicate_guids.iter().find(|record| record.guid == guid) {
+        if let Some(duplicate) = self
+            .duplicate_guids
+            .iter()
+            .find(|record| record.guid == guid)
+        {
             return GuidLookup::Duplicate(duplicate);
         }
         match self.entries.iter().find(|entry| entry.guid == guid) {
@@ -388,11 +391,7 @@ pub(crate) fn build_inventory(root: &Path) -> Result<AssetInventory, ProjectErro
             });
         }
     }
-    entries.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.kind.cmp(&right.kind))
-    });
+    entries.sort_by(|left, right| left.path.cmp(&right.path).then(left.kind.cmp(&right.kind)));
     Ok(AssetInventory {
         entries,
         duplicate_guids,
@@ -483,7 +482,10 @@ fn native_class(asset_path: &Path) -> Option<String> {
     }
     let text = String::from_utf8(bytes).ok()?;
     let stream = unity_yaml::parse(&text).ok()?;
-    let document = stream.documents.iter().find(|document| !document.stripped)?;
+    let document = stream
+        .documents
+        .iter()
+        .find(|document| !document.stripped)?;
     match &document.root {
         Node::Mapping(entries) => entries.first().map(|(key, _)| key.clone()),
         _ => None,
@@ -590,18 +592,18 @@ fn load_manifest_and_lock(
         path: manifest_path.clone(),
         message: error.to_string(),
     })?;
-    let manifest =
-        parse_manifest(&text).map_err(|error| ProjectError::Packages { message: error.to_string() })?;
+    let manifest = parse_manifest(&text).map_err(|error| ProjectError::Packages {
+        message: error.to_string(),
+    })?;
     let lock_path = directory.join("packages-lock.json");
     let lock = if lock_path.is_file() {
         let text = fs::read_to_string(&lock_path).map_err(|error| ProjectError::Io {
             path: lock_path.clone(),
             message: error.to_string(),
         })?;
-        Some(
-            parse_lock(&text)
-                .map_err(|error| ProjectError::Packages { message: error.to_string() })?,
-        )
+        Some(parse_lock(&text).map_err(|error| ProjectError::Packages {
+            message: error.to_string(),
+        })?)
     } else {
         None
     };

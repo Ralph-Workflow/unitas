@@ -23,7 +23,7 @@ pub struct BreadthFirstIter<'a> {
     queue: VecDeque<EntityId>,
 }
 
-impl<'a> Iterator for BreadthFirstIter<'a> {
+impl Iterator for BreadthFirstIter<'_> {
     type Item = EntityId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -40,7 +40,7 @@ pub struct DepthFirstIter<'a> {
     stack: Vec<EntityId>,
 }
 
-impl<'a> Iterator for DepthFirstIter<'a> {
+impl Iterator for DepthFirstIter<'_> {
     type Item = EntityId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -87,7 +87,7 @@ impl SceneGraph {
             if let Some(parent) = node.transform.parent {
                 node.transform.parent = Some(EntityId::new(base + parent.as_u64()));
             }
-            for child in node.transform.children.iter_mut() {
+            for child in &mut node.transform.children {
                 *child = EntityId::new(base + child.as_u64());
             }
             shifted.insert(new_id, position);
@@ -218,19 +218,13 @@ impl SceneGraph {
         for root in self.roots() {
             queue.push_back(root);
         }
-        BreadthFirstIter {
-            graph: self,
-            queue,
-        }
+        BreadthFirstIter { graph: self, queue }
     }
 
     pub fn iter_depth_first(&self) -> DepthFirstIter<'_> {
         let mut stack = self.roots();
         stack.reverse();
-        DepthFirstIter {
-            graph: self,
-            stack,
-        }
+        DepthFirstIter { graph: self, stack }
     }
 
     pub fn breadth_first_order(&self) -> Vec<EntityId> {

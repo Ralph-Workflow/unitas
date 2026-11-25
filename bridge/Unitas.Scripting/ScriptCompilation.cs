@@ -1475,7 +1475,7 @@ namespace Unitas.Scripting
             }
         }
 
-        private static IReadOnlyList<string> ResolveEngineAndBaseReferences(ScriptCompilationOptions options)
+        private static List<string> ResolveEngineAndBaseReferences(ScriptCompilationOptions options)
         {
             List<string> refs = new List<string>();
             if (_cachedNetReferenceDlls == null)
@@ -1650,7 +1650,7 @@ namespace Unitas.Scripting
             return false;
         }
 
-        private static IReadOnlyList<string> DiscoverNetReferencePackDlls()
+        private static List<string> DiscoverNetReferencePackDlls()
         {
             List<string> dlls = new List<string>();
             if (TryLocateDotnetAndCsc(out string dotnetExe, out string _, out string? _))
@@ -1772,7 +1772,7 @@ namespace Unitas.Scripting
                 string[] lines = File.ReadAllLines(path);
                 for (int i = 0; i < lines.Length; i++)
                 {
-                    int tab = lines[i].IndexOf('\t');
+                    int tab = lines[i].IndexOf('\t', StringComparison.Ordinal);
                     if (tab > 0)
                     {
                         string key = lines[i].Substring(0, tab);

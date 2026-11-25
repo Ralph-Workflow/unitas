@@ -469,8 +469,20 @@ impl BuildReport {
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\n");
         push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
-        push_kv_str(&mut out, 2, "architecture", self.architecture.as_str(), true);
-        push_kv_str(&mut out, 2, "configuration", self.configuration.as_str(), true);
+        push_kv_str(
+            &mut out,
+            2,
+            "architecture",
+            self.architecture.as_str(),
+            true,
+        );
+        push_kv_str(
+            &mut out,
+            2,
+            "configuration",
+            self.configuration.as_str(),
+            true,
+        );
         push_kv_str(&mut out, 2, "company_name", &self.company_name, true);
         push_kv_str(&mut out, 2, "product_name", &self.product_name, true);
         push_kv_str(
@@ -771,7 +783,13 @@ fn push_kv_compatibility_findings(
         push_kv_str(out, indent + 4, "tier", tier_name(item.tier), true);
         push_kv_str(out, indent + 4, "state", state_name(item.state), true);
         push_kv_opt_str(out, indent + 4, "guid", item.guid.as_deref(), true);
-        push_kv_opt_str(out, indent + 4, "asset_path", item.asset_path.as_deref(), true);
+        push_kv_opt_str(
+            out,
+            indent + 4,
+            "asset_path",
+            item.asset_path.as_deref(),
+            true,
+        );
         push_kv_opt_str(
             out,
             indent + 4,
@@ -779,7 +797,13 @@ fn push_kv_compatibility_findings(
             item.sub_asset_id.as_deref(),
             true,
         );
-        push_kv_opt_str(out, indent + 4, "object_name", item.object_name.as_deref(), true);
+        push_kv_opt_str(
+            out,
+            indent + 4,
+            "object_name",
+            item.object_name.as_deref(),
+            true,
+        );
         push_kv_str(out, indent + 4, "behavior", &item.behavior, true);
         push_kv_string_array(
             out,
@@ -1199,10 +1223,7 @@ fn get_optional_path(
     Ok(get_optional_string(obj, key)?.map(PathBuf::from))
 }
 
-fn get_required_u64(
-    obj: &BTreeMap<String, JsonValue>,
-    key: &str,
-) -> Result<u64, ReportParseError> {
+fn get_required_u64(obj: &BTreeMap<String, JsonValue>, key: &str) -> Result<u64, ReportParseError> {
     get_field(obj, key)?.as_u64(key)
 }
 
@@ -1337,7 +1358,10 @@ fn parse_target_arch(raw: &str) -> Result<TargetArch, ReportParseError> {
     }
 }
 
-fn parse_build_target(raw: &str, fallback_arch: TargetArch) -> Result<BuildTarget, ReportParseError> {
+fn parse_build_target(
+    raw: &str,
+    fallback_arch: TargetArch,
+) -> Result<BuildTarget, ReportParseError> {
     for candidate in BuildTarget::all() {
         if candidate.identifier().eq_ignore_ascii_case(raw)
             || candidate.to_string().eq_ignore_ascii_case(raw)
@@ -1434,7 +1458,10 @@ impl ContentBuildReport {
             .collect();
         let mut compatibility_findings = Vec::new();
         for rejected in &result.rejected_bundles {
-            if matches!(&rejected.reason, ContentRejectionReason::UnityBuiltArchive { .. }) {
+            if matches!(
+                &rejected.reason,
+                ContentRejectionReason::UnityBuiltArchive { .. }
+            ) {
                 let source_path = rejected.source_path.to_string_lossy().into_owned();
                 if let Some(finding) = CompatibilityFinding::unity_built_content(&source_path) {
                     compatibility_findings.push(finding);
@@ -1472,7 +1499,13 @@ impl ContentBuildReport {
             true,
         );
         push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
-        push_kv_str(&mut out, 2, "architecture", self.architecture.as_str(), true);
+        push_kv_str(
+            &mut out,
+            2,
+            "architecture",
+            self.architecture.as_str(),
+            true,
+        );
         push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
         push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
         push_kv_opt_path(
@@ -1630,8 +1663,8 @@ mod tests {
     }
 
     #[test]
-    fn succeeded_report_contains_all_spec_fields_and_round_trips_json()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn succeeded_report_contains_all_spec_fields_and_round_trips_json(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let config = sample_config().with_development_build(true);
         let category_sizes = vec![
             SizeCategoryEntry::new("scenes", 4096),
@@ -1743,8 +1776,8 @@ mod tests {
     }
 
     #[test]
-    fn failed_report_from_validation_errors_clears_artifacts_and_round_trips()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn failed_report_from_validation_errors_clears_artifacts_and_round_trips(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut invalid_config = sample_config();
         invalid_config.scenes.clear();
         invalid_config.product_name = String::new();
@@ -1776,8 +1809,8 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_report_has_no_launch_artifact_and_round_trips()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn cancelled_report_has_no_launch_artifact_and_round_trips(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let config = sample_config();
         let report = BuildReport::cancelled(&config, 19);
 
@@ -1795,8 +1828,8 @@ mod tests {
     }
 
     #[test]
-    fn development_and_release_reports_distinguish_configuration_and_diagnostics()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn development_and_release_reports_distinguish_configuration_and_diagnostics(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let release_config = sample_config().with_mode(BuildMode::Release);
         let dev_config = sample_config().with_mode(BuildMode::Development);
 

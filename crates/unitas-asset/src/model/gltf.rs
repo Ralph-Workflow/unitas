@@ -1,5 +1,3 @@
-//! glTF 2.0 and GLB import: one sub-mesh per primitive with stable identities.
-
 use crate::json::{self, JsonValue};
 use crate::primitive::{MeshData, SubMesh};
 
@@ -14,7 +12,6 @@ const COMPONENT_UNSIGNED_BYTE: u32 = 5121;
 const COMPONENT_UNSIGNED_SHORT: u32 = 5123;
 const COMPONENT_UNSIGNED_INT: u32 = 5125;
 
-/// Imports a glTF (JSON) or GLB (binary container) source.
 pub fn import_gltf(bytes: &[u8]) -> Result<MeshData, ModelImportError> {
     if bytes.starts_with(GLB_MAGIC) {
         import_glb(bytes)
@@ -80,10 +77,7 @@ fn import_glb(bytes: &[u8]) -> Result<MeshData, ModelImportError> {
     build_mesh(&document, bin_chunk)
 }
 
-fn build_mesh(
-    document: &JsonValue,
-    glb_bin: Option<&[u8]>,
-) -> Result<MeshData, ModelImportError> {
+fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, ModelImportError> {
     let buffers = read_buffers(document, glb_bin)?;
     let buffer_views = read_buffer_views(document)?;
     let accessors = read_accessors(document)?;
@@ -132,7 +126,8 @@ fn build_mesh(
                 .and_then(|value| value.as_i64())
                 .map(|index| index as usize);
 
-            let local_positions = read_vec3(&buffers, &buffer_views, &accessors, position_accessor)?;
+            let local_positions =
+                read_vec3(&buffers, &buffer_views, &accessors, position_accessor)?;
             let local_normals = match normal_accessor {
                 Some(index) => Some(read_vec3(&buffers, &buffer_views, &accessors, index)?),
                 None => None,
@@ -168,9 +163,7 @@ fn build_mesh(
                 .get("indices")
                 .and_then(|value| value.as_i64())
             {
-                Some(index) => {
-                    read_indices(&buffers, &buffer_views, &accessors, index as usize)?
-                }
+                Some(index) => read_indices(&buffers, &buffer_views, &accessors, index as usize)?,
                 None => (0..local_positions.len() as u32).collect(),
             };
             for index in &local_indices {
@@ -541,7 +534,9 @@ fn accessor_location<'a>(
         })?;
     let buffer = buffers
         .get(view.buffer)
-        .ok_or(ModelImportError::MissingBuffer { buffer: view.buffer })?;
+        .ok_or(ModelImportError::MissingBuffer {
+            buffer: view.buffer,
+        })?;
     let element = component_size(accessor.component_type) * accessor.kind.components();
     let stride = view.byte_stride.unwrap_or(element).max(element);
     let base = view.byte_offset + accessor.byte_offset;
@@ -554,20 +549,23 @@ fn read_f32(buffer: &[u8], offset: usize) -> Result<f32, ModelImportError> {
         .ok_or_else(|| ModelImportError::MalformedGltf {
             reason: "a buffer offset overflows".to_string(),
         })?;
-    let slice = buffer.get(offset..end).ok_or_else(|| ModelImportError::MalformedGltf {
-        reason: format!("a read of 4 bytes at {offset} is past the end of the buffer"),
-    })?;
+    let slice = buffer
+        .get(offset..end)
+        .ok_or_else(|| ModelImportError::MalformedGltf {
+            reason: format!("a read of 4 bytes at {offset} is past the end of the buffer"),
+        })?;
     let mut raw = [0u8; 4];
     raw.copy_from_slice(slice);
     Ok(f32::from_le_bytes(raw))
 }
 
 fn read_u8(buffer: &[u8], offset: usize) -> Result<u8, ModelImportError> {
-    buffer.get(offset).copied().ok_or_else(|| {
-        ModelImportError::MalformedGltf {
+    buffer
+        .get(offset)
+        .copied()
+        .ok_or_else(|| ModelImportError::MalformedGltf {
             reason: format!("a read of 1 byte at {offset} is past the end of the buffer"),
-        }
-    })
+        })
 }
 
 fn read_u16(buffer: &[u8], offset: usize) -> Result<u16, ModelImportError> {
@@ -576,9 +574,11 @@ fn read_u16(buffer: &[u8], offset: usize) -> Result<u16, ModelImportError> {
         .ok_or_else(|| ModelImportError::MalformedGltf {
             reason: "a buffer offset overflows".to_string(),
         })?;
-    let slice = buffer.get(offset..end).ok_or_else(|| ModelImportError::MalformedGltf {
-        reason: format!("a read of 2 bytes at {offset} is past the end of the buffer"),
-    })?;
+    let slice = buffer
+        .get(offset..end)
+        .ok_or_else(|| ModelImportError::MalformedGltf {
+            reason: format!("a read of 2 bytes at {offset} is past the end of the buffer"),
+        })?;
     let mut raw = [0u8; 2];
     raw.copy_from_slice(slice);
     Ok(u16::from_le_bytes(raw))
@@ -590,9 +590,11 @@ fn read_u32_buffer(buffer: &[u8], offset: usize) -> Result<u32, ModelImportError
         .ok_or_else(|| ModelImportError::MalformedGltf {
             reason: "a buffer offset overflows".to_string(),
         })?;
-    let slice = buffer.get(offset..end).ok_or_else(|| ModelImportError::MalformedGltf {
-        reason: format!("a read of 4 bytes at {offset} is past the end of the buffer"),
-    })?;
+    let slice = buffer
+        .get(offset..end)
+        .ok_or_else(|| ModelImportError::MalformedGltf {
+            reason: format!("a read of 4 bytes at {offset} is past the end of the buffer"),
+        })?;
     let mut raw = [0u8; 4];
     raw.copy_from_slice(slice);
     Ok(u32::from_le_bytes(raw))
@@ -604,9 +606,11 @@ fn read_u32_at(bytes: &[u8], offset: usize) -> Result<u32, ModelImportError> {
         .ok_or_else(|| ModelImportError::MalformedGlb {
             reason: "an offset overflows".to_string(),
         })?;
-    let slice = bytes.get(offset..end).ok_or_else(|| ModelImportError::MalformedGlb {
-        reason: format!("a read of 4 bytes at {offset} is past the end of the file"),
-    })?;
+    let slice = bytes
+        .get(offset..end)
+        .ok_or_else(|| ModelImportError::MalformedGlb {
+            reason: format!("a read of 4 bytes at {offset} is past the end of the file"),
+        })?;
     let mut raw = [0u8; 4];
     raw.copy_from_slice(slice);
     Ok(u32::from_le_bytes(raw))

@@ -19,9 +19,14 @@ impl std::fmt::Display for AnimationError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "unsupported controller wire version {version}")
             }
-            Self::InvalidUtf8 => write!(formatter, "invalid utf-8 string in controller wire buffer"),
+            Self::InvalidUtf8 => {
+                write!(formatter, "invalid utf-8 string in controller wire buffer")
+            }
             Self::InvalidTag { section, tag } => {
-                write!(formatter, "invalid tag {tag} in controller wire section {section}")
+                write!(
+                    formatter,
+                    "invalid tag {tag} in controller wire section {section}"
+                )
             }
         }
     }

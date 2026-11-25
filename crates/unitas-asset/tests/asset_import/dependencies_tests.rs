@@ -108,7 +108,10 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
         &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
     )?;
 
-    write_file(&project_root.join("Assets/Textures/Albedo.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Albedo.png"),
+        "png-bytes",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/Albedo.png.meta"),
         &meta(TEXTURE_GUID, "TextureImporter:"),
@@ -117,7 +120,10 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
     let material_yaml = format!(
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: Stone\n  m_SavedProperties:\n    m_TexEnvs:\n    - _MainTex:\n        m_Texture: {{fileID: 2800000, guid: {TEXTURE_GUID}, type: 3}}\n"
     );
-    write_file(&project_root.join("Assets/Materials/Stone.mat"), &material_yaml)?;
+    write_file(
+        &project_root.join("Assets/Materials/Stone.mat"),
+        &material_yaml,
+    )?;
     write_file(
         &project_root.join("Assets/Materials/Stone.mat.meta"),
         &meta(MATERIAL_GUID, "NativeFormatImporter:"),
@@ -126,7 +132,10 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
     let prefab_yaml = format!(
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: Pillar\n--- !u!23 &2300000\nMeshRenderer:\n  m_Materials:\n  - {{fileID: 2100000, guid: {MATERIAL_GUID}, type: 2}}\n"
     );
-    write_file(&project_root.join("Assets/Prefabs/Pillar.prefab"), &prefab_yaml)?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Pillar.prefab"),
+        &prefab_yaml,
+    )?;
     write_file(
         &project_root.join("Assets/Prefabs/Pillar.prefab.meta"),
         &meta(PREFAB_GUID, "NativeFormatImporter:"),
@@ -142,7 +151,10 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
     )?;
 
     let binary_bytes = build_binary_serialized_asset(MATERIAL_GUID);
-    write_bytes(&project_root.join("Assets/Bundles/Compiled.asset"), &binary_bytes)?;
+    write_bytes(
+        &project_root.join("Assets/Bundles/Compiled.asset"),
+        &binary_bytes,
+    )?;
     write_file(
         &project_root.join("Assets/Bundles/Compiled.asset.meta"),
         &meta(BINARY_BUNDLE_GUID, "NativeFormatImporter:"),
@@ -156,7 +168,10 @@ fn dependencies_direct_and_transitive_reverse() -> TestResult {
     assert_eq!(graph.dependencies_of(MATERIAL_GUID), vec![TEXTURE_GUID]);
     assert_eq!(graph.dependencies_of(PREFAB_GUID), vec![MATERIAL_GUID]);
     assert_eq!(graph.dependencies_of(SCENE_GUID), vec![PREFAB_GUID]);
-    assert_eq!(graph.dependencies_of(BINARY_BUNDLE_GUID), vec![MATERIAL_GUID]);
+    assert_eq!(
+        graph.dependencies_of(BINARY_BUNDLE_GUID),
+        vec![MATERIAL_GUID]
+    );
 
     assert_eq!(
         graph.reverse_dependencies_of(TEXTURE_GUID, false),

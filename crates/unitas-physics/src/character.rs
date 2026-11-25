@@ -509,9 +509,7 @@ impl CharacterController {
                 continue;
             }
 
-            if let Some((stepped_pos, step_ground)) =
-                self.try_step_up(world, position, leftover)
-            {
+            if let Some((stepped_pos, step_ground)) = self.try_step_up(world, position, leftover) {
                 position = stepped_pos;
                 flags.insert(CollisionFlags::BELOW);
                 *grounded = true;
@@ -568,11 +566,11 @@ impl CharacterController {
         let raised = [position[0], position[1] + up_clear, position[2]];
 
         let forward_cast_dist = forward_dist + self.skin_width;
-        let forward_travel =
-            match self.cast_capsule(world, raised, forward_dir, forward_cast_dist) {
-                Some(hit) => (hit.distance - self.skin_width).max(0.0),
-                None => forward_dist,
-            };
+        let forward_travel = match self.cast_capsule(world, raised, forward_dir, forward_cast_dist)
+        {
+            Some(hit) => (hit.distance - self.skin_width).max(0.0),
+            None => forward_dist,
+        };
         let min_advance = forward_dist.min(self.skin_width.max(1e-3));
         if forward_travel < min_advance {
             return None;
@@ -594,8 +592,8 @@ impl CharacterController {
         if climb_height <= 1e-4 || climb_height > self.step_offset + 1e-4 {
             return None;
         }
-        let forward_ledge_depth =
-            (down_hit.point[0] - position[0]) * forward_dir[0] + (down_hit.point[2] - position[2]) * forward_dir[2];
+        let forward_ledge_depth = (down_hit.point[0] - position[0]) * forward_dir[0]
+            + (down_hit.point[2] - position[2]) * forward_dir[2];
         let min_step_depth = (self.radius * 0.25).max(self.skin_width);
         let tread_probe_origin = [
             down_hit.point[0] + forward_dir[0] * min_step_depth,
@@ -613,7 +611,8 @@ impl CharacterController {
             .into_iter()
             .find(|hit| Some(hit.entity) != self.excluded_entity && hit.normal[1] > 0.0)
             .is_some_and(|hit| {
-                self.is_walkable_normal(hit.normal) && (hit.point[1] - down_hit.point[1]).abs() <= 1e-2
+                self.is_walkable_normal(hit.normal)
+                    && (hit.point[1] - down_hit.point[1]).abs() <= 1e-2
             });
         if !tread_supported || forward_ledge_depth <= 0.0 {
             return None;
@@ -709,9 +708,8 @@ impl CharacterController {
             self.layer_mask,
             false,
         );
-        hits.into_iter().find(|hit| {
-            Some(hit.entity) != self.excluded_entity && hit.normal[1] > 0.0
-        })
+        hits.into_iter()
+            .find(|hit| Some(hit.entity) != self.excluded_entity && hit.normal[1] > 0.0)
     }
 }
 

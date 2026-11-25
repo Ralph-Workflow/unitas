@@ -336,7 +336,10 @@ mod tests {
         let mut config = valid_config_for(host);
         config.scenes.clear();
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         assert!(errors.iter().any(|err| {
             err.setting == "scenes" && !err.consequence.is_empty() && !err.remedy.is_empty()
         }));
@@ -348,7 +351,10 @@ mod tests {
         let mut config = valid_config_for(host);
         config.scenes = vec![PathBuf::from("Assets/Scenes/Main.txt")];
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         assert!(errors.iter().any(|err| {
             err.setting == "scenes" && !err.consequence.is_empty() && !err.remedy.is_empty()
         }));
@@ -363,7 +369,10 @@ mod tests {
             PathBuf::from("Assets/Scenes/Main.unity"),
         ];
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         assert!(errors.iter().any(|err| {
             err.setting == "scenes"
                 && err.consequence.contains("duplicate")
@@ -380,7 +389,10 @@ mod tests {
         config.application_identifier = String::new();
         config.version = String::new();
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         for expected_setting in [
             "company_name",
             "product_name",
@@ -401,7 +413,10 @@ mod tests {
         let mut config = valid_config_for(host);
         config.target = BuildTarget::WINDOWS_X86_64;
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         assert!(errors.iter().any(|err| {
             err.setting == "target" && !err.consequence.is_empty() && !err.remedy.is_empty()
         }));
@@ -414,7 +429,10 @@ mod tests {
         config.development_build = false;
         config.development_diagnostics = true;
 
-        let errors = config.validate_with_host(Some(host)).unwrap_err();
+        let errors = config
+            .validate_with_host(Some(host))
+            .err()
+            .unwrap_or_default();
         assert!(errors.iter().any(|err| {
             err.setting == "development_diagnostics"
                 && !err.consequence.is_empty()

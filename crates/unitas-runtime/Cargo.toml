@@ -1,3 +1,4 @@
+# Governed by docs/ralph-workflow-policy/linting-policy.md and docs/ralph-workflow-policy/typechecking-policy.md
 [package]
 name = "unitas-runtime"
 version = "0.1.0"
@@ -5,6 +6,9 @@ edition = "2021"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
+
+[lints]
+workspace = true
 
 [features]
 default = []

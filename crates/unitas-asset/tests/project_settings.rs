@@ -226,8 +226,8 @@ fn parses_input_manager_asset_and_skips_joystick_axes() -> TestResult {
 }
 
 #[test]
-fn input_manager_handles_missing_file_and_m_type_aliases_and_rejects_missing_document(
-) -> TestResult {
+fn input_manager_handles_missing_file_and_m_type_aliases_and_rejects_missing_document() -> TestResult
+{
     let missing = settings_dir().join("MissingInputManager.asset");
     assert_eq!(parse_input_manager(&missing), Ok(None));
 

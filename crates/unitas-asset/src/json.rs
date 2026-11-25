@@ -441,9 +441,9 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        if matches!(self.peek(), Some(b'e') | Some(b'E')) {
+        if matches!(self.peek(), Some(b'e' | b'E')) {
             self.pos += 1;
-            if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+            if matches!(self.peek(), Some(b'+' | b'-')) {
                 self.pos += 1;
             }
             match self.peek() {
@@ -455,7 +455,8 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        let text = std::str::from_utf8(&self.bytes[start..self.pos]).map_err(|_| JsonError::InvalidUtf8)?;
+        let text = std::str::from_utf8(&self.bytes[start..self.pos])
+            .map_err(|_| JsonError::InvalidUtf8)?;
         let number: f64 = text.parse::<f64>().map_err(|_| JsonError::InvalidNumber)?;
         if !number.is_finite() {
             return Err(JsonError::InvalidNumber);

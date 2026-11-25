@@ -247,11 +247,17 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
     assert!(outcome_bundle.report.output_location.is_none());
     assert!(outcome_bundle.report.errors.iter().any(|diag| {
         diag.code == "setting.scenes"
-            && diag.remedy.as_deref().is_some_and(|remedy| !remedy.is_empty())
+            && diag
+                .remedy
+                .as_deref()
+                .is_some_and(|remedy| !remedy.is_empty())
     }));
     assert!(outcome_bundle.report.errors.iter().any(|diag| {
         diag.code == "setting.company_name"
-            && diag.remedy.as_deref().is_some_and(|remedy| !remedy.is_empty())
+            && diag
+                .remedy
+                .as_deref()
+                .is_some_and(|remedy| !remedy.is_empty())
     }));
 
     let missing_source_scene = workspace.join("DoesNotExist.unity");

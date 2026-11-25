@@ -106,7 +106,10 @@ enum Property {
 pub(crate) fn parse_instance(body: &Node) -> Option<PrefabInstance> {
     let source = body.get("m_SourcePrefab")?;
     let guid = source.get("guid")?.as_str()?.to_string();
-    let file_id = source.get("fileID").and_then(Node::as_i64).unwrap_or_default();
+    let file_id = source
+        .get("fileID")
+        .and_then(Node::as_i64)
+        .unwrap_or_default();
     let modification = body.get("m_Modification");
     let transform_parent = modification
         .and_then(|body| body.get("m_TransformParent"))
@@ -208,7 +211,11 @@ fn parse_modifications(modification: Option<&Node>) -> Vec<Modification> {
             Some(value) => value.to_string(),
             None => continue,
         };
-        modifications.push(Modification { target_file_id, property_path, value });
+        modifications.push(Modification {
+            target_file_id,
+            property_path,
+            value,
+        });
     }
     modifications
 }
@@ -222,16 +229,28 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
                 (
                     String::from("target"),
                     Node::Mapping(vec![
-                        (String::from("fileID"), Node::Scalar(m.target_file_id.to_string())),
-                        (String::from("guid"), Node::Scalar(instance.source.guid.clone())),
+                        (
+                            String::from("fileID"),
+                            Node::Scalar(m.target_file_id.to_string()),
+                        ),
+                        (
+                            String::from("guid"),
+                            Node::Scalar(instance.source.guid.clone()),
+                        ),
                         (String::from("type"), Node::Scalar(String::from("3"))),
                     ]),
                 ),
-                (String::from("propertyPath"), Node::Scalar(m.property_path.clone())),
+                (
+                    String::from("propertyPath"),
+                    Node::Scalar(m.property_path.clone()),
+                ),
                 (String::from("value"), Node::Scalar(m.value.clone())),
                 (
                     String::from("objectReference"),
-                    Node::Mapping(vec![(String::from("fileID"), Node::Scalar(String::from("0")))]),
+                    Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(String::from("0")),
+                    )]),
                 ),
             ])
         })
@@ -240,12 +259,21 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
     Node::Mapping(vec![(
         String::from("PrefabInstance"),
         Node::Mapping(vec![
-            (String::from("m_ObjectHideFlags"), Node::Scalar(String::from("0"))),
-            (String::from("serializedVersion"), Node::Scalar(String::from("2"))),
+            (
+                String::from("m_ObjectHideFlags"),
+                Node::Scalar(String::from("0")),
+            ),
+            (
+                String::from("serializedVersion"),
+                Node::Scalar(String::from("2")),
+            ),
             (
                 String::from("m_Modification"),
                 Node::Mapping(vec![
-                    (String::from("serializedVersion"), Node::Scalar(String::from("3"))),
+                    (
+                        String::from("serializedVersion"),
+                        Node::Scalar(String::from("3")),
+                    ),
                     (
                         String::from("m_TransformParent"),
                         Node::Mapping(vec![(
@@ -254,10 +282,22 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
                         )]),
                     ),
                     (String::from("m_Modifications"), Node::Sequence(mod_items)),
-                    (String::from("m_RemovedComponents"), Node::Sequence(Vec::new())),
-                    (String::from("m_RemovedGameObjects"), Node::Sequence(Vec::new())),
-                    (String::from("m_AddedGameObjects"), Node::Sequence(Vec::new())),
-                    (String::from("m_AddedComponents"), Node::Sequence(Vec::new())),
+                    (
+                        String::from("m_RemovedComponents"),
+                        Node::Sequence(Vec::new()),
+                    ),
+                    (
+                        String::from("m_RemovedGameObjects"),
+                        Node::Sequence(Vec::new()),
+                    ),
+                    (
+                        String::from("m_AddedGameObjects"),
+                        Node::Sequence(Vec::new()),
+                    ),
+                    (
+                        String::from("m_AddedComponents"),
+                        Node::Sequence(Vec::new()),
+                    ),
                 ]),
             ),
             (
@@ -267,7 +307,10 @@ pub fn render_prefab_instance_body(instance: &PrefabInstance) -> Node {
                         String::from("fileID"),
                         Node::Scalar(instance.source.file_id.to_string()),
                     ),
-                    (String::from("guid"), Node::Scalar(instance.source.guid.clone())),
+                    (
+                        String::from("guid"),
+                        Node::Scalar(instance.source.guid.clone()),
+                    ),
                     (String::from("type"), Node::Scalar(String::from("3"))),
                 ]),
             ),

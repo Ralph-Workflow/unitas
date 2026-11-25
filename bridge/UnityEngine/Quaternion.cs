@@ -439,7 +439,7 @@ namespace UnityEngine
         public bool Equals(Quaternion other) =>
             x.Equals(other.x) && y.Equals(other.y) && z.Equals(other.z) && w.Equals(other.w);
 
-        public override bool Equals(object? other) => other is Quaternion q && Equals(q);
+        public override bool Equals(object? obj) => obj is Quaternion q && Equals(q);
 
         public override int GetHashCode() => HashCode.Combine(x, y, z, w);
 

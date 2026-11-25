@@ -30,9 +30,17 @@ impl MergeSide {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructuralKind {
-    DeleteVersusChange { deleted_by: MergeSide },
-    ReparentCycle { cycle: Vec<i64> },
-    FileIdReuse { base_class: Option<u32>, ours_class: Option<u32>, theirs_class: Option<u32> },
+    DeleteVersusChange {
+        deleted_by: MergeSide,
+    },
+    ReparentCycle {
+        cycle: Vec<i64>,
+    },
+    FileIdReuse {
+        base_class: Option<u32>,
+        ours_class: Option<u32>,
+        theirs_class: Option<u32>,
+    },
     ArrayReorder,
 }
 
@@ -83,12 +91,26 @@ impl MergeOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeError {
-    NotMergeable { reason: String },
-    Yaml { side: MergeSide, error: YamlError },
-    Io { path: PathBuf, message: String },
-    UnresolvedConflicts { conflicts: Vec<MergeConflict> },
-    UnresolvedReferences { references: Vec<UnresolvedReference> },
-    InvalidMerge { message: String },
+    NotMergeable {
+        reason: String,
+    },
+    Yaml {
+        side: MergeSide,
+        error: YamlError,
+    },
+    Io {
+        path: PathBuf,
+        message: String,
+    },
+    UnresolvedConflicts {
+        conflicts: Vec<MergeConflict>,
+    },
+    UnresolvedReferences {
+        references: Vec<UnresolvedReference>,
+    },
+    InvalidMerge {
+        message: String,
+    },
 }
 
 impl fmt::Display for MergeError {
@@ -98,16 +120,28 @@ impl fmt::Display for MergeError {
                 write!(formatter, "asset is not semantically mergeable: {reason}")
             }
             MergeError::Yaml { side, error } => {
-                write!(formatter, "{} side is not valid unity yaml: {error}", side.label())
+                write!(
+                    formatter,
+                    "{} side is not valid unity yaml: {error}",
+                    side.label()
+                )
             }
             MergeError::Io { path, message } => {
                 write!(formatter, "cannot read {}: {}", path.display(), message)
             }
             MergeError::UnresolvedConflicts { conflicts } => {
-                write!(formatter, "merge has {} unresolved conflicts", conflicts.len())
+                write!(
+                    formatter,
+                    "merge has {} unresolved conflicts",
+                    conflicts.len()
+                )
             }
             MergeError::UnresolvedReferences { references } => {
-                write!(formatter, "merge has {} unresolved references", references.len())
+                write!(
+                    formatter,
+                    "merge has {} unresolved references",
+                    references.len()
+                )
             }
             MergeError::InvalidMerge { message } => {
                 write!(formatter, "merge result is invalid: {message}")
@@ -140,7 +174,9 @@ pub fn merge_files_to_path(
 ) -> Result<MergeOutcome, MergeError> {
     let outcome = merge_files(base, ours, theirs)?;
     if !outcome.conflicts.is_empty() {
-        return Err(MergeError::UnresolvedConflicts { conflicts: outcome.conflicts });
+        return Err(MergeError::UnresolvedConflicts {
+            conflicts: outcome.conflicts,
+        });
     }
     let introduced: Vec<UnresolvedReference> = outcome
         .references
@@ -149,7 +185,9 @@ pub fn merge_files_to_path(
         .cloned()
         .collect();
     if !introduced.is_empty() {
-        return Err(MergeError::UnresolvedReferences { references: introduced });
+        return Err(MergeError::UnresolvedReferences {
+            references: introduced,
+        });
     }
     let text = match outcome.merged.as_deref() {
         Some(text) => text,
@@ -208,16 +246,15 @@ fn parse_asset(bytes: &[u8], side: MergeSide) -> Result<Asset, MergeError> {
         let stream = unity_yaml::parse(text).map_err(|error| MergeError::Yaml { side, error })?;
         return Ok(asset_from_stream(stream));
     }
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(_) => {
-            return Err(MergeError::NotMergeable {
+    let text =
+        match std::str::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => return Err(MergeError::NotMergeable {
                 reason: String::from(
                     "asset uses a binary serialization form and carries no readable object data",
                 ),
-            })
-        }
-    };
+            }),
+        };
     match parse_meta_properties(text, side) {
         Ok(properties) => Ok(Asset {
             kind: AssetKind::Meta,
@@ -279,7 +316,11 @@ fn asset_from_stream(stream: Stream) -> Asset {
             }
         })
         .collect();
-    Asset { kind: AssetKind::Unity, header: stream.header, objects }
+    Asset {
+        kind: AssetKind::Unity,
+        header: stream.header,
+        objects,
+    }
 }
 
 fn split_document(document: &Document) -> (Option<String>, Node) {
@@ -295,11 +336,7 @@ fn split_document(document: &Document) -> (Option<String>, Node) {
     (None, Node::Mapping(Vec::new()))
 }
 
-fn merge_assets(
-    base: &Asset,
-    ours: &Asset,
-    theirs: &Asset,
-) -> Result<MergeOutcome, MergeError> {
+fn merge_assets(base: &Asset, ours: &Asset, theirs: &Asset) -> Result<MergeOutcome, MergeError> {
     if base.kind != ours.kind || base.kind != theirs.kind {
         return Err(MergeError::NotMergeable {
             reason: String::from("asset sides use different serialization forms"),
@@ -332,7 +369,12 @@ fn merge_assets(
         }
     }
     let merged_objects = order_objects(&ours.objects, &theirs.objects, &merged);
-    conflicts.extend(cycle_conflicts(&merged_objects, &base.objects, &ours.objects, &theirs.objects));
+    conflicts.extend(cycle_conflicts(
+        &merged_objects,
+        &base.objects,
+        &ours.objects,
+        &theirs.objects,
+    ));
     let mut names: BTreeMap<i64, String> = BTreeMap::new();
     for objects in [&base.objects, &ours.objects, &theirs.objects] {
         for (id, name) in object_names(objects) {
@@ -344,7 +386,7 @@ fn merge_assets(
     }
     let merged_paths = build_paths(&merged_objects, &names);
     let base_paths = build_paths(&base.objects, &names);
-    for conflict in conflicts.iter_mut() {
+    for conflict in &mut conflicts {
         let path = merged_paths
             .get(&conflict.file_id)
             .or_else(|| base_paths.get(&conflict.file_id));
@@ -364,14 +406,18 @@ fn merge_assets(
         ));
     }
     let mut references = references;
-    for reference in references.iter_mut() {
+    for reference in &mut references {
         reference.introduced = !introduced.contains(&(
             reference.file_id,
             reference.property.clone(),
             reference.referenced_file_id,
         ));
     }
-    let header = base.header.clone().or_else(|| ours.header.clone()).or_else(|| theirs.header.clone());
+    let header = base
+        .header
+        .clone()
+        .or_else(|| ours.header.clone())
+        .or_else(|| theirs.header.clone());
     let merged_text = if conflicts.is_empty() {
         let text = serialize_asset(base.kind, &header, &merged_objects);
         validate_merged_text(base.kind, &text)?;
@@ -463,7 +509,9 @@ fn merge_object(
                 base: base_object.map(|object| render_node(&object.properties)),
                 ours: None,
                 theirs: Some(render_node(&theirs.properties)),
-                detail: Some(String::from("object deleted on one side and changed on the other")),
+                detail: Some(String::from(
+                    "object deleted on one side and changed on the other",
+                )),
             };
             (None, vec![conflict])
         }
@@ -478,7 +526,9 @@ fn merge_object(
                 base: base_object.map(|object| render_node(&object.properties)),
                 ours: Some(render_node(&ours.properties)),
                 theirs: None,
-                detail: Some(String::from("object deleted on one side and changed on the other")),
+                detail: Some(String::from(
+                    "object deleted on one side and changed on the other",
+                )),
             };
             (None, vec![conflict])
         }
@@ -552,7 +602,9 @@ fn merge_values(
                 base: base.map(render_node),
                 ours: ours.map(render_node),
                 theirs: theirs.map(render_node),
-                detail: Some(String::from("both sides reordered the same serialized array")),
+                detail: Some(String::from(
+                    "both sides reordered the same serialized array",
+                )),
             };
             (None, vec![conflict])
         }
@@ -733,7 +785,10 @@ fn build_paths(objects: &[Object], names: &BTreeMap<i64, String>) -> BTreeMap<i6
             Some(type_name) => type_name.clone(),
             None => continue,
         };
-        let path = match owner.get(&object.file_id).and_then(|game_object| paths.get(game_object)) {
+        let path = match owner
+            .get(&object.file_id)
+            .and_then(|game_object| paths.get(game_object))
+        {
             Some(game_object_path) => format!("{game_object_path}/{type_name}"),
             None => format!("{type_name}{}", object.file_id),
         };
@@ -752,7 +807,10 @@ fn transform_path(
         Some(info) => info,
         None => return format!("Transform{transform}"),
     };
-    let name = match info.game_object.and_then(|game_object| names.get(&game_object)) {
+    let name = match info
+        .game_object
+        .and_then(|game_object| names.get(&game_object))
+    {
         Some(name) => name.clone(),
         None => format!("Transform{transform}"),
     };
@@ -814,8 +872,8 @@ fn find_cycles(fathers: &BTreeMap<i64, i64>) -> Vec<Vec<i64>> {
 fn same_members(left: &[i64], right: &[i64]) -> bool {
     let mut left: Vec<i64> = left.to_vec();
     let mut right: Vec<i64> = right.to_vec();
-    left.sort();
-    right.sort();
+    left.sort_unstable();
+    right.sort_unstable();
     left == right
 }
 
@@ -833,14 +891,14 @@ fn cycle_conflicts(
         .iter()
         .map(|cycle| {
             let mut members = cycle.clone();
-            members.sort();
+            members.sort_unstable();
             members
         })
         .collect();
     let mut conflicts: Vec<MergeConflict> = Vec::new();
     for cycle in find_cycles(&merged_fathers) {
         let mut members = cycle.clone();
-        members.sort();
+        members.sort_unstable();
         if base_cycles.contains(&members) {
             continue;
         }
@@ -849,7 +907,9 @@ fn cycle_conflicts(
             None => continue,
         };
         conflicts.push(MergeConflict {
-            kind: ConflictKind::Structural(StructuralKind::ReparentCycle { cycle: cycle.clone() }),
+            kind: ConflictKind::Structural(StructuralKind::ReparentCycle {
+                cycle: cycle.clone(),
+            }),
             object_path: String::new(),
             file_id: first,
             property: Some(String::from("m_Father")),
@@ -944,7 +1004,9 @@ fn validate_merged_text(kind: AssetKind, text: &str) -> Result<(), MergeError> {
         AssetKind::Meta => {
             parse_meta_properties(text, MergeSide::Base).map_err(|error| {
                 MergeError::InvalidMerge {
-                    message: format!("merged result does not parse as a property document: {error}"),
+                    message: format!(
+                        "merged result does not parse as a property document: {error}"
+                    ),
                 }
             })?;
         }
@@ -1080,14 +1142,20 @@ fn is_flow_mapping(entries: &[(String, Node)]) -> bool {
     if entries.is_empty() || entries.len() > MAX_FLOW_ENTRIES {
         return false;
     }
-    if !entries.iter().all(|(_, value)| matches!(value, Node::Scalar(_))) {
+    if !entries
+        .iter()
+        .all(|(_, value)| matches!(value, Node::Scalar(_)))
+    {
         return false;
     }
     if entries.iter().any(|(key, _)| key == FLOW_REFERENCE_KEY) {
         return true;
     }
     entries.iter().all(|(key, _)| {
-        key.len() == 1 && key.chars().all(|character| VECTOR_COMPONENTS.contains(character))
+        key.len() == 1
+            && key
+                .chars()
+                .all(|character| VECTOR_COMPONENTS.contains(character))
     })
 }
 
@@ -1608,7 +1676,9 @@ fn is_prefab_override_property(is_prefab: bool, path: &str) -> bool {
 fn is_reference_mapping(entries: &[(String, Node)]) -> bool {
     !entries.is_empty()
         && entries.len() <= MAX_FLOW_ENTRIES
-        && entries.iter().all(|(_, value)| matches!(value, Node::Scalar(_)))
+        && entries
+            .iter()
+            .all(|(_, value)| matches!(value, Node::Scalar(_)))
         && entries.iter().any(|(key, _)| key == FLOW_REFERENCE_KEY)
 }
 
@@ -1623,9 +1693,7 @@ fn canonicalize_node(node: &Node) -> Node {
             sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
             Node::Mapping(sorted)
         }
-        Node::Sequence(items) => {
-            Node::Sequence(items.iter().map(canonicalize_node).collect())
-        }
+        Node::Sequence(items) => Node::Sequence(items.iter().map(canonicalize_node).collect()),
     }
 }
 
@@ -1689,13 +1757,7 @@ fn diff_nodes(
                 } else {
                     format!("{property_path}.{key}")
                 };
-                diff_nodes(
-                    ctx,
-                    &child_path,
-                    old_child,
-                    new_child,
-                    out,
-                );
+                diff_nodes(ctx, &child_path, old_child, new_child, out);
             }
         }
         _ => {
@@ -1806,7 +1868,10 @@ struct AddedObjectKey {
     added_object_file_id: Option<i64>,
 }
 
-fn extract_added_objects(properties: Option<&Node>, field: &str) -> BTreeMap<AddedObjectKey, Option<String>> {
+fn extract_added_objects(
+    properties: Option<&Node>,
+    field: &str,
+) -> BTreeMap<AddedObjectKey, Option<String>> {
     let mut map = BTreeMap::new();
     let items = match properties
         .and_then(|p| p.get("m_Modification"))
@@ -1821,7 +1886,8 @@ fn extract_added_objects(properties: Option<&Node>, field: &str) -> BTreeMap<Add
             .get("targetCorrespondingSourceObject")
             .or_else(|| item.get("target"));
         let (target_file_id, target_guid) = parse_target_ref(target_node);
-        let added_object_file_id = reference_id(item.get("addedObject")).or_else(|| reference_id(Some(item)));
+        let added_object_file_id =
+            reference_id(item.get("addedObject")).or_else(|| reference_id(Some(item)));
         let insert_index = item
             .get("insertIndex")
             .and_then(Node::as_scalar)
@@ -2010,4 +2076,3 @@ fn diff_prefab_instance_overrides(
 
     diffs
 }
-

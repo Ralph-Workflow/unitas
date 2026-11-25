@@ -490,7 +490,8 @@ fn encode_type_tree_blob(endian: Endianness, specs: &[NodeSpec<'_>]) -> Vec<u8> 
     let mut blob = Vec::new();
     put_i32(&mut blob, endian, specs.len() as i32);
     put_i32(&mut blob, endian, string_buf.len() as i32);
-    for (index, (spec, (type_offset, name_offset))) in specs.iter().zip(offsets.iter()).enumerate() {
+    for (index, (spec, (type_offset, name_offset))) in specs.iter().zip(offsets.iter()).enumerate()
+    {
         put_i16(&mut blob, endian, 1);
         blob.push(spec.level);
         blob.push(spec.type_flags);
@@ -510,21 +511,126 @@ fn game_object_type_tree(endian: Endianness) -> Vec<u8> {
     encode_type_tree_blob(
         endian,
         &[
-            NodeSpec { level: 0, type_flags: 0, type_name: "GameObject", name: "Base", byte_size: -1, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "vector", name: "m_Component", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 2, type_flags: 1, type_name: "Array", name: "Array", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 3, type_flags: 0, type_name: "int", name: "size", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 3, type_flags: 0, type_name: "ComponentPair", name: "data", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 4, type_flags: 0, type_name: "PPtr<Component>", name: "component", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 5, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 5, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "unsigned int", name: "m_Layer", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "string", name: "m_Name", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 2, type_flags: 1, type_name: "Array", name: "Array", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 3, type_flags: 0, type_name: "int", name: "size", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 3, type_flags: 0, type_name: "char", name: "data", byte_size: 1, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "UInt16", name: "m_Tag", byte_size: 2, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "bool", name: "m_IsActive", byte_size: 1, meta_flag: ALIGN },
+            NodeSpec {
+                level: 0,
+                type_flags: 0,
+                type_name: "GameObject",
+                name: "Base",
+                byte_size: -1,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "vector",
+                name: "m_Component",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 1,
+                type_name: "Array",
+                name: "Array",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "int",
+                name: "size",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "ComponentPair",
+                name: "data",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 4,
+                type_flags: 0,
+                type_name: "PPtr<Component>",
+                name: "component",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 5,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 5,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "unsigned int",
+                name: "m_Layer",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "string",
+                name: "m_Name",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 1,
+                type_name: "Array",
+                name: "Array",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "int",
+                name: "size",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "char",
+                name: "data",
+                byte_size: 1,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "UInt16",
+                name: "m_Tag",
+                byte_size: 2,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "bool",
+                name: "m_IsActive",
+                byte_size: 1,
+                meta_flag: ALIGN,
+            },
         ],
     )
 }
@@ -534,32 +640,214 @@ fn transform_type_tree(endian: Endianness) -> Vec<u8> {
     encode_type_tree_blob(
         endian,
         &[
-            NodeSpec { level: 0, type_flags: 0, type_name: "Transform", name: "Base", byte_size: -1, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "PPtr<GameObject>", name: "m_GameObject", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "Quaternionf", name: "m_LocalRotation", byte_size: 16, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "x", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "y", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "z", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "w", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "Vector3f", name: "m_LocalPosition", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "x", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "y", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "z", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "Vector3f", name: "m_LocalScale", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "x", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "y", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "float", name: "z", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "vector", name: "m_Children", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 2, type_flags: 1, type_name: "Array", name: "Array", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 3, type_flags: 0, type_name: "int", name: "size", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 3, type_flags: 0, type_name: "PPtr<Transform>", name: "data", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 4, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 4, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "PPtr<Transform>", name: "m_Father", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
+            NodeSpec {
+                level: 0,
+                type_flags: 0,
+                type_name: "Transform",
+                name: "Base",
+                byte_size: -1,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "PPtr<GameObject>",
+                name: "m_GameObject",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "Quaternionf",
+                name: "m_LocalRotation",
+                byte_size: 16,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "x",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "y",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "z",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "w",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "Vector3f",
+                name: "m_LocalPosition",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "x",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "y",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "z",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "Vector3f",
+                name: "m_LocalScale",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "x",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "y",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "float",
+                name: "z",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "vector",
+                name: "m_Children",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 1,
+                type_name: "Array",
+                name: "Array",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "int",
+                name: "size",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "PPtr<Transform>",
+                name: "data",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 4,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 4,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "PPtr<Transform>",
+                name: "m_Father",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
         ],
     )
 }
@@ -569,24 +857,150 @@ fn monobehaviour_type_tree(endian: Endianness) -> Vec<u8> {
     encode_type_tree_blob(
         endian,
         &[
-            NodeSpec { level: 0, type_flags: 0, type_name: "MonoBehaviour", name: "Base", byte_size: -1, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "PPtr<GameObject>", name: "m_GameObject", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "UInt8", name: "m_Enabled", byte_size: 1, meta_flag: ALIGN },
-            NodeSpec { level: 1, type_flags: 0, type_name: "PPtr<MonoScript>", name: "m_Script", byte_size: 12, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "int", name: "m_FileID", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 2, type_flags: 0, type_name: "SInt64", name: "m_PathID", byte_size: 8, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "string", name: "m_Name", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 2, type_flags: 1, type_name: "Array", name: "Array", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 3, type_flags: 0, type_name: "int", name: "size", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 3, type_flags: 0, type_name: "char", name: "data", byte_size: 1, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "float", name: "speed", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "int", name: "ammo", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 1, type_flags: 0, type_name: "string", name: "callsign", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 2, type_flags: 1, type_name: "Array", name: "Array", byte_size: -1, meta_flag: ALIGN },
-            NodeSpec { level: 3, type_flags: 0, type_name: "int", name: "size", byte_size: 4, meta_flag: 0 },
-            NodeSpec { level: 3, type_flags: 0, type_name: "char", name: "data", byte_size: 1, meta_flag: 0 },
+            NodeSpec {
+                level: 0,
+                type_flags: 0,
+                type_name: "MonoBehaviour",
+                name: "Base",
+                byte_size: -1,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "PPtr<GameObject>",
+                name: "m_GameObject",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "UInt8",
+                name: "m_Enabled",
+                byte_size: 1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "PPtr<MonoScript>",
+                name: "m_Script",
+                byte_size: 12,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "int",
+                name: "m_FileID",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 0,
+                type_name: "SInt64",
+                name: "m_PathID",
+                byte_size: 8,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "string",
+                name: "m_Name",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 1,
+                type_name: "Array",
+                name: "Array",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "int",
+                name: "size",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "char",
+                name: "data",
+                byte_size: 1,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "float",
+                name: "speed",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "int",
+                name: "ammo",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 1,
+                type_flags: 0,
+                type_name: "string",
+                name: "callsign",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 2,
+                type_flags: 1,
+                type_name: "Array",
+                name: "Array",
+                byte_size: -1,
+                meta_flag: ALIGN,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "int",
+                name: "size",
+                byte_size: 4,
+                meta_flag: 0,
+            },
+            NodeSpec {
+                level: 3,
+                type_flags: 0,
+                type_name: "char",
+                name: "data",
+                byte_size: 1,
+                meta_flag: 0,
+            },
         ],
     )
 }
@@ -723,17 +1137,66 @@ fn build_typed_v22_fixture(
         meta.push(u8::from(enable_type_tree));
 
         let types: &[(i32, u8, i16, Option<Vec<u8>>)] = &[
-            (1, 0, -1, if enable_type_tree { Some(game_object_type_tree(endian)) } else { None }),
-            (4, 0, -1, if enable_type_tree { Some(transform_type_tree(endian)) } else { None }),
-            (114, 0, 0, if enable_type_tree { Some(monobehaviour_type_tree(endian)) } else { None }),
-            (999, 0, -1, if enable_type_tree {
-                Some(encode_type_tree_blob(endian, &[
-                    NodeSpec { level: 0, type_flags: 0, type_name: "MysteryObject", name: "Base", byte_size: -1, meta_flag: 0 },
-                    NodeSpec { level: 1, type_flags: 0, type_name: "UnsupportedBlobType", name: "m_Blob", byte_size: -1, meta_flag: 0 },
-                ]))
-            } else {
-                None
-            }),
+            (
+                1,
+                0,
+                -1,
+                if enable_type_tree {
+                    Some(game_object_type_tree(endian))
+                } else {
+                    None
+                },
+            ),
+            (
+                4,
+                0,
+                -1,
+                if enable_type_tree {
+                    Some(transform_type_tree(endian))
+                } else {
+                    None
+                },
+            ),
+            (
+                114,
+                0,
+                0,
+                if enable_type_tree {
+                    Some(monobehaviour_type_tree(endian))
+                } else {
+                    None
+                },
+            ),
+            (
+                999,
+                0,
+                -1,
+                if enable_type_tree {
+                    Some(encode_type_tree_blob(
+                        endian,
+                        &[
+                            NodeSpec {
+                                level: 0,
+                                type_flags: 0,
+                                type_name: "MysteryObject",
+                                name: "Base",
+                                byte_size: -1,
+                                meta_flag: 0,
+                            },
+                            NodeSpec {
+                                level: 1,
+                                type_flags: 0,
+                                type_name: "UnsupportedBlobType",
+                                name: "m_Blob",
+                                byte_size: -1,
+                                meta_flag: 0,
+                            },
+                        ],
+                    ))
+                } else {
+                    None
+                },
+            ),
         ];
         put_u32(&mut meta, endian, types.len() as u32);
         for (class_id, is_stripped, script_index, tree_blob) in types {
@@ -812,9 +1275,11 @@ fn build_typed_v22_fixture(
 }
 
 #[test]
-fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes() -> Result<(), BinarySerError> {
+fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes(
+) -> Result<(), BinarySerError> {
     let endian = Endianness::Little;
-    let go_payload = encode_game_object_payload(endian, &[(0, 1002), (0, 1003)], 3, "Hero", 1, true);
+    let go_payload =
+        encode_game_object_payload(endian, &[(0, 1002), (0, 1003)], 3, "Hero", 1, true);
     let tr_payload = encode_transform_payload(
         endian,
         (0, 1001),
@@ -855,24 +1320,45 @@ fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes
 
     let mut asset = SerializedAsset::read(&raw_bytes)?;
     assert!(asset.is_binary());
-    let file = asset
-        .as_binary_mut()
-        .ok_or(BinarySerError::InvalidHeader("expected mutable binary file"))?;
+    let file = asset.as_binary_mut().ok_or(BinarySerError::InvalidHeader(
+        "expected mutable binary file",
+    ))?;
 
     let mut decoded_go: TypedObject = file.decode_object(1001)?;
     assert_eq!(decoded_go.type_name, "GameObject");
-    assert_eq!(decoded_go.get("m_Name").and_then(TypedValue::as_str), Some("Hero"));
-    assert_eq!(decoded_go.get("m_Layer").and_then(TypedValue::as_u32), Some(3));
-    assert_eq!(decoded_go.get("m_IsActive").and_then(TypedValue::as_bool), Some(true));
+    assert_eq!(
+        decoded_go.get("m_Name").and_then(TypedValue::as_str),
+        Some("Hero")
+    );
+    assert_eq!(
+        decoded_go.get("m_Layer").and_then(TypedValue::as_u32),
+        Some(3)
+    );
+    assert_eq!(
+        decoded_go.get("m_IsActive").and_then(TypedValue::as_bool),
+        Some(true)
+    );
 
-    decoded_go.set("m_Name", TypedValue::String("HeroPrimeUpdatedLongerName".to_string()))?;
+    decoded_go.set(
+        "m_Name",
+        TypedValue::String("HeroPrimeUpdatedLongerName".to_string()),
+    )?;
     file.update_object(1001, &decoded_go)?;
 
     let mut decoded_mb: TypedObject = file.decode_object(1003)?;
     assert_eq!(decoded_mb.type_name, "MonoBehaviour");
-    assert_eq!(decoded_mb.get("speed").and_then(TypedValue::as_f32), Some(4.5));
-    assert_eq!(decoded_mb.get("ammo").and_then(TypedValue::as_i32), Some(12));
-    assert_eq!(decoded_mb.get("callsign").and_then(TypedValue::as_str), Some("Alpha"));
+    assert_eq!(
+        decoded_mb.get("speed").and_then(TypedValue::as_f32),
+        Some(4.5)
+    );
+    assert_eq!(
+        decoded_mb.get("ammo").and_then(TypedValue::as_i32),
+        Some(12)
+    );
+    assert_eq!(
+        decoded_mb.get("callsign").and_then(TypedValue::as_str),
+        Some("Alpha")
+    );
 
     decoded_mb.set("speed", TypedValue::F32(9.75))?;
     decoded_mb.set("ammo", TypedValue::I32(42))?;
@@ -887,7 +1373,9 @@ fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes
     assert!(reloaded_asset.is_binary());
     let reloaded = reloaded_asset
         .as_binary()
-        .ok_or(BinarySerError::InvalidHeader("expected binary file on reload"))?;
+        .ok_or(BinarySerError::InvalidHeader(
+            "expected binary file on reload",
+        ))?;
 
     assert_eq!(reloaded.objects.len(), 4);
     assert_eq!(reloaded.objects[0].path_id, 1001);
@@ -914,8 +1402,14 @@ fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes
         reloaded_go.get("m_Name").and_then(TypedValue::as_str),
         Some("HeroPrimeUpdatedLongerName")
     );
-    assert_eq!(reloaded_go.get("m_Layer").and_then(TypedValue::as_u32), Some(3));
-    assert_eq!(reloaded_go.get("m_IsActive").and_then(TypedValue::as_bool), Some(true));
+    assert_eq!(
+        reloaded_go.get("m_Layer").and_then(TypedValue::as_u32),
+        Some(3)
+    );
+    assert_eq!(
+        reloaded_go.get("m_IsActive").and_then(TypedValue::as_bool),
+        Some(true)
+    );
 
     let reloaded_tr = reloaded.decode_object(1002)?;
     let pos = reloaded_tr
@@ -926,8 +1420,14 @@ fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes
     assert_eq!(pos.get("z").and_then(TypedValue::as_f32), Some(3.0));
 
     let reloaded_mb = reloaded.decode_object(1003)?;
-    assert_eq!(reloaded_mb.get("speed").and_then(TypedValue::as_f32), Some(9.75));
-    assert_eq!(reloaded_mb.get("ammo").and_then(TypedValue::as_i32), Some(42));
+    assert_eq!(
+        reloaded_mb.get("speed").and_then(TypedValue::as_f32),
+        Some(9.75)
+    );
+    assert_eq!(
+        reloaded_mb.get("ammo").and_then(TypedValue::as_i32),
+        Some(42)
+    );
     assert_eq!(
         reloaded_mb.get("callsign").and_then(TypedValue::as_str),
         Some("OmegaSquadron")
@@ -957,7 +1457,9 @@ fn typed_decode_edit_write_back_and_reload_preserves_identity_and_unedited_bytes
         Some(7.25)
     );
 
-    let _ = TypeTree { nodes: Vec::<TypeTreeNode>::new() };
+    let _ = TypeTree {
+        nodes: Vec::<TypeTreeNode>::new(),
+    };
     Ok(())
 }
 
@@ -1023,7 +1525,10 @@ fn typed_decode_and_edit_works_for_big_endian_and_shorter_payloads() -> Result<(
 
     let reloaded = read_serialized_file(&saved)?;
     assert_eq!(
-        reloaded.decode_object(1001)?.get("m_Name").and_then(TypedValue::as_str),
+        reloaded
+            .decode_object(1001)?
+            .get("m_Name")
+            .and_then(TypedValue::as_str),
         Some("A")
     );
     assert_eq!(reloaded.object_bytes(1)?, tr_payload.as_slice());
@@ -1072,7 +1577,10 @@ fn typed_decode_reports_missing_type_tree_and_unsupported_type() -> Result<(), B
     let no_tree_file = read_serialized_file(&no_tree_bytes)?;
     assert_eq!(
         no_tree_file.decode_object(1001),
-        Err(BinarySerError::MissingTypeTree { path_id: 1001, class_id: 1 })
+        Err(BinarySerError::MissingTypeTree {
+            path_id: 1001,
+            class_id: 1
+        })
     );
 
     let with_tree_bytes = build_typed_v22_fixture(endian, true, &payloads);

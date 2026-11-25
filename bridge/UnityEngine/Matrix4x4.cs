@@ -514,7 +514,7 @@ namespace UnityEngine
                 && GetColumn(3).Equals(other.GetColumn(3));
         }
 
-        public override bool Equals(object? other) => other is Matrix4x4 m && Equals(m);
+        public override bool Equals(object? obj) => obj is Matrix4x4 m && Equals(m);
 
         public override int GetHashCode() =>
             HashCode.Combine(GetColumn(0), GetColumn(1), GetColumn(2), GetColumn(3));

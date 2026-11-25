@@ -1,5 +1,3 @@
-//! Per-user project trust and fetch consent, stored outside the project.
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -7,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::json::{parse, write as write_json, JsonValue};
 
-/// Who asked for a trust or consent grant; automation can never be granted one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustOrigin {
     Person,
@@ -242,7 +239,6 @@ impl fmt::Display for TrustError {
 
 impl std::error::Error for TrustError {}
 
-/// Per-user trust records keyed by absolute project path.
 #[derive(Debug, Clone)]
 pub struct TrustStore {
     store_path: PathBuf,
@@ -259,7 +255,6 @@ impl TrustStore {
         &self.store_path
     }
 
-    /// Grants trust for a project. An automation request is refused and changes nothing.
     pub fn trust_project(
         &self,
         project_path: &str,
@@ -280,7 +275,6 @@ impl TrustStore {
         Ok(TrustOutcome::Granted)
     }
 
-    /// The automation path: a request reaches the person and never grants trust.
     pub fn request_trust_from_automation(&self, project_path: &str) -> TrustOutcome {
         match self.trust_project(project_path, TrustOrigin::Automation) {
             Ok(outcome) => outcome,
@@ -298,7 +292,6 @@ impl TrustStore {
         Ok(())
     }
 
-    /// Grants fetch consent. Consent never implies trust.
     pub fn grant_fetch_consent(
         &self,
         project_path: &str,
@@ -343,10 +336,11 @@ impl TrustStore {
 
     pub fn record(&self, project_path: &str) -> Option<TrustRecord> {
         let key = self.key(project_path).ok()?;
-        self.records().ok().and_then(|records| records.get(&key).cloned())
+        self.records()
+            .ok()
+            .and_then(|records| records.get(&key).cloned())
     }
 
-    /// Capabilities of a project from the per-user records alone.
     pub fn capabilities(&self, project_path: &str) -> ProjectCapabilities {
         let trusted = self.is_trusted(project_path);
         let consent = self.has_fetch_consent(project_path);
@@ -357,7 +351,6 @@ impl TrustStore {
         }
     }
 
-    /// Capabilities when the invocation itself carries an explicit fetch consent.
     pub fn capabilities_with_fetch_consent(
         &self,
         project_path: &str,
@@ -401,9 +394,9 @@ impl TrustStore {
         }
         let root = parse(&text).map_err(|e| TrustError::InvalidStore(format!("{e:?}")))?;
         let projects = match root.get("projects") {
-            Some(value) => value.as_object().ok_or_else(|| {
-                TrustError::InvalidStore("projects is not an object".to_string())
-            })?,
+            Some(value) => value
+                .as_object()
+                .ok_or_else(|| TrustError::InvalidStore("projects is not an object".to_string()))?,
             None => return Ok(BTreeMap::new()),
         };
         let mut records = BTreeMap::new();
@@ -412,7 +405,10 @@ impl TrustStore {
                 path.clone(),
                 TrustRecord {
                     project_path: path.clone(),
-                    trusted: entry.get("trusted").and_then(|v| v.as_bool()).unwrap_or(false),
+                    trusted: entry
+                        .get("trusted")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                     fetch_consent: entry
                         .get("fetchConsent")
                         .and_then(|v| v.as_bool())
@@ -430,7 +426,10 @@ impl TrustStore {
                 path.clone(),
                 JsonValue::Object(vec![
                     ("trusted".to_string(), JsonValue::Bool(record.trusted)),
-                    ("fetchConsent".to_string(), JsonValue::Bool(record.fetch_consent)),
+                    (
+                        "fetchConsent".to_string(),
+                        JsonValue::Bool(record.fetch_consent),
+                    ),
                 ]),
             ));
         }
@@ -453,7 +452,6 @@ impl TrustStore {
     }
 }
 
-/// Lexically normalizes a path so trust records key on one absolute location.
 fn normalize(path: &str) -> String {
     let raw = Path::new(path);
     let absolute = if raw.is_absolute() {

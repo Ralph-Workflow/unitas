@@ -235,10 +235,7 @@ pub struct SerializedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerializedAsset {
-    Text {
-        stream: Stream,
-        raw: Vec<u8>,
-    },
+    Text { stream: Stream, raw: Vec<u8> },
     Binary(SerializedFile),
 }
 
@@ -489,12 +486,12 @@ impl SerializedFile {
                 class_id: object.class_id,
             });
         }
-        let tree = self.type_tree_for_class(object.class_id)?.ok_or(
-            BinarySerError::MissingTypeTree {
-                path_id,
-                class_id: object.class_id,
-            },
-        )?;
+        let tree =
+            self.type_tree_for_class(object.class_id)?
+                .ok_or(BinarySerError::MissingTypeTree {
+                    path_id,
+                    class_id: object.class_id,
+                })?;
         if tree.nodes.is_empty() {
             return Err(BinarySerError::MissingTypeTree {
                 path_id,
@@ -527,12 +524,12 @@ impl SerializedFile {
                 class_id: typed.class_id,
             });
         }
-        let tree = self.type_tree_for_class(typed.class_id)?.ok_or(
-            BinarySerError::MissingTypeTree {
-                path_id: typed.path_id,
-                class_id: typed.class_id,
-            },
-        )?;
+        let tree =
+            self.type_tree_for_class(typed.class_id)?
+                .ok_or(BinarySerError::MissingTypeTree {
+                    path_id: typed.path_id,
+                    class_id: typed.class_id,
+                })?;
         if tree.nodes.is_empty() {
             return Err(BinarySerError::MissingTypeTree {
                 path_id: typed.path_id,
@@ -545,7 +542,13 @@ impl SerializedFile {
             fields: typed.fields.clone(),
         };
         let mut out = Vec::new();
-        encode_node(&tree.nodes, 0, &root_struct, self.header.endianness, &mut out)?;
+        encode_node(
+            &tree.nodes,
+            0,
+            &root_struct,
+            self.header.endianness,
+            &mut out,
+        )?;
         Ok(out)
     }
 
@@ -623,7 +626,11 @@ impl SerializedFile {
             let entry_offset = table_start_in_raw.saturating_add(idx * OBJECT_ENTRY_SIZE);
             let offset_pos = entry_offset + 12;
             let size_pos = entry_offset + 20;
-            write_u64(&mut self.raw[offset_pos..offset_pos + 8], endian, obj.byte_offset);
+            write_u64(
+                &mut self.raw[offset_pos..offset_pos + 8],
+                endian,
+                obj.byte_offset,
+            );
             write_u32(&mut self.raw[size_pos..size_pos + 4], endian, obj.byte_size);
         }
 
@@ -742,10 +749,7 @@ fn read_unity_version(cursor: &mut Cursor<'_>) -> Result<String, BinarySerError>
             let raw = cursor.take(len)?;
             if !raw.contains(&0) {
                 if let Ok(version) = String::from_utf8(raw.to_vec()) {
-                    if version
-                        .bytes()
-                        .all(|byte| (0x20..=0x7E).contains(&byte))
-                    {
+                    if version.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
                         return Ok(version);
                     }
                 }
@@ -1183,7 +1187,10 @@ fn is_string_node(nodes: &[TypeTreeNode], idx: usize) -> bool {
     }
     let array_children = direct_children(nodes, array_idx);
     array_children.len() == 2
-        && matches!(nodes[array_children[1]].type_name.as_str(), "char" | "UInt8" | "byte")
+        && matches!(
+            nodes[array_children[1]].type_name.as_str(),
+            "char" | "UInt8" | "byte"
+        )
 }
 
 fn is_array_container_node(nodes: &[TypeTreeNode], idx: usize) -> Option<usize> {
@@ -1198,11 +1205,7 @@ fn is_array_container_node(nodes: &[TypeTreeNode], idx: usize) -> Option<usize> 
     None
 }
 
-fn validate_type_tree(
-    tree: &TypeTree,
-    path_id: i64,
-    class_id: i32,
-) -> Result<(), BinarySerError> {
+fn validate_type_tree(tree: &TypeTree, path_id: i64, class_id: i32) -> Result<(), BinarySerError> {
     if tree.nodes.is_empty() {
         return Err(BinarySerError::MissingTypeTree { path_id, class_id });
     }

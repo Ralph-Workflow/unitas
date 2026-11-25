@@ -85,7 +85,10 @@ fn manifest_records_every_dependency_source() -> TestResult {
             .find(|dependency| dependency.name == name)
             .map(|dependency| dependency.source.clone())
     };
-    assert_eq!(source_of("com.example.direct"), Some(PackageSource::Registry));
+    assert_eq!(
+        source_of("com.example.direct"),
+        Some(PackageSource::Registry)
+    );
     assert_eq!(
         source_of("com.example.git"),
         Some(PackageSource::Git(
@@ -96,7 +99,10 @@ fn manifest_records_every_dependency_source() -> TestResult {
         source_of("com.example.local"),
         Some(PackageSource::Local("../local-package".to_string()))
     );
-    assert_eq!(source_of("com.example.embedded"), Some(PackageSource::Embedded));
+    assert_eq!(
+        source_of("com.example.embedded"),
+        Some(PackageSource::Embedded)
+    );
     assert_eq!(
         source_of("com.example.tarball"),
         Some(PackageSource::Tarball("../package.tgz".to_string()))
@@ -298,11 +304,7 @@ fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_l
 ) -> TestResult {
     let manifest = parse_manifest(MANIFEST)?;
 
-    let registry_edit = attempt_package_edit(
-        &manifest,
-        "com.example.direct",
-        "Runtime/Direct.cs",
-    );
+    let registry_edit = attempt_package_edit(&manifest, "com.example.direct", "Runtime/Direct.cs");
     assert_eq!(
         registry_edit,
         PackageEditOutcome::NotCommitted {
@@ -313,11 +315,7 @@ fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_l
         }
     );
 
-    let scoped_edit = attempt_package_edit(
-        &manifest,
-        "com.example.scoped",
-        "Runtime/Scoped.cs",
-    );
+    let scoped_edit = attempt_package_edit(&manifest, "com.example.scoped", "Runtime/Scoped.cs");
     assert!(matches!(
         scoped_edit,
         PackageEditOutcome::NotCommitted {
@@ -327,11 +325,7 @@ fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_l
         } if package == "com.example.scoped"
     ));
 
-    let git_edit = attempt_package_edit(
-        &manifest,
-        "com.example.git",
-        "Runtime/GitFile.cs",
-    );
+    let git_edit = attempt_package_edit(&manifest, "com.example.git", "Runtime/GitFile.cs");
     assert!(matches!(
         git_edit,
         PackageEditOutcome::NotCommitted {
@@ -341,11 +335,8 @@ fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_l
         } if package == "com.example.git"
     ));
 
-    let embedded_edit = attempt_package_edit(
-        &manifest,
-        "com.example.embedded",
-        "Runtime/Embedded.cs",
-    );
+    let embedded_edit =
+        attempt_package_edit(&manifest, "com.example.embedded", "Runtime/Embedded.cs");
     assert_eq!(
         embedded_edit,
         PackageEditOutcome::Committed {
@@ -354,11 +345,7 @@ fn editing_read_only_registry_package_reports_not_committed_while_embedded_and_l
         }
     );
 
-    let local_edit = attempt_package_edit(
-        &manifest,
-        "com.example.local",
-        "Runtime/Local.cs",
-    );
+    let local_edit = attempt_package_edit(&manifest, "com.example.local", "Runtime/Local.cs");
     assert_eq!(
         local_edit,
         PackageEditOutcome::Committed {
@@ -414,12 +401,18 @@ fn locally_edited_cached_registry_and_embedded_packages_are_reported_not_committ
         r#"{"name":"com.unity.render-pipelines.universal","version":"14.0.10-local-edit"}"#,
     )?;
     write_test_file(
-        &root.join("Packages/com.unity.render-pipelines.universal/Runtime/UniversalRenderPipeline.cs"),
+        &root.join(
+            "Packages/com.unity.render-pipelines.universal/Runtime/UniversalRenderPipeline.cs",
+        ),
         "// modified embedded package\n",
     )?;
 
     let findings = detect_package_modifications(&root, &manifest, Some(&lock));
-    assert_eq!(findings.len(), 2, "expected 2 package modification findings: {findings:?}");
+    assert_eq!(
+        findings.len(),
+        2,
+        "expected 2 package modification findings: {findings:?}"
+    );
 
     let rider = findings
         .iter()

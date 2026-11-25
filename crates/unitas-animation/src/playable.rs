@@ -4,7 +4,6 @@ use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, SampledBinding, WrapMode};
 use crate::curve::AnimatedValue;
 
-/// Graph identity is part of every handle so a foreign handle can never alias a local node.
 static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,8 +363,7 @@ impl PlayableGraph {
     }
 
     pub fn output_name(&self, output: PlayableOutputHandle) -> Option<&str> {
-        self.output(output)
-            .map(|entry| entry.name.as_str())
+        self.output(output).map(|entry| entry.name.as_str())
     }
 
     pub fn output_pose(&self, output: PlayableOutputHandle) -> &[SampledBinding] {
@@ -460,13 +458,11 @@ impl PlayableGraph {
         if self.outputs.is_empty() {
             return false;
         }
-        self.outputs
-            .iter()
-            .all(|output| {
-                output
-                    .source
-                    .is_some_and(|source| self.node_is_done(source))
-            })
+        self.outputs.iter().all(|output| {
+            output
+                .source
+                .is_some_and(|source| self.node_is_done(source))
+        })
     }
 
     pub fn playable_time(&self, handle: PlayableHandle) -> Option<f64> {
@@ -673,11 +669,8 @@ impl PlayableGraph {
     }
 
     fn refresh_output_poses(&mut self) {
-        let sources: Vec<Option<PlayableHandle>> = self
-            .outputs
-            .iter()
-            .map(|output| output.source)
-            .collect();
+        let sources: Vec<Option<PlayableHandle>> =
+            self.outputs.iter().map(|output| output.source).collect();
         for (index, source) in sources.into_iter().enumerate() {
             let pose = match source {
                 Some(handle) => self.evaluate_node(handle),
@@ -696,9 +689,10 @@ impl PlayableGraph {
                 clip,
                 previous_time,
                 state,
-            } => clip
-                .sample(*previous_time as f32, state.time as f32)
-                .bindings,
+            } => {
+                clip.sample(*previous_time as f32, state.time as f32)
+                    .bindings
+            }
             PlayableNode::Mixer { inputs, .. } => {
                 let mut pose: Vec<SampledBinding> = Vec::new();
                 let mut accumulated = 0.0_f32;
@@ -764,19 +758,15 @@ impl PlayableGraph {
             }
             PlayableNode::Mixer { inputs, .. } => {
                 !inputs.is_empty()
-                    && inputs.iter().all(|input| {
-                        input
-                            .source
-                            .is_none_or(|source| self.node_is_done(source))
-                    })
+                    && inputs
+                        .iter()
+                        .all(|input| input.source.is_none_or(|source| self.node_is_done(source)))
             }
             PlayableNode::LayerMixer { layers, .. } => {
                 !layers.is_empty()
-                    && layers.iter().all(|layer| {
-                        layer
-                            .source
-                            .is_none_or(|source| self.node_is_done(source))
-                    })
+                    && layers
+                        .iter()
+                        .all(|layer| layer.source.is_none_or(|source| self.node_is_done(source)))
             }
         }
     }

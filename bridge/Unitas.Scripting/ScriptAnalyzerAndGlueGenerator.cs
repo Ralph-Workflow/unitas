@@ -1030,7 +1030,7 @@ namespace Unitas.Scripting
 
                     if (candidateLine.Contains('(', StringComparison.Ordinal) && !candidateLine.Contains('=', StringComparison.Ordinal))
                     {
-                        int semiIdx = candidateLine.IndexOf(';');
+                        int semiIdx = candidateLine.IndexOf(';', StringComparison.Ordinal);
                         int parenIdx = candidateLine.LastIndexOf(')');
                         if (parenIdx > 0 && semiIdx > parenIdx)
                         {
@@ -1256,9 +1256,9 @@ namespace Unitas.Scripting
             }
 
             if ((cleaned.StartsWith("List<", StringComparison.Ordinal) || cleaned.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal))
-                && cleaned.EndsWith(">", StringComparison.Ordinal))
+                && cleaned.EndsWith('>'))
             {
-                int openAngle = cleaned.IndexOf('<');
+                int openAngle = cleaned.IndexOf('<', StringComparison.Ordinal);
                 string elem = cleaned.Substring(openAngle + 1, cleaned.Length - openAngle - 2).Trim();
                 if (elem.Contains('<', StringComparison.Ordinal) || elem.Contains('[', StringComparison.Ordinal))
                 {
@@ -1389,7 +1389,7 @@ namespace Unitas.Scripting
         private static string? ParseSingleParameterType(string paramDecl)
         {
             string trimmed = paramDecl.Trim();
-            int eqIdx = trimmed.IndexOf('=');
+            int eqIdx = trimmed.IndexOf('=', StringComparison.Ordinal);
             if (eqIdx >= 0)
             {
                 trimmed = trimmed.Substring(0, eqIdx).Trim();

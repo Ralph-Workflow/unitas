@@ -2,7 +2,8 @@ use unitas_asset::json::{parse, parse_bytes, write, JsonError, JsonValue};
 
 #[test]
 fn round_trip_preserves_the_value() -> Result<(), JsonError> {
-    let text = r#"{"name":"Cube","count":2,"tags":["a","b"],"nested":{"x":1.5,"y":null},"ok":true}"#;
+    let text =
+        r#"{"name":"Cube","count":2,"tags":["a","b"],"nested":{"x":1.5,"y":null},"ok":true}"#;
     let value = parse(text)?;
     let reparsed = parse(&write(&value))?;
     assert_eq!(reparsed, value);
@@ -79,9 +80,18 @@ fn empty_containers_and_numbers_have_a_stable_spelling() -> Result<(), JsonError
 
 #[test]
 fn malformed_inputs_return_typed_errors() {
-    assert!(matches!(parse("\"unterminated"), Err(JsonError::UnexpectedEnd)));
-    assert!(matches!(parse("[1,2,]"), Err(JsonError::UnexpectedChar(']'))));
-    assert!(matches!(parse(r#"{"a":1,}"#), Err(JsonError::UnexpectedChar('}'))));
+    assert!(matches!(
+        parse("\"unterminated"),
+        Err(JsonError::UnexpectedEnd)
+    ));
+    assert!(matches!(
+        parse("[1,2,]"),
+        Err(JsonError::UnexpectedChar(']'))
+    ));
+    assert!(matches!(
+        parse(r#"{"a":1,}"#),
+        Err(JsonError::UnexpectedChar('}'))
+    ));
     assert!(matches!(parse(r#""\q""#), Err(JsonError::InvalidEscape)));
     assert!(matches!(parse("bare"), Err(JsonError::UnexpectedChar('b'))));
     assert!(matches!(parse("{} {}"), Err(JsonError::TrailingData)));

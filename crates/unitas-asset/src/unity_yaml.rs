@@ -49,9 +49,10 @@ impl Node {
 
     pub fn get(&self, key: &str) -> Option<&Node> {
         match self {
-            Node::Mapping(entries) => {
-                entries.iter().find(|(entry_key, _)| entry_key == key).map(|(_, value)| value)
-            }
+            Node::Mapping(entries) => entries
+                .iter()
+                .find(|(entry_key, _)| entry_key == key)
+                .map(|(_, value)| value),
             _ => None,
         }
     }
@@ -106,31 +107,34 @@ impl fmt::Display for YamlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             YamlError::TabIndentation { line } => {
-                write!(formatter, "line {}: tab character in indentation", line)
+                write!(formatter, "line {line}: tab character in indentation")
             }
             YamlError::InvalidDocumentHeader { line, text } => {
-                write!(formatter, "line {}: invalid document header {}", line, text)
+                write!(formatter, "line {line}: invalid document header {text}")
             }
             YamlError::InvalidClassId { line, text } => {
-                write!(formatter, "line {}: invalid class id {}", line, text)
+                write!(formatter, "line {line}: invalid class id {text}")
             }
             YamlError::InvalidFileId { line, text } => {
-                write!(formatter, "line {}: invalid file id {}", line, text)
+                write!(formatter, "line {line}: invalid file id {text}")
             }
             YamlError::UnexpectedContent { line, text } => {
-                write!(formatter, "line {}: unexpected content {}", line, text)
+                write!(formatter, "line {line}: unexpected content {text}")
             }
             YamlError::UnexpectedIndent { line, expected } => {
-                write!(formatter, "line {}: unexpected indentation, expected {}", line, expected)
+                write!(
+                    formatter,
+                    "line {line}: unexpected indentation, expected {expected}"
+                )
             }
             YamlError::UnterminatedString { line } => {
-                write!(formatter, "line {}: unterminated quoted scalar", line)
+                write!(formatter, "line {line}: unterminated quoted scalar")
             }
             YamlError::UnterminatedFlow { line } => {
-                write!(formatter, "line {}: unterminated flow collection", line)
+                write!(formatter, "line {line}: unterminated flow collection")
             }
             YamlError::InvalidEscape { line, text } => {
-                write!(formatter, "line {}: invalid escape {}", line, text)
+                write!(formatter, "line {line}: invalid escape {text}")
             }
             YamlError::Io { path, message } => {
                 write!(formatter, "cannot read {}: {}", path.display(), message)
@@ -158,7 +162,10 @@ pub fn parse_file(path: &Path) -> Result<Stream, YamlError> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) => {
-            return Err(YamlError::Io { path: path.to_path_buf(), message: error.to_string() })
+            return Err(YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })
         }
     };
     parse(&text)
@@ -191,7 +198,11 @@ fn split_lines(text: &str) -> Result<Vec<Line<'_>>, YamlError> {
 
 fn emit<'a>(text: &'a str, column: usize, number: usize, lines: &mut Vec<Line<'a>>) {
     if text == "-" || text.starts_with("- ") {
-        lines.push(Line { indent: column, text: "-", number });
+        lines.push(Line {
+            indent: column,
+            text: "-",
+            number,
+        });
         let rest = &text[1..];
         let content = rest.trim_start_matches(' ');
         let content_column = column + 1 + rest.len() - content.len();
@@ -199,7 +210,11 @@ fn emit<'a>(text: &'a str, column: usize, number: usize, lines: &mut Vec<Line<'a
             emit(content, content_column, number, lines);
         }
     } else {
-        lines.push(Line { indent: column, text, number });
+        lines.push(Line {
+            indent: column,
+            text,
+            number,
+        });
     }
 }
 
@@ -232,7 +247,11 @@ impl<'a> Parser<'a> {
             self.position += 1;
         }
         match yaml_version {
-            Some(version) => Ok(Some(Header { yaml_version: version, tag_handle, tag_prefix })),
+            Some(version) => Ok(Some(Header {
+                yaml_version: version,
+                tag_handle,
+                tag_prefix,
+            })),
             None => Ok(None),
         }
     }
@@ -265,14 +284,22 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        let digit_end = tag.find(|character: char| !character.is_ascii_digit()).unwrap_or(tag.len());
+        let digit_end = tag
+            .find(|character: char| !character.is_ascii_digit())
+            .unwrap_or(tag.len());
         if digit_end == 0 {
-            return Err(YamlError::InvalidClassId { line: line.number, text: rest.to_string() });
+            return Err(YamlError::InvalidClassId {
+                line: line.number,
+                text: rest.to_string(),
+            });
         }
         let class_id = match tag[..digit_end].parse::<u32>() {
             Ok(class_id) => class_id,
             Err(_) => {
-                return Err(YamlError::InvalidClassId { line: line.number, text: rest.to_string() })
+                return Err(YamlError::InvalidClassId {
+                    line: line.number,
+                    text: rest.to_string(),
+                })
             }
         };
         let mut cursor = tag[digit_end..].trim();
@@ -301,7 +328,12 @@ impl<'a> Parser<'a> {
         }
         self.position += 1;
         let root = self.parse_body(line.number)?;
-        Ok(Document { class_id, file_id, stripped, root })
+        Ok(Document {
+            class_id,
+            file_id,
+            stripped,
+            root,
+        })
     }
 
     fn parse_body(&mut self, header_line: usize) -> Result<Node, YamlError> {
@@ -354,7 +386,10 @@ impl<'a> Parser<'a> {
                 break;
             }
             if line.indent > indent {
-                return Err(YamlError::UnexpectedIndent { line: line.number, expected: indent });
+                return Err(YamlError::UnexpectedIndent {
+                    line: line.number,
+                    expected: indent,
+                });
             }
             if line.text == "-" {
                 break;
@@ -458,12 +493,15 @@ fn find_key_separator(text: &str) -> Option<usize> {
 fn decode_key(text: &str, line: usize) -> Result<String, YamlError> {
     let trimmed = text.trim();
     match trimmed.chars().next() {
-        Some('"') | Some('\'') => {
+        Some('"' | '\'') => {
             let mut flow = Flow::new(trimmed);
             let key = flow.parse_quoted(line)?;
             flow.skip_whitespace();
             if !flow.at_end() {
-                return Err(YamlError::UnexpectedContent { line, text: trimmed.to_string() });
+                return Err(YamlError::UnexpectedContent {
+                    line,
+                    text: trimmed.to_string(),
+                });
             }
             Ok(key)
         }
@@ -478,7 +516,10 @@ fn parse_inline(text: &str, line: usize) -> Result<Node, YamlError> {
         let node = flow.parse_value(line)?;
         flow.skip_whitespace();
         if !flow.at_end() {
-            return Err(YamlError::UnexpectedContent { line, text: trimmed.to_string() });
+            return Err(YamlError::UnexpectedContent {
+                line,
+                text: trimmed.to_string(),
+            });
         }
         Ok(node)
     } else {
@@ -488,12 +529,15 @@ fn parse_inline(text: &str, line: usize) -> Result<Node, YamlError> {
 
 fn decode_plain_scalar(text: &str, line: usize) -> Result<String, YamlError> {
     match text.chars().next() {
-        Some('"') | Some('\'') => {
+        Some('"' | '\'') => {
             let mut flow = Flow::new(text);
             let value = flow.parse_quoted(line)?;
             flow.skip_whitespace();
             if !flow.at_end() {
-                return Err(YamlError::UnexpectedContent { line, text: text.to_string() });
+                return Err(YamlError::UnexpectedContent {
+                    line,
+                    text: text.to_string(),
+                });
             }
             Ok(value)
         }
@@ -544,7 +588,7 @@ impl<'a> Flow<'a> {
 
     fn parse_scalar(&mut self, line: usize) -> Result<String, YamlError> {
         match self.peek() {
-            Some('"') | Some('\'') => self.parse_quoted(line),
+            Some('"' | '\'') => self.parse_quoted(line),
             _ => {
                 let rest = self.rest();
                 let end = rest.find([',', '}', ']']).unwrap_or(rest.len());
@@ -559,7 +603,10 @@ impl<'a> Flow<'a> {
         let quote = match self.peek() {
             Some(character) if character == '"' || character == '\'' => character,
             _ => {
-                return Err(YamlError::UnexpectedContent { line, text: self.rest().to_string() })
+                return Err(YamlError::UnexpectedContent {
+                    line,
+                    text: self.rest().to_string(),
+                })
             }
         };
         self.position += quote.len_utf8();
@@ -602,16 +649,12 @@ impl<'a> Flow<'a> {
                         }
                         let code = match u32::from_str_radix(&digits, 16) {
                             Ok(code) => code,
-                            Err(_) => {
-                                return Err(YamlError::InvalidEscape { line, text: digits })
-                            }
+                            Err(_) => return Err(YamlError::InvalidEscape { line, text: digits }),
                         };
                         self.position += 4;
                         match char::from_u32(code) {
                             Some(decoded) => value.push(decoded),
-                            None => {
-                                return Err(YamlError::InvalidEscape { line, text: digits })
-                            }
+                            None => return Err(YamlError::InvalidEscape { line, text: digits }),
                         }
                     }
                     other => {
@@ -627,7 +670,7 @@ impl<'a> Flow<'a> {
 
     fn parse_key(&mut self, line: usize) -> Result<String, YamlError> {
         match self.peek() {
-            Some('"') | Some('\'') => self.parse_quoted(line),
+            Some('"' | '\'') => self.parse_quoted(line),
             _ => {
                 let rest = self.rest();
                 let end = rest.find(':').unwrap_or(rest.len());

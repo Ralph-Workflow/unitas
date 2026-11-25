@@ -28,7 +28,6 @@ pub struct TriggerEvent {
     pub phase: Phase,
 }
 
-/// A pair of colliders that are touching in the current frame.
 #[derive(Clone, Copy, Debug)]
 pub struct TouchingPair<'a> {
     pub a: &'a PhysicsObject,
@@ -36,22 +35,14 @@ pub struct TouchingPair<'a> {
     pub is_trigger: bool,
 }
 
-/// The frame events that suppress the transitions Unity does not report.
 #[derive(Clone, Debug, Default)]
 pub struct FrameEvents {
-    /// Objects that moved by an instantaneous position change.
     pub teleported: BTreeSet<u64>,
-    /// Objects whose GameObject was deactivated in this frame.
     pub deactivated: BTreeSet<u64>,
-    /// Objects whose GameObject was activated in this frame.
     pub activated: BTreeSet<u64>,
 }
 
 impl FrameEvents {
-    /// Whether the pair reports nothing in this frame.
-    ///
-    /// A teleported body is not swept, a deactivated GameObject ends its contacts
-    /// without an exit message, and an activated GameObject does not start one.
     pub fn suppresses(&self, a: u64, b: u64) -> bool {
         [a, b].iter().any(|object_id| {
             self.teleported.contains(object_id)
@@ -68,24 +59,18 @@ struct TrackedPair {
     is_trigger: bool,
 }
 
-/// Tracks the touching pairs so the six messages fire on transitions only.
-///
-/// A pair that keeps touching reports a stay message, so a collider shape change
-/// never re-fires the enter message of a pair that is already touching.
 #[derive(Clone, Debug, Default)]
 pub struct MessageTracker {
     touching: BTreeMap<(u64, u64), TrackedPair>,
 }
 
 impl MessageTracker {
-    /// A tracker that has seen no contact yet.
     pub fn new() -> Self {
         Self {
             touching: BTreeMap::new(),
         }
     }
 
-    /// Applies one frame of contacts and returns the messages the transition implies.
     pub fn update(
         &mut self,
         pairs: &[TouchingPair<'_>],
@@ -113,7 +98,11 @@ impl MessageTracker {
             if events.suppresses(a.object_id, b.object_id) {
                 continue;
             }
-            let phase = if was_touching { Phase::Stay } else { Phase::Enter };
+            let phase = if was_touching {
+                Phase::Stay
+            } else {
+                Phase::Enter
+            };
             deliveries.extend(route_message(
                 CollisionMessage::from_phase(phase, pair.is_trigger),
                 a,

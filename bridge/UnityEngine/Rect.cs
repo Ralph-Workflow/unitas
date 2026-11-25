@@ -233,7 +233,7 @@ namespace UnityEngine
         public bool Equals(Rect other) =>
             x.Equals(other.x) && y.Equals(other.y) && width.Equals(other.width) && height.Equals(other.height);
 
-        public override bool Equals(object? other) => other is Rect r && Equals(r);
+        public override bool Equals(object? obj) => obj is Rect r && Equals(r);
 
         public override int GetHashCode() => HashCode.Combine(x, width, y, height);
 

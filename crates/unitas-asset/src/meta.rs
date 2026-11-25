@@ -8,10 +8,22 @@ const META_SUFFIX: &str = ".meta";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetaError {
-    Read { path: PathBuf, message: String },
-    MissingGuid { path: PathBuf },
-    InvalidGuid { path: PathBuf, value: String },
-    DuplicateGuid { guid: String, path: PathBuf, existing: PathBuf },
+    Read {
+        path: PathBuf,
+        message: String,
+    },
+    MissingGuid {
+        path: PathBuf,
+    },
+    InvalidGuid {
+        path: PathBuf,
+        value: String,
+    },
+    DuplicateGuid {
+        guid: String,
+        path: PathBuf,
+        existing: PathBuf,
+    },
 }
 
 impl fmt::Display for MetaError {
@@ -26,7 +38,11 @@ impl fmt::Display for MetaError {
             MetaError::InvalidGuid { path, value } => {
                 write!(formatter, "{} has invalid guid {}", path.display(), value)
             }
-            MetaError::DuplicateGuid { guid, path, existing } => {
+            MetaError::DuplicateGuid {
+                guid,
+                path,
+                existing,
+            } => {
                 write!(
                     formatter,
                     "guid {} in {} duplicates {}",
@@ -59,10 +75,17 @@ pub fn is_valid_guid(guid: &str) -> bool {
 pub fn parse_meta_text(text: &str, path: &Path) -> Result<String, MetaError> {
     let value = match guid_from_meta_text(text) {
         Some(value) => value,
-        None => return Err(MetaError::MissingGuid { path: path.to_path_buf() }),
+        None => {
+            return Err(MetaError::MissingGuid {
+                path: path.to_path_buf(),
+            })
+        }
     };
     if !is_valid_guid(&value) {
-        return Err(MetaError::InvalidGuid { path: path.to_path_buf(), value });
+        return Err(MetaError::InvalidGuid {
+            path: path.to_path_buf(),
+            value,
+        });
     }
     Ok(value)
 }
@@ -71,7 +94,10 @@ pub fn parse_meta_file(path: &Path) -> Result<String, MetaError> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) => {
-            return Err(MetaError::Read { path: path.to_path_buf(), message: error.to_string() })
+            return Err(MetaError::Read {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })
         }
     };
     parse_meta_text(&text, path)
@@ -102,7 +128,11 @@ impl GuidIndex {
             return Err(MetaError::InvalidGuid { path, value: guid });
         }
         if let Some(existing) = self.entries.get(&guid) {
-            return Err(MetaError::DuplicateGuid { guid, path, existing: existing.clone() });
+            return Err(MetaError::DuplicateGuid {
+                guid,
+                path,
+                existing: existing.clone(),
+            });
         }
         self.entries.insert(guid, path);
         Ok(())
@@ -125,7 +155,9 @@ impl GuidIndex {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Path)> {
-        self.entries.iter().map(|(guid, path)| (guid.as_str(), path.as_path()))
+        self.entries
+            .iter()
+            .map(|(guid, path)| (guid.as_str(), path.as_path()))
     }
 }
 

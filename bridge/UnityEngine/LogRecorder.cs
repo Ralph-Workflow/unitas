@@ -82,7 +82,7 @@ namespace UnityEngine
             List<LogEntry> matches = new List<LogEntry>();
             foreach (LogEntry entry in Recorded)
             {
-                if (entry.Message.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (entry.Message.Contains(text, StringComparison.OrdinalIgnoreCase))
                 {
                     matches.Add(entry);
                 }

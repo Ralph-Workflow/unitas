@@ -314,7 +314,10 @@ pub fn stage_roll_a_ball_bundle_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<StagedBundle, BundleError> {
-    let source_dir = output_dir.join("_sample_source").join("Assets").join("Scenes");
+    let source_dir = output_dir
+        .join("_sample_source")
+        .join("Assets")
+        .join("Scenes");
     fs::create_dir_all(&source_dir).map_err(|error| BundleError::Io {
         path: source_dir.clone(),
         message: error.to_string(),
@@ -693,8 +696,7 @@ impl RollABallController {
         {
             move_x = move_x.min(-1.0);
         }
-        if runtime.input().is_key_down(u32::from(b'w'))
-            || runtime.input().is_key_down(KEY_UP_ARROW)
+        if runtime.input().is_key_down(u32::from(b'w')) || runtime.input().is_key_down(KEY_UP_ARROW)
         {
             move_z = move_z.max(1.0);
         }
@@ -780,8 +782,7 @@ impl RollABallController {
             radius: config.map_or(PLAYER_CHARACTER_RADIUS, |value| value.radius),
             height: config.map_or(PLAYER_CHARACTER_HEIGHT, |value| value.height),
             center: config.map_or(PLAYER_CHARACTER_CENTER, |value| value.center),
-            slope_limit_deg: config
-                .map_or(PLAYER_CHARACTER_SLOPE_LIMIT, |value| value.slope_limit),
+            slope_limit_deg: config.map_or(PLAYER_CHARACTER_SLOPE_LIMIT, |value| value.slope_limit),
             step_offset: config.map_or(PLAYER_CHARACTER_STEP_OFFSET, |value| value.step_offset),
             skin_width: config.map_or(PLAYER_CHARACTER_SKIN_WIDTH, |value| value.skin_width),
             min_move_distance: config.map_or(PLAYER_CHARACTER_MIN_MOVE_DISTANCE, |value| {
@@ -956,8 +957,8 @@ mod tests {
     }
 
     #[test]
-    fn roll_a_ball_bundle_stages_and_loads_into_runtime(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn roll_a_ball_bundle_stages_and_loads_into_runtime() -> Result<(), Box<dyn std::error::Error>>
+    {
         let workspace = temp_dir("stage_sample")?;
         let bundle = stage_roll_a_ball_bundle(&workspace)?;
         assert_eq!(bundle.manifest.product_name, ROLL_A_BALL_PRODUCT_NAME);

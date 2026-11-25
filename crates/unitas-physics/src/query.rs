@@ -84,8 +84,11 @@ pub(crate) fn cast_against_sphere(
         } => {
             let expanded = radius + cast_radius;
             if distance(origin, center) < expanded {
-                let normal = normalize(subtract(origin, center))
-                    .unwrap_or([-direction[0], -direction[1], -direction[2]]);
+                let normal = normalize(subtract(origin, center)).unwrap_or([
+                    -direction[0],
+                    -direction[1],
+                    -direction[2],
+                ]);
                 return Some(CastHit {
                     distance: 0.0,
                     point: [
@@ -114,8 +117,11 @@ pub(crate) fn cast_against_sphere(
                 radius + half_extents[2],
             ];
             if point_strictly_inside_aabb(origin, center, expanded) {
-                let normal = normalize(subtract(origin, center))
-                    .unwrap_or([-direction[0], -direction[1], -direction[2]]);
+                let normal = normalize(subtract(origin, center)).unwrap_or([
+                    -direction[0],
+                    -direction[1],
+                    -direction[2],
+                ]);
                 return Some(CastHit {
                     distance: 0.0,
                     point: [

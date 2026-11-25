@@ -1041,7 +1041,7 @@ namespace UnityEngine
             }
         }
 
-        private void CollectActivationChanges(
+        private static void CollectActivationChanges(
             GameObject node,
             bool wasEffective,
             bool isEffective,

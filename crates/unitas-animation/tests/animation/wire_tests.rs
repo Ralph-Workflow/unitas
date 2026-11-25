@@ -371,7 +371,8 @@ fn roundtrip_clamp_forever_wrap_mode_and_empty_controller() -> Result<(), Animat
 }
 
 #[test]
-fn roundtrip_preserves_multi_threshold_blend_tree_and_multiple_events() -> Result<(), AnimationError> {
+fn roundtrip_preserves_multi_threshold_blend_tree_and_multiple_events() -> Result<(), AnimationError>
+{
     let clip1 = AnimationClip::new(
         "C1",
         1.0,
@@ -402,5 +403,3 @@ fn roundtrip_preserves_multi_threshold_blend_tree_and_multiple_events() -> Resul
     assert_eq!(decoded, ctrl);
     Ok(())
 }
-
-

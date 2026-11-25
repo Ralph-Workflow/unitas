@@ -476,8 +476,7 @@ namespace Unitas.Bridge.Tests
 
                 Check.That(
                     "Edit-time state object survives PlayMode test run unchanged",
-                    editTimeObject != null
-                    && string.Equals(editTimeObject.name, "EditTimeSurvivorObject", StringComparison.Ordinal)
+                    string.Equals(editTimeObject.name, "EditTimeSurvivorObject", StringComparison.Ordinal)
                     && editTimeObject.transform.position == new UnityEngine.Vector3(7f, 8f, 9f));
                 Check.That(
                     "PlayMode test objects are cleaned up after play session ends",

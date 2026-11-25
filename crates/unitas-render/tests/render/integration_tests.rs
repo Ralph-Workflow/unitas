@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use unitas_asset::meta;
-use unitas_asset::{parse_material, parse_material_with_guids, GuidIndex, MaterialError, MetaError};
+use unitas_asset::{
+    parse_material, parse_material_with_guids, GuidIndex, MaterialError, MetaError,
+};
 use unitas_render::{cube, look_at, render, render_with_view, Camera, Vec3};
 
 fn decode_bmp_pixel(bmp: &[u8], width: u32, height: u32, x: u32, y: u32) -> [u8; 3] {
@@ -24,8 +26,7 @@ fn material_to_pixel_end_to_end_pipeline() -> Result<(), Box<dyn std::error::Err
 
     let expected_tex_path = project_dir.join("Textures").join("Wood.png");
     let wood_meta_path = project_dir.join("Textures").join("Wood.png.meta");
-    let wood_guid =
-        meta::parse_meta_file(&wood_meta_path).map_err(|e: MetaError| e.to_string())?;
+    let wood_guid = meta::parse_meta_file(&wood_meta_path).map_err(|e: MetaError| e.to_string())?;
     assert_eq!(guids.get(&wood_guid), Some(expected_tex_path.as_path()));
 
     let material_path = project_dir.join("Material.mat");

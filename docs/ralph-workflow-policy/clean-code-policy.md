@@ -61,16 +61,21 @@ linter configuration.
 | Language | Banned constructs | Enforcing rule IDs | Enforcement |
 |---|---|---|---|
 | Python | `eval`; `exec`; `compile`; `__import__`; `globals`/`locals`/`vars`; `typing.cast`; an `Any` annotation; `assert` outside a test module; a bare or broad `except`; a named `lambda`; a mutable default argument; a star import; `os.environ`; `print` in library code. | `BANNED-CALL`; `BANNED-NAMESPACE`; `TYPING-CAST`; `ANN401`; `RUNTIME-ASSERT`; `E722`; `BLE001`; `E731`; `B006`; `F403`; `OS-ENVIRON`; `PRINT`. | deterministic: make banned-constructs |
-| Rust | `unsafe`; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`; `static_mut_refs`; `clippy::downcast_ref`; `BANNED-ALLOW`; `clippy::unwrap_used`; `clippy::expect_used`; `BANNED-UNTYPED-MACRO`. | deterministic: make banned-constructs |
+| Rust | `unsafe`; `transmute`; `static mut`; `Any`/`downcast`; `#[allow(...)]` on a banned lint; `unwrap`/`expect`/`panic!` outside tests; procedural macros generating untyped code. | `unsafe_code`; `unnecessary_transmutes`; `static_mut_refs`; `BANNED-ALLOW`; `clippy::unwrap_used`; `clippy::expect_used`; `clippy::panic`; `clippy::todo`; `clippy::unimplemented`; `clippy::dbg_macro`; `BANNED-UNTYPED-MACRO`. | deterministic: make banned-constructs |
 | C# | Reflection APIs; `Unsafe`; raw types; unchecked casts; `dynamic`; `Object` parameter types; `#pragma warning disable`. | `BANNED-REFLECTION`; `BANNED-UNSAFE`; `rawtypes`; `unchecked`; `BANNED-DYNAMIC`; `BANNED-OBJECT-PARAMETER`; `BANNED-SUPPRESSION`. | deterministic: make banned-constructs |
 
 ## Commenting policy
 
-Source code contains no comments. Intent, constraints, and invariants are
-expressed through names, types, structure, tests, and assertions. The only
-`#` line tolerated is a shebang on line 1 of an executable script.
+Source code and `Makefile` contain no comments or docstrings. Intent,
+constraints, and invariants are expressed through names, types, structure,
+tests, and assertions. The only `#` line tolerated in source code or scripts
+is a shebang on line 1 of an executable script. Tool configuration files
+(`pyproject.toml`, `Cargo.toml`, `rustfmt.toml`, `.editorconfig`, and
+`Directory.Build.props`) carry only the governing-policy header comment and
+the per-rule rationale comments required by `linting-policy.md` and
+`typechecking-policy.md`.
 
-Banned without exception:
+Banned without exception in source code:
 
 * Restating the code the comment sits on.
 * Change narration ("added for X", "fixed", "now", "previously").
@@ -105,16 +110,20 @@ No percentage, multiplier, or benchmark figure from either claim
 belongs in this policy until it is confirmed against the primary
 source.
 
-There is no inline bypass marker and no baseline. A comment is a finding
-even when it carries a reason, and the gate holds no list of exempted
-lines.
+There is no inline bypass marker and no baseline. A comment in source code
+is a finding even when it carries a reason, and the gate holds no list of
+exempted source lines.
 
-The comment audit enforces this absolutely: it fails on every comment
-token and every docstring in tracked Python, and on every comment in
-shell, TOML, YAML, Makefile and Jinja sources, except a line-1 shebang.
-It reads Python comments with the `tokenize` module and docstrings
+The comment audit enforces this deterministically: it fails on every comment
+token and every docstring in tracked Python, Rust, and C# source files, and on
+every comment in shell, YAML, `Makefile`, and Jinja sources, except a line-1
+shebang; in tool configuration files (`pyproject.toml`, `Cargo.toml`,
+`rustfmt.toml`, `.editorconfig`, and `Directory.Build.props`) it permits the
+governing-policy header comment and the per-rule rationale comments required
+by `linting-policy.md` and `typechecking-policy.md` while rejecting any other
+comment. It reads Python comments with the `tokenize` module and docstrings
 through the `ast` module, and it reads the other formats with quote
-awareness, so a `#` inside a string is never misread. A finding carries
+awareness, so a `#` or `//` inside a string is never misread. A finding carries
 `path:line`, the comment text, and the fix hint "delete the comment or
 encode it in code".
 
@@ -158,7 +167,7 @@ RALPH-FACT: error_handling_convention: a gate prints one finding per line and ex
 RALPH-FACT: logging_convention: a gate writes findings to standard output and writes no log file
 RALPH-FACT: generated_code_marker: none — the repository generates no source
 RALPH-FACT: vendored_code_marker: none — the repository vendors no third-party source
-RALPH-FACT: dead_code_audit_command: ruff check .
+RALPH-FACT: dead_code_audit_command: make lint
 
 ## AI execution instructions
 

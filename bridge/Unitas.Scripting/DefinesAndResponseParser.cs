@@ -382,7 +382,7 @@ namespace Unitas.Scripting
                     index++;
                 }
 
-                string token = line.Substring(start, index - start).Replace("\"", string.Empty);
+                string token = line.Substring(start, index - start).Replace("\"", string.Empty, StringComparison.Ordinal);
                 if (!string.IsNullOrEmpty(token))
                 {
                     tokens.Add(token);

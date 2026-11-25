@@ -4,7 +4,6 @@ use std::fmt;
 use unitas_core::EntityId;
 use unitas_physics::navigation::{NavMesh, NavMeshAgent, NavigationError, PathQueryResult};
 
-/// The failures the navigation runtime reports.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavigationRuntimeError {
     UnknownAgent(EntityId),
@@ -39,7 +38,6 @@ impl From<NavigationError> for NavigationRuntimeError {
     }
 }
 
-/// The navmesh and the agents bound to the scene entities that walk it.
 #[derive(Default)]
 pub struct NavigationRuntimeWorld {
     navmesh: NavMesh,
@@ -58,7 +56,6 @@ impl NavigationRuntimeWorld {
         &self.navmesh
     }
 
-    /// Binds an entity to a new agent that starts at the given position.
     pub fn add_agent(
         &mut self,
         entity: EntityId,
@@ -89,12 +86,10 @@ impl NavigationRuntimeWorld {
         self.agents.len()
     }
 
-    /// The position of the entity transform.
     pub fn position(&self, entity: EntityId) -> Option<[f64; 3]> {
         self.agents.get(&entity).map(NavMeshAgent::position)
     }
 
-    /// The position the entity reaches next.
     pub fn next_position(&self, entity: EntityId) -> Option<[f64; 3]> {
         self.agents.get(&entity).map(NavMeshAgent::next_position)
     }
@@ -105,7 +100,6 @@ impl NavigationRuntimeWorld {
             .is_some_and(|agent| agent.is_on_navmesh(&self.navmesh))
     }
 
-    /// Sets the destination of the agent bound to the entity.
     pub fn set_destination(
         &mut self,
         entity: EntityId,
@@ -120,7 +114,6 @@ impl NavigationRuntimeWorld {
             .map_err(NavigationRuntimeError::Navigation)
     }
 
-    /// Moves the agent bound to the entity without needing a path.
     pub fn warp(
         &mut self,
         entity: EntityId,
@@ -135,7 +128,6 @@ impl NavigationRuntimeWorld {
             .map_err(NavigationRuntimeError::Navigation)
     }
 
-    /// Steps every agent by one tick.
     pub fn step(&mut self, delta_seconds: f64) -> Result<(), NavigationRuntimeError> {
         if !delta_seconds.is_finite() || delta_seconds < 0.0 {
             return Err(NavigationRuntimeError::InvalidDeltaTime(delta_seconds));

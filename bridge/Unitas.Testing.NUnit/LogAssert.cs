@@ -15,20 +15,14 @@ namespace UnityEngine.TestTools
 
         public static void Expect(LogType type, string message)
         {
-            if (message == null)
-            {
-                throw new ArgumentNullException(nameof(message));
-            }
+            ArgumentNullException.ThrowIfNull(message);
 
             Pending.Add(new Expectation(type, message, null));
         }
 
         public static void Expect(LogType type, Regex message)
         {
-            if (message == null)
-            {
-                throw new ArgumentNullException(nameof(message));
-            }
+            ArgumentNullException.ThrowIfNull(message);
 
             Pending.Add(new Expectation(type, message.ToString(), message));
         }

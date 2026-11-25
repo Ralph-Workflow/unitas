@@ -18,8 +18,12 @@ pub(crate) struct Contact {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
-    Sphere { radius: f64 },
-    Box { half_extents: [f64; 3] },
+    Sphere {
+        radius: f64,
+    },
+    Box {
+        half_extents: [f64; 3],
+    },
     Capsule {
         radius: f64,
         height: f64,
@@ -96,7 +100,8 @@ impl Shape {
                     radius: other_radius,
                 },
             ) => {
-                let (a, b) = capsule_world_segment(position, rotation, *radius, *height, *direction);
+                let (a, b) =
+                    capsule_world_segment(position, rotation, *radius, *height, *direction);
                 let closest = closest_point_on_segment(a, b, other_position);
                 distance(closest, other_position) < radius + other_radius
             }
@@ -226,7 +231,8 @@ impl Shape {
                     radius: other_radius,
                 },
             ) => {
-                let (a, b) = capsule_world_segment(position, rotation, *radius, *height, *direction);
+                let (a, b) =
+                    capsule_world_segment(position, rotation, *radius, *height, *direction);
                 let closest = closest_point_on_segment(a, b, other_position);
                 distance(closest, other_position) < radius + other_radius
             }
@@ -256,7 +262,8 @@ impl Shape {
                 },
                 Self::Box { half_extents },
             ) => {
-                let (a, b) = capsule_world_segment(position, rotation, *radius, *height, *direction);
+                let (a, b) =
+                    capsule_world_segment(position, rotation, *radius, *height, *direction);
                 let local_a = to_local(other_rotation, other_position, a);
                 let local_b = to_local(other_rotation, other_position, b);
                 let (seg_pt, box_pt) = closest_point_segment_aabb(local_a, local_b, *half_extents);
@@ -362,7 +369,8 @@ impl Shape {
                     radius: other_radius,
                 },
             ) => {
-                let (a, b) = capsule_world_segment(position, rotation, *radius, *height, *direction);
+                let (a, b) =
+                    capsule_world_segment(position, rotation, *radius, *height, *direction);
                 let closest = closest_point_on_segment(a, b, other_position);
                 sphere_sphere_contact(closest, *radius, other_position, *other_radius)
             }
@@ -753,7 +761,11 @@ pub(crate) fn capsule_half_segment(radius: f64, height: f64) -> f64 {
     (0.5 * height - radius).max(0.0)
 }
 
-pub(crate) fn capsule_local_segment(radius: f64, height: f64, direction: u8) -> ([f64; 3], [f64; 3]) {
+pub(crate) fn capsule_local_segment(
+    radius: f64,
+    height: f64,
+    direction: u8,
+) -> ([f64; 3], [f64; 3]) {
     let half = capsule_half_segment(radius, height);
     let axis = capsule_local_axis(direction);
     (

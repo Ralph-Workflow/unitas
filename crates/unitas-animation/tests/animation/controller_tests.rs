@@ -13,7 +13,10 @@ fn simple_clip(name: &str, duration: f32, x0: f32, x1: f32) -> AnimationClip {
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::new("", "Transform", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, x0), Keyframe::linear(duration, x1)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, x0),
+                Keyframe::linear(duration, x1),
+            ]),
         )],
         Vec::new(),
     )
@@ -56,8 +59,14 @@ fn float_parameter_greater_and_less_conditions_drive_transition() {
         "SpeedCtrl",
         vec![ParameterDef::float("speed", 0.0)],
         vec![
-            AnimatorState::new("Idle", StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0))),
-            AnimatorState::new("Run", StateMotion::Clip(simple_clip("Run", 1.0, 10.0, 20.0))),
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "Run",
+                StateMotion::Clip(simple_clip("Run", 1.0, 10.0, 20.0)),
+            ),
         ],
         0,
         vec![
@@ -158,8 +167,14 @@ fn trigger_parameter_is_consumed_when_transition_fires_and_can_be_reset() {
         "JumpCtrl",
         vec![ParameterDef::trigger("jump")],
         vec![
-            AnimatorState::new("Idle", StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0))),
-            AnimatorState::new("Jump", StateMotion::Clip(simple_clip("Jump", 1.0, 1.0, 2.0))),
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "Jump",
+                StateMotion::Clip(simple_clip("Jump", 1.0, 1.0, 2.0)),
+            ),
         ],
         0,
         vec![StateTransition::instant(
@@ -191,7 +206,10 @@ fn has_exit_time_waits_for_normalized_time_threshold_and_exit_target_returns_to_
         "AttackChain",
         Vec::new(),
         vec![
-            AnimatorState::new("Idle", StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0))),
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
             AnimatorState::new(
                 "Attack",
                 StateMotion::Clip(simple_clip("Attack", 2.0, 0.0, 10.0)),
@@ -316,7 +334,10 @@ fn blend_tree_1d_interpolates_adjacent_clips_and_normalizes_quaternions() {
         vec![
             CurveBinding::float(
                 CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, 10.0),
+                    Keyframe::linear(1.0, 10.0),
+                ]),
             ),
             CurveBinding::new(
                 CurveBindingTarget::new("", "Transform", "localRotation"),
@@ -505,7 +526,10 @@ fn state_marked_is_exit_immediately_cycles_back_to_entry_state_on_transition() {
         "ExitStateTest",
         vec![ParameterDef::trigger("finish")],
         vec![
-            AnimatorState::new("Main", StateMotion::Clip(simple_clip("Main", 1.0, 2.0, 2.0))),
+            AnimatorState::new(
+                "Main",
+                StateMotion::Clip(simple_clip("Main", 1.0, 2.0, 2.0)),
+            ),
             AnimatorState {
                 name: "ExitNode".to_string(),
                 motion: StateMotion::None,
@@ -836,5 +860,3 @@ fn parameter_getters_return_none_on_unknown_or_mismatched_type() {
     assert_eq!(animator.controller().name, "Getters");
     assert!(animator.diagnostics().is_empty());
 }
-
-

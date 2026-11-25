@@ -188,8 +188,8 @@ namespace Unitas.Debugging
                         }
                     }
                     else if (!string.IsNullOrEmpty(rawFieldName)
-                        && !rawFieldName.StartsWith("<", StringComparison.Ordinal)
-                        && !rawFieldName.Contains("$", StringComparison.Ordinal))
+                        && !rawFieldName.StartsWith('<')
+                        && !rawFieldName.Contains('$', StringComparison.Ordinal))
                     {
                         if (!hoistedLocals.Contains(rawFieldName))
                         {
@@ -254,7 +254,7 @@ namespace Unitas.Debugging
             {
                 string name = rawTypes[candidate].Name;
                 if (!string.IsNullOrEmpty(name)
-                    && !name.StartsWith("<", StringComparison.Ordinal))
+                    && !name.StartsWith('<'))
                 {
                     string ns = rawTypes[candidate].Namespace;
                     return string.IsNullOrEmpty(ns) ? name : ns + "." + name;
@@ -340,7 +340,7 @@ namespace Unitas.Debugging
                 if (trimmed.StartsWith("namespace ", StringComparison.Ordinal))
                 {
                     string nsCandidate = trimmed.Substring("namespace ".Length).Trim();
-                    int braceIdx = nsCandidate.IndexOf('{');
+                    int braceIdx = nsCandidate.IndexOf('{', StringComparison.Ordinal);
                     if (braceIdx >= 0)
                     {
                         nsCandidate = nsCandidate.Substring(0, braceIdx).Trim();
@@ -381,7 +381,7 @@ namespace Unitas.Debugging
                     table.Add(nextId++, fullSourcePath, lineNumber, currentMethodDisplay, new List<string>(currentLocals));
                 }
 
-                if (methodBraceDepth <= 0 && (openCount > 0 || closeCount > 0 || trimmed.EndsWith(";", StringComparison.Ordinal)))
+                if (methodBraceDepth <= 0 && (openCount > 0 || closeCount > 0 || trimmed.EndsWith(';')))
                 {
                     insideMethod = false;
                     currentMethodDisplay = string.Empty;
@@ -485,7 +485,7 @@ namespace Unitas.Debugging
         {
             if (trimmedLine.StartsWith("for ", StringComparison.Ordinal) || trimmedLine.StartsWith("for(", StringComparison.Ordinal))
             {
-                int openParen = trimmedLine.IndexOf('(');
+                int openParen = trimmedLine.IndexOf('(', StringComparison.Ordinal);
                 int firstSemi = openParen >= 0 ? trimmedLine.IndexOf(';', openParen + 1) : -1;
                 if (openParen >= 0 && firstSemi > openParen)
                 {
@@ -496,7 +496,7 @@ namespace Unitas.Debugging
                 return;
             }
 
-            int eqIdx = trimmedLine.IndexOf('=');
+            int eqIdx = trimmedLine.IndexOf('=', StringComparison.Ordinal);
             if (eqIdx > 0)
             {
                 string leftSide = trimmedLine.Substring(0, eqIdx).Trim();
@@ -560,7 +560,7 @@ namespace Unitas.Debugging
                 return false;
             }
 
-            if (trimmedLine.EndsWith(";", StringComparison.Ordinal) && !trimmedLine.Contains("=>", StringComparison.Ordinal))
+            if (trimmedLine.EndsWith(';') && !trimmedLine.Contains("=>", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -615,7 +615,7 @@ namespace Unitas.Debugging
         private static bool TryParseStateMachineMethodName(string typeName, out string methodName)
         {
             methodName = string.Empty;
-            if (!typeName.StartsWith("<", StringComparison.Ordinal))
+            if (!typeName.StartsWith('<'))
             {
                 return false;
             }
@@ -633,7 +633,7 @@ namespace Unitas.Debugging
         private static bool TryParseHoistedLocalName(string fieldName, out string localName)
         {
             localName = string.Empty;
-            if (!fieldName.StartsWith("<", StringComparison.Ordinal))
+            if (!fieldName.StartsWith('<'))
             {
                 return false;
             }

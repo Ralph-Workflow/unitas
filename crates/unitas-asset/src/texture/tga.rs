@@ -1,5 +1,5 @@
-pub use crate::texture::import::{DecodedTexture, TextureImportError};
 use crate::texture::import::TextureFormat;
+pub use crate::texture::import::{DecodedTexture, TextureImportError};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -23,7 +23,9 @@ pub fn decode_tga(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
     let pixel_depth = bytes[16];
     let descriptor = bytes[17];
     if width == 0 || height == 0 {
-        return Err(TextureImportError::CorruptData("zero image size".to_string()));
+        return Err(TextureImportError::CorruptData(
+            "zero image size".to_string(),
+        ));
     }
     let (kind, run_length) = match image_type {
         1 => (Kind::ColourMapped, false),
@@ -170,12 +172,13 @@ fn convert(
     colour_map_first: usize,
     colour_map_entry_bytes: usize,
 ) -> Result<(TextureFormat, Vec<u8>), TextureImportError> {
-    let pixel_count = samples.len() / match pixel_depth {
-        8 => 1,
-        16 => 2,
-        24 => 3,
-        _ => 4,
-    };
+    let pixel_count = samples.len()
+        / match pixel_depth {
+            8 => 1,
+            16 => 2,
+            24 => 3,
+            _ => 4,
+        };
     let mut pixels: Vec<u8> = Vec::with_capacity(pixel_count * 4);
     match kind {
         Kind::ColourMapped => {
@@ -242,9 +245,7 @@ fn convert(
             }
         },
         Kind::Greyscale => {
-            for index in 0..pixel_count {
-                pixels.push(samples[index]);
-            }
+            pixels.extend_from_slice(&samples[..pixel_count]);
             Ok((TextureFormat::R8, pixels))
         }
     }

@@ -1,9 +1,10 @@
 use crate::dispatch::{error_json, AbiError, DispatchTable};
-use std::ffi::{c_char, CStr, CString};
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::RwLock;
+use std::sync::{Mutex, OnceLock, RwLock};
 
 static TABLE: RwLock<Option<DispatchTable>> = RwLock::new(None);
+static STRINGS: OnceLock<Mutex<HashMap<usize, Box<[u8]>>>> = OnceLock::new();
 
 const PANIC_MESSAGE: &str = "internal panic in unitas-editor-abi";
 
@@ -13,98 +14,112 @@ pub fn install_dispatch_table(table: DispatchTable) -> Result<(), AbiError> {
     Ok(())
 }
 
-fn into_raw(json: String) -> *mut c_char {
-    // Serialized JSON never contains interior NUL bytes.
-    match CString::new(json) {
-        Ok(string) => string.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+fn string_registry() -> &'static Mutex<HashMap<usize, Box<[u8]>>> {
+    STRINGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn panic_error() -> *mut c_char {
-    into_raw(
-        error_json("internal", None, PANIC_MESSAGE.to_string()).to_string(),
+fn allocate_c_string(text: &str) -> usize {
+    let mut bytes = Vec::with_capacity(text.len() + 1);
+    for &byte in text.as_bytes() {
+        if byte == 0 {
+            return 0;
+        }
+        bytes.push(byte);
+    }
+    bytes.push(0);
+    let boxed = bytes.into_boxed_slice();
+    let address = boxed.as_ptr() as usize;
+    let Ok(mut map) = string_registry().lock() else {
+        return 0;
+    };
+    map.insert(address, boxed);
+    address
+}
+
+fn read_c_string(address: usize) -> Option<Result<String, ()>> {
+    if address == 0 {
+        return None;
+    }
+    let map = string_registry().lock().ok()?;
+    let bytes = map.get(&address)?;
+    let payload = bytes.split_last().map_or(&[][..], |(_, rest)| rest);
+    Some(
+        std::str::from_utf8(payload)
+            .map(str::to_owned)
+            .map_err(|_| ()),
     )
+}
+
+fn panic_error() -> usize {
+    allocate_c_string(&error_json("internal", None, PANIC_MESSAGE).to_string())
 }
 
 fn with_table(f: impl FnOnce(Option<&DispatchTable>) -> String) -> String {
     match TABLE.read() {
         Ok(guard) => f(guard.as_ref()),
-        Err(_) => error_json("internal", None, "dispatch table lock poisoned".to_string())
-            .to_string(),
+        Err(_) => error_json("internal", None, "dispatch table lock poisoned").to_string(),
     }
 }
 
-fn invoke_json(name: *const c_char, args_json: *const c_char) -> String {
-    if name.is_null() {
-        return error_json("invalid-args", None, "tool name pointer is null".to_string())
-            .to_string();
-    }
-    // SAFETY: caller guarantees `name` is a valid NUL-terminated string.
-    let name = match unsafe { CStr::from_ptr(name) }.to_str() {
-        Ok(name) => name,
-        Err(_) => {
-            return error_json("invalid-args", None, "tool name is not valid UTF-8".to_string())
-                .to_string()
-        }
-    };
-    let args = if args_json.is_null() {
-        serde_json::Value::Object(serde_json::Map::new())
-    } else {
-        // SAFETY: caller guarantees `args_json` is a valid NUL-terminated string.
-        let raw = unsafe { CStr::from_ptr(args_json) };
-        match raw.to_str().map(serde_json::from_str) {
-            Ok(Ok(value)) => value,
-            _ => {
-                return error_json(
-                    "invalid-args",
-                    Some(name),
-                    "args are not valid UTF-8 JSON".to_string(),
-                )
-                .to_string()
-            }
-        }
-    };
-    with_table(|table| match table {
-        Some(table) => table.invoke(name, &args).to_string(),
-        None => error_json("unknown-tool", Some(name), format!("unknown tool {name}"))
-            .to_string(),
+fn describe_json() -> String {
+    with_table(|table| {
+        table.map_or_else(
+            || "{\"tools\":[]}".to_string(),
+            DispatchTable::describe_json,
+        )
     })
 }
 
-#[no_mangle]
-pub extern "C" fn unitas_editor_tools_describe() -> *mut c_char {
-    match catch_unwind(|| {
-        into_raw(with_table(|table| {
-            table.map_or_else(|| "{\"tools\":[]}".to_string(), DispatchTable::describe_json)
-        }))
-    }) {
+fn invoke_json(name_addr: usize, args_addr: usize) -> String {
+    if name_addr == 0 {
+        return error_json("invalid-args", None, "tool name pointer is null").to_string();
+    }
+    let Some(Ok(name)) = read_c_string(name_addr) else {
+        return error_json("invalid-args", None, "tool name is not valid UTF-8").to_string();
+    };
+    let args = if args_addr == 0 {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        let Some(Ok(raw)) = read_c_string(args_addr) else {
+            return error_json("invalid-args", Some(&name), "args are not valid UTF-8 JSON")
+                .to_string();
+        };
+        let Ok(value) = serde_json::from_str(&raw) else {
+            return error_json("invalid-args", Some(&name), "args are not valid UTF-8 JSON")
+                .to_string();
+        };
+        value
+    };
+    with_table(|table| match table {
+        Some(table) => table.invoke(&name, &args).to_string(),
+        None => {
+            error_json("unknown-tool", Some(&name), &format!("unknown tool {name}")).to_string()
+        }
+    })
+}
+
+pub extern "C" fn unitas_editor_tools_describe() -> usize {
+    match catch_unwind(|| allocate_c_string(&describe_json())) {
         Ok(ptr) => ptr,
         Err(_) => panic_error(),
     }
 }
 
-#[no_mangle]
-pub extern "C" fn unitas_editor_tool_invoke(
-    name: *const c_char,
-    args_json: *const c_char,
-) -> *mut c_char {
-    match catch_unwind(AssertUnwindSafe(|| into_raw(invoke_json(name, args_json)))) {
+pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> usize {
+    match catch_unwind(AssertUnwindSafe(|| {
+        allocate_c_string(&invoke_json(name, args_json))
+    })) {
         Ok(ptr) => ptr,
         Err(_) => panic_error(),
     }
 }
 
-/// # Safety
-///
-/// `ptr` must be null or a pointer previously returned by
-/// `unitas_editor_tools_describe` or `unitas_editor_tool_invoke`.
-#[no_mangle]
-pub unsafe extern "C" fn unitas_editor_string_free(ptr: *mut c_char) {
+pub extern "C" fn unitas_editor_string_free(ptr: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if !ptr.is_null() {
-            // SAFETY: contract above; the pointer came from CString::into_raw.
-            drop(unsafe { CString::from_raw(ptr) });
+        if ptr != 0 {
+            if let Ok(mut map) = string_registry().lock() {
+                map.remove(&ptr);
+            }
         }
     }));
 }
@@ -114,21 +129,24 @@ mod tests {
     use super::*;
     use crate::descriptor::{Scope, ToolDescriptor};
     use serde_json::{json, Value};
-    use std::sync::Mutex;
 
-    // The dispatch table is global; serialize the FFI tests that install into it.
     static FFI_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_ffi() -> std::sync::MutexGuard<'static, ()> {
-        FFI_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        FFI_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn read_and_free(ptr: *mut c_char) -> Result<Value, Box<dyn std::error::Error>> {
-        assert!(!ptr.is_null());
-        // SAFETY: ptr is a live CString from an export in this module.
-        let text = unsafe { CStr::from_ptr(ptr) }.to_str()?.to_string();
-        // SAFETY: ptr came from an export in this module and is released exactly once.
-        let _freed: () = unsafe { unitas_editor_string_free(ptr) };
+    fn read_and_free(ptr: usize) -> Result<Value, Box<dyn std::error::Error>> {
+        if ptr == 0 {
+            return Err("null string pointer".into());
+        }
+        let text = match read_c_string(ptr) {
+            Some(Ok(text)) => text,
+            _ => return Err("invalid UTF-8 string pointer".into()),
+        };
+        unitas_editor_string_free(ptr);
         Ok(serde_json::from_str(&text)?)
     }
 
@@ -154,23 +172,30 @@ mod tests {
 
         let described = read_and_free(unitas_editor_tools_describe())?;
         assert_eq!(described["tools"][0]["name"], json!("test.echo"));
-        assert_eq!(described["tools"][0]["requiredScope"], json!("read-project"));
+        assert_eq!(
+            described["tools"][0]["requiredScope"],
+            json!("read-project")
+        );
 
-        let name = CString::new("test.echo")?;
-        let args = CString::new("{\"x\": 7}")?;
-        let invoked = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), args.as_ptr()))?;
+        let name = allocate_c_string("test.echo");
+        let args = allocate_c_string("{\"x\": 7}");
+        let invoked = read_and_free(unitas_editor_tool_invoke(name, args))?;
         assert_eq!(invoked, json!({"x": 7}));
 
-        let unknown = CString::new("nope")?;
-        let result = read_and_free(unitas_editor_tool_invoke(unknown.as_ptr(), args.as_ptr()))?;
+        let unknown = allocate_c_string("nope");
+        let result = read_and_free(unitas_editor_tool_invoke(unknown, args))?;
         assert_eq!(result["error"]["kind"], json!("unknown-tool"));
+        unitas_editor_string_free(unknown);
 
-        let malformed = CString::new("{not json")?;
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), malformed.as_ptr()))?;
+        let malformed = allocate_c_string("{not json");
+        let result = read_and_free(unitas_editor_tool_invoke(name, malformed))?;
         assert_eq!(result["error"]["kind"], json!("invalid-args"));
+        unitas_editor_string_free(malformed);
 
-        let result = read_and_free(unitas_editor_tool_invoke(std::ptr::null(), args.as_ptr()))?;
+        let result = read_and_free(unitas_editor_tool_invoke(0, args))?;
         assert_eq!(result["error"]["kind"], json!("invalid-args"));
+        unitas_editor_string_free(name);
+        unitas_editor_string_free(args);
         Ok(())
     }
 
@@ -189,8 +214,9 @@ mod tests {
             .build();
         install_dispatch_table(table)?;
 
-        let name = CString::new("test.gated")?;
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()))?;
+        let name = allocate_c_string("test.gated");
+        let result = read_and_free(unitas_editor_tool_invoke(name, 0))?;
+        unitas_editor_string_free(name);
         assert_eq!(result["error"]["kind"], json!("missing-scope"));
         assert_eq!(result["error"]["scope"], json!("build"));
         Ok(())
@@ -216,8 +242,9 @@ mod tests {
             .build();
         install_dispatch_table(table)?;
 
-        let name = CString::new("test.panic")?;
-        let result = read_and_free(unitas_editor_tool_invoke(name.as_ptr(), std::ptr::null()))?;
+        let name = allocate_c_string("test.panic");
+        let result = read_and_free(unitas_editor_tool_invoke(name, 0))?;
+        unitas_editor_string_free(name);
         assert_eq!(result["error"]["kind"], json!("internal"));
         Ok(())
     }

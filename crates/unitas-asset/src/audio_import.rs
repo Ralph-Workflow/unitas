@@ -101,7 +101,9 @@ pub enum AudioImportError {
 impl fmt::Display for AudioImportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AudioImportError::NotAiff => formatter.write_str("file is not an AIFF or AIFF-C container"),
+            AudioImportError::NotAiff => {
+                formatter.write_str("file is not an AIFF or AIFF-C container")
+            }
             AudioImportError::NotWav => formatter.write_str("file is not a RIFF WAVE container"),
             AudioImportError::NotOgg => formatter.write_str("file is not an OGG container"),
             AudioImportError::NotMp3 => formatter.write_str("file is not an MP3 stream"),
@@ -388,7 +390,11 @@ pub fn decode_mp3(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
             | ((usize::from(bytes[7] & 0x7f)) << 14)
             | ((usize::from(bytes[8] & 0x7f)) << 7)
             | usize::from(bytes[9] & 0x7f);
-        let footer_size = if bytes[5] & 0x10 != 0 { 10usize } else { 0usize };
+        let footer_size = if bytes[5] & 0x10 != 0 {
+            10usize
+        } else {
+            0usize
+        };
         let header_end = 10usize
             .checked_add(tag_size)
             .and_then(|end| end.checked_add(footer_size))
@@ -416,8 +422,8 @@ pub fn decode_mp3(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
                         "zero audio channels".to_string(),
                     ));
                 }
-                let frame_rate =
-                    u32::try_from(frame.sample_rate).map_err(|_| AudioImportError::InvalidSampleRate)?;
+                let frame_rate = u32::try_from(frame.sample_rate)
+                    .map_err(|_| AudioImportError::InvalidSampleRate)?;
                 if frame_rate == 0 {
                     return Err(AudioImportError::InvalidSampleRate);
                 }
@@ -567,7 +573,7 @@ fn decode_wav_samples(fmt_chunk: &WavFmt, data: &[u8]) -> Result<PcmClip, AudioI
         (WavEncoding::Pcm, 8) => 1usize,
         (WavEncoding::Pcm, 16) => 2usize,
         (WavEncoding::Pcm, 24) => 3usize,
-        (WavEncoding::Pcm, 32) | (WavEncoding::IeeeFloat, 32) => 4usize,
+        (WavEncoding::Pcm | WavEncoding::IeeeFloat, 32) => 4usize,
         (WavEncoding::IeeeFloat, 64) => 8usize,
         (_, other) => return Err(AudioImportError::UnsupportedSampleSize(other)),
     };
@@ -585,9 +591,10 @@ fn decode_wav_samples(fmt_chunk: &WavFmt, data: &[u8]) -> Result<PcmClip, AudioI
             (WavEncoding::Pcm, 8) => (i16::from(chunk[0]) - 128) * 256,
             (WavEncoding::Pcm, 16) => i16::from_le_bytes([chunk[0], chunk[1]]),
             (WavEncoding::Pcm, 24) => {
-                let signed =
-                    ((i32::from(chunk[2]) << 24) | (i32::from(chunk[1]) << 16) | (i32::from(chunk[0]) << 8))
-                        >> 8;
+                let signed = ((i32::from(chunk[2]) << 24)
+                    | (i32::from(chunk[1]) << 16)
+                    | (i32::from(chunk[0]) << 8))
+                    >> 8;
                 (signed >> 8) as i16
             }
             (WavEncoding::Pcm, 32) => {
@@ -641,8 +648,10 @@ pub fn detect_audio_state(bytes: &[u8], file_name: &str) -> AudioImportState {
     if is_wav(bytes) || matches!(extension.as_str(), "wav" | "wave") {
         return match decode_wav(bytes) {
             Ok(_) => AudioImportState::Imported,
-            Err(AudioImportError::UnsupportedWavFormat { .. })
-            | Err(AudioImportError::NotYetSupported(_)) => AudioImportState::NotYetSupported,
+            Err(
+                AudioImportError::UnsupportedWavFormat { .. }
+                | AudioImportError::NotYetSupported(_),
+            ) => AudioImportState::NotYetSupported,
             Err(_) => AudioImportState::ImportFailed,
         };
     }
@@ -765,7 +774,9 @@ fn apply_import_transforms(
 }
 
 fn is_aiff(bytes: &[u8]) -> bool {
-    bytes.len() >= 12 && &bytes[0..4] == b"FORM" && (&bytes[8..12] == b"AIFF" || &bytes[8..12] == b"AIFC")
+    bytes.len() >= 12
+        && &bytes[0..4] == b"FORM"
+        && (&bytes[8..12] == b"AIFF" || &bytes[8..12] == b"AIFC")
 }
 
 fn is_ogg(bytes: &[u8]) -> bool {

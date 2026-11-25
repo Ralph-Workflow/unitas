@@ -69,7 +69,7 @@ again if demonstrated need returns than to retain unowned paths indefinitely.
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
 | No lint bypass | Lint owner | no inline lint suppression and no per-file ignore is present in the tracked tree | the bypass audit reports zero findings in the source and in the tool configuration | the bypass audit reports zero findings | deterministic: make bypass-audit | when the linter reports its own suppressions |
-| Strictest lint configuration | Lint owner | the lint configuration selects the project rule set and disables no rule | the bypass audit reports that the lint configuration selects a rule set and carries no ignore key | the bypass audit reports that the lint configuration selects a rule set | deterministic: make bypass-audit | when the linter can prove the configuration is the strictest available |
+| Strictest lint configuration | Lint owner | the lint configuration selects the project rule set and carries only reasoned rule disables | the bypass audit reports that the lint configuration selects the project rule set and carries only reasoned rule disables | the bypass audit reports that the lint configuration selects the project rule set | deterministic: make bypass-audit | when the linter can prove the configuration is the strictest available |
 | Lint run coverage | Lint owner | the lint run checks every tracked source file | the lint gate exits 0 over the tracked tree | the lint gate exits 0 | deterministic: make lint | when the lint run reports the files it checked |
 | Public / wrapper syntax-proxy | Lint owner | no banned construct reaches the tree through a wrapper | the ban gate reports zero findings over the tracked tree | the ban gate reports zero findings | deterministic: make banned-constructs | when the ban catalog is enforced by the linter itself |
 
@@ -79,16 +79,16 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely
 on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
-RALPH-FACT: linter_per_language: ruff for Python, cargo clippy for Rust, and dotnet format for C#
-RALPH-FACT: rule_set_baseline: the B, C4, E, F, I, RUF, SIM, UP, and W rules selected in pyproject.toml
-RALPH-FACT: formatter_responsibility: ruff format owns Python formatting and dotnet format owns C# formatting; no Rust formatter is configured yet
-RALPH-FACT: excluded_paths: none — the lint gate covers every tracked Python and Rust file
-RALPH-FACT: suppression_rationale_policy: no suppression exists; a lint finding is fixed in the code
-RALPH-FACT: ci_gate_integration: make lint runs ruff and cargo clippy in the default gate through the Makefile verify target
-RALPH-FACT: maintenance_evidence: the lint report the last make verify run printed
-RALPH-FACT: first_party_languages: Python for the repository tooling; Rust for the product crates; C# for the UnityEngine bridge
+RALPH-FACT: linter_per_language: ruff check and ruff format for Python, cargo clippy and rustfmt (cargo fmt) for Rust, and the .NET Roslyn analyzers (dotnet build) and dotnet format for C#
+RALPH-FACT: rule_set_baseline: Python selects ALL in pyproject.toml ([tool.ruff.lint] select = ["ALL"]) with only reasoned disables for formatter conflicts, mutually exclusive pydocstyle pairs, clean-code docstring rules, pytest assertions, and gate subprocess execution (COM812, D100-D107, D203, D213, ISC001, S101, S603) and no per-file-ignores; Rust declares [workspace.lints] in the root Cargo.toml with rust.warnings = "deny", rust.unsafe_code = "forbid", rust.unnecessary_transmutes = "deny", rust.static_mut_refs = "deny", clippy.all = "deny" (priority = -1), clippy.pedantic = "deny" (priority = -1), and the clean-code ban-catalog lints (unwrap_used, expect_used, panic, todo, unimplemented, dbg_macro) set to "deny", with every workspace crate setting lints.workspace = true and only reasoned workspace-level pedantic allows; C# declares Nullable=enable, TreatWarningsAsErrors=true, AnalysisMode=All, AnalysisLevel=latest-all, and EnforceCodeStyleInBuild=true in the root Directory.Build.props with formatting and reasoned diagnostic severities in the root .editorconfig
+RALPH-FACT: formatter_responsibility: ruff format --check . owns Python formatting (pyproject.toml); cargo fmt --all -- --check owns Rust formatting (rustfmt.toml); dotnet format bridge/Unitas.sln --verify-no-changes --no-restore owns C# formatting (.editorconfig)
+RALPH-FACT: excluded_paths: Python: none — every tracked .py file under tools/ is linted and formatted; Rust: none — every workspace crate and tracked .rs file is linted and formatted; C#: bridge/Unitas.Bridge.Tests/Fixtures/** (excluded via Compile Remove in bridge/Unitas.Bridge.Tests/Unitas.Bridge.Tests.csproj because those files are test-input C# fixtures compiled dynamically by test cases rather than maintained project source); build output directories target/, bin/, and obj/ are skipped
+RALPH-FACT: suppression_rationale_policy: inline suppressions, per-file ignores, allowlists, and baselines are forbidden; every disabled rule or downgraded analyzer severity lives in the language's root configuration file (pyproject.toml, Cargo.toml, or .editorconfig) with an adjacent written reason comment enforced by make bypass-audit
+RALPH-FACT: ci_gate_integration: make lint runs ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, and dotnet format bridge/Unitas.sln --verify-no-changes --no-restore; make verify runs all of them in the default gate within VERIFY_BUDGET_SECONDS
+RALPH-FACT: maintenance_evidence: Python: ruff 0.15.6 (Astral official release https://docs.astral.sh/ruff/, compatible with Python 3.11+ and covering all tracked tools/*.py files, selected 2026-11-25, recheck trigger: major Python or ruff upgrade, incompatibility, abandonment, or security signal); Rust: clippy 0.1.93 and rustfmt 1.8.0 on rustc 1.93.0 (Rust Project official toolchain https://doc.rust-lang.org/clippy/, covering all workspace crates and targets under edition 2021, selected 2026-11-25, recheck trigger: Rust toolchain or edition upgrade, incompatibility, abandonment, or security signal); C#: .NET SDK 8.0.428 Roslyn analyzers and dotnet format (Microsoft official .NET 8 SDK https://learn.microsoft.com/dotnet/fundamentals/code-analysis/overview, covering all 9 projects in bridge/Unitas.sln across bridge/ and editor/, selected 2026-11-25, recheck trigger: .NET SDK major upgrade, incompatibility, abandonment, or security signal)
+RALPH-FACT: first_party_languages: Python for the repository verification and CLA tooling (tools/); Rust for the engine, runtime, editor-abi, and build crates (crates/); C# for the UnityEngine bridge, scripting/testing/debugging assemblies, and editor host (bridge/ and editor/)
 RALPH-FACT: excluded_language_evidence: none — no language is excluded from the lint gate
-RALPH-FACT: dead_code_detection_per_language: ruff check reports unused imports and unused locals for Python; cargo clippy reports dead code for Rust; the .NET compiler and analyzer report unused members and unreachable code for C#
+RALPH-FACT: dead_code_detection_per_language: ruff check (with select = ["ALL"], including F401, F841, ERA, and PIE) reports unused imports, unused locals, and dead code for Python; rustc and cargo clippy (with rust.warnings = "deny", clippy.all = "deny", and clippy.pedantic = "deny") report dead_code and unused items as errors for Rust; the .NET compiler and Roslyn analyzers (with AnalysisMode=All, AnalysisLevel=latest-all, EnforceCodeStyleInBuild=true, and TreatWarningsAsErrors=true) report unused members, unread private state, and unreachable code as errors for C#
 RALPH-FACT: retained_compatibility_inventory: none — the repository retains no compatibility layer
 RALPH-FACT: live_entry_point_annotation_inventory: none — the repository has no speculative entry point
 
@@ -140,7 +140,7 @@ RALPH-LANG: Python
 RALPH-COMMAND: make lint
 
 RALPH-LANG: Rust
-RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D warnings
 
 RALPH-LANG: C#
 RALPH-COMMAND: make dotnet-format

@@ -291,7 +291,7 @@ namespace UnityEngine
         public bool Equals(Color other) =>
             r.Equals(other.r) && g.Equals(other.g) && b.Equals(other.b) && a.Equals(other.a);
 
-        public override bool Equals(object? other) => other is Color c && Equals(c);
+        public override bool Equals(object? obj) => obj is Color c && Equals(c);
 
         public override int GetHashCode() => HashCode.Combine(r, g, b, a);
 

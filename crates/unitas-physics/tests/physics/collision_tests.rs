@@ -870,7 +870,8 @@ fn dynamic_capsule_landing_on_static_box_floor_comes_to_rest() -> Result<(), Phy
 }
 
 #[test]
-fn dynamic_sphere_colliding_with_static_capsule_along_y_extent_is_stopped() -> Result<(), PhysicsError> {
+fn dynamic_sphere_colliding_with_static_capsule_along_y_extent_is_stopped(
+) -> Result<(), PhysicsError> {
     let mut world = World::with_gravity([0.0, 0.0, 0.0]);
     let post = EntityId::new(1);
     let ball = EntityId::new(2);
@@ -897,7 +898,8 @@ fn dynamic_sphere_colliding_with_static_capsule_along_y_extent_is_stopped() -> R
 }
 
 #[test]
-fn capsules_with_x_and_z_directions_collide_along_their_declared_axes() -> Result<(), PhysicsError> {
+fn capsules_with_x_and_z_directions_collide_along_their_declared_axes() -> Result<(), PhysicsError>
+{
     let mut world = World::with_gravity([0.0, 0.0, 0.0]);
     let x_capsule = EntityId::new(1);
     let z_capsule = EntityId::new(2);
@@ -907,7 +909,14 @@ fn capsules_with_x_and_z_directions_collide_along_their_declared_axes() -> Resul
     )?;
     world.add_body(
         z_capsule,
-        capsule_body([1.0, 0.8, 0.0], 0.5, 3.0, 2, BodyRole::Dynamic, [0.0, -2.0, 0.0]),
+        capsule_body(
+            [1.0, 0.8, 0.0],
+            0.5,
+            3.0,
+            2,
+            BodyRole::Dynamic,
+            [0.0, -2.0, 0.0],
+        ),
     )?;
 
     world.step(0.1)?;

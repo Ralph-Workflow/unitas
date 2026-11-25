@@ -12,29 +12,55 @@ pub use obj::{import_obj, import_obj_bytes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelImportError {
-    MalformedObj { line: usize, reason: String },
-    MalformedGltf { reason: String },
-    MalformedGlb { reason: String },
+    MalformedObj {
+        line: usize,
+        reason: String,
+    },
+    MalformedGltf {
+        reason: String,
+    },
+    MalformedGlb {
+        reason: String,
+    },
     Fbx(FbxImportError),
-    MissingAccessor { accessor: usize },
+    MissingAccessor {
+        accessor: usize,
+    },
     UnsupportedAccessorType {
         accessor: usize,
         component_type: u32,
         expected: String,
     },
-    MissingBuffer { buffer: usize },
-    MissingBufferView { buffer_view: usize },
-    MissingMesh { mesh: usize },
-    MissingNode { node: usize },
+    MissingBuffer {
+        buffer: usize,
+    },
+    MissingBufferView {
+        buffer_view: usize,
+    },
+    MissingMesh {
+        mesh: usize,
+    },
+    MissingNode {
+        node: usize,
+    },
     MissingAttribute {
         mesh: usize,
         primitive: usize,
         attribute: String,
     },
-    UnsupportedBufferUri { uri: String },
-    InvalidBase64 { reason: String },
-    UnsupportedFileType { file_name: String },
-    UnsupportedFormat { file_name: String, format: String },
+    UnsupportedBufferUri {
+        uri: String,
+    },
+    InvalidBase64 {
+        reason: String,
+    },
+    UnsupportedFileType {
+        file_name: String,
+    },
+    UnsupportedFormat {
+        file_name: String,
+        format: String,
+    },
 }
 
 impl From<FbxImportError> for ModelImportError {
@@ -139,7 +165,9 @@ pub fn import_model_sub_assets(
             file_name: file_name.to_string(),
             format: extension,
         }),
-        _ => Err(ModelImportError::UnsupportedFileType { file_name: extension }),
+        _ => Err(ModelImportError::UnsupportedFileType {
+            file_name: extension,
+        }),
     }
 }
 

@@ -336,12 +336,10 @@ impl AnimatorController {
                     thresholds,
                 } => {
                     match self.parameters.iter().find(|p| p.name == *parameter) {
-                        None => diagnostics.push(
-                            AnimationDiagnostic::InvalidParameterReference {
-                                parameter: parameter.clone(),
-                                context: format!("blend tree in state '{}'", state.name),
-                            },
-                        ),
+                        None => diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                            parameter: parameter.clone(),
+                            context: format!("blend tree in state '{}'", state.name),
+                        }),
                         Some(param)
                             if param.default_value.parameter_type() != ParameterType::Float =>
                         {
@@ -368,10 +366,10 @@ impl AnimatorController {
         }
 
         for transition in &self.transitions {
-            let source_name = self
-                .states
-                .get(transition.source_state)
-                .map_or_else(|| format!("#{}", transition.source_state), |s| s.name.clone());
+            let source_name = self.states.get(transition.source_state).map_or_else(
+                || format!("#{}", transition.source_state),
+                |s| s.name.clone(),
+            );
             if transition.source_state >= self.states.len() {
                 diagnostics.push(AnimationDiagnostic::ConflictingTransition {
                     source_state: source_name.clone(),
@@ -718,9 +716,7 @@ impl Animator {
             };
         };
         let blend_param = match &state.motion {
-            StateMotion::BlendTree1D { parameter, .. } => {
-                self.get_float(parameter).unwrap_or(0.0)
-            }
+            StateMotion::BlendTree1D { parameter, .. } => self.get_float(parameter).unwrap_or(0.0),
             _ => 0.0,
         };
         let length = state.motion.duration(blend_param);
@@ -795,9 +791,10 @@ impl Animator {
                 self.consume_transition_triggers(&transition);
                 let target_idx = match transition.target {
                     TransitionTarget::State(idx) if idx < self.controller.states.len() => idx,
-                    TransitionTarget::State(_) | TransitionTarget::Exit => {
-                        self.controller.entry_state.min(self.controller.states.len() - 1)
-                    }
+                    TransitionTarget::State(_) | TransitionTarget::Exit => self
+                        .controller
+                        .entry_state
+                        .min(self.controller.states.len() - 1),
                 };
                 if transition.duration <= 1e-6 {
                     self.current_state = target_idx;
@@ -808,8 +805,10 @@ impl Animator {
                         .get(self.current_state)
                         .is_some_and(|s| s.is_exit)
                     {
-                        self.current_state =
-                            self.controller.entry_state.min(self.controller.states.len() - 1);
+                        self.current_state = self
+                            .controller
+                            .entry_state
+                            .min(self.controller.states.len() - 1);
                     }
                     let sample = self.sample_state(self.current_state, 0.0, 0.0);
                     return AnimatorStepResult {
@@ -849,8 +848,10 @@ impl Animator {
                     .get(self.current_state)
                     .is_some_and(|s| s.is_exit)
                 {
-                    self.current_state =
-                        self.controller.entry_state.min(self.controller.states.len() - 1);
+                    self.current_state = self
+                        .controller
+                        .entry_state
+                        .min(self.controller.states.len() - 1);
                     self.state_time = 0.0;
                 }
                 let sample =
@@ -866,9 +867,9 @@ impl Animator {
             self.active_transition = Some(tr);
             let alpha = (tr.elapsed / tr.duration).clamp(0.0, 1.0);
             let src_sample = self.sample_state(self.current_state, prev_time, new_time);
-            let dst_sample =
-                self.sample_state(tr.target_state, prev_target_time, next_target_time);
-            let bindings = blend_sampled_bindings(&src_sample.bindings, &dst_sample.bindings, alpha);
+            let dst_sample = self.sample_state(tr.target_state, prev_target_time, next_target_time);
+            let bindings =
+                blend_sampled_bindings(&src_sample.bindings, &dst_sample.bindings, alpha);
             let mut fired_events = src_sample.fired_events;
             fired_events.extend(dst_sample.fired_events);
             return AnimatorStepResult {
@@ -893,9 +894,7 @@ impl Animator {
             return 0.0;
         };
         let blend_param = match &state.motion {
-            StateMotion::BlendTree1D { parameter, .. } => {
-                self.get_float(parameter).unwrap_or(0.0)
-            }
+            StateMotion::BlendTree1D { parameter, .. } => self.get_float(parameter).unwrap_or(0.0),
             _ => 0.0,
         };
         state.motion.duration(blend_param)

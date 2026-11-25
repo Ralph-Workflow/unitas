@@ -36,7 +36,8 @@ const OURS_REPARENTS_A: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !
 
 const THEIRS_REPARENTS_B: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: A\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: B\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n";
 
-const BASE_SINGLE: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Alpha\n";
+const BASE_SINGLE: &str =
+    "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Alpha\n";
 
 const OURS_RETYPE: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!4 &100\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n";
 
@@ -62,7 +63,10 @@ fn temp_dir(name: &str) -> PathBuf {
 
 fn property(text: &str, file_id: i64, path: &str) -> Option<String> {
     let stream = unity_yaml::parse(text).ok()?;
-    let document = stream.documents.iter().find(|document| document.file_id == file_id)?;
+    let document = stream
+        .documents
+        .iter()
+        .find(|document| document.file_id == file_id)?;
     let mut node = &document.root;
     for segment in path.split('.') {
         node = node.get(segment)?;
@@ -73,8 +77,12 @@ fn property(text: &str, file_id: i64, path: &str) -> Option<String> {
 fn file_ids(text: &str) -> Vec<i64> {
     match unity_yaml::parse(text) {
         Ok(stream) => {
-            let mut ids: Vec<i64> = stream.documents.iter().map(|document| document.file_id).collect();
-            ids.sort();
+            let mut ids: Vec<i64> = stream
+                .documents
+                .iter()
+                .map(|document| document.file_id)
+                .collect();
+            ids.sort_unstable();
             ids
         }
         Err(_) => Vec::new(),
@@ -209,7 +217,7 @@ fn merge_reports_reparent_cycle_as_structural_conflict() -> TestResult {
         other => return Err(format!("expected a reparent cycle conflict, found {other:?}").into()),
     };
     let mut members = cycle.clone();
-    members.sort();
+    members.sort_unstable();
     assert_eq!(members, vec![110, 210]);
     assert_eq!(conflict.property.as_deref(), Some("m_Father"));
     assert!(outcome.merged.is_none());
@@ -539,7 +547,10 @@ fn semantic_diff_reports_component_and_property_changes_preserving_guids_and_ppt
         .ok_or("expected Transform component diff")?;
     assert_eq!(transform_comp.change, DiffChangeKind::Changed);
     assert_eq!(transform_comp.properties.len(), 1);
-    assert_eq!(transform_comp.properties[0].property_path, "m_LocalPosition.x");
+    assert_eq!(
+        transform_comp.properties[0].property_path,
+        "m_LocalPosition.x"
+    );
     assert_eq!(transform_comp.properties[0].old_value.as_deref(), Some("0"));
     assert_eq!(transform_comp.properties[0].new_value.as_deref(), Some("2"));
     Ok(())
@@ -557,8 +568,7 @@ fn semantic_diff_reports_prefab_override_changes() -> TestResult {
         .prefab_overrides
         .iter()
         .find(|ov| {
-            ov.section == OverrideSection::Modifications
-                && ov.change == DiffChangeKind::Changed
+            ov.section == OverrideSection::Modifications && ov.change == DiffChangeKind::Changed
         })
         .ok_or("expected modified m_Modifications override")?;
     assert_eq!(mod_changed.prefab_instance_file_id, 1000);
@@ -682,5 +692,3 @@ fn semantic_diff_reports_binary_asset_as_not_semantically_diffable() -> TestResu
     ));
     Ok(())
 }
-
-

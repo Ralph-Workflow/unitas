@@ -16,8 +16,6 @@ const MAX_CONVEX_MESH_HULL_TRIANGLES: usize = 255;
 
 type PairSet = BTreeSet<(EntityId, EntityId)>;
 
-/// Material properties applied to a 3D collider, or the world's default material
-/// when a collider has no explicit material assigned.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicsMaterial3D {
     pub friction: f64,
@@ -42,7 +40,6 @@ impl PhysicsMaterial3D {
     }
 }
 
-/// Description of a 3D `MeshCollider` attached to a body or static/kinematic object.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshColliderDesc {
     pub object_name: String,
@@ -95,8 +92,6 @@ impl MeshColliderDesc {
     }
 }
 
-/// Unity-compatible diagnostic produced by 3D physics validation (such as attaching a
-/// non-convex `MeshCollider` to a dynamic `Rigidbody`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicsDiagnostic {
     pub entity: EntityId,
@@ -204,44 +199,31 @@ impl World {
         self.gravity
     }
 
-    /// Replaces the layer collision matrix.
     pub fn set_collision_matrix(&mut self, matrix: CollisionMatrix) {
         self.collision_matrix = matrix;
     }
 
-    /// The layer collision matrix that gates the collision and trigger callbacks.
     pub fn collision_matrix(&self) -> &CollisionMatrix {
         &self.collision_matrix
     }
 
-    /// Physics.IgnoreLayerCollision: disables or enables collisions, triggers,
-    /// and default-mask queries between `layer_a` and `layer_b`.
     pub fn ignore_layer_collision(&mut self, layer_a: usize, layer_b: usize, ignore: bool) {
         self.collision_matrix
             .ignore_layer_collision(layer_a, layer_b, ignore);
     }
 
-    /// Physics.GetIgnoreLayerCollision: whether collisions between `layer_a` and
-    /// `layer_b` are ignored.
     pub fn get_ignore_layer_collision(&self, layer_a: usize, layer_b: usize) -> bool {
         !self.collision_matrix.is_enabled(layer_a, layer_b)
     }
 
-    /// Returns the bitmask of layers enabled to collide with `layer` in the
-    /// collision matrix.
     pub fn layer_mask_for_layer(&self, layer: usize) -> u32 {
         self.collision_matrix.layer_mask_for_layer(layer)
     }
 
-    /// Whether transform changes (`set_position`, `set_rotation`,
-    /// `teleport_position`, `teleport_rotation`) are immediately visible to
-    /// spatial queries, or deferred until `sync_transforms()` or `step()`.
     pub fn auto_sync_transforms(&self) -> bool {
         self.auto_sync_transforms
     }
 
-    /// Sets `Physics.autoSyncTransforms`. When switched from `false` to `true`,
-    /// any pending transform changes are synchronized immediately.
     pub fn set_auto_sync_transforms(&mut self, auto_sync: bool) {
         self.auto_sync_transforms = auto_sync;
         if auto_sync {
@@ -249,8 +231,6 @@ impl World {
         }
     }
 
-    /// `Physics.SyncTransforms`: synchronizes all pending transform changes into
-    /// the query spatial state so subsequent queries observe the latest poses.
     pub fn sync_transforms(&mut self) {
         for body in &mut self.bodies {
             body.query_position = body.position;
@@ -258,13 +238,10 @@ impl World {
         }
     }
 
-    /// The default 3D physics material applied to colliders with no explicit material.
     pub fn default_material(&self) -> PhysicsMaterial3D {
         self.default_material
     }
 
-    /// Replaces the default 3D physics material and updates any bodies that use
-    /// the default material.
     pub fn set_default_material(&mut self, material: PhysicsMaterial3D) {
         let clamped = PhysicsMaterial3D::new(material.friction, material.restitution);
         self.default_material = clamped;
@@ -276,7 +253,6 @@ impl World {
         }
     }
 
-    /// Returns the effective physics material (friction, restitution) of `entity`.
     pub fn body_material(&self, entity: EntityId) -> Option<PhysicsMaterial3D> {
         self.indices.get(&entity).map(|index| {
             let body = &self.bodies[*index];
@@ -287,8 +263,6 @@ impl World {
         })
     }
 
-    /// Adds a body that inherits the world's `default_material()` instead of an
-    /// explicit per-collider material.
     pub fn add_body_with_default_material(
         &mut self,
         entity: EntityId,
@@ -303,8 +277,6 @@ impl World {
         Ok(())
     }
 
-    /// Adds a body with an optional explicit material; when `material` is `None`,
-    /// the world's `default_material()` is applied and tracked.
     pub fn add_body_with_material(
         &mut self,
         entity: EntityId,
@@ -321,17 +293,6 @@ impl World {
         }
     }
 
-    /// Attaches or ingests a `MeshCollider` on an entity with the given `BodyDesc`.
-    ///
-    /// * A non-convex `MeshCollider` on a dynamic `Rigidbody` produces the
-    ///   Unity-compatible diagnostic naming the object, disables physical
-    ///   participation as a dynamic shape, and returns
-    ///   `Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { .. })`.
-    /// * A non-convex `MeshCollider` marked as a trigger produces a diagnostic
-    ///   naming the object and does not participate as a trigger shape.
-    /// * A convex `MeshCollider` whose triangle count exceeds Unity's 255-triangle
-    ///   hull limit records a diagnostic naming the object and mesh and simulates
-    ///   with the reduced hull.
     pub fn add_mesh_collider_body(
         &mut self,
         entity: EntityId,
@@ -398,11 +359,6 @@ impl World {
         self.add_body(entity, body_desc)
     }
 
-    /// Attaches a `MeshCollider` to an already-registered body in the world.
-    /// If the body is dynamic and `mesh_desc.convex` is `false`, records the
-    /// Unity-compatible diagnostic naming the object, disables dynamic shape
-    /// simulation for that body, and returns
-    /// `Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { .. })`.
     pub fn attach_mesh_collider(
         &mut self,
         entity: EntityId,
@@ -474,12 +430,10 @@ impl World {
         Ok(())
     }
 
-    /// Recorded 3D physics diagnostics in chronological order.
     pub fn diagnostics(&self) -> &[PhysicsDiagnostic] {
         &self.diagnostics
     }
 
-    /// Diagnostics recorded for a specific entity.
     pub fn entity_diagnostics(&self, entity: EntityId) -> Vec<&PhysicsDiagnostic> {
         self.diagnostics
             .iter()
@@ -487,12 +441,10 @@ impl World {
             .collect()
     }
 
-    /// Drains all recorded 3D physics diagnostics.
     pub fn drain_diagnostics(&mut self) -> Vec<PhysicsDiagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
 
-    /// Whether `entity` is currently active in physical simulation and queries.
     pub fn is_body_simulated(&self, entity: EntityId) -> bool {
         self.indices
             .get(&entity)
@@ -618,10 +570,6 @@ impl World {
         })
     }
 
-    /// Teleports a body of any role to `p` without sweeping, as writing
-    /// `Rigidbody.position` does. Unlike `set_position`, a dynamic body may be
-    /// moved; its velocity is unchanged and the next step does not read the
-    /// teleport as swept motion.
     pub fn teleport_position(&mut self, body: EntityId, p: [f64; 3]) -> Result<(), PhysicsError> {
         let Some(index) = self.indices.get(&body).copied() else {
             return Err(PhysicsError::InvalidBody(body));
@@ -642,7 +590,6 @@ impl World {
         Ok(())
     }
 
-    /// Teleports a body of any role to orientation `rotation` without sweeping.
     pub fn teleport_rotation(
         &mut self,
         body: EntityId,
@@ -683,7 +630,6 @@ impl World {
         Ok(())
     }
 
-    /// Puts a dynamic body to sleep; it stops simulating until it is woken.
     pub fn sleep(&mut self, body: EntityId) -> Result<(), PhysicsError> {
         let Some(index) = self.indices.get(&body).copied() else {
             return Err(PhysicsError::InvalidBody(body));
@@ -694,7 +640,6 @@ impl World {
         Ok(())
     }
 
-    /// Wakes a sleeping body so the simulation moves it again.
     pub fn wake_up(&mut self, body: EntityId) {
         if let Some(index) = self.indices.get(&body).copied() {
             self.bodies[index].sleeping = false;
@@ -702,7 +647,6 @@ impl World {
         }
     }
 
-    /// Whether the body is currently asleep.
     pub fn is_sleeping(&self, body: EntityId) -> bool {
         self.indices
             .get(&body)
@@ -710,8 +654,6 @@ impl World {
             .unwrap_or(false)
     }
 
-    /// Replaces the speed below which a body may fall asleep and the time it
-    /// must stay below that speed first.
     pub fn set_sleep_threshold(&mut self, speed_threshold: f64, time_to_sleep: f64) {
         self.sleep_threshold = speed_threshold.max(0.0);
         self.time_to_sleep = time_to_sleep.max(0.0);
@@ -1075,7 +1017,6 @@ impl World {
         }
     }
 
-    /// Wakes a sleeping body that a moving dynamic body reaches.
     fn wake_on_contact(&mut self, first_index: usize, second_index: usize) {
         let threshold = self.sleep_threshold;
         let (first_speed, second_speed) = {
@@ -1093,8 +1034,6 @@ impl World {
         }
     }
 
-    /// Falls a dynamic body asleep once it has stayed below the sleep
-    /// threshold long enough.
     fn update_sleeping(&mut self, delta_seconds: f64) {
         let threshold = self.sleep_threshold;
         let time_to_sleep = self.time_to_sleep;
@@ -1264,8 +1203,10 @@ impl World {
         else {
             return false;
         };
-        self.collision_matrix
-            .is_enabled(self.bodies[*first].layer as usize, self.bodies[*second].layer as usize)
+        self.collision_matrix.is_enabled(
+            self.bodies[*first].layer as usize,
+            self.bodies[*second].layer as usize,
+        )
     }
 
     fn emit_events(&mut self, overlapping: &BTreeSet<(EntityId, EntityId)>) {

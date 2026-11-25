@@ -30,7 +30,11 @@ fn emit_stream_writes_the_same_bytes_as_the_source_file() -> TestResult {
     ] {
         let original = fs::read_to_string(fixture)?;
         let stream = unity_yaml::parse(&original)?;
-        assert_eq!(scene_save::emit_stream(&stream), original, "emitted text differs from {fixture}");
+        assert_eq!(
+            scene_save::emit_stream(&stream),
+            original,
+            "emitted text differs from {fixture}"
+        );
     }
     Ok(())
 }
@@ -39,7 +43,10 @@ fn emit_stream_writes_the_same_bytes_as_the_source_file() -> TestResult {
 fn emit_stream_round_trips_the_parsed_stream() -> TestResult {
     let original = fs::read_to_string(SCENE_FIXTURE)?;
     let stream = unity_yaml::parse(&original)?;
-    assert_eq!(unity_yaml::parse(&scene_save::emit_stream(&stream))?, stream);
+    assert_eq!(
+        unity_yaml::parse(&scene_save::emit_stream(&stream))?,
+        stream
+    );
     Ok(())
 }
 
@@ -47,7 +54,11 @@ fn emit_stream_round_trips_the_parsed_stream() -> TestResult {
 fn editing_one_field_changes_only_that_field() -> TestResult {
     let original = fs::read_to_string(SCENE_FIXTURE)?;
     let mut stream = unity_yaml::parse(&original)?;
-    assert!(set_field(&mut stream.documents[0].root, &["GameObject", "m_Name"], "Root Renamed"));
+    assert!(set_field(
+        &mut stream.documents[0].root,
+        &["GameObject", "m_Name"],
+        "Root Renamed"
+    ));
     let emitted = scene_save::emit_stream(&stream);
     let expected = original.replacen("  m_Name: Root\n", "  m_Name: Root Renamed\n", 1);
     assert_ne!(expected, original);
@@ -59,7 +70,10 @@ fn editing_one_field_changes_only_that_field() -> TestResult {
 fn an_unknown_document_round_trips_untouched() -> TestResult {
     let stream = unity_yaml::parse(UNKNOWN_DOCUMENT)?;
     assert_eq!(scene_save::emit_stream(&stream), UNKNOWN_DOCUMENT);
-    assert_eq!(unity_yaml::parse(&scene_save::emit_stream(&stream))?, stream);
+    assert_eq!(
+        unity_yaml::parse(&scene_save::emit_stream(&stream))?,
+        stream
+    );
     Ok(())
 }
 
@@ -70,8 +84,11 @@ fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
     let alpha_path = root.join("Alpha.unity");
     let beta_path = root.join("Beta.unity");
     let alpha_text = fs::read_to_string(SCENE_FIXTURE)?;
-    let beta_text = fs::read_to_string(SAMPLE_SCENE_FIXTURE)?
-        .replacen("m_Name: Main Camera\n", "m_Name: \"Main Camera\"\n", 1);
+    let beta_text = fs::read_to_string(SAMPLE_SCENE_FIXTURE)?.replacen(
+        "m_Name: Main Camera\n",
+        "m_Name: \"Main Camera\"\n",
+        1,
+    );
     fs::write(&alpha_path, &alpha_text)?;
     fs::write(&beta_path, &beta_text)?;
 
@@ -82,8 +99,14 @@ fn saving_one_scene_of_an_additive_set_writes_only_that_scene() -> TestResult {
         "Alpha"
     ));
     let scenes = vec![
-        SceneFile { path: alpha_path.clone(), stream: alpha_stream },
-        SceneFile { path: beta_path.clone(), stream: unity_yaml::parse(&beta_text)? },
+        SceneFile {
+            path: alpha_path.clone(),
+            stream: alpha_stream,
+        },
+        SceneFile {
+            path: beta_path.clone(),
+            stream: unity_yaml::parse(&beta_text)?,
+        },
     ];
     scene_save::save_scene_set(&scenes, &alpha_path)?;
 
@@ -106,7 +129,11 @@ fn a_failed_save_keeps_the_previous_file_content() -> TestResult {
     fs::create_dir(root.join("Scene.unity.tmp"))?;
 
     let mut stream = unity_yaml::parse(&original)?;
-    assert!(set_field(&mut stream.documents[0].root, &["GameObject", "m_Name"], "Changed"));
+    assert!(set_field(
+        &mut stream.documents[0].root,
+        &["GameObject", "m_Name"],
+        "Changed"
+    ));
     let error = match scene_save::save_stream(&path, &stream) {
         Ok(()) => return Err(String::from("the save unexpectedly succeeded").into()),
         Err(error) => error,
@@ -131,9 +158,15 @@ fn a_mixed_mode_project_keeps_each_document_in_its_own_form() -> TestResult {
     let mut asset = unitas_asset::binary_ser::read_serialized(text.as_bytes())?;
     match &mut asset {
         SerializedAsset::Text { stream, .. } => {
-            assert!(set_field(&mut stream.documents[0].root, &["GameObject", "m_Name"], "Edited"));
+            assert!(set_field(
+                &mut stream.documents[0].root,
+                &["GameObject", "m_Name"],
+                "Edited"
+            ));
         }
-        SerializedAsset::Binary(_) => return Err(String::from("the scene fixture is not text").into()),
+        SerializedAsset::Binary(_) => {
+            return Err(String::from("the scene fixture is not text").into())
+        }
     }
     scene_save::save_asset(&text_path, &asset)?;
     let saved_text = fs::read_to_string(&text_path)?;
@@ -156,7 +189,10 @@ fn the_scene_set_save_rejects_a_scene_outside_the_set() -> TestResult {
     let other = root.join("Other.unity");
     let text = fs::read_to_string(SCENE_FIXTURE)?;
     fs::write(&path, &text)?;
-    let scenes = vec![SceneFile { path: path.clone(), stream: unity_yaml::parse(&text)? }];
+    let scenes = vec![SceneFile {
+        path: path.clone(),
+        stream: unity_yaml::parse(&text)?,
+    }];
     let error = match scene_save::save_scene_set(&scenes, &other) {
         Ok(()) => return Err(String::from("the save unexpectedly succeeded").into()),
         Err(error) => error,
@@ -211,7 +247,10 @@ fn binary_asset(bytes: &[u8]) -> SerializedAsset {
 }
 
 fn temp_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("unitas_asset_scene_save_{name}_{}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "unitas_asset_scene_save_{name}_{}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -369,8 +408,7 @@ fn remap_internal_file_ids(node: &mut Node, id_map: &[(i64, i64)]) {
                 for (k, v) in entries.iter_mut() {
                     if k == "fileID" {
                         if let Some(old_id) = v.as_i64() {
-                            if let Some((_, new_id)) =
-                                id_map.iter().find(|(src, _)| *src == old_id)
+                            if let Some((_, new_id)) = id_map.iter().find(|(src, _)| *src == old_id)
                             {
                                 *v = Node::Scalar(new_id.to_string());
                             }
@@ -403,7 +441,13 @@ fn duplicated_hierarchy_redirects_internal_references_and_preserves_external_ref
     fs::write(&path, initial_yaml)?;
     let mut stream = unity_yaml::parse_file(&path)?;
 
-    let id_map: &[(i64, i64)] = &[(100, 1100), (101, 1101), (102, 1102), (200, 1200), (201, 1201)];
+    let id_map: &[(i64, i64)] = &[
+        (100, 1100),
+        (101, 1101),
+        (102, 1102),
+        (200, 1200),
+        (201, 1201),
+    ];
     let mut duplicated_docs = Vec::new();
     for doc in &stream.documents {
         if let Some((_, new_id)) = id_map.iter().find(|(old_id, _)| *old_id == doc.file_id) {
@@ -579,10 +623,7 @@ fn missing_script_missing_prefab_unrecognized_class_and_circular_component_refs_
     Ok(())
 }
 
-fn build_mixed_mode_typed_v22_binary(
-    go_name: &str,
-    baked_lighting_blob: &[u8],
-) -> Vec<u8> {
+fn build_mixed_mode_typed_v22_binary(go_name: &str, baked_lighting_blob: &[u8]) -> Vec<u8> {
     let unity_version = "2022.3.16f1";
     let mut string_buf = Vec::new();
     let specs: &[(&str, &str, u8, u8, i32, i32)] = &[
@@ -986,7 +1027,10 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
         .root
         .get("MonoBehaviour")
         .ok_or("missing MonoBehaviour after unrelated edit")?;
-    assert_eq!(mb_mid.get("shieldCapacity").and_then(Node::as_i64), Some(320));
+    assert_eq!(
+        mb_mid.get("shieldCapacity").and_then(Node::as_i64),
+        Some(320)
+    );
     assert!(mb_mid.get("m_LegacyShieldPoints").is_none());
 
     let ref_entry_mid = &mb_mid

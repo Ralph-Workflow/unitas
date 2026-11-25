@@ -3,13 +3,11 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>9.0</LangVersion>
-    <Nullable>enable</Nullable>
     <AssemblyName>Unitas.Testing.NUnit</AssemblyName>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../UnityEngine/UnityEngine.csproj" />
+    <ProjectReference Include="../UnityEngine/UnityEngine.csproj" />
   </ItemGroup>
 
 </Project>

@@ -537,10 +537,7 @@ fn a_non_unit_rotation_is_normalized_before_it_rotates() -> Result<(), CoreError
         None => return Err(CoreError::UnknownEntity(entity)),
     };
 
-    assert_close(
-        &world.rotation,
-        &[0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2],
-    );
+    assert_close(&world.rotation, &[0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]);
     assert_close(
         &rotate_vector([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0]),
         &[0.0, 1.0, 0.0],
@@ -629,7 +626,8 @@ fn core_error_display_and_trait() -> Result<(), CoreError> {
 }
 
 #[test]
-fn scene_graph_shift_entity_ids_moves_keys_ids_and_links() -> Result<(), Box<dyn std::error::Error>> {
+fn scene_graph_shift_entity_ids_moves_keys_ids_and_links() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut graph = SceneGraph::new();
     let root = graph.add_entity("Root");
     let child = graph.add_entity("Child");
@@ -646,12 +644,17 @@ fn scene_graph_shift_entity_ids_moves_keys_ids_and_links() -> Result<(), Box<dyn
         Some(String::from("Root"))
     );
     assert_eq!(
-        graph.entity(shifted_child).map(|entity| entity.name.clone()),
+        graph
+            .entity(shifted_child)
+            .map(|entity| entity.name.clone()),
         Some(String::from("Child"))
     );
     assert_eq!(graph.parent_of(shifted_child), Some(shifted_root));
     assert_eq!(graph.children_of(shifted_root), &[shifted_child][..]);
-    assert_eq!(graph.breadth_first_order(), vec![shifted_root, shifted_child]);
+    assert_eq!(
+        graph.breadth_first_order(),
+        vec![shifted_root, shifted_child]
+    );
     let added = graph.add_entity("Added");
     assert!(added.as_u64() > shifted_child.as_u64());
     Ok(())

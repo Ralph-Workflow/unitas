@@ -4,9 +4,8 @@ use std::rc::Rc;
 
 use unitas_animation::avatar_mask::AvatarMask;
 use unitas_animation::playable::{
-    AnimationClipPlayable, AnimationLayerMixerPlayable, AnimationMixerPlayable,
-    DirectorUpdateMode, PlayableBehaviour, PlayableError, PlayableFrameData, PlayableGraph,
-    PlayState, ScriptPlayable,
+    AnimationClipPlayable, AnimationLayerMixerPlayable, AnimationMixerPlayable, DirectorUpdateMode,
+    PlayState, PlayableBehaviour, PlayableError, PlayableFrameData, PlayableGraph, ScriptPlayable,
 };
 use unitas_animation::{
     AnimatedValue, AnimationClip, CurveBinding, CurveBindingTarget, FloatCurve, Keyframe,
@@ -327,8 +326,6 @@ fn a_handle_from_another_graph_is_never_accepted() -> Result<(), Box<dyn Error>>
     let mut other = PlayableGraph::new("Foreign");
     let foreign = AnimationClipPlayable::create(&mut other, constant_position_clip("Foreign", 1.0));
 
-    // Both graphs mint their first node at index 0, so only graph identity can
-    // tell the foreign handle apart from the local mixer.
     assert_ne!(foreign.handle(), mixer.handle());
     assert_eq!(
         graph.connect(foreign.handle(), 0, mixer.handle(), 0, 1.0),

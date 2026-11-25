@@ -528,7 +528,9 @@ pub fn lookup_package_matrix(package_id: &str) -> Option<&'static PackageMatrixE
         .find(|entry| entry.package_id == package_id)
 }
 
-pub fn lookup_unsupported_family(name_or_package_id: &str) -> Option<&'static UnsupportedFamilyEntry> {
+pub fn lookup_unsupported_family(
+    name_or_package_id: &str,
+) -> Option<&'static UnsupportedFamilyEntry> {
     RECOGNIZED_UNSUPPORTED_FAMILIES.iter().find(|entry| {
         entry.family == name_or_package_id
             || entry.package_id == Some(name_or_package_id)
@@ -869,9 +871,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
         let consequence = asset.observable_consequence.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || match state {
-                    CompatibilityState::Supported => {
-                        "content is editable and playable".to_string()
-                    }
+                    CompatibilityState::Supported => "content is editable and playable".to_string(),
                     CompatibilityState::PartiallySupported => {
                         "content is usable with stated exclusions".to_string()
                     }

@@ -16,7 +16,6 @@ const ALL_PRIMITIVES: [BuiltinPrimitive; 6] = [
     BuiltinPrimitive::Quad,
 ];
 
-/// Unity's built-in resource identity, one row per primitive.
 const EXPECTED_IDENTITY: [(BuiltinPrimitive, i64); 6] = [
     (BuiltinPrimitive::Cube, 10202),
     (BuiltinPrimitive::Cylinder, 10206),
@@ -136,11 +135,7 @@ fn capsule_is_a_closed_capsule_around_a_unit_high_cylinder() -> TestResult {
     assert_bounds(&capsule, [-0.5, -1.0, -0.5], [0.5, 1.0, 0.5]);
     for position in &capsule.positions {
         let closest = position[1].clamp(-0.5, 0.5);
-        let offset = [
-            position[0],
-            position[1] - closest,
-            position[2],
-        ];
+        let offset = [position[0], position[1] - closest, position[2]];
         let distance =
             (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
         assert_close(distance, 0.5);
@@ -229,8 +224,7 @@ fn triangles_are_wound_consistently_outward() -> TestResult {
             }
             assert!(
                 dot(&normal, &average) > 0.0,
-                "{:?} triangle {triangle} is wound inwards",
-                primitive
+                "{primitive:?} triangle {triangle} is wound inwards"
             );
         }
     }
@@ -245,9 +239,7 @@ fn cube_top_face_triangle_normal_points_up() -> TestResult {
         let a = cube.indices[triangle * 3] as usize;
         let b = cube.indices[triangle * 3 + 1] as usize;
         let c = cube.indices[triangle * 3 + 2] as usize;
-        if cube.positions[a][1] == 0.5
-            && cube.positions[b][1] == 0.5
-            && cube.positions[c][1] == 0.5
+        if cube.positions[a][1] == 0.5 && cube.positions[b][1] == 0.5 && cube.positions[c][1] == 0.5
         {
             let normal = face_normal(&cube, triangle);
             assert_close(normal[1], 1.0);
@@ -286,7 +278,10 @@ fn lookups_resolve_known_names_and_file_ids() -> TestResult {
 fn an_identity_pair_resolves_only_when_the_file_id_and_guid_agree() -> TestResult {
     for (primitive, file_id) in EXPECTED_IDENTITY {
         let guid = builtin_guid(primitive);
-        assert_eq!(builtin_primitive_by_identity(file_id, guid), Some(primitive));
+        assert_eq!(
+            builtin_primitive_by_identity(file_id, guid),
+            Some(primitive)
+        );
         assert_eq!(
             builtin_primitive_by_identity(file_id, &guid.to_uppercase()),
             Some(primitive)
@@ -296,7 +291,10 @@ fn an_identity_pair_resolves_only_when_the_file_id_and_guid_agree() -> TestResul
             None
         );
     }
-    assert_eq!(builtin_primitive_by_identity(10203, BUILTIN_EXTRA_GUID), None);
+    assert_eq!(
+        builtin_primitive_by_identity(10203, BUILTIN_EXTRA_GUID),
+        None
+    );
     Ok(())
 }
 

@@ -254,10 +254,9 @@ fn untrusted_open_blocks_initialize_on_load_source_generator_and_git_fetch_while
         report.trust_gate.blocked_vectors
     );
     assert!(
-        report.trust_gate.has_blocked_vector(
-            BlockedVectorKind::GitPackageFetch,
-            "com.example.remote-git"
-        ),
+        report
+            .trust_gate
+            .has_blocked_vector(BlockedVectorKind::GitPackageFetch, "com.example.remote-git"),
         "expected GitPackageFetch vector to be blocked: {:?}",
         report.trust_gate.blocked_vectors
     );
@@ -334,10 +333,9 @@ fn trusted_open_with_fetch_consent_moves_vectors_to_permitted() -> TestResult {
         .iter()
         .all(|v| v.kind != BlockedVectorKind::InitializeOnLoad
             && v.kind != BlockedVectorKind::SourceGenerator));
-    assert!(trusted_without_fetch.trust_gate.has_blocked_vector(
-        BlockedVectorKind::GitPackageFetch,
-        "com.example.git-pkg"
-    ));
+    assert!(trusted_without_fetch
+        .trust_gate
+        .has_blocked_vector(BlockedVectorKind::GitPackageFetch, "com.example.git-pkg"));
 
     store.grant_fetch_consent(&project_path, TrustOrigin::Person)?;
     let (_, fully_consented) = Project::open(&project, &store)?;

@@ -33,10 +33,7 @@ fn ground_body(position: [f64; 3], half_extents: [f64; 3]) -> BodyDesc {
 fn flat_ground_world() -> World {
     let mut world = World::new();
     assert!(world
-        .add_body(
-            GROUND,
-            ground_body([0.0, -0.5, 0.0], [50.0, 0.5, 50.0])
-        )
+        .add_body(GROUND, ground_body([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]))
         .is_ok());
     world
 }
@@ -192,7 +189,10 @@ fn motor_torque_accelerates_the_vehicle() -> Result<(), WheelError> {
     }
 
     let speed = vehicle.velocity()[2];
-    assert!(speed > start + 0.5, "speed {speed} did not grow from {start}");
+    assert!(
+        speed > start + 0.5,
+        "speed {speed} did not grow from {start}"
+    );
     assert!(vehicle.position()[2] > 1.0);
     Ok(())
 }
@@ -231,7 +231,10 @@ fn brake_torque_decelerates_the_vehicle() -> Result<(), WheelError> {
     }
 
     let stopped = vehicle.velocity()[2];
-    assert!(stopped < cruising - 0.5, "speed {stopped} did not fall from {cruising}");
+    assert!(
+        stopped < cruising - 0.5,
+        "speed {stopped} did not fall from {cruising}"
+    );
     Ok(())
 }
 
@@ -318,10 +321,7 @@ fn every_wheel_reports_its_own_ground_hit() -> Result<(), WheelError> {
 fn vehicle_grounds_only_the_wheels_that_reach_a_surface() -> Result<(), WheelError> {
     let mut world = World::new();
     assert!(world
-        .add_body(
-            GROUND,
-            ground_body([0.0, -0.5, -1.2], [1.0, 0.5, 1.0])
-        )
+        .add_body(GROUND, ground_body([0.0, -0.5, -1.2], [1.0, 0.5, 1.0]))
         .is_ok());
     let mut vehicle = four_wheel_vehicle()?;
 

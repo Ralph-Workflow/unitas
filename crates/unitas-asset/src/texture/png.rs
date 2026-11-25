@@ -1,7 +1,7 @@
 use crate::inflate::inflate_zlib;
 
-pub use crate::texture::import::{DecodedTexture, TextureImportError};
 use crate::texture::import::TextureFormat;
+pub use crate::texture::import::{DecodedTexture, TextureImportError};
 
 const SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
@@ -77,13 +77,19 @@ pub fn decode_png(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
         return Err(TextureImportError::InterlacedNotSupported);
     }
     if header.compression != 0 {
-        return Err(TextureImportError::UnsupportedCompression(header.compression));
+        return Err(TextureImportError::UnsupportedCompression(
+            header.compression,
+        ));
     }
     if header.filter_method != 0 {
-        return Err(TextureImportError::UnsupportedFilterMethod(header.filter_method));
+        return Err(TextureImportError::UnsupportedFilterMethod(
+            header.filter_method,
+        ));
     }
     if header.width == 0 || header.height == 0 {
-        return Err(TextureImportError::CorruptData("zero image size".to_string()));
+        return Err(TextureImportError::CorruptData(
+            "zero image size".to_string(),
+        ));
     }
     let channels = match header.color_type {
         0 => 1,
@@ -128,7 +134,7 @@ fn parse_header(data: &[u8]) -> Result<Header, TextureImportError> {
 }
 
 fn parse_palette(data: &[u8]) -> Result<Vec<[u8; 3]>, TextureImportError> {
-    if data.len() % 3 != 0 {
+    if !data.len().is_multiple_of(3) {
         return Err(TextureImportError::CorruptData(
             "palette length is not a multiple of three".to_string(),
         ));
@@ -139,10 +145,7 @@ fn parse_palette(data: &[u8]) -> Result<Vec<[u8; 3]>, TextureImportError> {
         .collect())
 }
 
-fn parse_transparency(
-    data: &[u8],
-    color_type: u8,
-) -> Result<Transparency, TextureImportError> {
+fn parse_transparency(data: &[u8], color_type: u8) -> Result<Transparency, TextureImportError> {
     match color_type {
         0 => {
             if data.len() < 2 {
@@ -177,9 +180,8 @@ fn unfilter_rows(
     let filter_bpp = channels * sample_bytes;
     let mut previous = vec![0u8; stride];
     let mut row = vec![0u8; stride];
-    let mut samples: Vec<u8> = Vec::with_capacity(
-        header.width as usize * header.height as usize * channels,
-    );
+    let mut samples: Vec<u8> =
+        Vec::with_capacity(header.width as usize * header.height as usize * channels);
     let mut position = 0usize;
     for _ in 0..header.height {
         let filter = raw[position];
@@ -333,9 +335,9 @@ fn assemble(
                 let entry = match palette.get(usize::from(*index)) {
                     Some(entry) => entry,
                     None => {
-                        return Err(TextureImportError::PaletteIndexOutOfRange(
-                            usize::from(*index),
-                        ))
+                        return Err(TextureImportError::PaletteIndexOutOfRange(usize::from(
+                            *index,
+                        )))
                     }
                 };
                 pixels.push(entry[0]);

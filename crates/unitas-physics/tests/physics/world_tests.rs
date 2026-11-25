@@ -230,7 +230,10 @@ fn capsule_bodies_support_dynamic_kinematic_and_static_roles() -> Result<(), Phy
     world.step(0.1)?;
 
     assert_eq!(world.body_role(dynamic_capsule), Some(BodyRole::Dynamic));
-    assert_eq!(world.body_role(kinematic_capsule), Some(BodyRole::Kinematic));
+    assert_eq!(
+        world.body_role(kinematic_capsule),
+        Some(BodyRole::Kinematic)
+    );
     assert_eq!(world.body_role(static_capsule), Some(BodyRole::Static));
     assert!(world.position(dynamic_capsule).map_or(5.0, |p| p[1]) < 5.0);
     assert_eq!(world.position(kinematic_capsule), Some([2.0, 0.0, 0.0]));
@@ -571,7 +574,10 @@ fn set_rotation_and_query_rotation_round_trip_with_auto_sync() -> Result<(), Phy
     world.set_auto_sync_transforms(false);
     assert_eq!(world.set_rotation(static_body, rot_z_90), Ok(()));
     assert_eq!(world.rotation(static_body), Some(rot_z_90));
-    assert_eq!(world.query_rotation(static_body), Some([0.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        world.query_rotation(static_body),
+        Some([0.0, 0.0, 0.0, 1.0])
+    );
 
     world.sync_transforms();
     assert_eq!(world.query_rotation(static_body), Some(rot_z_90));
@@ -620,7 +626,10 @@ fn raycast_and_overlap_sphere_default_layer_honor_collision_matrix() -> Result<(
 
     let initial_hits = world.raycast_default_layer([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, 1);
     assert_eq!(
-        initial_hits.iter().map(|hit| hit.entity).collect::<Vec<_>>(),
+        initial_hits
+            .iter()
+            .map(|hit| hit.entity)
+            .collect::<Vec<_>>(),
         vec![layer_zero, layer_two]
     );
 
@@ -631,7 +640,10 @@ fn raycast_and_overlap_sphere_default_layer_honor_collision_matrix() -> Result<(
 
     let filtered_hits = world.raycast_default_layer([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, 1);
     assert_eq!(
-        filtered_hits.iter().map(|hit| hit.entity).collect::<Vec<_>>(),
+        filtered_hits
+            .iter()
+            .map(|hit| hit.entity)
+            .collect::<Vec<_>>(),
         vec![layer_zero]
     );
 

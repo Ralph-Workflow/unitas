@@ -272,7 +272,7 @@ namespace UnityEngine.SceneManagement
 
         public bool Equals(Scene other) => handle == other.handle;
 
-        public override bool Equals(object? other) => other is Scene scene && Equals(scene);
+        public override bool Equals(object? obj) => obj is Scene scene && Equals(scene);
 
         public override int GetHashCode() => handle;
 
@@ -793,7 +793,7 @@ namespace UnityEngine.SceneManagement
         }
 
         private static bool IsCallbackReentrancyRejection(SceneManagementException ex) =>
-            ex.Message.IndexOf("inside a runtime callback", StringComparison.OrdinalIgnoreCase) >= 0;
+            ex.Message.Contains("inside a runtime callback", StringComparison.OrdinalIgnoreCase);
 
         private static Scene ExecuteHostLoad(ISceneHost host, string scenePath, LoadSceneMode mode)
         {
@@ -817,8 +817,8 @@ namespace UnityEngine.SceneManagement
         {
             if (BuildScenePaths.Count > 0)
             {
-                bool isPathQuery = sceneName.IndexOf('/') >= 0
-                    || sceneName.IndexOf('\\') >= 0
+                bool isPathQuery = sceneName.Contains('/', StringComparison.Ordinal)
+                    || sceneName.Contains('\\', StringComparison.Ordinal)
                     || sceneName.EndsWith(".unity", StringComparison.OrdinalIgnoreCase);
 
                 if (isPathQuery)

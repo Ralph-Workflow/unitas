@@ -5,7 +5,7 @@ export DOTNET_ROOT := $(HOME)/.dotnet
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
-DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All
+DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \
@@ -24,8 +24,12 @@ verify-scan-gates:
 	@$(MAKE) --no-print-directory secret-scan
 
 verify-suite-gates:
-	@$(MAKE) --no-print-directory lint
-	@$(MAKE) --no-print-directory typecheck
+	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
+	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
+	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
+	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D warnings
+	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
+	@python3 tools/verify.py timed typecheck-rs $(VERIFY_BUDGET_SECONDS) cargo check --workspace --all-targets
 	@$(MAKE) --no-print-directory test
 
 verify-dotnet-gates:
@@ -44,11 +48,14 @@ test:
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
 	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
-	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
+	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D warnings
+	@$(MAKE) --no-print-directory dotnet-format
 
 typecheck:
 	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
 	@python3 tools/verify.py timed typecheck-rs $(VERIFY_BUDGET_SECONDS) cargo check --workspace --all-targets
+	@$(MAKE) --no-print-directory dotnet-build
 
 policy-validate:
 	@python3 tools/verify.py timed policy $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py policy

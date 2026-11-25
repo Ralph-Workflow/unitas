@@ -28,7 +28,8 @@ fn static_capsule(position: [f64; 3]) -> BodyDesc {
 }
 
 #[test]
-fn cloth_grid_has_a_particle_and_a_constraint_for_every_cell() -> Result<(), Box<dyn std::error::Error>> {
+fn cloth_grid_has_a_particle_and_a_constraint_for_every_cell(
+) -> Result<(), Box<dyn std::error::Error>> {
     let cloth = Cloth::new(ClothDesc::new([-1.5, 0.0, 0.0], 3.0, 1.0, 5, 2))?;
 
     assert_eq!(cloth.desc().resolution_x, 5);
@@ -52,20 +53,30 @@ fn cloth_collides_with_assigned_capsules_only() -> Result<(), Box<dyn std::error
     world.add_body(unassigned, static_capsule([1.0, 0.5, 0.0]))?;
 
     let mut cloth = Cloth::new(ClothDesc::new([-1.5, 0.0, 0.0], 3.0, 1.0, 5, 2))?;
-    cloth.assign_collider(ClothCollider::capsule(assigned, CAPSULE_RADIUS, CAPSULE_HEIGHT))?;
-    assert_eq!(cloth.colliders().len(), 1, "the cloth holds one assigned collider");
+    cloth.assign_collider(ClothCollider::capsule(
+        assigned,
+        CAPSULE_RADIUS,
+        CAPSULE_HEIGHT,
+    ))?;
+    assert_eq!(
+        cloth.colliders().len(),
+        1,
+        "the cloth holds one assigned collider"
+    );
     assert_eq!(cloth.colliders()[0].entity, assigned);
 
     cloth.simulate(&world, TIMESTEP)?;
 
     let contacts = cloth.contacts();
     assert!(
-        contacts
-            .iter()
-            .all(|contact| contact.entity == assigned),
+        contacts.iter().all(|contact| contact.entity == assigned),
         "cloth reported a contact with a collider it was not assigned"
     );
-    assert_eq!(contacts.len(), 2, "expected a contact for every penetrating particle");
+    assert_eq!(
+        contacts.len(),
+        2,
+        "expected a contact for every penetrating particle"
+    );
 
     let pushed = cloth.particle(6).ok_or("missing particle")?;
     assert!(
@@ -95,14 +106,15 @@ fn cloth_grid_keeps_its_spacing_while_falling() -> Result<(), Box<dyn std::error
 
     for constraint in cloth.constraints() {
         let first = cloth.particle(constraint.first).ok_or("missing particle")?;
-        let second = cloth.particle(constraint.second).ok_or("missing particle")?;
+        let second = cloth
+            .particle(constraint.second)
+            .ok_or("missing particle")?;
         let delta = [
             second.position[0] - first.position[0],
             second.position[1] - first.position[1],
             second.position[2] - first.position[2],
         ];
-        let distance =
-            (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
         assert!(
             (distance - constraint.rest_length).abs() < constraint.rest_length * 0.1,
             "cloth link stretched from {} to {distance}",

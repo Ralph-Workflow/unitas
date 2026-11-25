@@ -143,7 +143,7 @@ namespace UnityEngine
 
         public override string ToString() => (_destroyed || _unassignedReference) ? "null" : _name;
 
-        public override bool Equals(object? other) => this == (other as Object);
+        public override bool Equals(object? obj) => this == (obj as Object);
 
         public override int GetHashCode() => (_destroyed || _unassignedReference) ? 0 : _instanceId;
 
@@ -412,24 +412,24 @@ namespace UnityEngine
             return 0;
         }
 
-        public static void Destroy(Object obj, float t)
+        public static void Destroy(Object? obj, float t)
         {
             _ = t;
             Destroy(obj);
         }
 
-        public static void DestroyImmediate(Object obj)
+        public static void DestroyImmediate(Object? obj)
         {
             Destroy(obj);
         }
 
-        public static void DestroyImmediate(Object obj, bool allowDestroyingAssets)
+        public static void DestroyImmediate(Object? obj, bool allowDestroyingAssets)
         {
             _ = allowDestroyingAssets;
             Destroy(obj);
         }
 
-        public static void Destroy(Object obj)
+        public static void Destroy(Object? obj)
         {
             if (obj is null || obj._destroyed || obj._unassignedReference)
             {

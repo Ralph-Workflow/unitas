@@ -151,10 +151,7 @@ fn the_property_curves_interpolate_at_the_midpoint_of_the_lifetime() {
     system.set_emit_params(emit_params(2.0));
     system.set_velocity_over_lifetime(Curve::<3>::new([0.0, 0.0, 0.0], [10.0, 0.0, 0.0]));
     system.set_size_over_lifetime(Curve::<1>::new([4.0], [0.0]));
-    system.set_color_over_lifetime(Curve::<4>::new(
-        [1.0, 0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0, 1.0],
-    ));
+    system.set_color_over_lifetime(Curve::<4>::new([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]));
     system.emit(1);
     system.simulate(1.0);
     let particle = system.get_particles()[0];
@@ -347,7 +344,9 @@ fn the_emission_shapes_place_particles_inside_their_bounds() {
     }
 
     let mut box_system = ParticleSystem::new(20);
-    box_system.set_shape(ParticleShape::Box { size: [1.0, 2.0, 3.0] });
+    box_system.set_shape(ParticleShape::Box {
+        size: [1.0, 2.0, 3.0],
+    });
     box_system.emit(50);
     for particle in box_system.get_particles() {
         assert!(particle.position[0].abs() <= 0.5 + 1e-4);

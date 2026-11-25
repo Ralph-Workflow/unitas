@@ -122,11 +122,8 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
     let loaded_update_catalog = ContentCatalog::load_from_dir(&update_out)?;
     assert_eq!(loaded_update_catalog, update_build.catalog);
 
-    let report = ContentBuildReport::from_build_result(
-        &update_build,
-        ContentBuildMode::ContentUpdate,
-        25,
-    );
+    let report =
+        ContentBuildReport::from_build_result(&update_build, ContentBuildMode::ContentUpdate, 25);
     assert_eq!(report.outcome, BuildOutcome::Succeeded);
     assert_eq!(report.unitas_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(report.player_compatibility_version, "1.0");
@@ -183,12 +180,7 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
         ContentBundleInput::new("env_unityweb", unity_web_path, host, "1.0"),
         ContentBundleInput::new("props_unityraw", unity_raw_path, host, "1.0"),
         ContentBundleInput::new("future_player", incompatible_player_path, host, "2.0"),
-        ContentBundleInput::new(
-            "wrong_target",
-            wrong_target_path,
-            mismatched_target,
-            "1.0",
-        ),
+        ContentBundleInput::new("wrong_target", wrong_target_path, mismatched_target, "1.0"),
     ];
 
     let out_dir = workspace.join("validated_content_out");

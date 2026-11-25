@@ -170,7 +170,7 @@ pub fn render_scene(
         to_u8(background[1]),
         to_u8(background[2]),
     ];
-    for pixel in image.pixels.iter_mut() {
+    for pixel in &mut image.pixels {
         *pixel = background_rgb;
     }
 

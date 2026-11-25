@@ -53,7 +53,9 @@ impl From<YamlError> for MaterialError {
 
 pub fn parse_material(path: &Path) -> Result<Material, MaterialError> {
     let stream = unity_yaml::parse_file(path)?;
-    let index = path.parent().and_then(|parent| GuidIndex::build(parent).ok());
+    let index = path
+        .parent()
+        .and_then(|parent| GuidIndex::build(parent).ok());
     extract_material(&stream, index.as_ref())
 }
 
@@ -76,10 +78,7 @@ pub fn parse_material_stream_with_guids(
     extract_material(stream, Some(index))
 }
 
-fn extract_material(
-    stream: &Stream,
-    index: Option<&GuidIndex>,
-) -> Result<Material, MaterialError> {
+fn extract_material(stream: &Stream, index: Option<&GuidIndex>) -> Result<Material, MaterialError> {
     let body = stream
         .documents
         .iter()

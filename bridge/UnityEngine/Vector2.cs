@@ -212,7 +212,7 @@ namespace UnityEngine
 
         public bool Equals(Vector2 other) => x == other.x && y == other.y;
 
-        public override bool Equals(object? other) => other is Vector2 v && Equals(v);
+        public override bool Equals(object? obj) => obj is Vector2 v && Equals(v);
 
         public override int GetHashCode() => HashCode.Combine(x, y);
 

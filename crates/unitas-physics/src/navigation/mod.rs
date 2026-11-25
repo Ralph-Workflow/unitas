@@ -1,6 +1,3 @@
-//! Navigation data and agent locomotion: a navmesh built from a walkable
-//! triangle soup, A* path queries over it, and the agents that walk the paths.
-
 mod agent;
 mod mesh;
 mod path;
@@ -15,7 +12,6 @@ pub use mesh::{
 };
 pub use path::{PathQueryResult, PathQueryStatus, UnreachableReason};
 
-/// The failures the navigation data and the agents report.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavigationError {
     DegenerateTriangle { index: usize },

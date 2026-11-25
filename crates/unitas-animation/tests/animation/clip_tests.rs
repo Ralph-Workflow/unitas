@@ -189,10 +189,7 @@ fn loop_boundary_fires_end_and_start_events_in_chronological_order_without_doubl
         .iter()
         .map(|e| e.function_name.as_str())
         .collect();
-    assert_eq!(
-        across_names,
-        vec!["NearEnd", "LoopEnd", "LoopStart", "Mid"]
-    );
+    assert_eq!(across_names, vec!["NearEnd", "LoopEnd", "LoopStart", "Mid"]);
 }
 
 #[test]
@@ -298,19 +295,58 @@ fn whole_property_and_per_channel_bindings_coexist_and_carry_parsed_targets() {
 fn transform_property_and_channel_parsing_covers_all_transform_paths() {
     use unitas_animation::{TransformChannel, TransformProperty};
     let cases = [
-        ("localPosition", Some((TransformProperty::LocalPosition, TransformChannel::All))),
-        ("m_LocalPosition.x", Some((TransformProperty::LocalPosition, TransformChannel::X))),
-        ("localPosition.y", Some((TransformProperty::LocalPosition, TransformChannel::Y))),
-        ("position.z", Some((TransformProperty::LocalPosition, TransformChannel::Z))),
-        ("localRotation", Some((TransformProperty::LocalRotation, TransformChannel::All))),
-        ("localRotation.x", Some((TransformProperty::LocalRotation, TransformChannel::X))),
-        ("localRotation.y", Some((TransformProperty::LocalRotation, TransformChannel::Y))),
-        ("localRotation.z", Some((TransformProperty::LocalRotation, TransformChannel::Z))),
-        ("m_LocalRotation.w", Some((TransformProperty::LocalRotation, TransformChannel::W))),
-        ("localScale", Some((TransformProperty::LocalScale, TransformChannel::All))),
-        ("localScale.x", Some((TransformProperty::LocalScale, TransformChannel::X))),
-        ("localScale.y", Some((TransformProperty::LocalScale, TransformChannel::Y))),
-        ("scale.z", Some((TransformProperty::LocalScale, TransformChannel::Z))),
+        (
+            "localPosition",
+            Some((TransformProperty::LocalPosition, TransformChannel::All)),
+        ),
+        (
+            "m_LocalPosition.x",
+            Some((TransformProperty::LocalPosition, TransformChannel::X)),
+        ),
+        (
+            "localPosition.y",
+            Some((TransformProperty::LocalPosition, TransformChannel::Y)),
+        ),
+        (
+            "position.z",
+            Some((TransformProperty::LocalPosition, TransformChannel::Z)),
+        ),
+        (
+            "localRotation",
+            Some((TransformProperty::LocalRotation, TransformChannel::All)),
+        ),
+        (
+            "localRotation.x",
+            Some((TransformProperty::LocalRotation, TransformChannel::X)),
+        ),
+        (
+            "localRotation.y",
+            Some((TransformProperty::LocalRotation, TransformChannel::Y)),
+        ),
+        (
+            "localRotation.z",
+            Some((TransformProperty::LocalRotation, TransformChannel::Z)),
+        ),
+        (
+            "m_LocalRotation.w",
+            Some((TransformProperty::LocalRotation, TransformChannel::W)),
+        ),
+        (
+            "localScale",
+            Some((TransformProperty::LocalScale, TransformChannel::All)),
+        ),
+        (
+            "localScale.x",
+            Some((TransformProperty::LocalScale, TransformChannel::X)),
+        ),
+        (
+            "localScale.y",
+            Some((TransformProperty::LocalScale, TransformChannel::Y)),
+        ),
+        (
+            "scale.z",
+            Some((TransformProperty::LocalScale, TransformChannel::Z)),
+        ),
         ("unknownProp", None),
     ];
     for (prop, expected) in cases {
@@ -351,7 +387,10 @@ fn ping_pong_clip_fires_events_on_forward_and_backward_sweeps() {
         60.0,
         WrapMode::PingPong,
         Vec::new(),
-        vec![AnimationEvent::new(0.3, "Pass03"), AnimationEvent::new(0.8, "Pass08")],
+        vec![
+            AnimationEvent::new(0.3, "Pass03"),
+            AnimationEvent::new(0.8, "Pass08"),
+        ],
     );
     let forward = clip.sample(0.0, 1.0);
     let f_names: Vec<&str> = forward
@@ -380,8 +419,14 @@ fn clip_duration_inferred_from_event_time_when_no_curves_exist() {
 
 #[test]
 fn invalid_sample_rate_and_negative_duration_sanitize_to_safe_defaults() {
-    let clip = AnimationClip::new("Sanitized", -5.0, -10.0, WrapMode::Once, Vec::new(), Vec::new());
+    let clip = AnimationClip::new(
+        "Sanitized",
+        -5.0,
+        -10.0,
+        WrapMode::Once,
+        Vec::new(),
+        Vec::new(),
+    );
     assert_eq!(clip.duration, 0.0);
     assert_eq!(clip.sample_rate, 60.0);
 }
-

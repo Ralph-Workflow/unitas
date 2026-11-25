@@ -130,12 +130,12 @@ fn property_curve_vector3_evaluates_each_channel_independently() {
     let prop = PropertyCurve::Vector3([
         FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 3.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 2.0), Keyframe::linear(1.0, 6.0)]),
-        FloatCurve::new(vec![Keyframe::stepped(0.0, 5.0), Keyframe::stepped(1.0, 9.0)]),
+        FloatCurve::new(vec![
+            Keyframe::stepped(0.0, 5.0),
+            Keyframe::stepped(1.0, 9.0),
+        ]),
     ]);
-    assert_eq!(
-        prop.evaluate(0.5),
-        AnimatedValue::Vector3([2.0, 4.0, 5.0])
-    );
+    assert_eq!(prop.evaluate(0.5), AnimatedValue::Vector3([2.0, 4.0, 5.0]));
 }
 
 #[test]
@@ -262,4 +262,3 @@ fn property_curve_float_and_max_time_across_all_variants() {
     ]);
     assert_eq!(vc.max_time(), 4.0);
 }
-

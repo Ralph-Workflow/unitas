@@ -138,7 +138,7 @@ impl NavMesh {
                 unreachable_reason: Some(UnreachableReason::StartNotOnNavMesh),
                 link_traversals: Vec::new(),
             };
-        };
+        }
         let Some(goal_polygon) = self.polygon_at(goal) else {
             return PathQueryResult {
                 status: PathQueryStatus::Invalid,
@@ -154,7 +154,7 @@ impl NavMesh {
                 unreachable_reason: Some(UnreachableReason::GoalNotOnNavMesh),
                 link_traversals: Vec::new(),
             };
-        };
+        }
         if start_polygon == goal_polygon {
             return PathQueryResult {
                 status: PathQueryStatus::Complete,
@@ -301,13 +301,13 @@ impl NavMesh {
                 } else {
                     (link.end, link.start)
                 };
-                let approach =
-                    distance(self.polygons[from].centroid, entry) * self.area_cost(self.polygons[from].area);
+                let approach = distance(self.polygons[from].centroid, entry)
+                    * self.area_cost(self.polygons[from].area);
                 let link_cost = link
                     .cost_override
                     .unwrap_or_else(|| distance(entry, exit) * self.area_cost(link.area));
-                let departure =
-                    distance(exit, self.polygons[to].centroid) * self.area_cost(self.polygons[to].area);
+                let departure = distance(exit, self.polygons[to].centroid)
+                    * self.area_cost(self.polygons[to].area);
                 approach + link_cost + departure
             }
         }

@@ -32,7 +32,7 @@ namespace Unitas.Editor.Tests
             Check.That("registry: refusal is MissingScope", refused is McpError.MissingScope);
             Check.That(
                 "registry: refusal names the missing scope",
-                refused != null && refused.Message.Contains("edit-content"));
+                refused != null && refused.Message.Contains("edit-content", StringComparison.Ordinal));
 
             host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
             JsonNode edit = host.CallTool(
@@ -107,7 +107,7 @@ namespace Unitas.Editor.Tests
                 new JsonObject { ["bundle"] = "Game.app" }));
             Check.That(
                 "registry: completing a completed operation is refused",
-                completedTwice != null && completedTwice.Message.Contains("no longer pending"));
+                completedTwice != null && completedTwice.Message.Contains("no longer pending", StringComparison.Ordinal));
         }
 
         // New: a native-registered tool goes through the same scope gate as a built-in.

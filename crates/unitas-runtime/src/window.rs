@@ -1,5 +1,15 @@
 #![cfg(feature = "device")]
 
+macro_rules! ffi_export {
+    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
+            #[used]
+            static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
+            $body
+        }
+    };
+}
+
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -206,7 +216,8 @@ impl Default for GpuCameraBinding {
     }
 }
 
-type FrameUpdateCallback<'a> = Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
+type FrameUpdateCallback<'a> =
+    Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
 
 pub struct GpuFramePresenter<'a> {
     renderer: Arc<Renderer>,
@@ -892,7 +903,7 @@ fn set_last_error(message: &str) {
     guard.push(0);
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_run_windowed(width: u32, height: u32, frame_limit: u32) -> i32 {
     let mut runtime = match Runtime::new() {
         Ok(runtime) => runtime,
@@ -924,13 +935,15 @@ pub extern "C" fn unitas_runtime_run_windowed(width: u32, height: u32, frame_lim
         }
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_window_frame_count() -> u64 {
     LAST_FRAME_COUNT.load(Ordering::Relaxed)
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_window_error_message() -> u64 {
     let store = LAST_ERROR.get_or_init(|| Mutex::new(Vec::new()));
     let Ok(guard) = store.lock() else {
@@ -940,6 +953,7 @@ pub extern "C" fn unitas_runtime_window_error_message() -> u64 {
         return 0;
     }
     guard.as_ptr() as usize as u64
+}
 }
 
 #[cfg(test)]
@@ -1120,12 +1134,8 @@ mod tests {
     #[test]
     fn gpu_mesh_binding_resolves_standalone_and_cpu_reference() -> Result<(), RuntimeError> {
         let runtime = Runtime::new()?;
-        let binding = GpuMeshBinding::standalone(
-            cube(1.0),
-            Mat4::identity(),
-            [0.8, 0.2, 0.2],
-            true,
-        );
+        let binding =
+            GpuMeshBinding::standalone(cube(1.0), Mat4::identity(), [0.8, 0.2, 0.2], true);
         assert!(binding.enabled);
         assert_eq!(binding.entity, None);
         assert_eq!(runtime.world_transform_of(EntityId::new(999)), None);

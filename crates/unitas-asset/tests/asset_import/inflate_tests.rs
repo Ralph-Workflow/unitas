@@ -129,7 +129,9 @@ fn inflates_fixed_huffman_literals_and_overlapping_back_reference() -> TestResul
     writer.write_code_msb(eob_code, eob_len);
 
     let stream = writer.finish();
-    let expected = vec![b'a', b'b', b'c', 200, b'a', b'b', b'c', 200, b'a', b'b', b'c'];
+    let expected = vec![
+        b'a', b'b', b'c', 200, b'a', b'b', b'c', 200, b'a', b'b', b'c',
+    ];
     assert_eq!(inflate_raw(&stream)?, expected);
     assert_eq!(inflate_zlib(&wrap_zlib(&stream, &expected))?, expected);
     Ok(())
@@ -160,17 +162,15 @@ fn inflates_fixed_huffman_single_byte_run_back_reference() -> TestResult {
 #[test]
 fn inflates_dynamic_huffman_block_with_rle_and_back_reference() -> TestResult {
     let raw: [u8; 30] = [
-        0x78, 0x9C, 0x4B, 0x4C, 0x4A, 0x4E, 0x49, 0x4D, 0x4B, 0xCF, 0xC8, 0xCC, 0xCA, 0xCE,
-        0xC9, 0xCD, 0xCB, 0x2F, 0x28, 0x2C, 0x2A, 0x2E, 0x29, 0x2D, 0x03, 0x00, 0x66, 0xDE,
-        0x09, 0x3E,
+        0x78, 0x9C, 0x4B, 0x4C, 0x4A, 0x4E, 0x49, 0x4D, 0x4B, 0xCF, 0xC8, 0xCC, 0xCA, 0xCE, 0xC9,
+        0xCD, 0xCB, 0x2F, 0x28, 0x2C, 0x2A, 0x2E, 0x29, 0x2D, 0x03, 0x00, 0x66, 0xDE, 0x09, 0x3E,
     ];
     assert_eq!(inflate_zlib(&raw)?, b"abcdefghijklmnopqrstuv");
 
     let dynamic_zlib: [u8; 44] = [
-        0x78, 0x9C, 0xED, 0xC7, 0x37, 0x11, 0x00, 0x30, 0x0C, 0x04, 0x30, 0x4A, 0x29, 0x08,
-        0xDE, 0xE6, 0xCF, 0x29, 0xC6, 0x91, 0xD3, 0xA0, 0x41, 0xA9, 0x5E, 0xA9, 0xDE, 0xE3,
-        0x8C, 0x1B, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0xFF, 0xEE, 0x0F, 0x16, 0x4C,
-        0xDE, 0x2E,
+        0x78, 0x9C, 0xED, 0xC7, 0x37, 0x11, 0x00, 0x30, 0x0C, 0x04, 0x30, 0x4A, 0x29, 0x08, 0xDE,
+        0xE6, 0xCF, 0x29, 0xC6, 0x91, 0xD3, 0xA0, 0x41, 0xA9, 0x5E, 0xA9, 0xDE, 0xE3, 0x8C, 0x1B,
+        0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0xFF, 0xEE, 0x0F, 0x16, 0x4C, 0xDE, 0x2E,
     ];
     let mut expected = Vec::with_capacity(4096);
     for i in 0..1024 {
@@ -205,14 +205,12 @@ fn inflates_hand_built_dynamic_huffman_tree_with_code_length_rle() -> TestResult
         writer.write_bits_lsb(u32::from(cl_lens[sym]), 3);
     }
 
-    // 65 unused literal codes, then 'A', 'B' and 'C' with two-bit codes.
     writer.write_code_msb(0b00, 2);
     writer.write_code_msb(0b1111, 4);
     writer.write_bits_lsb(53, 7);
     for _ in 0..3 {
         writer.write_code_msb(0b10, 2);
     }
-    // 188 unused literal codes between 'C' and the end-of-block code.
     writer.write_code_msb(0b00, 2);
     writer.write_code_msb(0b1111, 4);
     writer.write_bits_lsb(127, 7);
@@ -220,14 +218,13 @@ fn inflates_hand_built_dynamic_huffman_tree_with_code_length_rle() -> TestResult
     writer.write_bits_lsb(35, 7);
     writer.write_code_msb(0b110, 3);
     writer.write_bits_lsb(0, 2);
-    // End of block, one unused literal-length code, then two distance codes.
     writer.write_code_msb(0b10, 2);
     writer.write_code_msb(0b00, 2);
     writer.write_code_msb(0b01, 2);
     writer.write_code_msb(0b01, 2);
 
     for &byte in b"ABAAAB" {
-        writer.write_code_msb(if byte == b'A' { 0b00 } else { 0b01 }, 2);
+        writer.write_code_msb(u16::from(byte != b'A'), 2);
     }
     writer.write_code_msb(0b11, 2);
 
@@ -322,7 +319,10 @@ fn rejects_reserved_block_type_three() -> TestResult {
 
 #[test]
 fn rejects_truncated_streams() -> TestResult {
-    assert_eq!(inflate_zlib(&[0x78, 0x9C, 0x01]), Err(InflateError::Truncated));
+    assert_eq!(
+        inflate_zlib(&[0x78, 0x9C, 0x01]),
+        Err(InflateError::Truncated)
+    );
     assert_eq!(inflate_raw(&[]), Err(InflateError::Truncated));
     assert_eq!(
         inflate_raw(&[0x01, 0x04, 0x00, 0xFB, 0xFF, b'a', b'b']),

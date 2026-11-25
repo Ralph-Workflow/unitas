@@ -63,8 +63,8 @@ const CODE_LENGTH_ORDER: [usize; 19] = [
 ];
 
 const LENGTH_BASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
-    131, 163, 195, 227, 258,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
 
 const LENGTH_EXTRA: [u8; 29] = [
@@ -77,8 +77,8 @@ const DISTANCE_BASE: [u16; 30] = [
 ];
 
 const DISTANCE_EXTRA: [u8; 30] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
-    13, 13,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 ];
 
 const MAX_BITS: usize = 15;
@@ -224,9 +224,9 @@ impl HuffmanTree {
             });
         }
         let mut available = 1i32;
-        for bits in 1..=MAX_BITS {
+        for &count in &counts[1..=MAX_BITS] {
             available <<= 1;
-            available -= i32::from(counts[bits]);
+            available -= i32::from(count);
             if available < 0 {
                 return Err(InflateError::InvalidHuffmanTree);
             }
@@ -401,44 +401,44 @@ fn inflate_compressed_block(
 ) -> Result<(), InflateError> {
     loop {
         let symbol = lit_len_tree.decode(reader)?;
-        if symbol < 256 {
-            output.push(symbol as u8);
-        } else if symbol == 256 {
-            break;
-        } else {
-            let length_index = usize::from(symbol - 257);
-            if length_index >= LENGTH_BASE.len() {
-                return Err(InflateError::InvalidLengthSymbol(symbol));
-            }
-            let extra_bits = LENGTH_EXTRA[length_index];
-            let extra = if extra_bits > 0 {
-                reader.read_bits(extra_bits)?
-            } else {
-                0
-            };
-            let length = usize::from(LENGTH_BASE[length_index] + extra);
+        match symbol.cmp(&256) {
+            std::cmp::Ordering::Less => output.push(symbol as u8),
+            std::cmp::Ordering::Equal => break,
+            std::cmp::Ordering::Greater => {
+                let length_index = usize::from(symbol - 257);
+                if length_index >= LENGTH_BASE.len() {
+                    return Err(InflateError::InvalidLengthSymbol(symbol));
+                }
+                let extra_bits = LENGTH_EXTRA[length_index];
+                let extra = if extra_bits > 0 {
+                    reader.read_bits(extra_bits)?
+                } else {
+                    0
+                };
+                let length = usize::from(LENGTH_BASE[length_index] + extra);
 
-            let dist_symbol = dist_tree.decode(reader)?;
-            let dist_index = usize::from(dist_symbol);
-            if dist_index >= DISTANCE_BASE.len() {
-                return Err(InflateError::InvalidDistanceSymbol(dist_symbol));
-            }
-            let dist_extra_bits = DISTANCE_EXTRA[dist_index];
-            let dist_extra = if dist_extra_bits > 0 {
-                reader.read_bits(dist_extra_bits)?
-            } else {
-                0
-            };
-            let distance = usize::from(DISTANCE_BASE[dist_index] + dist_extra);
-            if distance == 0 || distance > output.len() {
-                return Err(InflateError::DistanceOutOfBounds {
-                    distance,
-                    available: output.len(),
-                });
-            }
-            for _ in 0..length {
-                let byte = output[output.len() - distance];
-                output.push(byte);
+                let dist_symbol = dist_tree.decode(reader)?;
+                let dist_index = usize::from(dist_symbol);
+                if dist_index >= DISTANCE_BASE.len() {
+                    return Err(InflateError::InvalidDistanceSymbol(dist_symbol));
+                }
+                let dist_extra_bits = DISTANCE_EXTRA[dist_index];
+                let dist_extra = if dist_extra_bits > 0 {
+                    reader.read_bits(dist_extra_bits)?
+                } else {
+                    0
+                };
+                let distance = usize::from(DISTANCE_BASE[dist_index] + dist_extra);
+                if distance == 0 || distance > output.len() {
+                    return Err(InflateError::DistanceOutOfBounds {
+                        distance,
+                        available: output.len(),
+                    });
+                }
+                for _ in 0..length {
+                    let byte = output[output.len() - distance];
+                    output.push(byte);
+                }
             }
         }
     }

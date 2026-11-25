@@ -58,10 +58,8 @@ const TRIANGLE_GLTF: &str = "\
 \"nodes\":[{\"name\":\"TriNode\",\"mesh\":0}]}";
 
 const TRIANGLE_BIN: &[u8] = &[
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // (0.0, 0.0, 0.0)
-    0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, // (1.0, 0.0, 0.0)
-    0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, // (0.0, 1.0, 0.0)
-    0, 0, 1, 0, 2, 0, // indices 0, 1, 2
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    128, 63, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0,
 ];
 
 const TRIANGLE_GLTF_DATA_URI: &str = "\
@@ -133,7 +131,11 @@ fn obj_with_two_groups_produces_two_sub_meshes() -> Result<(), String> {
     assert_eq!(mesh.positions.len(), 4, "one vertex per (v,vt,vn) triple");
     assert_eq!(mesh.normals.len(), 4);
     assert_eq!(mesh.uvs.len(), 4);
-    assert_eq!(mesh.indices.len(), 12, "two quads triangulated into four triangles");
+    assert_eq!(
+        mesh.indices.len(),
+        12,
+        "two quads triangulated into four triangles"
+    );
     assert_eq!(mesh.positions[0], [0.0, 0.0, 0.0]);
     assert_eq!(mesh.positions[1], [1.0, 0.0, 0.0]);
     assert_eq!(mesh.positions[3], [0.0, 1.0, 0.0]);
@@ -275,7 +277,11 @@ fn sub_asset_ids_are_stable_across_reimport_and_reordering() -> Result<(), Strin
             .map(|sub| sub.sub_asset_id.clone())
             .collect()
     };
-    assert_eq!(ids(&first), ids(&second), "the same bytes yield the same ids");
+    assert_eq!(
+        ids(&first),
+        ids(&second),
+        "the same bytes yield the same ids"
+    );
 
     let reordered = match import_obj(CUBE_OBJ_REORDERED) {
         Ok(mesh) => mesh,
@@ -285,7 +291,10 @@ fn sub_asset_ids_are_stable_across_reimport_and_reordering() -> Result<(), Strin
     let mut reordered_ids = ids(&reordered);
     original_ids.sort();
     reordered_ids.sort();
-    assert_eq!(original_ids, reordered_ids, "ids stay bound to the group names");
+    assert_eq!(
+        original_ids, reordered_ids,
+        "ids stay bound to the group names"
+    );
     assert_eq!(
         sub_mesh_positions(&first, "Front/Red"),
         sub_mesh_positions(&reordered, "Front/Red"),
@@ -307,7 +316,10 @@ fn malformed_obj_reports_a_named_error() -> Result<(), String> {
     match error {
         ModelImportError::MalformedObj { line, reason } => {
             assert_eq!(line, 2);
-            assert!(reason.contains("face"), "reason names the problem: {reason}");
+            assert!(
+                reason.contains("face"),
+                "reason names the problem: {reason}"
+            );
         }
         other => return Err(format!("unexpected error: {other:?}")),
     }
@@ -387,7 +399,10 @@ fn import_model_dispatches_on_the_file_name() -> Result<(), String> {
         Err(error) => return Err(format!("import failed: {error:?}")),
     };
     assert_eq!(mesh.sub_meshes.len(), 2);
-    assert_eq!(mesh.name, "cube", "the OBJ mesh name comes from the file name");
+    assert_eq!(
+        mesh.name, "cube",
+        "the OBJ mesh name comes from the file name"
+    );
 
     let mesh = match import_model(&make_glb(TRIANGLE_GLTF, TRIANGLE_BIN), "tri.glb") {
         Ok(mesh) => mesh,
@@ -528,11 +543,8 @@ fn build_fbx_node(base: u64, spec: &FbxTestNode) -> Vec<u8> {
         offset += bytes.len() as u64;
         child_bytes.push(bytes);
     }
-    let content_len: usize = property_bytes.len()
-        + child_bytes
-            .iter()
-            .map(|bytes| bytes.len())
-            .sum::<usize>();
+    let content_len: usize =
+        property_bytes.len() + child_bytes.iter().map(|bytes| bytes.len()).sum::<usize>();
     let end_offset = base + header_len as u64 + content_len as u64;
     let mut out = Vec::new();
     out.extend_from_slice(&end_offset.to_le_bytes());
@@ -594,8 +606,8 @@ fn make_fbx_geometry<'a>(name: &'a str, vertices: &[f64], polygons: &[i32]) -> F
 }
 
 #[test]
-fn import_model_combines_multiple_fbx_geometry_nodes_with_stable_sub_asset_ids() -> Result<(), String>
-{
+fn import_model_combines_multiple_fbx_geometry_nodes_with_stable_sub_asset_ids(
+) -> Result<(), String> {
     let first = make_fbx_geometry(
         "Hull",
         &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],

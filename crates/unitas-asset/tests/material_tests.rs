@@ -73,18 +73,14 @@ fn material_resolves_shader_name_from_guid_index() -> TestResult {
         String::from(STANDARD_SHADER_GUID),
         PathBuf::from("Shaders/Standard.shader"),
     )?;
-    let fixture_material =
-        parse_material_with_guids(Path::new(MATERIAL_FIXTURE), &standard_index)?;
+    let fixture_material = parse_material_with_guids(Path::new(MATERIAL_FIXTURE), &standard_index)?;
     assert_eq!(fixture_material.shader_name, Some(String::from("Standard")));
     Ok(())
 }
 
 #[test]
 fn material_parse_resolves_sibling_shader_meta_via_guid_index() -> TestResult {
-    let temp = std::env::temp_dir().join(format!(
-        "unitas_material_test_{}",
-        std::process::id()
-    ));
+    let temp = std::env::temp_dir().join(format!("unitas_material_test_{}", std::process::id()));
     std::fs::create_dir_all(&temp)?;
     let shader_meta = temp.join("CustomLit.shader.meta");
     let mat_path = temp.join("LitMaterial.mat");
@@ -106,7 +102,9 @@ fn material_missing_file_returns_yaml_io_error() {
     let result = parse_material(Path::new("tests/fixtures/project/DoesNotExist.mat"));
     assert!(matches!(
         result,
-        Err(MaterialError::Yaml { error: YamlError::Io { .. } })
+        Err(MaterialError::Yaml {
+            error: YamlError::Io { .. }
+        })
     ));
 }
 

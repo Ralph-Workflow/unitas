@@ -18,13 +18,17 @@ fn cinemachine_highest_priority_active_camera_is_live() -> Result<(), Box<dyn Er
     cameras.set_active(high, true);
     cameras.update(0.0);
     assert_eq!(live_name(&cameras).as_deref(), Some("High"));
-    assert_eq!(cameras.not_live_reason(low), Some(CameraNotLiveReason::LowerPriority));
+    assert_eq!(
+        cameras.not_live_reason(low),
+        Some(CameraNotLiveReason::LowerPriority)
+    );
     assert_eq!(cameras.not_live_reason(high), None);
     Ok(())
 }
 
 #[test]
-fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities() -> Result<(), Box<dyn Error>> {
+fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities(
+) -> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let first = cameras.add_camera(VirtualCamera::new("First", 5));
     let second = cameras.add_camera(VirtualCamera::new("Second", 5));
@@ -35,7 +39,10 @@ fn cinemachine_most_recently_activated_camera_wins_among_equal_priorities() -> R
     cameras.activate(first);
     cameras.update(0.0);
     assert_eq!(live_name(&cameras).as_deref(), Some("First"));
-    assert_eq!(cameras.not_live_reason(second), Some(CameraNotLiveReason::EqualPriority));
+    assert_eq!(
+        cameras.not_live_reason(second),
+        Some(CameraNotLiveReason::EqualPriority)
+    );
     Ok(())
 }
 
@@ -49,13 +56,18 @@ fn cinemachine_camera_swap_starts_a_blend_that_completes() -> Result<(), Box<dyn
     assert_eq!(live_name(&cameras).as_deref(), Some("First"));
     assert!(cameras.active_blend().is_none());
     cameras.set_active(second, true);
-    let blend = cameras.active_blend().ok_or("a camera swap starts a blend")?;
+    let blend = cameras
+        .active_blend()
+        .ok_or("a camera swap starts a blend")?;
     assert_eq!(blend.from, "First");
     assert_eq!(blend.to, "Second");
     assert_eq!(blend.style, BlendStyle::EaseInOut);
     assert_eq!(blend.progress(), 0.0);
     cameras.update(1.0);
-    assert_eq!(cameras.active_blend().map(|blend| blend.progress()), Some(0.5));
+    assert_eq!(
+        cameras.active_blend().map(|blend| blend.progress()),
+        Some(0.5)
+    );
     cameras.update(1.0);
     assert!(cameras.active_blend().is_none());
     assert_eq!(live_name(&cameras).as_deref(), Some("Second"));
@@ -77,10 +89,17 @@ fn cinemachine_custom_blend_is_used_for_a_matching_camera_pair() -> Result<(), B
     let second = cameras.add_camera(VirtualCamera::new("Second", 10));
     cameras.set_active(first, true);
     cameras.set_active(second, true);
-    let blend = cameras.active_blend().ok_or("a camera swap starts a blend")?;
+    let blend = cameras
+        .active_blend()
+        .ok_or("a camera swap starts a blend")?;
     assert_eq!(blend.style, BlendStyle::Linear);
     assert_eq!(blend.duration, 0.5);
-    assert_eq!(cameras.custom_blend("First", "Second").map(|blend| blend.duration), Some(0.5));
+    assert_eq!(
+        cameras
+            .custom_blend("First", "Second")
+            .map(|blend| blend.duration),
+        Some(0.5)
+    );
     Ok(())
 }
 
@@ -104,15 +123,22 @@ fn cinemachine_not_live_reason_explains_why_a_camera_is_not_live() -> Result<(),
     let backup = cameras.add_camera(VirtualCamera::new("Backup", 1));
     cameras.set_active(main, true);
     cameras.update(0.0);
-    assert_eq!(cameras.not_live_reason(backup), Some(CameraNotLiveReason::Inactive));
+    assert_eq!(
+        cameras.not_live_reason(backup),
+        Some(CameraNotLiveReason::Inactive)
+    );
     cameras.set_active(backup, true);
-    assert_eq!(cameras.not_live_reason(backup), Some(CameraNotLiveReason::LowerPriority));
+    assert_eq!(
+        cameras.not_live_reason(backup),
+        Some(CameraNotLiveReason::LowerPriority)
+    );
     assert_eq!(cameras.not_live_reason(main), None);
     Ok(())
 }
 
 #[test]
-fn cinemachine_shot_override_makes_the_shot_camera_live_and_releases_it() -> Result<(), Box<dyn Error>> {
+fn cinemachine_shot_override_makes_the_shot_camera_live_and_releases_it(
+) -> Result<(), Box<dyn Error>> {
     let mut cameras = CinemachineWorld::new();
     let main = cameras.add_camera(VirtualCamera::new("Main", 10));
     cameras.add_camera(VirtualCamera::new("Shot", 1));

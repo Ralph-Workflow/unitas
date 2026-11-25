@@ -340,10 +340,9 @@ fn compat_report_keeps_the_findings_it_was_built_from() {
     );
 }
 
-
 #[test]
-fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_unlisted_or_preview()
-{
+fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_unlisted_or_preview(
+) {
     use unitas_core::compat::{
         assess_package, lookup_package_matrix, lookup_unsupported_family,
         RECOGNIZED_UNSUPPORTED_FAMILIES, SUPPORTED_PACKAGE_MATRIX,
@@ -355,7 +354,10 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
     let urp = assess_package("com.unity.render-pipelines.universal", "14.0.10", false);
     assert_eq!(urp.state, CompatibilityState::Supported);
     assert_eq!(urp.tier, Some(Tier::Native));
-    assert_eq!(urp.owning_spec.as_deref(), Some("rendering-and-animation.md"));
+    assert_eq!(
+        urp.owning_spec.as_deref(),
+        Some("rendering-and-animation.md")
+    );
     assert_eq!(urp.owning_feature_id.as_deref(), Some("REN-006"));
 
     let input = assess_package("com.unity.inputsystem", "1.7.0", false);
@@ -374,13 +376,20 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
     let modified_embedded = assess_package("com.unity.ugui", "1.0.0", true);
     assert_eq!(modified_embedded.state, CompatibilityState::Unknown);
 
-    let hdrp = assess_package("com.unity.render-pipelines.high-definition", "14.0.10", false);
+    let hdrp = assess_package(
+        "com.unity.render-pipelines.high-definition",
+        "14.0.10",
+        false,
+    );
     assert_eq!(hdrp.state, CompatibilityState::Unsupported);
     assert_eq!(hdrp.owning_feature_id.as_deref(), Some("REN-006"));
 
     let visual_scripting = assess_package("com.unity.visualscripting", "1.9.1", false);
     assert_eq!(visual_scripting.state, CompatibilityState::Unsupported);
-    assert_eq!(visual_scripting.owning_feature_id.as_deref(), Some("RUN-002"));
+    assert_eq!(
+        visual_scripting.owning_feature_id.as_deref(),
+        Some("RUN-002")
+    );
 
     let rider = assess_package("com.unity.ide.rider", "3.0.28", false);
     assert_eq!(rider.state, CompatibilityState::PartiallySupported);
@@ -392,7 +401,9 @@ fn compat_package_matrix_reports_supported_urp_and_input_system_and_unknown_for_
 
     assert!(lookup_package_matrix("com.unity.shadergraph").is_some());
     assert!(lookup_unsupported_family("Enlighten realtime global illumination").is_some());
-    assert!(lookup_unsupported_family("Unity-built AssetBundles and Addressables content").is_some());
+    assert!(
+        lookup_unsupported_family("Unity-built AssetBundles and Addressables content").is_some()
+    );
 }
 
 #[test]
@@ -473,7 +484,10 @@ fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unli
     if let Some(urp) = urp {
         assert_eq!(urp.state, CompatibilityState::Supported);
         assert_eq!(urp.tier, Some(Tier::Native));
-        assert_eq!(urp.owning_spec.as_deref(), Some("rendering-and-animation.md"));
+        assert_eq!(
+            urp.owning_spec.as_deref(),
+            Some("rendering-and-animation.md")
+        );
         assert_eq!(urp.owning_feature_id.as_deref(), Some("REN-006"));
     }
 
@@ -507,12 +521,8 @@ fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unli
         assert_eq!(preview.state, CompatibilityState::Unknown);
     }
 
-    assert!(assessment
-        .absent_features
-        .contains(&"PHY-004".to_string()));
-    assert!(assessment
-        .absent_features
-        .contains(&"ENV-001".to_string()));
+    assert!(assessment.absent_features.contains(&"PHY-004".to_string()));
+    assert!(assessment.absent_features.contains(&"ENV-001".to_string()));
     assert!(!assessment
         .present_supported_features
         .contains(&"PHY-004".to_string()));
@@ -525,8 +535,8 @@ fn compat_assess_project_reports_supported_urp_and_input_system_and_unknown_unli
 }
 
 #[test]
-fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_remain_playable_and_updates_on_removal()
-{
+fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_remain_playable_and_updates_on_removal(
+) {
     use unitas_core::compat::{
         assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
         ProjectSettingEntry,
@@ -611,11 +621,15 @@ fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_rem
 
     assert!(initial.migrated_from_earlier_lts);
     assert_eq!(initial.overall_state, CompatibilityState::Unsupported);
-    assert!(initial.playable_scenes.contains(&"Assets/Scenes/GameplayUrp.unity".to_string()));
+    assert!(initial
+        .playable_scenes
+        .contains(&"Assets/Scenes/GameplayUrp.unity".to_string()));
 
-    let hdrp_finding = initial.report.findings.iter().find(|f| {
-        f.content.asset_path.as_deref() == Some("Assets/HDRP/SkyVolume.asset")
-    });
+    let hdrp_finding = initial
+        .report
+        .findings
+        .iter()
+        .find(|f| f.content.asset_path.as_deref() == Some("Assets/HDRP/SkyVolume.asset"));
     assert!(hdrp_finding.is_some());
     if let Some(f) = hdrp_finding {
         assert_eq!(f.state, CompatibilityState::Unsupported);
@@ -625,9 +639,11 @@ fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_rem
             .contains("URP and Built-in scenes remain editable and playable"));
     }
 
-    let vs_finding = initial.report.findings.iter().find(|f| {
-        f.content.asset_path.as_deref() == Some("Assets/Graphs/EnemyBrain.asset")
-    });
+    let vs_finding = initial
+        .report
+        .findings
+        .iter()
+        .find(|f| f.content.asset_path.as_deref() == Some("Assets/Graphs/EnemyBrain.asset"));
     assert!(vs_finding.is_some());
     if let Some(f) = vs_finding {
         assert_eq!(f.state, CompatibilityState::Unsupported);
@@ -646,7 +662,11 @@ fn compat_assess_project_isolates_hdrp_and_visual_scripting_while_urp_scenes_rem
         assert_eq!(f.feature_id, "REN-003");
     }
 
-    let phy_finding = initial.report.findings.iter().find(|f| f.feature_id == "PHY-001");
+    let phy_finding = initial
+        .report
+        .findings
+        .iter()
+        .find(|f| f.feature_id == "PHY-001");
     assert!(phy_finding.is_some());
 
     let cleaned_content = ProjectContent {

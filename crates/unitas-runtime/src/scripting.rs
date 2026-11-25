@@ -226,7 +226,9 @@ impl ProjectScriptIndex {
                     relative_path: relative_path.clone(),
                     script_name: script_name.clone(),
                 };
-                index.scripts_by_rel_path.insert(relative_path, guid.clone());
+                index
+                    .scripts_by_rel_path
+                    .insert(relative_path, guid.clone());
                 index
                     .scripts_by_name
                     .entry(script_name)
@@ -242,7 +244,9 @@ impl ProjectScriptIndex {
                     &asset_path,
                     &relative_path,
                 );
-                index.plugins_by_rel_path.insert(relative_path, guid.clone());
+                index
+                    .plugins_by_rel_path
+                    .insert(relative_path, guid.clone());
                 index.plugins_by_guid.insert(guid, plugin);
             }
         }
@@ -560,12 +564,11 @@ pub fn parse_plugin_meta_text(
                         if !val.eq_ignore_ascii_case("None") {
                             acc.current_cpu = Some(val);
                         }
-                    } else if key.eq_ignore_ascii_case("OS") && !val.is_empty() {
-                        if !val.eq_ignore_ascii_case("None") {
-                            acc.current_os = Some(val);
-                        }
-                    } else if key.eq_ignore_ascii_case("DefaultValueInitialized") {
-                        continue;
+                    } else if key.eq_ignore_ascii_case("OS")
+                        && !val.is_empty()
+                        && !val.eq_ignore_ascii_case("None")
+                    {
+                        acc.current_os = Some(val);
                     }
                 }
             }
@@ -797,7 +800,10 @@ fn platform_matches(configured: &str, target: &str) -> bool {
     false
 }
 
-fn collect_meta_files(directory: &Path, collected: &mut Vec<PathBuf>) -> Result<(), ScriptingError> {
+fn collect_meta_files(
+    directory: &Path,
+    collected: &mut Vec<PathBuf>,
+) -> Result<(), ScriptingError> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) => {

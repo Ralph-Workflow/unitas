@@ -13,7 +13,10 @@ impl std::fmt::Display for CoreError {
         match self {
             Self::UnknownEntity(id) => write!(formatter, "unknown entity {id:?}"),
             Self::AttachCycle { child, parent } => {
-                write!(formatter, "attaching {child:?} under {parent:?} creates a cycle")
+                write!(
+                    formatter,
+                    "attaching {child:?} under {parent:?} creates a cycle"
+                )
             }
         }
     }

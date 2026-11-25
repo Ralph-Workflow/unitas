@@ -1,20 +1,15 @@
-//! OBJ import: static geometry with stable group/material sub-asset identities.
-
 use std::collections::HashMap;
 
 use crate::primitive::{MeshData, SubMesh};
 
 use super::ModelImportError;
 
-/// Vertex identity used for de-duplication: (position, uv, normal), `-1` marks an absent attribute.
 type VertexKey = (i64, i64, i64);
 
-/// Imports an OBJ source held as text.
 pub fn import_obj(text: &str) -> Result<MeshData, ModelImportError> {
     ObjParser::default().parse(text)
 }
 
-/// Imports an OBJ source held as bytes.
 pub fn import_obj_bytes(bytes: &[u8]) -> Result<MeshData, ModelImportError> {
     let text = std::str::from_utf8(bytes).map_err(|_| ModelImportError::MalformedObj {
         line: 0,
@@ -69,7 +64,6 @@ impl ObjParser {
                 "f" => self.push_face(&values, line)?,
                 "g" | "o" => self.group = single_name(&values),
                 "usemtl" => self.material = single_name(&values),
-                // Material library names have no slot in MeshData, so the directive is accepted and skipped.
                 "mtllib" => {}
                 _ => {}
             }
@@ -247,7 +241,12 @@ fn parse_float(value: &str, line: usize) -> Result<f32, ModelImportError> {
         .map_err(|_| malformed(line, format!("`{value}` is not a number")))
 }
 
-fn parse_index(value: &str, line: usize, count: usize, kind: &str) -> Result<i64, ModelImportError> {
+fn parse_index(
+    value: &str,
+    line: usize,
+    count: usize,
+    kind: &str,
+) -> Result<i64, ModelImportError> {
     let parsed = value
         .parse::<i64>()
         .map_err(|_| malformed(line, format!("`{value}` is not a valid {kind} index")))?;

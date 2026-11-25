@@ -31,11 +31,11 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 JsonObject response = client.Request("teleport");
                 Check.That("an unknown request is answered with a response", ReadString(response["type"]) == "response");
                 Check.That("an unknown request is rejected", ReadBool(response["success"]) == false);
-                Check.That("an unknown request names the command", ReadString(response["message"]).Contains("teleport"));
+                Check.That("an unknown request names the command", ReadString(response["message"]).Contains("teleport", StringComparison.Ordinal));
             }
             finally
             {
@@ -52,7 +52,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 Check.That("initialize succeeds", ReadBool(client.Request("initialize")["success"]));
                 Check.That("attach succeeds", ReadBool(client.Request("attach")["success"]));
                 JsonObject setResponse = client.Request("setBreakpoints", new JsonObject
@@ -110,7 +110,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 client.Request("initialize");
                 client.Request("attach");
                 client.Request("setBreakpoints", new JsonObject
@@ -144,7 +144,7 @@ namespace Unitas.Bridge.Tests
             DebugSession session = DebugAgent.BeginSession(pair.Server);
             try
             {
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 client.Request("initialize");
                 client.Request("attach");
                 client.Request("setBreakpoints", new JsonObject
@@ -256,7 +256,7 @@ namespace Unitas.Bridge.Tests
                 DebugAgent.RegisterSequencePoints(table);
                 session = DebugAgent.BeginSession(pair.Server);
 
-                DapClient client = new DapClient(pair.Client);
+                using DapClient client = new DapClient(pair.Client);
                 Check.That("compiled coroutine debug: initialize succeeds", ReadBool(client.Request("initialize")["success"]));
                 Check.That("compiled coroutine debug: attach succeeds", ReadBool(client.Request("attach")["success"]));
 
@@ -567,7 +567,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private sealed class DapClient
+        private sealed class DapClient : IDisposable
         {
             private readonly Stream _stream;
             private readonly BlockingCollection<JsonObject> _messages = new BlockingCollection<JsonObject>();
@@ -577,6 +577,12 @@ namespace Unitas.Bridge.Tests
             {
                 _stream = stream;
                 _ = Task.Run(ReadLoopAsync);
+            }
+
+            public void Dispose()
+            {
+                _messages.Dispose();
+                _stream.Dispose();
             }
 
             public JsonObject Request(string command, JsonObject? arguments = null)

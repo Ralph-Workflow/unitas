@@ -1,7 +1,6 @@
 use unitas_asset::audio_import::{
     decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav, detect_audio_state, import_audio,
-    AudioCompressionFormat, AudioImportError, AudioImportSettings, AudioImportState,
-    AudioLoadType,
+    AudioCompressionFormat, AudioImportError, AudioImportSettings, AudioImportState, AudioLoadType,
 };
 
 fn extended80(rate: u32) -> [u8; 10] {
@@ -210,7 +209,10 @@ fn truncated_sample_data_reports_truncated() {
         ],
     );
     assert!(
-        matches!(decode_aiff(&bytes[..bytes.len() - 2]), Err(AudioImportError::Truncated)),
+        matches!(
+            decode_aiff(&bytes[..bytes.len() - 2]),
+            Err(AudioImportError::Truncated)
+        ),
         "expected short sample data to be reported"
     );
 }
@@ -383,13 +385,16 @@ fn decodes_stereo_mp3_fixture_and_applies_import_settings() {
 fn rejects_corrupt_and_truncated_ogg_and_mp3_streams() {
     let ogg = include_bytes!("../fixtures/sine_mono.ogg");
     assert!(
-        matches!(decode_ogg_vorbis(&ogg[..16]), Err(AudioImportError::Truncated)),
+        matches!(
+            decode_ogg_vorbis(&ogg[..16]),
+            Err(AudioImportError::Truncated)
+        ),
         "expected truncated OGG header to report Truncated"
     );
     assert!(
         matches!(
             decode_ogg_vorbis(b"OggS-not-a-valid-page-header-at-all"),
-            Err(AudioImportError::CorruptOgg(_)) | Err(AudioImportError::Truncated)
+            Err(AudioImportError::CorruptOgg(_) | AudioImportError::Truncated)
         ),
         "expected corrupt OGG stream to return a diagnostic error"
     );
@@ -407,13 +412,12 @@ fn rejects_corrupt_and_truncated_ogg_and_mp3_streams() {
     assert!(
         matches!(
             decode_mp3(b"ID3-not-a-real-frame"),
-            Err(AudioImportError::Truncated) | Err(AudioImportError::CorruptMp3(_))
+            Err(AudioImportError::Truncated | AudioImportError::CorruptMp3(_))
         ),
         "expected corrupt MP3 stream to return a diagnostic error"
     );
     assert!(
-        detect_audio_state(b"ID3-not-a-real-frame", "music.mp3")
-            == AudioImportState::ImportFailed,
+        detect_audio_state(b"ID3-not-a-real-frame", "music.mp3") == AudioImportState::ImportFailed,
         "expected corrupt MP3 to report ImportFailed"
     );
 }
@@ -421,7 +425,8 @@ fn rejects_corrupt_and_truncated_ogg_and_mp3_streams() {
 #[test]
 fn detects_unsupported_container() {
     assert!(
-        detect_audio_state(b"not-audio-at-all", "mystery.bin") == AudioImportState::UnsupportedContainer,
+        detect_audio_state(b"not-audio-at-all", "mystery.bin")
+            == AudioImportState::UnsupportedContainer,
         "expected an unknown container to be reported"
     );
 }
@@ -532,7 +537,11 @@ fn xm_tracker_module_reports_unsupported_by_name() {
     let result = match import_audio(xm_header, "Assets/Audio/level1.xm", &settings) {
         Ok(result) => result,
         Err(error) => {
-            assert_eq!(error, AudioImportError::NotAiff, "unexpected error: {error}");
+            assert_eq!(
+                error,
+                AudioImportError::NotAiff,
+                "unexpected error: {error}"
+            );
             return;
         }
     };
@@ -615,7 +624,11 @@ fn decodes_16_bit_stereo_wav_round_trip() {
     let clip = match decode_wav(&bytes) {
         Ok(clip) => clip,
         Err(error) => {
-            assert_eq!(error, AudioImportError::NotAiff, "unexpected decode_wav error: {error}");
+            assert_eq!(
+                error,
+                AudioImportError::NotAiff,
+                "unexpected decode_wav error: {error}"
+            );
             return;
         }
     };
@@ -762,7 +775,11 @@ fn wav_import_applies_force_to_mono_and_normalize() {
     let result = match import_audio(&bytes, "sfx.wav", &settings) {
         Ok(result) => result,
         Err(error) => {
-            assert_eq!(error, AudioImportError::NotAiff, "unexpected import_audio error: {error}");
+            assert_eq!(
+                error,
+                AudioImportError::NotAiff,
+                "unexpected import_audio error: {error}"
+            );
             return;
         }
     };
@@ -770,7 +787,10 @@ fn wav_import_applies_force_to_mono_and_normalize() {
     assert_eq!(result.clip.channels, 1);
     assert_eq!(result.clip.sample_rate, 22050);
     assert_eq!(result.clip.samples, vec![16384, -32767, 0]);
-    assert!(result.notes.iter().any(|note| note.contains("force to mono")));
+    assert!(result
+        .notes
+        .iter()
+        .any(|note| note.contains("force to mono")));
     assert!(result.notes.iter().any(|note| note.contains("normalize")));
     assert!(result.notes.iter().any(|note| note.contains("ADPCM")));
 
@@ -791,7 +811,10 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
     assert!(
         matches!(
             decode_wav(&adpcm_wav),
-            Err(AudioImportError::UnsupportedWavFormat { format_tag: 0x0011, .. })
+            Err(AudioImportError::UnsupportedWavFormat {
+                format_tag: 0x0011,
+                ..
+            })
         ),
         "expected IMA ADPCM WAV format tag 0x0011 to report UnsupportedWavFormat"
     );
@@ -838,12 +861,12 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
     let settings = AudioImportSettings::default();
     assert!(
         matches!(import_audio(&adpcm_wav, "voice_adpcm.wav", &settings), Ok(result)
-            if result.state == AudioImportState::NotYetSupported
-                && result.clip.samples.is_empty()
-                && result.notes.iter().any(|note| {
-                    note.contains("voice_adpcm.wav")
-                        && (note.contains("ADPCM") || note.contains("0x0011"))
-                })),
+        if result.state == AudioImportState::NotYetSupported
+            && result.clip.samples.is_empty()
+            && result.notes.iter().any(|note| {
+                note.contains("voice_adpcm.wav")
+                    && (note.contains("ADPCM") || note.contains("0x0011"))
+            })),
         "expected unsupported WAV encoding to produce a named NotYetSupported report"
     );
 
@@ -860,7 +883,10 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
     );
 
     assert!(
-        matches!(decode_wav(b"RIFF\x04\x00"), Err(AudioImportError::Truncated)),
+        matches!(
+            decode_wav(b"RIFF\x04\x00"),
+            Err(AudioImportError::Truncated)
+        ),
         "expected short RIFF header to report Truncated"
     );
     assert!(
@@ -902,4 +928,3 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
         AudioImportState::ImportFailed
     );
 }
-

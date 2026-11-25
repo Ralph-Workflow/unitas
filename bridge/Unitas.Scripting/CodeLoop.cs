@@ -1827,7 +1827,7 @@ namespace Unitas.Scripting
             _ = int.TryParse(classText, NumberStyles.Integer, CultureInfo.InvariantCulture, out classId);
 
             string afterAmp = headerLine.Substring(ampPos + 1).Trim();
-            int spaceIdx = afterAmp.IndexOf(' ');
+            int spaceIdx = afterAmp.IndexOf(' ', StringComparison.Ordinal);
             string fileIdText = spaceIdx >= 0 ? afterAmp.Substring(0, spaceIdx) : afterAmp;
             _ = long.TryParse(fileIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out fileId);
         }
@@ -1940,7 +1940,7 @@ namespace Unitas.Scripting
                     continue;
                 }
 
-                int colon = trimmed.IndexOf(':');
+                int colon = trimmed.IndexOf(':', StringComparison.Ordinal);
                 if (colon <= 0)
                 {
                     continue;
@@ -2235,7 +2235,7 @@ namespace Unitas.Scripting
 
         private static string ExtractColonValue(string line)
         {
-            int colon = line.IndexOf(':');
+            int colon = line.IndexOf(':', StringComparison.Ordinal);
             if (colon < 0)
             {
                 return string.Empty;

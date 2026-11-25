@@ -395,11 +395,7 @@ impl AnimationWorld {
             .map(|entry| entry.diagnostics.len())
     }
 
-    pub fn record_diagnostic(
-        &mut self,
-        entity: EntityId,
-        diagnostic: AnimationRuntimeDiagnostic,
-    ) {
+    pub fn record_diagnostic(&mut self, entity: EntityId, diagnostic: AnimationRuntimeDiagnostic) {
         if let Some(entry) = self.entries.get_mut(&entity) {
             entry.push_diagnostic(diagnostic);
         }
@@ -745,8 +741,8 @@ pub fn solve_two_bone_ik(
         (mid, tip)
     } else {
         let clamped_d = raw_dist.clamp(min_reach, max_reach);
-        let cos_alpha = ((l1 * l1 + clamped_d * clamped_d - l2 * l2) / (2.0 * l1 * clamped_d))
-            .clamp(-1.0, 1.0);
+        let cos_alpha =
+            ((l1 * l1 + clamped_d * clamped_d - l2 * l2) / (2.0 * l1 * clamped_d)).clamp(-1.0, 1.0);
         let sin_alpha = (1.0 - cos_alpha * cos_alpha).max(0.0).sqrt();
         let along = scale_vector(axis, l1 * cos_alpha);
         let perp = scale_vector(hinted_bend_dir, l1 * sin_alpha);
@@ -862,9 +858,7 @@ impl AnimatorIkPose {
     }
 
     pub fn ik_goal_position(&self, goal: AvatarIkGoal) -> [f32; 3] {
-        self.goals
-            .get(&goal)
-            .map_or([0.0; 3], |pose| pose.position)
+        self.goals.get(&goal).map_or([0.0; 3], |pose| pose.position)
     }
 
     pub fn set_ik_goal_rotation(&mut self, goal: AvatarIkGoal, rotation: [f32; 4]) {
@@ -910,9 +904,7 @@ impl AnimatorIkPose {
     }
 
     pub fn ik_hint_position(&self, hint: AvatarIkHint) -> [f32; 3] {
-        self.hints
-            .get(&hint)
-            .map_or([0.0; 3], |pose| pose.position)
+        self.hints.get(&hint).map_or([0.0; 3], |pose| pose.position)
     }
 
     pub fn set_ik_hint_position_weight(&mut self, hint: AvatarIkHint, weight: f32) {
@@ -986,7 +978,8 @@ impl AnimatorIkPose {
 }
 
 pub trait AnimatorScriptHooks {
-    fn on_animator_ik(&mut self, _entity: EntityId, _layer_index: u32, _pose: &mut AnimatorIkPose) {}
+    fn on_animator_ik(&mut self, _entity: EntityId, _layer_index: u32, _pose: &mut AnimatorIkPose) {
+    }
     fn on_animator_move(&mut self, _entity: EntityId, _motion: &mut AnimatorRootMotion) -> bool {
         false
     }
@@ -1071,13 +1064,15 @@ impl AnimatorHookWorld {
     }
 
     fn entry_mut(&mut self, entity: EntityId) -> &mut AnimatorHookEntry {
-        self.entries.entry(entity).or_insert_with(|| AnimatorHookEntry {
-            ik_layers: Vec::new(),
-            skeleton_chains: BTreeMap::new(),
-            look_at_bone_path: None,
-            script: None,
-            last_ik_pose: None,
-        })
+        self.entries
+            .entry(entity)
+            .or_insert_with(|| AnimatorHookEntry {
+                ik_layers: Vec::new(),
+                skeleton_chains: BTreeMap::new(),
+                look_at_bone_path: None,
+                script: None,
+                last_ik_pose: None,
+            })
     }
 }
 
@@ -1110,10 +1105,7 @@ impl AnimationWorld {
                     sampled_translation,
                     previous_transform.translation,
                 ),
-                delta_rotation: rotation_delta(
-                    previous_transform.rotation,
-                    sampled_rotation,
-                ),
+                delta_rotation: rotation_delta(previous_transform.rotation, sampled_rotation),
             };
             let existing_entity_bindings: Vec<SampledBinding> = child_bindings
                 .iter()
@@ -1180,12 +1172,11 @@ impl AnimationWorld {
                 }
                 hook_entry.last_ik_pose = Some(pose);
             }
-            let ik_override_translation =
-                if entry.transform.translation != sampled_translation {
-                    Some(entry.transform.translation)
-                } else {
-                    None
-                };
+            let ik_override_translation = if entry.transform.translation != sampled_translation {
+                Some(entry.transform.translation)
+            } else {
+                None
+            };
             let ik_override_rotation = if entry.transform.rotation != sampled_rotation {
                 Some(entry.transform.rotation)
             } else {

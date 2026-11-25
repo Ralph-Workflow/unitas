@@ -236,7 +236,9 @@ fn runtime_overlap_sphere_finds_the_rotated_crate_only() -> Result<(), Box<dyn E
         "the crate centre must overlap, got {overlaps:?}"
     );
     assert!(
-        !overlaps.iter().any(|record| record.entity == blocker_handle),
+        !overlaps
+            .iter()
+            .any(|record| record.entity == blocker_handle),
         "the blocker must not overlap, got {overlaps:?}"
     );
     Ok(())

@@ -10,17 +10,32 @@ const UNRECORDABLE_PROPERTIES: [(&str, &str); 8] = [
     ("m_ObjectHideFlags", "immutable object hide flags"),
     ("fileID", "immutable local file identifier"),
     ("m_Script", "immutable script asset binding"),
-    ("m_CorrespondingSourceObject", "immutable prefab source correspondence"),
+    (
+        "m_CorrespondingSourceObject",
+        "immutable prefab source correspondence",
+    ),
     ("m_PrefabInstance", "immutable prefab instance link"),
     ("m_PrefabAsset", "immutable prefab asset link"),
     ("m_GameObject", "immutable component owner reference"),
-    ("m_Father", "structural transform parent cannot be recorded as a property override"),
+    (
+        "m_Father",
+        "structural transform parent cannot be recorded as a property override",
+    ),
 ];
 
 const UNRECORDABLE_PREFIXES: [(&str, &str); 3] = [
-    ("m_Children", "source child ordering cannot be overridden in an instance or variant"),
-    ("m_Component", "component table cannot be mutated via property override"),
-    ("cross_prefab_ref:", "cross-prefab non-serializable reference"),
+    (
+        "m_Children",
+        "source child ordering cannot be overridden in an instance or variant",
+    ),
+    (
+        "m_Component",
+        "component table cannot be mutated via property override",
+    ),
+    (
+        "cross_prefab_ref:",
+        "cross-prefab non-serializable reference",
+    ),
 ];
 
 const CROSS_SCENE_TOKEN: &str = "cross_scene:";
@@ -217,11 +232,7 @@ impl PrefabVariantDefinition {
         }
     }
 
-    pub fn variant(
-        guid: impl Into<String>,
-        name: impl Into<String>,
-        base: PrefabSource,
-    ) -> Self {
+    pub fn variant(guid: impl Into<String>, name: impl Into<String>, base: PrefabSource) -> Self {
         Self {
             guid: guid.into(),
             name: name.into(),
@@ -239,7 +250,11 @@ impl PrefabVariantDefinition {
         &mut self,
         modification: Modification,
     ) -> Result<(), PrefabVariantError> {
-        validate_override(&modification.property_path, &modification.value, modification.target_file_id)?;
+        validate_override(
+            &modification.property_path,
+            &modification.value,
+            modification.target_file_id,
+        )?;
         let default_source_guid = match &self.base {
             Some(base) => base.guid.clone(),
             None => self.guid.clone(),
@@ -273,11 +288,13 @@ impl PrefabVariantDefinition {
         sibling_index: Option<usize>,
     ) -> Result<(), PrefabVariantError> {
         child.parent_file_id = Some(parent_target.target_file_id);
-        self.structural_overrides.added_children.push(AddedChildOverride {
-            parent_target,
-            child,
-            sibling_index,
-        });
+        self.structural_overrides
+            .added_children
+            .push(AddedChildOverride {
+                parent_target,
+                child,
+                sibling_index,
+            });
         Ok(())
     }
 
@@ -301,7 +318,11 @@ impl PrefabVariantDefinition {
     }
 
     pub fn remove_component_override(&mut self, target: SourceObjectId) {
-        if !self.structural_overrides.removed_components.contains(&target) {
+        if !self
+            .structural_overrides
+            .removed_components
+            .contains(&target)
+        {
             self.structural_overrides.removed_components.push(target);
         }
     }
@@ -335,7 +356,10 @@ impl PrefabVariantDefinition {
         Ok(())
     }
 
-    pub fn reject_source_child_reorder(&self, parent_file_id: i64) -> Result<(), PrefabVariantError> {
+    pub fn reject_source_child_reorder(
+        &self,
+        parent_file_id: i64,
+    ) -> Result<(), PrefabVariantError> {
         Err(PrefabVariantError::UnrecordableOverride {
             target_file_id: parent_file_id,
             property_path: String::from("m_Children"),
@@ -420,8 +444,8 @@ impl PrefabVariantDefinition {
             !matches
         });
         self.targeted_modifications.retain(|item| {
-            let matches = item.target.target_file_id == target_file_id
-                && item.property_path == property_path;
+            let matches =
+                item.target.target_file_id == target_file_id && item.property_path == property_path;
             if matches && removed_value.is_none() {
                 removed_value = Some(item.value.clone());
             }
@@ -492,11 +516,13 @@ impl ScenePrefabInstance {
         sibling_index: Option<usize>,
     ) {
         child.parent_file_id = Some(parent_target.target_file_id);
-        self.structural_overrides.added_children.push(AddedChildOverride {
-            parent_target,
-            child,
-            sibling_index,
-        });
+        self.structural_overrides
+            .added_children
+            .push(AddedChildOverride {
+                parent_target,
+                child,
+                sibling_index,
+            });
     }
 
     pub fn remove_child_override(&mut self, target: SourceObjectId) {
@@ -519,7 +545,11 @@ impl ScenePrefabInstance {
     }
 
     pub fn remove_component_override(&mut self, target: SourceObjectId) {
-        if !self.structural_overrides.removed_components.contains(&target) {
+        if !self
+            .structural_overrides
+            .removed_components
+            .contains(&target)
+        {
             self.structural_overrides.removed_components.push(target);
         }
     }
@@ -535,8 +565,8 @@ impl ScenePrefabInstance {
             !matches
         });
         self.targeted_modifications.retain(|item| {
-            let matches = item.target.target_file_id == target_file_id
-                && item.property_path == property_path;
+            let matches =
+                item.target.target_file_id == target_file_id && item.property_path == property_path;
             if matches && removed_value.is_none() {
                 removed_value = Some(item.value.clone());
             }
@@ -618,11 +648,7 @@ impl ResolvedHierarchy {
         self.nodes.get(id)
     }
 
-    pub fn effective_property(
-        &self,
-        target_file_id: i64,
-        property_path: &str,
-    ) -> Option<&str> {
+    pub fn effective_property(&self, target_file_id: i64, property_path: &str) -> Option<&str> {
         for node in self.nodes.values() {
             if node.identity.target_file_id == target_file_id {
                 return node.properties.get(property_path).map(String::as_str);
@@ -838,7 +864,9 @@ pub fn validate_override(
         return Err(PrefabVariantError::UnrecordableOverride {
             target_file_id,
             property_path: property_path.to_string(),
-            reason: String::from("persistent cross-scene references cannot be recorded in prefab overrides"),
+            reason: String::from(
+                "persistent cross-scene references cannot be recorded in prefab overrides",
+            ),
         });
     }
     if value.contains(NON_SERIALIZABLE_TOKEN) || value.starts_with("cross_prefab_ref:") {
@@ -1395,7 +1423,10 @@ impl PrefabRegistry {
                         })
                     }
                 };
-                if inst.remove_modification(target_file_id, property_path).is_none() {
+                if inst
+                    .remove_modification(target_file_id, property_path)
+                    .is_none()
+                {
                     return Err(PrefabVariantError::OverrideNotFound {
                         level: level.as_id().to_string(),
                         target_file_id,
@@ -1414,7 +1445,10 @@ impl PrefabRegistry {
                         })
                     }
                 };
-                if def.remove_modification(target_file_id, property_path).is_none() {
+                if def
+                    .remove_modification(target_file_id, property_path)
+                    .is_none()
+                {
                     return Err(PrefabVariantError::OverrideNotFound {
                         level: level.as_id().to_string(),
                         target_file_id,
@@ -1624,8 +1658,10 @@ fn apply_level_overrides(
                 if modification.property_path == "m_Name" {
                     node.name = modification.value.clone();
                 }
-                node.properties
-                    .insert(modification.property_path.clone(), modification.value.clone());
+                node.properties.insert(
+                    modification.property_path.clone(),
+                    modification.value.clone(),
+                );
                 let entries = node
                     .provenance
                     .entry(modification.property_path.clone())
@@ -1938,11 +1974,7 @@ impl ScenePrefabInstance {
         );
     }
 
-    pub fn save_to_file(
-        &self,
-        path: &Path,
-        instance_file_id: i64,
-    ) -> Result<(), SceneSaveError> {
+    pub fn save_to_file(&self, path: &Path, instance_file_id: i64) -> Result<(), SceneSaveError> {
         let stream = self.to_stream(instance_file_id);
         scene_save::save_stream(path, &stream)
     }
@@ -2007,7 +2039,10 @@ fn emit_prefab_node_documents(
 ) -> Vec<Document> {
     let mut docs = Vec::new();
     let mut go_entries = Vec::new();
-    go_entries.push((String::from("m_ObjectHideFlags"), Node::Scalar(String::from("0"))));
+    go_entries.push((
+        String::from("m_ObjectHideFlags"),
+        Node::Scalar(String::from("0")),
+    ));
     if let Some(inst_id) = prefab_instance_file_id {
         go_entries.push((
             String::from("m_PrefabInstance"),
@@ -2042,7 +2077,10 @@ fn emit_prefab_node_documents(
     } else {
         go_entries.push((
             String::from("m_Father"),
-            Node::Mapping(vec![(String::from("fileID"), Node::Scalar(String::from("0")))]),
+            Node::Mapping(vec![(
+                String::from("fileID"),
+                Node::Scalar(String::from("0")),
+            )]),
         ));
     }
     let child_refs: Vec<Node> = node
@@ -2098,7 +2136,10 @@ fn emit_component_document(
 ) -> Document {
     let class_id = class_id_for_component(&comp.class_name);
     let mut entries = Vec::new();
-    entries.push((String::from("m_ObjectHideFlags"), Node::Scalar(String::from("0"))));
+    entries.push((
+        String::from("m_ObjectHideFlags"),
+        Node::Scalar(String::from("0")),
+    ));
     if let Some(inst_id) = prefab_instance_file_id {
         entries.push((
             String::from("m_PrefabInstance"),
@@ -2138,8 +2179,7 @@ fn upsert_prefab_instance_in_stream(
     raw_modifications: &[Modification],
     structural: &StructuralOverrides,
 ) {
-    let mod_items: Vec<Node> = if !targeted_modifications.is_empty()
-        || raw_modifications.is_empty()
+    let mod_items: Vec<Node> = if !targeted_modifications.is_empty() || raw_modifications.is_empty()
     {
         targeted_modifications
             .iter()
@@ -2152,11 +2192,17 @@ fn upsert_prefab_instance_in_stream(
                                 String::from("fileID"),
                                 Node::Scalar(tm.target.target_file_id.to_string()),
                             ),
-                            (String::from("guid"), Node::Scalar(tm.target.source_guid.clone())),
+                            (
+                                String::from("guid"),
+                                Node::Scalar(tm.target.source_guid.clone()),
+                            ),
                             (String::from("type"), Node::Scalar(String::from("3"))),
                         ]),
                     ),
-                    (String::from("propertyPath"), Node::Scalar(tm.property_path.clone())),
+                    (
+                        String::from("propertyPath"),
+                        Node::Scalar(tm.property_path.clone()),
+                    ),
                     (String::from("value"), Node::Scalar(tm.value.clone())),
                     (
                         String::from("objectReference"),
@@ -2176,12 +2222,18 @@ fn upsert_prefab_instance_in_stream(
                     (
                         String::from("target"),
                         Node::Mapping(vec![
-                            (String::from("fileID"), Node::Scalar(m.target_file_id.to_string())),
+                            (
+                                String::from("fileID"),
+                                Node::Scalar(m.target_file_id.to_string()),
+                            ),
                             (String::from("guid"), Node::Scalar(source.guid.clone())),
                             (String::from("type"), Node::Scalar(String::from("3"))),
                         ]),
                     ),
-                    (String::from("propertyPath"), Node::Scalar(m.property_path.clone())),
+                    (
+                        String::from("propertyPath"),
+                        Node::Scalar(m.property_path.clone()),
+                    ),
                     (String::from("value"), Node::Scalar(m.value.clone())),
                     (
                         String::from("objectReference"),
@@ -2200,7 +2252,10 @@ fn upsert_prefab_instance_in_stream(
         .iter()
         .map(|rc| {
             Node::Mapping(vec![
-                (String::from("fileID"), Node::Scalar(rc.target_file_id.to_string())),
+                (
+                    String::from("fileID"),
+                    Node::Scalar(rc.target_file_id.to_string()),
+                ),
                 (String::from("guid"), Node::Scalar(rc.source_guid.clone())),
                 (String::from("type"), Node::Scalar(String::from("3"))),
             ])
@@ -2212,7 +2267,10 @@ fn upsert_prefab_instance_in_stream(
         .iter()
         .map(|rg| {
             Node::Mapping(vec![
-                (String::from("fileID"), Node::Scalar(rg.target_file_id.to_string())),
+                (
+                    String::from("fileID"),
+                    Node::Scalar(rg.target_file_id.to_string()),
+                ),
                 (String::from("guid"), Node::Scalar(rg.source_guid.clone())),
                 (String::from("type"), Node::Scalar(String::from("3"))),
             ])
@@ -2286,7 +2344,10 @@ fn upsert_prefab_instance_in_stream(
                         (String::from("type"), Node::Scalar(String::from("3"))),
                     ]),
                 ),
-                (String::from("insertIndex"), Node::Scalar(String::from("-1"))),
+                (
+                    String::from("insertIndex"),
+                    Node::Scalar(String::from("-1")),
+                ),
                 (
                     String::from("addedObject"),
                     Node::Mapping(vec![(
@@ -2301,12 +2362,21 @@ fn upsert_prefab_instance_in_stream(
     let prefab_root = Node::Mapping(vec![(
         String::from("PrefabInstance"),
         Node::Mapping(vec![
-            (String::from("m_ObjectHideFlags"), Node::Scalar(String::from("0"))),
-            (String::from("serializedVersion"), Node::Scalar(String::from("2"))),
+            (
+                String::from("m_ObjectHideFlags"),
+                Node::Scalar(String::from("0")),
+            ),
+            (
+                String::from("serializedVersion"),
+                Node::Scalar(String::from("2")),
+            ),
             (
                 String::from("m_Modification"),
                 Node::Mapping(vec![
-                    (String::from("serializedVersion"), Node::Scalar(String::from("3"))),
+                    (
+                        String::from("serializedVersion"),
+                        Node::Scalar(String::from("3")),
+                    ),
                     (
                         String::from("m_TransformParent"),
                         Node::Mapping(vec![(
@@ -2336,7 +2406,10 @@ fn upsert_prefab_instance_in_stream(
             (
                 String::from("m_SourcePrefab"),
                 Node::Mapping(vec![
-                    (String::from("fileID"), Node::Scalar(source.file_id.to_string())),
+                    (
+                        String::from("fileID"),
+                        Node::Scalar(source.file_id.to_string()),
+                    ),
                     (String::from("guid"), Node::Scalar(source.guid.clone())),
                     (String::from("type"), Node::Scalar(String::from("3"))),
                 ]),
@@ -2346,7 +2419,10 @@ fn upsert_prefab_instance_in_stream(
 
     let mut companion_docs = Vec::new();
     for ac in &structural.added_children {
-        companion_docs.extend(emit_prefab_node_documents(&ac.child, Some(instance_file_id)));
+        companion_docs.extend(emit_prefab_node_documents(
+            &ac.child,
+            Some(instance_file_id),
+        ));
     }
     for ac in &structural.added_components {
         companion_docs.push(emit_component_document(
@@ -2578,10 +2654,8 @@ fn parse_prefab_instance_from_stream(
                 None => continue,
             };
 
-            let component =
-                parse_component_record_from_stream(stream, added_comp_file_id).unwrap_or_else(
-                    || PrefabComponentRecord::new(added_comp_file_id, "MonoBehaviour"),
-                );
+            let component = parse_component_record_from_stream(stream, added_comp_file_id)
+                .unwrap_or_else(|| PrefabComponentRecord::new(added_comp_file_id, "MonoBehaviour"));
 
             structural.added_components.push(AddedComponentOverride {
                 owner_target,

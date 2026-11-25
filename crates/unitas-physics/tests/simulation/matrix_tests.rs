@@ -28,11 +28,7 @@ fn static_collider(object_id: u64, layer: usize) -> PhysicsObject {
     object
 }
 
-fn touching<'a>(
-    a: &'a PhysicsObject,
-    b: &'a PhysicsObject,
-    is_trigger: bool,
-) -> TouchingPair<'a> {
+fn touching<'a>(a: &'a PhysicsObject, b: &'a PhysicsObject, is_trigger: bool) -> TouchingPair<'a> {
     TouchingPair { a, b, is_trigger }
 }
 
@@ -67,10 +63,7 @@ fn matrix_has_32_layers_and_is_symmetric() {
     let matrix = CollisionMatrix::new();
     for a in 0..LAYER_COUNT {
         for b in 0..LAYER_COUNT {
-            assert!(
-                matrix.is_enabled(a, b),
-                "layer pair {a} {b} starts enabled"
-            );
+            assert!(matrix.is_enabled(a, b), "layer pair {a} {b} starts enabled");
         }
     }
 
@@ -119,11 +112,7 @@ fn matrix_static_static_exchanges_nothing() {
     assert!(!message_is_eligible(&a, &b, &matrix));
 
     let mut tracker = MessageTracker::new();
-    let deliveries = tracker.update(
-        &[touching(&a, &b, false)],
-        &matrix,
-        &FrameEvents::default(),
-    );
+    let deliveries = tracker.update(&[touching(&a, &b, false)], &matrix, &FrameEvents::default());
     assert!(deliveries.is_empty());
 }
 
@@ -293,7 +282,6 @@ fn matrix_shape_change_does_not_re_fire_enter() {
         .iter()
         .all(|delivery| delivery.message == CollisionMessage::OnCollisionEnter));
 
-    // the collider changed shape but the pair keeps touching, so it stays a stay
     let stayed = tracker.update(&[touching(&a, &b, false)], &matrix, &events);
     assert_eq!(stayed.len(), 2);
     assert!(stayed
@@ -311,11 +299,7 @@ fn matrix_trigger_without_rigidbody_is_silent() {
     assert!(!message_is_eligible(&a, &b, &matrix));
 
     let mut tracker = MessageTracker::new();
-    let deliveries = tracker.update(
-        &[touching(&a, &b, true)],
-        &matrix,
-        &FrameEvents::default(),
-    );
+    let deliveries = tracker.update(&[touching(&a, &b, true)], &matrix, &FrameEvents::default());
     assert!(deliveries.is_empty());
 }
 
@@ -417,16 +401,12 @@ fn matrix_removed_layer_pair_stops_default_mask_queries_and_default_material_app
     let filtered_hits = world.raycast_default_layer([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 0);
     let filtered_entities: Vec<EntityId> = filtered_hits.iter().map(|h| h.entity).collect();
     assert_eq!(filtered_entities, vec![body_l0, body_l2]);
-    assert!(
-        !world
-            .overlap_sphere_default_layer([3.0, 0.0, 0.0], 1.0, 0)
-            .contains(&body_l1)
-    );
-    assert!(
-        world
-            .overlap_sphere_default_layer([6.0, 0.0, 0.0], 1.0, 0)
-            .contains(&body_l2)
-    );
+    assert!(!world
+        .overlap_sphere_default_layer([3.0, 0.0, 0.0], 1.0, 0)
+        .contains(&body_l1));
+    assert!(world
+        .overlap_sphere_default_layer([6.0, 0.0, 0.0], 1.0, 0)
+        .contains(&body_l2));
     Ok(())
 }
 
@@ -507,7 +487,10 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
     assert_eq!(world.query_position(crate_body), Some([0.0, -10.0, 0.0]));
     let hits_before_step = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1);
     assert_eq!(
-        hits_before_step.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        hits_before_step
+            .iter()
+            .map(|h| h.entity)
+            .collect::<Vec<_>>(),
         vec![wall],
         "teleported dynamic body is not visible along the ray before sync_transforms or step"
     );
@@ -526,10 +509,7 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
         world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1).is_empty(),
         "with auto_sync_transforms on, moving collider updates query visibility immediately"
     );
-    assert_eq!(
-        world.overlap_sphere([0.0, 20.0, 0.0], 0.25, 1),
-        vec![wall]
-    );
+    assert_eq!(world.overlap_sphere([0.0, 20.0, 0.0], 0.25, 1), vec![wall]);
     Ok(())
 }
 
@@ -646,7 +626,10 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
         "rejected non-convex dynamic mesh collider must not appear in spatial queries"
     );
     let convex_y = world.position(valid_convex_dynamic).map_or(2.0, |p| p[1]);
-    assert!(convex_y < 2.0, "convex dynamic mesh collider simulates normally");
+    assert!(
+        convex_y < 2.0,
+        "convex dynamic mesh collider simulates normally"
+    );
 
     let attach_err = world.attach_mesh_collider(
         valid_convex_dynamic,

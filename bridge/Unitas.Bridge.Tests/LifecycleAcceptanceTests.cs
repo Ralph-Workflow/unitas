@@ -361,7 +361,7 @@ namespace Unitas.Bridge.Tests
                 Check.Equal(
                     "Story 2 DestroyImmediate runs OnDisable then OnDestroy",
                     "OnDisable, OnDestroy",
-                    string.Join(", ", immediateScript.Callbacks));
+                    string.Join(", ", immediateScript!.Callbacks));
                 Check.That(
                     "Story 2 C# ReferenceEquals still observes non-null managed reference after DestroyImmediate",
                     !ReferenceEquals(immediateTarget, null));
@@ -379,11 +379,11 @@ namespace Unitas.Bridge.Tests
                 Check.That("Story 2 Destroy marks retained GameObject reference falsy (!obj)", !frameDestroyTarget);
                 Check.That("Story 2 Destroy marks retained Component reference == null", frameDestroyScript == null);
                 Check.That("Story 2 Destroy marks retained Component reference falsy (!comp)", !frameDestroyScript);
-                Check.Equal("Story 2 destroyed object ToString() is 'null'", "null", frameDestroyTarget.ToString());
+                Check.Equal("Story 2 destroyed object ToString() is 'null'", "null", frameDestroyTarget!.ToString());
                 Check.Equal(
                     "Story 2 Destroy runs OnDisable then OnDestroy on component",
                     "OnDisable, OnDestroy",
-                    string.Join(", ", frameDestroyScript.Callbacks));
+                    string.Join(", ", frameDestroyScript!.Callbacks));
                 Check.That(
                     "Story 2 C# ?. operator observes managed reference on Destroyed object",
                     (frameDestroyTarget?.GetInstanceID()).HasValue);
@@ -391,7 +391,7 @@ namespace Unitas.Bridge.Tests
                 bool missingRefOnDestroyed = false;
                 try
                 {
-                    _ = frameDestroyTarget.name;
+                    _ = frameDestroyTarget!.name;
                 }
                 catch (MissingReferenceException)
                 {

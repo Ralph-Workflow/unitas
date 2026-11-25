@@ -1,10 +1,3 @@
-//! One test binary for the asset-import suite.
-//!
-//! Each import area keeps its own file under `asset_import/`; this root module
-//! binds them so the workspace builds one test binary per crate instead of one
-//! per area (each extra binary costs a link and a first-exec cost in the
-//! shared verification budget).
-
 #[path = "asset_import/audio_import_tests.rs"]
 mod audio_import_tests;
 #[path = "asset_import/binary_ser_tests.rs"]

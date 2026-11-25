@@ -133,8 +133,7 @@ pub(crate) fn pair_messages_allowed_2d(
 }
 
 fn endpoint_receives_2d(receiver: Endpoint2D, other: Endpoint2D, is_trigger: bool) -> bool {
-    let full_kinematic =
-        receiver.use_full_kinematic_contacts || other.use_full_kinematic_contacts;
+    let full_kinematic = receiver.use_full_kinematic_contacts || other.use_full_kinematic_contacts;
     if !full_kinematic {
         if receiver.is_kinematic() && !other.is_dynamic() {
             return false;

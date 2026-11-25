@@ -1,7 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::two_d::{
-    AreaEffector2D, BodyDesc2D, ColliderDesc2D, MessageKind2D, PlatformEffector2D,
-    PointEffector2D, SurfaceEffector2D, World2D,
+    AreaEffector2D, BodyDesc2D, ColliderDesc2D, MessageKind2D, PlatformEffector2D, PointEffector2D,
+    SurfaceEffector2D, World2D,
 };
 
 #[test]
@@ -18,9 +18,8 @@ fn platform_effector_allows_upward_pass_through_without_events_and_lands_from_ab
     );
     world.attach_effector(platform_col, PlatformEffector2D::default());
 
-    let player_body = world.add_body(
-        BodyDesc2D::dynamic(player_go, [0.0, -1.5]).with_velocity([0.0, 12.0]),
-    );
+    let player_body =
+        world.add_body(BodyDesc2D::dynamic(player_go, [0.0, -1.5]).with_velocity([0.0, 12.0]));
     let player_col = world.add_collider(
         ColliderDesc2D::box_collider(player_go, [0.4, 0.4]).with_attached_body(player_body),
     );
@@ -48,7 +47,10 @@ fn platform_effector_allows_upward_pass_through_without_events_and_lands_from_ab
             break;
         }
     }
-    assert!(passed_above, "player must pass above platform (max_y={max_y})");
+    assert!(
+        passed_above,
+        "player must pass above platform (max_y={max_y})"
+    );
 
     let mut landed_enter = false;
     let mut landed_stay = false;
@@ -66,8 +68,14 @@ fn platform_effector_allows_upward_pass_through_without_events_and_lands_from_ab
         }
     }
 
-    assert!(landed_enter, "player landing from above must receive OnCollisionEnter2D");
-    assert!(landed_stay, "player resting on platform must receive OnCollisionStay2D");
+    assert!(
+        landed_enter,
+        "player landing from above must receive OnCollisionEnter2D"
+    );
+    assert!(
+        landed_stay,
+        "player resting on platform must receive OnCollisionStay2D"
+    );
     assert!(world.is_touching(player_col, platform_col));
     let final_y = world.body(player_body).map_or(0.0, |b| b.position[1]);
     assert!(
@@ -90,9 +98,7 @@ fn platform_effector_respects_collider_mask_and_surface_arc() {
         PlatformEffector2D::new(120.0).with_collider_mask(1 << 0),
     );
 
-    let ignored_body = world.add_body(
-        BodyDesc2D::dynamic(ignored_go, [0.0, 1.0]).with_layer(2),
-    );
+    let ignored_body = world.add_body(BodyDesc2D::dynamic(ignored_go, [0.0, 1.0]).with_layer(2));
     world.add_collider(
         ColliderDesc2D::circle_collider(ignored_go, 0.3)
             .with_attached_body(ignored_body)
@@ -133,12 +139,16 @@ fn surface_effector_accelerates_contacting_body_along_tangent() {
         world.step(0.02);
     }
 
-    let vx = world
-        .body(crate_body)
-        .map_or(0.0, |b| b.linear_velocity[0]);
+    let vx = world.body(crate_body).map_or(0.0, |b| b.linear_velocity[0]);
     let x = world.body(crate_body).map_or(0.0, |b| b.position[0]);
-    assert!(vx > 3.5, "surface effector should drive tangential speed toward 4.0, got {vx}");
-    assert!(x > 0.2, "crate should move rightward along conveyor, got {x}");
+    assert!(
+        vx > 3.5,
+        "surface effector should drive tangential speed toward 4.0, got {vx}"
+    );
+    assert!(
+        x > 0.2,
+        "crate should move rightward along conveyor, got {x}"
+    );
 }
 
 #[test]
@@ -175,8 +185,16 @@ fn area_effector_applies_directional_force_and_drag_inside_trigger() {
     let vel = world
         .body(ball_body)
         .map_or([0.0, 0.0], |b| b.linear_velocity);
-    assert!(vel[1] > 5.0, "area effector at 90 deg must push upward, got vy={}", vel[1]);
-    assert!(vel[0] < 4.0, "area effector drag must damp initial horizontal velocity, got vx={}", vel[0]);
+    assert!(
+        vel[1] > 5.0,
+        "area effector at 90 deg must push upward, got vy={}",
+        vel[1]
+    );
+    assert!(
+        vel[0] < 4.0,
+        "area effector drag must damp initial horizontal velocity, got vx={}",
+        vel[0]
+    );
 }
 
 #[test]
@@ -196,18 +214,14 @@ fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
         PointEffector2D::new(-30.0, 1.0).with_collider_mask(1 << 1),
     );
 
-    let metal_body = world.add_body(
-        BodyDesc2D::dynamic(metal_go, [3.0, 0.0]).with_layer(1),
-    );
+    let metal_body = world.add_body(BodyDesc2D::dynamic(metal_go, [3.0, 0.0]).with_layer(1));
     world.add_collider(
         ColliderDesc2D::circle_collider(metal_go, 0.3)
             .with_attached_body(metal_body)
             .with_layer(1),
     );
 
-    let wood_body = world.add_body(
-        BodyDesc2D::dynamic(wood_go, [3.0, 1.0]).with_layer(2),
-    );
+    let wood_body = world.add_body(BodyDesc2D::dynamic(wood_go, [3.0, 1.0]).with_layer(2));
     world.add_collider(
         ColliderDesc2D::circle_collider(wood_go, 0.3)
             .with_attached_body(wood_body)
@@ -220,8 +234,14 @@ fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
 
     let metal_x = world.body(metal_body).map_or(3.0, |b| b.position[0]);
     let wood_x = world.body(wood_body).map_or(3.0, |b| b.position[0]);
-    assert!(metal_x < 2.5, "negative PointEffector2D force must attract metal toward origin, got x={metal_x}");
-    assert!((wood_x - 3.0).abs() < 1e-5, "excluded layer must not be moved by PointEffector2D");
+    assert!(
+        metal_x < 2.5,
+        "negative PointEffector2D force must attract metal toward origin, got x={metal_x}"
+    );
+    assert!(
+        (wood_x - 3.0).abs() < 1e-5,
+        "excluded layer must not be moved by PointEffector2D"
+    );
 
     world.clear_effectors(magnet_col);
     world.attach_effector(
@@ -236,7 +256,10 @@ fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
         world.step(0.05);
     }
     let repelled_x = world.body(metal_body).map_or(2.0, |b| b.position[0]);
-    assert!(repelled_x > 2.5, "positive PointEffector2D force must repel metal away from origin, got x={repelled_x}");
+    assert!(
+        repelled_x > 2.5,
+        "positive PointEffector2D force must repel metal away from origin, got x={repelled_x}"
+    );
 }
 
 #[test]
@@ -274,9 +297,7 @@ fn buoyancy_effector_floats_and_sinks_bodies_by_density_and_applies_submerged_dr
         ColliderDesc2D::box_collider(cork_go, [0.5, 0.5]).with_attached_body(cork_body),
     );
 
-    let stone_body = world.add_body(
-        BodyDesc2D::dynamic(stone_go, [2.0, 0.0]).with_mass(8.0),
-    );
+    let stone_body = world.add_body(BodyDesc2D::dynamic(stone_go, [2.0, 0.0]).with_mass(8.0));
     world.add_collider(
         ColliderDesc2D::box_collider(stone_go, [0.5, 0.5]).with_attached_body(stone_body),
     );
@@ -325,4 +346,3 @@ fn buoyancy_effector_floats_and_sinks_bodies_by_density_and_applies_submerged_dr
         "body inside effector collider but above surface_level=2.0 must receive zero buoyancy or flow, got ({air_x}, {air_y})"
     );
 }
-

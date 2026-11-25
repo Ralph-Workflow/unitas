@@ -1,3 +1,13 @@
+macro_rules! ffi_export {
+    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
+            #[used]
+            static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
+            $body
+        }
+    };
+}
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -113,7 +123,7 @@ fn registry() -> Result<&'static Mutex<HashMap<u64, RuntimeState>>, RuntimeError
     Ok(REGISTRY.get_or_init(|| Mutex::new(HashMap::new())))
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_new() -> u64 {
     let runtime = match Runtime::new() {
         Ok(r) => r,
@@ -131,8 +141,9 @@ pub extern "C" fn unitas_runtime_new() -> u64 {
     map.insert(handle, RuntimeState::new(runtime));
     handle
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_path_buffer(handle: u64, capacity: u64) -> u64 {
     if capacity == 0 {
         return 0;
@@ -149,8 +160,9 @@ pub extern "C" fn unitas_runtime_path_buffer(handle: u64, capacity: u64) -> u64 
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_load_scene(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
@@ -166,8 +178,9 @@ pub extern "C" fn unitas_runtime_load_scene(handle: u64, address: u64, length: u
             .map(|_| ())
     })
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_load_scene_mode(
     handle: u64,
     address: u64,
@@ -201,8 +214,9 @@ pub extern "C" fn unitas_runtime_load_scene_mode(
             .map(|_| ())
     })
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_unload_scene(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
@@ -212,10 +226,13 @@ pub extern "C" fn unitas_runtime_unload_scene(handle: u64, address: u64, length:
         Ok(text) => scene_name_from_input(&text),
         Err(code) => return code,
     };
-    run_scene_operation(handle, |runtime, hook| runtime.unload_scene_with_hook(&name, hook))
+    run_scene_operation(handle, |runtime, hook| {
+        runtime.unload_scene_with_hook(&name, hook)
+    })
+}
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_scene_count(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         match i32::try_from(state.runtime.scene_count()) {
@@ -230,8 +247,9 @@ pub extern "C" fn unitas_runtime_scene_count(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_scene_name(handle: u64, index: u32) -> i32 {
     match with_runtime_state(handle, |state| {
         let name = match state.runtime.scene_name(index as usize) {
@@ -247,8 +265,9 @@ pub extern "C" fn unitas_runtime_scene_name(handle: u64, index: u32) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_company_name(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         let name = match state.runtime.company_name() {
@@ -264,8 +283,9 @@ pub extern "C" fn unitas_runtime_company_name(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_product_name(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         let name = match state.runtime.product_name() {
@@ -281,8 +301,9 @@ pub extern "C" fn unitas_runtime_product_name(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_project_version(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         let version = match state.runtime.project_version() {
@@ -298,12 +319,9 @@ pub extern "C" fn unitas_runtime_project_version(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-fn write_string_to_path_buffer(
-    state: &mut RuntimeState,
-    value: &str,
-    overflow_error: &str,
-) -> i32 {
+fn write_string_to_path_buffer(state: &mut RuntimeState, value: &str, overflow_error: &str) -> i32 {
     let bytes = value.as_bytes();
     let needed = bytes.len() + 1;
     if state.path_buffer.len() < needed {
@@ -323,7 +341,7 @@ fn write_string_to_path_buffer(
     }
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_active_scene(handle: u64, index: u32) -> i32 {
     match with_runtime_state(handle, |state| {
         match state.runtime.set_active_scene(index as usize) {
@@ -341,8 +359,9 @@ pub extern "C" fn unitas_runtime_set_active_scene(handle: u64, index: u32) -> i3
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_active_scene_index(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| match state.runtime.active_scene_index() {
         Some(index) => match i32::try_from(index) {
@@ -358,8 +377,9 @@ pub extern "C" fn unitas_runtime_active_scene_index(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_dont_destroy_on_load(handle: u64, entity: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         match state.runtime.dont_destroy_on_load(EntityId::new(entity)) {
@@ -377,8 +397,9 @@ pub extern "C" fn unitas_runtime_dont_destroy_on_load(handle: u64, entity: u64) 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_callbacks(
     handle: u64,
     create: extern "C" fn(u64, u64, u64) -> u64,
@@ -414,8 +435,9 @@ pub extern "C" fn unitas_runtime_set_callbacks(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_tick(handle: u64, delta_seconds: f64) -> i32 {
     let mut state = match take_from_registry(handle) {
         Some(s) => s,
@@ -439,8 +461,9 @@ pub extern "C" fn unitas_runtime_tick(handle: u64, delta_seconds: f64) -> i32 {
     }
     code
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_destroy(handle: u64) -> i32 {
     let mut state = match take_from_registry(handle) {
         Some(s) => s,
@@ -453,8 +476,9 @@ pub extern "C" fn unitas_runtime_destroy(handle: u64) -> i32 {
         Err(_) => -6,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_error_message(handle: u64) -> u64 {
     if let Some(result) = with_active_state(handle, |state| {
         state
@@ -486,8 +510,9 @@ pub extern "C" fn unitas_runtime_error_message(handle: u64) -> u64 {
         None => 0,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_fixed_timestep(handle: u64) -> f64 {
     match with_runtime_state(handle, |state| {
         state.clear_error();
@@ -500,8 +525,9 @@ pub extern "C" fn unitas_runtime_fixed_timestep(handle: u64) -> f64 {
         }
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_time_scale(handle: u64, time_scale: f64) -> i32 {
     match with_runtime_state(handle, |state| {
         state.runtime.set_time_scale(time_scale);
@@ -511,8 +537,9 @@ pub extern "C" fn unitas_runtime_set_time_scale(handle: u64, time_scale: f64) ->
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
     with_runtime_state(handle, |state| {
         state.clear_error();
@@ -520,8 +547,9 @@ pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
     })
     .unwrap_or(0.0)
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_body_position(handle: u64, entity: u64, out_buffer: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if out_buffer == 0
@@ -545,8 +573,9 @@ pub extern "C" fn unitas_runtime_body_position(handle: u64, entity: u64, out_buf
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_body_velocity(handle: u64, entity: u64, out_buffer: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if out_buffer == 0
@@ -570,8 +599,9 @@ pub extern "C" fn unitas_runtime_body_velocity(handle: u64, entity: u64, out_buf
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_body_position(
     handle: u64,
     entity: u64,
@@ -600,8 +630,9 @@ pub extern "C" fn unitas_runtime_set_body_position(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_body_velocity(
     handle: u64,
     entity: u64,
@@ -629,6 +660,7 @@ pub extern "C" fn unitas_runtime_set_body_velocity(
         Ok(code) => code,
         Err(code) => code,
     }
+}
 }
 
 fn read_vec3_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f64; 3]> {
@@ -683,7 +715,7 @@ pub fn test_read_path_buffer(handle: u64, data: &mut [u8]) -> Result<(), Runtime
     }
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_key_event(handle: u64, key: u32, pressed: u32) -> i32 {
     match with_runtime_state(handle, |state| {
         state.runtime.input_key_event(key, pressed != 0);
@@ -694,8 +726,9 @@ pub extern "C" fn unitas_runtime_input_key_event(handle: u64, key: u32, pressed:
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_mouse_button_event(
     handle: u64,
     btn: u32,
@@ -710,8 +743,9 @@ pub extern "C" fn unitas_runtime_input_mouse_button_event(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_pointer_move(handle: u64, x: f64, y: f64) -> i32 {
     match with_runtime_state(handle, |state| {
         if !x.is_finite() || !y.is_finite() {
@@ -726,8 +760,9 @@ pub extern "C" fn unitas_runtime_input_pointer_move(handle: u64, x: f64, y: f64)
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_scroll(handle: u64, x: f64, y: f64) -> i32 {
     match with_runtime_state(handle, |state| {
         if !x.is_finite() || !y.is_finite() {
@@ -742,8 +777,9 @@ pub extern "C" fn unitas_runtime_input_scroll(handle: u64, x: f64, y: f64) -> i3
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_key_state(handle: u64, key: u32) -> u32 {
     match with_runtime_state(handle, |state| {
         state.clear_error();
@@ -756,8 +792,9 @@ pub extern "C" fn unitas_runtime_input_key_state(handle: u64, key: u32) -> u32 {
         }
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_mouse_state(handle: u64, btn: u32) -> u32 {
     match with_runtime_state(handle, |state| {
         state.clear_error();
@@ -770,8 +807,9 @@ pub extern "C" fn unitas_runtime_input_mouse_state(handle: u64, btn: u32) -> u32
         }
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_pointer(handle: u64, out_buffer: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if out_buffer == 0
@@ -793,8 +831,9 @@ pub extern "C" fn unitas_runtime_input_pointer(handle: u64, out_buffer: u64) -> 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_scroll_state(handle: u64, out_buffer: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if out_buffer == 0
@@ -814,8 +853,9 @@ pub extern "C" fn unitas_runtime_input_scroll_state(handle: u64, out_buffer: u64
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_axis(handle: u64, address: u64, length: u64) -> f64 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
@@ -855,8 +895,9 @@ pub extern "C" fn unitas_runtime_input_axis(handle: u64, address: u64, length: u
         }
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_axis_raw(handle: u64, address: u64, length: u64) -> f64 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
@@ -896,13 +937,10 @@ pub extern "C" fn unitas_runtime_input_axis_raw(handle: u64, address: u64, lengt
         }
     }
 }
+}
 
-#[no_mangle]
-pub extern "C" fn unitas_runtime_input_button_state(
-    handle: u64,
-    address: u64,
-    length: u64,
-) -> i32 {
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_button_state(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
         Err(_) => return -2,
@@ -938,8 +976,9 @@ pub extern "C" fn unitas_runtime_input_button_state(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_query_buffer(handle: u64, capacity: u32) -> u64 {
     if capacity == 0 {
         return 0;
@@ -955,8 +994,9 @@ pub extern "C" fn unitas_runtime_query_buffer(handle: u64, capacity: u32) -> u64
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_raycast(
     handle: u64,
     origin_x: f64,
@@ -983,8 +1023,9 @@ pub extern "C" fn unitas_runtime_raycast(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_linecast(
     handle: u64,
     origin_x: f64,
@@ -1011,8 +1052,9 @@ pub extern "C" fn unitas_runtime_linecast(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_sphere_cast(
     handle: u64,
     origin_x: f64,
@@ -1041,8 +1083,9 @@ pub extern "C" fn unitas_runtime_sphere_cast(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_box_cast(
     handle: u64,
     origin_x: f64,
@@ -1073,8 +1116,9 @@ pub extern "C" fn unitas_runtime_box_cast(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_overlap_sphere(
     handle: u64,
     center_x: f64,
@@ -1097,8 +1141,9 @@ pub extern "C" fn unitas_runtime_overlap_sphere(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_character_move(
     handle: u64,
     input: Option<&AbiCharacterMoveInput>,
@@ -1149,8 +1194,9 @@ pub extern "C" fn unitas_runtime_character_move(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_character_teleport(
     handle: u64,
     entity: u64,
@@ -1181,8 +1227,9 @@ pub extern "C" fn unitas_runtime_character_teleport(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_character_controller_config(
     handle: u64,
     entity: u64,
@@ -1224,8 +1271,9 @@ pub extern "C" fn unitas_runtime_character_controller_config(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_create(handle: u64, entity: u64) -> u64 {
     with_runtime_state(handle, |state| {
         let id = state.runtime.ensure_audio_source(entity);
@@ -1234,8 +1282,9 @@ pub extern "C" fn unitas_runtime_audio_create(handle: u64, entity: u64) -> u64 {
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_destroy(handle: u64, entity: u64) -> i32 {
     if entity == 0 {
         return -2;
@@ -1251,8 +1300,9 @@ pub extern "C" fn unitas_runtime_audio_destroy(handle: u64, entity: u64) -> i32 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_play(handle: u64, entity: u64, one_shot: u32) -> i32 {
     if entity == 0 {
         return -2;
@@ -1269,8 +1319,9 @@ pub extern "C" fn unitas_runtime_audio_play(handle: u64, entity: u64, one_shot: 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_pause(handle: u64, entity: u64) -> i32 {
     if entity == 0 {
         return -2;
@@ -1284,8 +1335,9 @@ pub extern "C" fn unitas_runtime_audio_pause(handle: u64, entity: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_unpause(handle: u64, entity: u64) -> i32 {
     if entity == 0 {
         return -2;
@@ -1299,8 +1351,9 @@ pub extern "C" fn unitas_runtime_audio_unpause(handle: u64, entity: u64) -> i32 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_stop(handle: u64, entity: u64) -> i32 {
     if entity == 0 {
         return -2;
@@ -1314,8 +1367,9 @@ pub extern "C" fn unitas_runtime_audio_stop(handle: u64, entity: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_volume(handle: u64, entity: u64, volume: f32) -> i32 {
     if entity == 0 || !volume.is_finite() {
         return -2;
@@ -1332,8 +1386,9 @@ pub extern "C" fn unitas_runtime_audio_set_volume(handle: u64, entity: u64, volu
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_pitch(handle: u64, entity: u64, pitch: f32) -> i32 {
     if entity == 0 || !pitch.is_finite() {
         return -2;
@@ -1350,8 +1405,9 @@ pub extern "C" fn unitas_runtime_audio_set_pitch(handle: u64, entity: u64, pitch
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_mute(handle: u64, entity: u64, mute: u32) -> i32 {
     if entity == 0 {
         return -2;
@@ -1368,8 +1424,9 @@ pub extern "C" fn unitas_runtime_audio_set_mute(handle: u64, entity: u64, mute: 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_loop(handle: u64, entity: u64, looping: u32) -> i32 {
     if entity == 0 {
         return -2;
@@ -1386,8 +1443,9 @@ pub extern "C" fn unitas_runtime_audio_set_loop(handle: u64, entity: u64, loopin
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_priority(
     handle: u64,
     entity: u64,
@@ -1409,8 +1467,9 @@ pub extern "C" fn unitas_runtime_audio_set_priority(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_spatial_blend(
     handle: u64,
     entity: u64,
@@ -1431,8 +1490,9 @@ pub extern "C" fn unitas_runtime_audio_set_spatial_blend(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_min_max_distance(
     handle: u64,
     entity: u64,
@@ -1453,8 +1513,9 @@ pub extern "C" fn unitas_runtime_audio_set_min_max_distance(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_time(handle: u64, entity: u64, time: f64) -> i32 {
     if entity == 0 || !time.is_finite() {
         return -2;
@@ -1471,8 +1532,9 @@ pub extern "C" fn unitas_runtime_audio_set_time(handle: u64, entity: u64, time: 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_clip(handle: u64, entity: u64, clip_id: u64) -> i32 {
     if entity == 0 {
         return -2;
@@ -1490,8 +1552,9 @@ pub extern "C" fn unitas_runtime_audio_set_clip(handle: u64, entity: u64, clip_i
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_custom_duration(
     handle: u64,
     entity: u64,
@@ -1517,8 +1580,9 @@ pub extern "C" fn unitas_runtime_audio_set_custom_duration(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_position(
     handle: u64,
     entity: u64,
@@ -1541,8 +1605,9 @@ pub extern "C" fn unitas_runtime_audio_set_position(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_state(handle: u64, entity: u64) -> i32 {
     with_runtime_state(handle, |state| {
         state.clear_error();
@@ -1554,8 +1619,9 @@ pub extern "C" fn unitas_runtime_audio_state(handle: u64, entity: u64) -> i32 {
     })
     .unwrap_or(-1)
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_time(handle: u64, entity: u64) -> f64 {
     with_runtime_state(handle, |state| {
         state.clear_error();
@@ -1563,8 +1629,9 @@ pub extern "C" fn unitas_runtime_audio_time(handle: u64, entity: u64) -> f64 {
     })
     .unwrap_or(0.0)
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_silence_reason(handle: u64, entity: u64) -> i32 {
     with_runtime_state(handle, |state| {
         state.clear_error();
@@ -1576,8 +1643,9 @@ pub extern "C" fn unitas_runtime_audio_silence_reason(handle: u64, entity: u64) 
     })
     .unwrap_or(-2)
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_listener(
     handle: u64,
     x: f32,
@@ -1608,8 +1676,9 @@ pub extern "C" fn unitas_runtime_audio_set_listener(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_clear_listener(handle: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         state.runtime.audio_mut().clear_listener();
@@ -1620,11 +1689,15 @@ pub extern "C" fn unitas_runtime_audio_clear_listener(handle: u64) -> i32 {
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_paused(handle: u64, paused: u32) -> i32 {
     match with_runtime_state(handle, |state| {
-        state.runtime.audio_mut().set_application_paused(paused != 0);
+        state
+            .runtime
+            .audio_mut()
+            .set_application_paused(paused != 0);
         state.clear_error();
         0
     }) {
@@ -1632,8 +1705,9 @@ pub extern "C" fn unitas_runtime_audio_set_paused(handle: u64, paused: u32) -> i
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_mix(handle: u64, frames: u64, out_buffer: u64) -> u64 {
     let Ok(n_frames) = usize::try_from(frames) else {
         return 0;
@@ -1664,13 +1738,10 @@ pub extern "C" fn unitas_runtime_audio_mix(handle: u64, frames: u64, out_buffer:
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
-pub extern "C" fn unitas_runtime_audio_load_clip(
-    handle: u64,
-    address: u64,
-    length: u64,
-) -> u64 {
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_load_clip(handle: u64, address: u64, length: u64) -> u64 {
     let Ok(len) = usize::try_from(length) else {
         return 0;
     };
@@ -1678,7 +1749,11 @@ pub extern "C" fn unitas_runtime_audio_load_clip(
         let Ok(path_str) = read_path_buffer(state, address, len) else {
             return 0;
         };
-        match state.runtime.audio_mut().load_wav_file(Path::new(&path_str)) {
+        match state
+            .runtime
+            .audio_mut()
+            .load_wav_file(Path::new(&path_str))
+        {
             Ok(clip_id) => {
                 state.clear_error();
                 clip_id
@@ -1691,8 +1766,9 @@ pub extern "C" fn unitas_runtime_audio_load_clip(
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_register_clip_samples(
     handle: u64,
     channels: u32,
@@ -1740,8 +1816,9 @@ pub extern "C" fn unitas_runtime_audio_register_clip_samples(
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_clip_info(
     handle: u64,
     clip_id: u64,
@@ -1772,8 +1849,9 @@ pub extern "C" fn unitas_runtime_audio_clip_info(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_source_config(
     handle: u64,
     entity: u64,
@@ -1827,6 +1905,7 @@ pub extern "C" fn unitas_runtime_audio_source_config(
         Err(code) => code,
     }
 }
+}
 
 fn read_runtime_bytes(state: &RuntimeState, address: u64, length: usize) -> Option<Vec<u8>> {
     if address == 0 {
@@ -1869,7 +1948,7 @@ fn animator_out_buffer_ready(state: &RuntimeState, out_buffer: u64, required: us
         && state.path_buffer.len() >= required
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_controller_create(
     handle: u64,
     address: u64,
@@ -1899,8 +1978,9 @@ pub extern "C" fn unitas_runtime_animator_controller_create(
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_controller_destroy(handle: u64, controller: u64) -> i32 {
     if controller == 0 {
         return -2;
@@ -1917,8 +1997,9 @@ pub extern "C" fn unitas_runtime_animator_controller_destroy(handle: u64, contro
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_attach(handle: u64, entity: u64) -> u64 {
     with_runtime_state(handle, |state| {
         let id = state.runtime.ensure_animator(entity);
@@ -1927,8 +2008,9 @@ pub extern "C" fn unitas_runtime_animator_attach(handle: u64, entity: u64) -> u6
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_controller(
     handle: u64,
     entity: u64,
@@ -1957,8 +2039,9 @@ pub extern "C" fn unitas_runtime_animator_set_controller(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_float(
     handle: u64,
     entity: u64,
@@ -1995,8 +2078,9 @@ pub extern "C" fn unitas_runtime_animator_set_float(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_get_float(
     handle: u64,
     entity: u64,
@@ -2038,8 +2122,9 @@ pub extern "C" fn unitas_runtime_animator_get_float(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_int(
     handle: u64,
     entity: u64,
@@ -2076,8 +2161,9 @@ pub extern "C" fn unitas_runtime_animator_set_int(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_get_int(
     handle: u64,
     entity: u64,
@@ -2119,8 +2205,9 @@ pub extern "C" fn unitas_runtime_animator_get_int(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_bool(
     handle: u64,
     entity: u64,
@@ -2160,8 +2247,9 @@ pub extern "C" fn unitas_runtime_animator_set_bool(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_get_bool(
     handle: u64,
     entity: u64,
@@ -2204,8 +2292,9 @@ pub extern "C" fn unitas_runtime_animator_get_bool(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_trigger(
     handle: u64,
     entity: u64,
@@ -2241,8 +2330,9 @@ pub extern "C" fn unitas_runtime_animator_set_trigger(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_reset_trigger(
     handle: u64,
     entity: u64,
@@ -2278,8 +2368,9 @@ pub extern "C" fn unitas_runtime_animator_reset_trigger(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_set_speed(handle: u64, entity: u64, speed: f32) -> i32 {
     match with_runtime_state(handle, |state| {
         if entity == 0 {
@@ -2303,8 +2394,9 @@ pub extern "C" fn unitas_runtime_animator_set_speed(handle: u64, entity: u64, sp
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_get_speed(
     handle: u64,
     entity: u64,
@@ -2337,8 +2429,9 @@ pub extern "C" fn unitas_runtime_animator_get_speed(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_state_info(
     handle: u64,
     entity: u64,
@@ -2413,8 +2506,9 @@ pub extern "C" fn unitas_runtime_animator_state_info(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_animator_state_name(handle: u64, entity: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if entity == 0 {
@@ -2450,6 +2544,7 @@ pub extern "C" fn unitas_runtime_animator_state_name(handle: u64, entity: u64) -
         Ok(code) => code,
         Err(code) => code,
     }
+}
 }
 
 pub fn test_read_error_message(handle: u64) -> Result<String, RuntimeError> {
@@ -2525,10 +2620,7 @@ where
     op(&mut state.runtime, &mut hook)
 }
 
-fn with_active_state<T>(
-    handle: u64,
-    action: impl FnOnce(&mut RuntimeState) -> T,
-) -> Option<T> {
+fn with_active_state<T>(handle: u64, action: impl FnOnce(&mut RuntimeState) -> T) -> Option<T> {
     ACTIVE_STATES.with(|cell| {
         let mut stack = cell.borrow_mut();
         for (active_handle, state) in stack.iter_mut().rev() {
@@ -2555,7 +2647,10 @@ fn read_path_argument(handle: u64, address: u64, length: usize) -> Result<String
 
 fn run_scene_operation(
     handle: u64,
-    op: impl FnOnce(&mut Runtime, &mut dyn FnMut(&mut Runtime, &mut dyn FnMut())) -> Result<(), RuntimeError>,
+    op: impl FnOnce(
+        &mut Runtime,
+        &mut dyn FnMut(&mut Runtime, &mut dyn FnMut()),
+    ) -> Result<(), RuntimeError>,
 ) -> i32 {
     if with_active_state(handle, |_| ()).is_some() {
         let _ = with_active_state(handle, |state| {
@@ -2749,7 +2844,7 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(raw)
 }
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u64 {
     if capacity == 0 {
         return 0;
@@ -2765,8 +2860,9 @@ pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u6
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_mesh_create(
     handle: u64,
     positions: *const f32,
@@ -2793,8 +2889,7 @@ pub extern "C" fn unitas_runtime_render_mesh_create(
         let position_bytes = position_count as usize * 4;
         let normal_bytes = normal_count as usize * 4;
         let index_bytes = index_count as usize * 4;
-        let Some(position_offset) =
-            path_buffer_offset(state, positions as usize, position_bytes)
+        let Some(position_offset) = path_buffer_offset(state, positions as usize, position_bytes)
         else {
             state.set_error("-2 invalid argument: mesh position buffer is out of range");
             return 0u64;
@@ -2835,8 +2930,9 @@ pub extern "C" fn unitas_runtime_render_mesh_create(
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_mesh_destroy(handle: u64, mesh: u64) -> i32 {
     match with_runtime_state(handle, |state| {
         if state.runtime.destroy_render_mesh(mesh) {
@@ -2851,13 +2947,15 @@ pub extern "C" fn unitas_runtime_render_mesh_destroy(handle: u64, mesh: u64) -> 
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_material_create(handle: u64) -> u64 {
     with_runtime_state(handle, |state| state.runtime.create_render_material()).unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_material_set_color(
     handle: u64,
     material: u64,
@@ -2882,20 +2980,24 @@ pub extern "C" fn unitas_runtime_render_material_set_color(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_camera_create(handle: u64, entity: u64) -> u64 {
     with_runtime_state(handle, |state| {
         if entity == 0 {
             state.set_error("-2 invalid argument: camera entity id is zero");
             return 0u64;
         }
-        state.runtime.create_render_camera(Some(EntityId::new(entity)))
+        state
+            .runtime
+            .create_render_camera(Some(EntityId::new(entity)))
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_camera_update(
     handle: u64,
     camera: u64,
@@ -2945,8 +3047,9 @@ pub extern "C" fn unitas_runtime_render_camera_update(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_renderer_create(
     handle: u64,
     entity: u64,
@@ -2974,8 +3077,9 @@ pub extern "C" fn unitas_runtime_render_renderer_create(
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_renderer_set_enabled(
     handle: u64,
     renderer: u64,
@@ -2997,20 +3101,24 @@ pub extern "C" fn unitas_runtime_render_renderer_set_enabled(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_light_create(handle: u64, entity: u64) -> u64 {
     with_runtime_state(handle, |state| {
         if entity == 0 {
             state.set_error("-2 invalid argument: light entity id is zero");
             return 0u64;
         }
-        state.runtime.create_render_light(Some(EntityId::new(entity)))
+        state
+            .runtime
+            .create_render_light(Some(EntityId::new(entity)))
     })
     .unwrap_or_default()
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_light_update(
     handle: u64,
     light: u64,
@@ -3040,8 +3148,9 @@ pub extern "C" fn unitas_runtime_render_light_update(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_frame(
     handle: u64,
     camera: u64,
@@ -3074,8 +3183,9 @@ pub extern "C" fn unitas_runtime_render_frame(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_camera_world_to_screen_point(
     handle: u64,
     camera: u64,
@@ -3093,7 +3203,10 @@ pub extern "C" fn unitas_runtime_render_camera_world_to_screen_point(
             state.set_error("-2 invalid argument: output buffer is out of range");
             return -2;
         };
-        match state.runtime.camera_world_to_screen_point(camera, [x, y, z]) {
+        match state
+            .runtime
+            .camera_world_to_screen_point(camera, [x, y, z])
+        {
             Ok(values) => {
                 for (index, value) in values.iter().enumerate() {
                     let start = offset + index * 4;
@@ -3112,8 +3225,9 @@ pub extern "C" fn unitas_runtime_render_camera_world_to_screen_point(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_camera_screen_point_to_ray(
     handle: u64,
     camera: u64,
@@ -3131,7 +3245,10 @@ pub extern "C" fn unitas_runtime_render_camera_screen_point_to_ray(
             state.set_error("-2 invalid argument: output buffer is out of range");
             return -2;
         };
-        match state.runtime.camera_screen_point_to_ray(camera, [x, y, 0.0]) {
+        match state
+            .runtime
+            .camera_screen_point_to_ray(camera, [x, y, 0.0])
+        {
             Ok(values) => {
                 for (index, value) in values.iter().enumerate() {
                     let start = offset + index * 4;
@@ -3150,13 +3267,10 @@ pub extern "C" fn unitas_runtime_render_camera_screen_point_to_ray(
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
-pub extern "C" fn unitas_runtime_script_index_build(
-    handle: u64,
-    address: u64,
-    length: u64,
-) -> i32 {
+ffi_export! {
+pub extern "C" fn unitas_runtime_script_index_build(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
         Err(_) => return -2,
@@ -3174,19 +3288,20 @@ pub extern "C" fn unitas_runtime_script_index_build(
             }
         };
         let manifest = index.to_manifest_tsv();
-        write_string_to_path_buffer(state, &manifest, "script index manifest exceeds supported length")
+        write_string_to_path_buffer(
+            state,
+            &manifest,
+            "script index manifest exceeds supported length",
+        )
     }) {
         Ok(code) => code,
         Err(code) => code,
     }
 }
+}
 
-#[no_mangle]
-pub extern "C" fn unitas_runtime_resources_scan(
-    handle: u64,
-    address: u64,
-    length: u64,
-) -> i32 {
+ffi_export! {
+pub extern "C" fn unitas_runtime_resources_scan(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
         Err(_) => return -2,
@@ -3215,9 +3330,14 @@ pub extern "C" fn unitas_runtime_resources_scan(
             ));
         }
         let manifest = lines.join("\n");
-        write_string_to_path_buffer(state, &manifest, "resources manifest exceeds supported length")
+        write_string_to_path_buffer(
+            state,
+            &manifest,
+            "resources manifest exceeds supported length",
+        )
     }) {
         Ok(code) => code,
         Err(code) => code,
     }
+}
 }

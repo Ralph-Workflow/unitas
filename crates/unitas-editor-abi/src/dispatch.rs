@@ -22,7 +22,7 @@ impl fmt::Display for AbiError {
 
 impl std::error::Error for AbiError {}
 
-pub fn error_json(kind: &str, tool: Option<&str>, message: String) -> Value {
+pub fn error_json(kind: &str, tool: Option<&str>, message: &str) -> Value {
     let mut error = json!({"kind": kind, "message": message});
     if let Some(name) = tool {
         error["tool"] = json!(name);
@@ -51,12 +51,21 @@ impl DispatchTableBuilder {
         self
     }
 
-    pub fn tool(mut self, descriptor: ToolDescriptor, handler: ToolHandler) -> Result<Self, AbiError> {
+    pub fn tool(
+        mut self,
+        descriptor: ToolDescriptor,
+        handler: ToolHandler,
+    ) -> Result<Self, AbiError> {
         if self.entries.contains_key(&descriptor.name) {
             return Err(AbiError::DuplicateTool(descriptor.name));
         }
-        self.entries
-            .insert(descriptor.name.clone(), DispatchEntry { descriptor, handler });
+        self.entries.insert(
+            descriptor.name.clone(),
+            DispatchEntry {
+                descriptor,
+                handler,
+            },
+        );
         Ok(self)
     }
 
@@ -90,13 +99,12 @@ impl DispatchTable {
     }
 
     pub fn describe_json(&self) -> String {
-        // ToolManifest of plain data always serializes.
         serde_json::to_string(&self.manifest()).unwrap_or_else(|_| "{\"tools\":[]}".to_string())
     }
 
     pub fn invoke(&self, name: &str, args: &Value) -> Value {
         let Some(entry) = self.entries.get(name) else {
-            return error_json("unknown-tool", Some(name), format!("unknown tool {name}"));
+            return error_json("unknown-tool", Some(name), &format!("unknown tool {name}"));
         };
         let required = entry.descriptor.required_scope;
         if !self.granted.contains(&required) {
@@ -109,7 +117,7 @@ impl DispatchTable {
         }
         match (entry.handler)(args) {
             Ok(payload) => payload,
-            Err(message) => error_json("tool-failed", Some(name), message),
+            Err(message) => error_json("tool-failed", Some(name), &message),
         }
     }
 }
@@ -131,8 +139,14 @@ mod tests {
     fn echo_table() -> Result<DispatchTable, AbiError> {
         Ok(DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor("test.echo", Scope::ReadProject), Box::new(|args| Ok(args.clone())))?
-            .tool(descriptor("test.build", Scope::Build), Box::new(|_| Ok(json!({}))))?
+            .tool(
+                descriptor("test.echo", Scope::ReadProject),
+                Box::new(|args| Ok(args.clone())),
+            )?
+            .tool(
+                descriptor("test.build", Scope::Build),
+                Box::new(|_| Ok(json!({}))),
+            )?
             .build())
     }
 
@@ -140,7 +154,11 @@ mod tests {
     fn describe_lists_tools_in_name_order() -> Result<(), Box<dyn std::error::Error>> {
         let table = echo_table()?;
         let manifest = table.manifest();
-        let names: Vec<&str> = manifest.tools.iter().map(|tool| tool.name.as_str()).collect();
+        let names: Vec<&str> = manifest
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect();
         assert_eq!(names, ["test.build", "test.echo"]);
         let parsed: Value = serde_json::from_str(&table.describe_json())?;
         assert_eq!(parsed["tools"][1]["requiredScope"], json!("read-project"));
@@ -178,7 +196,10 @@ mod tests {
     fn invoke_handler_failure_returns_structured_error() -> Result<(), AbiError> {
         let table = DispatchTable::builder()
             .grant(Scope::ReadProject)
-            .tool(descriptor("test.fail", Scope::ReadProject), Box::new(|_| Err("boom".to_string())))?
+            .tool(
+                descriptor("test.fail", Scope::ReadProject),
+                Box::new(|_| Err("boom".to_string())),
+            )?
             .build();
         let result = table.invoke("test.fail", &json!({}));
         assert_eq!(result["error"]["kind"], json!("tool-failed"));
@@ -189,9 +210,15 @@ mod tests {
     #[test]
     fn duplicate_tool_name_is_rejected() -> Result<(), AbiError> {
         let result = DispatchTable::builder()
-            .tool(descriptor("dup", Scope::ReadProject), Box::new(|_| Ok(json!({}))))?
+            .tool(
+                descriptor("dup", Scope::ReadProject),
+                Box::new(|_| Ok(json!({}))),
+            )?
             .tool(descriptor("dup", Scope::Build), Box::new(|_| Ok(json!({}))));
-        assert_eq!(result.err(), Some(AbiError::DuplicateTool("dup".to_string())));
+        assert_eq!(
+            result.err(),
+            Some(AbiError::DuplicateTool("dup".to_string()))
+        );
         Ok(())
     }
 }

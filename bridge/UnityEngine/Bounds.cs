@@ -173,7 +173,7 @@ namespace UnityEngine
 
         public bool Equals(Bounds other) => center.Equals(other.center) && extents.Equals(other.extents);
 
-        public override bool Equals(object? other) => other is Bounds b && Equals(b);
+        public override bool Equals(object? obj) => obj is Bounds b && Equals(b);
 
         public override int GetHashCode() => HashCode.Combine(center, extents);
 

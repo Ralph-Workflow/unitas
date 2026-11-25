@@ -1,0 +1,83 @@
+# Governed by docs/ralph-workflow-policy/linting-policy.md and docs/ralph-workflow-policy/typechecking-policy.md
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# UnityEngine API compatibility: public methods and properties expose List<T> to match Unity signatures.
+dotnet_diagnostic.CA1002.severity = none
+# UnityEngine API compatibility: events use Action and Func<bool> delegates to match Unity signatures.
+dotnet_diagnostic.CA1003.severity = none
+# UnityEngine and NUnit shim attributes follow Unity and NUnit attribute surface without extra property accessors.
+dotnet_diagnostic.CA1019.severity = none
+# UnityEngine API compatibility: Get* methods match Unity method signatures rather than properties.
+dotnet_diagnostic.CA1024.severity = none
+# UnityEngine API compatibility: enum values match Unity bit layouts and non-Flags definitions.
+dotnet_diagnostic.CA1027.severity = none
+# Top-level test and scenario runners catch general exceptions to record structured failure diagnostics.
+dotnet_diagnostic.CA1031.severity = none
+# Domain and Unity exception types define only the constructors used by their callers.
+dotnet_diagnostic.CA1032.severity = none
+# Tagged-union records use public nested sealed variant types to model closed sum types.
+dotnet_diagnostic.CA1034.severity = none
+# UnityEngine API compatibility: math structs, data structures, and serialized classes use public instance fields.
+dotnet_diagnostic.CA1051.severity = none
+# UnityEngine and MCP resource identifiers use string URIs to match Unity and MCP wire contracts.
+dotnet_diagnostic.CA1054.severity = none
+# UnityEngine and MCP resource properties use string URIs to match Unity and MCP wire contracts.
+dotnet_diagnostic.CA1056.severity = none
+# Nullable reference types are enabled across all projects; redundant null checks on non-nullable parameters are unnecessary.
+dotnet_diagnostic.CA1062.severity = none
+# UnityEngine API compatibility: vector, matrix, and color indexers throw IndexOutOfRangeException to match Unity behavior.
+dotnet_diagnostic.CA1065.severity = none
+# UnityEngine API compatibility: LoadSceneMode and LocalPhysicsMode enum aliases share constant values as in Unity.
+dotnet_diagnostic.CA1069.severity = none
+# Lowercase string normalization is required for Unity GUIDs, YAML keys, and canonical asset identifiers.
+dotnet_diagnostic.CA1308.severity = none
+# Native Rust FFI P/Invoke methods are shared across bridge assemblies via internal/public interop classes.
+dotnet_diagnostic.CA1401.severity = none
+# UnityEngine.Object overloads == and != to report destroyed objects as equal to null while the managed reference is non-null.
+dotnet_diagnostic.CA1508.severity = none
+# Native Rust FFI P/Invoke method names match the exported snake_case symbols in libunitas_runtime.
+dotnet_diagnostic.CA1707.severity = none
+# UnityEngine API compatibility: types expose both lowercase Unity properties and PascalCase members where required by Unity.
+dotnet_diagnostic.CA1708.severity = none
+# UnityEngine attributes (SerializeField, RequireComponent) and MCP domain error types follow Unity and domain naming conventions.
+dotnet_diagnostic.CA1710.severity = none
+# UnityEngine API compatibility: CollisionFlags enum name matches UnityEngine.CollisionFlags.
+dotnet_diagnostic.CA1711.severity = none
+# UnityEngine API compatibility: UnityEngine.Object and audio/coroutine members match Unity identifier names.
+dotnet_diagnostic.CA1716.severity = none
+# UnityEngine API compatibility: AnimatorControllerParameterType enum members Float, Int, Bool match Unity names.
+dotnet_diagnostic.CA1720.severity = none
+# UnityEngine API compatibility: Resources exposes both property and getter method shapes used by callers.
+dotnet_diagnostic.CA1721.severity = none
+# UnityEngine.Input and MCP domain types (Session, Io) match Unity and domain names without namespace collision in practice.
+dotnet_diagnostic.CA1724.severity = none
+# Native Rust FFI P/Invoke teardown calls and fire-and-forget interop calls intentionally ignore status codes during cleanup.
+dotnet_diagnostic.CA1806.severity = none
+# UnityEngine API compatibility: value types match Unity's struct equality surface without extra operator overloads.
+dotnet_diagnostic.CA1815.severity = none
+# UnityEngine API compatibility: properties such as DownloadHandler.data and AnimationClip curves return arrays to match Unity.
+dotnet_diagnostic.CA1819.severity = none
+# UnityEngine API compatibility and instance runner entry points keep instance method signatures expected by callers.
+dotnet_diagnostic.CA1822.severity = none
+# Inline char/string separator arrays in non-hot-path parsing and tests are clear and allocation-negligible.
+dotnet_diagnostic.CA1861.severity = none
+# IndexOfAny over small inline character arrays in non-hot-path YAML/semver parsing does not warrant SearchValues fields.
+dotnet_diagnostic.CA1870.severity = none
+# UnitySynchronizationContext tests intentionally await tasks without ConfigureAwait to test main-thread continuation pumping.
+dotnet_diagnostic.CA2007.severity = none
+# UnityEngine API compatibility: vector, matrix, and color indexers throw IndexOutOfRangeException to match Unity behavior.
+dotnet_diagnostic.CA2201.severity = none
+# UnityEngine API compatibility: math and color structs define operators without non-Unity Add/Subtract/Multiply methods.
+dotnet_diagnostic.CA2225.severity = none
+# Test probe scripts assign static collection properties across test cases to reset shared trace buffers.
+dotnet_diagnostic.CA2227.severity = none
+# Native Rust FFI P/Invoke methods resolve libunitas_runtime via custom NativeLibrary resolver and UNITAS_RUNTIME_LIBRARY.
+dotnet_diagnostic.CA5392.severity = none

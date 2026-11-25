@@ -157,7 +157,9 @@ fn multi_level_variant_inheritance_resolves_closer_level_precedence_and_provenan
     );
     assert_eq!(
         hierarchy.effective_owner(ROOT_RIGIDBODY_ID, "m_Drag"),
-        Some(&OverrideLevel::SceneInstance(String::from("scene_vehicle_1")))
+        Some(&OverrideLevel::SceneInstance(String::from(
+            "scene_vehicle_1"
+        )))
     );
 
     let drag_path = hierarchy
@@ -334,12 +336,7 @@ fn apply_all_and_revert_at_specific_level_restores_nearer_ancestor_values() -> T
         Some(&variant_b_level)
     );
 
-    registry.revert_override_at_level(
-        None,
-        &variant_b_level,
-        CHILD_A_GO_ID,
-        "m_Radius",
-    )?;
+    registry.revert_override_at_level(None, &variant_b_level, CHILD_A_GO_ID, "m_Radius")?;
 
     let resolved_2 = registry.resolve_instance(&instance)?;
     let hierarchy_2 = resolved_2.as_complete().ok_or("expected complete")?;
@@ -822,8 +819,14 @@ fn prefab_variant_and_scene_instance_disk_round_trip_preserves_overrides_identit
     );
 
     let base_def = registry.get(BASE_GUID).ok_or("missing base")?.clone();
-    let variant_a_def = registry.get(VARIANT_A_GUID).ok_or("missing variant A")?.clone();
-    let variant_b_def = registry.get(VARIANT_B_GUID).ok_or("missing variant B")?.clone();
+    let variant_a_def = registry
+        .get(VARIANT_A_GUID)
+        .ok_or("missing variant A")?
+        .clone();
+    let variant_b_def = registry
+        .get(VARIANT_B_GUID)
+        .ok_or("missing variant B")?
+        .clone();
 
     scene_save::save_prefab_variant(&base_path, &base_def)?;
     scene_save::save_prefab_variant(&variant_a_path, &variant_a_def)?;
@@ -846,7 +849,11 @@ fn prefab_variant_and_scene_instance_disk_round_trip_preserves_overrides_identit
     assert!(saved_scene_text_1.contains("m_AddedGameObjects:\n"));
     assert!(saved_scene_text_1.contains("m_AddedComponents:\n"));
 
-    instance.record_override(Modification::new(ROOT_TRANSFORM_ID, "m_LocalPosition.x", "99"))?;
+    instance.record_override(Modification::new(
+        ROOT_TRANSFORM_ID,
+        "m_LocalPosition.x",
+        "99",
+    ))?;
     let mut edited_variant_b = PrefabVariantDefinition::load_from_file(
         &variant_b_path,
         VARIANT_B_GUID,
@@ -909,10 +916,7 @@ fn prefab_variant_and_scene_instance_disk_round_trip_preserves_overrides_identit
         hierarchy.effective_property(CHILD_A_GO_ID, "m_Radius"),
         Some("0.65")
     );
-    assert_eq!(
-        hierarchy.effective_property(500, "m_Caliber"),
-        Some("30mm")
-    );
+    assert_eq!(hierarchy.effective_property(500, "m_Caliber"), Some("30mm"));
     assert_eq!(
         hierarchy.effective_property(700, "m_Intensity"),
         Some("800")
@@ -956,7 +960,9 @@ fn failed_prefab_variant_save_leaves_prior_on_disk_file_intact() -> TestResult {
     assert!(reloaded
         .modifications
         .iter()
-        .any(|m| m.target_file_id == ROOT_RIGIDBODY_ID && m.property_path == "m_Mass" && m.value == "2500"));
+        .any(|m| m.target_file_id == ROOT_RIGIDBODY_ID
+            && m.property_path == "m_Mass"
+            && m.value == "2500"));
 
     let _ = fs::remove_dir_all(&root);
     Ok(())

@@ -1,10 +1,6 @@
-//! Cloth: a particle grid that collides with the capsule colliders it is assigned.
-
 use unitas_core::EntityId;
 
-use crate::body::{
-    add, capsule_world_segment, closest_point_on_segment, subtract, vector_length,
-};
+use crate::body::{add, capsule_world_segment, closest_point_on_segment, subtract, vector_length};
 use crate::world::World;
 
 const CONSTRAINT_ITERATIONS: usize = 8;
@@ -39,10 +35,6 @@ impl std::fmt::Display for ClothError {
 
 impl std::error::Error for ClothError {}
 
-/// A capsule collider a cloth collides with.
-///
-/// The capsule must match the body the entity names in the world: the cloth
-/// reads the body pose from the world and applies the capsule shape here.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClothCollider {
     pub entity: EntityId,
@@ -52,7 +44,6 @@ pub struct ClothCollider {
 }
 
 impl ClothCollider {
-    /// A capsule collider aligned with the world up axis.
     pub fn capsule(entity: EntityId, radius: f64, height: f64) -> Self {
         Self {
             entity,
@@ -62,14 +53,12 @@ impl ClothCollider {
         }
     }
 
-    /// Sets the axis the capsule runs along: 0 is x, 1 is y, 2 is z.
     pub fn with_direction(mut self, direction: u8) -> Self {
         self.direction = direction;
         self
     }
 }
 
-/// The authored shape of a cloth particle grid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClothDesc {
     pub position: [f64; 3],
@@ -83,7 +72,6 @@ pub struct ClothDesc {
 }
 
 impl ClothDesc {
-    /// A grid that spans `width` along x and `height` along y from `position`.
     pub fn new(
         position: [f64; 3],
         width: f64,
@@ -104,7 +92,6 @@ impl ClothDesc {
     }
 }
 
-/// A particle of the cloth grid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClothParticle {
     pub position: [f64; 3],
@@ -112,7 +99,6 @@ pub struct ClothParticle {
     pub inverse_mass: f64,
 }
 
-/// A distance constraint that holds two particles of the grid together.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClothConstraint {
     pub first: usize,
@@ -120,7 +106,6 @@ pub struct ClothConstraint {
     pub rest_length: f64,
 }
 
-/// A contact between a particle of the cloth and an assigned collider.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClothContact {
     pub entity: EntityId,
@@ -128,7 +113,6 @@ pub struct ClothContact {
     pub normal: [f64; 3],
 }
 
-/// A grid of particles held together by distance constraints.
 pub struct Cloth {
     desc: ClothDesc,
     particles: Vec<ClothParticle>,
@@ -138,7 +122,6 @@ pub struct Cloth {
 }
 
 impl Cloth {
-    /// Builds the particle grid and its distance constraints.
     pub fn new(desc: ClothDesc) -> Result<Self, ClothError> {
         if !desc.position.iter().all(|value| value.is_finite())
             || !desc.width.is_finite()
@@ -205,39 +188,30 @@ impl Cloth {
         })
     }
 
-    /// The authored description of the cloth.
     pub fn desc(&self) -> &ClothDesc {
         &self.desc
     }
 
-    /// The particles of the grid, row by row.
     pub fn particles(&self) -> &[ClothParticle] {
         &self.particles
     }
 
-    /// The particle at `index`.
     pub fn particle(&self, index: usize) -> Option<&ClothParticle> {
         self.particles.get(index)
     }
 
-    /// The number of particles in the grid.
     pub fn particle_count(&self) -> usize {
         self.particles.len()
     }
 
-    /// The distance constraints that hold the grid together.
     pub fn constraints(&self) -> &[ClothConstraint] {
         &self.constraints
     }
 
-    /// The colliders the cloth collides with.
     pub fn colliders(&self) -> &[ClothCollider] {
         &self.colliders
     }
 
-    /// Assigns a capsule collider the cloth collides with.
-    ///
-    /// The cloth collides with the assigned colliders only.
     pub fn assign_collider(&mut self, collider: ClothCollider) -> Result<(), ClothError> {
         if !collider.radius.is_finite()
             || collider.radius <= 0.0
@@ -251,17 +225,11 @@ impl Cloth {
         Ok(())
     }
 
-    /// The contacts the cloth recorded during the last step.
     pub fn contacts(&self) -> &[ClothContact] {
         &self.contacts
     }
 
-    /// Advances the grid and resolves it against the assigned colliders.
-    pub fn simulate(
-        &mut self,
-        world: &World,
-        delta_seconds: f64,
-    ) -> Result<(), ClothError> {
+    pub fn simulate(&mut self, world: &World, delta_seconds: f64) -> Result<(), ClothError> {
         if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
             return Err(ClothError::InvalidDeltaTime(delta_seconds));
         }
@@ -338,7 +306,8 @@ impl Cloth {
                     collider.height,
                     collider.direction,
                 );
-                let closest = closest_point_on_segment(start, end, self.particles[particle_index].position);
+                let closest =
+                    closest_point_on_segment(start, end, self.particles[particle_index].position);
                 let offset = subtract(self.particles[particle_index].position, closest);
                 let distance = vector_length(offset);
                 let contact_distance = collider.radius + self.desc.particle_radius;
@@ -364,9 +333,5 @@ impl Cloth {
 }
 
 fn scale(vector: [f64; 3], factor: f64) -> [f64; 3] {
-    [
-        vector[0] * factor,
-        vector[1] * factor,
-        vector[2] * factor,
-    ]
+    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
 }

@@ -129,7 +129,7 @@ fn a_2d_box_dropped_onto_a_floor_falls_asleep_and_wakes_when_a_force_is_applied(
     let mut asleep = false;
     for _ in 0..600 {
         world.step(1.0 / 120.0);
-        if world.body(box_body).map(|body| body.is_sleeping()) == Some(true) {
+        if world.body(box_body).is_some_and(|body| body.is_sleeping()) {
             asleep = true;
             break;
         }

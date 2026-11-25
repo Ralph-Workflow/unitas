@@ -1,5 +1,3 @@
-//! Build report compatibility findings and JSON round-trip (BLD-005, CMP-002).
-
 use std::error::Error;
 use std::path::PathBuf;
 

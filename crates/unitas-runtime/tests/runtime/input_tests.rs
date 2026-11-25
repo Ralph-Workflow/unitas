@@ -29,11 +29,26 @@ fn input_parse_button_token_maps_unity_names_and_mouse_buttons_case_insensitivel
     assert_eq!(parse_button_token("down"), Some(ButtonSource::Key(274)));
     assert_eq!(parse_button_token("right"), Some(ButtonSource::Key(275)));
     assert_eq!(parse_button_token("left"), Some(ButtonSource::Key(276)));
-    assert_eq!(parse_button_token("right shift"), Some(ButtonSource::Key(303)));
-    assert_eq!(parse_button_token("left shift"), Some(ButtonSource::Key(304)));
-    assert_eq!(parse_button_token("right ctrl"), Some(ButtonSource::Key(305)));
-    assert_eq!(parse_button_token("left ctrl"), Some(ButtonSource::Key(306)));
-    assert_eq!(parse_button_token("right alt"), Some(ButtonSource::Key(307)));
+    assert_eq!(
+        parse_button_token("right shift"),
+        Some(ButtonSource::Key(303))
+    );
+    assert_eq!(
+        parse_button_token("left shift"),
+        Some(ButtonSource::Key(304))
+    );
+    assert_eq!(
+        parse_button_token("right ctrl"),
+        Some(ButtonSource::Key(305))
+    );
+    assert_eq!(
+        parse_button_token("left ctrl"),
+        Some(ButtonSource::Key(306))
+    );
+    assert_eq!(
+        parse_button_token("right alt"),
+        Some(ButtonSource::Key(307))
+    );
     assert_eq!(parse_button_token("left alt"), Some(ButtonSource::Key(308)));
     assert_eq!(
         parse_button_token("mouse 0"),
@@ -214,7 +229,10 @@ fn input_default_axis_configs_match_unity_project_settings_defaults() {
         horizontal.is_some(),
         "the fallback axis set must contain Horizontal"
     );
-    assert!(vertical.is_some(), "the fallback axis set must contain Vertical");
+    assert!(
+        vertical.is_some(),
+        "the fallback axis set must contain Vertical"
+    );
     assert_eq!(
         horizontal.map(|axis| axis.snap),
         Some(true),
@@ -332,7 +350,10 @@ fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reloa
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!13 &1\nInputManager:\n  m_Axes:\n  - serializedVersion: 3\n    m_Name: CustomThrust\n    negativeButton: s\n    positiveButton: w\n    altNegativeButton: \n    altPositiveButton: \n    gravity: 4\n    dead: 0.01\n    sensitivity: 4\n    snap: 1\n    invert: 0\n    type: 0\n    axis: 0\n",
     )?;
     let temp_scene = scenes_dir.join("Scene.unity");
-    std::fs::copy(Path::new("tests/fixtures/scene_with_script.unity"), &temp_scene)?;
+    std::fs::copy(
+        Path::new("tests/fixtures/scene_with_script.unity"),
+        &temp_scene,
+    )?;
 
     let mut runtime = Runtime::new()?;
     let load_res = runtime.load_scene(&temp_scene);
@@ -348,10 +369,7 @@ fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reloa
     runtime.tick(0.0)?;
     runtime.tick(0.1)?;
 
-    assert_eq!(
-        runtime.input_key_state(119),
-        STATE_DOWN | STATE_PRESSED
-    );
+    assert_eq!(runtime.input_key_state(119), STATE_DOWN | STATE_PRESSED);
     let thrust = runtime.input_axis("CustomThrust").unwrap_or(-999.0);
     assert!((thrust - 0.4).abs() < 1e-9);
     assert_eq!(runtime.input_axis_raw("CustomThrust"), Some(1.0));
@@ -379,7 +397,8 @@ fn runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reloa
 }
 
 #[test]
-fn runtime_abi_input_injection_and_queries_round_trip_across_frames() -> Result<(), Box<dyn Error>> {
+fn runtime_abi_input_injection_and_queries_round_trip_across_frames() -> Result<(), Box<dyn Error>>
+{
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
     let buf_addr = unitas_runtime_path_buffer(handle, 256);
