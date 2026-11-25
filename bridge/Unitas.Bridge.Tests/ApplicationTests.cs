@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -146,9 +147,9 @@ namespace Unitas.Bridge.Tests
             string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_with_script.unity");
             Check.That("Scene fixture exists for startup/shutdown test", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             ApplicationRecorderScript recorder = new ApplicationRecorderScript(events, "S1");
-            ScriptRegistry.Register(0UL, 1UL, () => recorder);
+            ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
             BridgeHost host = new BridgeHost();
             try
@@ -278,9 +279,9 @@ namespace Unitas.Bridge.Tests
             };
             ApplicationRecorderScript scriptB = new ApplicationRecorderScript(trace, "B");
 
-            ScriptRegistry.Clear();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
 
             Action<bool> onFocus = focused => trace.Add("Event:Focus:" + (focused ? "True" : "False"));
             Action<bool> onPause = paused => trace.Add("Event:Pause:" + (paused ? "True" : "False"));
@@ -349,9 +350,9 @@ namespace Unitas.Bridge.Tests
             };
             ApplicationRecorderScript scriptB = new ApplicationRecorderScript(trace, "B");
 
-            ScriptRegistry.Clear();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
 
             bool allowQuit = false;
             Func<bool> vetoGate = () =>
@@ -440,7 +441,7 @@ namespace Unitas.Bridge.Tests
 
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 using (BridgeHost host = new BridgeHost())
                 {
                     host.LoadScene(settingsSceneFixture);

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -92,9 +93,9 @@ namespace Unitas.Bridge.Tests
         private static TimeScaleProbe ProbeTimeScale(string scenePath, float scale, int ticks, bool startWait)
         {
             Time.timeScale = scale;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             TimeScaleScript script = new TimeScaleScript { StartScaledWait = startWait };
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => script);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => script);
 
             float nativeTimeScale = -1f;
 
@@ -124,9 +125,9 @@ namespace Unitas.Bridge.Tests
         private static TimeScaleProbe FallUntilCollisionExit(string scenePath, float scale, int maxTicks)
         {
             Time.timeScale = scale;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             TimeScaleScript script = new TimeScaleScript();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => script);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => script);
 
             int ticks = 0;
             using (BridgeHost host = new BridgeHost())

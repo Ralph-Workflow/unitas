@@ -4,7 +4,7 @@ using UnityEngine.SceneManagement;
 
 namespace UnityEngine
 {
-    public class GameObject : Object
+    public partial class GameObject : Object
     {
         private readonly List<Component> _components = new List<Component>();
         private string _tag = "Untagged";
@@ -20,6 +20,8 @@ namespace UnityEngine
         public Transform transform { get; }
 
         public bool activeSelf { get; set; }
+
+        public int layer { get; set; }
 
         public string tag
         {
@@ -48,9 +50,18 @@ namespace UnityEngine
             }
         }
 
+        public bool CompareTag(string tag)
+        {
+            if (tag == null)
+            {
+                throw new ArgumentNullException(nameof(tag));
+            }
+
+            return string.Equals(this.tag, tag, StringComparison.Ordinal);
+        }
+
         internal IReadOnlyList<Component> Components => _components;
 
-        /// <summary>Native entity backing this object; 0 when the object has no native counterpart.</summary>
         internal ulong NativeEntityId => _nativeEntityId;
 
         internal void AssignNativeEntityId(ulong entity)
@@ -71,6 +82,19 @@ namespace UnityEngine
             Transform t = new Transform();
             AttachComponent(t);
             transform = t;
+        }
+
+        public GameObject(string name, params Type[] components) : this(name)
+        {
+            if (components == null)
+            {
+                throw new ArgumentNullException(nameof(components));
+            }
+
+            for (int i = 0; i < components.Length; i++)
+            {
+                AddComponent(components[i]);
+            }
         }
 
         public bool activeInHierarchy
@@ -311,7 +335,7 @@ namespace UnityEngine
             _components.Add(component);
         }
 
-        public T? GetComponent<T>() where T : Component
+        public T? GetComponent<T>() where T : class
         {
             for (int i = 0; i < _components.Count; i++)
             {
@@ -340,38 +364,77 @@ namespace UnityEngine
             return null;
         }
 
-        public T[] GetComponents<T>() where T : Component
+        public bool TryGetComponent<T>(out T component) where T : class
+        {
+            T? found = GetComponent<T>();
+            if (found is not null)
+            {
+                component = found;
+                return true;
+            }
+
+            component = null!;
+            return false;
+        }
+
+        public bool TryGetComponent(Type type, out Component? component)
+        {
+            component = GetComponent(type);
+            return component is not null;
+        }
+
+        public T[] GetComponents<T>() where T : class
         {
             List<T> matches = new List<T>();
+            GetComponents<T>(matches);
+            return matches.ToArray();
+        }
+
+        public void GetComponents<T>(List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            results.Clear();
             for (int i = 0; i < _components.Count; i++)
             {
                 Component candidate = _components[i];
                 if (candidate is not null && !candidate.IsDestroyed && candidate is T match)
                 {
-                    matches.Add(match);
+                    results.Add(match);
                 }
             }
-
-            return matches.ToArray();
         }
 
         public Component[] GetComponents(Type type)
         {
-            ValidateComponentType(type);
             List<Component> matches = new List<Component>();
+            GetComponents(type, matches);
+            return matches.ToArray();
+        }
+
+        public void GetComponents(Type type, List<Component> results)
+        {
+            ValidateComponentType(type);
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            results.Clear();
             for (int i = 0; i < _components.Count; i++)
             {
                 Component candidate = _components[i];
                 if (candidate is not null && !candidate.IsDestroyed && type.IsInstanceOfType(candidate))
                 {
-                    matches.Add(candidate);
+                    results.Add(candidate);
                 }
             }
-
-            return matches.ToArray();
         }
 
-        public T? GetComponentInChildren<T>(bool includeInactive = false) where T : Component
+        public T? GetComponentInChildren<T>(bool includeInactive = false) where T : class
         {
             if (IsDestroyed)
             {
@@ -404,7 +467,56 @@ namespace UnityEngine
             return SearchComponentInChildren(this, type, includeInactive);
         }
 
-        public T? GetComponentInParent<T>(bool includeInactive = false) where T : Component
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class
+        {
+            List<T> results = new List<T>();
+            GetComponentsInChildren<T>(includeInactive, results);
+            return results.ToArray();
+        }
+
+        public void GetComponentsInChildren<T>(bool includeInactive, List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            results.Clear();
+            if (IsDestroyed)
+            {
+                return;
+            }
+
+            if (!includeInactive && !activeInHierarchy)
+            {
+                return;
+            }
+
+            CollectComponentsInChildren<T>(this, includeInactive, results);
+        }
+
+        public void GetComponentsInChildren<T>(List<T> results) where T : class =>
+            GetComponentsInChildren<T>(false, results);
+
+        public Component[] GetComponentsInChildren(Type type, bool includeInactive = false)
+        {
+            ValidateComponentType(type);
+            if (IsDestroyed)
+            {
+                return Array.Empty<Component>();
+            }
+
+            if (!includeInactive && !activeInHierarchy)
+            {
+                return Array.Empty<Component>();
+            }
+
+            List<Component> results = new List<Component>();
+            CollectComponentsInChildren(this, type, includeInactive, results);
+            return results.ToArray();
+        }
+
+        public T? GetComponentInParent<T>(bool includeInactive = false) where T : class
         {
             GameObject? current = this;
             while (current is not null && !current.IsDestroyed)
@@ -449,7 +561,68 @@ namespace UnityEngine
             return null;
         }
 
-        private static T? SearchComponentInChildren<T>(GameObject node, bool includeInactive) where T : Component
+        public T[] GetComponentsInParent<T>(bool includeInactive = false) where T : class
+        {
+            List<T> results = new List<T>();
+            GetComponentsInParent<T>(includeInactive, results);
+            return results.ToArray();
+        }
+
+        public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            results.Clear();
+            GameObject? current = this;
+            while (current is not null && !current.IsDestroyed)
+            {
+                if (includeInactive || current.activeInHierarchy)
+                {
+                    for (int i = 0; i < current._components.Count; i++)
+                    {
+                        Component candidate = current._components[i];
+                        if (candidate is not null && !candidate.IsDestroyed && candidate is T match)
+                        {
+                            results.Add(match);
+                        }
+                    }
+                }
+
+                Transform? parentTransform = current.transform.parent;
+                current = parentTransform is not null ? parentTransform.gameObject : null;
+            }
+        }
+
+        public Component[] GetComponentsInParent(Type type, bool includeInactive = false)
+        {
+            ValidateComponentType(type);
+            List<Component> results = new List<Component>();
+            GameObject? current = this;
+            while (current is not null && !current.IsDestroyed)
+            {
+                if (includeInactive || current.activeInHierarchy)
+                {
+                    for (int i = 0; i < current._components.Count; i++)
+                    {
+                        Component candidate = current._components[i];
+                        if (candidate is not null && !candidate.IsDestroyed && type.IsInstanceOfType(candidate))
+                        {
+                            results.Add(candidate);
+                        }
+                    }
+                }
+
+                Transform? parentTransform = current.transform.parent;
+                current = parentTransform is not null ? parentTransform.gameObject : null;
+            }
+
+            return results.ToArray();
+        }
+
+        private static T? SearchComponentInChildren<T>(GameObject node, bool includeInactive) where T : class
         {
             if (node is null || node.IsDestroyed)
             {
@@ -521,6 +694,72 @@ namespace UnityEngine
             return null;
         }
 
+        private static void CollectComponentsInChildren<T>(GameObject node, bool includeInactive, List<T> results) where T : class
+        {
+            if (node is null || node.IsDestroyed)
+            {
+                return;
+            }
+
+            if (!includeInactive && !node.activeInHierarchy)
+            {
+                return;
+            }
+
+            for (int i = 0; i < node._components.Count; i++)
+            {
+                Component candidate = node._components[i];
+                if (candidate is not null && !candidate.IsDestroyed && candidate is T match)
+                {
+                    results.Add(match);
+                }
+            }
+
+            for (int i = 0; i < node.transform.childCount; i++)
+            {
+                GameObject child = node.transform.GetChild(i).gameObject;
+                if (child is null)
+                {
+                    continue;
+                }
+
+                CollectComponentsInChildren<T>(child, includeInactive, results);
+            }
+        }
+
+        private static void CollectComponentsInChildren(GameObject node, Type type, bool includeInactive, List<Component> results)
+        {
+            if (node is null || node.IsDestroyed)
+            {
+                return;
+            }
+
+            if (!includeInactive && !node.activeInHierarchy)
+            {
+                return;
+            }
+
+            for (int i = 0; i < node._components.Count; i++)
+            {
+                Component candidate = node._components[i];
+                if (candidate is not null && !candidate.IsDestroyed && type.IsInstanceOfType(candidate))
+                {
+                    results.Add(candidate);
+                }
+            }
+
+            for (int i = 0; i < node.transform.childCount; i++)
+            {
+                GameObject child = node.transform.GetChild(i).gameObject;
+                if (child is null)
+                {
+                    continue;
+                }
+
+                CollectComponentsInChildren(child, type, includeInactive, results);
+            }
+        }
+
         private static GameObject? MatchHierarchyPath(GameObject current, string[] segments, int segmentIndex)
         {
             if (segmentIndex >= segments.Length)
@@ -557,7 +796,7 @@ namespace UnityEngine
                 throw new ArgumentNullException(nameof(type));
             }
 
-            if (!typeof(Component).IsAssignableFrom(type))
+            if (!typeof(Component).IsAssignableFrom(type) && !type.IsInterface)
             {
                 throw new ArgumentException("Type must derive from UnityEngine.Component.", nameof(type));
             }

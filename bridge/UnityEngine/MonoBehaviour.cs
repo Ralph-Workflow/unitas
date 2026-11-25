@@ -1,13 +1,12 @@
 namespace UnityEngine
 {
-    public class MonoBehaviour : Behaviour
+    public partial class MonoBehaviour : Behaviour
     {
         public MonoBehaviour()
         {
-            GameObject owner = new GameObject("Scripted Game Object");
-            owner.AttachComponent(this);
-            owner.AddComponent<SphereCollider>();
         }
+
+        internal IUnitasMessageHandler? MessageHandler { get; set; }
 
         public Coroutine StartCoroutine(System.Collections.IEnumerator routine)
         {

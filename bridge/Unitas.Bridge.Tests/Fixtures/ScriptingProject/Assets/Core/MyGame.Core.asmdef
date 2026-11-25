@@ -1,0 +1,20 @@
+{
+  "name": "MyGame.Core",
+  "rootNamespace": "MyGame.Core",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [
+    {
+      "name": "com.mygame.analytics",
+      "expression": "1.2.0",
+      "define": "HAS_ANALYTICS_1_2"
+    }
+  ],
+  "noEngineReferences": false
+}

@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
 
 namespace UnityEngine
 {
-    public class Component : Object
+    public partial class Component : Object
     {
         private GameObject? _gameObject;
 
@@ -30,7 +31,21 @@ namespace UnityEngine
             }
         }
 
-        public T? GetComponent<T>() where T : Component => gameObject != null ? gameObject.GetComponent<T>() : null;
+        public string tag
+        {
+            get => gameObject != null ? gameObject.tag : "Untagged";
+            set
+            {
+                if (gameObject != null)
+                {
+                    gameObject.tag = value;
+                }
+            }
+        }
+
+        public bool CompareTag(string tag) => gameObject != null && gameObject.CompareTag(tag);
+
+        public T? GetComponent<T>() where T : class => gameObject != null ? gameObject.GetComponent<T>() : null;
 
         public Component? GetComponent(Type type)
         {
@@ -43,7 +58,47 @@ namespace UnityEngine
             return null;
         }
 
-        public T[] GetComponents<T>() where T : Component => gameObject != null ? gameObject.GetComponents<T>() : Array.Empty<T>();
+        public bool TryGetComponent<T>(out T component) where T : class
+        {
+            if (gameObject != null)
+            {
+                return gameObject.TryGetComponent<T>(out component);
+            }
+
+            component = null!;
+            return false;
+        }
+
+        public bool TryGetComponent(Type type, out Component? component)
+        {
+            if (gameObject != null)
+            {
+                return gameObject.TryGetComponent(type, out component);
+            }
+
+            GameObject.ValidateComponentType(type);
+            component = null;
+            return false;
+        }
+
+        public T[] GetComponents<T>() where T : class => gameObject != null ? gameObject.GetComponents<T>() : Array.Empty<T>();
+
+        public void GetComponents<T>(List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            if (gameObject != null)
+            {
+                gameObject.GetComponents<T>(results);
+            }
+            else
+            {
+                results.Clear();
+            }
+        }
 
         public Component[] GetComponents(Type type)
         {
@@ -56,7 +111,24 @@ namespace UnityEngine
             return Array.Empty<Component>();
         }
 
-        public T? GetComponentInChildren<T>(bool includeInactive = false) where T : Component => gameObject != null ? gameObject.GetComponentInChildren<T>(includeInactive) : null;
+        public void GetComponents(Type type, List<Component> results)
+        {
+            if (gameObject != null)
+            {
+                gameObject.GetComponents(type, results);
+                return;
+            }
+
+            GameObject.ValidateComponentType(type);
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+            results.Clear();
+        }
+
+        public T? GetComponentInChildren<T>(bool includeInactive = false) where T : class =>
+            gameObject != null ? gameObject.GetComponentInChildren<T>(includeInactive) : null;
 
         public Component? GetComponentInChildren(Type type) => GetComponentInChildren(type, false);
 
@@ -71,7 +143,42 @@ namespace UnityEngine
             return null;
         }
 
-        public T? GetComponentInParent<T>(bool includeInactive = false) where T : Component => gameObject != null ? gameObject.GetComponentInParent<T>(includeInactive) : null;
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class =>
+            gameObject != null ? gameObject.GetComponentsInChildren<T>(includeInactive) : Array.Empty<T>();
+
+        public void GetComponentsInChildren<T>(bool includeInactive, List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            if (gameObject != null)
+            {
+                gameObject.GetComponentsInChildren<T>(includeInactive, results);
+            }
+            else
+            {
+                results.Clear();
+            }
+        }
+
+        public void GetComponentsInChildren<T>(List<T> results) where T : class =>
+            GetComponentsInChildren<T>(false, results);
+
+        public Component[] GetComponentsInChildren(Type type, bool includeInactive = false)
+        {
+            if (gameObject != null)
+            {
+                return gameObject.GetComponentsInChildren(type, includeInactive);
+            }
+
+            GameObject.ValidateComponentType(type);
+            return Array.Empty<Component>();
+        }
+
+        public T? GetComponentInParent<T>(bool includeInactive = false) where T : class =>
+            gameObject != null ? gameObject.GetComponentInParent<T>(includeInactive) : null;
 
         public Component? GetComponentInParent(Type type) => GetComponentInParent(type, false);
 
@@ -84,6 +191,37 @@ namespace UnityEngine
 
             GameObject.ValidateComponentType(type);
             return null;
+        }
+
+        public T[] GetComponentsInParent<T>(bool includeInactive = false) where T : class =>
+            gameObject != null ? gameObject.GetComponentsInParent<T>(includeInactive) : Array.Empty<T>();
+
+        public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : class
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            if (gameObject != null)
+            {
+                gameObject.GetComponentsInParent<T>(includeInactive, results);
+            }
+            else
+            {
+                results.Clear();
+            }
+        }
+
+        public Component[] GetComponentsInParent(Type type, bool includeInactive = false)
+        {
+            if (gameObject != null)
+            {
+                return gameObject.GetComponentsInParent(type, includeInactive);
+            }
+
+            GameObject.ValidateComponentType(type);
+            return Array.Empty<Component>();
         }
 
         public T? AddComponent<T>() where T : Component, new() => gameObject != null ? gameObject.AddComponent<T>() : null;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using Unitas.Bridge;
+using Unitas.Bridge.Scripting;
 
 namespace Unitas.Bridge.Tests
 {
@@ -178,7 +179,7 @@ namespace Unitas.Bridge.Tests
             Check.That("Exception containment scene file exists", File.Exists(scenePath));
 
             LogRecorder.Clear();
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
 
             ThrowingUpdateScript throwing = new ThrowingUpdateScript();
             SiblingCountingScript sibling = new SiblingCountingScript();
@@ -187,12 +188,12 @@ namespace Unitas.Bridge.Tests
             SelfDestroyingScript destroyed = new SelfDestroyingScript();
             DisabledSelfScript disabled = new DisabledSelfScript();
 
-            ScriptRegistry.Register("33333333333333333333333333333333", () => throwing);
-            ScriptRegistry.Register("44444444444444444444444444444444", () => sibling);
-            ScriptRegistry.Register("55555555555555555555555555555555", () => awakeThrowing);
-            ScriptRegistry.Register("66666666666666666666666666666666", () => inactive);
-            ScriptRegistry.Register("77777777777777777777777777777777", () => destroyed);
-            ScriptRegistry.Register("88888888888888888888888888888888", () => disabled);
+            ScriptGlueRegistry.Register("33333333333333333333333333333333", () => throwing);
+            ScriptGlueRegistry.Register("44444444444444444444444444444444", () => sibling);
+            ScriptGlueRegistry.Register("55555555555555555555555555555555", () => awakeThrowing);
+            ScriptGlueRegistry.Register("66666666666666666666666666666666", () => inactive);
+            ScriptGlueRegistry.Register("77777777777777777777777777777777", () => destroyed);
+            ScriptGlueRegistry.Register("88888888888888888888888888888888", () => disabled);
 
             using (BridgeHost host = new BridgeHost())
             {

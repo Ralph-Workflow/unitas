@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Unitas.Bridge;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -26,7 +27,7 @@ namespace Unitas.Bridge.Tests
             Check.That("the first scene fixture exists", File.Exists(firstScene));
             Check.That("the replacement scene fixture exists", File.Exists(replacementScene));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             PersistentSceneIntegrationRecorder persistent = new PersistentSceneIntegrationRecorder
             {
                 StartCoroutineOnStart = true,
@@ -36,9 +37,9 @@ namespace Unitas.Bridge.Tests
                 StartCoroutineOnStart = true,
             };
             BetaSceneRecorder replacement = new BetaSceneRecorder();
-            ScriptRegistry.Register(TargetGuid, () => persistent);
-            ScriptRegistry.Register(OtherGuid, () => transient);
-            ScriptRegistry.Register(BetaGuid, () => replacement);
+            ScriptGlueRegistry.Register(TargetGuid, () => persistent);
+            ScriptGlueRegistry.Register(OtherGuid, () => transient);
+            ScriptGlueRegistry.Register(BetaGuid, () => replacement);
 
             try
             {

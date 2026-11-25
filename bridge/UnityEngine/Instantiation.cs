@@ -15,6 +15,8 @@ namespace UnityEngine
             GameObject clone = new GameObject(original.name + " (Clone)");
             clone.activeSelf = original.activeSelf;
             clone.transform.localPosition = original.transform.localPosition;
+            clone.transform.localRotation = original.transform.localRotation;
+            clone.transform.localScale = original.transform.localScale;
             CopyComponents(original, clone);
             CopyChildren(original.transform, clone.transform);
             return clone;
@@ -68,8 +70,10 @@ namespace UnityEngine
                 GameObject sourceChildObject = sourceChild.gameObject;
                 GameObject targetChildObject = new GameObject(sourceChildObject.name);
                 targetChildObject.activeSelf = sourceChildObject.activeSelf;
-                targetChildObject.transform.localPosition = sourceChild.localPosition;
                 targetChildObject.transform.SetParent(target, false);
+                targetChildObject.transform.localPosition = sourceChild.localPosition;
+                targetChildObject.transform.localRotation = sourceChild.localRotation;
+                targetChildObject.transform.localScale = sourceChild.localScale;
                 CopyComponents(sourceChildObject, targetChildObject);
                 CopyChildren(sourceChild, targetChildObject.transform);
             }

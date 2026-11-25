@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -138,9 +139,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 MotionRecorderScript? recorder = null;
-                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new MotionRecorderScript());
+                ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new MotionRecorderScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -208,9 +209,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 VelocityWriterScript? writer = null;
-                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => writer = new VelocityWriterScript());
+                ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => writer = new VelocityWriterScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -285,11 +286,11 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 SphereRestRecorderScript? recorder = null;
                 PlatformMoverScript? mover = null;
-                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new SphereRestRecorderScript());
-                ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => mover = new PlatformMoverScript());
+                ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recorder = new SphereRestRecorderScript());
+                ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => mover = new PlatformMoverScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -365,9 +366,9 @@ MonoBehaviour:
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 LoggingScript? settingsScript = null;
-                ScriptRegistry.Register(0UL, 1UL, () => settingsScript = new LoggingScript());
+                ScriptGlueRegistry.Register(0UL, 1UL, () => settingsScript = new LoggingScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -413,9 +414,9 @@ MonoBehaviour:
         private static int CountFixedSteps(string scenePath, float scale)
         {
             Time.timeScale = scale;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             LoggingScript? target = null;
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => target = new LoggingScript());
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => target = new LoggingScript());
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -438,11 +439,11 @@ MonoBehaviour:
             float savedScale = Time.timeScale;
             Time.timeScale = 1f;
             int frameBefore = Time.frameCount;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             LoggingScript? target = null;
             PassiveScript? other = null;
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => target = new LoggingScript());
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => other = new PassiveScript());
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => target = new LoggingScript());
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => other = new PassiveScript());
 
             using (BridgeHost host = new BridgeHost())
             {

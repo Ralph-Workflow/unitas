@@ -1,9 +1,85 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace UnityEngine
 {
+    public enum RuntimePlatform
+    {
+        OSXEditor = 0,
+        OSXPlayer = 1,
+        WindowsPlayer = 2,
+        WindowsEditor = 7,
+        IPhonePlayer = 8,
+        Android = 11,
+        LinuxPlayer = 13,
+        LinuxEditor = 16,
+        WebGLPlayer = 17,
+        PS4 = 25,
+        XboxOne = 27,
+        tvOS = 31,
+        Switch = 32,
+        PS5 = 38,
+        LinuxServer = 43,
+        WindowsServer = 44,
+        OSXServer = 45,
+    }
+
+    public enum NetworkReachability
+    {
+        NotReachable = 0,
+        ReachableViaCarrierDataNetwork = 1,
+        ReachableViaLocalAreaNetwork = 2,
+    }
+
+    public enum SystemLanguage
+    {
+        Afrikaans = 0,
+        Arabic = 1,
+        Basque = 2,
+        Belarusian = 3,
+        Bulgarian = 4,
+        Catalan = 5,
+        Chinese = 6,
+        Czech = 7,
+        Danish = 8,
+        Dutch = 9,
+        English = 10,
+        Estonian = 11,
+        Faroese = 12,
+        Finnish = 13,
+        French = 14,
+        German = 15,
+        Greek = 16,
+        Hebrew = 17,
+        Hungarian = 18,
+        Icelandic = 19,
+        Indonesian = 20,
+        Italian = 21,
+        Japanese = 22,
+        Korean = 23,
+        Latvian = 24,
+        Lithuanian = 25,
+        Norwegian = 26,
+        Polish = 27,
+        Portuguese = 28,
+        Romanian = 29,
+        Russian = 30,
+        SerboCroatian = 31,
+        Slovak = 32,
+        Slovenian = 33,
+        Spanish = 34,
+        Swedish = 35,
+        Thai = 36,
+        Turkish = 37,
+        Ukrainian = 38,
+        Vietnamese = 39,
+        ChineseSimplified = 40,
+        ChineseTraditional = 41,
+        Unknown = 42,
+    }
+
     public enum ApplicationBuildKind
     {
         Editor = 0,
@@ -42,6 +118,11 @@ namespace UnityEngine
         private const string DefaultUnityVersion = "2022.3.0f1";
 
         private static string? _persistentDataPathOverride;
+        private static string? _unityVersionOverride;
+        private static int _targetFrameRate = -1;
+        private static bool _runInBackground = true;
+        private static bool _ignoreQuitInPlayMode;
+        private static int _quitRequestCount;
 
         static Application()
         {
@@ -56,6 +137,20 @@ namespace UnityEngine
             set => _persistentDataPathOverride = value;
         }
 
+        public static string? UnityVersionOverride
+        {
+            get => _unityVersionOverride;
+            set => _unityVersionOverride = value;
+        }
+
+        public static bool IgnoreQuitInPlayMode
+        {
+            get => _ignoreQuitInPlayMode;
+            set => _ignoreQuitInPlayMode = value;
+        }
+
+        public static int QuitRequestCount => _quitRequestCount;
+
         public static event Func<bool>? wantsToQuit;
 
         public static event Action? quitting;
@@ -64,6 +159,8 @@ namespace UnityEngine
 
         public static event Action<bool>? pauseChanged;
 
+        public static event Action<string>? deepLinkActivated;
+
         public static bool isPlaying => Host?.IsPlaying ?? false;
 
         public static bool isEditor => Host != null && Host.BuildKind == ApplicationBuildKind.Editor;
@@ -71,6 +168,48 @@ namespace UnityEngine
         public static bool isFocused => Host?.IsFocused ?? false;
 
         public static bool isPaused => Host?.IsPaused ?? false;
+
+        public static bool isBatchMode => true;
+
+        public static RuntimePlatform platform
+        {
+            get
+            {
+                bool editor = Host == null || Host.BuildKind == ApplicationBuildKind.Editor;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    return editor ? RuntimePlatform.OSXEditor : RuntimePlatform.OSXPlayer;
+                }
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    return editor ? RuntimePlatform.WindowsEditor : RuntimePlatform.WindowsPlayer;
+                }
+
+                return editor ? RuntimePlatform.LinuxEditor : RuntimePlatform.LinuxPlayer;
+            }
+        }
+
+        public static int targetFrameRate
+        {
+            get => _targetFrameRate;
+            set => _targetFrameRate = value;
+        }
+
+        public static bool runInBackground
+        {
+            get => _runInBackground;
+            set => _runInBackground = value;
+        }
+
+        public static NetworkReachability internetReachability => NetworkReachability.ReachableViaLocalAreaNetwork;
+
+        public static SystemLanguage systemLanguage => SystemLanguage.English;
+
+        public static bool isMobilePlatform =>
+            platform == RuntimePlatform.IPhonePlayer || platform == RuntimePlatform.Android;
+
+        public static string absoluteURL => string.Empty;
 
         public static ApplicationBuildKind buildKind => Host?.BuildKind ?? ApplicationBuildKind.ReleasePlayer;
 
@@ -116,7 +255,8 @@ namespace UnityEngine
             }
         }
 
-        public static string unityVersion => DefaultUnityVersion;
+        public static string unityVersion =>
+            string.IsNullOrEmpty(_unityVersionOverride) ? DefaultUnityVersion : _unityVersionOverride!;
 
         public static string identifier
         {
@@ -225,6 +365,12 @@ namespace UnityEngine
         public static void Quit(int exitCode)
         {
             _ = exitCode;
+            _quitRequestCount++;
+            if (_ignoreQuitInPlayMode && isEditor && isPlaying)
+            {
+                return;
+            }
+
             if (!EvaluateWantsToQuit())
             {
                 return;
@@ -241,12 +387,38 @@ namespace UnityEngine
             }
         }
 
+        public static void OpenURL(string url)
+        {
+            _ = url;
+        }
+
+        internal static void RaiseDeepLinkActivated(string url)
+        {
+            Action<string>? handlers = deepLinkActivated;
+            if (handlers == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handlers.Invoke(url ?? string.Empty);
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Debug.LogException(ex);
+            }
+        }
+
         public static void ClearEvents()
         {
             wantsToQuit = null;
             quitting = null;
             focusChanged = null;
             pauseChanged = null;
+            deepLinkActivated = null;
+            _ignoreQuitInPlayMode = false;
+            _quitRequestCount = 0;
         }
 
         internal static bool EvaluateWantsToQuit()

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -21,7 +22,12 @@ namespace Unitas.Bridge
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
+        private readonly Dictionary<ulong, GameObject> _entityGameObjects = new Dictionary<ulong, GameObject>();
+        private readonly Dictionary<ulong, string> _sceneObjectNames = new Dictionary<ulong, string>();
         private readonly Dictionary<ulong, SceneRigidbodyMetadata> _sceneRigidbodies = new Dictionary<ulong, SceneRigidbodyMetadata>();
+        private readonly Dictionary<ulong, SceneSphereColliderMetadata> _sceneSphereColliders = new Dictionary<ulong, SceneSphereColliderMetadata>();
+        private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
+        private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
         private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
         private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -125,6 +131,19 @@ namespace Unitas.Bridge
             MeshFilter.Provider = _renderProvider;
             MeshRenderer.Provider = _renderProvider;
             Light.Provider = _renderProvider;
+            Unitas.Bridge.Messaging.MessageDispatcher.EnsureInstalled();
+
+            string? glueAssemblyPath = Environment.GetEnvironmentVariable("UNITAS_GLUE_ASSEMBLY");
+            if (!string.IsNullOrEmpty(glueAssemblyPath) && File.Exists(glueAssemblyPath))
+            {
+                ScriptGlueRegistry.LoadGlueAssembly(glueAssemblyPath);
+            }
+        }
+
+        public void LoadGlueAssembly(string assemblyPath)
+        {
+            ThrowIfDisposed();
+            ScriptGlueRegistry.LoadGlueAssembly(assemblyPath);
         }
 
         public ulong Handle => _runtimeHandle;
@@ -233,7 +252,9 @@ namespace Unitas.Bridge
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
             RegisterLoadedScene(path, LoadSceneMode.Single);
-            SceneManager.RaiseSceneLoaded(FindLoadedScene(path), LoadSceneMode.Single);
+            Scene loaded = FindLoadedScene(path);
+            DeregisterReplacedSceneObjects(loaded, LoadSceneMode.Single);
+            SceneManager.RaiseSceneLoaded(loaded, LoadSceneMode.Single);
         }
 
         public Scene LoadScene(string path, LoadSceneMode mode)
@@ -264,6 +285,7 @@ namespace Unitas.Bridge
             UpdateProjectMetadata(path);
             RegisterLoadedScene(path, mode);
             Scene loaded = FindLoadedScene(path);
+            DeregisterReplacedSceneObjects(loaded, mode);
             SceneManager.RaiseSceneLoaded(loaded, mode);
             return loaded;
         }
@@ -287,7 +309,94 @@ namespace Unitas.Bridge
             }
 
             RemoveLoadedScene(name);
+            DeregisterUnloadedSceneObjects(scene);
             SceneManager.RaiseSceneUnloaded(scene);
+        }
+
+        private static void DeregisterUnloadedSceneObjects(Scene unloadedScene)
+        {
+            if (unloadedScene.handle == 0)
+            {
+                return;
+            }
+
+            List<UnityEngine.Object> snapshot = UnityEngine.Object.SnapshotLiveObjects();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                UnityEngine.Object candidate = snapshot[i];
+                if (candidate is null || candidate.IsPersistent || candidate.scene.handle != unloadedScene.handle)
+                {
+                    continue;
+                }
+
+                if (candidate is GameObject go)
+                {
+                    if (!go.IsPersistent)
+                    {
+                        UnityEngine.Object.DeregisterLiveObject(go);
+                        IReadOnlyList<Component> comps = go.Components;
+                        for (int j = 0; j < comps.Count; j++)
+                        {
+                            UnityEngine.Object.DeregisterLiveObject(comps[j]);
+                        }
+                    }
+                }
+                else if (candidate is Component comp)
+                {
+                    GameObject? owner = comp.gameObject;
+                    if (owner is null || !owner.IsPersistent)
+                    {
+                        UnityEngine.Object.DeregisterLiveObject(comp);
+                    }
+                }
+                else
+                {
+                    UnityEngine.Object.DeregisterLiveObject(candidate);
+                }
+            }
+        }
+
+        private static void DeregisterReplacedSceneObjects(Scene loadedScene, LoadSceneMode mode)
+        {
+            if (mode != LoadSceneMode.Single || loadedScene.handle == 0)
+            {
+                return;
+            }
+
+            List<UnityEngine.Object> snapshot = UnityEngine.Object.SnapshotLiveObjects();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                UnityEngine.Object candidate = snapshot[i];
+                if (candidate is null || candidate.IsPersistent || candidate.scene.handle == 0 || candidate.scene.handle == loadedScene.handle)
+                {
+                    continue;
+                }
+
+                if (candidate is GameObject go)
+                {
+                    if (!go.IsPersistent)
+                    {
+                        UnityEngine.Object.DeregisterLiveObject(go);
+                        IReadOnlyList<Component> comps = go.Components;
+                        for (int j = 0; j < comps.Count; j++)
+                        {
+                            UnityEngine.Object.DeregisterLiveObject(comps[j]);
+                        }
+                    }
+                }
+                else if (candidate is Component comp)
+                {
+                    GameObject? owner = comp.gameObject;
+                    if (owner is null || !owner.IsPersistent)
+                    {
+                        UnityEngine.Object.DeregisterLiveObject(comp);
+                    }
+                }
+                else
+                {
+                    UnityEngine.Object.DeregisterLiveObject(candidate);
+                }
+            }
         }
 
         public bool TryResolveScenePath(string sceneName, out string scenePath)
@@ -421,6 +530,7 @@ namespace Unitas.Bridge
                 if (entity != 0)
                 {
                     _entityScripts.Remove(entity);
+                    _entityGameObjects.Remove(entity);
                 }
             }
         }
@@ -559,7 +669,12 @@ namespace Unitas.Bridge
                 _lateUpdateCallsInTick = 0;
                 _scripts.Clear();
                 _entityScripts.Clear();
+                _entityGameObjects.Clear();
+                _sceneObjectNames.Clear();
                 _sceneRigidbodies.Clear();
+                _sceneSphereColliders.Clear();
+                _sceneBoxColliders.Clear();
+                _sceneCapsuleColliders.Clear();
                 StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
                 {
@@ -1675,8 +1790,7 @@ namespace Unitas.Bridge
 
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
-            MonoBehaviour? script = ScriptRegistry.Create(guidHi, guidLo);
-            if (script == null)
+            if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
             {
                 return 0;
             }
@@ -1684,51 +1798,85 @@ namespace Unitas.Bridge
             _scripts[handle] = script;
             _entityScripts[entity] = handle;
             GameObject? owner = script.gameObject;
-            if (owner != null)
+            if (owner == null || owner.IsDestroyed)
             {
-                owner.AssignNativeEntityId(entity);
-                if (_sceneRigidbodies.TryGetValue(entity, out SceneRigidbodyMetadata metadata))
+                if (!_entityGameObjects.TryGetValue(entity, out owner) || owner == null || owner.IsDestroyed)
                 {
-                    Rigidbody body = owner.GetComponent<Rigidbody>() ?? owner.AddComponent<Rigidbody>();
-                    body.mass = metadata.Mass;
-                    body.useGravity = metadata.UseGravity;
-                    body.isKinematic = metadata.IsKinematic;
+                    string objectName = string.IsNullOrEmpty(script.name)
+                        ? (_sceneObjectNames.TryGetValue(entity, out string? parsedName) && !string.IsNullOrEmpty(parsedName)
+                            ? parsedName
+                            : "GameObject")
+                        : script.name;
+                    owner = new GameObject(objectName);
                 }
-                if (TryGetConfig(entity, out CharacterControllerConfig ccConfig))
-                {
-                    CharacterController controller = owner.GetComponent<CharacterController>() ?? owner.AddComponent<CharacterController>();
-                    controller.radius = ccConfig.Radius;
-                    controller.height = ccConfig.Height;
-                    controller.center = ccConfig.Center;
-                    controller.slopeLimit = ccConfig.SlopeLimit;
-                    controller.stepOffset = ccConfig.StepOffset;
-                    controller.skinWidth = ccConfig.SkinWidth;
-                    controller.minMoveDistance = ccConfig.MinMoveDistance;
-                    controller.enabled = ccConfig.Enabled;
-                }
-                if (TryGetAudioSourceConfig(entity, out AudioSourceConfig audioConfig))
-                {
-                    AudioSource audioSource = owner.GetComponent<AudioSource>() ?? owner.AddComponent<AudioSource>();
-                    AudioClip? loadedClip = null;
-                    if (audioConfig.ClipId != 0UL)
-                    {
-                        if (TryGetAudioClipInfo(audioConfig.ClipId, out uint channels, out uint sampleRate, out ulong _, out double durationSeconds))
-                        {
-                            loadedClip = new AudioClip("SceneAudioClip", (float)durationSeconds, (int)channels, (int)sampleRate, audioConfig.ClipId);
-                        }
-                        else
-                        {
-                            loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, audioConfig.ClipId);
-                        }
-                    }
-                    else if (audioConfig.ClipDuration > 0.0)
-                    {
-                        loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, 0UL);
-                    }
-                    audioSource.ApplyNativeConfig(entity, audioConfig, loadedClip);
-                }
-                SyncSimulatedTransform(owner);
+                owner.AttachComponent(script);
             }
+            _entityGameObjects[entity] = owner;
+            owner.AssignNativeEntityId(entity);
+            if (_sceneRigidbodies.TryGetValue(entity, out SceneRigidbodyMetadata metadata))
+            {
+                Rigidbody body = owner.GetComponent<Rigidbody>() ?? owner.AddComponent<Rigidbody>();
+                body.mass = metadata.Mass;
+                body.useGravity = metadata.UseGravity;
+                body.isKinematic = metadata.IsKinematic;
+            }
+            if (_sceneSphereColliders.TryGetValue(entity, out SceneSphereColliderMetadata sphereMeta))
+            {
+                SphereCollider sphere = owner.GetComponent<SphereCollider>() ?? owner.AddComponent<SphereCollider>();
+                sphere.radius = sphereMeta.Radius;
+                sphere.center = sphereMeta.Center;
+                sphere.isTrigger = sphereMeta.IsTrigger;
+            }
+            if (_sceneBoxColliders.TryGetValue(entity, out SceneBoxColliderMetadata boxMeta))
+            {
+                BoxCollider box = owner.GetComponent<BoxCollider>() ?? owner.AddComponent<BoxCollider>();
+                box.size = boxMeta.Size;
+                box.center = boxMeta.Center;
+                box.isTrigger = boxMeta.IsTrigger;
+            }
+            if (_sceneCapsuleColliders.TryGetValue(entity, out SceneCapsuleColliderMetadata capsuleMeta))
+            {
+                CapsuleCollider capsule = owner.GetComponent<CapsuleCollider>() ?? owner.AddComponent<CapsuleCollider>();
+                capsule.radius = capsuleMeta.Radius;
+                capsule.height = capsuleMeta.Height;
+                capsule.direction = capsuleMeta.Direction;
+                capsule.center = capsuleMeta.Center;
+                capsule.isTrigger = capsuleMeta.IsTrigger;
+            }
+            if (TryGetConfig(entity, out CharacterControllerConfig ccConfig))
+            {
+                CharacterController controller = owner.GetComponent<CharacterController>() ?? owner.AddComponent<CharacterController>();
+                controller.radius = ccConfig.Radius;
+                controller.height = ccConfig.Height;
+                controller.center = ccConfig.Center;
+                controller.slopeLimit = ccConfig.SlopeLimit;
+                controller.stepOffset = ccConfig.StepOffset;
+                controller.skinWidth = ccConfig.SkinWidth;
+                controller.minMoveDistance = ccConfig.MinMoveDistance;
+                controller.enabled = ccConfig.Enabled;
+            }
+            if (TryGetAudioSourceConfig(entity, out AudioSourceConfig audioConfig))
+            {
+                AudioSource audioSource = owner.GetComponent<AudioSource>() ?? owner.AddComponent<AudioSource>();
+                AudioClip? loadedClip = null;
+                if (audioConfig.ClipId != 0UL)
+                {
+                    if (TryGetAudioClipInfo(audioConfig.ClipId, out uint channels, out uint sampleRate, out ulong _, out double durationSeconds))
+                    {
+                        loadedClip = new AudioClip("SceneAudioClip", (float)durationSeconds, (int)channels, (int)sampleRate, audioConfig.ClipId);
+                    }
+                    else
+                    {
+                        loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, audioConfig.ClipId);
+                    }
+                }
+                else if (audioConfig.ClipDuration > 0.0)
+                {
+                    loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, 0UL);
+                }
+                audioSource.ApplyNativeConfig(entity, audioConfig, loadedClip);
+            }
+            SyncSimulatedTransform(owner);
             return handle;
         }
 
@@ -1898,7 +2046,11 @@ namespace Unitas.Bridge
         {
             if (mode == LoadSceneMode.Single)
             {
+                _sceneObjectNames.Clear();
                 _sceneRigidbodies.Clear();
+                _sceneSphereColliders.Clear();
+                _sceneBoxColliders.Clear();
+                _sceneCapsuleColliders.Clear();
                 _nextSceneEntityBase = 1;
                 foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
                 {
@@ -1917,15 +2069,26 @@ namespace Unitas.Bridge
 
             string[] lines = File.ReadAllLines(scenePath);
             Dictionary<string, ulong> gameObjectEntities = new Dictionary<string, ulong>(StringComparer.Ordinal);
+            Dictionary<string, string> gameObjectNames = new Dictionary<string, string>(StringComparer.Ordinal);
             ulong localEntityIndex = 0;
 
             int currentClassId = 0;
             string currentFileId = string.Empty;
             string currentGameObjectFileId = string.Empty;
+            string currentName = string.Empty;
             float currentMass = 1f;
             bool currentUseGravity = true;
             bool currentIsKinematic = false;
+            float currentRadius = 0.5f;
+            float currentHeight = 2f;
+            int currentDirection = 1;
+            bool currentIsTrigger = false;
+            Vector3 currentCenter = Vector3.zero;
+            Vector3 currentSize = new Vector3(1f, 1f, 1f);
             List<ParsedRigidbodyRecord> rigidbodies = new List<ParsedRigidbodyRecord>();
+            List<ParsedSphereColliderRecord> sphereColliders = new List<ParsedSphereColliderRecord>();
+            List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
+            List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
 
             for (int index = 0; index < lines.Length; index++)
             {
@@ -1936,22 +2099,47 @@ namespace Unitas.Bridge
                         currentClassId,
                         currentFileId,
                         currentGameObjectFileId,
+                        currentName,
                         currentMass,
                         currentUseGravity,
                         currentIsKinematic,
+                        currentRadius,
+                        currentHeight,
+                        currentDirection,
+                        currentIsTrigger,
+                        currentCenter,
+                        currentSize,
                         ref localEntityIndex,
                         gameObjectEntities,
-                        rigidbodies);
+                        gameObjectNames,
+                        rigidbodies,
+                        sphereColliders,
+                        boxColliders,
+                        capsuleColliders);
 
                     ParseDocumentHeader(line, out currentClassId, out currentFileId);
                     currentGameObjectFileId = string.Empty;
+                    currentName = string.Empty;
                     currentMass = 1f;
                     currentUseGravity = true;
                     currentIsKinematic = false;
+                    currentRadius = 0.5f;
+                    currentHeight = 2f;
+                    currentDirection = 1;
+                    currentIsTrigger = false;
+                    currentCenter = Vector3.zero;
+                    currentSize = new Vector3(1f, 1f, 1f);
                     continue;
                 }
 
-                if (currentClassId == 54)
+                if (currentClassId == 1)
+                {
+                    if (line.StartsWith("m_Name:", StringComparison.Ordinal))
+                    {
+                        currentName = ParseStringValue(line);
+                    }
+                }
+                else if (currentClassId == 54)
                 {
                     if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
                     {
@@ -1970,18 +2158,69 @@ namespace Unitas.Bridge
                         currentIsKinematic = ParseBoolValue(line, false);
                     }
                 }
+                else if (currentClassId == 65 || currentClassId == 135 || currentClassId == 136)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_IsTrigger:", StringComparison.Ordinal))
+                    {
+                        currentIsTrigger = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_Radius:", StringComparison.Ordinal))
+                    {
+                        currentRadius = ParseFloatValue(line, 0.5f);
+                    }
+                    else if (line.StartsWith("m_Height:", StringComparison.Ordinal))
+                    {
+                        currentHeight = ParseFloatValue(line, 2f);
+                    }
+                    else if (line.StartsWith("m_Direction:", StringComparison.Ordinal))
+                    {
+                        currentDirection = (int)ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_Center:", StringComparison.Ordinal))
+                    {
+                        currentCenter = ParseVector3Value(line, Vector3.zero);
+                    }
+                    else if (line.StartsWith("m_Size:", StringComparison.Ordinal))
+                    {
+                        currentSize = ParseVector3Value(line, new Vector3(1f, 1f, 1f));
+                    }
+                }
             }
 
             FlushDocument(
                 currentClassId,
                 currentFileId,
                 currentGameObjectFileId,
+                currentName,
                 currentMass,
                 currentUseGravity,
                 currentIsKinematic,
+                currentRadius,
+                currentHeight,
+                currentDirection,
+                currentIsTrigger,
+                currentCenter,
+                currentSize,
                 ref localEntityIndex,
                 gameObjectEntities,
-                rigidbodies);
+                gameObjectNames,
+                rigidbodies,
+                sphereColliders,
+                boxColliders,
+                capsuleColliders);
+
+            foreach (KeyValuePair<string, ulong> entry in gameObjectEntities)
+            {
+                ulong shiftedEntity = _nextSceneEntityBase + entry.Value;
+                if (gameObjectNames.TryGetValue(entry.Key, out string? name) && !string.IsNullOrEmpty(name))
+                {
+                    _sceneObjectNames[shiftedEntity] = name;
+                }
+            }
 
             for (int index = 0; index < rigidbodies.Count; index++)
             {
@@ -1996,6 +2235,47 @@ namespace Unitas.Bridge
                 }
             }
 
+            for (int index = 0; index < sphereColliders.Count; index++)
+            {
+                ParsedSphereColliderRecord record = sphereColliders[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneSphereColliders[shiftedEntity] = new SceneSphereColliderMetadata(
+                        record.Radius,
+                        record.Center,
+                        record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < boxColliders.Count; index++)
+            {
+                ParsedBoxColliderRecord record = boxColliders[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneBoxColliders[shiftedEntity] = new SceneBoxColliderMetadata(
+                        record.Size,
+                        record.Center,
+                        record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < capsuleColliders.Count; index++)
+            {
+                ParsedCapsuleColliderRecord record = capsuleColliders[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneCapsuleColliders[shiftedEntity] = new SceneCapsuleColliderMetadata(
+                        record.Radius,
+                        record.Height,
+                        record.Direction,
+                        record.Center,
+                        record.IsTrigger);
+                }
+            }
+
             _nextSceneEntityBase += localEntityIndex;
         }
 
@@ -2003,21 +2283,45 @@ namespace Unitas.Bridge
             int classId,
             string fileId,
             string gameObjectFileId,
+            string name,
             float mass,
             bool useGravity,
             bool isKinematic,
+            float radius,
+            float height,
+            int direction,
+            bool isTrigger,
+            Vector3 center,
+            Vector3 size,
             ref ulong localEntityIndex,
             Dictionary<string, ulong> gameObjectEntities,
-            List<ParsedRigidbodyRecord> rigidbodies)
+            Dictionary<string, string> gameObjectNames,
+            List<ParsedRigidbodyRecord> rigidbodies,
+            List<ParsedSphereColliderRecord> sphereColliders,
+            List<ParsedBoxColliderRecord> boxColliders,
+            List<ParsedCapsuleColliderRecord> capsuleColliders)
         {
             if (classId == 1 && !string.IsNullOrEmpty(fileId))
             {
                 gameObjectEntities[fileId] = localEntityIndex;
+                gameObjectNames[fileId] = name;
                 localEntityIndex++;
             }
             else if (classId == 54 && !string.IsNullOrEmpty(gameObjectFileId))
             {
                 rigidbodies.Add(new ParsedRigidbodyRecord(gameObjectFileId, mass, useGravity, isKinematic));
+            }
+            else if (classId == 65 && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                boxColliders.Add(new ParsedBoxColliderRecord(gameObjectFileId, size, center, isTrigger));
+            }
+            else if (classId == 135 && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                sphereColliders.Add(new ParsedSphereColliderRecord(gameObjectFileId, radius, center, isTrigger));
+            }
+            else if (classId == 136 && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                capsuleColliders.Add(new ParsedCapsuleColliderRecord(gameObjectFileId, radius, height, direction, center, isTrigger));
             }
         }
 
@@ -2094,6 +2398,49 @@ namespace Unitas.Bridge
             return fallback;
         }
 
+        private static string ParseStringValue(string line)
+        {
+            int colon = line.IndexOf(':', StringComparison.Ordinal);
+            if (colon < 0)
+            {
+                return string.Empty;
+            }
+            return line.Substring(colon + 1).Trim().Trim('"', '\'');
+        }
+
+        private static Vector3 ParseVector3Value(string line, Vector3 fallback)
+        {
+            int braceStart = line.IndexOf('{', StringComparison.Ordinal);
+            int braceEnd = line.LastIndexOf('}');
+            if (braceStart < 0 || braceEnd <= braceStart)
+            {
+                return fallback;
+            }
+
+            float x = fallback.x;
+            float y = fallback.y;
+            float z = fallback.z;
+            string inner = line.Substring(braceStart + 1, braceEnd - braceStart - 1);
+            string[] parts = inner.Split(',');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i].Trim();
+                if (part.StartsWith("x:", StringComparison.Ordinal))
+                {
+                    x = ParseFloatValue(part, fallback.x);
+                }
+                else if (part.StartsWith("y:", StringComparison.Ordinal))
+                {
+                    y = ParseFloatValue(part, fallback.y);
+                }
+                else if (part.StartsWith("z:", StringComparison.Ordinal))
+                {
+                    z = ParseFloatValue(part, fallback.z);
+                }
+            }
+            return new Vector3(x, y, z);
+        }
+
         private readonly struct SceneRigidbodyMetadata
         {
             public SceneRigidbodyMetadata(float mass, bool useGravity, bool isKinematic)
@@ -2108,6 +2455,60 @@ namespace Unitas.Bridge
             public bool UseGravity { get; }
 
             public bool IsKinematic { get; }
+        }
+
+        private readonly struct SceneSphereColliderMetadata
+        {
+            public SceneSphereColliderMetadata(float radius, Vector3 center, bool isTrigger)
+            {
+                Radius = radius;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public float Radius { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct SceneBoxColliderMetadata
+        {
+            public SceneBoxColliderMetadata(Vector3 size, Vector3 center, bool isTrigger)
+            {
+                Size = size;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public Vector3 Size { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct SceneCapsuleColliderMetadata
+        {
+            public SceneCapsuleColliderMetadata(float radius, float height, int direction, Vector3 center, bool isTrigger)
+            {
+                Radius = radius;
+                Height = height;
+                Direction = direction;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public float Radius { get; }
+
+            public float Height { get; }
+
+            public int Direction { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
         }
 
         private readonly struct ParsedRigidbodyRecord
@@ -2127,6 +2528,69 @@ namespace Unitas.Bridge
             public bool UseGravity { get; }
 
             public bool IsKinematic { get; }
+        }
+
+        private readonly struct ParsedSphereColliderRecord
+        {
+            public ParsedSphereColliderRecord(string gameObjectFileId, float radius, Vector3 center, bool isTrigger)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Radius = radius;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public float Radius { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedBoxColliderRecord
+        {
+            public ParsedBoxColliderRecord(string gameObjectFileId, Vector3 size, Vector3 center, bool isTrigger)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Size = size;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public Vector3 Size { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedCapsuleColliderRecord
+        {
+            public ParsedCapsuleColliderRecord(string gameObjectFileId, float radius, float height, int direction, Vector3 center, bool isTrigger)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Radius = radius;
+                Height = height;
+                Direction = direction;
+                Center = center;
+                IsTrigger = isTrigger;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public float Radius { get; }
+
+            public float Height { get; }
+
+            public int Direction { get; }
+
+            public Vector3 Center { get; }
+
+            public bool IsTrigger { get; }
         }
 
         private MonoBehaviour? FindScriptByEntity(ulong entity)
@@ -2219,6 +2683,7 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.PumpFrame();
+                InvokeScheduler.PumpFrame();
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -2231,6 +2696,7 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.OwnerDestroyed(script);
+                InvokeScheduler.OwnerDestroyed(script);
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -2243,6 +2709,7 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.StopAll(script);
+                InvokeScheduler.CancelAll(script);
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -2255,6 +2722,7 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.StopAll();
+                InvokeScheduler.StopAll();
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {

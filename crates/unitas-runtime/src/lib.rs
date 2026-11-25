@@ -6,6 +6,8 @@ pub mod particles;
 pub mod physics;
 mod runtime;
 pub mod window;
+pub mod resources;
+pub mod scripting;
 
 pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};

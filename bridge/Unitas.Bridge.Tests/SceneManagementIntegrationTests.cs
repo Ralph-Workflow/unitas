@@ -2,16 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Unitas.Bridge;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge.Tests
 {
-    /// <summary>
-    /// End-to-end coverage of the scene management slice against the real native runtime: the managed facade
-    /// drives the native scene ABI through <see cref="NativeSceneBackend"/>, so every assertion here proves
-    /// the native behaviour rather than a test double.
-    /// </summary>
     public static class SceneManagementIntegrationTests
     {
         private const string AlphaGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -46,11 +42,11 @@ namespace Unitas.Bridge.Tests
             Check.That("the alpha scene fixture exists", File.Exists(alpha));
             Check.That("the beta scene fixture exists", File.Exists(beta));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -75,11 +71,11 @@ namespace Unitas.Bridge.Tests
         {
             string alpha = ResolveFixture(AlphaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -106,11 +102,11 @@ namespace Unitas.Bridge.Tests
         {
             string alpha = ResolveFixture(AlphaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -146,11 +142,11 @@ namespace Unitas.Bridge.Tests
         {
             string alpha = ResolveFixture(AlphaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -197,11 +193,11 @@ namespace Unitas.Bridge.Tests
             string alpha = ResolveFixture(AlphaFixture);
             string beta = ResolveFixture(BetaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             PersistentSceneIntegrationRecorder persistent = new PersistentSceneIntegrationRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => persistent);
+            ScriptGlueRegistry.Register(AlphaGuid, () => persistent);
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -240,12 +236,12 @@ namespace Unitas.Bridge.Tests
             string alpha = ResolveFixture(AlphaFixture);
             string beta = ResolveFixture(BetaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             PersistentSceneIntegrationRecorder persistent = new PersistentSceneIntegrationRecorder();
             persistent.MarkSelfPersistent = true;
-            ScriptRegistry.Register(AlphaGuid, () => persistent);
+            ScriptGlueRegistry.Register(AlphaGuid, () => persistent);
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -283,11 +279,11 @@ namespace Unitas.Bridge.Tests
         {
             string alpha = ResolveFixture(AlphaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -335,9 +331,9 @@ namespace Unitas.Bridge.Tests
             string missing = ResolveFixture(MissingFixture);
             Check.That("the missing scene fixture does not exist", !File.Exists(missing));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -408,9 +404,9 @@ namespace Unitas.Bridge.Tests
         {
             string alpha = ResolveFixture(AlphaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -457,9 +453,9 @@ namespace Unitas.Bridge.Tests
             string missing = ResolveFixture(MissingFixture);
             Check.That("the missing scene fixture does not exist for async failure coverage", !File.Exists(missing));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -576,11 +572,11 @@ namespace Unitas.Bridge.Tests
             string alpha = ResolveFixture(AlphaFixture);
             string beta = ResolveFixture(BetaFixture);
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             AlphaSceneRecorder alphaScript = new AlphaSceneRecorder();
             BetaSceneRecorder betaScript = new BetaSceneRecorder();
-            ScriptRegistry.Register(AlphaGuid, () => alphaScript);
-            ScriptRegistry.Register(BetaGuid, () => betaScript);
+            ScriptGlueRegistry.Register(AlphaGuid, () => alphaScript);
+            ScriptGlueRegistry.Register(BetaGuid, () => betaScript);
 
             using (BridgeHost host = CreateHost(alpha))
             {
@@ -664,9 +660,6 @@ namespace Unitas.Bridge.Tests
         }
     }
 
-    /// <summary>
-    /// Scene provider with an explicit scene list so a test can point a scene name at a file that is not on disk.
-    /// </summary>
     internal sealed class IntegrationSceneProvider : ISceneProvider
     {
         private readonly List<string> _scenePaths = new List<string>();

@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Unitas.Bridge.Playtest;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -14,7 +15,7 @@ namespace Unitas.Bridge.Tests
 
         public PlaytestBallScript()
         {
-            gameObject.name = "Ball";
+            name = "Ball";
         }
 
         public override void Awake()
@@ -39,7 +40,7 @@ namespace Unitas.Bridge.Tests
 
         public PlaytestRecorderScript()
         {
-            gameObject.name = "Recorder";
+            name = "Recorder";
         }
 
         public override void Update()
@@ -58,7 +59,7 @@ namespace Unitas.Bridge.Tests
     {
         public PlaytestCameraScript()
         {
-            gameObject.name = "Main Camera";
+            name = "Main Camera";
         }
 
         public override void Awake()
@@ -85,7 +86,7 @@ namespace Unitas.Bridge.Tests
 
         public PlaytestQuadScript()
         {
-            gameObject.name = "Quad";
+            name = "Quad";
         }
 
         public override void Awake()
@@ -139,11 +140,11 @@ namespace Unitas.Bridge.Tests
 
         public static void Run()
         {
-            ScriptRegistry.Clear();
-            ScriptRegistry.Register(BallGuid, () => new PlaytestBallScript());
-            ScriptRegistry.Register(RecorderGuid, () => new PlaytestRecorderScript());
-            ScriptRegistry.Register(CameraGuid, () => new PlaytestCameraScript());
-            ScriptRegistry.Register(QuadGuid, () => new PlaytestQuadScript());
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(BallGuid, () => new PlaytestBallScript());
+            ScriptGlueRegistry.Register(RecorderGuid, () => new PlaytestRecorderScript());
+            ScriptGlueRegistry.Register(CameraGuid, () => new PlaytestCameraScript());
+            ScriptGlueRegistry.Register(QuadGuid, () => new PlaytestQuadScript());
             try
             {
                 FullPassScenario();
@@ -154,7 +155,7 @@ namespace Unitas.Bridge.Tests
             }
             finally
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
             }
         }
 

@@ -8,7 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Fixtures/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Unitas.Bridge/Unitas.Bridge.csproj" />
+    <ProjectReference Include="../Unitas.Scripting/Unitas.Scripting.csproj" />
+    <ProjectReference Include="../Unitas.Testing/Unitas.Testing.csproj" />
+    <ProjectReference Include="../Unitas.Testing/Shim/Unitas.Testing.NUnit.csproj" />
   </ItemGroup>
 
 </Project>

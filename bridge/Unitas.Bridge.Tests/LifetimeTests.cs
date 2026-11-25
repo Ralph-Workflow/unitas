@@ -80,13 +80,15 @@ namespace Unitas.Bridge.Tests
 
             Check.That("destroyed object throws MissingReferenceException on name access", threw);
 
-            LifetimeProbeScript probe = new LifetimeProbeScript();
+            GameObject probeOwner = new GameObject("ProbeOwner");
+            LifetimeProbeScript probe = probeOwner.AddComponent<LifetimeProbeScript>();
             Object.Destroy(probe);
             Check.That("destroyed script equals null", probe == null);
             Check.That("destroyed script is falsy", !(bool)probe);
             Check.Equal("destroyed script fires OnDisable then OnDestroy", "OnDisable, OnDestroy", probe.ObservedOrder);
             Object.Destroy(probe);
             Check.Equal("double destroy is a no-op", "OnDisable, OnDestroy", probe.ObservedOrder);
+            Object.Destroy(probeOwner);
 
             GameObject owner = new GameObject("Owner");
             LifetimeProbeScript owned = owner.AddComponent<LifetimeProbeScript>();
@@ -102,8 +104,9 @@ namespace Unitas.Bridge.Tests
         {
             LogRecorder.Clear();
             GameObject sentinel = new GameObject("DestroyOriginSentinel");
+            GameObject probeOwner = new GameObject("DestroyOriginProbeOwner");
+            DestroyOriginProbeScript probe = probeOwner.AddComponent<DestroyOriginProbeScript>();
             LogRecorder.CurrentOrigin = sentinel;
-            DestroyOriginProbeScript probe = new DestroyOriginProbeScript();
             Object.Destroy(probe);
             Check.That("destroy restores the previous log origin", ReferenceEquals(LogRecorder.CurrentOrigin, sentinel));
             LogRecorder.CurrentOrigin = null;
@@ -115,6 +118,8 @@ namespace Unitas.Bridge.Tests
                 entries.Count == 2
                 && ReferenceEquals(entries[0].Origin, probe)
                 && ReferenceEquals(entries[1].Origin, probe));
+            Object.Destroy(probeOwner);
+            Object.Destroy(sentinel);
         }
     }
 }

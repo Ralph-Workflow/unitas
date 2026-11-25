@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -65,9 +66,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 InputRecorderScript recorder = new InputRecorderScript { WatchedKey = KeyCode.Space };
-                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+                ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -149,9 +150,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 InputRecorderScript recorder = new InputRecorderScript { WatchedMouseButton = 0 };
-                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+                ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -236,9 +237,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 InputRecorderScript recorder = new InputRecorderScript();
-                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+                ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -296,9 +297,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 InputRecorderScript recorder = new InputRecorderScript { WatchedKey = KeyCode.RightArrow };
-                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+                ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -377,9 +378,9 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 InputRecorderScript recorder = new InputRecorderScript { WatchedKey = KeyCode.Space, WatchedMouseButton = 0 };
-                ScriptRegistry.Register(0UL, 1UL, () => recorder);
+                ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
 
                 using (BridgeHost host = new BridgeHost())
                 {

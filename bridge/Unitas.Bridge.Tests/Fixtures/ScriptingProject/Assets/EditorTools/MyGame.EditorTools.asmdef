@@ -1,0 +1,18 @@
+{
+  "name": "MyGame.EditorTools",
+  "rootNamespace": "MyGame.EditorTools",
+  "references": [
+    "MyGame.Core"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

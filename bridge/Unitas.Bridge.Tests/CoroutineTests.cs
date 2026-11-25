@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -200,7 +201,9 @@ namespace Unitas.Bridge.Tests
         private static void TestStopAndNonStopLifecycleRules()
         {
             CoroutineRecorderScript ownerA = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
+            GameObject goB = new GameObject("OwnerB");
             CoroutineRecorderScript ownerB = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
+            goB.AttachComponent(ownerB);
             CoroutineRecorderScript ownerC = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
             try
             {
@@ -248,6 +251,7 @@ namespace Unitas.Bridge.Tests
                 CoroutineScheduler.OwnerDestroyed(ownerA);
                 CoroutineScheduler.OwnerDestroyed(ownerB);
                 CoroutineScheduler.OwnerDestroyed(ownerC);
+                UnityEngine.Object.Destroy(goB);
             }
         }
 
@@ -258,9 +262,9 @@ namespace Unitas.Bridge.Tests
 
             float savedScale = Time.timeScale;
             Time.timeScale = 1f;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             CoroutineRecorderScript recorded = new CoroutineRecorderScript();
-            ScriptRegistry.Register(0UL, 1UL, () => recorded);
+            ScriptGlueRegistry.Register(0UL, 1UL, () => recorded);
 
             try
             {
@@ -294,12 +298,12 @@ namespace Unitas.Bridge.Tests
 
             float savedScale = Time.timeScale;
             Time.timeScale = 1f;
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             Collection<string> shared = new Collection<string>();
             CoroutineRecorderScript scriptA = new CoroutineRecorderScript(shared, "A", false);
             CoroutineRecorderScript scriptB = new CoroutineRecorderScript(shared, "B", false);
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
 
             try
             {
@@ -403,9 +407,9 @@ namespace Unitas.Bridge.Tests
             Check.That("Scripted scene exists for reload test", File.Exists(scriptedScene));
             Check.That("Plain scene exists for reload test", File.Exists(plainScene));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             CoroutineRecorderScript sceneScript = new CoroutineRecorderScript();
-            ScriptRegistry.Register(0UL, 1UL, () => sceneScript);
+            ScriptGlueRegistry.Register(0UL, 1UL, () => sceneScript);
 
             try
             {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -273,13 +274,13 @@ MonoBehaviour:
             Directory.CreateDirectory(tempDir);
             string scenePath = Path.Combine(tempDir, "render.unity");
             File.WriteAllText(scenePath, RenderSceneYaml);
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             RenderCameraScript? cameraScript = null;
             RenderQuadScript? quadScript = null;
             RenderLightScript? lightScript = null;
-            ScriptRegistry.Register(CameraGuid, () => cameraScript = new RenderCameraScript());
-            ScriptRegistry.Register(QuadGuid, () => quadScript = new RenderQuadScript());
-            ScriptRegistry.Register(LightGuid, () => lightScript = new RenderLightScript());
+            ScriptGlueRegistry.Register(CameraGuid, () => cameraScript = new RenderCameraScript());
+            ScriptGlueRegistry.Register(QuadGuid, () => quadScript = new RenderQuadScript());
+            ScriptGlueRegistry.Register(LightGuid, () => lightScript = new RenderLightScript());
             try
             {
                 using (BridgeHost host = new BridgeHost())
@@ -392,7 +393,7 @@ MonoBehaviour:
             }
             finally
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 if (Directory.Exists(tempDir))
                 {
                     Directory.Delete(tempDir, true);

@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -70,6 +71,12 @@ namespace Unitas.Bridge.Tests
             TestAnimatorDefaultsAndNullProvider();
             TestAnimatorControllerBinaryEncoding();
             TestEndToEndAnimatorControllerAndTransitions();
+            CoreApiTests.Run();
+            CompilationTests.Run();
+            EventsTests.Run();
+            ResourcesSceneTests.Run();
+            IdeGenerationTests.Run();
+            UtfRunnerTests.Run();
 
             if (Check.FailureCount > 0)
             {
@@ -251,9 +258,9 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Scene file exists", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             LifecycleScript recordedScript = new LifecycleScript();
-            ScriptRegistry.Register(0UL, 1UL, () => recordedScript);
+            ScriptGlueRegistry.Register(0UL, 1UL, () => recordedScript);
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -277,9 +284,9 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Collision scene file exists", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             CollisionRecorderScript recordedScript = new CollisionRecorderScript();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -335,9 +342,9 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Trigger scene file exists", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             TriggerRecorderScript recordedScript = new TriggerRecorderScript();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -392,9 +399,9 @@ namespace Unitas.Bridge.Tests
             Check.That("Scripted collision scene file exists", File.Exists(scriptedScene));
             Check.That("Plain collision scene file exists", File.Exists(plainScene));
 
-            ScriptRegistry.Clear();
+            ScriptGlueRegistry.Clear();
             CollisionRecorderScript recordedScript = new CollisionRecorderScript();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => recordedScript);
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -435,9 +442,9 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Physics query scene file exists", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new PhysicsQueryScript());
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -550,11 +557,11 @@ namespace Unitas.Bridge.Tests
             Time.timeScale = 1f;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 CharacterProbeScript? playerScript = null;
                 PlatformVelocityScript? platformScript = null;
-                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => playerScript = new CharacterProbeScript());
-                ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => platformScript = new PlatformVelocityScript());
+                ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => playerScript = new CharacterProbeScript());
+                ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => platformScript = new PlatformVelocityScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -864,9 +871,9 @@ namespace Unitas.Bridge.Tests
             AudioListener.pause = false;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 AudioStarterScript? starterScript = null;
-                ScriptRegistry.Register(0x1111111111111111UL, 0x2222222222222222UL, () => starterScript = new AudioStarterScript());
+                ScriptGlueRegistry.Register(0x1111111111111111UL, 0x2222222222222222UL, () => starterScript = new AudioStarterScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -1116,7 +1123,6 @@ namespace Unitas.Bridge.Tests
                 Animator animator = target.AddComponent<Animator>();
                 animator.runtimeAnimatorController = BuildAnimatorController();
 
-                // The first native tick only initializes pending scripts, so it does not advance the animation.
                 host.Tick(0.0);
 
                 AnimatorStateInfo info = animator.GetCurrentAnimatorStateInfo();

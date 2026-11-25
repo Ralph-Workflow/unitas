@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using Unitas.Bridge.Scripting;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -233,9 +234,9 @@ namespace Unitas.Bridge.Tests
             string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_query.unity");
             Check.That("Linecast scene file exists", File.Exists(scenePath));
 
-            ScriptRegistry.Clear();
-            ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
-            ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
+            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
 
             using (BridgeHost host = new BridgeHost())
             {
@@ -292,10 +293,10 @@ namespace Unitas.Bridge.Tests
             bool savedQueriesHitTriggers = Physics.queriesHitTriggers;
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 TriggerTargetScript? triggerScript = null;
-                ScriptRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => triggerScript = new TriggerTargetScript());
-                ScriptRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
+                ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => triggerScript = new TriggerTargetScript());
+                ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => new LinecastTargetScript());
 
                 using (BridgeHost host = new BridgeHost())
                 {
@@ -368,14 +369,14 @@ namespace Unitas.Bridge.Tests
 
             try
             {
-                ScriptRegistry.Clear();
+                ScriptGlueRegistry.Clear();
                 CapsuleTargetScript? pillarScript = null;
                 CapsuleTargetScript? defaultCapsuleScript = null;
-                ScriptRegistry.Register(
+                ScriptGlueRegistry.Register(
                     0x1111222233334444UL,
                     0x5555666677778888UL,
                     () => pillarScript = new CapsuleTargetScript(0.25f, 2f, 2, new Vector3(0.1f, 0.2f, -0.3f), true));
-                ScriptRegistry.Register(
+                ScriptGlueRegistry.Register(
                     0x2222222233334444UL,
                     0x5555666677778888UL,
                     () => defaultCapsuleScript = new CapsuleTargetScript(0.5f, 2f, 1, Vector3.zero, false));
@@ -624,7 +625,7 @@ MonoBehaviour:
                     UnityEngine.Object.Destroy(placeholder);
                 }
 
-                CapsuleCollider capsule = gameObject.AddComponent<CapsuleCollider>();
+                CapsuleCollider capsule = gameObject.GetComponent<CapsuleCollider>() ?? gameObject.AddComponent<CapsuleCollider>();
                 capsule.radius = _radius;
                 capsule.height = _height;
                 capsule.direction = _direction;
