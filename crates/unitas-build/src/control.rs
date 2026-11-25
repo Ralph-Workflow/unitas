@@ -585,7 +585,9 @@ mod tests {
             Ok(Request::ToolsDescribe)
         );
         assert_eq!(
-            parse_request("{\"cmd\":\"tool_invoke\",\"name\":\"spawn\",\"arguments\":{\"count\":2}}"),
+            parse_request(
+                "{\"cmd\":\"tool_invoke\",\"name\":\"spawn\",\"arguments\":{\"count\":2}}"
+            ),
             Ok(Request::ToolInvoke {
                 name: String::from("spawn"),
                 arguments: json!({"count": 2})
