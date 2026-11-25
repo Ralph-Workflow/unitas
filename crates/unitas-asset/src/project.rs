@@ -138,8 +138,7 @@ impl Project {
         trust: &TrustStore,
         invocation: InvocationTrust,
     ) -> Result<(Project, OpenReport), ProjectError> {
-        let capabilities =
-            trust.capabilities_with_invocation(&root.to_string_lossy(), invocation);
+        let capabilities = trust.capabilities_with_invocation(&root.to_string_lossy(), invocation);
         Self::open_with_capabilities(root, capabilities)
     }
 
@@ -228,10 +227,7 @@ impl Project {
         Ok(preview)
     }
 
-    pub fn preview_unitypackage(
-        &self,
-        bytes: &[u8],
-    ) -> Result<UnityPackagePreview, ProjectError> {
+    pub fn preview_unitypackage(&self, bytes: &[u8]) -> Result<UnityPackagePreview, ProjectError> {
         let entries = parse_unitypackage_bytes(bytes)?;
         let mut items = Vec::new();
         let mut guid_collisions = Vec::new();
@@ -865,20 +861,19 @@ impl ProjectCompatibilityReport {
                 .iter()
                 .any(|f| f.identity == entry.guid || f.identity == entry.path.to_string_lossy())
         });
-        let all_packages_accounted = report.recognized_packages.iter().all(|pkg| {
-            self.package_findings.iter().any(|f| &f.identity == pkg)
-        });
-        let all_settings_accounted = report.recognized_settings.iter().all(|setting| {
-            self.setting_findings.iter().any(|f| &f.identity == setting)
-        });
+        let all_packages_accounted = report
+            .recognized_packages
+            .iter()
+            .all(|pkg| self.package_findings.iter().any(|f| &f.identity == pkg));
+        let all_settings_accounted = report
+            .recognized_settings
+            .iter()
+            .all(|setting| self.setting_findings.iter().any(|f| &f.identity == setting));
         all_assets_accounted && all_packages_accounted && all_settings_accounted
     }
 }
 
-pub fn build_compatibility_report(
-    _root: &Path,
-    report: &OpenReport,
-) -> ProjectCompatibilityReport {
+pub fn build_compatibility_report(_root: &Path, report: &OpenReport) -> ProjectCompatibilityReport {
     let asset_findings = report
         .inventory
         .entries

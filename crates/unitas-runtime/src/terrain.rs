@@ -100,7 +100,8 @@ impl TerrainWorld {
         direction: [f64; 3],
         max_distance: f64,
     ) -> Option<TerrainRayHit> {
-        self.terrain(entity)?.raycast(origin, direction, max_distance)
+        self.terrain(entity)?
+            .raycast(origin, direction, max_distance)
     }
 
     pub fn register_wind_zone(&mut self, entity: EntityId, wind_zone: WindZone) {

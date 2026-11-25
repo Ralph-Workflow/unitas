@@ -2,11 +2,10 @@ use unitas_asset::dependencies::{
     AssetImportState, ImportCandidate, ImportDiagnostic, ImportOutcome, ImportSession,
 };
 use unitas_asset::texture::import::{
-    apply_max_size, decode_texture, generate_mip_chain, import_texture,
-    import_texture_for_target, srgb_to_linear, texture_import_outcome, DecodedTexture,
-    FilterMode, SpriteMode, TextureCompressionQuality, TextureFormat, TextureImportError,
-    TextureImportSettings, TextureImporterType, TexturePlatformFormat, TexturePlatformSettings,
-    WrapMode,
+    apply_max_size, decode_texture, generate_mip_chain, import_texture, import_texture_for_target,
+    srgb_to_linear, texture_import_outcome, DecodedTexture, FilterMode, SpriteMode,
+    TextureCompressionQuality, TextureFormat, TextureImportError, TextureImportSettings,
+    TextureImporterType, TexturePlatformFormat, TexturePlatformSettings, WrapMode,
 };
 use unitas_asset::texture::jpeg::decode_jpeg;
 use unitas_asset::texture::png::decode_png;
@@ -1134,12 +1133,22 @@ fn build_exr_zip(width: u32, height: u32, pixels: &[(f32, f32, f32, f32)]) -> Ve
     exr_attribute(&mut bytes, "dataWindow", "box2i", &window);
     exr_attribute(&mut bytes, "displayWindow", "box2i", &window);
     exr_attribute(&mut bytes, "lineOrder", "lineOrder", &[0u8]);
-    exr_attribute(&mut bytes, "pixelAspectRatio", "float", &1.0f32.to_le_bytes());
+    exr_attribute(
+        &mut bytes,
+        "pixelAspectRatio",
+        "float",
+        &1.0f32.to_le_bytes(),
+    );
     let mut center = Vec::new();
     center.extend_from_slice(&0.0f32.to_le_bytes());
     center.extend_from_slice(&0.0f32.to_le_bytes());
     exr_attribute(&mut bytes, "screenWindowCenter", "v2f", &center);
-    exr_attribute(&mut bytes, "screenWindowWidth", "float", &1.0f32.to_le_bytes());
+    exr_attribute(
+        &mut bytes,
+        "screenWindowWidth",
+        "float",
+        &1.0f32.to_le_bytes(),
+    );
     bytes.push(0);
 
     let offset_table = bytes.len();
@@ -1154,8 +1163,8 @@ fn build_exr_zip(width: u32, height: u32, pixels: &[(f32, f32, f32, f32)]) -> Ve
 }
 
 #[test]
-fn prj004_outcome14_exr_imports_with_its_float_channels(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn prj004_outcome14_exr_imports_with_its_float_channels() -> Result<(), Box<dyn std::error::Error>>
+{
     let pixels = [
         (1.0f32, 0.0f32, 0.0f32, 1.0f32),
         (0.0, 1.0, 0.0, 1.0),
@@ -1221,7 +1230,10 @@ fn prj004_outcome14_sprite_multiple_slices_keep_their_names_rects_pivots_and_ide
     assert_eq!(restored, settings);
     assert_eq!(restored.sprite_slices[0].name, "Hero_Slice_A");
 
-    let rows = vec![vec![10u8, 20, 30, 40, 50, 60], vec![70, 80, 90, 100, 110, 120]];
+    let rows = vec![
+        vec![10u8, 20, 30, 40, 50, 60],
+        vec![70, 80, 90, 100, 110, 120],
+    ];
     let png = build_png(&PngOptions {
         width: 2,
         height: 2,
@@ -1272,8 +1284,7 @@ fn prj004_outcome6_source_preview_and_runtime_texture_are_distinguishable(
     );
     assert_eq!((imported.texture.width, imported.texture.height), (2, 2));
     assert_ne!(
-        imported.texture.pixels,
-        imported.source.pixels,
+        imported.texture.pixels, imported.source.pixels,
         "the runtime texture differs from the source preview"
     );
     Ok(())
@@ -1291,9 +1302,7 @@ fn import_candidate(path: &str, guid: &str, source: Vec<u8>) -> ImportCandidate 
     }
 }
 
-fn texture_importer(
-    candidate: &ImportCandidate,
-) -> ImportOutcome {
+fn texture_importer(candidate: &ImportCandidate) -> ImportOutcome {
     let path = candidate.path.display().to_string();
     match import_texture(&candidate.source, &path, &TextureImportSettings::default()) {
         Ok(imported) => texture_import_outcome(&path, Ok(&imported)),
@@ -1316,11 +1325,31 @@ fn prj004_outcome19_corrupt_textures_end_as_a_partial_success_and_an_interrupted
     let corrupt = vec![0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01];
 
     let candidates = vec![
-        import_candidate("Assets/Textures/Good_A.png", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", good.clone()),
-        import_candidate("Assets/Textures/Corrupt_1.png", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", corrupt.clone()),
-        import_candidate("Assets/Textures/Corrupt_2.png", "cccccccccccccccccccccccccccccccc", corrupt.clone()),
-        import_candidate("Assets/Textures/Corrupt_3.png", "dddddddddddddddddddddddddddddddd", corrupt.clone()),
-        import_candidate("Assets/Textures/Good_B.png", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", good.clone()),
+        import_candidate(
+            "Assets/Textures/Good_A.png",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            good.clone(),
+        ),
+        import_candidate(
+            "Assets/Textures/Corrupt_1.png",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            corrupt.clone(),
+        ),
+        import_candidate(
+            "Assets/Textures/Corrupt_2.png",
+            "cccccccccccccccccccccccccccccccc",
+            corrupt.clone(),
+        ),
+        import_candidate(
+            "Assets/Textures/Corrupt_3.png",
+            "dddddddddddddddddddddddddddddddd",
+            corrupt.clone(),
+        ),
+        import_candidate(
+            "Assets/Textures/Good_B.png",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            good.clone(),
+        ),
     ];
 
     let mut session = ImportSession::new();
@@ -1361,7 +1390,10 @@ fn prj004_outcome19_corrupt_textures_end_as_a_partial_success_and_an_interrupted
 
     let resumed = interrupted.run(&candidates, &mut texture_importer);
     assert_eq!(resumed.reused, 2, "unchanged results are reused");
-    assert_eq!(resumed.imported, 3, "the remaining assets are imported again");
+    assert_eq!(
+        resumed.imported, 3,
+        "the remaining assets are imported again"
+    );
     assert!(resumed.partial_success);
     let reused = resumed
         .record(std::path::Path::new("Assets/Textures/Good_A.png"))
@@ -1391,8 +1423,16 @@ fn prj004_outcome5_every_asset_that_is_not_fully_usable_has_a_state_and_a_conseq
     let gif = two_frame_animated_gif_2x2();
     let corrupt = vec![0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01];
     let candidates = vec![
-        import_candidate("Assets/Textures/Explosion.gif", "ffffffffffffffffffffffffffffffff", gif),
-        import_candidate("Assets/Textures/Broken.png", "11111111111111111111111111111111", corrupt),
+        import_candidate(
+            "Assets/Textures/Explosion.gif",
+            "ffffffffffffffffffffffffffffffff",
+            gif,
+        ),
+        import_candidate(
+            "Assets/Textures/Broken.png",
+            "11111111111111111111111111111111",
+            corrupt,
+        ),
     ];
 
     let mut session = ImportSession::new();

@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_asset::binary_ser::{Endianness, SUPPORTED_VERSION};
-use unitas_asset::dependencies::{
-    DependencyGraph, ImportCandidate, ImportOutcome, ImportSession,
-};
+use unitas_asset::dependencies::{DependencyGraph, ImportCandidate, ImportOutcome, ImportSession};
 use unitas_asset::project::{Project, BASELINE_UNITY_VERSION};
 use unitas_asset::scene_save;
 use unitas_asset::trust::TrustStore;
@@ -613,8 +611,8 @@ fn referenced_texture_project(root: &Path) -> std::io::Result<()> {
 }
 
 #[test]
-fn prj002_outcome3_move_delete_and_restore_preserve_expose_and_restore_the_reference(
-) -> TestResult {
+fn prj002_outcome3_move_delete_and_restore_preserve_expose_and_restore_the_reference() -> TestResult
+{
     let root = temp_dir("dependencies-move-delete-restore")?;
     let project_root = root.join("project");
     referenced_texture_project(&project_root)?;
@@ -677,7 +675,10 @@ fn prj004_outcome6_reimport_touches_only_dependency_affected_assets() -> TestRes
     let root = temp_dir("dependencies-reimport")?;
     let project_root = root.join("project");
     referenced_texture_project(&project_root)?;
-    write_file(&project_root.join("Assets/Textures/Unrelated.png"), "other-png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Unrelated.png"),
+        "other-png-bytes",
+    )?;
     write_file(
         &project_root.join("Assets/Textures/Unrelated.png.meta"),
         &meta(UNRELATED_GUID, "TextureImporter:"),
@@ -720,7 +721,10 @@ fn prj004_outcome6_reimport_touches_only_dependency_affected_assets() -> TestRes
     let mut session = ImportSession::new();
     let mut importer = |_: &ImportCandidate| ImportOutcome::ready();
 
-    let first = session.run(&[albedo.clone(), material.clone(), unrelated.clone()], &mut importer);
+    let first = session.run(
+        &[albedo.clone(), material.clone(), unrelated.clone()],
+        &mut importer,
+    );
     assert_eq!(first.imported, 3);
     assert_eq!(first.reused, 0);
 
@@ -734,7 +738,10 @@ fn prj004_outcome6_reimport_touches_only_dependency_affected_assets() -> TestRes
         &mut importer,
     );
 
-    assert_eq!(second.imported, 2, "only the changed asset and its dependent");
+    assert_eq!(
+        second.imported, 2,
+        "only the changed asset and its dependent"
+    );
     assert_eq!(second.reused, 1, "the unrelated asset keeps its result");
     let changed_record = second
         .record(Path::new("Assets/Textures/Albedo.png"))

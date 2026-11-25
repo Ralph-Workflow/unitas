@@ -392,7 +392,11 @@ impl ParticleSystem {
     }
 
     pub fn set_external_forces_multiplier(&mut self, multiplier: f32) {
-        self.external_forces_multiplier = if multiplier.is_finite() { multiplier } else { 0.0 };
+        self.external_forces_multiplier = if multiplier.is_finite() {
+            multiplier
+        } else {
+            0.0
+        };
     }
 
     pub fn external_forces_multiplier(&self) -> f32 {

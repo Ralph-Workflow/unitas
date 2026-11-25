@@ -187,7 +187,11 @@ pub fn import_text_asset(bytes: &[u8], file_name: &str) -> Result<TextAssetConte
     })
 }
 
-pub fn identify_asset_family(path: &Path, bytes: &[u8], meta_text: Option<&str>) -> Option<IdentifiedAssetFamily> {
+pub fn identify_asset_family(
+    path: &Path,
+    bytes: &[u8],
+    meta_text: Option<&str>,
+) -> Option<IdentifiedAssetFamily> {
     let asset_label = path.display().to_string();
     let ext = path
         .extension()

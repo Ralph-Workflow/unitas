@@ -389,7 +389,12 @@ impl AnimationClip {
         }
     }
 
-    fn collect_events_reverse(&self, prev_time: f32, current_time: f32, d: f32) -> Vec<AnimationEvent> {
+    fn collect_events_reverse(
+        &self,
+        prev_time: f32,
+        current_time: f32,
+        d: f32,
+    ) -> Vec<AnimationEvent> {
         match self.wrap_mode {
             WrapMode::Once | WrapMode::ClampForever => {
                 if prev_time <= 0.0 {
@@ -434,12 +439,9 @@ impl AnimationClip {
                     if seg_hi > seg_lo + EVENT_EPSILON {
                         let include_hi = offset > 0;
                         if cycle.rem_euclid(2) == 0 {
-                            fired.extend(self.events_in_window_descending(
-                                seg_lo,
-                                seg_hi,
-                                true,
-                                include_hi,
-                            ));
+                            fired.extend(
+                                self.events_in_window_descending(seg_lo, seg_hi, true, include_hi),
+                            );
                         } else {
                             let fwd_lo = d - seg_hi;
                             let fwd_hi = d - seg_lo;

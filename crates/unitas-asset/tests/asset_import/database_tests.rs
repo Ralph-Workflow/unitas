@@ -326,15 +326,26 @@ fn prj002_outcome3_move_rename_delete_and_restore_preserve_expose_and_restore_re
 
     let (mut project, _) = Project::open(&project_root, &store)?;
     let ref_guid = referenced_material_guid(&project_root.join("Assets/Scenes/Main.unity"))?;
-    assert_eq!(ref_guid, MATERIAL_GUID, "PRJ-002 Outcome 3 initial GUID matches");
+    assert_eq!(
+        ref_guid, MATERIAL_GUID,
+        "PRJ-002 Outcome 3 initial GUID matches"
+    );
 
     project.rename_asset(Path::new("Assets/Materials/Brick.mat"), "BrickRenamed.mat")?;
     match project.inventory().lookup(&ref_guid) {
         GuidLookup::Asset(entry) => {
-            assert_eq!(entry.guid, MATERIAL_GUID, "PRJ-002 Outcome 3 rename preserves GUID");
-            assert_eq!(entry.path, PathBuf::from("Assets/Materials/BrickRenamed.mat"));
+            assert_eq!(
+                entry.guid, MATERIAL_GUID,
+                "PRJ-002 Outcome 3 rename preserves GUID"
+            );
+            assert_eq!(
+                entry.path,
+                PathBuf::from("Assets/Materials/BrickRenamed.mat")
+            );
         }
-        other => return Err(format!("PRJ-002 Outcome 3 expected renamed asset, got {other:?}").into()),
+        other => {
+            return Err(format!("PRJ-002 Outcome 3 expected renamed asset, got {other:?}").into())
+        }
     }
 
     project.move_asset(
@@ -343,10 +354,15 @@ fn prj002_outcome3_move_rename_delete_and_restore_preserve_expose_and_restore_re
     )?;
     match project.inventory().lookup(&ref_guid) {
         GuidLookup::Asset(entry) => {
-            assert_eq!(entry.guid, MATERIAL_GUID, "PRJ-002 Outcome 3 move preserves GUID");
+            assert_eq!(
+                entry.guid, MATERIAL_GUID,
+                "PRJ-002 Outcome 3 move preserves GUID"
+            );
             assert_eq!(entry.path, PathBuf::from("Assets/Moved/BrickFinal.mat"));
         }
-        other => return Err(format!("PRJ-002 Outcome 3 expected moved asset, got {other:?}").into()),
+        other => {
+            return Err(format!("PRJ-002 Outcome 3 expected moved asset, got {other:?}").into())
+        }
     }
 
     project.delete_asset(Path::new("Assets/Moved/BrickFinal.mat"))?;
@@ -364,10 +380,15 @@ fn prj002_outcome3_move_rename_delete_and_restore_preserve_expose_and_restore_re
     project.restore_asset(Path::new("Assets/Moved/BrickFinal.mat"))?;
     match project.inventory().lookup(&ref_guid) {
         GuidLookup::Asset(entry) => {
-            assert_eq!(entry.guid, MATERIAL_GUID, "PRJ-002 Outcome 3 restore re-resolves reference");
+            assert_eq!(
+                entry.guid, MATERIAL_GUID,
+                "PRJ-002 Outcome 3 restore re-resolves reference"
+            );
             assert_eq!(entry.path, PathBuf::from("Assets/Moved/BrickFinal.mat"));
         }
-        other => return Err(format!("PRJ-002 Outcome 3 expected restored asset, got {other:?}").into()),
+        other => {
+            return Err(format!("PRJ-002 Outcome 3 expected restored asset, got {other:?}").into())
+        }
     }
 
     fs::remove_dir_all(&root)?;
@@ -468,8 +489,7 @@ fn prj002_prj004_outcome17_json_and_bytes_import_as_text_asset_and_avatar_mask_a
     let json_asset = import_text_asset(json_payload, "Assets/Data/config.json")?;
     assert_eq!(json_asset.name, "config");
     assert_eq!(
-        json_asset.text,
-        r#"{"level":42,"title":"Dungeon"}"#,
+        json_asset.text, r#"{"level":42,"title":"Dungeon"}"#,
         "PRJ-002/PRJ-004 Outcome 17 .json TextAsset text matches file content"
     );
     assert_eq!(
@@ -489,8 +509,9 @@ fn prj002_prj004_outcome17_json_and_bytes_import_as_text_asset_and_avatar_mask_a
         "PRJ-002/PRJ-004 Outcome 17 .bytes TextAsset text matches lossy UTF-8 content"
     );
 
-    let json_family = identify_asset_family(Path::new("Assets/Data/config.json"), json_payload, None)
-        .ok_or("expected family for config.json")?;
+    let json_family =
+        identify_asset_family(Path::new("Assets/Data/config.json"), json_payload, None)
+            .ok_or("expected family for config.json")?;
     assert_eq!(json_family.family, RecognizedAssetFamily::TextAsset);
     assert_eq!(json_family.family.class_name(), "TextAsset");
     assert_eq!(json_family.outcome.state, AssetImportState::Ready);
@@ -550,7 +571,9 @@ fn prj002_prj004_outcome17_json_and_bytes_import_as_text_asset_and_avatar_mask_a
     let atlas_v2_family = identify_asset_family(
         Path::new("Assets/Sprites/UIAtlas.spriteatlasv2"),
         sprite_atlas_v2_yaml,
-        Some("fileFormatVersion: 2\nguid: 88888888888888888888888888888888\nSpriteAtlasImporter:\n"),
+        Some(
+            "fileFormatVersion: 2\nguid: 88888888888888888888888888888888\nSpriteAtlasImporter:\n",
+        ),
     )
     .ok_or("expected family for UIAtlas.spriteatlasv2")?;
     assert_eq!(

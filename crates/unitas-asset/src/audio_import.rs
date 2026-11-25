@@ -788,7 +788,13 @@ pub fn import_audio_for_target(
         return Err(AudioImportError::NotAiff);
     };
     let mut notes = Vec::new();
-    apply_import_transforms(&mut clip, settings, &target_settings, build_target, &mut notes);
+    apply_import_transforms(
+        &mut clip,
+        settings,
+        &target_settings,
+        build_target,
+        &mut notes,
+    );
 
     Ok(AudioImportResult {
         clip,

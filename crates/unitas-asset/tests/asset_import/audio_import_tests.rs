@@ -931,7 +931,6 @@ fn wav_with_unsupported_encoding_or_malformed_header_reports_explicit_diagnostic
     );
 }
 
-
 #[test]
 fn prj004_outcome16_aiff_imports_with_per_target_vorbis_and_force_to_mono(
 ) -> Result<(), Box<dyn std::error::Error>> {

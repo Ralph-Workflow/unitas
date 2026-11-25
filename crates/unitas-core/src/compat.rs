@@ -546,7 +546,12 @@ pub fn assess_package(
     resolved_version: &str,
     is_locally_modified_embedded: bool,
 ) -> AssessedPackage {
-    assess_package_for_baseline(package_id, resolved_version, is_locally_modified_embedded, false)
+    assess_package_for_baseline(
+        package_id,
+        resolved_version,
+        is_locally_modified_embedded,
+        false,
+    )
 }
 
 pub fn assess_package_for_baseline(
@@ -644,11 +649,19 @@ fn version_migrates_from_earlier_lts_line(version: &str, line: &str) -> bool {
     let Some(target_prefix) = line.strip_suffix(".x") else {
         return false;
     };
-    let target_major = match target_prefix.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+    let target_major = match target_prefix
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+    {
         Some(v) => v,
         None => return false,
     };
-    let resolved_major = match version.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+    let resolved_major = match version
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+    {
         Some(v) => v,
         None => return false,
     };
@@ -1769,7 +1782,10 @@ pub fn build_semantic_finding(
         behavior,
         consequence,
     )
-    .with_condition(format!("reference: Unity 2022.3 LTS ({})", catalog_entry.owning_spec))
+    .with_condition(format!(
+        "reference: Unity 2022.3 LTS ({})",
+        catalog_entry.owning_spec
+    ))
     .with_condition(format!("benchmark: {benchmark}"));
     if let Some(diff) = found_difference {
         if !diff.trim().is_empty() {

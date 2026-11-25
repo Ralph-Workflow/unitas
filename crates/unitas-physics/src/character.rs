@@ -332,22 +332,12 @@ impl CharacterController {
 
         let lateral_motion = [total_motion[0], 0.0, total_motion[2]];
         if vector_length(lateral_motion) > MOTION_EPSILON {
-            position = self.resolve_lateral(
-                world,
-                position,
-                lateral_motion,
-                &mut outcome,
-            );
+            position = self.resolve_lateral(world, position, lateral_motion, &mut outcome);
         }
 
         let vertical_motion = [0.0, total_motion[1], 0.0];
         if vertical_motion[1].abs() > MOTION_EPSILON {
-            position = self.resolve_vertical(
-                world,
-                position,
-                vertical_motion[1],
-                &mut outcome,
-            );
+            position = self.resolve_vertical(world, position, vertical_motion[1], &mut outcome);
         }
 
         if total_motion[1] <= MOTION_EPSILON {

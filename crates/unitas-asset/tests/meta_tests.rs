@@ -139,9 +139,13 @@ fn prj003_outcome2_moving_an_asset_with_its_meta_preserves_the_guid_and_every_re
     project.move_asset(material_relative, moved_relative)?;
 
     assert!(!project_root.join(material_relative).is_file());
-    assert!(!project_root.join("Assets/Materials/Brick.mat.meta").is_file());
+    assert!(!project_root
+        .join("Assets/Materials/Brick.mat.meta")
+        .is_file());
     assert!(project_root.join(moved_relative).is_file());
-    assert!(project_root.join("Assets/Materials/MovedBrick.mat.meta").is_file());
+    assert!(project_root
+        .join("Assets/Materials/MovedBrick.mat.meta")
+        .is_file());
 
     let index = GuidIndex::build(&project_root)?;
     assert_eq!(
@@ -161,7 +165,10 @@ fn prj003_outcome2_moving_an_asset_with_its_meta_preserves_the_guid_and_every_re
         .and_then(Node::as_str)
         .ok_or("the material reference lost its guid")?;
     assert_eq!(reference_guid, guid);
-    assert_eq!(reference.get("fileID").and_then(Node::as_i64), Some(2100000));
+    assert_eq!(
+        reference.get("fileID").and_then(Node::as_i64),
+        Some(2100000)
+    );
     assert_eq!(
         index.get(reference_guid),
         Some(project_root.join(moved_relative).as_path())

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use unitas_core::EntityId;
@@ -504,12 +505,10 @@ impl NavMeshAgent {
                 let overlap = min_dist - dist;
                 let prio_i = agents[i].avoidance_priority;
                 let prio_j = agents[j].avoidance_priority;
-                let (weight_i, weight_j) = if prio_i < prio_j {
-                    (0.0, 1.0)
-                } else if prio_j < prio_i {
-                    (1.0, 0.0)
-                } else {
-                    (0.5, 0.5)
+                let (weight_i, weight_j) = match prio_i.cmp(&prio_j) {
+                    Ordering::Less => (0.0, 1.0),
+                    Ordering::Greater => (1.0, 0.0),
+                    Ordering::Equal => (0.5, 0.5),
                 };
 
                 let lateral = [-diff[2], 0.0, diff[0]];
@@ -526,11 +525,7 @@ impl NavMeshAgent {
                     diff
                 };
                 let push_len = vector_length(push_dir).max(POSITION_EPSILON);
-                let unit_push = [
-                    push_dir[0] / push_len,
-                    0.0,
-                    push_dir[2] / push_len,
-                ];
+                let unit_push = [push_dir[0] / push_len, 0.0, push_dir[2] / push_len];
 
                 if weight_i > 0.0 {
                     let candidate_i = [

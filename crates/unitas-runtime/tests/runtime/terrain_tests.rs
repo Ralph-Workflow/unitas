@@ -223,8 +223,8 @@ fn terrain_registration_rejects_duplicate_and_unknown_entities() -> TestResult {
 }
 
 #[test]
-fn env_001_story_11_12_16_runtime_terrain_raycast_holes_wind_zone_and_instanced_draw(
-) -> TestResult {
+fn env_001_story_11_12_16_runtime_terrain_raycast_holes_wind_zone_and_instanced_draw() -> TestResult
+{
     let data = flat_data(RESOLUTION, TERRAIN_SIZE, FLAT_HEIGHT)?;
     data.set_hole(0, 0, true);
     let creator_proto = data.add_tree_prototype(TreePrototype::tree_creator("TreeCreator_Oak", 3));

@@ -2213,8 +2213,7 @@ fn apply_resolution(
                     .iter()
                     .find(|obj| obj.file_id == resolution.file_id)
                     .cloned();
-                ours.objects
-                    .retain(|obj| obj.file_id != resolution.file_id);
+                ours.objects.retain(|obj| obj.file_id != resolution.file_id);
                 if let Some(obj) = theirs_obj {
                     ours.objects.push(obj);
                 }
@@ -2226,8 +2225,7 @@ fn apply_resolution(
                     .into_iter()
                     .find(|obj| obj.file_id == resolution.file_id)
                 {
-                    ours.objects
-                        .retain(|obj| obj.file_id != resolution.file_id);
+                    ours.objects.retain(|obj| obj.file_id != resolution.file_id);
                     theirs
                         .objects
                         .retain(|obj| obj.file_id != resolution.file_id);
@@ -2352,7 +2350,11 @@ impl fmt::Display for WorkspaceGuardError {
                 )
             }
             WorkspaceGuardError::UntrackedFile { path } => {
-                write!(formatter, "file is not tracked in workspace guard: {}", path.display())
+                write!(
+                    formatter,
+                    "file is not tracked in workspace guard: {}",
+                    path.display()
+                )
             }
             WorkspaceGuardError::UnresolvedMergeConflict { path, conflicts } => {
                 write!(
@@ -2363,7 +2365,11 @@ impl fmt::Display for WorkspaceGuardError {
                 )
             }
             WorkspaceGuardError::MergeFailed { path, error } => {
-                write!(formatter, "merge validation failed for {}: {error}", path.display())
+                write!(
+                    formatter,
+                    "merge validation failed for {}: {error}",
+                    path.display()
+                )
             }
         }
     }
@@ -2398,17 +2404,17 @@ impl WorkspaceMergeGuard {
     }
 
     pub fn record_unsaved_edit(&mut self, path: &Path, origin: FileChangeOrigin, bytes: &[u8]) {
-        let entry = self
-            .files
-            .entry(path.to_path_buf())
-            .or_insert_with(|| TrackedFileAccountability {
-                path: path.to_path_buf(),
-                state: FileAccountabilityState::Clean,
-                origins: Vec::new(),
-                unresolved_conflicts: Vec::new(),
-                saved_bytes: Vec::new(),
-                working_bytes: Vec::new(),
-            });
+        let entry =
+            self.files
+                .entry(path.to_path_buf())
+                .or_insert_with(|| TrackedFileAccountability {
+                    path: path.to_path_buf(),
+                    state: FileAccountabilityState::Clean,
+                    origins: Vec::new(),
+                    unresolved_conflicts: Vec::new(),
+                    saved_bytes: Vec::new(),
+                    working_bytes: Vec::new(),
+                });
         entry.working_bytes = bytes.to_vec();
         if !entry.origins.contains(&origin) {
             entry.origins.push(origin);
@@ -2424,17 +2430,17 @@ impl WorkspaceMergeGuard {
         external_bytes: &[u8],
         conflicts: Vec<MergeConflict>,
     ) {
-        let entry = self
-            .files
-            .entry(path.to_path_buf())
-            .or_insert_with(|| TrackedFileAccountability {
-                path: path.to_path_buf(),
-                state: FileAccountabilityState::Clean,
-                origins: Vec::new(),
-                unresolved_conflicts: Vec::new(),
-                saved_bytes: external_bytes.to_vec(),
-                working_bytes: external_bytes.to_vec(),
-            });
+        let entry =
+            self.files
+                .entry(path.to_path_buf())
+                .or_insert_with(|| TrackedFileAccountability {
+                    path: path.to_path_buf(),
+                    state: FileAccountabilityState::Clean,
+                    origins: Vec::new(),
+                    unresolved_conflicts: Vec::new(),
+                    saved_bytes: external_bytes.to_vec(),
+                    working_bytes: external_bytes.to_vec(),
+                });
         if !entry
             .origins
             .contains(&FileChangeOrigin::ExternalSourceControl)
@@ -2576,5 +2582,3 @@ impl WorkspaceMergeGuard {
         Ok(entry.clone())
     }
 }
-
-

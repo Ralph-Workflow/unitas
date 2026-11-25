@@ -285,11 +285,8 @@ pub fn import_fbx_with_settings(
 
     let mut clips = Vec::new();
     for clip_def in &settings.clip_definitions {
-        let mut keyframes = build_clip_keyframes(
-            clip_def.first_frame,
-            clip_def.last_frame,
-            &raw_curve_values,
-        );
+        let mut keyframes =
+            build_clip_keyframes(clip_def.first_frame, clip_def.last_frame, &raw_curve_values);
         if clip_def.loop_pose && keyframes.len() >= 2 {
             let start_val = keyframes[0].value;
             if let Some(last) = keyframes.last_mut() {
@@ -395,13 +392,7 @@ fn collect_bundle_from_node(
         _ => {}
     }
     for child in &node.children {
-        collect_bundle_from_node(
-            child,
-            meshes,
-            bone_names,
-            material_names,
-            raw_curve_values,
-        )?;
+        collect_bundle_from_node(child, meshes, bone_names, material_names, raw_curve_values)?;
     }
     Ok(())
 }

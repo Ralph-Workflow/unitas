@@ -351,11 +351,7 @@ impl NavMesh {
             return Err(NavigationError::InvalidAreaCost { area, cost });
         }
         self.area_costs.insert(area, cost);
-        self.min_area_cost = self
-            .area_costs
-            .values()
-            .copied()
-            .fold(1.0_f64, f64::min);
+        self.min_area_cost = self.area_costs.values().copied().fold(1.0_f64, f64::min);
         self.revision = self.revision.saturating_add(1);
         Ok(())
     }
@@ -407,10 +403,7 @@ impl NavMesh {
         };
         self.obstacles.iter().any(|obstacle| {
             obstacle.blocks_point(polygon.centroid)
-                || polygon
-                    .vertices
-                    .iter()
-                    .all(|v| obstacle.blocks_point(*v))
+                || polygon.vertices.iter().all(|v| obstacle.blocks_point(*v))
         })
     }
 

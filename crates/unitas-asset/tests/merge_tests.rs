@@ -1005,6 +1005,3 @@ fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_m
     );
     Ok(())
 }
-
-
-

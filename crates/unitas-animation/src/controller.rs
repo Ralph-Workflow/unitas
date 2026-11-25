@@ -422,12 +422,12 @@ impl AnimatorController {
                 } => {
                     for parameter in [parameter_x, parameter_y] {
                         match self.parameters.iter().find(|p| p.name == *parameter) {
-                            None => diagnostics.push(
-                                AnimationDiagnostic::InvalidParameterReference {
+                            None => {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
                                     parameter: parameter.clone(),
                                     context: format!("2D blend tree in state '{}'", state.name),
-                                },
-                            ),
+                                });
+                            }
                             Some(param)
                                 if param.default_value.parameter_type() != ParameterType::Float =>
                             {
@@ -459,12 +459,12 @@ impl AnimatorController {
                     }
                     for (parameter, clip) in children {
                         match self.parameters.iter().find(|p| p.name == *parameter) {
-                            None => diagnostics.push(
-                                AnimationDiagnostic::InvalidParameterReference {
+                            None => {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
                                     parameter: parameter.clone(),
                                     context: format!("Direct blend tree in state '{}'", state.name),
-                                },
-                            ),
+                                });
+                            }
                             Some(param)
                                 if param.default_value.parameter_type() != ParameterType::Float =>
                             {
@@ -1059,8 +1059,15 @@ impl Animator {
                         self.state_frames = 0;
                         entered = Some(target);
                         let sample = self.sample_state(self.current_state, 0.0, 0.0);
-                        let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-                        return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
+                        let bindings =
+                            self.apply_write_defaults(self.current_state, sample.bindings);
+                        return self.finish(
+                            callbacks,
+                            entered,
+                            exited,
+                            bindings,
+                            sample.fired_events,
+                        );
                     }
                 }
                 AnimatorRequest::CrossFade(target, duration) => {
@@ -1124,21 +1131,41 @@ impl Animator {
             };
             let interrupt_tr_idx = match active.interruption_source {
                 InterruptionSource::None => None,
-                InterruptionSource::Source => {
-                    self.find_interrupting_transition(self.current_state, current_norm, active.target_state)
-                }
-                InterruptionSource::Destination => {
-                    self.find_interrupting_transition(active.target_state, dst_norm, active.target_state)
-                }
+                InterruptionSource::Source => self.find_interrupting_transition(
+                    self.current_state,
+                    current_norm,
+                    active.target_state,
+                ),
+                InterruptionSource::Destination => self.find_interrupting_transition(
+                    active.target_state,
+                    dst_norm,
+                    active.target_state,
+                ),
                 InterruptionSource::SourceThenDestination => self
-                    .find_interrupting_transition(self.current_state, current_norm, active.target_state)
+                    .find_interrupting_transition(
+                        self.current_state,
+                        current_norm,
+                        active.target_state,
+                    )
                     .or_else(|| {
-                        self.find_interrupting_transition(active.target_state, dst_norm, active.target_state)
+                        self.find_interrupting_transition(
+                            active.target_state,
+                            dst_norm,
+                            active.target_state,
+                        )
                     }),
                 InterruptionSource::DestinationThenSource => self
-                    .find_interrupting_transition(active.target_state, dst_norm, active.target_state)
+                    .find_interrupting_transition(
+                        active.target_state,
+                        dst_norm,
+                        active.target_state,
+                    )
                     .or_else(|| {
-                        self.find_interrupting_transition(self.current_state, current_norm, active.target_state)
+                        self.find_interrupting_transition(
+                            self.current_state,
+                            current_norm,
+                            active.target_state,
+                        )
                     }),
             };
             if let Some(tr_idx) = interrupt_tr_idx {
@@ -1188,9 +1215,10 @@ impl Animator {
             self.consume_transition_triggers(&transition);
             let target_idx = match transition.target {
                 TransitionTarget::State(idx) if idx < self.controller.states.len() => idx,
-                TransitionTarget::State(_) | TransitionTarget::Exit => {
-                    self.controller.entry_state.min(self.controller.states.len() - 1)
-                }
+                TransitionTarget::State(_) | TransitionTarget::Exit => self
+                    .controller
+                    .entry_state
+                    .min(self.controller.states.len() - 1),
             };
             if transition.duration <= 1e-6 {
                 exited = Some(self.current_state);
@@ -1203,8 +1231,10 @@ impl Animator {
                     .get(self.current_state)
                     .is_some_and(|s| s.is_exit)
                 {
-                    self.current_state =
-                        self.controller.entry_state.min(self.controller.states.len() - 1);
+                    self.current_state = self
+                        .controller
+                        .entry_state
+                        .min(self.controller.states.len() - 1);
                 }
                 entered = Some(self.current_state);
                 let sample = self.sample_state(self.current_state, 0.0, 0.0);
@@ -1250,7 +1280,8 @@ impl Animator {
                         .min(self.controller.states.len() - 1);
                     self.state_time = 0.0;
                 }
-                let sample = self.sample_state(self.current_state, prev_target_time, self.state_time);
+                let sample =
+                    self.sample_state(self.current_state, prev_target_time, self.state_time);
                 let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
                 return self.finish(callbacks, entered, exited, bindings, sample.fired_events);
             }
@@ -1285,10 +1316,9 @@ impl Animator {
             callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateEnter, index));
         }
         if self.state_frames >= 2 && exited != Some(self.current_state) {
-            callbacks.push(self.state_callback(
-                StateMachineCallbackKind::OnStateUpdate,
-                self.current_state,
-            ));
+            callbacks.push(
+                self.state_callback(StateMachineCallbackKind::OnStateUpdate, self.current_state),
+            );
         }
         if let Some(index) = exited {
             callbacks.push(self.state_callback(StateMachineCallbackKind::OnStateExit, index));
@@ -1316,7 +1346,10 @@ impl Animator {
         }
         let mut result = bindings;
         for default in &self.captured_defaults {
-            if result.iter().any(|binding| binding.target == default.target) {
+            if result
+                .iter()
+                .any(|binding| binding.target == default.target)
+            {
                 continue;
             }
             result.push(default.clone());

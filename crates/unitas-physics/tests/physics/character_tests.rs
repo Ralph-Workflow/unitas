@@ -687,10 +687,7 @@ fn phy_003_story_4_character_slides_down_steep_slope_and_reports_controller_coll
         steep_slope,
         oriented_static_box([0.0, 0.0, 0.0], rotation_about_z(60.0), [4.0, 0.5, 4.0]),
     )?;
-    world.add_body(
-        wall,
-        static_box([-3.0, 1.0, 0.0], [0.5, 3.0, 4.0]),
-    )?;
+    world.add_body(wall, static_box([-3.0, 1.0, 0.0], [0.5, 3.0, 4.0]))?;
 
     let mut controller = CharacterController::new(0.5, 2.0)?;
     controller.slope_limit_deg = 45.0;
@@ -722,5 +719,3 @@ fn phy_003_story_4_character_slides_down_steep_slope_and_reports_controller_coll
     );
     Ok(())
 }
-
-

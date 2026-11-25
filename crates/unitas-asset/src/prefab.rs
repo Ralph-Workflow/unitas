@@ -45,7 +45,10 @@ impl PrefabSourceReference {
     }
 
     pub fn to_node(&self) -> Node {
-        let mut entries = vec![(String::from("fileID"), Node::Scalar(self.file_id.to_string()))];
+        let mut entries = vec![(
+            String::from("fileID"),
+            Node::Scalar(self.file_id.to_string()),
+        )];
         if let Some(guid) = &self.guid {
             entries.push((String::from("guid"), Node::Scalar(guid.clone())));
         }
@@ -76,7 +79,10 @@ impl PrefabSourceReference {
     pub fn to_encoded_string(&self) -> String {
         match (&self.guid, self.ref_type) {
             (Some(guid), Some(ref_type)) => {
-                format!("{{fileID: {}, guid: {}, type: {}}}", self.file_id, guid, ref_type)
+                format!(
+                    "{{fileID: {}, guid: {}, type: {}}}",
+                    self.file_id, guid, ref_type
+                )
             }
             (Some(guid), None) => format!("{{fileID: {}, guid: {}}}", self.file_id, guid),
             (None, _) => format!("{{fileID: {}}}", self.file_id),

@@ -117,11 +117,7 @@ fn save_asset_form(
     }
 }
 
-fn save_text(
-    path: &Path,
-    stream: &Stream,
-    upgrade: bool,
-) -> Result<SaveOutcome, SceneSaveError> {
+fn save_text(path: &Path, stream: &Stream, upgrade: bool) -> Result<SaveOutcome, SceneSaveError> {
     let rendered = emit_stream(stream);
     if fs::read(path).ok().as_deref() == Some(rendered.as_bytes()) {
         return Ok(SaveOutcome {
@@ -131,9 +127,10 @@ fn save_text(
         });
     }
     let upgraded = upgrade && has_serialized_version(stream);
-    let text = match upgraded {
-        true => emit_baseline_stream(stream),
-        false => rendered,
+    let text = if upgraded {
+        emit_baseline_stream(stream)
+    } else {
+        rendered
     };
     write_atomic(path, text.as_bytes())?;
     Ok(SaveOutcome {
@@ -160,11 +157,9 @@ fn has_serialized_version(stream: &Stream) -> bool {
 
 fn contains_serialized_version(node: &Node) -> bool {
     match node {
-        Node::Mapping(entries) => {
-            entries.iter().any(|(key, value)| {
-                key == SERIALIZED_VERSION_KEY || contains_serialized_version(value)
-            })
-        }
+        Node::Mapping(entries) => entries.iter().any(|(key, value)| {
+            key == SERIALIZED_VERSION_KEY || contains_serialized_version(value)
+        }),
         Node::Sequence(items) => items.iter().any(contains_serialized_version),
         Node::Scalar(_) => false,
     }

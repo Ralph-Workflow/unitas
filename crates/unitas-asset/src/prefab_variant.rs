@@ -1409,7 +1409,7 @@ impl PrefabRegistry {
                         );
                         ResolvedPrefab::Complete(hierarchy)
                     }
-                    broken => broken,
+                    broken @ ResolvedPrefab::BrokenBase(_) => broken,
                 };
                 resolved_nested.push(ResolvedNestedPrefab {
                     instance_file_id: nested.instance_file_id,
@@ -1935,12 +1935,9 @@ impl PrefabRegistry {
     ) -> Result<(), PrefabVariantError> {
         match resolution {
             OrphanedOverrideResolution::Retain => Ok(()),
-            OrphanedOverrideResolution::Discard => self.revert_override_at_level(
-                scene_instance,
-                level,
-                target_file_id,
-                property_path,
-            ),
+            OrphanedOverrideResolution::Discard => {
+                self.revert_override_at_level(scene_instance, level, target_file_id, property_path)
+            }
         }
     }
 
@@ -1985,11 +1982,7 @@ fn flatten_resolved_hierarchy(
             Some(p) => Some(p.target_file_id),
             None => parent_override,
         };
-        let children_ids: Vec<i64> = rnode
-            .children
-            .iter()
-            .map(|c| c.target_file_id)
-            .collect();
+        let children_ids: Vec<i64> = rnode.children.iter().map(|c| c.target_file_id).collect();
         let components: Vec<PrefabComponentRecord> = rnode
             .components
             .iter()

@@ -493,15 +493,18 @@ impl TrustStore {
         let root = parse(&text).map_err(|e| TrustError::InvalidStore(format!("{e:?}")))?;
         let mut state = TrustStoreState::default();
         if let Some(projects) = root.get("projects") {
-            let projects = projects.as_object().ok_or_else(|| {
-                TrustError::InvalidStore("projects is not an object".to_string())
-            })?;
+            let projects = projects
+                .as_object()
+                .ok_or_else(|| TrustError::InvalidStore("projects is not an object".to_string()))?;
             for (path, entry) in projects {
                 state.records.insert(
                     path.clone(),
                     TrustRecord {
                         project_path: path.clone(),
-                        trusted: entry.get("trusted").and_then(|v| v.as_bool()).unwrap_or(false),
+                        trusted: entry
+                            .get("trusted")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
                         fetch_consent: entry
                             .get("fetchConsent")
                             .and_then(|v| v.as_bool())
@@ -511,9 +514,9 @@ impl TrustStore {
             }
         }
         if let Some(requests) = root.get("requests") {
-            let requests = requests.as_array().ok_or_else(|| {
-                TrustError::InvalidStore("requests is not an array".to_string())
-            })?;
+            let requests = requests
+                .as_array()
+                .ok_or_else(|| TrustError::InvalidStore("requests is not an array".to_string()))?;
             for request in requests {
                 let project_path = request
                     .get("projectPath")
@@ -559,7 +562,10 @@ impl TrustStore {
                 .map(|entry| JsonValue::String(entry.clone()))
                 .collect();
             requests.push(JsonValue::Object(vec![
-                ("projectPath".to_string(), JsonValue::String(request.project_path.clone())),
+                (
+                    "projectPath".to_string(),
+                    JsonValue::String(request.project_path.clone()),
+                ),
                 ("code".to_string(), JsonValue::Array(code)),
             ]));
         }

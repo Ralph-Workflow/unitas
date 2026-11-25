@@ -94,11 +94,7 @@ impl NavigationRuntimeWorld {
             .map_err(NavigationRuntimeError::Navigation)
     }
 
-    pub fn set_area_cost(
-        &mut self,
-        area: u32,
-        cost: f64,
-    ) -> Result<(), NavigationRuntimeError> {
+    pub fn set_area_cost(&mut self, area: u32, cost: f64) -> Result<(), NavigationRuntimeError> {
         self.navmesh
             .set_area_cost(area, cost)
             .map_err(NavigationRuntimeError::Navigation)
@@ -110,7 +106,8 @@ impl NavigationRuntimeWorld {
         max_distance: f64,
         area_mask: u32,
     ) -> Option<NavMeshHit> {
-        self.navmesh.sample_position(source, max_distance, area_mask)
+        self.navmesh
+            .sample_position(source, max_distance, area_mask)
     }
 
     pub fn raycast(&self, source: [f64; 3], target: [f64; 3], area_mask: u32) -> NavMeshHit {

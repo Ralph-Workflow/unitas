@@ -290,15 +290,14 @@ pub fn apply_content_update_to_player(
 
     for emitted in &content_update.emitted_bundles {
         let updated_bundle_path = content_update.output_dir.join(&emitted.staged_path);
-        let bytes = fs::read(&updated_bundle_path).map_err(|error| {
-            PlayerStartupError::ManifestLoad {
+        let bytes =
+            fs::read(&updated_bundle_path).map_err(|error| PlayerStartupError::ManifestLoad {
                 bundle_dir: player_bundle_dir.to_path_buf(),
                 source: BundleError::Io {
                     path: updated_bundle_path.clone(),
                     message: error.to_string(),
                 },
-            }
-        })?;
+            })?;
         let dest_content_bundle = player_bundle_dir.join(&emitted.staged_path);
         if let Some(parent) = dest_content_bundle.parent() {
             fs::create_dir_all(parent).map_err(|error| PlayerStartupError::ManifestLoad {

@@ -625,7 +625,9 @@ fn assemble_documents(
     let mut seen_file_ids: HashSet<i64> = HashSet::new();
     for document in &stream.documents {
         if !seen_file_ids.insert(document.file_id) {
-            return Err(SceneError::DuplicateFileId { file_id: document.file_id });
+            return Err(SceneError::DuplicateFileId {
+                file_id: document.file_id,
+            });
         }
     }
     let mut set = DocumentSet {

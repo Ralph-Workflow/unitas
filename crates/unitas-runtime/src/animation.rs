@@ -205,7 +205,8 @@ impl AnimationWorld {
         }
         let defaults = animator.captured_defaults().to_vec();
         let mut transform = entry.transform.clone();
-        let mut default_children = apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
+        let mut default_children =
+            apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
         let step_result = animator.step(0.0);
         for diag in step_result.diagnostics {
             entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
@@ -213,7 +214,8 @@ impl AnimationWorld {
         entry.fired_events.extend(step_result.fired_events);
         entry.callbacks = step_result.callbacks;
         entry.animator = Some(animator);
-        let child_bindings = apply_bindings_to_transform(entity, entry, &mut transform, &step_result.bindings);
+        let child_bindings =
+            apply_bindings_to_transform(entity, entry, &mut transform, &step_result.bindings);
         entry.transform = transform;
         default_children.extend(child_bindings);
         Ok(default_children)
@@ -510,7 +512,8 @@ impl AnimationWorld {
                 apply_bindings_to_transform(entity, entry, &mut sampled, &sample.bindings);
             let weight = component.weight();
             if weight < 1.0 {
-                sampled.translation = blend_vector(previous.translation, sampled.translation, weight);
+                sampled.translation =
+                    blend_vector(previous.translation, sampled.translation, weight);
                 sampled.rotation = blend_quaternion(previous.rotation, sampled.rotation, weight);
                 sampled.scale = blend_vector(previous.scale, sampled.scale, weight);
             }
@@ -521,7 +524,11 @@ impl AnimationWorld {
         }
     }
 
-    pub fn set_update_mode(&mut self, entity: EntityId, mode: AnimatorUpdateMode) -> Result<(), String> {
+    pub fn set_update_mode(
+        &mut self,
+        entity: EntityId,
+        mode: AnimatorUpdateMode,
+    ) -> Result<(), String> {
         let Some(entry) = self.entries.get_mut(&entity) else {
             return Err(format!("animator not found for entity {}", entity.as_u64()));
         };
@@ -570,7 +577,11 @@ impl AnimationWorld {
         self.entries.get(&entity).map(|entry| entry.visible)
     }
 
-    pub fn set_keep_state_on_disable(&mut self, entity: EntityId, keep: bool) -> Result<(), String> {
+    pub fn set_keep_state_on_disable(
+        &mut self,
+        entity: EntityId,
+        keep: bool,
+    ) -> Result<(), String> {
         let Some(entry) = self.entries.get_mut(&entity) else {
             return Err(format!("animator not found for entity {}", entity.as_u64()));
         };
@@ -645,7 +656,10 @@ impl AnimationWorld {
         self.legacy.get(&entity)
     }
 
-    pub fn legacy_animation_mut(&mut self, entity: EntityId) -> Option<&mut LegacyAnimationComponent> {
+    pub fn legacy_animation_mut(
+        &mut self,
+        entity: EntityId,
+    ) -> Option<&mut LegacyAnimationComponent> {
         self.legacy.get_mut(&entity)
     }
 
@@ -991,7 +1005,9 @@ impl LegacyAnimationComponent {
             }
         }
         for (blend_index, weight) in self.blended.clone() {
-            let blend_sample = self.clips[blend_index].clip.sample(previous_time, self.time);
+            let blend_sample = self.clips[blend_index]
+                .clip
+                .sample(previous_time, self.time);
             bindings = blend_sampled_bindings(&bindings, &blend_sample.bindings, weight);
             fired_events.extend(blend_sample.fired_events);
         }
@@ -1668,7 +1684,8 @@ impl AnimationWorld {
                             script.on_state_machine_exit(entity, machine);
                         }
                     }
-                    StateMachineCallbackKind::OnStateMove | StateMachineCallbackKind::OnStateIK => {}
+                    StateMachineCallbackKind::OnStateMove | StateMachineCallbackKind::OnStateIK => {
+                    }
                 }
             }
             let sampled_translation = entry.transform.translation;

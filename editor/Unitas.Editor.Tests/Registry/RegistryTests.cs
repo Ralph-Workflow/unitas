@@ -194,7 +194,7 @@ namespace Unitas.Editor.Tests
 
         private static McpHost MakeHost()
         {
-            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.inspect",
@@ -232,7 +232,7 @@ namespace Unitas.Editor.Tests
 
         private static void OwnedResourcesAreDisposedOnceAndReleaseIsSafeToRepeat()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             using CountingDisposable owned = new CountingDisposable();
             host.OwnResource(owned);
             Check.Equal("registry: owned resource is alive before release", 0, owned.DisposeCount);

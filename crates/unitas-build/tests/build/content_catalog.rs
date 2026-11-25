@@ -378,8 +378,7 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
         "BLD-005 story 25: catalog must record unitas version"
     );
     assert_eq!(
-        v1_result.catalog.target,
-        host,
+        v1_result.catalog.target, host,
         "BLD-005 story 25: catalog must record target platform"
     );
     assert!(
@@ -454,8 +453,7 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
         "BLD-005 story 25: unchanged bundles must not be re-emitted"
     );
     assert_ne!(
-        v2_update.catalog.catalog_hash,
-        v1_result.catalog.catalog_hash,
+        v2_update.catalog.catalog_hash, v1_result.catalog.catalog_hash,
         "BLD-005 story 25: content update must produce a new content catalog"
     );
 
@@ -478,8 +476,7 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
     let reloaded_v2_catalog = ContentCatalog::load_from_dir(&v2_update_dir)?;
     assert_eq!(reloaded_v2_catalog, v2_update.catalog);
 
-    let updated_session =
-        apply_content_update_to_player(&player_dir, &v2_update, 3, 1.0 / 60.0)?;
+    let updated_session = apply_content_update_to_player(&player_dir, &v2_update, 3, 1.0 / 60.0)?;
     assert_eq!(
         fs::read(&staged_player.launch_artifact_path)?,
         initial_launcher_bytes,
@@ -493,4 +490,3 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
     fs::remove_dir_all(&workspace)?;
     Ok(())
 }
-

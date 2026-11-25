@@ -4,8 +4,8 @@ use std::rc::Rc;
 use unitas_core::EntityId;
 
 use crate::body::{
-    capsule_half_segment, capsule_local_axis, distance, dot, rotate_vector, subtract, vector_length,
-    Shape,
+    capsule_half_segment, capsule_local_axis, distance, dot, rotate_vector, subtract,
+    vector_length, Shape,
 };
 use crate::world::World;
 

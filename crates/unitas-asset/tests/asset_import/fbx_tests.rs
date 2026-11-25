@@ -481,13 +481,7 @@ fn prj004_outcome15_humanoid_fbx_imports_avatar_split_clips_with_loop_pose_baked
 
     let fbx_bytes = fbx_file(
         &objects_root(vec![
-            body_geom,
-            hips_bone,
-            spine_bone,
-            head_bone,
-            armor_mat,
-            cloth_mat,
-            curve_node,
+            body_geom, hips_bone, spine_bone, head_bone, armor_mat, cloth_mat, curve_node,
         ]),
         FBX_VERSION_64,
     );

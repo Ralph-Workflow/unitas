@@ -1092,7 +1092,10 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::new("", "Transform", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 10.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
         )],
         vec![
             AnimationEvent::new(0.25, "Quarter"),
@@ -1133,7 +1136,9 @@ fn ani_001_outcome_27_preview_play_mode_and_built_player_produce_identical_pose_
     let mut play_poses = Vec::new();
     for dt in frame_deltas {
         play_world.tick(f64::from(dt));
-        let tr = play_world.transform(play_entity).ok_or("missing transform")?;
+        let tr = play_world
+            .transform(play_entity)
+            .ok_or("missing transform")?;
         play_poses.push(tr.translation[0]);
     }
     let play_events: Vec<String> = play_world
@@ -1203,7 +1208,10 @@ fn ani_001_outcome_29_disable_and_enable_resets_or_keeps_state_and_preserves_las
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 10.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
         )],
         Vec::new(),
     );
@@ -1282,7 +1290,10 @@ fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_pa
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 10.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
         )],
         vec![AnimationEvent::new(0.2, "StepEvt")],
     );
@@ -1293,7 +1304,10 @@ fn ani_001_outcome_30_update_modes_culling_modes_and_same_frame_crossfade_and_pa
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 20.0), Keyframe::linear(1.0, 20.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 20.0),
+                Keyframe::linear(1.0, 20.0),
+            ]),
         )],
         Vec::new(),
     );
@@ -1426,7 +1440,10 @@ fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_cl
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 10.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
         )],
         Vec::new(),
     );
@@ -1459,7 +1476,10 @@ fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_cl
     world.set_legacy_animation(entity, legacy);
 
     world.tick(0.1);
-    let pos_walk = world.transform(entity).ok_or("missing transform")?.translation[0];
+    let pos_walk = world
+        .transform(entity)
+        .ok_or("missing transform")?
+        .translation[0];
     assert!(pos_walk.abs() < 1e-5);
 
     world
@@ -1467,18 +1487,23 @@ fn ani_002_outcome_32_legacy_animation_component_plays_and_cross_fades_legacy_cl
         .ok_or("missing legacy")?
         .cross_fade("Run", 1.0)?;
     world.tick(0.5);
-    let pos_mid = world.transform(entity).ok_or("missing transform")?.translation[0];
+    let pos_mid = world
+        .transform(entity)
+        .ok_or("missing transform")?
+        .translation[0];
     assert!(
         (pos_mid - 5.0).abs() < 1e-4,
         "ANI-002 outcome 32: legacy Animation cross-fade at 50% must blend pose to 5.0, got {pos_mid}"
     );
 
     world.tick(0.5);
-    let pos_end = world.transform(entity).ok_or("missing transform")?.translation[0];
+    let pos_end = world
+        .transform(entity)
+        .ok_or("missing transform")?
+        .translation[0];
     assert!(
         (pos_end - 10.0).abs() < 1e-4,
         "ANI-002 outcome 32: legacy Animation cross-fade at 100% must reach target pose 10.0, got {pos_end}"
     );
     Ok(())
 }
-

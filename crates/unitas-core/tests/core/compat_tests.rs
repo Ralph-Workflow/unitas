@@ -1151,7 +1151,8 @@ fn compat_canonical_parser_rejects_malformed_text_and_escapes_special_characters
 }
 
 #[test]
-fn cmp_002_story_16_migrates_unity_2021_3_urp_12_x_against_2022_3_lts_urp_14_x_baseline_without_2021_3_claims() {
+fn cmp_002_story_16_migrates_unity_2021_3_urp_12_x_against_2022_3_lts_urp_14_x_baseline_without_2021_3_claims(
+) {
     use unitas_core::compat::{
         assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
         ProjectSettingEntry,
@@ -1208,7 +1209,10 @@ fn cmp_002_story_16_migrates_unity_2021_3_urp_12_x_against_2022_3_lts_urp_14_x_b
             "CMP-002 Story 16: URP 12.x in a 2021.3 LTS project must migrate and assess as Supported against URP 14.x"
         );
         assert_eq!(urp_pkg.tier, Some(Tier::Native));
-        assert_eq!(urp_pkg.owning_spec.as_deref(), Some("rendering-and-animation.md"));
+        assert_eq!(
+            urp_pkg.owning_spec.as_deref(),
+            Some("rendering-and-animation.md")
+        );
         assert_eq!(urp_pkg.owning_feature_id.as_deref(), Some("REN-006"));
         assert!(urp_pkg.notes.contains("14.x"));
         assert!(!urp_pkg.notes.contains("2021.3-specific"));
@@ -1223,7 +1227,8 @@ fn cmp_002_story_16_migrates_unity_2021_3_urp_12_x_against_2022_3_lts_urp_14_x_b
 }
 
 #[test]
-fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar_catalog_populates_all_differences() {
+fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar_catalog_populates_all_differences(
+) {
     use unitas_core::compat::{
         build_familiar_finding, build_semantic_finding, lookup_familiar_behavior_differences,
         FAMILIAR_BEHAVIOR_DIFFERENCES,
@@ -1241,7 +1246,9 @@ fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar
     if let Ok(semantic_finding) = semantic {
         assert_eq!(semantic_finding.tier, Tier::Semantic);
         assert!(
-            semantic_finding.observable_consequence.contains("Unity 2022.3 LTS"),
+            semantic_finding
+                .observable_consequence
+                .contains("Unity 2022.3 LTS"),
             "CMP-002 Story 17: Semantic finding must cite Unity 2022.3 LTS"
         );
         assert!(
@@ -1316,7 +1323,8 @@ fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar
 }
 
 #[test]
-fn cmp_002_story_18_translated_material_accepts_against_unitas_reference_and_rejects_unity_screenshot_pixel_diff_failure() {
+fn cmp_002_story_18_translated_material_accepts_against_unitas_reference_and_rejects_unity_screenshot_pixel_diff_failure(
+) {
     use unitas_core::compat::assess_translated_material;
 
     let accepted = assess_translated_material(
@@ -1358,7 +1366,8 @@ fn cmp_002_story_18_translated_material_accepts_against_unitas_reference_and_rej
 }
 
 #[test]
-fn cmp_002_story_19_unspecified_supported_package_behavior_is_unknown_and_package_matrix_tiers_match_feature_catalog() {
+fn cmp_002_story_19_unspecified_supported_package_behavior_is_unknown_and_package_matrix_tiers_match_feature_catalog(
+) {
     use unitas_core::compat::{
         assess_package_behavior, PackageBehaviorClassification, SUPPORTED_PACKAGE_MATRIX,
     };
@@ -1400,7 +1409,8 @@ fn cmp_002_story_19_unspecified_supported_package_behavior_is_unknown_and_packag
 }
 
 #[test]
-fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_and_rider_and_collab_are_partially_supported_with_exclusions() {
+fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_and_rider_and_collab_are_partially_supported_with_exclusions(
+) {
     use unitas_core::compat::{
         assess_project, PackageSource, ProjectAssetEntry, ProjectContent, ProjectPackageEntry,
         ProjectSettingEntry,
@@ -1459,9 +1469,10 @@ fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_an
         assert_eq!(f.feature_id, "REN-003");
     }
 
-    let bundle = assessment.report.findings.iter().find(|f| {
-        f.content.asset_path.as_deref() == Some("Assets/StreamingAssets/level1.bundle")
-    });
+    let bundle =
+        assessment.report.findings.iter().find(|f| {
+            f.content.asset_path.as_deref() == Some("Assets/StreamingAssets/level1.bundle")
+        });
     assert!(bundle.is_some());
     if let Some(f) = bundle {
         assert_eq!(f.state, CompatibilityState::Unsupported);
@@ -1493,10 +1504,9 @@ fn cmp_002_story_20_enlighten_gi_and_unity_built_assetbundles_are_unsupported_an
 }
 
 #[test]
-fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and_hdrp_target_is_unsupported() {
-    use unitas_core::compat::{
-        assess_shader_graph, ShaderGraphNodeIssue, ShaderGraphTarget,
-    };
+fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and_hdrp_target_is_unsupported(
+) {
+    use unitas_core::compat::{assess_shader_graph, ShaderGraphNodeIssue, ShaderGraphTarget};
 
     let unrepresentable = assess_shader_graph(
         content("Assets/Shaders/WaterSurface.shadergraph"),
@@ -1518,7 +1528,9 @@ fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and
         unrepresentable.content.sub_asset_id.as_deref(),
         Some("node-98a1")
     );
-    assert!(unrepresentable.behavior.contains("WaterSurface.shadergraph"));
+    assert!(unrepresentable
+        .behavior
+        .contains("WaterSurface.shadergraph"));
     assert!(unrepresentable.behavior.contains("CustomHDSceneColorNode"));
     assert!(unrepresentable.behavior.contains("node-98a1"));
     assert!(unrepresentable
@@ -1540,6 +1552,3 @@ fn cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and
     );
     assert!(hdrp_target.behavior.contains("HDRP"));
 }
-
-
-

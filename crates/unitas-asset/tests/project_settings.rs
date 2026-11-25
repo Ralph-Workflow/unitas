@@ -698,8 +698,7 @@ fn prj007_outcome10_per_target_scripting_defines_collision_matrix_and_fixed_time
     );
     let android_effective = typed_settings.effective_scripting_defines("7", "Android");
     assert_eq!(
-        android_effective.effective_value,
-        "ANDROID_BUILD;MOBILE_INPUT;VULKAN_BACKEND",
+        android_effective.effective_value, "ANDROID_BUILD;MOBILE_INPUT;VULKAN_BACKEND",
         "PRJ-007 Outcome 10: effective per-target scripting define for Android"
     );
     assert_eq!(

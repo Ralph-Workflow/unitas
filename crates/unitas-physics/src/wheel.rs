@@ -388,12 +388,7 @@ impl Vehicle {
         } else {
             0.0
         };
-        let steer_quat = [
-            0.0,
-            (steer_rad * 0.5).sin(),
-            0.0,
-            (steer_rad * 0.5).cos(),
-        ];
+        let steer_quat = [0.0, (steer_rad * 0.5).sin(), 0.0, (steer_rad * 0.5).cos()];
         let spin_quat = [
             (wheel.rotation_angle * 0.5).sin(),
             0.0,

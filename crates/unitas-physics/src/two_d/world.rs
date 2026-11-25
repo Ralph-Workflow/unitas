@@ -943,8 +943,11 @@ impl World2D {
         }
         if let Some(body_id) = collider.attached_body {
             if let Some(body) = self.bodies.get(&body_id) {
-                let world_pos =
-                    transform_point2(collider.query_offset, body.query_position, body.query_rotation);
+                let world_pos = transform_point2(
+                    collider.query_offset,
+                    body.query_position,
+                    body.query_rotation,
+                );
                 return (world_pos, body.query_rotation + collider.query_rotation);
             }
         }
@@ -1079,7 +1082,8 @@ impl World2D {
                         let target_rot = rot_a + fj.reference_angle;
                         let pos_err = length2(sub2(target_pos, pos_b));
                         let rot_err = (target_rot - rot_b).abs();
-                        if (fj.break_force.is_finite() && pos_err / (inv_b * dt * dt) > fj.break_force)
+                        if (fj.break_force.is_finite()
+                            && pos_err / (inv_b * dt * dt) > fj.break_force)
                             || (fj.break_torque.is_finite()
                                 && rot_err / (inv_b * dt * dt) > fj.break_torque)
                         {
@@ -1197,8 +1201,7 @@ impl World2D {
                             if slj.use_motor {
                                 let max_dv = slj.motor.max_motor_torque.max(0.0) * inv_b * dt;
                                 let v_along = dot2(b.linear_velocity, axis);
-                                let dv =
-                                    (slj.motor.motor_speed - v_along).clamp(-max_dv, max_dv);
+                                let dv = (slj.motor.motor_speed - v_along).clamp(-max_dv, max_dv);
                                 let new_v = v_along + dv;
                                 b.linear_velocity = [axis[0] * new_v, axis[1] * new_v];
                                 coord += new_v * dt;
@@ -1206,7 +1209,8 @@ impl World2D {
                             if slj.use_limits {
                                 coord = coord.clamp(slj.limits.min, slj.limits.max);
                             }
-                            b.position = [world_a[0] + axis[0] * coord, world_a[1] + axis[1] * coord];
+                            b.position =
+                                [world_a[0] + axis[0] * coord, world_a[1] + axis[1] * coord];
                         }
                     }
                 }
@@ -1258,9 +1262,9 @@ impl World2D {
     }
 
     fn body_pose_and_inv(&self, id: BodyId2D) -> ([f32; 2], f32, f32) {
-        self.bodies
-            .get(&id)
-            .map_or(([0.0, 0.0], 0.0, 0.0), |b| (b.position, b.rotation, b.inverse_mass()))
+        self.bodies.get(&id).map_or(([0.0, 0.0], 0.0, 0.0), |b| {
+            (b.position, b.rotation, b.inverse_mass())
+        })
     }
 
     fn endpoint_for(&self, collider: &Collider2D) -> Endpoint2D {

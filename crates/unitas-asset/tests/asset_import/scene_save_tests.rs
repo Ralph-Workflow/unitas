@@ -780,8 +780,7 @@ fn build_mixed_mode_typed_v22_binary(go_name: &str, baked_lighting_blob: &[u8]) 
 }
 
 #[test]
-fn ser005_outcome12_an_edited_binary_stays_binary_and_an_edited_text_stays_text(
-) -> TestResult {
+fn ser005_outcome12_an_edited_binary_stays_binary_and_an_edited_text_stays_text() -> TestResult {
     let root = temp_root("mixed_mode_real_v22");
     fs::create_dir_all(&root)?;
     let text_path = root.join("TextScene.unity");
@@ -1502,7 +1501,10 @@ fn ser005_outcome13_saving_assets_writes_no_unity_generated_folder() -> TestResu
     scene_save::save_asset(&binary_path, &binary_asset(binary))?;
 
     for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
-        assert!(!root.join(folder).exists(), "{folder} was written by the save");
+        assert!(
+            !root.join(folder).exists(),
+            "{folder} was written by the save"
+        );
     }
     let mut entries: Vec<String> = Vec::new();
     for entry in fs::read_dir(&root)? {
@@ -1547,7 +1549,9 @@ fn ser005_outcome18_an_older_serialized_version_is_rewritten_only_after_an_edit_
         .and_then(|document| document.root.get("Material"))
         .ok_or("missing Material")?;
     assert_eq!(
-        before_material.get("serializedVersion").and_then(Node::as_i64),
+        before_material
+            .get("serializedVersion")
+            .and_then(Node::as_i64),
         Some(6)
     );
 
@@ -1595,7 +1599,9 @@ fn ser005_outcome18_an_older_serialized_version_is_rewritten_only_after_an_edit_
             .and_then(Node::as_str)
     );
     assert_eq!(
-        before_material.get("m_Keywords").and_then(Node::as_sequence),
+        before_material
+            .get("m_Keywords")
+            .and_then(Node::as_sequence),
         after_material.get("m_Keywords").and_then(Node::as_sequence)
     );
 
@@ -1653,8 +1659,13 @@ fn ser005_outcomes_13_17_18_19_project_open_migration_no_library_writes_build_an
 
     let store = TrustStore::new(per_user_dir.join("trust.json"));
     let (_, report_on_open) = Project::open(&project_root, &store)?;
-    assert_eq!(report_on_open.declared_version.as_deref(), Some("2021.3.16f1"));
-    assert!(!project_root.join("ProjectSettings/UnitasVersion.txt").exists());
+    assert_eq!(
+        report_on_open.declared_version.as_deref(),
+        Some("2021.3.16f1")
+    );
+    assert!(!project_root
+        .join("ProjectSettings/UnitasVersion.txt")
+        .exists());
     for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
         assert!(!project_root.join(folder).exists());
     }
@@ -1701,7 +1712,10 @@ fn ser005_outcomes_13_17_18_19_project_open_migration_no_library_writes_build_an
     let version_rel = PathBuf::from("ProjectSettings/UnitasVersion.txt");
     let policy_rel = PathBuf::from("ProjectSettings/UnitasReviewPolicy.json");
     fs::write(project_root.join(&version_rel), "unitas_version: 0.1.0\n")?;
-    fs::write(project_root.join(&policy_rel), "{\"requireApproval\":true}\n")?;
+    fs::write(
+        project_root.join(&policy_rel),
+        "{\"requireApproval\":true}\n",
+    )?;
 
     for folder in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
         assert!(!project_root.join(folder).exists());

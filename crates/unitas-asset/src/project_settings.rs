@@ -413,11 +413,16 @@ pub fn load_project_settings(
         if let Ok(dyn_settings) = parse_dynamics_manager_stream(&stream) {
             gravity = dyn_settings.gravity;
         }
-        if let Some(body) = stream.documents.iter().filter(|d| !d.stripped).find_map(|d| {
-            d.root
-                .get("PhysicsManager")
-                .or_else(|| d.root.get("DynamicsManager"))
-        }) {
+        if let Some(body) = stream
+            .documents
+            .iter()
+            .filter(|d| !d.stripped)
+            .find_map(|d| {
+                d.root
+                    .get("PhysicsManager")
+                    .or_else(|| d.root.get("DynamicsManager"))
+            })
+        {
             if let Some(hex) = body.get("m_LayerCollisionMatrix").and_then(Node::as_str) {
                 layer_collision_matrix = parse_layer_collision_matrix(hex);
             }
@@ -439,7 +444,7 @@ pub fn load_project_settings(
             .filter(|d| !d.stripped)
             .find_map(|d| d.root.get("PlayerSettings"))
         {
-            if let Some( Node::Mapping(entries)) = body.get("scriptingDefineSymbols") {
+            if let Some(Node::Mapping(entries)) = body.get("scriptingDefineSymbols") {
                 for (key, val) in entries {
                     if let Some(text) = val.as_str() {
                         if key == "default" {

@@ -424,10 +424,9 @@ fn prj008_outcome11_outcome13_ci_headless_invocation_trust_matrix_and_agent_requ
             && fetch_only_report.capabilities.may_fetch,
         "PRJ-008 Outcome 13: CI run with only fetch-consent argument fetches package but runs no project code"
     );
-    assert!(fetch_only_report.trust_gate.has_permitted_vector(
-        BlockedVectorKind::GitPackageFetch,
-        "com.example.ci-git"
-    ));
+    assert!(fetch_only_report
+        .trust_gate
+        .has_permitted_vector(BlockedVectorKind::GitPackageFetch, "com.example.ci-git"));
     assert!(fetch_only_report.trust_gate.has_blocked_vector(
         BlockedVectorKind::InitializeOnLoad,
         "Assets/Editor/CiHook.cs"
@@ -549,9 +548,10 @@ fn prj008_outcome18_importing_unitypackage_with_scripts_in_untrusted_project_lis
         "PRJ-008 Outcome 18: scripts are neither compiled nor executed in an untrusted project"
     );
     assert!(
-        import_report
-            .trust_gate
-            .has_blocked_vector(BlockedVectorKind::InitializeOnLoad, "Assets/Editor/ImportedAutoRun.cs"),
+        import_report.trust_gate.has_blocked_vector(
+            BlockedVectorKind::InitializeOnLoad,
+            "Assets/Editor/ImportedAutoRun.cs"
+        ),
         "PRJ-008 Outcome 18: extracted script is gated by project trust"
     );
     assert!(!project.join("pkg_pwned.txt").exists());
@@ -566,13 +566,13 @@ fn prj008_outcome18_importing_unitypackage_with_scripts_in_untrusted_project_lis
         "PRJ-008 Outcome 18: extracted script asset is inspectable in project inventory"
     );
     assert!(
-        report_after
-            .trust_gate
-            .has_blocked_vector(BlockedVectorKind::InitializeOnLoad, "Assets/Editor/ImportedAutoRun.cs"),
+        report_after.trust_gate.has_blocked_vector(
+            BlockedVectorKind::InitializeOnLoad,
+            "Assets/Editor/ImportedAutoRun.cs"
+        ),
         "PRJ-008 Outcome 18: reopening untrusted project keeps imported script blocked"
     );
 
     fs::remove_dir_all(&root)?;
     Ok(())
 }
-

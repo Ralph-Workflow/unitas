@@ -864,9 +864,7 @@ fn parameter_getters_return_none_on_unknown_or_mismatched_type() {
 
 #[test]
 fn ani_001_outcome_28_2d_and_direct_blend_trees_interruption_sources_and_callback_order() {
-    use unitas_animation::{
-        BlendTree2DMode, InterruptionSource, StateMachineCallbackKind,
-    };
+    use unitas_animation::{BlendTree2DMode, InterruptionSource, StateMachineCallbackKind};
     let clip_center = simple_clip("Center", 1.0, 0.0, 0.0);
     let clip_right = simple_clip("Right", 1.0, 10.0, 10.0);
     let clip_up = simple_clip("Up", 1.0, 0.0, 20.0);
@@ -996,7 +994,10 @@ fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
         WrapMode::Loop,
         vec![CurveBinding::float(
             CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 10.0)]),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 10.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
         )],
         Vec::new(),
     );
@@ -1006,8 +1007,16 @@ fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
         vec![ParameterDef::int("phase", 0)],
         vec![
             AnimatorState::with_write_defaults("FullXY", StateMotion::Clip(clip_xy), true),
-            AnimatorState::with_write_defaults("NoDefaultsX", StateMotion::Clip(clip_x_only.clone()), false),
-            AnimatorState::with_write_defaults("WithDefaultsX", StateMotion::Clip(clip_x_only), true),
+            AnimatorState::with_write_defaults(
+                "NoDefaultsX",
+                StateMotion::Clip(clip_x_only.clone()),
+                false,
+            ),
+            AnimatorState::with_write_defaults(
+                "WithDefaultsX",
+                StateMotion::Clip(clip_x_only),
+                true,
+            ),
         ],
         0,
         vec![
@@ -1057,6 +1066,3 @@ fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
         "ANI-001 outcome 29: Write Defaults on must restore captured default value (2.0) for unanimated property"
     );
 }
-
-
-

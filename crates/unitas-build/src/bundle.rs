@@ -1039,7 +1039,13 @@ impl ContentCatalog {
             .get("catalog_id")
             .cloned()
             .filter(|val| !val.trim().is_empty())
-            .unwrap_or_else(|| format!("catalog-{}-{}", target.identifier(), player_compatibility_version));
+            .unwrap_or_else(|| {
+                format!(
+                    "catalog-{}-{}",
+                    target.identifier(),
+                    player_compatibility_version
+                )
+            });
 
         let mut bundles = Vec::with_capacity(bundle_count);
         for slot in 0..bundle_count {
@@ -1669,7 +1675,10 @@ pub fn validate_content_bundle(
             .build_path
             .clone()
             .unwrap_or_else(|| format!("ContentBundles/{}.bundle", input.bundle_name));
-        let load_rel = input.load_path.clone().unwrap_or_else(|| staged_rel.clone());
+        let load_rel = input
+            .load_path
+            .clone()
+            .unwrap_or_else(|| staged_rel.clone());
         let staged_dest = output_dir.join(&staged_rel);
 
         if let Some(signature) = detect_unity_bundle_signature(&bytes) {

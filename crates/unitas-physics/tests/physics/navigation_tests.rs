@@ -475,8 +475,10 @@ fn nav_001_story_9_carving_obstacle_detours_agent_and_reports_distinct_path_stat
         "NAV-001 Story 9: unobstructed path takes direct near strip"
     );
 
-    let obstacle_idx =
-        navmesh.add_obstacle(NavMeshObstacle::carving_box([1.5, 0.0, 0.5], [0.6, 1.0, 0.6]))?;
+    let obstacle_idx = navmesh.add_obstacle(NavMeshObstacle::carving_box(
+        [1.5, 0.0, 0.5],
+        [0.6, 1.0, 0.6],
+    ))?;
     let detoured = navmesh.find_path([0.5, 0.0, 0.5], [3.5, 0.0, 0.5]);
     assert_eq!(
         detoured.status,
@@ -488,7 +490,10 @@ fn nav_001_story_9_carving_obstacle_detours_agent_and_reports_distinct_path_stat
         "NAV-001 Story 9: carving NavMeshObstacle forces route around via far strip"
     );
 
-    navmesh.add_obstacle(NavMeshObstacle::carving_box([1.5, 0.0, 2.5], [0.6, 1.0, 0.6]))?;
+    navmesh.add_obstacle(NavMeshObstacle::carving_box(
+        [1.5, 0.0, 2.5],
+        [0.6, 1.0, 0.6],
+    ))?;
     let mut agent = NavMeshAgent::new(EntityId::new(9), "Story9Runner", [0.5, 0.0, 0.5]);
     let blocked = agent.set_destination(&navmesh, [3.5, 0.0, 0.5])?;
     assert_eq!(

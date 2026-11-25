@@ -596,7 +596,10 @@ impl<'a> Cursor<'a> {
     }
 
     fn peek_u32(&self) -> Result<u32, AnimationError> {
-        let end = self.pos.checked_add(4).ok_or(AnimationError::UnexpectedEof)?;
+        let end = self
+            .pos
+            .checked_add(4)
+            .ok_or(AnimationError::UnexpectedEof)?;
         if end > self.bytes.len() {
             return Err(AnimationError::UnexpectedEof);
         }

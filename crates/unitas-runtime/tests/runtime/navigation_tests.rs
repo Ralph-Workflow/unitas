@@ -207,15 +207,18 @@ fn nav_001_story_9_10_15_runtime_surface_rebuild_carving_link_and_reciprocal_avo
     let pos_b_after = world
         .position(agent_b)
         .ok_or(NavigationRuntimeError::UnknownAgent(agent_b))?;
-    let dist_xz =
-        ((pos_a_after[0] - pos_b_after[0]).powi(2) + (pos_a_after[2] - pos_b_after[2]).powi(2))
-            .sqrt();
+    let dist_xz = ((pos_a_after[0] - pos_b_after[0]).powi(2)
+        + (pos_a_after[2] - pos_b_after[2]).powi(2))
+    .sqrt();
     assert!(
         dist_xz > 0.2,
         "NAV-001 Story 15: runtime step resolves reciprocal avoidance between agents"
     );
 
-    world.add_obstacle(NavMeshObstacle::carving_box([5.5, 0.0, 0.5], [0.4, 1.0, 0.4]))?;
+    world.add_obstacle(NavMeshObstacle::carving_box(
+        [5.5, 0.0, 0.5],
+        [0.4, 1.0, 0.4],
+    ))?;
     let mut filter = NavMeshQueryFilter::new(NavMesh::ALL_AREAS);
     filter.set_area_cost(0, 1.0)?;
     let detoured = world.calculate_path([4.5, 0.0, 0.5], [6.5, 0.0, 0.5], &filter);

@@ -569,11 +569,18 @@ fn cin_001_outcome_33_combined_five_track_timeline_plays_pauses_seeks_completes_
 
         assert_eq!(animations.speed(anim_entity), Some(1.0));
         assert_eq!(
-            world.player(player).ok_or("player missing")?.active_audio_clips()[0].clip,
+            world
+                .player(player)
+                .ok_or("player missing")?
+                .active_audio_clips()[0]
+                .clip,
             "theme"
         );
         assert_eq!(
-            world.player(player).ok_or("player missing")?.active_activation_clips(),
+            world
+                .player(player)
+                .ok_or("player missing")?
+                .active_activation_clips(),
             vec![(act_entity, true)]
         );
         assert_eq!(
@@ -642,4 +649,3 @@ fn cin_001_outcome_33_combined_five_track_timeline_plays_pauses_seeks_completes_
     }
     Ok(())
 }
-

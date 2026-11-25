@@ -675,10 +675,7 @@ fn phy_001_story_2_removing_layer_pair_stops_collision_and_trigger_callbacks_and
         dynamic_l0,
         sphere_body([-0.3, 0.0, 0.0], [0.0, 0.0, 0.0], 0),
     )?;
-    world.add_body(
-        dynamic_l1,
-        sphere_body([0.3, 0.0, 0.0], [0.0, 0.0, 0.0], 1),
-    )?;
+    world.add_body(dynamic_l1, sphere_body([0.3, 0.0, 0.0], [0.0, 0.0, 0.0], 1))?;
     world.add_body(
         trigger_l1,
         BodyDesc {

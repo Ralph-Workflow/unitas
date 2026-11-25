@@ -233,7 +233,10 @@ impl ImportSessionReport {
     }
 
     pub fn imported_again(&self) -> Vec<&ImportRecord> {
-        self.records.iter().filter(|record| !record.reused).collect()
+        self.records
+            .iter()
+            .filter(|record| !record.reused)
+            .collect()
     }
 }
 

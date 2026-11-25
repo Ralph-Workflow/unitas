@@ -15,13 +15,30 @@ pub use path::{NavMeshHit, PathQueryResult, PathQueryStatus, UnreachableReason};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavigationError {
-    DegenerateTriangle { index: usize },
-    InvalidAreaCost { area: u32, cost: f64 },
-    InvalidPosition { position: [f64; 3] },
-    InvalidObstacle { center: [f64; 3], half_extents: [f64; 3] },
-    LinkEndpointOffNavMesh { position: [f64; 3] },
-    DestinationOffNavMesh { position: [f64; 3] },
-    AgentOffNavMesh { entity: EntityId, name: String },
+    DegenerateTriangle {
+        index: usize,
+    },
+    InvalidAreaCost {
+        area: u32,
+        cost: f64,
+    },
+    InvalidPosition {
+        position: [f64; 3],
+    },
+    InvalidObstacle {
+        center: [f64; 3],
+        half_extents: [f64; 3],
+    },
+    LinkEndpointOffNavMesh {
+        position: [f64; 3],
+    },
+    DestinationOffNavMesh {
+        position: [f64; 3],
+    },
+    AgentOffNavMesh {
+        entity: EntityId,
+        name: String,
+    },
 }
 
 impl fmt::Display for NavigationError {

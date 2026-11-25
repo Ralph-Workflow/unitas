@@ -266,8 +266,8 @@ impl NavMesh {
                 if closed[next] {
                     continue;
                 }
-                let tentative =
-                    cost_so_far[current] + self.step_cost(current, next, &kind, area_cost_overrides);
+                let tentative = cost_so_far[current]
+                    + self.step_cost(current, next, &kind, area_cost_overrides);
                 if tentative < cost_so_far[next] {
                     cost_so_far[next] = tentative;
                     came_from[next] = Some(PathStep {

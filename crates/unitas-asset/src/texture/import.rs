@@ -602,9 +602,9 @@ impl TextureImportSettings {
     pub fn from_meta_text(text: &str) -> Result<TextureImportSettings, TextureImportError> {
         let texture_type = match meta_value(text, "textureType") {
             Some(raw) => {
-                let code = raw.parse::<u8>().map_err(|_| {
-                    TextureImportError::InvalidMetaText("textureType".to_string())
-                })?;
+                let code = raw
+                    .parse::<u8>()
+                    .map_err(|_| TextureImportError::InvalidMetaText("textureType".to_string()))?;
                 TextureImporterType::from_code(code).ok_or_else(|| {
                     TextureImportError::InvalidMetaText(format!("textureType {code}"))
                 })?
@@ -886,9 +886,10 @@ fn parse_meta_pair(value: &str) -> Result<(f32, f32), TextureImportError> {
             Some(pair) => pair,
             None => continue,
         };
-        let number = raw.trim().parse::<f32>().map_err(|_| {
-            TextureImportError::InvalidMetaText(format!("sprite {}", key.trim()))
-        })?;
+        let number = raw
+            .trim()
+            .parse::<f32>()
+            .map_err(|_| TextureImportError::InvalidMetaText(format!("sprite {}", key.trim())))?;
         match key.trim() {
             "x" => x = Some(number),
             "y" => y = Some(number),
@@ -911,9 +912,10 @@ fn parse_meta_quad(value: &str) -> Result<(f32, f32, f32, f32), TextureImportErr
             Some(pair) => pair,
             None => continue,
         };
-        let number = raw.trim().parse::<f32>().map_err(|_| {
-            TextureImportError::InvalidMetaText(format!("sprite {}", key.trim()))
-        })?;
+        let number = raw
+            .trim()
+            .parse::<f32>()
+            .map_err(|_| TextureImportError::InvalidMetaText(format!("sprite {}", key.trim())))?;
         values.push((key.trim().to_string(), number));
     }
     if values.len() != 4 {
@@ -921,12 +923,7 @@ fn parse_meta_quad(value: &str) -> Result<(f32, f32, f32, f32), TextureImportErr
             "sprite border is incomplete".to_string(),
         ));
     }
-    Ok((
-        values[0].1,
-        values[1].1,
-        values[2].1,
-        values[3].1,
-    ))
+    Ok((values[0].1, values[1].1, values[2].1, values[3].1))
 }
 
 fn parse_meta_i32(value: &str) -> Result<i32, TextureImportError> {

@@ -473,5 +473,3 @@ fn ani_001_outcome_27_reverse_playback_and_preview_play_mode_player_parity() {
         "ANI-001 outcome 27: reverse playback across loop boundary must fire events in descending order"
     );
 }
-
-

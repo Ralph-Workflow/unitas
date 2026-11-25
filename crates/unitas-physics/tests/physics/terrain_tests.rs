@@ -473,8 +473,7 @@ fn terrain_bounds_report_the_placed_extent() -> TestResult {
 }
 
 #[test]
-fn env_001_story_11_splat_layers_delayed_heights_and_raycast_through_terrain_holes(
-) -> TestResult {
+fn env_001_story_11_splat_layers_delayed_heights_and_raycast_through_terrain_holes() -> TestResult {
     let resolution = 4usize;
     let size = 8.0;
     let data = flat_data(resolution, [size, 4.0, size], 3.0)?;
@@ -595,8 +594,7 @@ fn env_001_story_12_wind_zone_moves_tree_creator_trees_and_grass_while_excluding
 }
 
 #[test]
-fn env_001_story_16_terrain_instanced_drawing_urp_lit_and_speedtree_8_lods(
-) -> TestResult {
+fn env_001_story_16_terrain_instanced_drawing_urp_lit_and_speedtree_8_lods() -> TestResult {
     let data = flat_data(4, [20.0, 10.0, 20.0], 2.0)?;
     let tree_creator = data.add_tree_prototype(TreePrototype::tree_creator("TreeCreator_Elm", 2));
     let speed_tree = data.add_tree_prototype(TreePrototype::speed_tree_8("SpeedTree8_Redwood", 4));
@@ -635,8 +633,7 @@ fn env_001_story_16_terrain_instanced_drawing_urp_lit_and_speedtree_8_lods(
         "ENV-001 Story 16: terrain uses instanced drawing"
     );
     assert_eq!(
-        draw.material_shader,
-        "Universal Render Pipeline/Terrain/Lit",
+        draw.material_shader, "Universal Render Pipeline/Terrain/Lit",
         "ENV-001 Story 16: terrain renders with URP Terrain Lit material"
     );
     assert_eq!(draw.tree_batches.len(), 2);

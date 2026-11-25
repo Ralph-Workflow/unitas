@@ -470,7 +470,9 @@ fn phy_004_story_6_four_wheel_vehicle_accelerates_brakes_steers_and_reports_grou
             wheel.sprung_mass() > 0.0,
             "PHY-004 story 6: wheel {idx} must report positive sprung mass"
         );
-        let (pose_pos, _pose_rot) = vehicle.wheel_world_pose(idx).ok_or(WheelError::InvalidVehicle)?;
+        let (pose_pos, _pose_rot) = vehicle
+            .wheel_world_pose(idx)
+            .ok_or(WheelError::InvalidVehicle)?;
         assert!(pose_pos[1].is_finite());
     }
 

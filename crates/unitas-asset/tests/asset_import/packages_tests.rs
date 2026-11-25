@@ -537,7 +537,9 @@ fn prj006_outcome8_outcome9_scoped_registry_git_embedded_lock_offline_cache_edit
 
     let offline_report = open_offline(&manifest, &lock);
     assert!(
-        offline_report.resolved_package("com.example.scoped").is_some(),
+        offline_report
+            .resolved_package("com.example.scoped")
+            .is_some(),
         "PRJ-006 Outcome 8: offline open resolves locked scoped package"
     );
     assert!(
@@ -545,7 +547,9 @@ fn prj006_outcome8_outcome9_scoped_registry_git_embedded_lock_offline_cache_edit
         "PRJ-006 Outcome 8: offline open resolves locked git package"
     );
     assert!(
-        offline_report.resolved_package("com.example.embedded").is_some(),
+        offline_report
+            .resolved_package("com.example.embedded")
+            .is_some(),
         "PRJ-006 Outcome 8: offline open resolves locked embedded package"
     );
     let unfetched = offline_report
@@ -578,4 +582,3 @@ fn prj006_outcome8_outcome9_scoped_registry_git_embedded_lock_offline_cache_edit
     fs::remove_dir_all(&root)?;
     Ok(())
 }
-

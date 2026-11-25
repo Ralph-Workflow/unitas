@@ -1674,7 +1674,10 @@ fn ser003_outcome8_nested_and_variant_values_expose_one_unambiguous_inheritance_
         ]
     );
     assert_eq!(
-        changed_entries.iter().filter(|entry| entry.is_effective).count(),
+        changed_entries
+            .iter()
+            .filter(|entry| entry.is_effective)
+            .count(),
         1
     );
     assert_eq!(
@@ -1951,10 +1954,7 @@ fn ser003_outcome7_object_reference_override_round_trips_and_propagates_across_v
         PrefabSourceReference::external(2100000, mat_guid_2, 2),
     ))?;
 
-    scene_save::save_prefab_variant(
-        &base_path,
-        registry.get(BASE_GUID).ok_or("missing base")?,
-    )?;
+    scene_save::save_prefab_variant(&base_path, registry.get(BASE_GUID).ok_or("missing base")?)?;
     scene_save::save_prefab_variant(
         &variant_a_path,
         registry.get(VARIANT_A_GUID).ok_or("missing variant A")?,
@@ -2090,10 +2090,7 @@ fn ser003_outcome7_nested_prefab_apply_to_source_and_orphaned_override_resolutio
         "m_Caliber",
     )?;
 
-    let nested_def = registry
-        .get(NESTED_GUID)
-        .ok_or("missing nested")?
-        .clone();
+    let nested_def = registry.get(NESTED_GUID).ok_or("missing nested")?.clone();
     let outer_def = registry.get(BASE_GUID).ok_or("missing outer")?.clone();
     assert!(outer_def.nested_prefabs[0].modifications.is_empty());
 
@@ -2218,8 +2215,7 @@ fn ser003_outcome7_outcome8_unpack_one_level_and_completely_preserves_values_and
         .ok_or("missing variant A")?;
     variant_mut.add_child_override(
         SourceObjectId::new(BASE_GUID, ROOT_GO_ID),
-        PrefabNodeRecord::new(600, "AddedBanner", Some(ROOT_GO_ID))
-            .with_property("m_Color", "red"),
+        PrefabNodeRecord::new(600, "AddedBanner", Some(ROOT_GO_ID)).with_property("m_Color", "red"),
         None,
     )?;
 
@@ -2237,10 +2233,7 @@ fn ser003_outcome7_outcome8_unpack_one_level_and_completely_preserves_values_and
 
     let unpacked_one = registry.unpack_instance(&instance, UnpackMode::OneLevel)?;
     assert_eq!(unpacked_one.nested_prefabs.len(), 1);
-    assert_eq!(
-        unpacked_one.nested_prefabs[0].source.guid,
-        NESTED_GUID
-    );
+    assert_eq!(unpacked_one.nested_prefabs[0].source.guid, NESTED_GUID);
     assert_eq!(
         unpacked_one.effective_property(ROOT_GO_ID, "m_Name"),
         Some("UnpackedOuterVehicle")
@@ -2253,10 +2246,7 @@ fn ser003_outcome7_outcome8_unpack_one_level_and_completely_preserves_values_and
         unpacked_one.effective_property(ROOT_TRANSFORM_ID, "m_LocalPosition.x"),
         Some("77")
     );
-    assert_eq!(
-        unpacked_one.effective_property(600, "m_Color"),
-        Some("red")
-    );
+    assert_eq!(unpacked_one.effective_property(600, "m_Color"), Some("red"));
 
     let mut one_level_stream =
         unity_yaml::parse(&scene_with_prefab_instance_yaml(VARIANT_A_GUID, ROOT_GO_ID))?;
