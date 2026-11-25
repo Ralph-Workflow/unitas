@@ -90,9 +90,21 @@ struct ShadeContext<'a> {
     light_color: [f32; 3],
     intensity: f32,
     ambient: f32,
-    camera_pos: Vec3,
     material: &'a Material,
     color: [f32; 3],
+}
+
+struct FrameTarget<'a> {
+    depth_buffer: &'a mut [f32],
+    pixels: &'a mut [[u8; 3]],
+    width: u32,
+    height: u32,
+}
+
+struct TriangleInterp {
+    normal: [Vec3; 3],
+    tangent: [Vec3; 3],
+    uv: [[f32; 2]; 3],
 }
 
 pub fn render(
@@ -134,6 +146,12 @@ pub fn render_with_view(
     }
 
     let mut depth_buffer = vec![f32::INFINITY; (width as usize) * (height as usize)];
+    let mut target = FrameTarget {
+        depth_buffer: &mut depth_buffer,
+        pixels: &mut image.pixels[..],
+        width,
+        height,
+    };
     let vp = camera.projection_matrix() * view;
     let light = light_dir.normalize();
     let width_f = width as f32;
@@ -194,10 +212,7 @@ pub fn render_with_view(
             ];
 
             rasterize_triangle(
-                &mut depth_buffer,
-                &mut image.pixels,
-                width,
-                height,
+                &mut target,
                 [
                     ScreenVertex {
                         x: s0_x,
@@ -279,9 +294,13 @@ pub fn render_scene_materials(
     }
 
     let mut depth_buffer = vec![f32::INFINITY; (width as usize) * (height as usize)];
+    let mut target = FrameTarget {
+        depth_buffer: &mut depth_buffer,
+        pixels: &mut image.pixels[..],
+        width,
+        height,
+    };
     let vp = camera.projection_matrix() * view;
-    let light_dir = light.direction.normalize();
-    let t = light.intensity.clamp(0.0, 1.0);
     let camera_pos = view
         .inverse()
         .map(|inverse| inverse.transform_point(Vec3::ZERO).truncate())
@@ -291,19 +310,7 @@ pub fn render_scene_materials(
         .iter()
         .filter(|instance| instance.material.blend == BlendMode::Opaque)
     {
-        draw_instance(
-            instance,
-            &vp,
-            light_dir,
-            light.color,
-            t,
-            1.0 - t,
-            camera_pos,
-            &mut depth_buffer,
-            &mut image.pixels,
-            width,
-            height,
-        );
+        draw_instance(instance, &vp, light, camera_pos, &mut target);
     }
 
     // Translucent pass: draw back-to-front (larger view-space depth first).
@@ -314,40 +321,23 @@ pub fn render_scene_materials(
     translucent.sort_by(|a, b| {
         let depth_a = view.mul_mat4(&a.model).transform_point(Vec3::ZERO).z;
         let depth_b = view.mul_mat4(&b.model).transform_point(Vec3::ZERO).z;
-        depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal)
+        depth_b
+            .partial_cmp(&depth_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     for instance in translucent {
-        draw_instance(
-            instance,
-            &vp,
-            light_dir,
-            light.color,
-            t,
-            1.0 - t,
-            camera_pos,
-            &mut depth_buffer,
-            &mut image.pixels,
-            width,
-            height,
-        );
+        draw_instance(instance, &vp, light, camera_pos, &mut target);
     }
 
     image
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_instance(
     instance: &MaterialInstance<'_>,
     vp: &Mat4,
-    light_dir: Vec3,
-    light_color: [f32; 3],
-    t: f32,
-    ambient: f32,
+    light: &DirectionalLight,
     camera_pos: Vec3,
-    depth_buffer: &mut [f32],
-    pixels: &mut [[u8; 3]],
-    width: u32,
-    height: u32,
+    target: &mut FrameTarget<'_>,
 ) {
     let mesh = instance.mesh;
     let mvp = *vp * instance.model;
@@ -360,12 +350,17 @@ fn draw_instance(
     } else {
         None
     };
+    let light_dir = light.direction.normalize();
+    let light_color = light.color;
+    let t = light.intensity.clamp(0.0, 1.0);
+    let ambient = 1.0 - t;
+    let width = target.width;
+    let height = target.height;
     let context = ShadeContext {
         light_dir,
         light_color,
         intensity: t,
         ambient,
-        camera_pos,
         material,
         color: instance.color,
     };
@@ -412,9 +407,18 @@ fn draw_instance(
             },
         ];
 
-        let n0 = transform_direction(instance.model, mesh.normals.get(i0).copied().unwrap_or(Vec3::ZERO));
-        let n1 = transform_direction(instance.model, mesh.normals.get(i1).copied().unwrap_or(Vec3::ZERO));
-        let n2 = transform_direction(instance.model, mesh.normals.get(i2).copied().unwrap_or(Vec3::ZERO));
+        let n0 = transform_direction(
+            instance.model,
+            mesh.normals.get(i0).copied().unwrap_or(Vec3::ZERO),
+        );
+        let n1 = transform_direction(
+            instance.model,
+            mesh.normals.get(i1).copied().unwrap_or(Vec3::ZERO),
+        );
+        let n2 = transform_direction(
+            instance.model,
+            mesh.normals.get(i2).copied().unwrap_or(Vec3::ZERO),
+        );
         let sum = n0 + n1 + n2;
         let face_normal = if sum.length_squared() > 1e-8 {
             sum.normalize()
@@ -432,16 +436,9 @@ fn draw_instance(
                 to_u8(instance.color[1] * (ambient + light_color[1] * lambert * t)),
                 to_u8(instance.color[2] * (ambient + light_color[2] * lambert * t)),
             ];
-            rasterize_triangle(
-                depth_buffer,
-                pixels,
-                width,
-                height,
-                screen,
-                write_depth,
-                alpha,
-                &move |_, _, _| shaded_rgb,
-            );
+            rasterize_triangle(target, screen, write_depth, alpha, &move |_, _, _| {
+                shaded_rgb
+            });
             continue;
         }
 
@@ -472,60 +469,29 @@ fn draw_instance(
             * (1.0 / 3.0);
         let view_dir = (camera_pos - centroid).normalize();
 
-        rasterize_triangle(
-            depth_buffer,
-            pixels,
-            width,
-            height,
-            screen,
-            write_depth,
-            alpha,
-            &|w0, w1, w2| {
-                shade_textured_pixel(
-                    &context,
-                    face_normal,
-                    w0,
-                    w1,
-                    w2,
-                    n0,
-                    n1,
-                    n2,
-                    tangent0,
-                    tangent1,
-                    tangent2,
-                    uv0,
-                    uv1,
-                    uv2,
-                    view_dir,
-                )
-            },
-        );
+        let interp = TriangleInterp {
+            normal: [n0, n1, n2],
+            tangent: [tangent0, tangent1, tangent2],
+            uv: [uv0, uv1, uv2],
+        };
+        rasterize_triangle(target, screen, write_depth, alpha, &|w0, w1, w2| {
+            shade_textured_pixel(&context, face_normal, [w0, w1, w2], &interp, view_dir)
+        });
     }
 }
 
 /// Per-pixel lit shading for textured materials; mirrors the GPU fragment
 /// shader exactly (albedo multiply, tangent-space normal map, Blinn-Phong
 /// specular gated by metallic*smoothness, emissive add).
-#[allow(clippy::too_many_arguments)]
 fn shade_textured_pixel(
     context: &ShadeContext<'_>,
     face_normal: Vec3,
-    w0: f32,
-    w1: f32,
-    w2: f32,
-    n0: Vec3,
-    n1: Vec3,
-    n2: Vec3,
-    tangent0: Vec3,
-    tangent1: Vec3,
-    tangent2: Vec3,
-    uv0: [f32; 2],
-    uv1: [f32; 2],
-    uv2: [f32; 2],
+    w: [f32; 3],
+    interp: &TriangleInterp,
     view_dir: Vec3,
 ) -> [u8; 3] {
-    let u = w0 * uv0[0] + w1 * uv1[0] + w2 * uv2[0];
-    let v = w0 * uv0[1] + w1 * uv1[1] + w2 * uv2[1];
+    let u = w[0] * interp.uv[0][0] + w[1] * interp.uv[1][0] + w[2] * interp.uv[2][0];
+    let v = w[0] * interp.uv[0][1] + w[1] * interp.uv[1][1] + w[2] * interp.uv[2][1];
     let white = [1.0f32; 3];
     let black = [0.0f32; 3];
     let albedo_tex = context
@@ -541,16 +507,19 @@ fn shade_textured_pixel(
         .map(|tex| tex.sample_bilinear(u, v))
         .unwrap_or(black);
 
-    let mut normal = (w0 * n0 + w1 * n1 + w2 * n2).normalize();
+    let mut normal =
+        (w[0] * interp.normal[0] + w[1] * interp.normal[1] + w[2] * interp.normal[2]).normalize();
     if normal.length_squared() < 1e-12 {
         normal = face_normal;
     }
-    if context.material.normal.is_some() {
-        let tangent = (w0 * tangent0 + w1 * tangent1 + w2 * tangent2).normalize();
+    if let Some(normal_map) = &context.material.normal {
+        let tangent =
+            (w[0] * interp.tangent[0] + w[1] * interp.tangent[1] + w[2] * interp.tangent[2])
+                .normalize();
         if tangent.length_squared() > 1e-12 {
             let tangent = (tangent - normal * tangent.dot(normal)).normalize();
             let bitangent = normal.cross(tangent);
-            let mapped = context.material.normal.as_ref().unwrap().sample_bilinear(u, v);
+            let mapped = normal_map.sample_bilinear(u, v);
             let mapped = Vec3::new(
                 mapped[0] * 2.0 - 1.0,
                 mapped[1] * 2.0 - 1.0,
@@ -586,15 +555,14 @@ fn transform_direction(model: Mat4, direction: Vec3) -> Vec3 {
 }
 
 fn rasterize_triangle(
-    depth_buffer: &mut [f32],
-    pixels: &mut [[u8; 3]],
-    width: u32,
-    height: u32,
+    target: &mut FrameTarget<'_>,
     screen: [ScreenVertex; 3],
     write_depth: bool,
     alpha: Option<f32>,
     shade: &dyn Fn(f32, f32, f32) -> [u8; 3],
 ) {
+    let width = target.width;
+    let height = target.height;
     let area = edge_function(
         screen[0].x,
         screen[0].y,
@@ -670,14 +638,15 @@ fn rasterize_triangle(
                 let depth = w0 * screen[0].z + w1 * screen[1].z + w2 * screen[2].z;
                 if (0.0..=1.0).contains(&depth) {
                     let idx = (py as usize) * (width as usize) + (px as usize);
-                    if depth < depth_buffer[idx] {
+                    if depth < target.depth_buffer[idx] {
+                        let dst = target.pixels[idx];
                         let src = shade(w0, w1, w2);
-                        pixels[idx] = match alpha {
-                            Some(a) => blend_pixel(pixels[idx], src, a),
+                        target.pixels[idx] = match alpha {
+                            Some(a) => blend_pixel(dst, src, a),
                             None => src,
                         };
                         if write_depth {
-                            depth_buffer[idx] = depth;
+                            target.depth_buffer[idx] = depth;
                         }
                     }
                 }
@@ -768,15 +737,18 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         );
         for matrix in [model, view] {
-            let inverse = matrix.inverse().expect("matrix is invertible");
-            let product = matrix.mul_mat4(&inverse);
-            for index in 0..16 {
-                let expected = if index % 5 == 0 { 1.0 } else { 0.0 };
-                assert!(
-                    (product.data[index] - expected).abs() < 1e-5,
-                    "index {index}: {}",
-                    product.data[index]
-                );
+            let inverse = matrix.inverse();
+            assert!(inverse.is_some(), "matrix is invertible");
+            if let Some(inverse) = inverse {
+                let product = matrix.mul_mat4(&inverse);
+                for index in 0..16 {
+                    let expected = if index % 5 == 0 { 1.0 } else { 0.0 };
+                    assert!(
+                        (product.data[index] - expected).abs() < 1e-5,
+                        "index {index}: {}",
+                        product.data[index]
+                    );
+                }
             }
         }
     }
@@ -933,6 +905,9 @@ mod tests {
             (pixel[0] as i32 - 127).abs() <= 2 && (pixel[2] as i32 - 64).abs() <= 2,
             "blended pixel {pixel:?} does not match back-to-front compositing"
         );
-        assert!(pixel[0] > pixel[2], "nearer red quad must dominate the blend");
+        assert!(
+            pixel[0] > pixel[2],
+            "nearer red quad must dominate the blend"
+        );
     }
 }

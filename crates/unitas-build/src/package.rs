@@ -165,7 +165,7 @@ fn launcher_script(executable_name: &str) -> String {
          # Launcher for the {executable_name} player bundle: runs the staged\n\
          # bundle that ships inside this application.\n\
          here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n\
-         exec \"$here/{PLAYER_BINARY_FILENAME}\" \"$here/../{RESOURCES_DIR_NAME}\" \"$@\"\n"
+         exec \"$here/{PLAYER_BINARY_FILENAME}\" \"$here/../{RESOURCES_DIR_NAME}\" --windowed \"$@\"\n"
     )
 }
 
@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn packaged_macos_app_carries_the_player_bundle_and_starts_headless(
+    fn packaged_macos_app_carries_the_player_bundle_and_launches_windowed(
     ) -> Result<(), Box<dyn Error>> {
         let output_dir = test_output_dir("macos_app")?;
         let config = BuildConfiguration::new(
@@ -392,15 +392,26 @@ mod tests {
         assert!(info_plist.contains("<string>PackagedGame</string>"));
         assert!(info_plist.contains("<string>com.unitas.packaged</string>"));
 
+        let launcher = fs::read_to_string(&executable)?;
+        assert!(
+            launcher.contains("--windowed"),
+            "the packaged launcher does not start the player windowed: {launcher}"
+        );
+        assert!(
+            launcher.contains("\"$@\""),
+            "the packaged launcher does not forward caller arguments: {launcher}"
+        );
+
         #[cfg(target_os = "macos")]
         {
-            let output = Command::new(&executable)
+            let output = Command::new(macos.join(PLAYER_BINARY_FILENAME))
+                .arg(&resources)
                 .arg("--frames")
                 .arg("1")
                 .output()?;
             assert!(
                 output.status.success(),
-                "the packaged app exited with {}: {}",
+                "the packaged player exited with {}: {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
             );
@@ -412,6 +423,17 @@ mod tests {
             assert!(
                 stdout.contains("frames_stepped=1"),
                 "unexpected startup output: {stdout}"
+            );
+
+            let launcher_run = Command::new(&executable)
+                .arg("--control-stdio")
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(
+                launcher_run.status.success(),
+                "the packaged launcher exited with {}: {}",
+                launcher_run.status,
+                String::from_utf8_lossy(&launcher_run.stderr)
             );
         }
         Ok(())

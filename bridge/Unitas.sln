@@ -23,7 +23,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Debugging", "Unitas.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.PlayerHost", "Unitas.PlayerHost\Unitas.PlayerHost.csproj", "{6E4F8A22-3B71-4E85-9C30-2D4A6B8C0E1F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.PlayerHost.Tests", "Unitas.PlayerHost\Tests\Unitas.PlayerHost.Tests.csproj", "{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.PlayerHost.Tests", "Unitas.PlayerHost.Tests\Unitas.PlayerHost.Tests.csproj", "{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
