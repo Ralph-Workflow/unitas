@@ -277,12 +277,36 @@ def test_bypass_audit_flags_analyzer_severity_downgrade_without_reason(tmp_path:
     assert any("analyzer severity downgrade" in finding for finding in findings)
     (tmp_path / ".editorconfig").write_text("root = true\n", encoding="utf-8")
     (tmp_path / ".globalconfig").write_text(
+        "is_global = true\n# justified downgrade\ndotnet_diagnostic.CA1031.severity = suggestion\n",
+        encoding="utf-8",
+    )
+    assert verify.check_bypass(tmp_path) == []
+    (tmp_path / ".globalconfig").write_text(
         "is_global = true\ndotnet_diagnostic.CA1031.severity = suggestion\n",
         encoding="utf-8",
     )
     findings = verify.check_bypass(tmp_path)
     assert any(
         ".globalconfig" in finding and "analyzer severity downgrade" in finding
+        for finding in findings
+    )
+
+
+def test_bypass_audit_scans_clippy_toml_and_rustfmt_toml(tmp_path: Path) -> None:
+    _write_clean_pyproject(tmp_path)
+    _write_clean_rust_workspace(tmp_path)
+    (tmp_path / "clippy.toml").write_text("cognitive-complexity-threshold = 25\n", encoding="utf-8")
+    (tmp_path / "rustfmt.toml").write_text("max_width = 100\n", encoding="utf-8")
+    assert verify.check_bypass(tmp_path) == []
+    (tmp_path / "clippy.toml").write_text("allow-unwrap-in-tests = true\n", encoding="utf-8")
+    (tmp_path / "rustfmt.toml").write_text("disable_all_formatting = true\n", encoding="utf-8")
+    findings = verify.check_bypass(tmp_path)
+    assert any(
+        "clippy.toml" in finding and "allow-unwrap-in-tests bypass is forbidden" in finding
+        for finding in findings
+    )
+    assert any(
+        "rustfmt.toml" in finding and "disable_all_formatting bypass is forbidden" in finding
         for finding in findings
     )
 
