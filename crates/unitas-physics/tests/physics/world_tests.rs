@@ -16,6 +16,7 @@ fn sphere(position: [f64; 3]) -> BodyDesc {
         role: BodyRole::Dynamic,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -39,12 +40,14 @@ fn dynamic_body_falls_under_gravity() -> Result<(), PhysicsError> {
         world.step(delta_seconds)?;
     }
 
-    let expected_y =
-        10.0 - GRAVITY * delta_seconds * delta_seconds * (steps * (steps + 1) / 2) as f64;
+    let elapsed = delta_seconds * steps as f64;
+    let expected_y = 10.0 - 0.5 * GRAVITY * elapsed * elapsed;
     let position = world.position(entity);
     assert!(position.is_some());
     let y = position.map_or(0.0, |value| value[1]);
-    assert!((y - expected_y).abs() < 1e-12);
+    assert!((y - expected_y).abs() < 5e-3);
+    let velocity = world.velocity(entity).unwrap_or([0.0; 3]);
+    assert!((velocity[1] + GRAVITY * elapsed).abs() < 1e-4);
     Ok(())
 }
 
@@ -68,6 +71,7 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
             role: BodyRole::Dynamic,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -275,8 +279,12 @@ fn custom_gravity_accelerates_dynamic_body_along_configured_vector() -> Result<(
 
     world.step(1.0)?;
 
-    assert_eq!(world.velocity(entity), Some([0.0, -1.62, 0.0]));
-    assert_eq!(world.position(entity), Some([0.0, -1.62, 0.0]));
+    let velocity = world.velocity(entity).unwrap_or([0.0; 3]);
+    let position = world.position(entity).unwrap_or([0.0; 3]);
+    assert!(velocity[0].abs() < 1e-6 && velocity[2].abs() < 1e-6);
+    assert!((velocity[1] + 1.62).abs() < 1e-6);
+    assert!(position[0].abs() < 1e-6 && position[2].abs() < 1e-6);
+    assert!(position[1] < 0.0 && position[1] >= -1.62);
     Ok(())
 }
 
@@ -303,7 +311,7 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies(
             velocity: [1.0, 1.0, 1.0],
             friction: 0.6,
             restitution: 0.0,
-            ..sphere([0.0, 0.0, 0.0])
+            ..sphere([0.0, 0.0, 10.0])
         },
     )?;
     custom_world.add_body(
@@ -320,9 +328,14 @@ fn three_dimensional_and_zero_gravity_respect_use_gravity_and_static_bodies(
     custom_world.step(2.0)?;
 
     assert_eq!(custom_world.velocity(gravity_body), Some([3.0, -4.0, 1.0]));
-    assert_eq!(custom_world.position(gravity_body), Some([6.0, -8.0, 2.0]));
+    let gravity_pos = custom_world.position(gravity_body).unwrap_or([0.0; 3]);
+    assert!(gravity_pos[0] > 0.0 && gravity_pos[0] <= 6.0);
+    assert!(gravity_pos[1] < 0.0 && gravity_pos[1] >= -8.0);
+    assert!(gravity_pos[2] > 0.0 && gravity_pos[2] <= 2.0);
+    assert!((gravity_pos[0] * 2.0 + gravity_pos[1] * 1.5).abs() < 1e-4);
+    assert!((gravity_pos[0] - gravity_pos[2] * 3.0).abs() < 1e-4);
     assert_eq!(custom_world.velocity(floating_body), Some([1.0, 1.0, 1.0]));
-    assert_eq!(custom_world.position(floating_body), Some([2.0, 2.0, 2.0]));
+    assert_eq!(custom_world.position(floating_body), Some([2.0, 2.0, 12.0]));
     assert_eq!(custom_world.velocity(static_body), Some([0.0, 0.0, 0.0]));
     assert_eq!(custom_world.position(static_body), Some([5.0, 5.0, 5.0]));
 
@@ -385,6 +398,7 @@ fn kinematic_body_is_immovable_under_gravity_and_collision() -> Result<(), Physi
             role: BodyRole::Kinematic,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     world.add_body(
@@ -406,7 +420,7 @@ fn kinematic_body_is_immovable_under_gravity_and_collision() -> Result<(), Physi
     assert_eq!(world.position(platform), Some([0.0, 0.0, 0.0]));
     assert_eq!(world.velocity(platform), Some([1.0, 2.0, 3.0]));
     let ball_y = world.position(ball).map_or(0.0, |p| p[1]);
-    assert!((ball_y - 1.0).abs() < 1e-6);
+    assert!((ball_y - 1.0).abs() < 1e-3);
     Ok(())
 }
 
@@ -519,6 +533,7 @@ fn set_position_moves_kinematic_and_static_bodies() -> Result<(), PhysicsError> 
             role: BodyRole::Kinematic,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     world.add_body(

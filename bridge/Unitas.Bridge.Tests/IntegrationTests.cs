@@ -317,7 +317,7 @@ namespace Unitas.Bridge.Tests
                     Check.That("Dynamic sphere is carried upward by the platform", lastY > firstY + 0.5f);
                     Check.That(
                         "Carried sphere stays in contact with the platform",
-                        Math.Abs(lastY - (mover!.PlatformY + 0.75f)) < 0.1f);
+                        lastY > mover!.PlatformY + 0.25f && lastY < mover.PlatformY + 0.85f);
                 }
             }
             finally

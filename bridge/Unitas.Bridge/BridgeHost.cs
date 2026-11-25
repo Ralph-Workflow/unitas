@@ -1268,6 +1268,16 @@ namespace Unitas.Bridge
             return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_velocity, velocity);
         }
 
+        public bool TrySetBodyCollisionDetectionMode(ulong entity, CollisionDetectionMode mode)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            int nativeMode = mode == CollisionDetectionMode.Discrete ? 0 : 1;
+            return RuntimeInterop.unitas_runtime_body_set_collision_detection_mode(_runtimeHandle, entity, nativeMode) == 0;
+        }
+
         public bool TryAddForce(ulong entity, Vector3 force, ForceMode mode)
         {
             if (_isDisposed || entity == 0)

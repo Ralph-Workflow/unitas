@@ -15,6 +15,7 @@ fn dynamic_ball(position: [f64; 3]) -> BodyDesc {
         layer: 0,
         friction: 0.5,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -54,6 +55,7 @@ fn teleport_moves_a_kinematic_body_without_reporting_swept_motion() -> Result<()
             layer: 0,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 

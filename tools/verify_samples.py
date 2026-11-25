@@ -23,6 +23,8 @@ BUILD_BUDGET_SECONDS = 600.0
 RUN_BUDGET_SECONDS = 300.0
 
 SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
+    ("bumper_restitution", "bumper_restitution.json", ("--repeat", "2"), False),
+    ("ccd_containment", "ccd_containment.json", ("--repeat", "2"), False),
     ("collect_all", "collect_all.json", ("--repeat", "2"), False),
     ("retry_clean", "retry_clean.json", ("--repeat", "2"), False),
     ("combo_multiplier", "combo_multiplier.json", ("--repeat", "2"), False),

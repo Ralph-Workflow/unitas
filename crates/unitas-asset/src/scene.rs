@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -223,6 +223,7 @@ pub(crate) struct GameObjectRecord {
 pub struct ScriptBinding {
     pub entity: EntityId,
     pub guid: String,
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -788,7 +789,11 @@ fn assemble_documents(
             Some(guid) => guid.to_string(),
             None => continue,
         };
-        set.scripts.push(ScriptBinding { entity, guid });
+        set.scripts.push(ScriptBinding {
+            entity,
+            guid,
+            fields: serialized_fields(body),
+        });
     }
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
@@ -810,7 +815,11 @@ fn assemble_documents(
                     })
                 }
             };
-            expand_instance(&instance, document.file_id, &mut set, graph, context)?;
+            let expanded_root =
+                expand_instance(&instance, document.file_id, &mut set, graph, context)?;
+            if set.root.is_none() && instance.transform_parent == ROOT_FILE_ID {
+                set.root = Some(expanded_root);
+            }
         }
     }
     Ok(set)
@@ -822,7 +831,7 @@ fn expand_instance(
     set: &mut DocumentSet,
     graph: &mut SceneGraph,
     context: &mut PrefabContext,
-) -> Result<(), SceneError> {
+) -> Result<EntityId, SceneError> {
     let path = match context
         .index
         .and_then(|index| index.get(&instance.source.guid))
@@ -853,12 +862,14 @@ fn expand_instance(
             })
         }
     };
+    let mut prefab_set = prefab_set;
     prefab::apply_modifications(
         instance,
         &prefab_set.game_objects,
         &prefab_set.transforms,
         graph,
     );
+    apply_overridden_bindings(instance, &stream, &mut prefab_set, context.index);
     if instance.transform_parent != ROOT_FILE_ID {
         let parent = match set.transforms.get(&instance.transform_parent) {
             Some(parent) => *parent,
@@ -877,7 +888,140 @@ fn expand_instance(
     set.render.cameras.extend(prefab_set.render.cameras);
     set.render.renderers.extend(prefab_set.render.renderers);
     set.render.lights.extend(prefab_set.render.lights);
-    Ok(())
+    Ok(root)
+}
+
+const SCRIPT_RESERVED_KEYS: [&str; 7] = [
+    "m_ObjectHideFlags",
+    "m_GameObject",
+    "m_Script",
+    "m_PrefabInstance",
+    "m_CorrespondingSourceObject",
+    "m_PrefabAsset",
+    "serializedVersion",
+];
+
+fn serialized_fields(body: &Node) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    if let Some(entries) = body.as_mapping() {
+        for (key, value) in entries {
+            if SCRIPT_RESERVED_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            if let Some(scalar) = value.as_str() {
+                fields.insert(key.clone(), scalar.to_string());
+            }
+        }
+    }
+    fields
+}
+
+fn apply_overridden_bindings(
+    instance: &prefab::PrefabInstance,
+    stream: &Stream,
+    set: &mut DocumentSet,
+    index: Option<&GuidIndex>,
+) {
+    for modification in &instance.modifications {
+        let document =
+            match stream.documents.iter().find(|document| {
+                document.file_id == modification.target_file_id && !document.stripped
+            }) {
+                Some(document) => document,
+                None => continue,
+            };
+        let body = match document.class_id {
+            MESH_RENDERER_CLASS => document.root.get("MeshRenderer"),
+            MONO_BEHAVIOUR_CLASS => document.root.get("MonoBehaviour"),
+            _ => continue,
+        };
+        let body = match body {
+            Some(body) => body,
+            None => continue,
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject")) {
+            Ok(Some(file_id)) => file_id,
+            _ => continue,
+        };
+        let entity = match set.game_objects.get(&game_object_file_id) {
+            Some(record) => record.entity,
+            None => continue,
+        };
+        if document.class_id == MESH_RENDERER_CLASS {
+            apply_material_override(modification, entity, set, index);
+        } else {
+            apply_script_field_override(modification, entity, set);
+        }
+    }
+}
+
+fn material_slot(property_path: &str) -> Option<usize> {
+    let rest = property_path.strip_prefix("m_Materials.Array.data[")?;
+    let slot = rest.strip_suffix(']')?;
+    slot.parse::<usize>().ok()
+}
+
+fn apply_material_override(
+    modification: &prefab::Modification,
+    entity: EntityId,
+    set: &mut DocumentSet,
+    index: Option<&GuidIndex>,
+) {
+    if material_slot(&modification.property_path) != Some(0) {
+        return;
+    }
+    let guid = match modification
+        .object_reference
+        .as_ref()
+        .and_then(|reference| reference.guid.clone())
+        .filter(|guid| !guid.is_empty())
+    {
+        Some(guid) => guid,
+        None => return,
+    };
+    let renderer = match set
+        .render
+        .renderers
+        .iter_mut()
+        .find(|renderer| renderer.entity == entity)
+    {
+        Some(renderer) => renderer,
+        None => return,
+    };
+    let path = index
+        .and_then(|guids| guids.get(&guid))
+        .map(Path::to_path_buf);
+    if let (Some(path), Some(index)) = (&path, index) {
+        renderer.material_color = resolve_material_color(path, index);
+    }
+    renderer.material_guid = Some(guid);
+    renderer.material_path = path;
+    renderer.material_diagnostic = None;
+}
+
+fn apply_script_field_override(
+    modification: &prefab::Modification,
+    entity: EntityId,
+    set: &mut DocumentSet,
+) {
+    if modification.property_path.contains('.') || modification.property_path.contains('[') {
+        return;
+    }
+    let binding = match set
+        .scripts
+        .iter_mut()
+        .find(|binding| binding.entity == entity)
+    {
+        Some(binding) => binding,
+        None => return,
+    };
+    let value = match &modification.object_reference {
+        Some(reference) if modification.value.is_empty() => reference.to_encoded_string(),
+        _ => modification.value.clone(),
+    };
+    binding
+        .fields
+        .insert(modification.property_path.clone(), value);
 }
 
 enum PhysicsComponent {
@@ -1276,7 +1420,7 @@ fn load_physic_material(path: &Path) -> Result<MaterialValues, String> {
             .ok_or_else(|| String::from("invalid m_Bounciness"))?,
         None => DEFAULT_PHYSIC_MATERIAL_RESTITUTION,
     };
-    if !restitution.is_finite() || !(0.0..=1.0).contains(&restitution) {
+    if !restitution.is_finite() || restitution < 0.0 {
         return Err(format!("invalid m_Bounciness {restitution}"));
     }
 

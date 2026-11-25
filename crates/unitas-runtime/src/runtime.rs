@@ -1974,6 +1974,7 @@ fn body_desc(
             role,
             friction,
             restitution,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
         offset,
     ))

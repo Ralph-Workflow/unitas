@@ -36,6 +36,7 @@ fn perf_physics_step_moves_two_thousand_active_bodies_within_budget() -> TestRes
                 role: BodyRole::Dynamic,
                 friction: 0.6,
                 restitution: 0.0,
+                collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
             },
         )?;
     }

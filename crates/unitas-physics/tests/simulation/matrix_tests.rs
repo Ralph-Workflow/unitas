@@ -54,6 +54,7 @@ fn sphere_body(position: [f64; 3], velocity: [f64; 3], layer: u32) -> BodyDesc {
         role: BodyRole::Dynamic,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -434,6 +435,7 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
             layer: 1,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     world.add_body(
@@ -450,6 +452,7 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
             layer: 1,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -538,6 +541,7 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
             layer: 1,
             friction: 0.6,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -555,6 +559,7 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
         layer: 1,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     };
 
     let err = world.add_mesh_collider_body(

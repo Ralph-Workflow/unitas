@@ -43,6 +43,7 @@ fn sphere_desc(position: [f64; 3], radius: f64) -> BodyDesc {
         role: BodyRole::Dynamic,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

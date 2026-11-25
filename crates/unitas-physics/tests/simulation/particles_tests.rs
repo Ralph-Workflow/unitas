@@ -278,6 +278,7 @@ fn collider(position: [f64; 3], radius: f64, is_trigger: bool) -> BodyDesc {
         role: BodyRole::Static,
         friction: 0.5,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

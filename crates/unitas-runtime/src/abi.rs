@@ -18,7 +18,7 @@ use std::sync::{Mutex, OnceLock};
 use unitas_animation::decode_controller_binary;
 use unitas_audio::AudioClip;
 use unitas_core::EntityId;
-use unitas_physics::ForceMode;
+use unitas_physics::{CollisionDetectionMode3D, ForceMode};
 use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
@@ -679,6 +679,47 @@ pub extern "C" fn unitas_runtime_set_body_velocity(
         match state
             .runtime
             .set_body_velocity(EntityId::new(entity), vector)
+        {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body_set_collision_detection_mode(
+    handle: u64,
+    entity: u64,
+    mode: u32,
+) -> i32 {
+    let mode = match mode {
+        0 => CollisionDetectionMode3D::Discrete,
+        1 => CollisionDetectionMode3D::Continuous,
+        _ => {
+            return match with_runtime_state(handle, |state| {
+                state.set_error("unknown collision detection mode");
+                -2
+            }) {
+                Ok(code) => code,
+                Err(code) => code,
+            };
+        }
+    };
+    match with_runtime_state(handle, |state| {
+        match state
+            .runtime
+            .physics_mut()
+            .set_collision_detection_mode_3d(EntityId::new(entity), mode)
         {
             Ok(()) => {
                 state.clear_error();

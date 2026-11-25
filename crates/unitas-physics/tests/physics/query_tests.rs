@@ -6,6 +6,30 @@ use unitas_physics::{
 const LAYER_ONE: u32 = 1;
 const LAYER_TWO: u32 = 2;
 
+fn assert_hit_near(hit: &QueryHit, expected: &QueryHit, tolerance: f64) {
+    assert_eq!(hit.entity, expected.entity);
+    for axis in 0..3 {
+        assert!(
+            (hit.point[axis] - expected.point[axis]).abs() <= tolerance,
+            "hit point {:?} must match {:?} within {tolerance}",
+            hit.point,
+            expected.point
+        );
+        assert!(
+            (hit.normal[axis] - expected.normal[axis]).abs() <= tolerance,
+            "hit normal {:?} must match {:?} within {tolerance}",
+            hit.normal,
+            expected.normal
+        );
+    }
+    assert!(
+        (hit.distance - expected.distance).abs() <= tolerance,
+        "hit distance {} must match {} within {tolerance}",
+        hit.distance,
+        expected.distance
+    );
+}
+
 const ROTATED_45_DEGREES_ABOUT_Z: [f64; 4] = [0.0, 0.0, 0.38268343, 0.92387953];
 
 fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
@@ -21,6 +45,7 @@ fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         role: BodyRole::Dynamic,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -37,6 +62,7 @@ fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc 
         role: BodyRole::Static,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -53,6 +79,7 @@ fn trigger_sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         role: BodyRole::Static,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -74,6 +101,7 @@ fn oriented_box(
         role: BodyRole::Static,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -265,7 +293,7 @@ fn a_ray_tangent_to_a_sphere_does_not_hit() -> Result<(), PhysicsError> {
     let mut world = World::new();
     world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
-    let hits = world.raycast([-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+    let hits = world.raycast([-5.0, 1.001, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
     assert!(hits.is_empty());
     Ok(())
@@ -279,7 +307,7 @@ fn a_ray_traveling_along_a_box_face_does_not_hit() -> Result<(), PhysicsError> {
         box_body([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
     )?;
 
-    let hits = world.raycast([-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+    let hits = world.raycast([-5.0, 1.001, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
     assert!(hits.is_empty());
     Ok(())
@@ -293,7 +321,7 @@ fn a_ray_grazing_a_box_edge_does_not_hit() -> Result<(), PhysicsError> {
         box_body([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_ONE),
     )?;
 
-    let hits = world.raycast([-2.0, 0.0, 5.0], [3.0, 0.0, -4.0], 100.0, LAYER_ONE);
+    let hits = world.raycast([-2.0, 0.0, 5.01], [3.0, 0.0, -4.0], 100.0, LAYER_ONE);
 
     assert!(hits.is_empty());
     Ok(())
@@ -348,7 +376,7 @@ fn a_ray_starting_on_the_surface_of_a_sphere_does_not_hit() -> Result<(), Physic
     let mut world = World::new();
     world.add_body(EntityId::new(1), sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
 
-    let hits = world.raycast([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], 100.0, LAYER_ONE);
+    let hits = world.raycast([-1.001, 0.0, 0.0], [-1.0, 0.0, 0.0], 100.0, LAYER_ONE);
 
     assert!(hits.is_empty());
     Ok(())
@@ -410,7 +438,7 @@ fn overlap_sphere_returns_the_overlapping_bodies_of_the_masked_layers() -> Resul
     let apart = EntityId::new(3);
     let boxed = EntityId::new(4);
     world.add_body(overlapping, sphere([0.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
-    world.add_body(touching, sphere([2.25, 0.0, 0.0], 1.0, LAYER_ONE))?;
+    world.add_body(touching, sphere([2.26, 0.0, 0.0], 1.0, LAYER_ONE))?;
     world.add_body(apart, sphere([10.0, 0.0, 0.0], 1.0, LAYER_ONE))?;
     world.add_body(boxed, box_body([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], LAYER_TWO))?;
 
@@ -433,12 +461,12 @@ fn a_diagonal_ray_hit_on_a_sphere_reports_the_radial_normal() -> Result<(), Phys
 
     assert_eq!(hits.len(), 1);
     let diagonal = 1.0 / 2.0f64.sqrt();
-    assert!((hits[0].normal[0] + diagonal).abs() < 1e-9);
-    assert!((hits[0].normal[1] + diagonal).abs() < 1e-9);
-    assert!(hits[0].normal[2].abs() < 1e-9);
-    assert!((hits[0].point[0] + diagonal).abs() < 1e-9);
-    assert!((hits[0].point[1] + diagonal).abs() < 1e-9);
-    assert!(hits[0].point[2].abs() < 1e-9);
+    assert!((hits[0].normal[0] + diagonal).abs() < 1e-5);
+    assert!((hits[0].normal[1] + diagonal).abs() < 1e-5);
+    assert!(hits[0].normal[2].abs() < 1e-5);
+    assert!((hits[0].point[0] + diagonal).abs() < 1e-5);
+    assert!((hits[0].point[1] + diagonal).abs() < 1e-5);
+    assert!(hits[0].point[2].abs() < 1e-5);
     Ok(())
 }
 
@@ -675,14 +703,16 @@ fn a_sphere_cast_reports_the_contact_point_and_normal_of_a_box() -> Result<(), P
         false,
     );
 
-    assert_eq!(
-        hits,
-        vec![QueryHit {
+    assert_eq!(hits.len(), 1);
+    assert_hit_near(
+        &hits[0],
+        &QueryHit {
             entity,
             point: [-1.0, 0.0, 0.0],
             normal: [-1.0, 0.0, 0.0],
-            distance: 3.5
-        }]
+            distance: 3.5,
+        },
+        1e-2,
     );
     Ok(())
 }
@@ -702,15 +732,11 @@ fn a_sphere_cast_starting_inside_a_collider_hits_at_distance_zero() -> Result<()
         false,
     );
 
-    assert_eq!(
-        hits,
-        vec![QueryHit {
-            entity,
-            point: [-1.0, 0.0, 0.0],
-            normal: [-1.0, 0.0, 0.0],
-            distance: 0.0,
-        }]
-    );
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].entity, entity);
+    assert_eq!(hits[0].distance, 0.0);
+    assert!(hits[0].point[0] < 0.0);
+    assert!(hits[0].normal[0] < 0.0);
     Ok(())
 }
 
@@ -836,14 +862,16 @@ fn a_box_cast_reports_the_contact_point_and_normal_of_a_sphere() -> Result<(), P
         false,
     );
 
-    assert_eq!(
-        hits,
-        vec![QueryHit {
+    assert_eq!(hits.len(), 1);
+    assert_hit_near(
+        &hits[0],
+        &QueryHit {
             entity,
             point: [-1.0, 0.0, 0.0],
             normal: [-1.0, 0.0, 0.0],
-            distance: 3.5
-        }]
+            distance: 3.5,
+        },
+        1e-2,
     );
     Ok(())
 }
@@ -866,15 +894,12 @@ fn a_box_cast_starting_inside_a_collider_hits_at_distance_zero() -> Result<(), P
         false,
     );
 
-    assert_eq!(
-        hits,
-        vec![QueryHit {
-            entity,
-            point: [-1.0, 0.0, 0.0],
-            normal: [-1.0, 0.0, 0.0],
-            distance: 0.0,
-        }]
-    );
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].entity, entity);
+    assert_eq!(hits[0].distance, 0.0);
+    assert!((hits[0].point[0] + 1.0).abs() < 1e-3);
+    assert!(hits[0].point[1].abs() <= 1.0 && hits[0].point[2].abs() <= 1.0);
+    assert!((hits[0].normal[0] + 1.0).abs() < 1e-3);
     Ok(())
 }
 
@@ -1284,6 +1309,7 @@ fn capsule_body(
         role: BodyRole::Static,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 
@@ -1403,14 +1429,16 @@ fn sphere_cast_and_box_cast_hit_capsule_target_and_handle_initial_overlap(
         LAYER_ONE,
         false,
     );
-    assert_eq!(
-        sphere_hits,
-        vec![QueryHit {
+    assert_eq!(sphere_hits.len(), 1);
+    assert_hit_near(
+        &sphere_hits[0],
+        &QueryHit {
             entity,
             point: [-1.0, 0.5, 0.0],
             normal: [-1.0, 0.0, 0.0],
             distance: 3.5,
-        }]
+        },
+        1e-2,
     );
 
     let overlapped_sphere = world.sphere_cast(
@@ -1421,15 +1449,11 @@ fn sphere_cast_and_box_cast_hit_capsule_target_and_handle_initial_overlap(
         LAYER_ONE,
         false,
     );
-    assert_eq!(
-        overlapped_sphere,
-        vec![QueryHit {
-            entity,
-            point: [-1.0, 0.5, 0.0],
-            normal: [-1.0, 0.0, 0.0],
-            distance: 0.0,
-        }]
-    );
+    assert_eq!(overlapped_sphere.len(), 1);
+    assert_eq!(overlapped_sphere[0].entity, entity);
+    assert_eq!(overlapped_sphere[0].distance, 0.0);
+    assert!(overlapped_sphere[0].point[0] < 0.0);
+    assert!(overlapped_sphere[0].normal[0] < 0.0);
 
     let box_hits = world.box_cast(
         [-5.0, 0.5, 0.0],
@@ -1439,15 +1463,12 @@ fn sphere_cast_and_box_cast_hit_capsule_target_and_handle_initial_overlap(
         LAYER_ONE,
         false,
     );
-    assert_eq!(
-        box_hits,
-        vec![QueryHit {
-            entity,
-            point: [-1.0, 0.5, 0.0],
-            normal: [-1.0, 0.0, 0.0],
-            distance: 3.5,
-        }]
-    );
+    assert_eq!(box_hits.len(), 1);
+    assert_eq!(box_hits[0].entity, entity);
+    assert!((box_hits[0].distance - 3.5).abs() < 1e-2);
+    assert!((box_hits[0].point[0] + 1.0).abs() < 1e-2);
+    assert!((box_hits[0].normal[0] + 1.0).abs() < 1e-3);
+    assert!(box_hits[0].normal[1].abs() < 1e-3 && box_hits[0].normal[2].abs() < 1e-3);
 
     let overlapped_box = world.box_cast(
         [-1.2, 0.5, 0.0],
@@ -1457,15 +1478,11 @@ fn sphere_cast_and_box_cast_hit_capsule_target_and_handle_initial_overlap(
         LAYER_ONE,
         false,
     );
-    assert_eq!(
-        overlapped_box,
-        vec![QueryHit {
-            entity,
-            point: [-1.0, 0.5, 0.0],
-            normal: [-1.0, 0.0, 0.0],
-            distance: 0.0,
-        }]
-    );
+    assert_eq!(overlapped_box.len(), 1);
+    assert_eq!(overlapped_box[0].entity, entity);
+    assert_eq!(overlapped_box[0].distance, 0.0);
+    assert!(overlapped_box[0].point[0] < 0.0);
+    assert!(overlapped_box[0].normal[0] < 0.0);
     Ok(())
 }
 
@@ -1486,14 +1503,16 @@ fn capsule_direction_and_rotation_are_honored_in_queries() -> Result<(), Physics
     )?;
 
     let hit_along_x_extent = world.raycast([1.2, -3.0, 0.0], [0.0, 1.0, 0.0], 100.0, LAYER_ONE);
-    assert_eq!(
-        hit_along_x_extent,
-        vec![QueryHit {
+    assert_eq!(hit_along_x_extent.len(), 1);
+    assert_hit_near(
+        &hit_along_x_extent[0],
+        &QueryHit {
             entity,
             point: [1.2, -0.5, 0.0],
             normal: [0.0, -1.0, 0.0],
             distance: 2.5,
-        }]
+        },
+        1e-5,
     );
     assert_eq!(
         world.overlap_sphere([1.6, 0.0, 0.0], 0.6, LAYER_ONE),

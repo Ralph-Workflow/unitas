@@ -28,6 +28,7 @@ fn link(position: [f64; 3], shape: Shape) -> BodyDesc {
         role: BodyRole::Kinematic,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

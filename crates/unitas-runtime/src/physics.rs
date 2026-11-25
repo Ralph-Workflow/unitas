@@ -10,7 +10,8 @@ use unitas_physics::two_d::{
     RoutedMessage2D, SurfaceEffector2D, World2D,
 };
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, QueryHit, TriggerEvent, World,
+    BodyDesc, BodyRole, CollisionDetectionMode3D, CollisionEvent, Phase, PhysicsError, QueryHit,
+    TriggerEvent, World,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +89,14 @@ impl PhysicsRuntimeWorld {
 
     pub fn add_body_3d(&mut self, entity: EntityId, desc: BodyDesc) -> Result<(), PhysicsError> {
         self.world_3d.add_body(entity, desc)
+    }
+
+    pub fn set_collision_detection_mode_3d(
+        &mut self,
+        entity: EntityId,
+        mode: CollisionDetectionMode3D,
+    ) -> Result<(), PhysicsError> {
+        self.world_3d.set_collision_detection_mode(entity, mode)
     }
 
     pub fn inspect_body_3d(&self, entity: EntityId) -> Option<BodySnapshot3D> {

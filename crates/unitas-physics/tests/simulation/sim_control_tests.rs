@@ -17,6 +17,7 @@ fn moving_box(position: [f64; 3]) -> BodyDesc {
         layer: 0,
         friction: 0.5,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

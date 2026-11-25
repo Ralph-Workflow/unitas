@@ -18,6 +18,7 @@ fn body(role: BodyRole, mass: f64) -> BodyDesc {
         layer: 0,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

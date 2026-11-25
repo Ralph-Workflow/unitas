@@ -2315,3 +2315,167 @@ fn ser003_outcome7_outcome8_unpack_one_level_and_completely_preserves_values_and
     let _ = fs::remove_dir_all(&root);
     Ok(())
 }
+
+const PICKUP_PREFAB_GUID: &str = "22222222222222222222222222220001";
+const PICKUP_GOLD_PREFAB_GUID: &str = "22222222222222222222222222220002";
+const GOLD_MATERIAL_GUID: &str = "22222222222222222222222222220004";
+const PICKUP_SCRIPT_GUID: &str = "22222222222222222222222222220005";
+const PICKUP_ROOT_GO_ID: i64 = 2400000;
+const PICKUP_TRANSFORM_ID: i64 = 400000;
+const PICKUP_RENDERER_ID: i64 = 2300000;
+const PICKUP_BEHAVIOUR_ID: i64 = 11400000;
+const PICKUP_PREFAB_FIXTURE: &str = "tests/fixtures/prefab_project/Assets/Prefabs/Pickup.prefab";
+const PICKUP_GOLD_PREFAB_FIXTURE: &str =
+    "tests/fixtures/prefab_project/Assets/Prefabs/PickupGold.prefab";
+const PICKUP_SCENE_FIXTURE: &str = "tests/fixtures/prefab_project/Assets/Scenes/PickupScene.unity";
+
+fn load_pickup_registry() -> Result<PrefabRegistry, Box<dyn Error>> {
+    let mut registry = PrefabRegistry::new();
+    registry.register(PrefabVariantDefinition::load_from_file(
+        std::path::Path::new(PICKUP_PREFAB_FIXTURE),
+        PICKUP_PREFAB_GUID,
+        "Pickup",
+    )?);
+    Ok(registry)
+}
+
+fn assert_pickup_gold_overrides(
+    hierarchy: &unitas_asset::prefab_variant::ResolvedHierarchy,
+) -> TestResult {
+    assert_eq!(
+        hierarchy.effective_property(PICKUP_ROOT_GO_ID, "m_Name"),
+        Some("PickupGold")
+    );
+    let material_reference = hierarchy
+        .effective_object_reference(PICKUP_RENDERER_ID, "m_Materials.Array.data[0]")
+        .ok_or("renderer material override missing")?;
+    assert_eq!(material_reference.guid.as_deref(), Some(GOLD_MATERIAL_GUID));
+    assert_eq!(material_reference.file_id, 2100000);
+    assert_eq!(
+        hierarchy.effective_property(PICKUP_BEHAVIOUR_ID, "score"),
+        Some("5")
+    );
+    assert_eq!(
+        hierarchy.effective_property(PICKUP_BEHAVIOUR_ID, "lifetime"),
+        Some("4")
+    );
+    assert_eq!(
+        hierarchy.effective_property(PICKUP_TRANSFORM_ID, "m_LocalEulerAnglesHint.x"),
+        Some("15")
+    );
+    Ok(())
+}
+
+#[test]
+fn variant_expansion_in_scene_applies_material_and_mono_field_overrides() -> TestResult {
+    let scene = unitas_asset::scene::assemble_scene_file_bundle(std::path::Path::new(
+        PICKUP_SCENE_FIXTURE,
+    ))?;
+    let mut gold_entity = None;
+    let mut arena_entity = None;
+    for id in scene.graph.breadth_first_order() {
+        if let Some(entity) = scene.graph.entity(id) {
+            if entity.name == "PickupGold" {
+                gold_entity = Some(id);
+            }
+            if entity.name == "Arena" {
+                arena_entity = Some(id);
+            }
+        }
+    }
+    let gold = gold_entity.ok_or("expanded PickupGold entity missing")?;
+    let arena = arena_entity.ok_or("Arena entity missing")?;
+    assert_eq!(scene.graph.parent(gold), Some(arena));
+
+    let renderer = scene
+        .render
+        .renderers
+        .iter()
+        .find(|renderer| renderer.entity == gold)
+        .ok_or("expanded renderer missing")?;
+    assert_eq!(renderer.material_guid.as_deref(), Some(GOLD_MATERIAL_GUID));
+    let material_path = renderer
+        .material_path
+        .as_ref()
+        .ok_or("gold material path missing")?;
+    assert!(material_path.ends_with("Assets/Materials/Gold.mat"));
+    assert!(renderer.material_diagnostic.is_none());
+    assert_eq!(renderer.material_color, [1.0, 0.84, 0.0]);
+
+    let script = scene
+        .scripts
+        .iter()
+        .find(|binding| binding.entity == gold)
+        .ok_or("expanded script binding missing")?;
+    assert_eq!(script.guid, PICKUP_SCRIPT_GUID);
+    assert_eq!(script.fields.get("score").map(String::as_str), Some("5"));
+    assert_eq!(script.fields.get("lifetime").map(String::as_str), Some("4"));
+    assert_eq!(
+        script.fields.get("m_Enabled").map(String::as_str),
+        Some("1")
+    );
+    Ok(())
+}
+
+#[test]
+fn variant_material_and_mono_field_overrides_round_trip_through_save() -> TestResult {
+    let mut registry = load_pickup_registry()?;
+    let gold_definition = PrefabVariantDefinition::load_from_file(
+        std::path::Path::new(PICKUP_GOLD_PREFAB_FIXTURE),
+        PICKUP_GOLD_PREFAB_GUID,
+        "PickupGold",
+    )?;
+    assert_eq!(
+        gold_definition.base,
+        Some(PrefabSource::new(PICKUP_PREFAB_GUID, 100100000))
+    );
+    registry.register(gold_definition.clone());
+
+    let instance = ScenePrefabInstance::new(
+        "pickup_gold_scene_1",
+        PrefabInstance::new(
+            PrefabSource::new(PICKUP_GOLD_PREFAB_GUID, 100100000),
+            0,
+            Vec::new(),
+        ),
+    );
+    let resolved = registry.resolve_instance(&instance)?;
+    let hierarchy = resolved
+        .as_complete()
+        .ok_or("expected complete hierarchy")?;
+    assert_pickup_gold_overrides(hierarchy)?;
+
+    let root = temp_prefab_dir("s13_variant_round_trip")?;
+    let saved_path = root.join("PickupGold.prefab");
+    scene_save::save_prefab_variant(&saved_path, &gold_definition)?;
+    let saved_text = fs::read_to_string(&saved_path)?;
+    assert!(saved_text.contains("m_Materials.Array.data[0]"));
+    assert!(saved_text.contains(GOLD_MATERIAL_GUID));
+    assert!(saved_text.contains("propertyPath: score"));
+    assert!(saved_text.contains("propertyPath: lifetime"));
+    assert!(saved_text.contains("m_LocalEulerAnglesHint.x"));
+
+    let reloaded = PrefabVariantDefinition::load_from_file(
+        &saved_path,
+        PICKUP_GOLD_PREFAB_GUID,
+        "PickupGold",
+    )?;
+    assert_eq!(reloaded.base, gold_definition.base);
+    assert_eq!(
+        reloaded.targeted_modifications,
+        gold_definition.targeted_modifications
+    );
+    assert_eq!(reloaded.modifications, gold_definition.modifications);
+
+    let mut reloaded_registry = load_pickup_registry()?;
+    reloaded_registry.register(reloaded);
+    let resolved_again = reloaded_registry.resolve_instance(&instance)?;
+    let hierarchy_again = resolved_again
+        .as_complete()
+        .ok_or("expected complete hierarchy after reload")?;
+    assert_pickup_gold_overrides(hierarchy_again)?;
+    assert_eq!(hierarchy_again, hierarchy);
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}

@@ -2,14 +2,16 @@ use std::collections::{BTreeSet, HashMap};
 
 use unitas_core::EntityId;
 
-use crate::body::{BodyDesc, BodyRole, Shape, IDENTITY_ROTATION};
+use crate::backend::{Backend, BackendHandles};
+use crate::body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::matrix::CollisionMatrix;
-use crate::query::{cast_against, normalize, CastShape, QueryHit};
+use crate::query::{
+    cast_ray_against, cast_shape_against, normalize, overlaps_at, probe_shape, CastShape, QueryHit,
+};
 
 const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
-const SOLVER_ITERATIONS: usize = 4;
 const DEFAULT_SLEEP_THRESHOLD: f64 = 0.05;
 const DEFAULT_TIME_TO_SLEEP: f64 = 0.5;
 const MAX_CONVEX_MESH_HULL_TRIANGLES: usize = 255;
@@ -132,10 +134,10 @@ fn pair_exchanges_messages(first: &Body, second: &Body) -> bool {
 #[derive(Clone, Copy, Debug)]
 struct Body {
     entity: EntityId,
+    handles: BackendHandles,
     shape: Shape,
     mass: f64,
     role: BodyRole,
-    use_gravity: bool,
     is_trigger: bool,
     position: [f64; 3],
     rotation: [f64; 4],
@@ -147,6 +149,7 @@ struct Body {
     restitution: f64,
     uses_default_material: bool,
     previous_position: [f64; 3],
+    previous_rotation: [f64; 4],
     sweep_velocity: [f64; 3],
     pending_force: [f64; 3],
     pending_impulse: [f64; 3],
@@ -165,23 +168,15 @@ impl Body {
             BodyRole::Dynamic | BodyRole::Kinematic | BodyRole::Static => 0.0,
         }
     }
-
-    fn effective_velocity(&self) -> [f64; 3] {
-        match self.role {
-            BodyRole::Dynamic => self.velocity,
-            BodyRole::Kinematic => self.sweep_velocity,
-            BodyRole::Static => [0.0; 3],
-        }
-    }
 }
 
 pub struct World {
     gravity: [f64; 3],
+    backend: Backend,
     bodies: Vec<Body>,
     indices: HashMap<EntityId, usize>,
-    overlapping: BTreeSet<(EntityId, EntityId)>,
-    resolved_contacts: BTreeSet<(EntityId, EntityId)>,
-    overlapping_triggers: BTreeSet<(EntityId, EntityId)>,
+    overlapping: PairSet,
+    overlapping_triggers: PairSet,
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
     collision_matrix: CollisionMatrix,
@@ -206,11 +201,11 @@ impl World {
     pub fn with_gravity(gravity: [f64; 3]) -> Self {
         Self {
             gravity,
+            backend: Backend::new(),
             bodies: Vec::new(),
             indices: HashMap::new(),
-            overlapping: BTreeSet::new(),
-            resolved_contacts: BTreeSet::new(),
-            overlapping_triggers: BTreeSet::new(),
+            overlapping: PairSet::new(),
+            overlapping_triggers: PairSet::new(),
             events: Vec::new(),
             trigger_events: Vec::new(),
             collision_matrix: CollisionMatrix::new(),
@@ -276,6 +271,8 @@ impl World {
             if body.uses_default_material {
                 body.friction = clamped.friction;
                 body.restitution = clamped.restitution;
+                self.backend
+                    .set_material(body.handles, clamped.friction, clamped.restitution);
             }
         }
     }
@@ -368,6 +365,8 @@ impl World {
             self.add_body(entity, body_desc)?;
             if let Some(index) = self.indices.get(&entity).copied() {
                 self.bodies[index].simulated = false;
+                let handles = self.bodies[index].handles;
+                self.backend.set_enabled(handles, false);
             }
             return Ok(());
         }
@@ -414,9 +413,10 @@ impl World {
             });
             self.bodies[index].simulated = false;
             self.bodies[index].velocity = [0.0; 3];
+            let handles = self.bodies[index].handles;
+            self.backend.set_enabled(handles, false);
+            self.backend.set_velocity(handles, [0.0; 3], false);
             self.overlapping
-                .retain(|(first, second)| *first != entity && *second != entity);
-            self.resolved_contacts
                 .retain(|(first, second)| *first != entity && *second != entity);
             self.overlapping_triggers
                 .retain(|(first, second)| *first != entity && *second != entity);
@@ -437,6 +437,8 @@ impl World {
                 message,
             });
             self.bodies[index].simulated = false;
+            let handles = self.bodies[index].handles;
+            self.backend.set_enabled(handles, false);
             return Ok(());
         }
         if mesh_desc.convex && mesh_desc.triangle_count > MAX_CONVEX_MESH_HULL_TRIANGLES {
@@ -451,6 +453,10 @@ impl World {
                 message,
             });
         }
+        let handles = self.bodies[index].handles;
+        self.backend.set_shape(handles, &new_shape);
+        self.backend.set_sensor(handles, mesh_desc.is_trigger);
+        self.backend.set_enabled(handles, true);
         self.bodies[index].shape = new_shape;
         self.bodies[index].is_trigger = mesh_desc.is_trigger;
         self.bodies[index].simulated = true;
@@ -485,13 +491,15 @@ impl World {
         if !desc.is_valid() {
             return Err(PhysicsError::InvalidBody(entity));
         }
+        let role = desc.effective_role();
+        let handles = self.backend.add_body(entity, &desc, role);
         let index = self.bodies.len();
         self.bodies.push(Body {
             entity,
+            handles,
             shape: desc.shape,
             mass: desc.mass,
-            role: desc.effective_role(),
-            use_gravity: desc.use_gravity,
+            role,
             is_trigger: desc.is_trigger,
             position: desc.position,
             rotation: desc.rotation,
@@ -503,6 +511,7 @@ impl World {
             restitution: desc.restitution,
             uses_default_material: false,
             previous_position: desc.position,
+            previous_rotation: desc.rotation,
             sweep_velocity: [0.0; 3],
             pending_force: [0.0; 3],
             pending_impulse: [0.0; 3],
@@ -521,30 +530,133 @@ impl World {
         if !delta_seconds.is_finite() || delta_seconds < 0.0 {
             return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
         }
-        self.integrate(delta_seconds);
-        self.update_sweep_velocities(delta_seconds);
-        let (mut overlapping, mut overlapping_triggers) = self.overlapping_pairs();
-        let resolved = self.resolve_contacts();
-        self.update_sleeping(delta_seconds);
-        let (post_overlapping, post_triggers) = self.overlapping_pairs();
-        overlapping.extend(post_overlapping);
-        overlapping_triggers.extend(post_triggers);
-        let mut active = overlapping.clone();
-        active.extend(self.resolved_contacts.iter().copied());
-        self.emit_events(&active);
-        self.emit_trigger_events(&overlapping_triggers);
-        let mut next_resolved = BTreeSet::new();
-        for pair in resolved {
-            if !self.overlapping.contains(&pair) {
-                next_resolved.insert(pair);
+        for body in &mut self.bodies {
+            if !body.simulated {
+                continue;
+            }
+            if body.role == BodyRole::Kinematic {
+                if body.pending_move_position.is_some() || body.pending_move_rotation.is_some() {
+                    if delta_seconds > 0.0 {
+                        self.backend.set_next_kinematic_pose(
+                            body.handles,
+                            body.pending_move_position,
+                            body.pending_move_rotation,
+                        );
+                    } else {
+                        let position = body.pending_move_position.unwrap_or(body.position);
+                        let rotation = body.pending_move_rotation.unwrap_or(body.rotation);
+                        self.backend.set_pose(body.handles, position, rotation);
+                    }
+                    body.pending_move_position = None;
+                    body.pending_move_rotation = None;
+                } else if delta_seconds > 0.0
+                    && (body.position != body.previous_position
+                        || body.rotation != body.previous_rotation)
+                {
+                    self.backend
+                        .set_translation(body.handles, body.previous_position, false);
+                    self.backend
+                        .set_rotation(body.handles, body.previous_rotation, false);
+                    self.backend.set_next_kinematic_pose(
+                        body.handles,
+                        Some(body.position),
+                        Some(body.rotation),
+                    );
+                }
+                continue;
+            }
+            if body.role != BodyRole::Dynamic || body.sleeping {
+                continue;
+            }
+            let inv_mass = body.inverse_mass();
+            let mass = if inv_mass > 0.0 { 1.0 / inv_mass } else { 0.0 };
+            let force = [
+                body.pending_force[0] + body.pending_acceleration[0] * mass,
+                body.pending_force[1] + body.pending_acceleration[1] * mass,
+                body.pending_force[2] + body.pending_acceleration[2] * mass,
+            ];
+            let impulse = body.pending_impulse;
+            body.pending_force = [0.0; 3];
+            body.pending_impulse = [0.0; 3];
+            body.pending_acceleration = [0.0; 3];
+            self.backend.apply_forces(body.handles, force, impulse);
+        }
+        if delta_seconds > 0.0 {
+            self.backend
+                .step(self.gravity, delta_seconds, &self.collision_matrix);
+        }
+        for body in &mut self.bodies {
+            if !body.simulated {
+                continue;
+            }
+            match body.role {
+                BodyRole::Dynamic => {
+                    body.position = self.backend.position(body.handles);
+                    body.rotation = self.backend.rotation(body.handles);
+                    if body.sleeping && !self.backend.is_sleeping(body.handles) {
+                        body.sleeping = false;
+                        body.sleep_timer = 0.0;
+                    }
+                    if !body.sleeping {
+                        body.velocity = self.backend.velocity(body.handles);
+                    }
+                }
+                BodyRole::Kinematic => {
+                    body.position = self.backend.position(body.handles);
+                    body.rotation = self.backend.rotation(body.handles);
+                }
+                BodyRole::Static => {}
             }
         }
-        self.overlapping = active;
-        self.resolved_contacts = next_resolved;
-        self.overlapping_triggers = overlapping_triggers;
+        self.update_sweep_velocities(delta_seconds);
+        self.update_sleeping(delta_seconds);
+        if delta_seconds > 0.0 {
+            self.collect_events();
+        } else {
+            self.emit_events(&self.overlapping.clone());
+            self.emit_trigger_events(&self.overlapping_triggers.clone());
+        }
         self.commit_positions();
         self.sync_transforms();
         Ok(())
+    }
+
+    fn collect_events(&mut self) {
+        let (contact_pairs, intersection_pairs) = self.backend.touching_entity_pairs();
+        let mut overlapping = PairSet::new();
+        let mut overlapping_triggers = PairSet::new();
+        for pair in contact_pairs {
+            let (Some(first), Some(second)) =
+                (self.indices.get(&pair.0), self.indices.get(&pair.1))
+            else {
+                continue;
+            };
+            if !self.bodies[*first].simulated || !self.bodies[*second].simulated {
+                continue;
+            }
+            if !pair_exchanges_messages(&self.bodies[*first], &self.bodies[*second]) {
+                continue;
+            }
+            overlapping.insert(pair);
+        }
+        for pair in intersection_pairs {
+            let (Some(first), Some(second)) =
+                (self.indices.get(&pair.0), self.indices.get(&pair.1))
+            else {
+                continue;
+            };
+            if !self.bodies[*first].simulated || !self.bodies[*second].simulated {
+                continue;
+            }
+            if !pair_exchanges_messages(&self.bodies[*first], &self.bodies[*second]) {
+                continue;
+            }
+            overlapping_triggers.insert(pair);
+        }
+        self.emit_events(&overlapping);
+        self.emit_trigger_events(&overlapping_triggers);
+        self.overlapping = overlapping;
+        self.overlapping_triggers = overlapping_triggers;
     }
 
     pub fn drain_events(&mut self) -> Vec<CollisionEvent> {
@@ -620,6 +732,9 @@ impl World {
         slot.sweep_velocity = [0.0; 3];
         slot.sleeping = false;
         slot.sleep_timer = 0.0;
+        let handles = slot.handles;
+        self.backend.set_translation(handles, p, true);
+        self.backend.wake_up(handles);
         Ok(())
     }
 
@@ -637,12 +752,16 @@ impl World {
         let auto_sync = self.auto_sync_transforms;
         let slot = &mut self.bodies[index];
         slot.rotation = rotation;
+        slot.previous_rotation = rotation;
         slot.pending_move_rotation = None;
         if auto_sync {
             slot.query_rotation = rotation;
         }
         slot.sleeping = false;
         slot.sleep_timer = 0.0;
+        let handles = slot.handles;
+        self.backend.set_rotation(handles, rotation, true);
+        self.backend.wake_up(handles);
         Ok(())
     }
 
@@ -690,6 +809,7 @@ impl World {
         if slot.role != BodyRole::Dynamic {
             return Ok(());
         }
+        let mut sync_velocity = false;
         match mode {
             ForceMode::Force => {
                 slot.pending_force[0] += force[0];
@@ -706,16 +826,26 @@ impl World {
                 slot.velocity[0] += force[0] * inv_mass;
                 slot.velocity[1] += force[1] * inv_mass;
                 slot.velocity[2] += force[2] * inv_mass;
+                sync_velocity = true;
             }
             ForceMode::VelocityChange => {
                 slot.velocity[0] += force[0];
                 slot.velocity[1] += force[1];
                 slot.velocity[2] += force[2];
+                sync_velocity = true;
             }
         }
         if force != [0.0; 3] {
             slot.sleeping = false;
             slot.sleep_timer = 0.0;
+        }
+        let handles = slot.handles;
+        let velocity = slot.velocity;
+        if sync_velocity {
+            self.backend.set_velocity(handles, velocity, true);
+        }
+        if force != [0.0; 3] {
+            self.backend.wake_up(handles);
         }
         Ok(())
     }
@@ -735,6 +865,8 @@ impl World {
             if impulse != [0.0; 3] {
                 slot.sleeping = false;
                 slot.sleep_timer = 0.0;
+                let handles = slot.handles;
+                self.backend.wake_up(handles);
             }
         }
         Ok(())
@@ -754,7 +886,24 @@ impl World {
             return Err(PhysicsError::InvalidBody(body));
         }
         self.bodies[index].velocity = v;
+        let handles = self.bodies[index].handles;
+        if self.bodies[index].role == BodyRole::Dynamic {
+            self.backend.set_velocity(handles, v, true);
+        }
         self.wake_up(body);
+        Ok(())
+    }
+
+    pub fn set_collision_detection_mode(
+        &mut self,
+        body: EntityId,
+        mode: CollisionDetectionMode3D,
+    ) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        let handles = self.bodies[index].handles;
+        self.backend.set_collision_detection_mode(handles, mode);
         Ok(())
     }
 
@@ -768,6 +917,8 @@ impl World {
         self.bodies[index].pending_force = [0.0; 3];
         self.bodies[index].pending_impulse = [0.0; 3];
         self.bodies[index].pending_acceleration = [0.0; 3];
+        let handles = self.bodies[index].handles;
+        self.backend.sleep(handles);
         Ok(())
     }
 
@@ -775,6 +926,8 @@ impl World {
         if let Some(index) = self.indices.get(&body).copied() {
             self.bodies[index].sleeping = false;
             self.bodies[index].sleep_timer = 0.0;
+            let handles = self.bodies[index].handles;
+            self.backend.wake_up(handles);
         }
     }
 
@@ -804,6 +957,11 @@ impl World {
         if self.auto_sync_transforms {
             self.bodies[index].query_position = p;
         }
+        if self.bodies[index].role == BodyRole::Kinematic {
+            return Ok(());
+        }
+        let handles = self.bodies[index].handles;
+        self.backend.set_translation(handles, p, false);
         Ok(())
     }
 
@@ -821,6 +979,11 @@ impl World {
         if self.auto_sync_transforms {
             self.bodies[index].query_rotation = rotation;
         }
+        if self.bodies[index].role == BodyRole::Kinematic {
+            return Ok(());
+        }
+        let handles = self.bodies[index].handles;
+        self.backend.set_rotation(handles, rotation, false);
         Ok(())
     }
 
@@ -832,15 +995,14 @@ impl World {
         let Some(index) = self.indices.remove(&entity) else {
             return false;
         };
-        self.bodies.remove(index);
+        let removed = self.bodies.remove(index);
+        self.backend.remove_body(removed.handles);
         for slot in self.indices.values_mut() {
             if *slot > index {
                 *slot -= 1;
             }
         }
         self.overlapping
-            .retain(|(first, second)| *first != entity && *second != entity);
-        self.resolved_contacts
             .retain(|(first, second)| *first != entity && *second != entity);
         self.overlapping_triggers
             .retain(|(first, second)| *first != entity && *second != entity);
@@ -972,7 +1134,11 @@ impl World {
         query_layer: usize,
     ) -> Vec<EntityId> {
         let mask = self.layer_mask_for_layer(query_layer);
-        let probe = Shape::Sphere { radius };
+        if !radius.is_finite() || radius <= 0.0 {
+            return Vec::new();
+        }
+        let probe = probe_shape(&Shape::Sphere { radius });
+        let dispatcher = self.backend.dispatcher();
         let mut entities: Vec<EntityId> = self
             .bodies
             .iter()
@@ -980,12 +1146,13 @@ impl World {
             .filter(|body| Self::layer_index_matches_mask(body.layer, mask))
             .filter(|body| !body.is_trigger)
             .filter(|body| {
-                probe.overlaps(
+                overlaps_at(
+                    dispatcher,
+                    &probe,
                     center,
-                    IDENTITY_ROTATION,
-                    &body.shape,
                     body.query_position,
                     body.query_rotation,
+                    &body.shape,
                 )
             })
             .map(|body| body.entity)
@@ -1005,7 +1172,11 @@ impl World {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<EntityId> {
-        let probe = Shape::Sphere { radius };
+        if !radius.is_finite() || radius <= 0.0 {
+            return Vec::new();
+        }
+        let probe = probe_shape(&Shape::Sphere { radius });
+        let dispatcher = self.backend.dispatcher();
         let mut entities: Vec<EntityId> = self
             .bodies
             .iter()
@@ -1013,12 +1184,13 @@ impl World {
             .filter(|body| body.layer & layer_mask != 0)
             .filter(|body| !body.is_trigger || include_triggers)
             .filter(|body| {
-                probe.overlaps(
+                overlaps_at(
+                    dispatcher,
+                    &probe,
                     center,
-                    IDENTITY_ROTATION,
-                    &body.shape,
                     body.query_position,
                     body.query_rotation,
+                    &body.shape,
                 )
             })
             .map(|body| body.entity)
@@ -1064,6 +1236,7 @@ impl World {
         let Some(direction) = normalize(direction) else {
             return Vec::new();
         };
+        let dispatcher = self.backend.dispatcher();
         let mut hits = Vec::new();
         for body in &self.bodies {
             if !body.simulated {
@@ -1080,14 +1253,25 @@ impl World {
             if body.is_trigger && !include_triggers {
                 continue;
             }
-            let Some(hit) = cast_against(
-                origin,
-                direction,
-                body.query_position,
-                body.query_rotation,
-                &body.shape,
-                cast_shape,
-            ) else {
+            let hit = match cast_shape {
+                CastShape::Point => cast_ray_against(
+                    origin,
+                    direction,
+                    max_distance,
+                    body.query_position,
+                    body.query_rotation,
+                    &body.shape,
+                ),
+                CastShape::Sphere { .. } | CastShape::Box { .. } => cast_shape_against(
+                    dispatcher,
+                    cast_shape,
+                    origin,
+                    direction,
+                    max_distance,
+                    (body.query_position, body.query_rotation, &body.shape),
+                ),
+            };
+            let Some(hit) = hit else {
                 continue;
             };
             if hit.distance > max_distance {
@@ -1107,49 +1291,6 @@ impl World {
                 .then(first.entity.cmp(&second.entity))
         });
         hits
-    }
-
-    fn integrate(&mut self, delta_seconds: f64) {
-        for body in &mut self.bodies {
-            if !body.simulated {
-                continue;
-            }
-            if body.role == BodyRole::Kinematic {
-                if let Some(target_pos) = body.pending_move_position.take() {
-                    body.position = target_pos;
-                }
-                if let Some(target_rot) = body.pending_move_rotation.take() {
-                    body.rotation = target_rot;
-                }
-                continue;
-            }
-            if body.role != BodyRole::Dynamic || body.sleeping {
-                continue;
-            }
-            let inv_mass = body.inverse_mass();
-            if inv_mass > 0.0 {
-                body.velocity[0] +=
-                    (body.pending_force[0] * delta_seconds + body.pending_impulse[0]) * inv_mass;
-                body.velocity[1] +=
-                    (body.pending_force[1] * delta_seconds + body.pending_impulse[1]) * inv_mass;
-                body.velocity[2] +=
-                    (body.pending_force[2] * delta_seconds + body.pending_impulse[2]) * inv_mass;
-            }
-            body.velocity[0] += body.pending_acceleration[0] * delta_seconds;
-            body.velocity[1] += body.pending_acceleration[1] * delta_seconds;
-            body.velocity[2] += body.pending_acceleration[2] * delta_seconds;
-            body.pending_force = [0.0; 3];
-            body.pending_impulse = [0.0; 3];
-            body.pending_acceleration = [0.0; 3];
-            if body.use_gravity {
-                body.velocity[0] += self.gravity[0] * delta_seconds;
-                body.velocity[1] += self.gravity[1] * delta_seconds;
-                body.velocity[2] += self.gravity[2] * delta_seconds;
-            }
-            body.position[0] += body.velocity[0] * delta_seconds;
-            body.position[1] += body.velocity[1] * delta_seconds;
-            body.position[2] += body.velocity[2] * delta_seconds;
-        }
     }
 
     fn update_sweep_velocities(&mut self, delta_seconds: f64) {
@@ -1172,23 +1313,7 @@ impl World {
     fn commit_positions(&mut self) {
         for body in &mut self.bodies {
             body.previous_position = body.position;
-        }
-    }
-
-    fn wake_on_contact(&mut self, first_index: usize, second_index: usize) {
-        let threshold = self.sleep_threshold;
-        let (first_speed, second_speed) = {
-            let first = &self.bodies[first_index];
-            let second = &self.bodies[second_index];
-            (speed_of(first), speed_of(second))
-        };
-        if self.bodies[first_index].sleeping && second_speed > threshold {
-            self.bodies[first_index].sleeping = false;
-            self.bodies[first_index].sleep_timer = 0.0;
-        }
-        if self.bodies[second_index].sleeping && first_speed > threshold {
-            self.bodies[second_index].sleeping = false;
-            self.bodies[second_index].sleep_timer = 0.0;
+            body.previous_rotation = body.rotation;
         }
     }
 
@@ -1204,159 +1329,13 @@ impl World {
                 if body.sleep_timer >= time_to_sleep {
                     body.sleeping = true;
                     body.velocity = [0.0; 3];
+                    let handles = body.handles;
+                    self.backend.sleep(handles);
                 }
             } else {
                 body.sleep_timer = 0.0;
             }
         }
-    }
-
-    fn resolve_contacts(&mut self) -> PairSet {
-        let mut resolved = BTreeSet::new();
-        let count = self.bodies.len();
-        for _ in 0..SOLVER_ITERATIONS {
-            for first_index in 0..count {
-                for second_index in (first_index + 1)..count {
-                    let first = self.bodies[first_index];
-                    let second = self.bodies[second_index];
-                    if !first.simulated || !second.simulated {
-                        continue;
-                    }
-                    if first.is_trigger || second.is_trigger {
-                        continue;
-                    }
-                    if !self
-                        .collision_matrix
-                        .is_enabled(first.layer as usize, second.layer as usize)
-                    {
-                        continue;
-                    }
-                    let inv_a = first.inverse_mass();
-                    let inv_b = second.inverse_mass();
-                    let inv_sum = inv_a + inv_b;
-                    if inv_sum <= 0.0 {
-                        continue;
-                    }
-                    let Some(contact) = first.shape.contact(
-                        first.position,
-                        first.rotation,
-                        &second.shape,
-                        second.position,
-                        second.rotation,
-                    ) else {
-                        continue;
-                    };
-                    self.wake_on_contact(first_index, second_index);
-                    let move_a = contact.depth * (inv_a / inv_sum);
-                    let move_b = contact.depth * (inv_b / inv_sum);
-                    self.bodies[first_index].position[0] -= contact.normal[0] * move_a;
-                    self.bodies[first_index].position[1] -= contact.normal[1] * move_a;
-                    self.bodies[first_index].position[2] -= contact.normal[2] * move_a;
-                    self.bodies[second_index].position[0] += contact.normal[0] * move_b;
-                    self.bodies[second_index].position[1] += contact.normal[1] * move_b;
-                    self.bodies[second_index].position[2] += contact.normal[2] * move_b;
-
-                    let first_velocity = self.bodies[first_index].effective_velocity();
-                    let second_velocity = self.bodies[second_index].effective_velocity();
-                    let relative_velocity = [
-                        second_velocity[0] - first_velocity[0],
-                        second_velocity[1] - first_velocity[1],
-                        second_velocity[2] - first_velocity[2],
-                    ];
-                    let normal_speed = relative_velocity[0] * contact.normal[0]
-                        + relative_velocity[1] * contact.normal[1]
-                        + relative_velocity[2] * contact.normal[2];
-                    if normal_speed < 0.0 {
-                        let restitution = (first.restitution + second.restitution) / 2.0;
-                        let friction = (first.friction + second.friction) / 2.0;
-                        let impulse = -normal_speed / inv_sum * (1.0 + restitution);
-                        self.bodies[first_index].velocity[0] -= contact.normal[0] * impulse * inv_a;
-                        self.bodies[first_index].velocity[1] -= contact.normal[1] * impulse * inv_a;
-                        self.bodies[first_index].velocity[2] -= contact.normal[2] * impulse * inv_a;
-                        self.bodies[second_index].velocity[0] +=
-                            contact.normal[0] * impulse * inv_b;
-                        self.bodies[second_index].velocity[1] +=
-                            contact.normal[1] * impulse * inv_b;
-                        self.bodies[second_index].velocity[2] +=
-                            contact.normal[2] * impulse * inv_b;
-                        let tangential = [
-                            relative_velocity[0] - contact.normal[0] * normal_speed,
-                            relative_velocity[1] - contact.normal[1] * normal_speed,
-                            relative_velocity[2] - contact.normal[2] * normal_speed,
-                        ];
-                        let tangential_speed = (tangential[0] * tangential[0]
-                            + tangential[1] * tangential[1]
-                            + tangential[2] * tangential[2])
-                            .sqrt();
-                        if tangential_speed > 0.0 {
-                            let friction_impulse =
-                                (tangential_speed / inv_sum).min(friction * impulse);
-                            let direction = [
-                                tangential[0] / tangential_speed,
-                                tangential[1] / tangential_speed,
-                                tangential[2] / tangential_speed,
-                            ];
-                            self.bodies[first_index].velocity[0] +=
-                                direction[0] * friction_impulse * inv_a;
-                            self.bodies[first_index].velocity[1] +=
-                                direction[1] * friction_impulse * inv_a;
-                            self.bodies[first_index].velocity[2] +=
-                                direction[2] * friction_impulse * inv_a;
-                            self.bodies[second_index].velocity[0] -=
-                                direction[0] * friction_impulse * inv_b;
-                            self.bodies[second_index].velocity[1] -=
-                                direction[1] * friction_impulse * inv_b;
-                            self.bodies[second_index].velocity[2] -=
-                                direction[2] * friction_impulse * inv_b;
-                        }
-                        let pair = if first.entity < second.entity {
-                            (first.entity, second.entity)
-                        } else {
-                            (second.entity, first.entity)
-                        };
-                        resolved.insert(pair);
-                    }
-                }
-            }
-        }
-        resolved
-    }
-
-    fn overlapping_pairs(&self) -> (PairSet, PairSet) {
-        let mut pairs = BTreeSet::new();
-        let mut trigger_pairs = BTreeSet::new();
-        for (index, first) in self.bodies.iter().enumerate() {
-            if !first.simulated {
-                continue;
-            }
-            for second in self.bodies.iter().skip(index + 1) {
-                if !second.simulated {
-                    continue;
-                }
-                if !pair_exchanges_messages(first, second) {
-                    continue;
-                }
-                if first.shape.in_contact(
-                    first.position,
-                    first.rotation,
-                    &second.shape,
-                    second.position,
-                    second.rotation,
-                ) {
-                    let pair = if first.entity < second.entity {
-                        (first.entity, second.entity)
-                    } else {
-                        (second.entity, first.entity)
-                    };
-                    if first.is_trigger || second.is_trigger {
-                        trigger_pairs.insert(pair);
-                    } else {
-                        pairs.insert(pair);
-                    }
-                }
-            }
-        }
-        (pairs, trigger_pairs)
     }
 
     fn layer_pair_enabled(&self, pair: &(EntityId, EntityId)) -> bool {

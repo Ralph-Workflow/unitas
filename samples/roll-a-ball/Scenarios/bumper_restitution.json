@@ -1,0 +1,57 @@
+{
+  "name": "bumper_restitution",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/PhysicsLab.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 150,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "bumper_contact_reported",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "BumperMarble bumper outgoing"
+    },
+    {
+      "id": "outgoing_faster_than_incoming",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "restitution gained"
+    },
+    {
+      "id": "platform_carries_marble",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "PlatformMarble platform carried"
+    },
+    {
+      "id": "carried_marble_moved_with_platform",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "PlatformMarble",
+      "expected": [
+        -11.5,
+        1,
+        0
+      ],
+      "tolerance": 1.0
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 2,
+      "kind": "frame_count",
+      "expected": 151
+    }
+  ]
+}

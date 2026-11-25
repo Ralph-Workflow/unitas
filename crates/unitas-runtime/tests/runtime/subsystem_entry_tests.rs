@@ -38,6 +38,7 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
             layer: 1,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     runtime_physics.add_body_3d(
@@ -56,6 +57,7 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
             layer: 1,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -120,6 +122,7 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
             layer: 0,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     runtime_physics.add_body_3d(
@@ -138,6 +141,7 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
             layer: 0,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     runtime_physics.add_body_3d(
@@ -156,6 +160,7 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
             layer: 0,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
     runtime_physics.add_body_3d(
@@ -172,6 +177,7 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
             layer: 0,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -272,6 +278,7 @@ fn subsystem_entry_particles_control_systems_and_collide_with_3d_world() -> Resu
             layer: 1,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -368,6 +375,7 @@ fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_r
             layer: 1,
             friction: 0.5,
             restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
 
@@ -525,6 +533,7 @@ fn subsystem_entry_dynamic_sphere(position: [f64; 3], radius: f64) -> BodyDesc {
         layer: 0,
         friction: 0.6,
         restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     }
 }
 

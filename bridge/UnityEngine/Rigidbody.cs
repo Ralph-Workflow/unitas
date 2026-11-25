@@ -6,6 +6,7 @@ namespace UnityEngine
         private bool _useGravity = true;
         private bool _isKinematic;
         private Vector3 _velocity;
+        private CollisionDetectionMode _collisionDetectionMode;
 
         public float mass
         {
@@ -45,6 +46,20 @@ namespace UnityEngine
                 if (!_isKinematic && owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null)
                 {
                     provider.TrySetBodyVelocity(owner.NativeEntityId, value);
+                }
+            }
+        }
+        public CollisionDetectionMode collisionDetectionMode
+        {
+            get => _collisionDetectionMode;
+            set
+            {
+                _collisionDetectionMode = value;
+                GameObject? owner = gameObject;
+                IPhysicsProvider? provider = Physics.Provider;
+                if (owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null)
+                {
+                    provider.TrySetBodyCollisionDetectionMode(owner.NativeEntityId, value);
                 }
             }
         }
