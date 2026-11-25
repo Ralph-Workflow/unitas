@@ -428,6 +428,32 @@ namespace UnityEngine.SceneManagement
             AssignSceneRecursive(go, scene);
         }
 
+        public static void MergeScenes(Scene scene, Scene destinationScene)
+        {
+            if (!scene.IsValid() || !scene.isLoaded)
+            {
+                throw new ArgumentException("The source scene '" + scene.name + "' is not loaded.", nameof(scene));
+            }
+
+            if (!destinationScene.IsValid() || !destinationScene.isLoaded)
+            {
+                throw new ArgumentException("The destination scene '" + destinationScene.name + "' is not loaded.", nameof(destinationScene));
+            }
+
+            if (scene == destinationScene)
+            {
+                throw new ArgumentException("The source scene and the destination scene must be different scenes.", nameof(destinationScene));
+            }
+
+            GameObject[] roots = scene.GetRootGameObjects();
+            for (int i = 0; i < roots.Length; i++)
+            {
+                MoveGameObjectToScene(roots[i], destinationScene);
+            }
+
+            UnloadScene(scene.name);
+        }
+
         public static Scene GetSceneByName(string sceneName)
         {
             if (string.IsNullOrEmpty(sceneName))
@@ -824,13 +850,31 @@ namespace UnityEngine.SceneManagement
                 if (isPathQuery)
                 {
                     string normalizedQuery = NormalizePath(sceneName);
+                    List<string> pathMatches = new List<string>();
                     for (int i = 0; i < BuildScenePaths.Count; i++)
                     {
                         if (string.Equals(NormalizePath(BuildScenePaths[i]), normalizedQuery, StringComparison.Ordinal)
                             || NormalizePath(BuildScenePaths[i]).EndsWith("/" + normalizedQuery, StringComparison.Ordinal))
                         {
-                            return BuildScenePaths[i];
+                            pathMatches.Add(BuildScenePaths[i]);
                         }
+                    }
+
+                    if (pathMatches.Count > 1)
+                    {
+                        Debug.LogWarning(
+                            "Multiple scenes in build settings match the path '"
+                            + sceneName
+                            + "': "
+                            + string.Join(", ", pathMatches)
+                            + ". Loading '"
+                            + pathMatches[0]
+                            + "'. Specify the full scene path to disambiguate.");
+                    }
+
+                    if (pathMatches.Count > 0)
+                    {
+                        return pathMatches[0];
                     }
                 }
                 else

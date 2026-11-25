@@ -11,6 +11,7 @@ namespace Unitas.Bridge.Tests
         {
             TestPersistenceAcrossSimulatedHostRestartAtPerTargetLocation();
             TestAtomicWriteThenReplaceLeavesNoTmpAndPreservesLastCompleteSaveAfterCrash();
+            TestStory7QuotaExhaustionAndInterruptedSaveFileWriteKeepThePriorValidSavePerTarget();
             TestCorruptPlayerPrefsFileLogsDiagnosticNamingFilePathAndReasonAndFallsBackToDefaults();
             TestDeleteAllAndPersistentDataPathSaveFilesRemainMutuallyIsolated();
         }
@@ -93,6 +94,116 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("Reload with leftover .tmp reports Loaded state", (int)PlayerPrefsLoadState.Loaded, (int)PlayerPrefs.LastLoadState);
                 Check.Equal("Reload with leftover .tmp logs zero warnings", 0, LogRecorder.OfSeverity(LogSeverity.Warning).Count);
                 Check.Equal("Reload with leftover .tmp logs zero errors", 0, LogRecorder.OfSeverity(LogSeverity.Error).Count);
+            }
+            finally
+            {
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory7QuotaExhaustionAndInterruptedSaveFileWriteKeepThePriorValidSavePerTarget()
+        {
+            // The shim simulates the storage outcomes; real device quotas and real device
+            // paths belong to the target workstream, so no device quota is asserted here.
+            string tempDir = CreateTempRoot();
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            PlayerPrefs.StorageDirectoryOverride = tempDir;
+            PlayerPrefs.Reload();
+            try
+            {
+                PlayerPrefs.SetInt("checkpoint_stage", 4);
+                PlayerPrefs.SetString("save_owner", "PlayerOne");
+                PlayerPrefs.Save();
+
+                string iniPath = PlayerPrefs.StorageFilePath;
+                string priorIni = File.ReadAllText(iniPath);
+                Check.That("Story 7 a prior valid save exists before the storage outcomes", priorIni.Length > 0);
+
+                PlayerPrefs.SetInt("checkpoint_stage", 9);
+                PlayerPrefs.SimulatedQuotaBytes = 1;
+                StorageFailureReason quotaReason = StorageFailureReason.None;
+                string? quotaError = null;
+                bool quotaFailed = false;
+                try
+                {
+                    PlayerPrefs.Save();
+                }
+                catch (PlayerPrefsException ex)
+                {
+                    quotaFailed = true;
+                    quotaReason = PlayerPrefs.LastSaveFailureReason;
+                    quotaError = PlayerPrefs.LastSaveError;
+                    Check.That("Story 7 the quota failure names the target file", ex.Message.Contains(iniPath, StringComparison.Ordinal));
+                }
+                finally
+                {
+                    PlayerPrefs.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a quota-exhausted PlayerPrefs save fails", quotaFailed);
+                Check.Equal("Story 7 the quota-exhausted save reports the QuotaExceeded outcome", (int)StorageFailureReason.QuotaExceeded, (int)quotaReason);
+                Check.That("Story 7 the quota failure names the target file and the quota", quotaError != null && quotaError.Contains(iniPath, StringComparison.Ordinal) && quotaError.Contains("quota", StringComparison.Ordinal));
+                Check.Equal("Story 7 the quota-exhausted save leaves the prior valid save untouched", priorIni, File.ReadAllText(iniPath));
+                Check.Equal("Story 7 the quota-exhausted save leaves no temporary file behind", 0, Directory.GetFiles(tempDir, "*.tmp*").Length);
+
+                PlayerPrefs.Reload();
+                Check.Equal("Story 7 the quota-exhausted save does not commit the pending value", 4, PlayerPrefs.GetInt("checkpoint_stage"));
+                Check.Equal("Story 7 the prior valid save survives the quota-exhausted save", "PlayerOne", PlayerPrefs.GetString("save_owner"));
+
+                string saveFilePath = Path.Combine(tempDir, "campaign_slot_01.json");
+                string priorPayload = "{\"version\":3,\"chapter\":7}";
+                File.WriteAllText(saveFilePath, priorPayload);
+
+                SaveMigration.SimulatedQuotaBytes = 8;
+                bool fileQuotaFailed = false;
+                string? fileQuotaMessage = null;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(saveFilePath, "{\"version\":3,\"chapter\":9}");
+                }
+                catch (SaveStorageQuotaException ex)
+                {
+                    fileQuotaFailed = true;
+                    fileQuotaMessage = ex.Message;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a quota-exhausted save file write fails with the quota outcome", fileQuotaFailed);
+                Check.That("Story 7 the quota failure names the save file", fileQuotaMessage != null && fileQuotaMessage.Contains(saveFilePath, StringComparison.Ordinal));
+                Check.Equal("Story 7 the quota-exhausted save file write leaves the prior valid save untouched", priorPayload, File.ReadAllText(saveFilePath));
+
+                SaveMigration.SimulatedInterruptionAfterBytes = 4;
+                bool interrupted = false;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(saveFilePath, "{\"version\":3,\"chapter\":9}");
+                }
+                catch (SaveWriteInterruptionException)
+                {
+                    interrupted = true;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a save file write interrupted by termination fails with the interruption outcome", interrupted);
+                Check.Equal("Story 7 the interrupted save file write leaves the prior valid save untouched", priorPayload, File.ReadAllText(saveFilePath));
+
+                IReadOnlyList<PersistenceDurabilityContract> contracts = SaveMigration.GetAllTargetDurabilityContracts();
+                Check.That("Story 7 the per-target product knowledge covers the documented targets", contracts.Count >= 4);
+                foreach (PersistenceDurabilityContract contract in contracts)
+                {
+                    string target = contract.Platform.ToString();
+                    Check.Equal("Story 7 " + target + " documents that a quota-exhausted write keeps the prior valid save", true, contract.PriorValidSaveSurvivesQuotaExhaustion);
+                    Check.Equal("Story 7 " + target + " documents that an interrupted write keeps the prior valid save", true, contract.PriorValidSaveSurvivesInterruption);
+                    Check.Equal("Story 7 " + target + " documents that write-then-replace is atomic", true, contract.AtomicWriteThenReplaceSupported);
+                }
             }
             finally
             {

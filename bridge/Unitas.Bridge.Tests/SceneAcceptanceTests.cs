@@ -205,7 +205,7 @@ namespace Unitas.Bridge.Tests
                         Label = "orderB",
                     };
                     GameObject stagedGo = new GameObject("StagedOrderBObject");
-                    stagedGo.AttachComponent(stagedScript);
+                    stagedGo.AttachComponent(stagedScript, typeof(SceneAcceptanceOrderedScript));
 
                     AsyncOperation stagedOp = SceneManager.LoadSceneAsync("OrderB", LoadSceneMode.Single, false);
                     Check.Equal("Story 17 staged async op holds at 0.9f", 0.9f, stagedOp.progress);

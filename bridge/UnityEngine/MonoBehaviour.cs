@@ -182,14 +182,56 @@ namespace UnityEngine
             return CoroutineScheduler.Start(this, routine);
         }
 
+        public Coroutine? StartCoroutine(string methodName)
+        {
+            return CoroutineScheduler.StartByName(this, methodName);
+        }
+
+        public Coroutine? StartCoroutine<T>(string methodName, T value)
+        {
+            return CoroutineScheduler.StartByName(this, methodName, value);
+        }
+
         public void StopCoroutine(Coroutine coroutine)
         {
             CoroutineScheduler.Stop(coroutine);
         }
 
+        public void StopCoroutine(System.Collections.IEnumerator routine)
+        {
+            CoroutineScheduler.Stop(this, routine);
+        }
+
+        public void StopCoroutine(string methodName)
+        {
+            CoroutineScheduler.StopByName(this, methodName);
+        }
+
         public void StopAllCoroutines()
         {
             CoroutineScheduler.StopAll(this);
+        }
+
+        public virtual System.Collections.IEnumerator? ResolveNamedCoroutine(string methodName)
+        {
+            _ = methodName;
+            return null;
+        }
+
+        public virtual System.Collections.IEnumerator? ResolveNamedCoroutine<T>(string methodName, T value)
+        {
+            _ = value;
+            return ResolveNamedCoroutine(methodName);
+        }
+
+        public void RegisterNamedCoroutine(string methodName, Func<System.Collections.IEnumerator> factory)
+        {
+            CoroutineScheduler.RegisterMethod(this, methodName, factory);
+        }
+
+        public void RegisterNamedCoroutine<T>(string methodName, Func<T, System.Collections.IEnumerator> factory)
+        {
+            CoroutineScheduler.RegisterMethod(this, methodName, factory);
         }
 
         public virtual void Awake()
@@ -257,6 +299,50 @@ namespace UnityEngine
         }
 
         public virtual void OnApplicationQuit()
+        {
+        }
+
+        public virtual void OnBecameVisible()
+        {
+        }
+
+        public virtual void OnBecameInvisible()
+        {
+        }
+
+        public virtual void OnMouseDown()
+        {
+        }
+
+        public virtual void OnMouseUp()
+        {
+        }
+
+        public virtual void OnMouseUpAsButton()
+        {
+        }
+
+        public virtual void OnMouseEnter()
+        {
+        }
+
+        public virtual void OnMouseExit()
+        {
+        }
+
+        public virtual void OnMouseOver()
+        {
+        }
+
+        public virtual void OnMouseDrag()
+        {
+        }
+
+        public virtual void OnTransformParentChanged()
+        {
+        }
+
+        public virtual void OnTransformChildrenChanged()
         {
         }
     }

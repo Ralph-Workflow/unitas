@@ -58,6 +58,7 @@ namespace Unitas.Bridge.Tests
             SceneManagementTests.Run();
             SceneManagementIntegrationTests.Run();
             SceneManagementPersistenceTests.Run();
+            SceneMergeTests.Run();
             ApplicationTests.Run();
             RuntimeInitializeTests.Run();
             PlayerPrefsTests.Run();
@@ -94,6 +95,9 @@ namespace Unitas.Bridge.Tests
             UtfHardeningTests.Run();
             DebuggingTests.Run();
             DapSteppingTests.Run();
+            EditorMenuTests.Run();
+            LifecycleMessageTests.Run();
+            SaveMigrationTests.Run();
 
             if (Check.FailureCount > 0)
             {

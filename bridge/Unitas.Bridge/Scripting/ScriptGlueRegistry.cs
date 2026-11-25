@@ -12,15 +12,18 @@ namespace Unitas.Bridge.Scripting
     {
         private readonly struct GlueEntry
         {
-            public GlueEntry(Func<MonoBehaviour> factory, Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory)
+            public GlueEntry(Func<MonoBehaviour> factory, Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory, Type? scriptType)
             {
                 Factory = factory;
                 HandlerFactory = handlerFactory;
+                ScriptType = scriptType;
             }
 
             public Func<MonoBehaviour> Factory { get; }
 
             public Func<MonoBehaviour, IUnitasMessageHandler>? HandlerFactory { get; }
+
+            public Type? ScriptType { get; }
         }
 
         private static readonly Dictionary<(ulong, ulong), GlueEntry> Entries =
@@ -55,7 +58,7 @@ namespace Unitas.Bridge.Scripting
             Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory = null)
         {
             ArgumentNullException.ThrowIfNull(factory);
-            Entries[(guidHi, guidLo)] = new GlueEntry(factory, handlerFactory);
+            Entries[(guidHi, guidLo)] = new GlueEntry(factory, handlerFactory, null);
         }
 
         public static void Register(
@@ -83,7 +86,7 @@ namespace Unitas.Bridge.Scripting
                 TypeResolvers.Add(instance => instance is T typed ? handlerFactory(typed) : null);
             }
 
-            Entries[(guidHi, guidLo)] = new GlueEntry(() => factory(), wrappedHandler);
+            Entries[(guidHi, guidLo)] = new GlueEntry(() => factory(), wrappedHandler, typeof(T));
         }
 
         public static void Register<T>(
@@ -130,6 +133,11 @@ namespace Unitas.Bridge.Scripting
             if (created is null)
             {
                 return false;
+            }
+
+            if (entry.ScriptType != null && created.AttachedRuntimeType == null)
+            {
+                created.AttachedRuntimeType = entry.ScriptType;
             }
 
             instance = created;

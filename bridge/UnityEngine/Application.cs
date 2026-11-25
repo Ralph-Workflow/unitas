@@ -119,10 +119,12 @@ namespace UnityEngine
 
         private static string? _persistentDataPathOverride;
         private static string? _unityVersionOverride;
+        private static RuntimePlatform? _platformOverride;
         private static int _targetFrameRate = -1;
         private static bool _runInBackground = true;
         private static bool _ignoreQuitInPlayMode;
         private static int _quitRequestCount;
+        private static int _ignoredPlayModeQuitCount;
 
         static Application()
         {
@@ -143,6 +145,12 @@ namespace UnityEngine
             set => _unityVersionOverride = value;
         }
 
+        public static RuntimePlatform? PlatformOverride
+        {
+            get => _platformOverride;
+            set => _platformOverride = value;
+        }
+
         public static bool IgnoreQuitInPlayMode
         {
             get => _ignoreQuitInPlayMode;
@@ -150,6 +158,8 @@ namespace UnityEngine
         }
 
         public static int QuitRequestCount => _quitRequestCount;
+
+        public static int IgnoredPlayModeQuitCount => _ignoredPlayModeQuitCount;
 
         public static event Func<bool>? wantsToQuit;
 
@@ -175,6 +185,11 @@ namespace UnityEngine
         {
             get
             {
+                if (_platformOverride.HasValue)
+                {
+                    return _platformOverride.Value;
+                }
+
                 bool editor = Host == null || Host.BuildKind == ApplicationBuildKind.Editor;
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
@@ -255,8 +270,24 @@ namespace UnityEngine
             }
         }
 
-        public static string unityVersion =>
-            string.IsNullOrEmpty(_unityVersionOverride) ? DefaultUnityVersion : _unityVersionOverride!;
+        public static string unityVersion
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(_unityVersionOverride))
+                {
+                    return _unityVersionOverride!;
+                }
+
+                string? resolvedFromProject = TryResolveUnityVersionFromProjectSettings();
+                if (!string.IsNullOrEmpty(resolvedFromProject))
+                {
+                    return resolvedFromProject!;
+                }
+
+                return DefaultUnityVersion;
+            }
+        }
 
         public static string identifier
         {
@@ -324,24 +355,71 @@ namespace UnityEngine
                     return overridePath;
                 }
 
-                string baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                if (string.IsNullOrEmpty(baseFolder))
+                string resolved = ResolvePersistentDataPathForTarget(platform, companyName, productName, ResolveCurrentUserHomeDirectory());
+                if (platform != RuntimePlatform.WebGLPlayer)
                 {
-                    baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                    string fullResolved = Path.GetFullPath(resolved);
+                    Directory.CreateDirectory(fullResolved);
+                    return fullResolved;
                 }
 
-                if (string.IsNullOrEmpty(baseFolder))
-                {
-                    baseFolder = Path.GetTempPath();
-                }
-
-                string folderName = SanitizeFolderToken(companyName, DefaultCompanyName)
-                    + "-"
-                    + SanitizeFolderToken(productName, DefaultProductName);
-                string resolved = Path.GetFullPath(Path.Combine(baseFolder, "unitas", folderName));
-                Directory.CreateDirectory(resolved);
                 return resolved;
             }
+        }
+
+        public static string ResolvePersistentDataPathForTarget(
+            RuntimePlatform targetPlatform,
+            string? targetCompanyName,
+            string? targetProductName,
+            string? userHomeDirectory = null)
+        {
+            string companyToken = SanitizeFolderToken(targetCompanyName ?? string.Empty, DefaultCompanyName);
+            string productToken = SanitizeFolderToken(targetProductName ?? string.Empty, DefaultProductName);
+            string home = string.IsNullOrEmpty(userHomeDirectory)
+                ? ResolveCurrentUserHomeDirectory()
+                : userHomeDirectory!.TrimEnd('/', '\\');
+
+            switch (targetPlatform)
+            {
+                case RuntimePlatform.OSXEditor:
+                case RuntimePlatform.OSXPlayer:
+                case RuntimePlatform.OSXServer:
+                    return CombineUnixPath(home, "Library", "Application Support", companyToken, productToken);
+
+                case RuntimePlatform.WindowsEditor:
+                case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsServer:
+                    return CombineWindowsPath(home, "AppData", "LocalLow", companyToken, productToken);
+
+                case RuntimePlatform.LinuxEditor:
+                case RuntimePlatform.LinuxPlayer:
+                case RuntimePlatform.LinuxServer:
+                    return CombineUnixPath(home, ".config", "unity3d", companyToken, productToken);
+
+                case RuntimePlatform.WebGLPlayer:
+                    return "/idbfs/" + companyToken + "/" + productToken;
+
+                case RuntimePlatform.IPhonePlayer:
+                case RuntimePlatform.tvOS:
+                    return CombineUnixPath(home, "Documents", companyToken, productToken);
+
+                case RuntimePlatform.Android:
+                    return "/storage/emulated/0/Android/data/"
+                        + "com."
+                        + NormalizeIdentifierToken(companyToken, "defaultcompany")
+                        + "."
+                        + NormalizeIdentifierToken(productToken, "unitasproduct")
+                        + "/files";
+
+                default:
+                    return CombineUnixPath(home, "unitas", companyToken + "-" + productToken);
+            }
+        }
+
+        public static string ResolveUnityVersionForProject(string? projectOrDataPath)
+        {
+            string? version = TryReadUnityVersionFromPath(projectOrDataPath);
+            return string.IsNullOrEmpty(version) ? DefaultUnityVersion : version!;
         }
 
         public static string temporaryCachePath
@@ -368,6 +446,8 @@ namespace UnityEngine
             _quitRequestCount++;
             if (_ignoreQuitInPlayMode && isEditor && isPlaying)
             {
+                _ignoredPlayModeQuitCount++;
+                Debug.Log("Application.Quit is ignored in the Editor during Play Mode.");
                 return;
             }
 
@@ -419,6 +499,9 @@ namespace UnityEngine
             deepLinkActivated = null;
             _ignoreQuitInPlayMode = false;
             _quitRequestCount = 0;
+            _ignoredPlayModeQuitCount = 0;
+            _platformOverride = null;
+            _unityVersionOverride = null;
         }
 
         internal static bool EvaluateWantsToQuit()
@@ -578,6 +661,136 @@ namespace UnityEngine
 
             string sanitized = builder.ToString().Trim();
             return sanitized.Length == 0 ? fallback : sanitized;
+        }
+
+        private static string ResolveCurrentUserHomeDirectory()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(home))
+            {
+                return home.TrimEnd('/', '\\');
+            }
+
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (!string.IsNullOrEmpty(localAppData))
+            {
+                return localAppData.TrimEnd('/', '\\');
+            }
+
+            return Path.GetTempPath().TrimEnd('/', '\\');
+        }
+
+        private static string CombineUnixPath(string root, params string[] segments)
+        {
+            StringBuilder builder = new StringBuilder(root.Replace('\\', '/').TrimEnd('/'));
+            for (int i = 0; i < segments.Length; i++)
+            {
+                string segment = segments[i].Replace('\\', '/').Trim('/');
+                if (segment.Length > 0)
+                {
+                    builder.Append('/').Append(segment);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static string CombineWindowsPath(string root, params string[] segments)
+        {
+            StringBuilder builder = new StringBuilder(root.Replace('/', '\\').TrimEnd('\\'));
+            for (int i = 0; i < segments.Length; i++)
+            {
+                string segment = segments[i].Replace('/', '\\').Trim('\\');
+                if (segment.Length > 0)
+                {
+                    builder.Append('\\').Append(segment);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static string? TryResolveUnityVersionFromProjectSettings()
+        {
+            string? hostDataPath = Host?.DataPath;
+            if (!string.IsNullOrEmpty(hostDataPath))
+            {
+                string? fromHost = TryReadUnityVersionFromPath(hostDataPath);
+                if (!string.IsNullOrEmpty(fromHost))
+                {
+                    return fromHost;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? TryReadUnityVersionFromPath(string? startPath)
+        {
+            if (string.IsNullOrEmpty(startPath))
+            {
+                return null;
+            }
+
+            string? current = File.Exists(startPath)
+                ? Path.GetDirectoryName(Path.GetFullPath(startPath))
+                : Path.GetFullPath(startPath);
+
+            int depth = 0;
+            while (!string.IsNullOrEmpty(current) && depth < 6)
+            {
+                string candidate = Path.Combine(current, "ProjectSettings", "ProjectVersion.txt");
+                if (File.Exists(candidate))
+                {
+                    string? parsed = TryParseEditorVersionFile(candidate);
+                    if (!string.IsNullOrEmpty(parsed))
+                    {
+                        return parsed;
+                    }
+                }
+
+                current = Path.GetDirectoryName(current);
+                depth++;
+            }
+
+            return null;
+        }
+
+        private static string? TryParseEditorVersionFile(string filePath)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(filePath, Encoding.UTF8);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string trimmed = lines[i].Trim();
+                if (trimmed.StartsWith("m_EditorVersion:", StringComparison.Ordinal))
+                {
+                    string rawVersion = trimmed.Substring("m_EditorVersion:".Length).Trim();
+                    if (rawVersion.StartsWith("2022.3.", StringComparison.Ordinal))
+                    {
+                        return rawVersion;
+                    }
+
+                    if (rawVersion.Length > 0)
+                    {
+                        return DefaultUnityVersion;
+                    }
+                }
+            }
+
+            return null;
         }
     }
 }

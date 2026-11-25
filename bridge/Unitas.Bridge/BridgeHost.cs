@@ -2063,7 +2063,7 @@ namespace Unitas.Bridge
                         : script.name;
                     owner = new GameObject(objectName);
                 }
-                owner.AttachComponent(script);
+                owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
             }
             _entityGameObjects[entity] = owner;
             owner.AssignNativeEntityId(entity);

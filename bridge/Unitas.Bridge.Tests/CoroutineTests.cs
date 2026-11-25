@@ -204,7 +204,7 @@ namespace Unitas.Bridge.Tests
             CoroutineRecorderScript ownerA = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
             GameObject goB = new GameObject("OwnerB");
             CoroutineRecorderScript ownerB = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
-            goB.AttachComponent(ownerB);
+            goB.AttachComponent(ownerB, typeof(CoroutineRecorderScript));
             CoroutineRecorderScript ownerC = new CoroutineRecorderScript(new Collection<string>(), string.Empty, false);
             try
             {

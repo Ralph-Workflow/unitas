@@ -48,12 +48,65 @@ namespace UnityEngine
             ChildCoroutine
         }
 
+        private interface INamedCoroutineFactory
+        {
+            IEnumerator? TryCreateZeroArg();
+
+            IEnumerator? TryCreateWithArg<T>(T value);
+        }
+
+        private sealed class ZeroArgCoroutineFactory : INamedCoroutineFactory
+        {
+            private readonly Func<IEnumerator> _factory;
+
+            public ZeroArgCoroutineFactory(Func<IEnumerator> factory)
+            {
+                _factory = factory;
+            }
+
+            public IEnumerator? TryCreateZeroArg() => _factory();
+
+            public IEnumerator? TryCreateWithArg<T>(T value)
+            {
+                _ = value;
+                return _factory();
+            }
+        }
+
+        private sealed class TypedArgCoroutineFactory<TArg> : INamedCoroutineFactory
+        {
+            private readonly Func<TArg, IEnumerator> _factory;
+
+            public TypedArgCoroutineFactory(Func<TArg, IEnumerator> factory)
+            {
+                _factory = factory;
+            }
+
+            public IEnumerator? TryCreateZeroArg() => _factory(default!);
+
+            public IEnumerator? TryCreateWithArg<T>(T value)
+            {
+                if (value is TArg typed)
+                {
+                    return _factory(typed);
+                }
+
+                if (value is null && default(TArg) is null)
+                {
+                    return _factory(default!);
+                }
+
+                return null;
+            }
+        }
+
         private sealed class CoroutineEntry
         {
             public CoroutineEntry(MonoBehaviour owner, Coroutine handle, IEnumerator routine, string? methodName)
             {
                 Owner = owner;
                 Handle = handle;
+                RootRoutine = routine;
                 MethodName = methodName ?? string.Empty;
                 Enumerators = new Stack<IEnumerator>();
                 Enumerators.Push(routine);
@@ -63,6 +116,8 @@ namespace UnityEngine
             public MonoBehaviour Owner { get; }
 
             public Coroutine Handle { get; }
+
+            public IEnumerator RootRoutine { get; }
 
             public string MethodName { get; }
 
@@ -78,8 +133,180 @@ namespace UnityEngine
         }
 
         private static readonly List<CoroutineEntry> Entries = new List<CoroutineEntry>();
+        private static readonly Dictionary<int, Dictionary<string, INamedCoroutineFactory>> NamedFactories =
+            new Dictionary<int, Dictionary<string, INamedCoroutineFactory>>();
 
         public static int ActiveCount => Entries.Count;
+
+        public static void RegisterMethod(MonoBehaviour owner, string methodName, Func<IEnumerator> factory)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (string.IsNullOrEmpty(methodName))
+            {
+                throw new ArgumentException("Method name cannot be null or empty.", nameof(methodName));
+            }
+
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            int id = owner.GetInstanceID();
+            if (!NamedFactories.TryGetValue(id, out Dictionary<string, INamedCoroutineFactory>? map))
+            {
+                map = new Dictionary<string, INamedCoroutineFactory>(StringComparer.Ordinal);
+                NamedFactories[id] = map;
+            }
+
+            map[methodName] = new ZeroArgCoroutineFactory(factory);
+        }
+
+        public static void RegisterMethod<T>(MonoBehaviour owner, string methodName, Func<T, IEnumerator> factory)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (string.IsNullOrEmpty(methodName))
+            {
+                throw new ArgumentException("Method name cannot be null or empty.", nameof(methodName));
+            }
+
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            int id = owner.GetInstanceID();
+            if (!NamedFactories.TryGetValue(id, out Dictionary<string, INamedCoroutineFactory>? map))
+            {
+                map = new Dictionary<string, INamedCoroutineFactory>(StringComparer.Ordinal);
+                NamedFactories[id] = map;
+            }
+
+            map[methodName] = new TypedArgCoroutineFactory<T>(factory);
+        }
+
+        public static Coroutine? StartByName(MonoBehaviour owner, string methodName)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (string.IsNullOrEmpty(methodName))
+            {
+                Debug.LogError("Coroutine name cannot be null or empty.", owner);
+                return null;
+            }
+
+            if (owner.gameObject != null && !owner.gameObject.activeInHierarchy)
+            {
+                string objectName = string.IsNullOrEmpty(owner.gameObject.name) ? "GameObject" : owner.gameObject.name;
+                Debug.LogError(
+                    "Coroutine couldn't be started because the the game object '"
+                    + objectName
+                    + "' is inactive!",
+                    owner);
+                return null;
+            }
+
+            if (IsDestroyedOwner(owner))
+            {
+                return null;
+            }
+
+            IEnumerator? routine = ResolveNamedEnumerator(owner, methodName);
+            if (routine == null)
+            {
+                Debug.LogError(
+                    "Coroutine '"
+                    + methodName
+                    + "' couldn't be started!",
+                    owner);
+                return null;
+            }
+
+            return Start(owner, routine, methodName);
+        }
+
+        public static Coroutine? StartByName<T>(MonoBehaviour owner, string methodName, T value)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (string.IsNullOrEmpty(methodName))
+            {
+                Debug.LogError("Coroutine name cannot be null or empty.", owner);
+                return null;
+            }
+
+            if (owner.gameObject != null && !owner.gameObject.activeInHierarchy)
+            {
+                string objectName = string.IsNullOrEmpty(owner.gameObject.name) ? "GameObject" : owner.gameObject.name;
+                Debug.LogError(
+                    "Coroutine couldn't be started because the the game object '"
+                    + objectName
+                    + "' is inactive!",
+                    owner);
+                return null;
+            }
+
+            if (IsDestroyedOwner(owner))
+            {
+                return null;
+            }
+
+            IEnumerator? routine = ResolveNamedEnumerator(owner, methodName, value);
+            if (routine == null)
+            {
+                Debug.LogError(
+                    "Coroutine '"
+                    + methodName
+                    + "' couldn't be started!",
+                    owner);
+                return null;
+            }
+
+            return Start(owner, routine, methodName);
+        }
+
+        private static IEnumerator? ResolveNamedEnumerator(MonoBehaviour owner, string methodName)
+        {
+            if (NamedFactories.TryGetValue(owner.GetInstanceID(), out Dictionary<string, INamedCoroutineFactory>? map)
+                && map.TryGetValue(methodName, out INamedCoroutineFactory? factory))
+            {
+                IEnumerator? created = factory.TryCreateZeroArg();
+                if (created != null)
+                {
+                    return created;
+                }
+            }
+
+            return owner.ResolveNamedCoroutine(methodName);
+        }
+
+        private static IEnumerator? ResolveNamedEnumerator<T>(MonoBehaviour owner, string methodName, T value)
+        {
+            if (NamedFactories.TryGetValue(owner.GetInstanceID(), out Dictionary<string, INamedCoroutineFactory>? map)
+                && map.TryGetValue(methodName, out INamedCoroutineFactory? factory))
+            {
+                IEnumerator? created = factory.TryCreateWithArg(value);
+                if (created != null)
+                {
+                    return created;
+                }
+            }
+
+            return owner.ResolveNamedCoroutine(methodName, value);
+        }
 
         public static Coroutine Start(MonoBehaviour owner, IEnumerator routine) =>
             Start(owner, routine, null);
@@ -146,6 +373,30 @@ namespace UnityEngine
             }
         }
 
+        public static void Stop(MonoBehaviour owner, IEnumerator routine)
+        {
+            if (owner is null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (routine == null)
+            {
+                throw new ArgumentNullException(nameof(routine));
+            }
+
+            for (int i = Entries.Count - 1; i >= 0; i--)
+            {
+                CoroutineEntry entry = Entries[i];
+                if (ReferenceEquals(entry.Owner, owner)
+                    && (ReferenceEquals(entry.RootRoutine, routine) || entry.Enumerators.Contains(routine)))
+                {
+                    entry.Handle.IsCompleted = true;
+                    Entries.RemoveAt(i);
+                }
+            }
+        }
+
         public static void Stop(Coroutine coroutine)
         {
             if (coroutine == null)
@@ -200,6 +451,7 @@ namespace UnityEngine
                 throw new ArgumentNullException(nameof(owner));
             }
 
+            NamedFactories.Remove(owner.GetInstanceID());
             RemoveForOwner(owner);
         }
 

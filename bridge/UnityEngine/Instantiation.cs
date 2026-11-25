@@ -37,7 +37,7 @@ namespace UnityEngine
                 {
                     MonoBehaviour copy = (MonoBehaviour)behaviour.ShallowClone();
                     copy.AssignNewInstanceId();
-                    target.AttachComponent(copy);
+                    target.AttachComponent(copy, behaviour.AttachedRuntimeType ?? typeof(MonoBehaviour));
                     continue;
                 }
 
@@ -47,7 +47,7 @@ namespace UnityEngine
                     copy.isTrigger = box.isTrigger;
                     copy.center = box.center;
                     copy.size = box.size;
-                    target.AttachComponent(copy);
+                    target.AttachComponent(copy, typeof(BoxCollider));
                     continue;
                 }
 
@@ -57,7 +57,7 @@ namespace UnityEngine
                     copy.isTrigger = sphere.isTrigger;
                     copy.center = sphere.center;
                     copy.radius = sphere.radius;
-                    target.AttachComponent(copy);
+                    target.AttachComponent(copy, typeof(SphereCollider));
                 }
             }
         }

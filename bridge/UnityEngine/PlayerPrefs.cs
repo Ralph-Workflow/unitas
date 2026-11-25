@@ -29,6 +29,14 @@ namespace UnityEngine
         IoError = 3
     }
 
+    public enum StorageFailureReason
+    {
+        None = 0,
+        QuotaExceeded = 1,
+        PermissionDenied = 2,
+        IoError = 3
+    }
+
     public static class PlayerPrefs
     {
         private const string HeaderLine = "UNITAS_PLAYERPREFS_V1";
@@ -43,6 +51,10 @@ namespace UnityEngine
         private static Func<string>? _persistentDataPathResolver;
         private static PlayerPrefsLoadState _lastLoadState = PlayerPrefsLoadState.Absent;
         private static string? _lastLoadError;
+        private static StorageFailureReason _lastSaveFailureReason = StorageFailureReason.None;
+        private static string? _lastSaveError;
+        private static long _simulatedQuotaBytes = -1;
+        private static int _simulatedInterruptionAfterBytes = -1;
 
         public static PlayerPrefsLoadState LastLoadState
         {
@@ -62,6 +74,44 @@ namespace UnityEngine
                 EnsureLoaded();
                 return _lastLoadError;
             }
+        }
+
+        public static StorageFailureReason LastSaveFailureReason => _lastSaveFailureReason;
+
+        public static string? LastSaveError => _lastSaveError;
+
+        public static long SimulatedQuotaBytes
+        {
+            get => _simulatedQuotaBytes;
+            set => _simulatedQuotaBytes = value;
+        }
+
+        public static int SimulatedInterruptionAfterBytes
+        {
+            get => _simulatedInterruptionAfterBytes;
+            set => _simulatedInterruptionAfterBytes = value;
+        }
+
+        public static long CurrentCommittedByteSize
+        {
+            get
+            {
+                string path = StorageFilePath;
+                if (!File.Exists(path))
+                {
+                    return 0L;
+                }
+
+                return new FileInfo(path).Length;
+            }
+        }
+
+        public static void ResetSimulationControls()
+        {
+            _simulatedQuotaBytes = -1;
+            _simulatedInterruptionAfterBytes = -1;
+            _lastSaveFailureReason = StorageFailureReason.None;
+            _lastSaveError = null;
         }
 
         internal static string? StorageDirectoryOverride
@@ -225,11 +275,50 @@ namespace UnityEngine
             string targetPath = StorageFilePath;
             string directory = Path.GetDirectoryName(targetPath) ?? ResolveStorageDirectory();
             string tempPath = Path.Combine(directory, "PlayerPrefs.ini.tmp." + Guid.NewGuid().ToString("N"));
+            bool preserveInterruptedTemp = false;
             try
             {
                 Directory.CreateDirectory(directory);
                 string serialized = SerializeCache();
-                File.WriteAllText(tempPath, serialized, new UTF8Encoding(false));
+                byte[] utf8Bytes = new UTF8Encoding(false).GetBytes(serialized);
+
+                if (_simulatedQuotaBytes >= 0 && utf8Bytes.LongLength > _simulatedQuotaBytes)
+                {
+                    _lastSaveFailureReason = StorageFailureReason.QuotaExceeded;
+                    string quotaMessage = string.Concat(
+                        "Could not save PlayerPrefs to '",
+                        targetPath,
+                        "': storage quota exceeded (required ",
+                        utf8Bytes.LongLength.ToString(CultureInfo.InvariantCulture),
+                        " bytes, quota ",
+                        _simulatedQuotaBytes.ToString(CultureInfo.InvariantCulture),
+                        " bytes).");
+                    _lastSaveError = quotaMessage;
+                    Debug.LogError(quotaMessage);
+                    throw new PlayerPrefsException(quotaMessage, new IOException(quotaMessage));
+                }
+
+                if (_simulatedInterruptionAfterBytes >= 0 && _simulatedInterruptionAfterBytes < utf8Bytes.Length)
+                {
+                    preserveInterruptedTemp = true;
+                    _lastSaveFailureReason = StorageFailureReason.IoError;
+                    byte[] partialBytes = new byte[_simulatedInterruptionAfterBytes];
+                    Buffer.BlockCopy(utf8Bytes, 0, partialBytes, 0, _simulatedInterruptionAfterBytes);
+                    File.WriteAllBytes(tempPath, partialBytes);
+                    string interruptedMessage = string.Concat(
+                        "Could not save PlayerPrefs to '",
+                        targetPath,
+                        "': simulated write interruption after ",
+                        _simulatedInterruptionAfterBytes.ToString(CultureInfo.InvariantCulture),
+                        " of ",
+                        utf8Bytes.Length.ToString(CultureInfo.InvariantCulture),
+                        " bytes before atomic replace.");
+                    _lastSaveError = interruptedMessage;
+                    Debug.LogError(interruptedMessage);
+                    throw new PlayerPrefsException(interruptedMessage, new IOException(interruptedMessage));
+                }
+
+                File.WriteAllBytes(tempPath, utf8Bytes);
                 if (File.Exists(targetPath))
                 {
                     File.Delete(targetPath);
@@ -239,27 +328,40 @@ namespace UnityEngine
                 _loadedFilePath = targetPath;
                 _lastLoadState = PlayerPrefsLoadState.Loaded;
                 _lastLoadError = null;
+                _lastSaveFailureReason = StorageFailureReason.None;
+                _lastSaveError = null;
+            }
+            catch (PlayerPrefsException)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
             {
+                _lastSaveFailureReason = ex is UnauthorizedAccessException
+                    ? StorageFailureReason.PermissionDenied
+                    : StorageFailureReason.IoError;
                 string errorMessage = "Could not save PlayerPrefs to '" + targetPath + "': " + ex.Message;
+                _lastSaveError = errorMessage;
                 Debug.LogError(errorMessage);
                 throw new PlayerPrefsException(errorMessage, ex);
             }
             finally
             {
-                try
+                if (!preserveInterruptedTemp)
                 {
-                    if (File.Exists(tempPath))
+                    try
                     {
-                        File.Delete(tempPath);
+                        if (File.Exists(tempPath))
+                        {
+                            File.Delete(tempPath);
+                        }
                     }
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
                 }
             }
         }

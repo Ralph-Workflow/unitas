@@ -286,7 +286,7 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("compiled coroutine debug: CoroutineProbe created via generated glue", true, created && instance != null);
 
                 GameObject hostObject = new GameObject("CoroutineProbeHost");
-                hostObject.AttachComponent(instance!);
+                hostObject.AttachComponent(instance!, instance!.AttachedRuntimeType ?? typeof(MonoBehaviour));
 
                 GameObject destroyedRef = new GameObject("CoroutineVictim");
                 UnityEngine.Object.DestroyImmediate(destroyedRef);

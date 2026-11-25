@@ -136,7 +136,7 @@ namespace UnityEngine
             activeSelf = true;
             scene = SceneManager.GetActiveScene();
             Transform t = new Transform();
-            AttachComponent(t);
+            AttachComponent(t, typeof(Transform));
             transform = t;
         }
 
@@ -339,12 +339,28 @@ namespace UnityEngine
             }
         }
 
+        public readonly struct ComponentOperationResult
+        {
+            public ComponentOperationResult(bool succeeded, Component? component, string? refusalReason)
+            {
+                Succeeded = succeeded;
+                Component = component;
+                RefusalReason = refusalReason;
+            }
+
+            public bool Succeeded { get; }
+
+            public Component? Component { get; }
+
+            public string? RefusalReason { get; }
+        }
+
         public T AddComponent<T>() where T : Component, new()
         {
             ThrowIfDestroyed();
             T component = new T();
             component.AttachedRuntimeType = typeof(T);
-            if (!TryAttachWithRules(component, typeof(T)))
+            if (!TryAttachWithRules(component, typeof(T), out string? _))
             {
                 DeregisterLiveObject(component);
                 return null!;
@@ -382,7 +398,7 @@ namespace UnityEngine
             }
 
             component.AttachedRuntimeType = componentType;
-            if (!TryAttachWithRules(component, componentType))
+            if (!TryAttachWithRules(component, componentType, out string? _))
             {
                 DeregisterLiveObject(component);
                 return null!;
@@ -391,17 +407,113 @@ namespace UnityEngine
             return component;
         }
 
-        private bool TryAttachWithRules(Component component, Type componentType)
+        public ComponentOperationResult TryAddComponentForAgent<T>() where T : Component, new()
         {
+            ThrowIfDestroyed();
+            T component = new T();
+            component.AttachedRuntimeType = typeof(T);
+            if (!TryAttachWithRules(component, typeof(T), out string? refusalReason))
+            {
+                DeregisterLiveObject(component);
+                return new ComponentOperationResult(false, null, refusalReason);
+            }
+
+            return new ComponentOperationResult(true, component, null);
+        }
+
+        public ComponentOperationResult TryAddComponentForAgent(Type componentType)
+        {
+            ThrowIfDestroyed();
+            if (componentType == null)
+            {
+                throw new ArgumentNullException(nameof(componentType));
+            }
+
+            if (!typeof(Component).IsAssignableFrom(componentType) || componentType.IsAbstract)
+            {
+                throw new ArgumentException("Type must be a concrete UnityEngine.Component.", nameof(componentType));
+            }
+
+            object? created;
+            try
+            {
+                created = Activator.CreateInstance(componentType);
+            }
+            catch (MissingMethodException ex)
+            {
+                throw new ArgumentException("Component type must have a parameterless constructor: " + componentType.FullName, nameof(componentType), ex);
+            }
+
+            if (!(created is Component component))
+            {
+                throw new ArgumentException("Failed to instantiate UnityEngine.Component.", nameof(componentType));
+            }
+
+            component.AttachedRuntimeType = componentType;
+            if (!TryAttachWithRules(component, componentType, out string? refusalReason))
+            {
+                DeregisterLiveObject(component);
+                return new ComponentOperationResult(false, null, refusalReason);
+            }
+
+            return new ComponentOperationResult(true, component, null);
+        }
+
+        public ComponentOperationResult TryRemoveComponentForAgent(Component component)
+        {
+            ThrowIfDestroyed();
+            if (component is null)
+            {
+                throw new ArgumentNullException(nameof(component));
+            }
+
+            if (component.IsDestroyed || !ReferenceEquals(component.OwnerOrNull, this))
+            {
+                return new ComponentOperationResult(false, null, "Component is not attached to " + name + ".");
+            }
+
+            if (TryFindDependentRequiring(component, out Component? dependent))
+            {
+                string targetTypeName = component.ComponentTypeName;
+                string dependentTypeName = dependent != null ? dependent.ComponentTypeName : nameof(Component);
+                string refusalReason =
+                    "Can't remove "
+                    + targetTypeName
+                    + " because "
+                    + dependentTypeName
+                    + " depends on it";
+                Debug.LogError(refusalReason, this);
+                return new ComponentOperationResult(false, component, refusalReason);
+            }
+
+            Destroy(component);
+            return new ComponentOperationResult(!component.IsDestroyed ? false : true, component, null);
+        }
+
+        public ComponentOperationResult TryRemoveComponentForAgent<T>() where T : Component
+        {
+            ThrowIfDestroyed();
+            T? target = GetComponent<T>();
+            if (target is null)
+            {
+                return new ComponentOperationResult(false, null, "Component '" + typeof(T).Name + "' is not attached to " + name + ".");
+            }
+
+            return TryRemoveComponentForAgent(target);
+        }
+
+        private bool TryAttachWithRules(Component component, Type componentType, out string? refusalReason)
+        {
+            refusalReason = null;
             if (component.ResolveDisallowMultiple(componentType) && GetComponent(componentType) != null)
             {
-                Debug.LogError(
+                refusalReason =
                     "Can't add component '"
                     + componentType.Name
                     + "' to "
                     + name
-                    + " because such a component is already added to the game object!",
-                    this);
+                    + " because such a component is already added to the game object!";
+                Debug.LogError(refusalReason, this);
                 return false;
             }
 
@@ -420,7 +532,7 @@ namespace UnityEngine
                 }
             }
 
-            AttachComponent(component);
+            AttachComponentCore(component);
             return true;
         }
 
@@ -470,7 +582,29 @@ namespace UnityEngine
             return false;
         }
 
-        internal void AttachComponent(Component component)
+        internal void AttachComponent(Component component, Type componentType)
+        {
+            // Serialized (editor-authored scene or prefab) attach: the same rules and the same
+            // refusal reason as the programmatic add path, so a person and an agent see one behaviour.
+            // The caller supplies the runtime type the serialized data carries; the bridge never
+            // discovers it by reflection.
+            if (componentType == null)
+            {
+                throw new ArgumentNullException(nameof(componentType));
+            }
+
+            if (component.AttachedRuntimeType == null)
+            {
+                component.AttachedRuntimeType = componentType;
+            }
+
+            if (!TryAttachWithRules(component, componentType, out string? _))
+            {
+                DeregisterLiveObject(component);
+            }
+        }
+
+        private void AttachComponentCore(Component component)
         {
             GameObject? previousOwner = component.OwnerOrNull;
             if (previousOwner is not null && !ReferenceEquals(previousOwner, this) && previousOwner._isScriptedPlaceholder)
