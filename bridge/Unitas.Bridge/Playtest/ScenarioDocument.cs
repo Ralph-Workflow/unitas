@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Text.Json;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -46,9 +47,10 @@ namespace Unitas.Bridge.Playtest
 
         public IReadOnlyList<ScenarioCheckpoint> Checkpoints { get; }
 
-        public static ScenarioDocument Parse(string json)
+        public static ScenarioDocument Parse(string json, string? baseDirectory = null)
         {
             ArgumentNullException.ThrowIfNull(json);
+            string referenceBase = string.IsNullOrEmpty(baseDirectory) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDirectory);
 
             JsonDocument document;
             try
@@ -113,7 +115,7 @@ namespace Unitas.Bridge.Playtest
                     foreach (JsonElement checkpointElement in checkpointsElement.EnumerateArray())
                     {
                         string path = "checkpoints[" + index.ToString(CultureInfo.InvariantCulture) + "]";
-                        checkpoints.Add(ParseCheckpoint(checkpointElement, path, ids));
+                        checkpoints.Add(ParseCheckpoint(checkpointElement, path, ids, referenceBase));
                         index++;
                     }
                 }
@@ -277,7 +279,7 @@ namespace Unitas.Bridge.Playtest
             return new SetTimeScaleStep(value);
         }
 
-        private static ScenarioCheckpoint ParseCheckpoint(JsonElement element, string path, HashSet<string> ids)
+        private static ScenarioCheckpoint ParseCheckpoint(JsonElement element, string path, HashSet<string> ids, string referenceBase)
         {
             if (element.ValueKind != JsonValueKind.Object)
             {
@@ -306,7 +308,7 @@ namespace Unitas.Bridge.Playtest
                 case "frame_count":
                     return ParseFrameCountCheckpoint(element, path, id, afterStep);
                 case "render_capture":
-                    return ParseRenderCaptureCheckpoint(element, path, id, afterStep);
+                    return ParseRenderCaptureCheckpoint(element, path, id, afterStep, referenceBase);
                 default:
                     throw Fail(path + ".kind", "unknown checkpoint kind '" + kind + "'");
             }
@@ -400,7 +402,12 @@ namespace Unitas.Bridge.Playtest
                 null);
         }
 
-        private static ScenarioCheckpoint ParseRenderCaptureCheckpoint(JsonElement element, string path, string id, int afterStep)
+        private static ScenarioCheckpoint ParseRenderCaptureCheckpoint(
+            JsonElement element,
+            string path,
+            string id,
+            int afterStep,
+            string referenceBase)
         {
             RejectUnknownProperties(
                 element,
@@ -411,7 +418,9 @@ namespace Unitas.Bridge.Playtest
                 "camera",
                 "width",
                 "height",
-                "expected_non_background_pixels");
+                "expected_non_background_pixels",
+                "reference",
+                "tolerance");
             string cameraName = ReadRequiredString(element, "camera", path + ".camera");
             int width = ReadOptionalInt(element, "width", path + ".width", DefaultCaptureSize);
             if (width <= 0)
@@ -435,20 +444,58 @@ namespace Unitas.Bridge.Playtest
                 }
             }
 
+            string? reference = ReadOptionalString(element, "reference", path + ".reference");
+            if (reference != null && reference.Length == 0)
+            {
+                throw Fail(path + ".reference", "'reference' must not be empty");
+            }
+
+            double tolerance = DefaultTolerance;
+            if (element.TryGetProperty("tolerance", out JsonElement toleranceElement))
+            {
+                if (reference == null)
+                {
+                    throw Fail(path + ".tolerance", "'tolerance' requires 'reference'");
+                }
+
+                tolerance = ReadNumber(toleranceElement, "tolerance", path + ".tolerance");
+                if (tolerance < 0.0 || tolerance > 1.0)
+                {
+                    throw Fail(path + ".tolerance", "'tolerance' must be between 0 and 1");
+                }
+            }
+            else if (reference != null)
+            {
+                tolerance = 0.0;
+            }
+
+            string? referencePath = reference == null ? null : ResolveReferencePath(reference, referenceBase);
+
             return new ScenarioCheckpoint(
                 id,
                 afterStep,
                 CheckpointKind.RenderCapture,
                 null,
                 null,
-                DefaultTolerance,
+                tolerance,
                 null,
                 null,
                 null,
                 cameraName,
                 width,
                 height,
-                expectedNonBackgroundPixels);
+                expectedNonBackgroundPixels,
+                referencePath);
+        }
+
+        private static string ResolveReferencePath(string reference, string referenceBase)
+        {
+            if (Path.IsPathRooted(reference))
+            {
+                return Path.GetFullPath(reference);
+            }
+
+            return Path.GetFullPath(Path.Combine(referenceBase, reference));
         }
 
         private static bool IsKnownSeverity(string severity)

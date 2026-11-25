@@ -123,6 +123,37 @@ namespace Unitas.Bridge.Playtest
             return different;
         }
 
+        public int CountPixelsDifferentFrom(BmpImage other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+            if (other.Width != Width || other.Height != Height)
+            {
+                throw new InvalidDataException(
+                    "BMP dimensions differ: " + Width.ToString(CultureInfo.InvariantCulture) + "x" + Height.ToString(CultureInfo.InvariantCulture)
+                    + " vs " + other.Width.ToString(CultureInfo.InvariantCulture) + "x" + other.Height.ToString(CultureInfo.InvariantCulture) + ".");
+            }
+
+            int different = 0;
+            for (int row = 0; row < Height; row++)
+            {
+                int rowStart = _dataOffset + (row * _rowStride);
+                int otherRowStart = other._dataOffset + (row * other._rowStride);
+                for (int column = 0; column < Width; column++)
+                {
+                    int pixel = rowStart + (column * BytesPerPixel);
+                    int otherPixel = otherRowStart + (column * BytesPerPixel);
+                    if (_data[pixel] != other._data[otherPixel]
+                        || _data[pixel + 1] != other._data[otherPixel + 1]
+                        || _data[pixel + 2] != other._data[otherPixel + 2])
+                    {
+                        different++;
+                    }
+                }
+            }
+
+            return different;
+        }
+
         private static byte ToByte(float value)
         {
             if (float.IsNaN(value))

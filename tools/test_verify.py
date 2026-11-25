@@ -8,7 +8,7 @@ from itertools import product
 from typing import TYPE_CHECKING
 from unittest import mock
 
-from tools import verify
+from tools import verify, verify_samples
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1219,3 +1219,21 @@ def test_bypass_audit_flags_conditional_rust_lint_attribute(tmp_path: Path) -> N
         '#[cfg_attr(feature = "extra", derive(Debug))]\npub fn run() {}\n', encoding="utf-8"
     )
     assert verify.check_bypass(tmp_path) == []
+
+
+def test_samples_lane_lists_s8_visual_scenarios() -> None:
+    s8 = (
+        "s8_title_checkpoint.scenario.json",
+        "s8_arena_countdown.scenario.json",
+        "s8_arena_x5_checkpoint.scenario.json",
+        "s8_results_gold_checkpoint.scenario.json",
+    )
+    entries = {
+        scenario: (extra_args, needs_persist)
+        for _, scenario, extra_args, needs_persist in verify_samples.SCENARIOS
+    }
+    for scenario in s8:
+        assert scenario in entries
+        assert entries[scenario] == ((), False)
+        assert (verify_samples.SCENARIO_DIR / scenario).is_file()
+    assert not set(s8) & set(verify_samples.EDITOR_SCENARIOS)

@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unitas.Bridge")]
 [assembly: InternalsVisibleTo("Unitas.Bridge.Tests")]
 [assembly: InternalsVisibleTo("Unitas.Editor")]
+[assembly: InternalsVisibleTo("Unitas.PlayerHost.Tests")]
 
 namespace UnityEngine
 {

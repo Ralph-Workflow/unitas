@@ -127,13 +127,71 @@ namespace Unitas.Bridge.Playtest
             int different = image.CountPixelsDifferentFrom(camera.backgroundColor);
             string observed = different.ToString(CultureInfo.InvariantCulture);
             int? threshold = checkpoint.ExpectedNonBackgroundPixels;
-            if (!threshold.HasValue)
+            string? referencePath = checkpoint.ReferencePath;
+            if (string.IsNullOrEmpty(referencePath))
             {
-                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Passed, "<any>", observed, null);
+                if (!threshold.HasValue)
+                {
+                    return new CheckpointResult(checkpoint.Id, CheckpointStatus.Passed, "<any>", observed, null);
+                }
+
+                CheckpointStatus status = different >= threshold.Value ? CheckpointStatus.Passed : CheckpointStatus.Failed;
+                return new CheckpointResult(checkpoint.Id, status, threshold.Value.ToString(CultureInfo.InvariantCulture), observed, null);
             }
 
-            CheckpointStatus status = different >= threshold.Value ? CheckpointStatus.Passed : CheckpointStatus.Failed;
-            return new CheckpointResult(checkpoint.Id, status, threshold.Value.ToString(CultureInfo.InvariantCulture), observed, null);
+            if (threshold.HasValue && different < threshold.Value)
+            {
+                return new CheckpointResult(
+                    checkpoint.Id,
+                    CheckpointStatus.Failed,
+                    threshold.Value.ToString(CultureInfo.InvariantCulture),
+                    observed,
+                    "non-background pixel threshold not met: " + observed + " is below " + threshold.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (!File.Exists(referencePath))
+            {
+                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Failed, null, null, "reference image not found: " + referencePath);
+            }
+
+            BmpImage reference;
+            try
+            {
+                reference = BmpImage.Load(referencePath);
+            }
+            catch (Exception ex)
+            {
+                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Failed, null, null, "reference image could not be read: " + referencePath + " (" + ex.Message + ")");
+            }
+
+            if (reference.Width != image.Width || reference.Height != image.Height)
+            {
+                return new CheckpointResult(
+                    checkpoint.Id,
+                    CheckpointStatus.Failed,
+                    null,
+                    null,
+                    "reference image size " + reference.Width.ToString(CultureInfo.InvariantCulture) + "x" + reference.Height.ToString(CultureInfo.InvariantCulture)
+                    + " does not match capture size " + image.Width.ToString(CultureInfo.InvariantCulture) + "x" + image.Height.ToString(CultureInfo.InvariantCulture));
+            }
+
+            int differing = image.CountPixelsDifferentFrom(reference);
+            int total = image.Width * image.Height;
+            double fraction = total > 0 ? (double)differing / total : 0.0;
+            double tolerance = checkpoint.Tolerance;
+            string referenceExpected = "tolerance " + FormatFraction(tolerance);
+            string referenceObserved = differing.ToString(CultureInfo.InvariantCulture) + "/" + total.ToString(CultureInfo.InvariantCulture) + " (" + FormatFraction(fraction) + ")";
+            if (fraction > tolerance)
+            {
+                return new CheckpointResult(
+                    checkpoint.Id,
+                    CheckpointStatus.Failed,
+                    referenceExpected,
+                    referenceObserved,
+                    "reference comparison failed: " + referenceObserved + " exceeds " + referenceExpected);
+            }
+
+            return new CheckpointResult(checkpoint.Id, CheckpointStatus.Passed, referenceExpected, referenceObserved, null);
         }
 
         private static LogSeverity? RequiredSeverity(string? severity)
@@ -174,6 +232,11 @@ namespace Unitas.Bridge.Playtest
         private static string FormatNumber(double value)
         {
             return value.ToString("F6", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatFraction(double value)
+        {
+            return value.ToString("F4", CultureInfo.InvariantCulture);
         }
     }
 }

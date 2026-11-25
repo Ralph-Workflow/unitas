@@ -31,6 +31,8 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
         private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
+        private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
+        private readonly List<GameObject> _materializedSceneCameras = new List<GameObject>();
         private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
         private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -827,6 +829,7 @@ namespace Unitas.Bridge
                 _entityScripts.Clear();
                 _entityGameObjects.Clear();
                 _materializedSceneEntities.Clear();
+                DropMaterializedSceneCameras();
                 _sceneObjectNames.Clear();
                 _sceneParentEntities.Clear();
                 _sceneRigidbodies.Clear();
@@ -2234,6 +2237,37 @@ namespace Unitas.Bridge
             _materializedSceneEntities.Clear();
         }
 
+        // A scene camera is materialized when the scene loads, so the object a later scene load
+        // replaces has to be destroyed or GameObject.Find keeps returning the stale one.
+        private void DropMaterializedSceneCameras()
+        {
+            for (int index = 0; index < _materializedSceneCameras.Count; index++)
+            {
+                GameObject cameraOwner = _materializedSceneCameras[index];
+                if (cameraOwner != null && !cameraOwner.IsDestroyed)
+                {
+                    UnityEngine.Object.Destroy(cameraOwner);
+                }
+            }
+            _materializedSceneCameras.Clear();
+        }
+
+        private void ApplySceneCameraComponent(ulong entity, GameObject owner)
+        {
+            if (!_sceneCameras.TryGetValue(entity, out SceneCameraSettings settings))
+            {
+                return;
+            }
+
+            Camera camera = owner.GetComponent<Camera>() ?? owner.AddComponent<Camera>();
+            camera.orthographic = settings.Orthographic;
+            camera.orthographicSize = settings.OrthographicSize;
+            camera.fieldOfView = settings.FieldOfView;
+            camera.nearClipPlane = settings.NearClipPlane;
+            camera.farClipPlane = settings.FarClipPlane;
+            camera.backgroundColor = settings.BackgroundColor;
+        }
+
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
             if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
@@ -2520,7 +2554,9 @@ namespace Unitas.Bridge
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
                 _sceneTransforms.Clear();
+                _sceneCameras.Clear();
                 DropMaterializedSceneObjects();
+                DropMaterializedSceneCameras();
                 _nextSceneEntityBase = 1;
                 foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
                 {
@@ -2559,11 +2595,18 @@ namespace Unitas.Bridge
             List<ParsedSphereColliderRecord> sphereColliders = new List<ParsedSphereColliderRecord>();
             List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
+            List<KeyValuePair<string, SceneCameraSettings>> cameras = new List<KeyValuePair<string, SceneCameraSettings>>();
             List<ParsedTransformRecord> transforms = new List<ParsedTransformRecord>();
             string currentFatherFileId = string.Empty;
             Vector3 currentLocalPosition = Vector3.zero;
             Quaternion currentLocalRotation = Quaternion.identity;
             Vector3 currentLocalScale = Vector3.one;
+            Color currentCameraBackground = Color.black;
+            float currentCameraFieldOfView = 60f;
+            float currentCameraNearClipPlane = 0.3f;
+            float currentCameraFarClipPlane = 1000f;
+            bool currentCameraOrthographic = false;
+            float currentCameraOrthographicSize = 5f;
 
             for (int index = 0; index < lines.Length; index++)
             {
@@ -2594,13 +2637,15 @@ namespace Unitas.Bridge
                         currentIsTrigger,
                         currentCenter,
                         currentSize,
+                        new SceneCameraSettings(currentCameraBackground, currentCameraFieldOfView, currentCameraNearClipPlane, currentCameraFarClipPlane, currentCameraOrthographic, currentCameraOrthographicSize),
                         ref localEntityIndex,
                         gameObjectEntities,
                         gameObjectNames,
                         rigidbodies,
                         sphereColliders,
                         boxColliders,
-                        capsuleColliders);
+                        capsuleColliders,
+                        cameras);
 
                     ParseDocumentHeader(line, out currentClassId, out currentFileId);
                     currentGameObjectFileId = string.Empty;
@@ -2618,6 +2663,12 @@ namespace Unitas.Bridge
                     currentLocalPosition = Vector3.zero;
                     currentLocalRotation = Quaternion.identity;
                     currentLocalScale = Vector3.one;
+                    currentCameraBackground = Color.black;
+                    currentCameraFieldOfView = 60f;
+                    currentCameraNearClipPlane = 0.3f;
+                    currentCameraFarClipPlane = 1000f;
+                    currentCameraOrthographic = false;
+                    currentCameraOrthographicSize = 5f;
                     continue;
                 }
 
@@ -2701,6 +2752,37 @@ namespace Unitas.Bridge
                         currentSize = ParseVector3Value(line, new Vector3(1f, 1f, 1f));
                     }
                 }
+                else if (currentClassId == 20)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_BackGroundColor:", StringComparison.Ordinal))
+                    {
+                        currentCameraBackground = ParseColorValue(line, currentCameraBackground);
+                    }
+                    else if (line.StartsWith("near clip plane:", StringComparison.Ordinal))
+                    {
+                        currentCameraNearClipPlane = ParseFloatValue(line, currentCameraNearClipPlane);
+                    }
+                    else if (line.StartsWith("far clip plane:", StringComparison.Ordinal))
+                    {
+                        currentCameraFarClipPlane = ParseFloatValue(line, currentCameraFarClipPlane);
+                    }
+                    else if (line.StartsWith("field of view:", StringComparison.Ordinal))
+                    {
+                        currentCameraFieldOfView = ParseFloatValue(line, currentCameraFieldOfView);
+                    }
+                    else if (line.StartsWith("orthographic:", StringComparison.Ordinal))
+                    {
+                        currentCameraOrthographic = ParseBoolValue(line, currentCameraOrthographic);
+                    }
+                    else if (line.StartsWith("orthographic size:", StringComparison.Ordinal))
+                    {
+                        currentCameraOrthographicSize = ParseFloatValue(line, currentCameraOrthographicSize);
+                    }
+                }
             }
 
             if (currentClassId == 4 && currentFileId.Length > 0)
@@ -2727,13 +2809,15 @@ namespace Unitas.Bridge
                 currentIsTrigger,
                 currentCenter,
                 currentSize,
+                new SceneCameraSettings(currentCameraBackground, currentCameraFieldOfView, currentCameraNearClipPlane, currentCameraFarClipPlane, currentCameraOrthographic, currentCameraOrthographicSize),
                 ref localEntityIndex,
                 gameObjectEntities,
                 gameObjectNames,
                 rigidbodies,
                 sphereColliders,
                 boxColliders,
-                capsuleColliders);
+                capsuleColliders,
+                cameras);
 
             foreach (KeyValuePair<string, ulong> entry in gameObjectEntities)
             {
@@ -2835,6 +2919,27 @@ namespace Unitas.Bridge
                 _sceneParentEntities[_nextSceneEntityBase + childLocal] = _nextSceneEntityBase + parentLocal;
             }
 
+            for (int index = 0; index < cameras.Count; index++)
+            {
+                KeyValuePair<string, SceneCameraSettings> cameraEntry = cameras[index];
+                if (!gameObjectEntities.TryGetValue(cameraEntry.Key, out ulong cameraLocalEntity))
+                {
+                    continue;
+                }
+
+                ulong cameraEntity = _nextSceneEntityBase + cameraLocalEntity;
+                _sceneCameras[cameraEntity] = cameraEntry.Value;
+                bool created = !_entityGameObjects.ContainsKey(cameraEntity);
+                GameObject cameraOwner = EnsureSceneGameObject(cameraEntity);
+                WireSceneParent(cameraEntity, cameraOwner);
+                ApplySceneCameraComponent(cameraEntity, cameraOwner);
+                if (created)
+                {
+                    _materializedSceneCameras.Add(cameraOwner);
+                    _materializedSceneEntities.Add(cameraEntity);
+                }
+            }
+
             _nextSceneEntityBase += localEntityIndex;
         }
 
@@ -2852,13 +2957,15 @@ namespace Unitas.Bridge
             bool isTrigger,
             Vector3 center,
             Vector3 size,
+            SceneCameraSettings camera,
             ref ulong localEntityIndex,
             Dictionary<string, ulong> gameObjectEntities,
             Dictionary<string, string> gameObjectNames,
             List<ParsedRigidbodyRecord> rigidbodies,
             List<ParsedSphereColliderRecord> sphereColliders,
             List<ParsedBoxColliderRecord> boxColliders,
-            List<ParsedCapsuleColliderRecord> capsuleColliders)
+            List<ParsedCapsuleColliderRecord> capsuleColliders,
+            List<KeyValuePair<string, SceneCameraSettings>> cameras)
         {
             if (classId == 1 && !string.IsNullOrEmpty(fileId))
             {
@@ -2881,6 +2988,10 @@ namespace Unitas.Bridge
             else if (classId == 136 && !string.IsNullOrEmpty(gameObjectFileId))
             {
                 capsuleColliders.Add(new ParsedCapsuleColliderRecord(gameObjectFileId, radius, height, direction, center, isTrigger));
+            }
+            else if (classId == 20 && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                cameras.Add(new KeyValuePair<string, SceneCameraSettings>(gameObjectFileId, camera));
             }
         }
 
@@ -2965,6 +3076,44 @@ namespace Unitas.Bridge
                 return string.Empty;
             }
             return line.Substring(colon + 1).Trim().Trim('"', '\'');
+        }
+
+        private static Color ParseColorValue(string line, Color fallback)
+        {
+            int braceStart = line.IndexOf('{', StringComparison.Ordinal);
+            int braceEnd = line.LastIndexOf('}');
+            if (braceStart < 0 || braceEnd <= braceStart)
+            {
+                return fallback;
+            }
+
+            float red = fallback.r;
+            float green = fallback.g;
+            float blue = fallback.b;
+            float alpha = fallback.a;
+            string inner = line.Substring(braceStart + 1, braceEnd - braceStart - 1);
+            string[] parts = inner.Split(',');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i].Trim();
+                if (part.StartsWith("r:", StringComparison.Ordinal))
+                {
+                    red = ParseFloatValue(part, fallback.r);
+                }
+                else if (part.StartsWith("g:", StringComparison.Ordinal))
+                {
+                    green = ParseFloatValue(part, fallback.g);
+                }
+                else if (part.StartsWith("b:", StringComparison.Ordinal))
+                {
+                    blue = ParseFloatValue(part, fallback.b);
+                }
+                else if (part.StartsWith("a:", StringComparison.Ordinal))
+                {
+                    alpha = ParseFloatValue(part, fallback.a);
+                }
+            }
+            return new Color(red, green, blue, alpha);
         }
 
         private static Vector3 ParseVector3Value(string line, Vector3 fallback)
@@ -3137,6 +3286,37 @@ namespace Unitas.Bridge
             public Quaternion Rotation { get; }
 
             public Vector3 Scale { get; }
+        }
+
+        private readonly struct SceneCameraSettings
+        {
+            public SceneCameraSettings(
+                Color backgroundColor,
+                float fieldOfView,
+                float nearClipPlane,
+                float farClipPlane,
+                bool orthographic,
+                float orthographicSize)
+            {
+                BackgroundColor = backgroundColor;
+                FieldOfView = fieldOfView;
+                NearClipPlane = nearClipPlane;
+                FarClipPlane = farClipPlane;
+                Orthographic = orthographic;
+                OrthographicSize = orthographicSize;
+            }
+
+            public Color BackgroundColor { get; }
+
+            public float FieldOfView { get; }
+
+            public float NearClipPlane { get; }
+
+            public float FarClipPlane { get; }
+
+            public bool Orthographic { get; }
+
+            public float OrthographicSize { get; }
         }
 
         private readonly struct SceneTransformMetadata

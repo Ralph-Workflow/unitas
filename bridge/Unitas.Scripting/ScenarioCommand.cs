@@ -36,7 +36,7 @@ namespace Unitas.Scripting
             ScenarioDocument scenario;
             try
             {
-                scenario = ScenarioDocument.Parse(File.ReadAllText(scenarioPath));
+                scenario = ScenarioDocument.Parse(File.ReadAllText(scenarioPath), Path.GetDirectoryName(scenarioPath));
             }
             catch (ScenarioFormatException ex)
             {

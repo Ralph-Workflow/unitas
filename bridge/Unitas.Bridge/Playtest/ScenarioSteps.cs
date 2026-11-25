@@ -144,7 +144,8 @@ namespace Unitas.Bridge.Playtest
             string? cameraName,
             int width,
             int height,
-            int? expectedNonBackgroundPixels)
+            int? expectedNonBackgroundPixels,
+            string? referencePath = null)
         {
             Id = id;
             AfterStep = afterStep;
@@ -159,6 +160,7 @@ namespace Unitas.Bridge.Playtest
             Width = width;
             Height = height;
             ExpectedNonBackgroundPixels = expectedNonBackgroundPixels;
+            ReferencePath = referencePath;
         }
 
         public string Id { get; }
@@ -186,5 +188,7 @@ namespace Unitas.Bridge.Playtest
         public int Height { get; }
 
         public int? ExpectedNonBackgroundPixels { get; }
+
+        public string? ReferencePath { get; }
     }
 }

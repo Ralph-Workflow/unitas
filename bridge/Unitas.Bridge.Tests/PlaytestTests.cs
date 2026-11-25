@@ -152,6 +152,7 @@ namespace Unitas.Bridge.Tests
                 UnevaluableCheckpointScenario();
                 SetupFailureScenario();
                 RepeatabilityScenario();
+                VisualReferenceTests.Run();
             }
             finally
             {
