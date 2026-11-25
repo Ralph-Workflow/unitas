@@ -48,6 +48,8 @@ namespace Unitas.Bridge.Tests
             TestEndToEndRustLifecycleOrder();
             TestEndToEndRustCollisionOrder();
             TestEndToEndRustTriggerOrder();
+            CollisionCounterpartTests.Run();
+            SceneTransformSeedTests.Run();
             TestSceneReloadDropsPreviousSceneScripts();
             TestLayerMaskConversions();
             TestEndToEndRustPhysicsQuery();
@@ -364,7 +366,7 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Collision order contains a Stay", sawStay);
             Check.That("Collision order holds only Enter, Stay and Exit", onlyKnownEvents);
-            Check.That("Collision gameObject is null when the other party is unregistered", recordedScript.OtherGameObjectAlwaysNull);
+            Check.That("Collision gameObject is resolved when the other party carries no script", !recordedScript.OtherGameObjectAlwaysNull);
         }
 
         private static void TestEndToEndRustTriggerOrder()
@@ -422,7 +424,7 @@ namespace Unitas.Bridge.Tests
 
             Check.That("Trigger order contains a Stay", sawStay);
             Check.That("Trigger order holds only Enter, Stay and Exit", onlyKnownEvents);
-            Check.That("Trigger other collider is null when the other party is unregistered", recordedScript.OtherColliderAlwaysNull);
+            Check.That("Trigger other collider is resolved when the other party carries no script", !recordedScript.OtherColliderAlwaysNull);
         }
 
         private static void TestSceneReloadDropsPreviousSceneScripts()

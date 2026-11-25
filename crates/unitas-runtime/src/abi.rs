@@ -719,6 +719,37 @@ pub extern "C" fn unitas_runtime_set_body_velocity(
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_set_body_rotation(
+    handle: u64,
+    entity: u64,
+    in_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(rotation) = read_vec4_from_path_buffer(state, in_buffer) else {
+            state.set_error("buffer address mismatch");
+            return -2;
+        };
+        match state
+            .runtime
+            .set_body_rotation(EntityId::new(entity), rotation)
+        {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_body_set_collision_detection_mode(
     handle: u64,
     entity: u64,
@@ -804,6 +835,25 @@ fn read_vec3_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f
         f64::from_le_bytes(x_bytes),
         f64::from_le_bytes(y_bytes),
         f64::from_le_bytes(z_bytes),
+    ])
+}
+
+fn read_vec4_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f64; 4]> {
+    if in_buffer == 0
+        || in_buffer != state.path_buffer.as_ptr() as usize as u64
+        || state.path_buffer.len() < 32
+    {
+        return None;
+    }
+    let x_bytes: [u8; 8] = state.path_buffer[0..8].try_into().ok()?;
+    let y_bytes: [u8; 8] = state.path_buffer[8..16].try_into().ok()?;
+    let z_bytes: [u8; 8] = state.path_buffer[16..24].try_into().ok()?;
+    let w_bytes: [u8; 8] = state.path_buffer[24..32].try_into().ok()?;
+    Some([
+        f64::from_le_bytes(x_bytes),
+        f64::from_le_bytes(y_bytes),
+        f64::from_le_bytes(z_bytes),
+        f64::from_le_bytes(w_bytes),
     ])
 }
 

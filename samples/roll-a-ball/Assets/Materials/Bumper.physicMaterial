@@ -10,7 +10,6 @@ PhysicMaterial:
   dynamicFriction: 0.2
   staticFriction: 0.2
   bounciness: 1.5
-  # unitas importer reads the m_-prefixed spellings; keep both in sync.
   m_DynamicFriction: 0.2
   m_Bounciness: 1.5
   frictionCombine: 0

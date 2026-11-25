@@ -1381,6 +1381,15 @@ impl Runtime {
         Ok(())
     }
 
+    pub fn set_body_rotation(
+        &mut self,
+        entity: EntityId,
+        rotation: [f64; 4],
+    ) -> Result<(), RuntimeError> {
+        self.physics.world_3d_mut().set_rotation(entity, rotation)?;
+        Ok(())
+    }
+
     pub fn add_body_force(
         &mut self,
         entity: EntityId,

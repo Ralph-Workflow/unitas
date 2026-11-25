@@ -76,6 +76,7 @@ namespace UnityEngine
             {
                 _localRotation = Quaternion.Normalize(value);
                 MarkChanged();
+                PushRotationToNative();
             }
         }
 
@@ -106,6 +107,7 @@ namespace UnityEngine
                     _localRotation = normalized;
                 }
                 MarkChanged();
+                PushRotationToNative();
             }
         }
 
@@ -723,6 +725,25 @@ namespace UnityEngine
             if (provider != null)
             {
                 provider.TrySetBodyPosition(owner.NativeEntityId, position);
+            }
+        }
+
+        private void PushRotationToNative()
+        {
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed || owner.NativeEntityId == 0)
+            {
+                return;
+            }
+            Rigidbody? body = owner.GetComponent<Rigidbody>();
+            if (body == null)
+            {
+                return;
+            }
+            IPhysicsProvider? provider = Physics.Provider;
+            if (provider != null)
+            {
+                provider.TrySetBodyRotation(owner.NativeEntityId, rotation);
             }
         }
 

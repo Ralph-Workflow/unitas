@@ -28,7 +28,7 @@ const SCORE_TEXT_FILE_ID: i64 = 6002;
 const PICKUP_COLLIDER_FILE_ID: i64 = 13500000;
 
 fn sample_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/RollABall")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/roll_a_ball_project")
 }
 
 fn temp_dir(name: &str) -> std::io::Result<PathBuf> {

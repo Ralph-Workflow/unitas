@@ -21,6 +21,12 @@ namespace UnityEngine
         bool TrySetBodyPosition(ulong entity, Vector3 position);
 
         bool TrySetBodyVelocity(ulong entity, Vector3 velocity);
+
+        bool TrySetBodyRotation(ulong entity, Quaternion rotation)
+        {
+            return false;
+        }
+
         bool TryAddForce(ulong entity, Vector3 force, ForceMode mode);
 
         bool TrySetBodyCollisionDetectionMode(ulong entity, CollisionDetectionMode mode)

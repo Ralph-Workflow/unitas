@@ -7,7 +7,8 @@ use unitas_core::EntityId;
 use unitas_physics::{BodyRole, ForceMode};
 use unitas_runtime::{Callbacks, Runtime};
 
-const SAMPLE_SCENE_RELATIVE: &str = "../../samples/RollABall/Assets/Scenes/Main.unity";
+const SAMPLE_SCENE_RELATIVE: &str =
+    "../unitas-asset/tests/fixtures/roll_a_ball_project/Assets/Scenes/Main.unity";
 const TRIGGER_FIXTURE_RELATIVE: &str = "../unitas-asset/tests/fixtures/physics_trigger.unity";
 const BALL_NAME: &str = "Ball";
 const ARENA_HALF_EXTENT: f64 = 5.0;

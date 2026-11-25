@@ -14,7 +14,7 @@ const SCENE_LOAD_CEILING_MS: f64 = 24.0;
 #[ignore = "perf measurement runs in the make verify-perf lane"]
 fn perf_scene_load_assembles_the_roll_a_ball_scene_within_budget() -> TestResult {
     let scene_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../samples/RollABall/Assets/Scenes/Main.unity");
+        .join("tests/fixtures/roll_a_ball_project/Assets/Scenes/Main.unity");
     let started = Instant::now();
     for _ in 0..LOAD_PASSES {
         black_box(assemble_scene_file_bundle(&scene_path)?);

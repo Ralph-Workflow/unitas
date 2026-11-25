@@ -23,12 +23,14 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, GameObject> _entityGameObjects = new Dictionary<ulong, GameObject>();
+        private readonly List<ulong> _materializedSceneEntities = new List<ulong>();
         private readonly Dictionary<ulong, string> _sceneObjectNames = new Dictionary<ulong, string>();
         private readonly Dictionary<ulong, ulong> _sceneParentEntities = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, SceneRigidbodyMetadata> _sceneRigidbodies = new Dictionary<ulong, SceneRigidbodyMetadata>();
         private readonly Dictionary<ulong, SceneSphereColliderMetadata> _sceneSphereColliders = new Dictionary<ulong, SceneSphereColliderMetadata>();
         private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
         private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
+        private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
         private readonly Dictionary<string, int> _sceneHandles = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -824,12 +826,14 @@ namespace Unitas.Bridge
                 _scripts.Clear();
                 _entityScripts.Clear();
                 _entityGameObjects.Clear();
+                _materializedSceneEntities.Clear();
                 _sceneObjectNames.Clear();
                 _sceneParentEntities.Clear();
                 _sceneRigidbodies.Clear();
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
+                _sceneTransforms.Clear();
                 StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
                 {
@@ -1144,8 +1148,7 @@ namespace Unitas.Bridge
 
         public Collider? GetCollider(ulong entity)
         {
-            MonoBehaviour? script = FindScriptByEntity(entity);
-            return script?.GetComponent<Collider>();
+            return ResolveColliderByEntity(entity);
         }
 
         public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers, out RaycastHit hit)
@@ -2114,36 +2117,62 @@ namespace Unitas.Bridge
                 : "GameObject";
             GameObject created = new GameObject(name);
             created.AssignNativeEntityId(entity);
+            ApplySceneTransform(entity, created);
             _entityGameObjects[entity] = created;
             return created;
         }
 
-        private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
+        // Unity serializes a scene transform as a local transform, so the seeded values stay
+        // local and compose with the parent hierarchy the way the serialized scene does.
+        private void ApplySceneTransform(ulong entity, GameObject owner)
         {
-            if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
+            if (!_sceneTransforms.TryGetValue(entity, out SceneTransformMetadata metadata))
             {
-                return 0;
+                return;
             }
-            ulong handle = _nextScriptHandle++;
-            _scripts[handle] = script;
-            _entityScripts[entity] = handle;
-            GameObject? owner = script.gameObject;
-            if (owner == null || owner.IsDestroyed)
+
+            owner.transform.localPosition = metadata.Position;
+            owner.transform.localRotation = metadata.Rotation;
+            owner.transform.localScale = metadata.Scale;
+        }
+
+        // Unity hands the counterpart GameObject of a collision to the script whether or not the
+        // counterpart carries a MonoBehaviour, so the counterpart is resolved by entity and a
+        // scene object without a script is materialized on demand.
+        private GameObject? ResolveGameObjectByEntity(ulong entity)
+        {
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? existing) && existing != null && !existing.IsDestroyed)
             {
-                if (!_entityGameObjects.TryGetValue(entity, out owner) || owner == null || owner.IsDestroyed)
-                {
-                    string objectName = string.IsNullOrEmpty(script.name)
-                        ? (_sceneObjectNames.TryGetValue(entity, out string? parsedName) && !string.IsNullOrEmpty(parsedName)
-                            ? parsedName
-                            : "GameObject")
-                        : script.name;
-                    owner = new GameObject(objectName);
-                }
-                owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
+                return existing;
             }
-            _entityGameObjects[entity] = owner;
-            owner.AssignNativeEntityId(entity);
-            WireSceneParent(entity, owner);
+
+            if (!IsSceneEntity(entity))
+            {
+                return null;
+            }
+
+            GameObject created = EnsureSceneGameObject(entity);
+            ApplyScenePhysicsComponents(entity, created);
+            _materializedSceneEntities.Add(entity);
+            return created;
+        }
+
+        private Collider? ResolveColliderByEntity(ulong entity)
+        {
+            return ResolveGameObjectByEntity(entity)?.GetComponent<Collider>();
+        }
+
+        private bool IsSceneEntity(ulong entity)
+        {
+            return _sceneObjectNames.ContainsKey(entity)
+                || _sceneRigidbodies.ContainsKey(entity)
+                || _sceneSphereColliders.ContainsKey(entity)
+                || _sceneBoxColliders.ContainsKey(entity)
+                || _sceneCapsuleColliders.ContainsKey(entity);
+        }
+
+        private void ApplyScenePhysicsComponents(ulong entity, GameObject owner)
+        {
             if (_sceneRigidbodies.TryGetValue(entity, out SceneRigidbodyMetadata metadata))
             {
                 Rigidbody body = owner.GetComponent<Rigidbody>() ?? owner.AddComponent<Rigidbody>();
@@ -2174,6 +2203,45 @@ namespace Unitas.Bridge
                 capsule.center = capsuleMeta.Center;
                 capsule.isTrigger = capsuleMeta.IsTrigger;
             }
+        }
+
+        private void DropMaterializedSceneObjects()
+        {
+            for (int index = 0; index < _materializedSceneEntities.Count; index++)
+            {
+                _entityGameObjects.Remove(_materializedSceneEntities[index]);
+            }
+            _materializedSceneEntities.Clear();
+        }
+
+        private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
+        {
+            if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
+            {
+                return 0;
+            }
+            ulong handle = _nextScriptHandle++;
+            _scripts[handle] = script;
+            _entityScripts[entity] = handle;
+            GameObject? owner = script.gameObject;
+            if (owner == null || owner.IsDestroyed)
+            {
+                if (!_entityGameObjects.TryGetValue(entity, out owner) || owner == null || owner.IsDestroyed)
+                {
+                    string objectName = string.IsNullOrEmpty(script.name)
+                        ? (_sceneObjectNames.TryGetValue(entity, out string? parsedName) && !string.IsNullOrEmpty(parsedName)
+                            ? parsedName
+                            : "GameObject")
+                        : script.name;
+                    owner = new GameObject(objectName);
+                }
+                owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
+            }
+            _entityGameObjects[entity] = owner;
+            owner.AssignNativeEntityId(entity);
+            ApplySceneTransform(entity, owner);
+            WireSceneParent(entity, owner);
+            ApplyScenePhysicsComponents(entity, owner);
             if (TryGetConfig(entity, out CharacterControllerConfig ccConfig))
             {
                 CharacterController controller = owner.GetComponent<CharacterController>() ?? owner.AddComponent<CharacterController>();
@@ -2360,12 +2428,12 @@ namespace Unitas.Bridge
 
             if (IsEligible(scriptA))
             {
-                DispatchCollision(scriptA!, new Collision(scriptB != null ? scriptB.gameObject : null), phase);
+                DispatchCollision(scriptA!, new Collision(ResolveGameObjectByEntity(entityB)), phase);
             }
 
             if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
             {
-                DispatchCollision(scriptB!, new Collision(scriptA != null ? scriptA.gameObject : null), phase);
+                DispatchCollision(scriptB!, new Collision(ResolveGameObjectByEntity(entityA)), phase);
             }
         }
 
@@ -2377,12 +2445,12 @@ namespace Unitas.Bridge
 
             if (IsEligible(scriptA))
             {
-                DispatchTrigger(scriptA!, scriptB?.GetComponent<Collider>(), phase);
+                DispatchTrigger(scriptA!, ResolveColliderByEntity(entityB), phase);
             }
 
             if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
             {
-                DispatchTrigger(scriptB!, scriptA?.GetComponent<Collider>(), phase);
+                DispatchTrigger(scriptB!, ResolveColliderByEntity(entityA), phase);
             }
         }
 
@@ -2431,6 +2499,8 @@ namespace Unitas.Bridge
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
+                _sceneTransforms.Clear();
+                DropMaterializedSceneObjects();
                 _nextSceneEntityBase = 1;
                 foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
                 {
@@ -2471,6 +2541,9 @@ namespace Unitas.Bridge
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
             List<ParsedTransformRecord> transforms = new List<ParsedTransformRecord>();
             string currentFatherFileId = string.Empty;
+            Vector3 currentLocalPosition = Vector3.zero;
+            Quaternion currentLocalRotation = Quaternion.identity;
+            Vector3 currentLocalScale = Vector3.one;
 
             for (int index = 0; index < lines.Length; index++)
             {
@@ -2479,7 +2552,13 @@ namespace Unitas.Bridge
                 {
                     if (currentClassId == 4 && currentFileId.Length > 0)
                     {
-                        transforms.Add(new ParsedTransformRecord(currentFileId, currentGameObjectFileId, currentFatherFileId));
+                        transforms.Add(new ParsedTransformRecord(
+                            currentFileId,
+                            currentGameObjectFileId,
+                            currentFatherFileId,
+                            currentLocalPosition,
+                            currentLocalRotation,
+                            currentLocalScale));
                     }
                     FlushDocument(
                         currentClassId,
@@ -2516,6 +2595,9 @@ namespace Unitas.Bridge
                     currentCenter = Vector3.zero;
                     currentSize = new Vector3(1f, 1f, 1f);
                     currentFatherFileId = string.Empty;
+                    currentLocalPosition = Vector3.zero;
+                    currentLocalRotation = Quaternion.identity;
+                    currentLocalScale = Vector3.one;
                     continue;
                 }
 
@@ -2535,6 +2617,18 @@ namespace Unitas.Bridge
                     else if (line.StartsWith("m_Father:", StringComparison.Ordinal))
                     {
                         currentFatherFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_LocalPosition:", StringComparison.Ordinal))
+                    {
+                        currentLocalPosition = ParseVector3Value(line, Vector3.zero);
+                    }
+                    else if (line.StartsWith("m_LocalRotation:", StringComparison.Ordinal))
+                    {
+                        currentLocalRotation = ParseQuaternionValue(line, Quaternion.identity);
+                    }
+                    else if (line.StartsWith("m_LocalScale:", StringComparison.Ordinal))
+                    {
+                        currentLocalScale = ParseVector3Value(line, Vector3.one);
                     }
                 }
                 else if (currentClassId == 54)
@@ -2591,7 +2685,13 @@ namespace Unitas.Bridge
 
             if (currentClassId == 4 && currentFileId.Length > 0)
             {
-                transforms.Add(new ParsedTransformRecord(currentFileId, currentGameObjectFileId, currentFatherFileId));
+                transforms.Add(new ParsedTransformRecord(
+                    currentFileId,
+                    currentGameObjectFileId,
+                    currentFatherFileId,
+                    currentLocalPosition,
+                    currentLocalRotation,
+                    currentLocalScale));
             }
             FlushDocument(
                 currentClassId,
@@ -2675,6 +2775,19 @@ namespace Unitas.Bridge
                         record.Direction,
                         record.Center,
                         record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < transforms.Count; index++)
+            {
+                ParsedTransformRecord record = transforms[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneTransforms[shiftedEntity] = new SceneTransformMetadata(
+                        record.Position,
+                        record.Rotation,
+                        record.Scale);
                 }
             }
 
@@ -2867,6 +2980,44 @@ namespace Unitas.Bridge
             return new Vector3(x, y, z);
         }
 
+        private static Quaternion ParseQuaternionValue(string line, Quaternion fallback)
+        {
+            int braceStart = line.IndexOf('{', StringComparison.Ordinal);
+            int braceEnd = line.LastIndexOf('}');
+            if (braceStart < 0 || braceEnd <= braceStart)
+            {
+                return fallback;
+            }
+
+            float x = fallback.x;
+            float y = fallback.y;
+            float z = fallback.z;
+            float w = fallback.w;
+            string inner = line.Substring(braceStart + 1, braceEnd - braceStart - 1);
+            string[] parts = inner.Split(',');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i].Trim();
+                if (part.StartsWith("x:", StringComparison.Ordinal))
+                {
+                    x = ParseFloatValue(part, fallback.x);
+                }
+                else if (part.StartsWith("y:", StringComparison.Ordinal))
+                {
+                    y = ParseFloatValue(part, fallback.y);
+                }
+                else if (part.StartsWith("z:", StringComparison.Ordinal))
+                {
+                    z = ParseFloatValue(part, fallback.z);
+                }
+                else if (part.StartsWith("w:", StringComparison.Ordinal))
+                {
+                    w = ParseFloatValue(part, fallback.w);
+                }
+            }
+            return new Quaternion(x, y, z, w);
+        }
+
         private readonly struct SceneRigidbodyMetadata
         {
             public SceneRigidbodyMetadata(float mass, bool useGravity, bool isKinematic)
@@ -2939,11 +3090,20 @@ namespace Unitas.Bridge
 
         private readonly struct ParsedTransformRecord
         {
-            public ParsedTransformRecord(string transformFileId, string gameObjectFileId, string fatherFileId)
+            public ParsedTransformRecord(
+                string transformFileId,
+                string gameObjectFileId,
+                string fatherFileId,
+                Vector3 position,
+                Quaternion rotation,
+                Vector3 scale)
             {
                 TransformFileId = transformFileId;
                 GameObjectFileId = gameObjectFileId;
                 FatherFileId = fatherFileId;
+                Position = position;
+                Rotation = rotation;
+                Scale = scale;
             }
 
             public string TransformFileId { get; }
@@ -2951,6 +3111,28 @@ namespace Unitas.Bridge
             public string GameObjectFileId { get; }
 
             public string FatherFileId { get; }
+
+            public Vector3 Position { get; }
+
+            public Quaternion Rotation { get; }
+
+            public Vector3 Scale { get; }
+        }
+
+        private readonly struct SceneTransformMetadata
+        {
+            public SceneTransformMetadata(Vector3 position, Quaternion rotation, Vector3 scale)
+            {
+                Position = position;
+                Rotation = rotation;
+                Scale = scale;
+            }
+
+            public Vector3 Position { get; }
+
+            public Quaternion Rotation { get; }
+
+            public Vector3 Scale { get; }
         }
 
         private readonly struct ParsedRigidbodyRecord
