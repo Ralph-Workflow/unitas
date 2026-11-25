@@ -7,66 +7,6 @@ using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge.Tests
 {
-    public sealed class ApplicationRecorderScript : MonoBehaviour
-    {
-        private readonly IList<string> _events;
-        private readonly string _prefix;
-
-        public ApplicationRecorderScript(IList<string> events, string prefix)
-        {
-            _events = events ?? throw new ArgumentNullException(nameof(events));
-            _prefix = prefix ?? string.Empty;
-        }
-
-        public bool ThrowOnFocus { get; set; }
-
-        public bool ThrowOnPause { get; set; }
-
-        public bool ThrowOnQuit { get; set; }
-
-        public override void OnApplicationFocus(bool hasFocus)
-        {
-            _events.Add(_prefix + ":Focus:" + (hasFocus ? "True" : "False"));
-            if (ThrowOnFocus)
-            {
-                throw new InvalidOperationException(_prefix + " focus boom");
-            }
-        }
-
-        public override void OnApplicationPause(bool pauseStatus)
-        {
-            _events.Add(_prefix + ":Pause:" + (pauseStatus ? "True" : "False"));
-            if (ThrowOnPause)
-            {
-                throw new InvalidOperationException(_prefix + " pause boom");
-            }
-        }
-
-        public override void OnApplicationQuit()
-        {
-            _events.Add(_prefix + ":Quit");
-            if (ThrowOnQuit)
-            {
-                throw new InvalidOperationException(_prefix + " quit boom");
-            }
-        }
-
-        public override void OnDisable()
-        {
-            _events.Add(_prefix + ":OnDisable");
-        }
-
-        public override void OnEnable()
-        {
-            _events.Add(_prefix + ":OnEnable");
-        }
-
-        public override void OnDestroy()
-        {
-            _events.Add(_prefix + ":OnDestroy");
-        }
-    }
-
     public static class ApplicationTests
     {
         public static void Run()
@@ -140,16 +80,15 @@ namespace Unitas.Bridge.Tests
             Application.ClearEvents();
             Check.Equal("Before host ctor isPlaying is false", false, Application.isPlaying);
 
-            List<string> events = new List<string>();
-            Action onQuitting = () => events.Add("quitting");
+            Action onQuitting = () => Debug.Log("APP_TRACE:quitting");
             Application.quitting += onQuitting;
 
             string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_with_script.unity");
             Check.That("Scene fixture exists for startup/shutdown test", File.Exists(scenePath));
 
             ScriptGlueRegistry.Clear();
-            ApplicationRecorderScript recorder = new ApplicationRecorderScript(events, "S1");
-            ScriptGlueRegistry.Register(0UL, 1UL, () => recorder);
+            CompilationTests.EnsureCompiledGlueLoaded();
+            LogRecorder.Clear();
 
             BridgeHost host = new BridgeHost();
             try
@@ -177,13 +116,13 @@ namespace Unitas.Bridge.Tests
                 Check.Equal(
                     "Shutdown fires quitting then OnApplicationQuit then native teardown callbacks",
                     "S1:OnEnable, quitting, S1:Quit, S1:OnDisable, S1:OnDestroy",
-                    string.Join(", ", events));
+                    CollectAppTrace());
 
                 host.Shutdown();
                 Check.Equal(
                     "Second Shutdown is idempotent and does not re-fire quitting or OnApplicationQuit",
                     "S1:OnEnable, quitting, S1:Quit, S1:OnDisable, S1:OnDestroy",
-                    string.Join(", ", events));
+                    CollectAppTrace());
 
                 bool tickThrew = false;
                 try
@@ -271,20 +210,11 @@ namespace Unitas.Bridge.Tests
             string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_query.unity");
             Check.That("Physics query scene exists for multi-script focus/pause test", File.Exists(scenePath));
 
-            List<string> trace = new List<string>();
-            ApplicationRecorderScript scriptA = new ApplicationRecorderScript(trace, "A")
-            {
-                ThrowOnFocus = true,
-                ThrowOnPause = true,
-            };
-            ApplicationRecorderScript scriptB = new ApplicationRecorderScript(trace, "B");
-
             ScriptGlueRegistry.Clear();
-            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
-            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
+            CompilationTests.EnsureCompiledGlueLoaded();
 
-            Action<bool> onFocus = focused => trace.Add("Event:Focus:" + (focused ? "True" : "False"));
-            Action<bool> onPause = paused => trace.Add("Event:Pause:" + (paused ? "True" : "False"));
+            Action<bool> onFocus = focused => Debug.Log("APP_TRACE:Event:Focus:" + (focused ? "True" : "False"));
+            Action<bool> onPause = paused => Debug.Log("APP_TRACE:Event:Pause:" + (paused ? "True" : "False"));
             Application.focusChanged += onFocus;
             Application.pauseChanged += onPause;
             LogRecorder.Clear();
@@ -295,7 +225,13 @@ namespace Unitas.Bridge.Tests
                 {
                     host.LoadScene(scenePath);
                     host.Tick(0.02);
-                    trace.Clear();
+                    MonoBehaviour? scriptA = host.GetScript(1UL);
+                    MonoBehaviour? scriptB = host.GetScript(2UL);
+                    Check.That("Attached compiled scriptA is non-null", scriptA != null);
+                    Check.That("Attached compiled scriptB is non-null", scriptB != null);
+                    scriptA!.SendMessage("SetThrowOnFocus", true);
+                    scriptA.SendMessage("SetThrowOnPause", true);
+                    LogRecorder.Clear();
 
                     host.SetFocus(false);
                     Check.Equal("Application.isFocused is false after SetFocus(false)", false, Application.isFocused);
@@ -309,7 +245,7 @@ namespace Unitas.Bridge.Tests
                     host.SetFocus(true);
                     Check.Equal("Application.isFocused is true after SetFocus(true)", true, Application.isFocused);
 
-                    scriptB.enabled = false;
+                    scriptB!.enabled = false;
                     host.SetFocus(false);
                     scriptB.enabled = true;
                     scriptB.gameObject.SetActive(false);
@@ -320,7 +256,7 @@ namespace Unitas.Bridge.Tests
                     Check.Equal(
                         "Focus and pause events fire before eligible script callbacks in registration order, skip disabled/inactive scripts, and survive script exceptions",
                         "Event:Focus:False, A:Focus:False, B:Focus:False, Event:Pause:True, A:Pause:True, B:Pause:True, Event:Pause:False, A:Pause:False, B:Pause:False, Event:Focus:True, A:Focus:True, B:Focus:True, Event:Focus:False, A:Focus:False, B:OnDisable, Event:Pause:True, A:Pause:True, B:OnEnable, Event:Focus:True, A:Focus:True, B:Focus:True",
-                        string.Join(", ", trace));
+                        CollectAppTrace());
 
                     IReadOnlyList<LogEntry> errors = LogRecorder.OfSeverity(LogSeverity.Error);
                     Check.Equal("Throwing focus and pause callbacks log seven exception entries", 7, errors.Count);
@@ -343,24 +279,16 @@ namespace Unitas.Bridge.Tests
             string scenePath = ResolveFixture("crates/unitas-runtime/tests/fixtures/scene_physics_query.unity");
             Check.That("Scene exists for Quit veto and normal Quit test", File.Exists(scenePath));
 
-            List<string> trace = new List<string>();
-            ApplicationRecorderScript scriptA = new ApplicationRecorderScript(trace, "A")
-            {
-                ThrowOnQuit = true,
-            };
-            ApplicationRecorderScript scriptB = new ApplicationRecorderScript(trace, "B");
-
             ScriptGlueRegistry.Clear();
-            ScriptGlueRegistry.Register(0x1111222233334444UL, 0x5555666677778888UL, () => scriptA);
-            ScriptGlueRegistry.Register(0x2222222233334444UL, 0x5555666677778888UL, () => scriptB);
+            CompilationTests.EnsureCompiledGlueLoaded();
 
             bool allowQuit = false;
             Func<bool> vetoGate = () =>
             {
-                trace.Add("wantsToQuit:" + (allowQuit ? "Allow" : "Veto"));
+                Debug.Log("APP_TRACE:wantsToQuit:" + (allowQuit ? "Allow" : "Veto"));
                 return allowQuit;
             };
-            Action onQuitting = () => trace.Add("Event:quitting");
+            Action onQuitting = () => Debug.Log("APP_TRACE:Event:quitting");
 
             Application.wantsToQuit += vetoGate;
             Application.quitting += onQuitting;
@@ -371,17 +299,22 @@ namespace Unitas.Bridge.Tests
             {
                 host.LoadScene(scenePath);
                 host.Tick(0.02);
-                trace.Clear();
+                MonoBehaviour? scriptA = host.GetScript(1UL);
+                MonoBehaviour? scriptB = host.GetScript(2UL);
+                Check.That("Attached compiled scriptA is non-null for Quit test", scriptA != null);
+                Check.That("Attached compiled scriptB is non-null for Quit test", scriptB != null);
+                scriptA!.SendMessage("SetThrowOnQuit", true);
+                LogRecorder.Clear();
 
                 Application.Quit();
 
                 Check.Equal("Vetoed Quit leaves isPlaying true", true, Application.isPlaying);
-                Check.Equal("Vetoed Quit records only wantsToQuit", "wantsToQuit:Veto", string.Join(", ", trace));
+                Check.Equal("Vetoed Quit records only wantsToQuit", "wantsToQuit:Veto", CollectAppTrace());
 
                 host.Tick(0.02);
                 Check.Equal("Host remains usable and ticks after vetoed Quit", true, Application.isPlaying);
 
-                trace.Clear();
+                LogRecorder.Clear();
                 allowQuit = true;
                 Application.Quit();
 
@@ -389,7 +322,7 @@ namespace Unitas.Bridge.Tests
                 Check.Equal(
                     "Accepted Quit runs wantsToQuit -> quitting -> OnApplicationQuit in order -> native OnDisable/OnDestroy",
                     "wantsToQuit:Allow, Event:quitting, A:Quit, B:Quit, B:OnDisable, A:OnDisable, B:OnDestroy, A:OnDestroy",
-                    string.Join(", ", trace));
+                    CollectAppTrace());
 
                 IReadOnlyList<LogEntry> errors = LogRecorder.OfSeverity(LogSeverity.Error);
                 Check.Equal("Exception in A.OnApplicationQuit is logged and does not stop B.OnApplicationQuit", 1, errors.Count);
@@ -477,6 +410,22 @@ namespace Unitas.Bridge.Tests
                     Directory.Delete(tempRoot, true);
                 }
             }
+        }
+
+        private static string CollectAppTrace()
+        {
+            List<string> trace = new List<string>();
+            IReadOnlyList<LogEntry> entries = LogRecorder.Entries;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                string msg = entries[i].Message;
+                if (msg.StartsWith("APP_TRACE:", StringComparison.Ordinal))
+                {
+                    trace.Add(msg.Substring("APP_TRACE:".Length));
+                }
+            }
+
+            return string.Join(", ", trace);
         }
 
         private static string ResolveFixture(string relativePath)

@@ -44,6 +44,7 @@ namespace Unitas.Bridge.Tests
             TestTransformSiblingIndexAndFind();
             TestGetComponentsInChildrenAndParent();
             TestTryGetComponentAndListOverloads();
+            ObjectModelTests.RunAll();
         }
 
         private static void TestMathfSurface()

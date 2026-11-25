@@ -21,6 +21,14 @@ namespace UnityEngine
         }
     }
 
+    public enum PlayerPrefsLoadState
+    {
+        Absent = 0,
+        Loaded = 1,
+        Corrupt = 2,
+        IoError = 3
+    }
+
     public static class PlayerPrefs
     {
         private const string HeaderLine = "UNITAS_PLAYERPREFS_V1";
@@ -33,6 +41,28 @@ namespace UnityEngine
         private static string? _loadedFilePath;
         private static string? _storageDirectoryOverride;
         private static Func<string>? _persistentDataPathResolver;
+        private static PlayerPrefsLoadState _lastLoadState = PlayerPrefsLoadState.Absent;
+        private static string? _lastLoadError;
+
+        public static PlayerPrefsLoadState LastLoadState
+        {
+            get
+            {
+                EnsureLoaded();
+                return _lastLoadState;
+            }
+        }
+
+        public static bool IsCorrupt => LastLoadState == PlayerPrefsLoadState.Corrupt;
+
+        public static string? LastLoadError
+        {
+            get
+            {
+                EnsureLoaded();
+                return _lastLoadError;
+            }
+        }
 
         internal static string? StorageDirectoryOverride
         {
@@ -207,10 +237,14 @@ namespace UnityEngine
 
                 File.Move(tempPath, targetPath);
                 _loadedFilePath = targetPath;
+                _lastLoadState = PlayerPrefsLoadState.Loaded;
+                _lastLoadError = null;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
             {
-                throw new PlayerPrefsException("Could not save PlayerPrefs to '" + targetPath + "': " + ex.Message, ex);
+                string errorMessage = "Could not save PlayerPrefs to '" + targetPath + "': " + ex.Message;
+                Debug.LogError(errorMessage);
+                throw new PlayerPrefsException(errorMessage, ex);
             }
             finally
             {
@@ -278,6 +312,8 @@ namespace UnityEngine
             Cache.Clear();
             _loadedFilePath = currentPath;
             _isLoaded = true;
+            _lastLoadState = PlayerPrefsLoadState.Absent;
+            _lastLoadError = null;
 
             if (!File.Exists(currentPath))
             {
@@ -291,21 +327,34 @@ namespace UnityEngine
             }
             catch (IOException ex)
             {
-                Debug.LogWarning("PlayerPrefs failed to read '" + currentPath + "': " + ex.Message);
+                string msg = "PlayerPrefs failed to read '" + currentPath + "': " + ex.Message;
+                _lastLoadState = PlayerPrefsLoadState.IoError;
+                _lastLoadError = msg;
+                Debug.LogError(msg);
+                Debug.LogWarning(msg);
                 return;
             }
             catch (UnauthorizedAccessException ex)
             {
-                Debug.LogWarning("PlayerPrefs failed to read '" + currentPath + "': " + ex.Message);
+                string msg = "PlayerPrefs failed to read '" + currentPath + "': " + ex.Message;
+                _lastLoadState = PlayerPrefsLoadState.IoError;
+                _lastLoadError = msg;
+                Debug.LogError(msg);
+                Debug.LogWarning(msg);
                 return;
             }
 
             if (!TryDeserialize(content, out Dictionary<string, PrefEntry> parsed, out string reason))
             {
-                Debug.LogWarning("PlayerPrefs corrupt file '" + currentPath + "': " + reason);
+                string msg = "PlayerPrefs corrupt file '" + currentPath + "': " + reason;
+                _lastLoadState = PlayerPrefsLoadState.Corrupt;
+                _lastLoadError = msg;
+                Debug.LogError(msg);
+                Debug.LogWarning(msg);
                 return;
             }
 
+            _lastLoadState = PlayerPrefsLoadState.Loaded;
             foreach (KeyValuePair<string, PrefEntry> pair in parsed)
             {
                 Cache[pair.Key] = pair.Value;

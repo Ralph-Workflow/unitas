@@ -77,6 +77,8 @@ namespace Unitas.Bridge.Tests
             TimeScaleZeroFreezesTheNativeWorld();
             TimeScaleHalfMakesTheFallingBodyFallHalfAsFarPerTick();
             WaitForSecondsCompletesLaterAtHalfScale();
+            CaptureFramerateAdvancesGameTimeByInverseRateRegardlessOfWallClock();
+            AsyncTests.RunAll();
         }
 
         private struct TimeScaleProbe
@@ -398,6 +400,51 @@ namespace Unitas.Bridge.Tests
             Check.That(
                 "entry records the ambient origin",
                 ReferenceEquals(LogRecorder.Entries[0].Origin, origin));
+        }
+
+        private static void CaptureFramerateAdvancesGameTimeByInverseRateRegardlessOfWallClock()
+        {
+            float savedScale = Time.timeScale;
+            try
+            {
+                Time.Reset();
+                Check.Equal("captureFramerate defaults to 0 after Reset", 0, Time.captureFramerate);
+                Check.Equal("captureDeltaTime defaults to 0 after Reset", 0f, Time.captureDeltaTime);
+
+                Time.captureFramerate = 30;
+                float expectedStep = 1f / 30f;
+                Check.Equal("captureFramerate getter returns 30", 30, Time.captureFramerate);
+                Check.Equal("captureDeltaTime equals 1/30 when captureFramerate is 30", expectedStep, Time.captureDeltaTime);
+
+                Time.Advance(0.5);
+                Check.Equal("first frame deltaTime is 1/30 despite 0.5s wall clock", expectedStep, Time.deltaTime);
+                Check.Equal("first frame unscaledDeltaTime is 1/30", expectedStep, Time.unscaledDeltaTime);
+                Check.Equal("first frame time is 1/30", expectedStep, Time.time);
+                Check.Equal("first frame unscaledTime is 1/30", expectedStep, Time.unscaledTime);
+
+                Time.Advance(0.001);
+                Check.Equal("second frame deltaTime is 1/30 despite 0.001s wall clock", expectedStep, Time.deltaTime);
+                Check.Equal("second frame time is 2/30", expectedStep * 2f, Time.time);
+
+                Time.Advance(2.75);
+                Check.Equal("third frame deltaTime is 1/30 despite 2.75s wall clock", expectedStep, Time.deltaTime);
+                Check.Equal("third frame time is 3/30", expectedStep * 3f, Time.time);
+
+                Time.timeScale = 0.5f;
+                Time.Advance(1.0);
+                Check.Equal("captureFramerate unscaledDeltaTime stays 1/30 at half timeScale", expectedStep, Time.unscaledDeltaTime);
+                Check.Equal("captureFramerate deltaTime scales by timeScale (0.5 / 30)", expectedStep * 0.5f, Time.deltaTime);
+
+                Time.Reset();
+                Check.Equal("Time.Reset clears captureFramerate to 0", 0, Time.captureFramerate);
+                Check.Equal("Time.Reset clears captureDeltaTime to 0", 0f, Time.captureDeltaTime);
+                Check.Equal("Time.Reset restores timeScale to 1", 1f, Time.timeScale);
+            }
+            finally
+            {
+                Time.captureFramerate = 0;
+                Time.timeScale = savedScale;
+            }
         }
     }
 }

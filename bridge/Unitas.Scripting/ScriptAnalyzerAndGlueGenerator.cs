@@ -36,9 +36,17 @@ namespace Unitas.Scripting
             @"(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([^{]+))?",
             RegexOptions.Compiled);
 
+        private static readonly Regex TypeDeclRegex = new Regex(
+            @"((?:\[[^\]]*\]\s*)*)(?:(public|internal|private|protected)\s+)?(?:(abstract|sealed|static|partial|readonly)\s+)*(class|struct)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([^{]+))?",
+            RegexOptions.Compiled);
+
         private static readonly Regex MethodRegex = new Regex(
             @"(?:^|[;{}])\s*(?:(\[[^\]]*\]\s*)*)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|async)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|=>)",
             RegexOptions.Compiled | RegexOptions.Multiline);
+
+        private static readonly Regex FieldDeclRegex = new Regex(
+            @"^\s*((?:\[[^\]]*\]\s*)*)(?:(public|private|protected|internal)\s+)?((?:(?:static|const|readonly|volatile|new)\s+)*)([A-Za-z_][A-Za-z0-9_<>,.\[\]\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^;]*)?;\s*$",
+            RegexOptions.Compiled);
 
         private static readonly Regex DllImportRegex = new Regex(
             @"\[\s*(?:System\.Runtime\.InteropServices\.)?DllImport(?:Attribute)?\s*\(\s*""([^""]+)""[^\]]*\]\s*(?:[A-Za-z_][A-Za-z0-9_<>,.\[\]\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
@@ -156,6 +164,7 @@ namespace Unitas.Scripting
                 }
 
                 List<ScriptMethodSignature> methods = ParseMethodsFromClassHierarchy(className, classMap);
+                List<ScriptSerializedField> fields = ParseFieldsFromClassHierarchy(className, classMap);
                 bindings.Add(new ScriptGuidBinding(
                     guid,
                     hi,
@@ -164,16 +173,139 @@ namespace Unitas.Scripting
                     className,
                     ns,
                     assemblyName,
-                    methods));
+                    methods,
+                    fields));
             }
 
             return bindings;
         }
 
-        public static string GenerateGlueSource(IReadOnlyList<ScriptGuidBinding> bindings)
+        public static List<SerializableTypeBinding> DiscoverSerializableTypesForAssembly(
+            string assemblyName,
+            IReadOnlyList<string> sourceFiles,
+            HashSet<string> activeDefines)
         {
+            List<SerializableTypeBinding> results = new List<SerializableTypeBinding>();
+            Dictionary<string, (string NamespaceName, string BaseList, string BodyText, string FilePath)> classMap =
+                new Dictionary<string, (string NamespaceName, string BaseList, string BodyText, string FilePath)>(StringComparer.Ordinal);
+            List<(string TypeName, string NamespaceName, bool IsValueType, string BodyText)> candidates =
+                new List<(string TypeName, string NamespaceName, bool IsValueType, string BodyText)>();
+
+            for (int i = 0; i < sourceFiles.Count; i++)
+            {
+                string filePath = Path.GetFullPath(sourceFiles[i]);
+                if (!File.Exists(filePath))
+                {
+                    continue;
+                }
+
+                string rawText;
+                try
+                {
+                    rawText = File.ReadAllText(filePath);
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+
+                string activeText = FilterConditionalCompilation(rawText, activeDefines);
+                string ns = ExtractNamespace(activeText);
+                MatchCollection typeMatches = TypeDeclRegex.Matches(activeText);
+                for (int tIdx = 0; tIdx < typeMatches.Count; tIdx++)
+                {
+                    Match tm = typeMatches[tIdx];
+                    string attrs = tm.Groups[1].Value;
+                    string visibility = tm.Groups[2].Success ? tm.Groups[2].Value : string.Empty;
+                    string modifier = tm.Groups[3].Value;
+                    string kind = tm.Groups[4].Value;
+                    string typeName = tm.Groups[5].Value;
+                    string baseList = tm.Groups[6].Success ? tm.Groups[6].Value : string.Empty;
+
+                    if (string.Equals(modifier, "abstract", StringComparison.Ordinal)
+                        || string.Equals(modifier, "static", StringComparison.Ordinal)
+                        || string.Equals(visibility, "private", StringComparison.Ordinal)
+                        || string.Equals(visibility, "protected", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    string body = ExtractClassBody(activeText, tm.Index + tm.Length);
+                    bool isStruct = string.Equals(kind, "struct", StringComparison.Ordinal);
+                    if (!isStruct)
+                    {
+                        classMap[typeName] = (ns, baseList, body, filePath);
+                    }
+
+                    bool hasSerializableAttr = attrs.Contains("Serializable", StringComparison.Ordinal);
+                    if (hasSerializableAttr || string.Equals(visibility, "public", StringComparison.Ordinal))
+                    {
+                        candidates.Add((typeName, ns, isStruct, body));
+                    }
+                }
+            }
+
+            HashSet<string> emittedFullNames = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                (string typeName, string ns, bool isValueType, string body) = candidates[i];
+                string fullName = string.IsNullOrEmpty(ns) ? typeName : string.Concat(ns, ".", typeName);
+                if (!emittedFullNames.Add(fullName))
+                {
+                    continue;
+                }
+
+                List<ScriptSerializedField> fields = isValueType
+                    ? ParseFieldsFromBody(body)
+                    : ParseFieldsFromClassHierarchy(typeName, classMap);
+
+                results.Add(new SerializableTypeBinding(
+                    typeName,
+                    ns,
+                    assemblyName,
+                    isValueType,
+                    fields));
+            }
+
+            return results;
+        }
+
+        public static string GenerateGlueSource(IReadOnlyList<ScriptGuidBinding> bindings) =>
+            GenerateGlueSource(bindings, Array.Empty<SerializableTypeBinding>());
+
+        public static string GenerateGlueSource(
+            IReadOnlyList<ScriptGuidBinding> bindings,
+            IReadOnlyList<SerializableTypeBinding> serializableTypes)
+        {
+            List<SerializableTypeBinding> allJsonTypes = new List<SerializableTypeBinding>();
+            HashSet<string> seenJsonTypes = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int i = 0; i < bindings.Count; i++)
+            {
+                ScriptGuidBinding b = bindings[i];
+                if (seenJsonTypes.Add(b.FullTypeName))
+                {
+                    allJsonTypes.Add(new SerializableTypeBinding(
+                        b.ClassName,
+                        b.NamespaceName,
+                        b.AssemblyName,
+                        false,
+                        b.SerializedFields));
+                }
+            }
+
+            for (int i = 0; i < serializableTypes.Count; i++)
+            {
+                SerializableTypeBinding st = serializableTypes[i];
+                if (seenJsonTypes.Add(st.FullTypeName))
+                {
+                    allJsonTypes.Add(st);
+                }
+            }
+
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("using System;");
+            sb.AppendLine("using System.Collections.Generic;");
             sb.AppendLine("using System.Runtime.CompilerServices;");
             sb.AppendLine("using UnityEngine;");
             sb.AppendLine("using Unitas.Bridge;");
@@ -296,6 +428,79 @@ namespace Unitas.Scripting
                 sb.AppendLine();
             }
 
+            Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName =
+                new Dictionary<string, SerializableTypeBinding>(StringComparer.Ordinal);
+            Dictionary<string, SerializableTypeBinding> jsonTypeByFullName =
+                new Dictionary<string, SerializableTypeBinding>(StringComparer.Ordinal);
+            for (int i = 0; i < allJsonTypes.Count; i++)
+            {
+                SerializableTypeBinding st = allJsonTypes[i];
+                jsonTypeBySimpleName[st.TypeName] = st;
+                jsonTypeByFullName[st.FullTypeName] = st;
+            }
+
+            for (int i = 0; i < allJsonTypes.Count; i++)
+            {
+                SerializableTypeBinding st = allJsonTypes[i];
+                string serializerName = "GeneratedJsonSerializer_" + i.ToString(CultureInfo.InvariantCulture) + "_" + st.TypeName;
+                string fullType = "global::" + st.FullTypeName;
+
+                sb.AppendLine("    public static class " + serializerName);
+                sb.AppendLine("    {");
+
+                for (int fIdx = 0; fIdx < st.Fields.Count; fIdx++)
+                {
+                    ScriptSerializedField field = st.Fields[fIdx];
+                    if (!field.IsPublic
+                        && TryResolveFieldTypeExpression(field.TypeName, st.NamespaceName, jsonTypeBySimpleName, jsonTypeByFullName, out string resolvedFieldType, out string _, out string _))
+                    {
+                        string targetParam = st.IsValueType ? "ref " + fullType + " target" : fullType + " target";
+                        sb.AppendLine("        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = \"" + field.Name + "\")]");
+                        sb.AppendLine("        private static extern ref " + resolvedFieldType + " FieldRef_" + field.Name + "(" + targetParam + ");");
+                        sb.AppendLine();
+                    }
+                }
+
+                sb.AppendLine("        public static void Write(" + fullType + " value, JsonSerializeWriter writer)");
+                sb.AppendLine("        {");
+                for (int fIdx = 0; fIdx < st.Fields.Count; fIdx++)
+                {
+                    ScriptSerializedField field = st.Fields[fIdx];
+                    if (!TryResolveFieldTypeExpression(field.TypeName, st.NamespaceName, jsonTypeBySimpleName, jsonTypeByFullName, out string _, out string writeMethod, out string _))
+                    {
+                        continue;
+                    }
+
+                    string accessExpr = field.IsPublic
+                        ? "value." + field.Name
+                        : (st.IsValueType ? "FieldRef_" + field.Name + "(ref value)" : "FieldRef_" + field.Name + "(value)");
+                    sb.AppendLine("            writer." + writeMethod + "(\"" + field.Name + "\", " + accessExpr + ");");
+                }
+
+                sb.AppendLine("        }");
+                sb.AppendLine();
+
+                sb.AppendLine("        public static void Read(ref " + fullType + " target, JsonParseNode node)");
+                sb.AppendLine("        {");
+                for (int fIdx = 0; fIdx < st.Fields.Count; fIdx++)
+                {
+                    ScriptSerializedField field = st.Fields[fIdx];
+                    if (!TryResolveFieldTypeExpression(field.TypeName, st.NamespaceName, jsonTypeBySimpleName, jsonTypeByFullName, out string _, out string _, out string readMethod))
+                    {
+                        continue;
+                    }
+
+                    string targetRefExpr = field.IsPublic
+                        ? "target." + field.Name
+                        : (st.IsValueType ? "FieldRef_" + field.Name + "(ref target)" : "FieldRef_" + field.Name + "(target)");
+                    sb.AppendLine("            " + targetRefExpr + " = node." + readMethod + "(\"" + field.Name + "\", " + targetRefExpr + ");");
+                }
+
+                sb.AppendLine("        }");
+                sb.AppendLine("    }");
+                sb.AppendLine();
+            }
+
             sb.AppendLine("    public sealed class GlueInitializer");
             sb.AppendLine("    {");
             sb.AppendLine("        static GlueInitializer()");
@@ -331,6 +536,17 @@ namespace Unitas.Scripting
                 sb.AppendLine("                    return inst;");
                 sb.AppendLine("                },");
                 sb.AppendLine("                inst => new " + handlerName + "(inst));");
+            }
+
+            for (int i = 0; i < allJsonTypes.Count; i++)
+            {
+                SerializableTypeBinding st = allJsonTypes[i];
+                string serializerName = "GeneratedJsonSerializer_" + i.ToString(CultureInfo.InvariantCulture) + "_" + st.TypeName;
+                string fullType = "global::" + st.FullTypeName;
+                sb.AppendLine("            JsonUtility.RegisterType<" + fullType + ">(");
+                sb.AppendLine("                () => new " + fullType + "(),");
+                sb.AppendLine("                " + serializerName + ".Write,");
+                sb.AppendLine("                " + serializerName + ".Read);");
             }
 
             sb.AppendLine("        }");
@@ -601,6 +817,434 @@ namespace Unitas.Scripting
             }
 
             return methods;
+        }
+
+        private static List<ScriptSerializedField> ParseFieldsFromClassHierarchy(
+            string className,
+            Dictionary<string, (string NamespaceName, string BaseList, string BodyText, string FilePath)> classMap)
+        {
+            List<string> hierarchy = new List<string>();
+            HashSet<string> visited = new HashSet<string>(StringComparer.Ordinal);
+            string? current = className;
+
+            while (!string.IsNullOrEmpty(current) && visited.Add(current))
+            {
+                if (!classMap.TryGetValue(current, out (string NamespaceName, string BaseList, string BodyText, string FilePath) entry))
+                {
+                    break;
+                }
+
+                hierarchy.Add(current);
+
+                string? nextBase = null;
+                if (!string.IsNullOrEmpty(entry.BaseList))
+                {
+                    string[] bases = entry.BaseList.Split(',');
+                    for (int i = 0; i < bases.Length; i++)
+                    {
+                        string candidate = bases[i].Trim();
+                        int dot = candidate.LastIndexOf('.');
+                        string simple = dot >= 0 ? candidate.Substring(dot + 1) : candidate;
+                        if (classMap.ContainsKey(simple))
+                        {
+                            nextBase = simple;
+                            break;
+                        }
+                    }
+                }
+
+                current = nextBase;
+            }
+
+            List<ScriptSerializedField> fields = new List<ScriptSerializedField>();
+            HashSet<string> seenNames = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = hierarchy.Count - 1; i >= 0; i--)
+            {
+                string typeKey = hierarchy[i];
+                if (!classMap.TryGetValue(typeKey, out (string NamespaceName, string BaseList, string BodyText, string FilePath) entry))
+                {
+                    continue;
+                }
+
+                List<ScriptSerializedField> bodyFields = ParseFieldsFromBody(entry.BodyText);
+                for (int f = 0; f < bodyFields.Count; f++)
+                {
+                    if (seenNames.Add(bodyFields[f].Name))
+                    {
+                        fields.Add(bodyFields[f]);
+                    }
+                }
+            }
+
+            return fields;
+        }
+
+        private static List<ScriptSerializedField> ParseFieldsFromBody(string bodyText)
+        {
+            List<ScriptSerializedField> fields = new List<ScriptSerializedField>();
+            if (string.IsNullOrEmpty(bodyText))
+            {
+                return fields;
+            }
+
+            string[] lines = bodyText.Split('\n');
+            int braceDepth = 0;
+            StringBuilder pendingAttributes = new StringBuilder();
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                string trimmed = line.Trim();
+
+                if (braceDepth == 1 && trimmed.StartsWith('[') && trimmed.EndsWith(']') && !trimmed.Contains(';', StringComparison.Ordinal))
+                {
+                    pendingAttributes.Append(trimmed).Append(' ');
+                    continue;
+                }
+
+                int depthBefore = braceDepth;
+                for (int cIdx = 0; cIdx < line.Length; cIdx++)
+                {
+                    char c = line[cIdx];
+                    if (c == '{')
+                    {
+                        braceDepth++;
+                    }
+                    else if (c == '}')
+                    {
+                        braceDepth--;
+                    }
+                }
+
+                if (depthBefore == 1 && braceDepth == 1)
+                {
+                    string candidateLine = pendingAttributes.Length > 0
+                        ? pendingAttributes.ToString() + trimmed
+                        : trimmed;
+                    pendingAttributes.Clear();
+
+                    if (candidateLine.Contains('(', StringComparison.Ordinal) && !candidateLine.Contains('=', StringComparison.Ordinal))
+                    {
+                        int semiIdx = candidateLine.IndexOf(';');
+                        int parenIdx = candidateLine.LastIndexOf(')');
+                        if (parenIdx > 0 && semiIdx > parenIdx)
+                        {
+                            continue;
+                        }
+                    }
+
+                    Match m = FieldDeclRegex.Match(candidateLine);
+                    if (!m.Success)
+                    {
+                        continue;
+                    }
+
+                    string attrs = m.Groups[1].Value;
+                    string visibility = m.Groups[2].Success ? m.Groups[2].Value : "private";
+                    string modifiers = m.Groups[3].Value;
+                    string fieldType = m.Groups[4].Value.Trim();
+                    string fieldName = m.Groups[5].Value.Trim();
+
+                    if (string.Equals(fieldType, "event", StringComparison.Ordinal)
+                        || fieldType.StartsWith("event ", StringComparison.Ordinal)
+                        || string.Equals(fieldType, "return", StringComparison.Ordinal)
+                        || string.Equals(fieldType, "throw", StringComparison.Ordinal)
+                        || string.Equals(fieldType, "yield", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (modifiers.Contains("static", StringComparison.Ordinal)
+                        || modifiers.Contains("const", StringComparison.Ordinal)
+                        || modifiers.Contains("readonly", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (attrs.Contains("NonSerialized", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    bool isPublic = string.Equals(visibility, "public", StringComparison.Ordinal);
+                    bool hasSerializeField = attrs.Contains("SerializeField", StringComparison.Ordinal);
+                    if (!isPublic && !hasSerializeField)
+                    {
+                        continue;
+                    }
+
+                    fields.Add(new ScriptSerializedField(fieldName, fieldType, isPublic, hasSerializeField));
+                }
+                else
+                {
+                    pendingAttributes.Clear();
+                }
+            }
+
+            return fields;
+        }
+
+        private static bool TryResolveFieldTypeExpression(
+            string rawTypeName,
+            string declaringNamespace,
+            Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName,
+            Dictionary<string, SerializableTypeBinding> jsonTypeByFullName,
+            out string csharpTypeExpr,
+            out string writeMethodName,
+            out string readMethodName)
+        {
+            string cleaned = rawTypeName.Trim();
+            if (cleaned.EndsWith('?'))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 1).Trim();
+            }
+
+            csharpTypeExpr = string.Empty;
+            writeMethodName = string.Empty;
+            readMethodName = string.Empty;
+
+            if (string.Equals(cleaned, "int", StringComparison.Ordinal) || string.Equals(cleaned, "Int32", StringComparison.Ordinal) || string.Equals(cleaned, "System.Int32", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "int";
+                writeMethodName = "WriteInt";
+                readMethodName = "ReadInt";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "long", StringComparison.Ordinal) || string.Equals(cleaned, "Int64", StringComparison.Ordinal) || string.Equals(cleaned, "System.Int64", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "long";
+                writeMethodName = "WriteLong";
+                readMethodName = "ReadLong";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "float", StringComparison.Ordinal) || string.Equals(cleaned, "Single", StringComparison.Ordinal) || string.Equals(cleaned, "System.Single", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "float";
+                writeMethodName = "WriteFloat";
+                readMethodName = "ReadFloat";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "double", StringComparison.Ordinal) || string.Equals(cleaned, "Double", StringComparison.Ordinal) || string.Equals(cleaned, "System.Double", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "double";
+                writeMethodName = "WriteDouble";
+                readMethodName = "ReadDouble";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "bool", StringComparison.Ordinal) || string.Equals(cleaned, "Boolean", StringComparison.Ordinal) || string.Equals(cleaned, "System.Boolean", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "bool";
+                writeMethodName = "WriteBool";
+                readMethodName = "ReadBool";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "string", StringComparison.Ordinal) || string.Equals(cleaned, "String", StringComparison.Ordinal) || string.Equals(cleaned, "System.String", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "string";
+                writeMethodName = "WriteString";
+                readMethodName = "ReadString";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Vector2", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Vector2", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Vector2";
+                writeMethodName = "WriteVector2";
+                readMethodName = "ReadVector2";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Vector3", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Vector3", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Vector3";
+                writeMethodName = "WriteVector3";
+                readMethodName = "ReadVector3";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Vector4", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Vector4", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Vector4";
+                writeMethodName = "WriteVector4";
+                readMethodName = "ReadVector4";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Quaternion", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Quaternion", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Quaternion";
+                writeMethodName = "WriteQuaternion";
+                readMethodName = "ReadQuaternion";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Rect", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Rect", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Rect";
+                writeMethodName = "WriteRect";
+                readMethodName = "ReadRect";
+                return true;
+            }
+
+            if (string.Equals(cleaned, "Bounds", StringComparison.Ordinal) || string.Equals(cleaned, "UnityEngine.Bounds", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::UnityEngine.Bounds";
+                writeMethodName = "WriteBounds";
+                readMethodName = "ReadBounds";
+                return true;
+            }
+
+            if (cleaned.EndsWith("[]", StringComparison.Ordinal))
+            {
+                string elem = cleaned.Substring(0, cleaned.Length - 2).Trim();
+                if (elem.Contains('[', StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "int[]";
+                    writeMethodName = "WriteIntList";
+                    readMethodName = "ReadIntArray";
+                    return true;
+                }
+
+                if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "float[]";
+                    writeMethodName = "WriteFloatList";
+                    readMethodName = "ReadFloatArray";
+                    return true;
+                }
+
+                if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "bool[]";
+                    writeMethodName = "WriteBoolList";
+                    readMethodName = "ReadBoolArray";
+                    return true;
+                }
+
+                if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "string[]";
+                    writeMethodName = "WriteStringList";
+                    readMethodName = "ReadStringArray";
+                    return true;
+                }
+
+                if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
+                {
+                    csharpTypeExpr = elemFull + "[]";
+                    writeMethodName = "WriteNestedList<" + elemFull + ">";
+                    readMethodName = "ReadNestedArray<" + elemFull + ">";
+                    return true;
+                }
+
+                return false;
+            }
+
+            if ((cleaned.StartsWith("List<", StringComparison.Ordinal) || cleaned.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal))
+                && cleaned.EndsWith(">", StringComparison.Ordinal))
+            {
+                int openAngle = cleaned.IndexOf('<');
+                string elem = cleaned.Substring(openAngle + 1, cleaned.Length - openAngle - 2).Trim();
+                if (elem.Contains('<', StringComparison.Ordinal) || elem.Contains('[', StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "global::System.Collections.Generic.List<int>";
+                    writeMethodName = "WriteIntList";
+                    readMethodName = "ReadIntList";
+                    return true;
+                }
+
+                if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "global::System.Collections.Generic.List<float>";
+                    writeMethodName = "WriteFloatList";
+                    readMethodName = "ReadFloatList";
+                    return true;
+                }
+
+                if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "global::System.Collections.Generic.List<bool>";
+                    writeMethodName = "WriteBoolList";
+                    readMethodName = "ReadBoolList";
+                    return true;
+                }
+
+                if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
+                {
+                    csharpTypeExpr = "global::System.Collections.Generic.List<string>";
+                    writeMethodName = "WriteStringList";
+                    readMethodName = "ReadStringList";
+                    return true;
+                }
+
+                if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
+                {
+                    csharpTypeExpr = "global::System.Collections.Generic.List<" + elemFull + ">";
+                    writeMethodName = "WriteNestedList<" + elemFull + ">";
+                    readMethodName = "ReadNestedList<" + elemFull + ">";
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (TryResolveCustomJsonType(cleaned, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string customFull))
+            {
+                csharpTypeExpr = customFull;
+                writeMethodName = "WriteNested<" + customFull + ">";
+                readMethodName = "ReadNested<" + customFull + ">";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveCustomJsonType(
+            string rawTypeName,
+            string declaringNamespace,
+            Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName,
+            Dictionary<string, SerializableTypeBinding> jsonTypeByFullName,
+            out string globalFullName)
+        {
+            globalFullName = string.Empty;
+            if (jsonTypeByFullName.TryGetValue(rawTypeName, out SerializableTypeBinding? exactFull))
+            {
+                globalFullName = "global::" + exactFull.FullTypeName;
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(declaringNamespace))
+            {
+                string scopedCandidate = declaringNamespace + "." + rawTypeName;
+                if (jsonTypeByFullName.TryGetValue(scopedCandidate, out SerializableTypeBinding? scopedMatch))
+                {
+                    globalFullName = "global::" + scopedMatch.FullTypeName;
+                    return true;
+                }
+            }
+
+            if (jsonTypeBySimpleName.TryGetValue(rawTypeName, out SerializableTypeBinding? simpleMatch))
+            {
+                globalFullName = "global::" + simpleMatch.FullTypeName;
+                return true;
+            }
+
+            return false;
         }
 
         private static void ParseMethodsFromBody(string bodyText, List<ScriptMethodSignature> methods)

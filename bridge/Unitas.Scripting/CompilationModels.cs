@@ -252,7 +252,8 @@ namespace Unitas.Scripting
             string className,
             string namespaceName,
             string assemblyName,
-            IReadOnlyList<ScriptMethodSignature> methods)
+            IReadOnlyList<ScriptMethodSignature> methods,
+            IReadOnlyList<ScriptSerializedField>? serializedFields = null)
         {
             Guid = guid;
             GuidHi = guidHi;
@@ -262,6 +263,7 @@ namespace Unitas.Scripting
             NamespaceName = namespaceName;
             AssemblyName = assemblyName;
             Methods = methods;
+            SerializedFields = serializedFields ?? Array.Empty<ScriptSerializedField>();
         }
 
         public string Guid { get; }
@@ -283,6 +285,62 @@ namespace Unitas.Scripting
         public string AssemblyName { get; }
 
         public IReadOnlyList<ScriptMethodSignature> Methods { get; }
+
+        public IReadOnlyList<ScriptSerializedField> SerializedFields { get; }
+    }
+
+    public sealed class ScriptSerializedField
+    {
+        public ScriptSerializedField(
+            string name,
+            string typeName,
+            bool isPublic,
+            bool hasSerializeField)
+        {
+            Name = name;
+            TypeName = typeName;
+            IsPublic = isPublic;
+            HasSerializeField = hasSerializeField;
+        }
+
+        public string Name { get; }
+
+        public string TypeName { get; }
+
+        public bool IsPublic { get; }
+
+        public bool HasSerializeField { get; }
+    }
+
+    public sealed class SerializableTypeBinding
+    {
+        public SerializableTypeBinding(
+            string typeName,
+            string namespaceName,
+            string assemblyName,
+            bool isValueType,
+            IReadOnlyList<ScriptSerializedField> fields)
+        {
+            TypeName = typeName;
+            NamespaceName = namespaceName;
+            AssemblyName = assemblyName;
+            IsValueType = isValueType;
+            Fields = fields;
+        }
+
+        public string TypeName { get; }
+
+        public string NamespaceName { get; }
+
+        public string FullTypeName => string.IsNullOrEmpty(NamespaceName)
+            ? TypeName
+            : string.Concat(NamespaceName, ".", TypeName);
+
+        public string AssemblyName { get; }
+
+        public bool IsValueType { get; }
+
+        public IReadOnlyList<ScriptSerializedField> Fields { get; }
     }
 
     public sealed class ScriptMethodSignature

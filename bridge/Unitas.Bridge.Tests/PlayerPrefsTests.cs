@@ -16,7 +16,10 @@ namespace Unitas.Bridge.Tests
             TestCorruptFileLogsWarningReturnsDefaultsAndSaveRecovers();
             TestSaveFailureThrowsPlayerPrefsExceptionAndPreservesPriorValidFile();
             TestStoragePathUnderPersistentDataPathAndNotProjectContent();
+            TestDeleteAllAndClearPrefsPreservesSaveFilesInPersistentDataPath();
         }
+
+        public static void RunAll() => Run();
 
         private static void TestCrudIntFloatStringAndDefaults()
         {
@@ -35,6 +38,10 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("Absent GetString default is empty", string.Empty, PlayerPrefs.GetString("player"));
                 Check.Equal("Absent GetString supplied default", "Guest", PlayerPrefs.GetString("player", "Guest"));
                 Check.Equal("Absent file logs zero warnings", 0, LogRecorder.OfSeverity(LogSeverity.Warning).Count);
+                Check.Equal("Absent file logs zero errors", 0, LogRecorder.OfSeverity(LogSeverity.Error).Count);
+                Check.That("Absent file load state is Absent", PlayerPrefs.LastLoadState == PlayerPrefsLoadState.Absent);
+                Check.Equal("Absent file IsCorrupt is false", false, PlayerPrefs.IsCorrupt);
+                Check.That("Absent file LastLoadError is null", PlayerPrefs.LastLoadError == null);
 
                 PlayerPrefs.SetInt("score", 1200);
                 PlayerPrefs.SetFloat("volume", 0.65f);
@@ -186,18 +193,28 @@ namespace Unitas.Bridge.Tests
 
                 Check.Equal("Corrupt file reads return default int", 10, PlayerPrefs.GetInt("any", 10));
                 Check.Equal("Corrupt file HasKey is false", false, PlayerPrefs.HasKey("any"));
+                Check.That("Corrupt file LastLoadState is Corrupt", PlayerPrefs.LastLoadState == PlayerPrefsLoadState.Corrupt);
+                Check.Equal("Corrupt file IsCorrupt is true", true, PlayerPrefs.IsCorrupt);
+                Check.That("Corrupt file LastLoadError mentions reason", !string.IsNullOrEmpty(PlayerPrefs.LastLoadError) && PlayerPrefs.LastLoadError.Contains("missing or invalid header", StringComparison.Ordinal));
                 IReadOnlyList<LogEntry> warnings = LogRecorder.OfSeverity(LogSeverity.Warning);
+                IReadOnlyList<LogEntry> errors = LogRecorder.OfSeverity(LogSeverity.Error);
                 Check.Equal("Corrupt file logs one warning", 1, warnings.Count);
+                Check.Equal("Corrupt file logs one error diagnostic", 1, errors.Count);
                 Check.That(
                     "Corrupt file warning mentions file path",
                     warnings.Count == 1 && warnings[0].Message.Contains(filePath, StringComparison.Ordinal));
+                Check.That(
+                    "Corrupt file error mentions file path",
+                    errors.Count == 1 && errors[0].Message.Contains(filePath, StringComparison.Ordinal));
 
                 File.WriteAllText(filePath, "UNITAS_PLAYERPREFS_V1\nkey|I|not_an_int\n");
                 LogRecorder.Clear();
                 PlayerPrefs.Reload();
 
                 Check.Equal("Corrupt int record returns default", 0, PlayerPrefs.GetInt("key"));
+                Check.Equal("Corrupt int record IsCorrupt is true", true, PlayerPrefs.IsCorrupt);
                 Check.Equal("Corrupt int record logs one warning", 1, LogRecorder.OfSeverity(LogSeverity.Warning).Count);
+                Check.Equal("Corrupt int record logs one error", 1, LogRecorder.OfSeverity(LogSeverity.Error).Count);
 
                 PlayerPrefs.SetInt("recovered", 88);
                 PlayerPrefs.Save();
@@ -205,6 +222,9 @@ namespace Unitas.Bridge.Tests
                 PlayerPrefs.Reload();
 
                 Check.Equal("Recovered file logs zero warnings", 0, LogRecorder.OfSeverity(LogSeverity.Warning).Count);
+                Check.Equal("Recovered file logs zero errors", 0, LogRecorder.OfSeverity(LogSeverity.Error).Count);
+                Check.That("Recovered file LastLoadState is Loaded", PlayerPrefs.LastLoadState == PlayerPrefsLoadState.Loaded);
+                Check.Equal("Recovered file IsCorrupt is false", false, PlayerPrefs.IsCorrupt);
                 Check.Equal("Recovered file reads saved value", 88, PlayerPrefs.GetInt("recovered"));
             }
             finally
@@ -234,6 +254,7 @@ namespace Unitas.Bridge.Tests
 
                 PlayerPrefs.StorageDirectoryOverride = blockedRootFile;
                 PlayerPrefs.SetInt("checkpoint", 99);
+                LogRecorder.Clear();
 
                 bool threwPrefsException = false;
                 try
@@ -246,6 +267,7 @@ namespace Unitas.Bridge.Tests
                 }
 
                 Check.That("Save into an invalid directory throws PlayerPrefsException", threwPrefsException);
+                Check.Equal("Failed Save logs error diagnostic", 1, LogRecorder.OfSeverity(LogSeverity.Error).Count);
 
                 PlayerPrefs.StorageDirectoryOverride = tempDir;
                 PlayerPrefs.Reload();
@@ -284,6 +306,52 @@ namespace Unitas.Bridge.Tests
                 Check.That(
                     "Default StorageFilePath is outside repository project content",
                     !filePath.StartsWith(repoRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestDeleteAllAndClearPrefsPreservesSaveFilesInPersistentDataPath()
+        {
+            string tempDir = CreateTempRoot();
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            PlayerPrefs.StorageDirectoryOverride = null;
+            Application.PersistentDataPathOverride = tempDir;
+            PlayerPrefs.Reload();
+            try
+            {
+                string saveSlot1Path = Path.Combine(Application.persistentDataPath, "save_slot_1.json");
+                string saveProfileDir = Path.Combine(Application.persistentDataPath, "profiles");
+                Directory.CreateDirectory(saveProfileDir);
+                string saveSlot2Path = Path.Combine(saveProfileDir, "slot_2.dat");
+
+                File.WriteAllText(saveSlot1Path, "{\"slot\":1,\"level\":7}");
+                File.WriteAllText(saveSlot2Path, "SAVE_V2_PAYLOAD");
+
+                PlayerPrefs.SetInt("music_volume", 80);
+                PlayerPrefs.SetString("language", "en-US");
+                PlayerPrefs.Save();
+
+                Check.Equal("Prefs exist before DeleteAll", true, PlayerPrefs.HasKey("music_volume"));
+                Check.That("Game save file 1 exists before DeleteAll", File.Exists(saveSlot1Path));
+                Check.That("Game save file 2 exists before DeleteAll", File.Exists(saveSlot2Path));
+
+                PlayerPrefs.DeleteAll();
+                PlayerPrefs.Save();
+                PlayerPrefs.Reload();
+
+                Check.Equal("Prefs are cleared after DeleteAll and Save", false, PlayerPrefs.HasKey("music_volume"));
+                Check.Equal("Language pref is cleared after DeleteAll and Save", false, PlayerPrefs.HasKey("language"));
+                Check.That("Clearing PlayerPrefs keeps game save file 1 intact", File.Exists(saveSlot1Path));
+                Check.Equal("Game save file 1 content is untouched by DeleteAll", "{\"slot\":1,\"level\":7}", File.ReadAllText(saveSlot1Path));
+                Check.That("Clearing PlayerPrefs keeps nested profile save file 2 intact", File.Exists(saveSlot2Path));
+                Check.Equal("Game save file 2 content is untouched by DeleteAll", "SAVE_V2_PAYLOAD", File.ReadAllText(saveSlot2Path));
             }
             finally
             {

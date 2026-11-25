@@ -7,9 +7,94 @@ namespace UnityEngine
 {
     public class MissingReferenceException : Exception
     {
+        public MissingReferenceException() : base("The object of type 'Object' has been destroyed but you are still trying to access it.")
+        {
+        }
+
         public MissingReferenceException(string message) : base(message)
         {
         }
+
+        public MissingReferenceException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    public class UnassignedReferenceException : Exception
+    {
+        public UnassignedReferenceException() : base("The variable has not been assigned.")
+        {
+        }
+
+        public UnassignedReferenceException(string message) : base(message)
+        {
+        }
+
+        public UnassignedReferenceException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    public class MissingComponentException : Exception
+    {
+        public MissingComponentException() : base("There is no component attached to the GameObject.")
+        {
+        }
+
+        public MissingComponentException(string message) : base(message)
+        {
+        }
+
+        public MissingComponentException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
+    }
+
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = true)]
+    public sealed class RequireComponent : Attribute
+    {
+        public Type? m_Type0;
+
+        public Type? m_Type1;
+
+        public Type? m_Type2;
+
+        public RequireComponent(Type requiredComponent)
+        {
+            m_Type0 = requiredComponent;
+        }
+
+        public RequireComponent(Type requiredComponent, Type requiredComponent2)
+        {
+            m_Type0 = requiredComponent;
+            m_Type1 = requiredComponent2;
+        }
+
+        public RequireComponent(Type requiredComponent, Type requiredComponent2, Type requiredComponent3)
+        {
+            m_Type0 = requiredComponent;
+            m_Type1 = requiredComponent2;
+            m_Type2 = requiredComponent3;
+        }
+    }
+
+    [AttributeUsage(AttributeTargets.Class, Inherited = true)]
+    public sealed class DisallowMultipleComponent : Attribute
+    {
+        public DisallowMultipleComponent()
+        {
+        }
+    }
+
+    [AttributeUsage(AttributeTargets.Class, Inherited = true)]
+    public sealed class DefaultExecutionOrder : Attribute
+    {
+        public DefaultExecutionOrder(int order)
+        {
+            this.order = order;
+        }
+
+        public int order { get; }
     }
 
     public partial class Object
@@ -22,7 +107,12 @@ namespace UnityEngine
         private bool _destroyed;
         private bool _destroying;
         private bool _persistent;
+        private bool _unassignedReference;
+        private string _unassignedFieldName = string.Empty;
+        private string _unassignedOwnerName = string.Empty;
         private Scene _scene;
+
+        public static bool ForcePlayerReferenceExceptions { get; set; }
 
         public Object()
         {
@@ -43,10 +133,6 @@ namespace UnityEngine
             }
         }
 
-        /// <summary>
-        /// The scene the object belongs to. A new object takes the scene that was active when it was
-        /// created; a component takes the scene of the game object it is attached to.
-        /// </summary>
         public Scene scene
         {
             get => _scene;
@@ -55,16 +141,25 @@ namespace UnityEngine
 
         public int GetInstanceID() => _instanceId;
 
-        public override string ToString() => _destroyed ? "null" : _name;
+        public override string ToString() => (_destroyed || _unassignedReference) ? "null" : _name;
 
         public override bool Equals(object? other) => this == (other as Object);
 
-        public override int GetHashCode() => _destroyed ? 0 : _instanceId;
+        public override int GetHashCode() => (_destroyed || _unassignedReference) ? 0 : _instanceId;
 
         internal bool IsDestroyed => _destroyed;
 
-        /// <summary>True once the object was marked to survive scene changes.</summary>
+        internal bool IsUnassignedReference => _unassignedReference;
+
         internal bool IsPersistent => _persistent;
+
+        internal void MarkAsUnassignedReference(string fieldName, string ownerName)
+        {
+            _unassignedReference = true;
+            _unassignedFieldName = fieldName ?? string.Empty;
+            _unassignedOwnerName = ownerName ?? string.Empty;
+            DeregisterLiveObject(this);
+        }
 
         internal void AssignNewInstanceId()
         {
@@ -229,7 +324,7 @@ namespace UnityEngine
 
         private static bool IsDiscoverable(Object candidate, bool includeInactive)
         {
-            if (candidate is null || candidate._destroyed)
+            if (candidate is null || candidate._destroyed || candidate._unassignedReference)
             {
                 return false;
             }
@@ -246,36 +341,26 @@ namespace UnityEngine
 
             if (candidate is Component component)
             {
-                GameObject? owner = component.gameObject;
-                return owner is not null && !owner._destroyed && owner.activeInHierarchy;
+                GameObject? owner = component.OwnerOrNull;
+                return owner is not null && !owner._destroyed && !owner._unassignedReference && owner.activeInHierarchy;
             }
 
             return true;
         }
 
+        private static bool IsNullOrDestroyedOrUnassigned(Object? obj) =>
+            obj is null || obj._destroyed || obj._unassignedReference;
+
         public static bool operator ==(Object? left, Object? right)
         {
-            if (left is null && right is null)
+            bool leftNull = IsNullOrDestroyedOrUnassigned(left);
+            bool rightNull = IsNullOrDestroyedOrUnassigned(right);
+            if (leftNull && rightNull)
             {
                 return true;
             }
 
-            if (left is null)
-            {
-                return right!._destroyed;
-            }
-
-            if (right is null)
-            {
-                return left!._destroyed;
-            }
-
-            if (left._destroyed && right._destroyed)
-            {
-                return true;
-            }
-
-            if (left._destroyed || right._destroyed)
+            if (leftNull || rightNull)
             {
                 return false;
             }
@@ -285,14 +370,8 @@ namespace UnityEngine
 
         public static bool operator !=(Object? left, Object? right) => !(left == right);
 
-        public static implicit operator bool(Object? value) => value is not null && !value._destroyed;
+        public static implicit operator bool(Object? value) => !IsNullOrDestroyedOrUnassigned(value);
 
-        /// <summary>
-        /// Marks the object so it survives scene changes. Objects backed by a native entity forward that
-        /// entity to the native runtime; managed-only objects are flagged locally and are not forwarded yet.
-        /// Marking a component also marks the game object that owns it, because the bridge keeps a component
-        /// alive by the flag of its game object.
-        /// </summary>
         public static void DontDestroyOnLoad(Object target)
         {
             if (target == null)
@@ -303,7 +382,7 @@ namespace UnityEngine
             target._persistent = true;
             if (target is Component component)
             {
-                GameObject? owner = component.gameObject;
+                GameObject? owner = component.OwnerOrNull;
                 if (owner != null)
                 {
                     owner._persistent = true;
@@ -326,18 +405,56 @@ namespace UnityEngine
 
             if (target is Component component)
             {
-                GameObject? owner = component.gameObject;
+                GameObject? owner = component.OwnerOrNull;
                 return owner == null ? 0 : owner.NativeEntityId;
             }
 
             return 0;
         }
 
+        public static void Destroy(Object obj, float t)
+        {
+            _ = t;
+            Destroy(obj);
+        }
+
+        public static void DestroyImmediate(Object obj)
+        {
+            Destroy(obj);
+        }
+
+        public static void DestroyImmediate(Object obj, bool allowDestroyingAssets)
+        {
+            _ = allowDestroyingAssets;
+            Destroy(obj);
+        }
+
         public static void Destroy(Object obj)
         {
-            if (obj is null || obj._destroyed)
+            if (obj is null || obj._destroyed || obj._unassignedReference)
             {
                 return;
+            }
+
+            if (obj is Component candidateComponent)
+            {
+                GameObject? owner = candidateComponent.OwnerOrNull;
+                if (owner is not null
+                    && !owner._destroyed
+                    && !owner._destroying
+                    && owner.TryFindDependentRequiring(candidateComponent, out Component? dependent))
+                {
+                    string targetTypeName = candidateComponent.ComponentTypeName;
+                    string dependentTypeName = dependent != null ? dependent.ComponentTypeName : nameof(Component);
+                    Debug.LogError(
+                        "Can't remove "
+                        + targetTypeName
+                        + " because "
+                        + dependentTypeName
+                        + " depends on it",
+                        owner);
+                    return;
+                }
             }
 
             obj._destroying = true;
@@ -356,15 +473,27 @@ namespace UnityEngine
                     bool[] notify = new bool[count];
                     for (int i = 0; i < count; i++)
                     {
-                        notify[i] = IsEffectivelyEnabled(gameObject.Components[i]);
+                        Component c = gameObject.Components[i];
+                        if (c is null || c._destroyed)
+                        {
+                            continue;
+                        }
+
+                        notify[i] = IsEffectivelyEnabled(c);
                     }
 
                     obj._destroyed = true;
                     DeregisterLiveObject(gameObject);
                     for (int i = 0; i < count; i++)
                     {
-                        DeregisterLiveObject(gameObject.Components[i]);
-                        DestroyComponent(gameObject.Components[i], notify[i]);
+                        Component c = gameObject.Components[i];
+                        if (c is null || c._destroyed)
+                        {
+                            continue;
+                        }
+
+                        DeregisterLiveObject(c);
+                        DestroyComponent(c, notify[i]);
                     }
                 }
                 else
@@ -381,9 +510,9 @@ namespace UnityEngine
 
         private static bool IsEffectivelyEnabled(Component component)
         {
-            if (component is MonoBehaviour behaviour)
+            if (component is not null && !component._destroyed && component is MonoBehaviour behaviour)
             {
-                return behaviour.enabled && behaviour.isActiveAndEnabled;
+                return behaviour.isActiveAndEnabled;
             }
 
             return false;
@@ -424,8 +553,32 @@ namespace UnityEngine
             }
         }
 
-        private void ThrowIfDestroyed()
+        internal void ThrowIfUnassignedReference()
         {
+            if (_unassignedReference)
+            {
+                bool isPlayer = ForcePlayerReferenceExceptions
+                    || (Application.Host != null && !Application.isEditor);
+                if (isPlayer)
+                {
+                    throw new NullReferenceException("Object reference not set to an instance of an object.");
+                }
+
+                string fieldLabel = string.IsNullOrEmpty(_unassignedFieldName) ? "reference" : _unassignedFieldName;
+                string ownerLabel = string.IsNullOrEmpty(_unassignedOwnerName) ? "MonoBehaviour" : _unassignedOwnerName;
+                throw new UnassignedReferenceException(
+                    "The variable "
+                    + fieldLabel
+                    + " of "
+                    + ownerLabel
+                    + " has not been assigned.");
+            }
+        }
+
+        internal void ThrowIfDestroyed()
+        {
+            ThrowIfUnassignedReference();
+
             if (_destroyed && !_destroying)
             {
                 throw new MissingReferenceException("The object has been destroyed and can no longer be accessed.");

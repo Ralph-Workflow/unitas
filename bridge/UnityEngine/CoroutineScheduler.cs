@@ -60,8 +60,14 @@ namespace UnityEngine
             }
 
             Coroutine handle = new Coroutine();
-            if (owner.gameObject != null && !owner.gameObject.activeSelf)
+            if (owner.gameObject != null && !owner.gameObject.activeInHierarchy)
             {
+                string objectName = string.IsNullOrEmpty(owner.gameObject.name) ? "GameObject" : owner.gameObject.name;
+                Debug.LogError(
+                    "Coroutine couldn't be started because the the game object '"
+                    + objectName
+                    + "' is inactive!",
+                    owner);
                 handle.IsCompleted = true;
                 return handle;
             }
@@ -263,7 +269,7 @@ namespace UnityEngine
 
         private static bool IsOwnerActive(MonoBehaviour owner)
         {
-            return owner.gameObject == null || owner.gameObject.activeSelf;
+            return owner.gameObject == null || owner.gameObject.activeInHierarchy;
         }
 
         private static void RemoveForOwner(MonoBehaviour owner)

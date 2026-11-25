@@ -132,6 +132,9 @@ namespace Unitas.Bridge
             MeshRenderer.Provider = _renderProvider;
             Light.Provider = _renderProvider;
             Unitas.Bridge.Messaging.MessageDispatcher.EnsureInstalled();
+            UnitySynchronizationContext.Install();
+            Time.PushTimeScaleToHost();
+            ScanProjectResources(DataPath);
 
             string? glueAssemblyPath = Environment.GetEnvironmentVariable("UNITAS_GLUE_ASSEMBLY");
             if (!string.IsNullOrEmpty(glueAssemblyPath) && File.Exists(glueAssemblyPath))
@@ -621,7 +624,8 @@ namespace Unitas.Bridge
             _lateUpdateCallsInTick = 0;
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
-            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, deltaSeconds * Time.timeScale);
+            double tickDeltaSeconds = Time.captureFramerate > 0 ? Time.unscaledDeltaTime : deltaSeconds;
+            int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, tickDeltaSeconds * Time.timeScale);
             if (result != 0)
             {
                 string? error = GetErrorMessage();
@@ -635,6 +639,10 @@ namespace Unitas.Bridge
             SyncSimulatedTransforms();
             SyncAudioSourceTransforms();
             SceneManager.PumpAsyncOperations();
+            if (_scripts.Count == 0)
+            {
+                UnitySynchronizationContext.PumpFrame();
+            }
         }
 
         private void SyncAudioSourceTransforms()
@@ -776,6 +784,109 @@ namespace Unitas.Bridge
             _companyName = string.IsNullOrEmpty(company) ? "DefaultCompany" : company;
             _productName = product;
             _projectVersion = string.IsNullOrEmpty(version) ? "0.1" : version;
+            ScanProjectResources(!string.IsNullOrEmpty(projectRoot) ? projectRoot : _dataPath);
+        }
+
+        public int ScanProjectResources(string projectOrAssetsRoot)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(projectOrAssetsRoot) || !Directory.Exists(projectOrAssetsRoot))
+            {
+                return 0;
+            }
+
+            string fullRoot = Path.GetFullPath(projectOrAssetsRoot);
+            if (!TryWriteStringToPathBuffer(fullRoot, out IntPtr buffer, out ulong length))
+            {
+                return 0;
+            }
+
+            int byteLength;
+            try
+            {
+                byteLength = RuntimeInterop.unitas_runtime_resources_scan(_runtimeHandle, buffer, length);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return 0;
+            }
+            catch (DllNotFoundException)
+            {
+                return 0;
+            }
+
+            if (byteLength <= 0)
+            {
+                return 0;
+            }
+
+            IntPtr manifestBuffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)byteLength);
+            if (manifestBuffer == IntPtr.Zero)
+            {
+                return 0;
+            }
+
+            string? manifest = Marshal.PtrToStringUTF8(manifestBuffer, byteLength);
+            if (string.IsNullOrEmpty(manifest))
+            {
+                return 0;
+            }
+
+            int discoveredCount = 0;
+            string[] lines = manifest.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            for (int index = 0; index < lines.Length; index++)
+            {
+                string line = lines[index].TrimEnd('\r');
+                string[] columns = line.Split('\t');
+                if (columns.Length < 3)
+                {
+                    continue;
+                }
+
+                string resourcePath = columns[1];
+                string filePath = columns[2];
+                string? resourcesRoot = ExtractResourcesRootDirectory(filePath, resourcePath);
+                if (!string.IsNullOrEmpty(resourcesRoot))
+                {
+                    Resources.AddSearchRoot(resourcesRoot);
+                }
+
+                discoveredCount++;
+            }
+
+            return discoveredCount;
+        }
+
+        private static string? ExtractResourcesRootDirectory(string filePath, string resourcePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(resourcePath))
+            {
+                return null;
+            }
+
+            string[] segments = resourcePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                return null;
+            }
+
+            string? current = filePath;
+            for (int index = 0; index < segments.Length; index++)
+            {
+                current = Path.GetDirectoryName(current);
+                if (string.IsNullOrEmpty(current))
+                {
+                    return null;
+                }
+            }
+
+            string leaf = Path.GetFileName(current.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.Equals(leaf, "Resources", StringComparison.OrdinalIgnoreCase))
+            {
+                return current;
+            }
+
+            return null;
         }
 
         private bool TryReadNativeIdentity(Func<ulong, int> nativeQuery, out string value)
@@ -2671,6 +2782,7 @@ namespace Unitas.Bridge
             try
             {
                 CoroutineScheduler.PumpFixed();
+                UnitySynchronizationContext.PumpFixed();
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -2684,6 +2796,7 @@ namespace Unitas.Bridge
             {
                 CoroutineScheduler.PumpFrame();
                 InvokeScheduler.PumpFrame();
+                UnitySynchronizationContext.PumpFrame();
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -2723,6 +2836,7 @@ namespace Unitas.Bridge
             {
                 CoroutineScheduler.StopAll();
                 InvokeScheduler.StopAll();
+                UnitySynchronizationContext.ReportAndClearSession();
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {

@@ -9,17 +9,19 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>]");
                 return 1;
             }
 
             string command = args[0];
             bool isCompile = string.Equals(command, "compile", StringComparison.OrdinalIgnoreCase);
             bool isGenerateIde = string.Equals(command, "generate-ide", StringComparison.OrdinalIgnoreCase);
+            bool isDiagnose = string.Equals(command, "diagnose", StringComparison.OrdinalIgnoreCase);
+            bool isSymbols = string.Equals(command, "symbols", StringComparison.OrdinalIgnoreCase);
 
-            if (!isCompile && !isGenerateIde)
+            if (!isCompile && !isGenerateIde && !isDiagnose && !isSymbols)
             {
-                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile' or 'generate-ide'.");
+                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', or 'symbols'.");
                 return 1;
             }
 
@@ -31,6 +33,7 @@ namespace Unitas.Scripting
 
             string projectRoot = args[1];
             ScriptCompilationOptions options = new ScriptCompilationOptions();
+            string? typeFilter = null;
 
             for (int i = 2; i < args.Length; i++)
             {
@@ -71,6 +74,11 @@ namespace Unitas.Scripting
                     i++;
                     options.AdditionalDefines.Add(args[i]);
                 }
+                else if (string.Equals(arg, "--type", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    typeFilter = args[i];
+                }
             }
 
             if (isGenerateIde)
@@ -83,6 +91,20 @@ namespace Unitas.Scripting
                 }
 
                 return ideResult.Succeeded ? 0 : 1;
+            }
+
+            if (isDiagnose)
+            {
+                DiagnoseReport report = ScriptCompilation.DiagnoseProject(projectRoot, options);
+                Console.WriteLine(report.ToJson());
+                return report.ErrorCount == 0 && report.Succeeded ? 0 : 1;
+            }
+
+            if (isSymbols)
+            {
+                SymbolQueryResult queryResult = SymbolQuery.QueryProject(projectRoot, typeFilter, options);
+                Console.WriteLine(queryResult.ToJson());
+                return 0;
             }
 
             ScriptCompilationResult result = ScriptCompilation.CompileProject(projectRoot, options);

@@ -6,9 +6,14 @@ namespace UnityEngine
 
         public bool enabled
         {
-            get => _enabled;
+            get
+            {
+                ThrowIfUnassignedReference();
+                return _enabled;
+            }
             set
             {
+                ThrowIfUnassignedReference();
                 if (_enabled == value)
                 {
                     return;
@@ -19,7 +24,7 @@ namespace UnityEngine
             }
         }
 
-        public bool isActiveAndEnabled => _enabled && gameObject != null && gameObject.activeInHierarchy;
+        public bool isActiveAndEnabled => !IsDestroyed && !IsUnassignedReference && _enabled && OwnerOrNull != null && OwnerOrNull.activeInHierarchy;
 
         internal virtual void OnEnabledChanged(bool isEnabled)
         {

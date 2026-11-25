@@ -50,6 +50,7 @@ namespace Unitas.Bridge.Tests
             TestSceneAbsentFromBuildListAndUnloadOnlySceneRefused();
             TestResourcesLoadTextAssetPrefabInstantiateAndMissingPaths();
             TestResourcesUnloadUnusedAssetsAndUnloadAssetValidation();
+            TestSessionStartScansResourcesViaNativeRuntimeEndToEnd();
             TestHeadlessApplicationScreenAndSystemInfoValues();
         }
 
@@ -513,6 +514,100 @@ namespace Unitas.Bridge.Tests
             {
                 UnityEngine.Object.Destroy(go);
                 Resources.Clear();
+            }
+        }
+
+        private static void TestSessionStartScansResourcesViaNativeRuntimeEndToEnd()
+        {
+            Resources.Clear();
+            string tempRoot = Path.Combine(Path.GetTempPath(), "unitas_res_session_e2e_" + Guid.NewGuid().ToString("N"));
+            string projectSettingsDir = Path.Combine(tempRoot, "ProjectSettings");
+            string resConfigDir = Path.Combine(tempRoot, "Assets", "Resources", "Config");
+            string resNestedDir = Path.Combine(tempRoot, "Assets", "Gameplay", "Resources", "Nested");
+            string scenesDir = Path.Combine(tempRoot, "Assets", "Scenes");
+            Directory.CreateDirectory(projectSettingsDir);
+            Directory.CreateDirectory(resConfigDir);
+            Directory.CreateDirectory(resNestedDir);
+            Directory.CreateDirectory(scenesDir);
+
+            string sessionItemPath = Path.Combine(resConfigDir, "session_item.txt");
+            string sessionItemMetaPath = Path.Combine(resConfigDir, "session_item.txt.meta");
+            string nestedNotePath = Path.Combine(resNestedDir, "note.txt");
+            string scenePath = Path.Combine(scenesDir, "Main.unity");
+
+            File.WriteAllText(sessionItemPath, "session_payload_v1");
+            File.WriteAllText(sessionItemMetaPath, "fileFormatVersion: 2\nguid: 11223344556677889900aabbccddeeff\n");
+            File.WriteAllText(nestedNotePath, "nested_resource_note");
+            File.WriteAllText(
+                scenePath,
+                "%YAML 1.1\n"
+                + "%TAG !u! tag:unity3d.com,2011:\n"
+                + "--- !u!1 &100\n"
+                + "GameObject:\n"
+                + "  m_Name: Root\n"
+                + "  m_IsActive: 1\n"
+                + "--- !u!4 &101\n"
+                + "Transform:\n"
+                + "  m_GameObject: {fileID: 100}\n"
+                + "  m_LocalPosition: {x: 0, y: 0, z: 0}\n"
+                + "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n"
+                + "  m_LocalScale: {x: 1, y: 1, z: 1}\n");
+
+            try
+            {
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(scenePath);
+
+                    TextAsset? configItem = Resources.Load<TextAsset>("Config/session_item");
+                    Check.That("headless session Resources.Load<TextAsset> resolves Assets/Resources item without manual AddSearchRoot", configItem != null);
+                    if (configItem != null)
+                    {
+                        Check.Equal("session TextAsset name matches stem", "session_item", configItem.name);
+                        Check.Equal("session TextAsset text matches file content", "session_payload_v1", configItem.text);
+                    }
+
+                    TextAsset? nestedNote = Resources.Load<TextAsset>("Nested/note");
+                    Check.That("headless session Resources.Load<TextAsset> resolves nested Assets/Gameplay/Resources item", nestedNote != null);
+                    if (nestedNote != null)
+                    {
+                        Check.Equal("nested TextAsset name matches stem", "note", nestedNote.name);
+                        Check.Equal("nested TextAsset text matches file content", "nested_resource_note", nestedNote.text);
+                    }
+
+                    UnityEngine.Object? missingUntyped = Resources.Load("Missing/DoesNotExist");
+                    TextAsset? missingTyped = Resources.Load<TextAsset>("Missing/DoesNotExist");
+                    Check.That("headless session Resources.Load on missing path returns null without throwing", missingUntyped == null);
+                    Check.That("headless session Resources.Load<TextAsset> on missing path returns null without throwing", missingTyped == null);
+
+                    Check.Equal("resident asset count reflects two loaded session resources", 2, Resources.ResidentAssetCount);
+
+                    if (configItem != null)
+                    {
+                        Resources.UnloadAsset(configItem);
+                    }
+
+                    AsyncOperation firstUnload = Resources.UnloadUnusedAssets();
+                    Check.That("UnloadUnusedAssets completes after first UnloadAsset", firstUnload.isDone);
+                    Check.Equal("resident asset count drops to 1 after unloading first asset", 1, Resources.ResidentAssetCount);
+
+                    if (nestedNote != null)
+                    {
+                        Resources.UnloadAsset(nestedNote);
+                    }
+
+                    AsyncOperation secondUnload = Resources.UnloadUnusedAssets();
+                    Check.That("UnloadUnusedAssets completes after second UnloadAsset", secondUnload.isDone);
+                    Check.Equal("resident asset count drops to 0 after unloading remaining asset", 0, Resources.ResidentAssetCount);
+                }
+            }
+            finally
+            {
+                Resources.Clear();
+                if (Directory.Exists(tempRoot))
+                {
+                    Directory.Delete(tempRoot, true);
+                }
             }
         }
 

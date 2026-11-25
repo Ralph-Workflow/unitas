@@ -68,6 +68,55 @@ namespace NUnit.Framework
 
         public string Reason { get; }
     }
+
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
+    public sealed class ExplicitAttribute : Attribute
+    {
+        public ExplicitAttribute()
+        {
+            Reason = string.Empty;
+        }
+
+        public ExplicitAttribute(string reason)
+        {
+            Reason = reason ?? string.Empty;
+        }
+
+        public string Reason { get; }
+    }
+
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class RetryAttribute : Attribute
+    {
+        public RetryAttribute(int tryCount)
+        {
+            TryCount = tryCount;
+        }
+
+        public int TryCount { get; }
+    }
+
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class RepeatAttribute : Attribute
+    {
+        public RepeatAttribute(int count)
+        {
+            Count = count;
+        }
+
+        public int Count { get; }
+    }
+
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class TimeoutAttribute : Attribute
+    {
+        public TimeoutAttribute(int timeout)
+        {
+            Timeout = timeout;
+        }
+
+        public int Timeout { get; }
+    }
 }
 
 namespace UnityEngine
@@ -101,5 +150,75 @@ namespace UnityEngine.TestTools
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
     public sealed class UnityTearDownAttribute : Attribute
     {
+    }
+
+    [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    public sealed class UnityPlatformAttribute : Attribute
+    {
+        public UnityPlatformAttribute()
+        {
+            include = Array.Empty<UnityEngine.RuntimePlatform>();
+            exclude = Array.Empty<UnityEngine.RuntimePlatform>();
+        }
+
+        public UnityPlatformAttribute(params UnityEngine.RuntimePlatform[] include)
+        {
+            this.include = include ?? Array.Empty<UnityEngine.RuntimePlatform>();
+            exclude = Array.Empty<UnityEngine.RuntimePlatform>();
+        }
+
+        public UnityEngine.RuntimePlatform[] include { get; set; }
+
+        public UnityEngine.RuntimePlatform[] exclude { get; set; }
+    }
+
+    public interface IPrebuildSetup
+    {
+        void Setup();
+    }
+
+    public interface IPostBuildCleanup
+    {
+        void Cleanup();
+    }
+
+    [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class PrebuildSetupAttribute : Attribute
+    {
+        public PrebuildSetupAttribute(Type targetClass)
+        {
+            TargetClass = targetClass;
+            TargetClassName = targetClass?.FullName ?? string.Empty;
+        }
+
+        public PrebuildSetupAttribute(string targetClassName)
+        {
+            TargetClass = null;
+            TargetClassName = targetClassName ?? string.Empty;
+        }
+
+        public Type? TargetClass { get; }
+
+        public string TargetClassName { get; }
+    }
+
+    [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class PostBuildCleanupAttribute : Attribute
+    {
+        public PostBuildCleanupAttribute(Type targetClass)
+        {
+            TargetClass = targetClass;
+            TargetClassName = targetClass?.FullName ?? string.Empty;
+        }
+
+        public PostBuildCleanupAttribute(string targetClassName)
+        {
+            TargetClass = null;
+            TargetClassName = targetClassName ?? string.Empty;
+        }
+
+        public Type? TargetClass { get; }
+
+        public string TargetClassName { get; }
     }
 }

@@ -17,6 +17,7 @@ namespace Unitas.Bridge.Tests
             TestWaitFormsResumeOnExpectedPhases();
             TestScaledAndUnscaledWaitDurations();
             TestStopAndNonStopLifecycleRules();
+            TestStartCoroutineOnInactiveGameObjectLogsErrorNamingObject();
             TestNativeBridgeHostCoroutineLifecycle();
             TestNativeBridgeHostMultiStepFixedWait();
             TestNestedEnumeratorPredicateExceptionAndSceneReload();
@@ -252,6 +253,63 @@ namespace Unitas.Bridge.Tests
                 CoroutineScheduler.OwnerDestroyed(ownerB);
                 CoroutineScheduler.OwnerDestroyed(ownerC);
                 UnityEngine.Object.Destroy(goB);
+            }
+        }
+
+        private static void TestStartCoroutineOnInactiveGameObjectLogsErrorNamingObject()
+        {
+            GameObject inactiveRoot = new GameObject("InactiveLauncherObject");
+            CoroutineRecorderScript rootScript = inactiveRoot.AddComponent<CoroutineRecorderScript>();
+            inactiveRoot.SetActive(false);
+
+            GameObject activeParent = new GameObject("DeactivatedAncestorRoot");
+            GameObject childUnderInactive = new GameObject("ChildOnInactiveBranch");
+            childUnderInactive.transform.SetParent(activeParent.transform, false);
+            CoroutineRecorderScript childScript = childUnderInactive.AddComponent<CoroutineRecorderScript>();
+            activeParent.SetActive(false);
+
+            LogRecorder.Clear();
+            try
+            {
+                List<string> trace = new List<string>();
+                rootScript.StartCoroutine(StepRoutine(trace, "directInactive", 2));
+                CoroutineScheduler.PumpFrame();
+
+                Check.Equal("Coroutine started on directly inactive GameObject does not run", 0, trace.Count);
+                IReadOnlyList<LogEntry> directErrors = LogRecorder.OfSeverity(LogSeverity.Error);
+                Check.Equal("StartCoroutine on directly inactive GameObject logs an error", 1, directErrors.Count);
+                if (directErrors.Count == 1)
+                {
+                    Check.That(
+                        "Error message names the inactive GameObject InactiveLauncherObject",
+                        directErrors[0].Message.Contains("InactiveLauncherObject", StringComparison.Ordinal));
+                    Check.That(
+                        "Error message explains game object is inactive",
+                        directErrors[0].Message.Contains("inactive", StringComparison.OrdinalIgnoreCase));
+                }
+
+                LogRecorder.Clear();
+                childScript.StartCoroutine(StepRoutine(trace, "ancestorInactive", 2));
+                CoroutineScheduler.PumpFrame();
+
+                Check.Equal("Coroutine started on child under inactive ancestor does not run", 0, trace.Count);
+                IReadOnlyList<LogEntry> childErrors = LogRecorder.OfSeverity(LogSeverity.Error);
+                Check.Equal("StartCoroutine on child under inactive ancestor logs an error", 1, childErrors.Count);
+                if (childErrors.Count == 1)
+                {
+                    Check.That(
+                        "Error message names the inactive child GameObject ChildOnInactiveBranch",
+                        childErrors[0].Message.Contains("ChildOnInactiveBranch", StringComparison.Ordinal));
+                }
+            }
+            finally
+            {
+                LogRecorder.Clear();
+                CoroutineScheduler.OwnerDestroyed(rootScript);
+                CoroutineScheduler.OwnerDestroyed(childScript);
+                UnityEngine.Object.Destroy(inactiveRoot);
+                UnityEngine.Object.Destroy(activeParent);
+                UnityEngine.Object.Destroy(childUnderInactive);
             }
         }
 

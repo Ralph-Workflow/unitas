@@ -12,6 +12,21 @@ namespace Unitas.Bridge.Tests
 {
     public static class CompilationTests
     {
+        public static string? LastGeneratedGlueAssemblyPath { get; private set; }
+
+        public static void EnsureCompiledGlueLoaded()
+        {
+            if (string.IsNullOrEmpty(LastGeneratedGlueAssemblyPath) || !File.Exists(LastGeneratedGlueAssemblyPath))
+            {
+                TestGeneratedGlueAndZeroReflectionMessageDispatch();
+            }
+
+            if (!string.IsNullOrEmpty(LastGeneratedGlueAssemblyPath) && File.Exists(LastGeneratedGlueAssemblyPath))
+            {
+                ScriptGlueRegistry.LoadGlueAssembly(LastGeneratedGlueAssemblyPath);
+            }
+        }
+
         public static void Run()
         {
             TestStory6AssembliesAsmrefDefinesAndVersionDefines();
@@ -322,6 +337,26 @@ namespace Unitas.Bridge.Tests
                 Check.That("Generated glue DLL path exists", !string.IsNullOrEmpty(result.GeneratedGlueAssemblyPath) && File.Exists(result.GeneratedGlueAssemblyPath));
                 Check.That("Generated glue source exists in obj dir", !string.IsNullOrEmpty(result.GeneratedGlueSourcePath) && File.Exists(result.GeneratedGlueSourcePath));
 
+                string permanentGluePath = Path.Combine(
+                    Path.GetTempPath(),
+                    "unitas_shared_glue_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".dll");
+                File.Copy(result.GeneratedGlueAssemblyPath!, permanentGluePath, true);
+                string? glueOutDir = Path.GetDirectoryName(result.GeneratedGlueAssemblyPath!);
+                if (!string.IsNullOrEmpty(glueOutDir))
+                {
+                    string[] siblingDlls = Directory.GetFiles(glueOutDir, "*.dll");
+                    string permanentDir = Path.GetDirectoryName(permanentGluePath) ?? Path.GetTempPath();
+                    for (int i = 0; i < siblingDlls.Length; i++)
+                    {
+                        string fileName = Path.GetFileName(siblingDlls[i]);
+                        if (!string.Equals(fileName, Path.GetFileName(result.GeneratedGlueAssemblyPath!), StringComparison.OrdinalIgnoreCase))
+                        {
+                            File.Copy(siblingDlls[i], Path.Combine(permanentDir, fileName), true);
+                        }
+                    }
+                }
+
+                LastGeneratedGlueAssemblyPath = permanentGluePath;
                 ScriptGlueRegistry.LoadGlueAssembly(result.GeneratedGlueAssemblyPath!);
 
                 bool created = ScriptGlueRegistry.TryCreate(
@@ -348,8 +383,20 @@ namespace Unitas.Bridge.Tests
                     IUnitasMessageHandler? resolvedViaDispatcher = MessageDispatcher.ResolveHandler(counterInstance);
                     Check.That("MessageDispatcher.ResolveHandler finds registered handler", resolvedViaDispatcher != null);
 
-                    MonoBehaviour? viaScriptRegistry = ScriptRegistry.Create(0x2000000000000000UL, 0x0000000000000002UL);
-                    Check.That("ScriptRegistry also resolves compiled script GUID", viaScriptRegistry != null);
+                    MonoBehaviour? viaGlueCreate = ScriptGlueRegistry.Create(0x2000000000000000UL, 0x0000000000000002UL);
+                    Check.That("ScriptGlueRegistry.Create also resolves compiled script GUID", viaGlueCreate != null);
+                }
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    string scenePath = Path.Combine(tempProject, "Assets", "CounterScene.unity");
+                    File.WriteAllText(
+                        scenePath,
+                        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_ObjectHideFlags: 0\n  serializedVersion: 6\n  m_Component:\n  - component: {fileID: 101}\n  - component: {fileID: 102}\n  m_Layer: 0\n  m_Name: CounterObject\n  m_TagString: Untagged\n  m_IsActive: 1\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!114 &102\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Enabled: 1\n  m_Script: {fileID: 11500000, guid: 20000000000000000000000000000002, type: 3}\n");
+                    host.LoadScene(scenePath);
+                    host.Tick(0.02);
+                    MonoBehaviour? attachedScript = host.GetScript(1UL);
+                    Check.That("BridgeHost attaches compiled script by GUID on scene load", attachedScript != null);
                 }
             }
             finally

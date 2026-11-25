@@ -124,10 +124,69 @@ namespace Unitas.Scripting
         private static string? _cachedDotnetExecutable;
         private static string? _cachedCscDllPath;
         private static IReadOnlyList<string>? _cachedNetReferenceDlls;
+        private static readonly Dictionary<string, ScriptCompilationResult> LastValidResultByOutputDir =
+            new Dictionary<string, ScriptCompilationResult>(StringComparer.Ordinal);
+        private static readonly object LastValidGate = new object();
 
         static ScriptCompilation()
         {
             RoslynAssemblyResolver.EnsureInstalled();
+        }
+
+        public static DiagnoseReport DiagnoseProject(string projectRoot, ScriptCompilationOptions? options = null)
+        {
+            ScriptCompilationResult result = CompileProject(projectRoot, options);
+            return DiagnoseReport.FromCompilationResult(result);
+        }
+
+        public static ScriptCompilationResult? GetLastValidCompilation(string projectRootOrOutputDirectory)
+        {
+            if (string.IsNullOrEmpty(projectRootOrOutputDirectory))
+            {
+                return null;
+            }
+
+            string fullPath = Path.GetFullPath(projectRootOrOutputDirectory);
+            string candidateOutDir = Directory.Exists(Path.Combine(fullPath, "Library", DefaultOutputFolderName))
+                ? Path.Combine(fullPath, "Library", DefaultOutputFolderName)
+                : fullPath;
+
+            lock (LastValidGate)
+            {
+                if (LastValidResultByOutputDir.TryGetValue(candidateOutDir, out ScriptCompilationResult? cached))
+                {
+                    return cached;
+                }
+
+                if (LastValidResultByOutputDir.TryGetValue(fullPath, out ScriptCompilationResult? cachedDirect))
+                {
+                    return cachedDirect;
+                }
+            }
+
+            List<string> existingDlls = GetExistingDllsInDirectory(candidateOutDir);
+            if (existingDlls.Count == 0)
+            {
+                return null;
+            }
+
+            string candidateGlue = Path.Combine(candidateOutDir, GeneratedGlueAssemblyName + ".dll");
+            string? existingGlue = File.Exists(candidateGlue) ? candidateGlue : null;
+            string candidateGlueSrc = Path.Combine(candidateOutDir, "obj", "Unitas.Generated.g.cs");
+            string? existingGlueSrc = File.Exists(candidateGlueSrc) ? candidateGlueSrc : null;
+
+            return new ScriptCompilationResult(
+                true,
+                ActiveAssemblyState.Current,
+                candidateOutDir,
+                existingGlue,
+                existingGlueSrc,
+                Array.Empty<CompiledAssemblyRecord>(),
+                Array.Empty<ScriptDiagnostic>(),
+                Array.Empty<string>(),
+                existingDlls,
+                Array.Empty<ScriptGuidBinding>(),
+                Array.Empty<DiscoveredPluginRecord>());
         }
 
         public static ScriptCompilationResult CompileProject(string projectRoot, ScriptCompilationOptions? options = null)
@@ -590,7 +649,7 @@ namespace Unitas.Scripting
                     ScriptGlueRegistry.LoadGlueAssembly(generatedGlueDllPath);
                 }
 
-                return new ScriptCompilationResult(
+                ScriptCompilationResult successResult = new ScriptCompilationResult(
                     true,
                     ActiveAssemblyState.Current,
                     outputDirectory,
@@ -602,6 +661,13 @@ namespace Unitas.Scripting
                     activeDlls,
                     allBindings,
                     pluginRecords);
+
+                lock (LastValidGate)
+                {
+                    LastValidResultByOutputDir[outputDirectory] = successResult;
+                }
+
+                return successResult;
             }
             finally
             {
@@ -624,25 +690,46 @@ namespace Unitas.Scripting
             List<ScriptDiagnostic> diagnostics)
         {
             List<string> existingValidDlls = GetExistingDllsInDirectory(outputDirectory);
+            ScriptCompilationResult? previousValid = null;
+            lock (LastValidGate)
+            {
+                LastValidResultByOutputDir.TryGetValue(outputDirectory, out previousValid);
+            }
+
+            if (existingValidDlls.Count == 0 && previousValid != null && previousValid.ActiveAssemblyPaths.Count > 0)
+            {
+                existingValidDlls = new List<string>(previousValid.ActiveAssemblyPaths);
+            }
+
             ActiveAssemblyState state = existingValidDlls.Count > 0
                 ? ActiveAssemblyState.LastValidFallback
                 : ActiveAssemblyState.None;
 
             string candidateGlue = Path.Combine(outputDirectory, GeneratedGlueAssemblyName + ".dll");
-            string? existingGlue = File.Exists(candidateGlue) ? candidateGlue : null;
+            string? existingGlue = File.Exists(candidateGlue)
+                ? candidateGlue
+                : previousValid?.GeneratedGlueAssemblyPath;
+            string? existingGlueSource = previousValid?.GeneratedGlueSourcePath;
+
+            IReadOnlyList<ScriptGuidBinding> preservedBindings = previousValid != null
+                ? previousValid.ScriptBindings
+                : Array.Empty<ScriptGuidBinding>();
+            IReadOnlyList<DiscoveredPluginRecord> preservedPlugins = previousValid != null
+                ? previousValid.Plugins
+                : Array.Empty<DiscoveredPluginRecord>();
 
             return new ScriptCompilationResult(
                 false,
                 state,
                 outputDirectory,
                 existingGlue,
-                null,
+                existingGlueSource,
                 records,
                 diagnostics,
                 Array.Empty<string>(),
                 existingValidDlls,
-                Array.Empty<ScriptGuidBinding>(),
-                Array.Empty<DiscoveredPluginRecord>());
+                preservedBindings,
+                preservedPlugins);
         }
 
         private static List<string> TopologicalSortAndDetectCycles(
@@ -719,6 +806,298 @@ namespace Unitas.Scripting
             public static readonly Dictionary<string, (DateTime LastWriteUtc, PortableExecutableReference Reference)> Items =
                 new Dictionary<string, (DateTime LastWriteUtc, PortableExecutableReference Reference)>(StringComparer.Ordinal);
             public static readonly object Gate = new object();
+        }
+
+        internal static PortableExecutableReference GetMetadataReference(string fullPath)
+        {
+            return GetCachedMetadataReference(fullPath);
+        }
+
+        internal static IReadOnlyList<string> GetNetReferenceDlls()
+        {
+            if (_cachedNetReferenceDlls == null)
+            {
+                _cachedNetReferenceDlls = DiscoverNetReferencePackDlls();
+            }
+
+            return _cachedNetReferenceDlls;
+        }
+
+        internal static CSharpCompilation CreateRoslynCompilation(
+            string assemblyName,
+            IReadOnlyList<string> sourceFiles,
+            IReadOnlyList<string> defines,
+            IReadOnlyList<MetadataReference> metadataRefs,
+            bool allowUnsafe,
+            ResponseFileOptions rspOptions)
+        {
+            CSharpParseOptions parseOptions = new CSharpParseOptions(
+                LanguageVersion.CSharp9,
+                DocumentationMode.None,
+                SourceCodeKind.Regular,
+                defines);
+
+            List<SyntaxTree> syntaxTrees = new List<SyntaxTree>(sourceFiles.Count);
+            for (int i = 0; i < sourceFiles.Count; i++)
+            {
+                string fullSourcePath = Path.GetFullPath(sourceFiles[i]);
+                if (!File.Exists(fullSourcePath))
+                {
+                    continue;
+                }
+
+                string sourceText = File.ReadAllText(fullSourcePath, Encoding.UTF8);
+                syntaxTrees.Add(CSharpSyntaxTree.ParseText(sourceText, parseOptions, fullSourcePath, Encoding.UTF8));
+            }
+
+            Dictionary<string, ReportDiagnostic> specificDiagnosticOptions =
+                new Dictionary<string, ReportDiagnostic>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["CS1701"] = ReportDiagnostic.Suppress,
+                    ["CS1702"] = ReportDiagnostic.Suppress
+                };
+
+            for (int i = 0; i < rspOptions.DisabledWarnings.Count; i++)
+            {
+                string w = rspOptions.DisabledWarnings[i].Trim();
+                if (!string.IsNullOrEmpty(w))
+                {
+                    string code = w.StartsWith("CS", StringComparison.OrdinalIgnoreCase) ? w.ToUpperInvariant() : "CS" + w.PadLeft(4, '0');
+                    specificDiagnosticOptions[code] = ReportDiagnostic.Suppress;
+                    specificDiagnosticOptions[w] = ReportDiagnostic.Suppress;
+                }
+            }
+
+            for (int i = 0; i < rspOptions.WarningsAsErrorIds.Count; i++)
+            {
+                string w = rspOptions.WarningsAsErrorIds[i].Trim();
+                if (!string.IsNullOrEmpty(w))
+                {
+                    string code = w.StartsWith("CS", StringComparison.OrdinalIgnoreCase) ? w.ToUpperInvariant() : "CS" + w.PadLeft(4, '0');
+                    specificDiagnosticOptions[code] = ReportDiagnostic.Error;
+                    specificDiagnosticOptions[w] = ReportDiagnostic.Error;
+                }
+            }
+
+            CSharpCompilationOptions compilationOptions = new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                reportSuppressedDiagnostics: false,
+                moduleName: assemblyName + ".dll",
+                allowUnsafe: allowUnsafe,
+                generalDiagnosticOption: rspOptions.WarningsAsErrors ? ReportDiagnostic.Error : ReportDiagnostic.Default,
+                specificDiagnosticOptions: specificDiagnosticOptions,
+                concurrentBuild: false,
+                deterministic: true,
+                nullableContextOptions: NullableContextOptions.Disable);
+
+            return CSharpCompilation.Create(
+                assemblyName,
+                syntaxTrees,
+                metadataRefs,
+                compilationOptions);
+        }
+
+        internal static IReadOnlyList<(string AssemblyName, CSharpCompilation Compilation)> CreateProjectCompilations(
+            string fullProjectRoot,
+            ScriptCompilationOptions effectiveOptions,
+            List<ScriptDiagnostic> diagnostics)
+        {
+            Dictionary<string, string> guidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> pathToGuid = new Dictionary<string, string>(StringComparer.Ordinal);
+            List<ParsedPluginMeta> parsedPlugins = new List<ParsedPluginMeta>();
+
+            ProjectMetadataIndex.ScanProjectMeta(fullProjectRoot, guidToPath, pathToGuid, parsedPlugins);
+
+            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions);
+
+            ProjectMetadataIndex.EvaluatePlugins(
+                parsedPlugins,
+                effectiveOptions,
+                baseDefines,
+                out Dictionary<string, DiscoveredPluginRecord> _,
+                out List<string> autoReferencedManagedDlls,
+                out Dictionary<string, string> allCompatibleManagedDllsByFileName);
+
+            List<AssemblyDefinitionModel> customAssemblies = AssemblyDiscovery.DiscoverAssemblies(
+                fullProjectRoot,
+                guidToPath,
+                pathToGuid,
+                diagnostics);
+
+            Dictionary<string, List<string>> scriptsByAssembly = AssemblyDiscovery.AssignScriptsToAssemblies(
+                fullProjectRoot,
+                customAssemblies,
+                out List<AssemblyDefinitionModel> predefinedAssemblies);
+
+            List<AssemblyDefinitionModel> allAssemblies = new List<AssemblyDefinitionModel>();
+            allAssemblies.AddRange(customAssemblies);
+            allAssemblies.AddRange(predefinedAssemblies);
+
+            Dictionary<string, AssemblyDefinitionModel> modelsByName =
+                new Dictionary<string, AssemblyDefinitionModel>(StringComparer.Ordinal);
+            Dictionary<string, AssemblyDefinitionModel> modelsByGuid =
+                new Dictionary<string, AssemblyDefinitionModel>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < allAssemblies.Count; i++)
+            {
+                AssemblyDefinitionModel model = allAssemblies[i];
+                modelsByName[model.Name] = model;
+                if (!string.IsNullOrEmpty(model.Guid))
+                {
+                    modelsByGuid[model.Guid] = model;
+                }
+            }
+
+            Dictionary<string, HashSet<string>> assemblyDefinesMap =
+                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            Dictionary<string, ResponseFileOptions> assemblyRspMap =
+                new Dictionary<string, ResponseFileOptions>(StringComparer.Ordinal);
+            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap =
+                new Dictionary<string, (bool IsExcluded, string Reason)>(StringComparer.Ordinal);
+
+            for (int i = 0; i < allAssemblies.Count; i++)
+            {
+                AssemblyDefinitionModel model = allAssemblies[i];
+                HashSet<string> asmDefines = new HashSet<string>(baseDefines, StringComparer.Ordinal);
+                AssemblyDiscovery.ApplyVersionDefines(model, effectiveOptions, asmDefines, diagnostics);
+
+                ResponseFileOptions rsp = DefinesAndResponseParser.ParseCscRspFiles(
+                    fullProjectRoot,
+                    model.IsPredefined ? null : model.DirectoryPath,
+                    model.Name,
+                    diagnostics);
+
+                for (int d = 0; d < rsp.Defines.Count; d++)
+                {
+                    asmDefines.Add(rsp.Defines[d]);
+                }
+
+                assemblyDefinesMap[model.Name] = asmDefines;
+                assemblyRspMap[model.Name] = rsp;
+
+                if (!AssemblyDiscovery.EvaluatePlatformEligibility(model, effectiveOptions, out string platReason))
+                {
+                    exclusionMap[model.Name] = (true, platReason);
+                    continue;
+                }
+
+                if (!AssemblyDiscovery.EvaluateDefineConstraints(model.DefineConstraints, asmDefines, out string failedConstraint))
+                {
+                    exclusionMap[model.Name] = (true, "Excluded by defineConstraints (" + failedConstraint + ").");
+                    continue;
+                }
+
+                exclusionMap[model.Name] = (false, string.Empty);
+            }
+
+            Dictionary<string, List<string>> resolvedDeps = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            for (int i = 0; i < allAssemblies.Count; i++)
+            {
+                AssemblyDefinitionModel model = allAssemblies[i];
+                List<string> deps = new List<string>();
+                resolvedDeps[model.Name] = deps;
+
+                if (exclusionMap[model.Name].IsExcluded)
+                {
+                    continue;
+                }
+
+                for (int r = 0; r < model.References.Count; r++)
+                {
+                    string refToken = model.References[r];
+                    AssemblyDefinitionModel? target = AssemblyDiscovery.ResolveReferenceToken(refToken, modelsByName, modelsByGuid);
+                    if (target == null)
+                    {
+                        continue;
+                    }
+
+                    if (exclusionMap.TryGetValue(target.Name, out (bool IsExcluded, string Reason) targetEx) && targetEx.IsExcluded)
+                    {
+                        continue;
+                    }
+
+                    if (!deps.Contains(target.Name))
+                    {
+                        deps.Add(target.Name);
+                    }
+                }
+            }
+
+            List<string> topoOrder = TopologicalSortAndDetectCycles(allAssemblies, resolvedDeps, modelsByName, diagnostics);
+            IReadOnlyList<string> engineReferenceDlls = ResolveEngineAndBaseReferences(effectiveOptions);
+
+            List<(string AssemblyName, CSharpCompilation Compilation)> results =
+                new List<(string AssemblyName, CSharpCompilation Compilation)>();
+            Dictionary<string, CSharpCompilation> compilationByAssembly =
+                new Dictionary<string, CSharpCompilation>(StringComparer.Ordinal);
+
+            for (int i = 0; i < topoOrder.Count; i++)
+            {
+                string asmName = topoOrder[i];
+                if (exclusionMap[asmName].IsExcluded)
+                {
+                    continue;
+                }
+
+                List<string> sources = scriptsByAssembly.TryGetValue(asmName, out List<string>? foundSources)
+                    ? foundSources
+                    : new List<string>();
+                if (sources.Count == 0)
+                {
+                    continue;
+                }
+
+                AssemblyDefinitionModel model = modelsByName[asmName];
+                ResponseFileOptions rsp = assemblyRspMap[asmName];
+                List<string> sortedDefines = new List<string>(assemblyDefinesMap[asmName]);
+                sortedDefines.Sort(StringComparer.Ordinal);
+
+                List<string> externalRefPaths = BuildAssemblyReferencePaths(
+                    model,
+                    rsp,
+                    engineReferenceDlls,
+                    autoReferencedManagedDlls,
+                    allCompatibleManagedDllsByFileName,
+                    new List<string>(),
+                    new Dictionary<string, string>(StringComparer.Ordinal));
+
+                List<MetadataReference> metadataRefs = new List<MetadataReference>();
+                HashSet<string> addedRefs = new HashSet<string>(StringComparer.Ordinal);
+                for (int r = 0; r < externalRefPaths.Count; r++)
+                {
+                    string path = externalRefPaths[r];
+                    if (File.Exists(path))
+                    {
+                        string fullRef = Path.GetFullPath(path);
+                        if (addedRefs.Add(fullRef))
+                        {
+                            metadataRefs.Add(GetCachedMetadataReference(fullRef));
+                        }
+                    }
+                }
+
+                List<string> directDeps = resolvedDeps[asmName];
+                for (int d = 0; d < directDeps.Count; d++)
+                {
+                    if (compilationByAssembly.TryGetValue(directDeps[d], out CSharpCompilation? depComp))
+                    {
+                        metadataRefs.Add(depComp.ToMetadataReference());
+                    }
+                }
+
+                CSharpCompilation compilation = CreateRoslynCompilation(
+                    asmName,
+                    sources,
+                    sortedDefines,
+                    metadataRefs,
+                    model.AllowUnsafeCode || rsp.AllowUnsafe,
+                    rsp);
+
+                compilationByAssembly[asmName] = compilation;
+                results.Add((asmName, compilation));
+            }
+
+            return results;
         }
 
         private static PortableExecutableReference GetCachedMetadataReference(string fullPath)

@@ -6,6 +6,7 @@ namespace UnityEngine
 {
     public partial class GameObject : Object
     {
+        private static readonly HashSet<string> s_definedTags = CreateDefaultDefinedTags();
         private readonly List<Component> _components = new List<Component>();
         private string _tag = "Untagged";
         private ulong _nativeEntityId;
@@ -15,6 +16,71 @@ namespace UnityEngine
         {
             SceneManager.sceneUnloaded += OnSceneUnloaded;
             SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private static HashSet<string> CreateDefaultDefinedTags()
+        {
+            return new HashSet<string>(StringComparer.Ordinal)
+            {
+                "Untagged",
+                "Respawn",
+                "Finish",
+                "EditorOnly",
+                "MainCamera",
+                "Player",
+                "GameController",
+                "Enemy"
+            };
+        }
+
+        public static void RegisterTag(string tagName)
+        {
+            if (string.IsNullOrEmpty(tagName))
+            {
+                throw new ArgumentException("Tag cannot be null or empty.", nameof(tagName));
+            }
+
+            s_definedTags.Add(tagName);
+        }
+
+        public static bool IsTagDefined(string tagName)
+        {
+            if (tagName == null)
+            {
+                return false;
+            }
+
+            return s_definedTags.Contains(tagName);
+        }
+
+        public static void ResetDefinedTags()
+        {
+            s_definedTags.Clear();
+            foreach (string builtIn in CreateDefaultDefinedTags())
+            {
+                s_definedTags.Add(builtIn);
+            }
+        }
+
+        internal static void ValidateTagDefined(string tagName)
+        {
+            if (tagName == null)
+            {
+                throw new ArgumentNullException(nameof(tagName));
+            }
+
+            if (tagName.Length == 0 || !s_definedTags.Contains(tagName))
+            {
+                throw new UnityException("Tag: " + tagName + " is not defined.");
+            }
+        }
+
+        public static GameObject CreateUnassignedReference(string fieldName, string ownerName = "MonoBehaviour")
+        {
+            GameObject placeholder = new GameObject("UnassignedReferencePlaceholder");
+            DeregisterObjectAndComponents(placeholder);
+            placeholder.MarkAsUnassignedReference(fieldName, ownerName);
+            return placeholder;
         }
 
         public Transform transform { get; }
@@ -27,36 +93,26 @@ namespace UnityEngine
         {
             get
             {
-                if (IsDestroyed)
-                {
-                    throw new MissingReferenceException("The object has been destroyed and can no longer be accessed.");
-                }
-
+                ThrowIfDestroyed();
                 return _tag;
             }
             set
             {
-                if (IsDestroyed)
-                {
-                    throw new MissingReferenceException("The object has been destroyed and can no longer be accessed.");
-                }
-
+                ThrowIfDestroyed();
                 if (value == null)
                 {
                     throw new ArgumentNullException(nameof(value));
                 }
 
+                s_definedTags.Add(value);
                 _tag = value;
             }
         }
 
         public bool CompareTag(string tag)
         {
-            if (tag == null)
-            {
-                throw new ArgumentNullException(nameof(tag));
-            }
-
+            ThrowIfDestroyed();
+            ValidateTagDefined(tag);
             return string.Equals(this.tag, tag, StringComparison.Ordinal);
         }
 
@@ -285,13 +341,21 @@ namespace UnityEngine
 
         public T AddComponent<T>() where T : Component, new()
         {
+            ThrowIfDestroyed();
             T component = new T();
-            AttachComponent(component);
+            component.AttachedRuntimeType = typeof(T);
+            if (!TryAttachWithRules(component, typeof(T)))
+            {
+                DeregisterLiveObject(component);
+                return null!;
+            }
+
             return component;
         }
 
         public Component AddComponent(Type componentType)
         {
+            ThrowIfDestroyed();
             if (componentType == null)
             {
                 throw new ArgumentNullException(nameof(componentType));
@@ -317,17 +381,107 @@ namespace UnityEngine
                 throw new ArgumentException("Failed to instantiate UnityEngine.Component.", nameof(componentType));
             }
 
-            AttachComponent(component);
+            component.AttachedRuntimeType = componentType;
+            if (!TryAttachWithRules(component, componentType))
+            {
+                DeregisterLiveObject(component);
+                return null!;
+            }
+
             return component;
+        }
+
+        private bool TryAttachWithRules(Component component, Type componentType)
+        {
+            if (component.ResolveDisallowMultiple(componentType) && GetComponent(componentType) != null)
+            {
+                Debug.LogError(
+                    "Can't add component '"
+                    + componentType.Name
+                    + "' to "
+                    + name
+                    + " because such a component is already added to the game object!",
+                    this);
+                return false;
+            }
+
+            IReadOnlyList<Type> requiredTypes = component.ResolveRequiredComponents(componentType);
+            for (int i = 0; i < requiredTypes.Count; i++)
+            {
+                Type reqType = requiredTypes[i];
+                if (reqType == null || !typeof(Component).IsAssignableFrom(reqType))
+                {
+                    continue;
+                }
+
+                if (GetComponent(reqType) == null && !reqType.IsAbstract)
+                {
+                    AddComponent(reqType);
+                }
+            }
+
+            AttachComponent(component);
+            return true;
+        }
+
+        internal bool TryFindDependentRequiring(Component targetComponent, out Component? dependentComponent)
+        {
+            dependentComponent = null;
+            for (int i = 0; i < _components.Count; i++)
+            {
+                Component candidate = _components[i];
+                if (candidate is null || candidate.IsDestroyed || ReferenceEquals(candidate, targetComponent))
+                {
+                    continue;
+                }
+
+                Type candidateType = candidate.AttachedRuntimeType ?? typeof(Component);
+                IReadOnlyList<Type> requiredTypes = candidate.ResolveRequiredComponents(candidateType);
+                for (int r = 0; r < requiredTypes.Count; r++)
+                {
+                    Type reqType = requiredTypes[r];
+                    if (reqType == null || !reqType.IsInstanceOfType(targetComponent))
+                    {
+                        continue;
+                    }
+
+                    bool anotherSatisfies = false;
+                    for (int j = 0; j < _components.Count; j++)
+                    {
+                        Component other = _components[j];
+                        if (other is not null
+                            && !other.IsDestroyed
+                            && !ReferenceEquals(other, targetComponent)
+                            && reqType.IsInstanceOfType(other))
+                        {
+                            anotherSatisfies = true;
+                            break;
+                        }
+                    }
+
+                    if (!anotherSatisfies)
+                    {
+                        dependentComponent = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         internal void AttachComponent(Component component)
         {
-            GameObject? previousOwner = component.gameObject;
+            GameObject? previousOwner = component.OwnerOrNull;
             if (previousOwner is not null && !ReferenceEquals(previousOwner, this) && previousOwner._isScriptedPlaceholder)
             {
                 previousOwner._components.Remove(component);
                 DeregisterObjectAndComponents(previousOwner);
+            }
+
+            if (component.AttachedRuntimeType == null && component is Transform)
+            {
+                component.AttachedRuntimeType = typeof(Transform);
             }
 
             component.gameObject = this;
@@ -827,7 +981,7 @@ namespace UnityEngine
                 }
                 else if (candidate is Component comp)
                 {
-                    GameObject? owner = comp.gameObject;
+                    GameObject? owner = comp.OwnerOrNull;
                     if (owner is null || !owner.IsPersistent)
                     {
                         DeregisterLiveObject(comp);
@@ -865,7 +1019,7 @@ namespace UnityEngine
                 }
                 else if (candidate is Component comp)
                 {
-                    GameObject? owner = comp.gameObject;
+                    GameObject? owner = comp.OwnerOrNull;
                     if (owner is null || !owner.IsPersistent)
                     {
                         DeregisterLiveObject(comp);

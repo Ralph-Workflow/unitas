@@ -5,24 +5,165 @@ namespace UnityEngine
 {
     public partial class Component : Object
     {
+        private static readonly Dictionary<Type, Type[]> s_registeredRequiredComponents =
+            new Dictionary<Type, Type[]>();
+
+        private static readonly HashSet<Type> s_registeredDisallowMultiple =
+            new HashSet<Type>();
+
         private GameObject? _gameObject;
+
+        internal GameObject? OwnerOrNull => _gameObject;
 
         public GameObject gameObject
         {
-            get => _gameObject!;
+            get
+            {
+                ThrowIfUnassignedReference();
+                return _gameObject!;
+            }
             internal set => _gameObject = value;
         }
 
-        public Transform transform => gameObject.transform;
+        public Transform transform
+        {
+            get
+            {
+                ThrowIfUnassignedReference();
+                return _gameObject!.transform;
+            }
+        }
+
+        public virtual IReadOnlyList<Type> RequiredComponents => Array.Empty<Type>();
+
+        public virtual bool DisallowMultiple => false;
+
+        internal Type? AttachedRuntimeType { get; set; }
+
+        internal string ComponentTypeName =>
+            AttachedRuntimeType != null ? AttachedRuntimeType.Name : nameof(Component);
+
+        public static void RegisterRequireComponent<TComponent>(params Type[] requiredTypes)
+            where TComponent : Component
+        {
+            RegisterRequireComponent(typeof(TComponent), requiredTypes);
+        }
+
+        public static void RegisterRequireComponent(Type componentType, params Type[] requiredTypes)
+        {
+            if (componentType == null)
+            {
+                throw new ArgumentNullException(nameof(componentType));
+            }
+
+            if (requiredTypes == null || requiredTypes.Length == 0)
+            {
+                s_registeredRequiredComponents.Remove(componentType);
+                return;
+            }
+
+            List<Type> valid = new List<Type>(requiredTypes.Length);
+            for (int i = 0; i < requiredTypes.Length; i++)
+            {
+                if (requiredTypes[i] != null)
+                {
+                    valid.Add(requiredTypes[i]);
+                }
+            }
+
+            s_registeredRequiredComponents[componentType] = valid.ToArray();
+        }
+
+        public static void RegisterDisallowMultipleComponent<TComponent>(bool disallow = true)
+            where TComponent : Component
+        {
+            RegisterDisallowMultipleComponent(typeof(TComponent), disallow);
+        }
+
+        public static void RegisterDisallowMultipleComponent(Type componentType, bool disallow = true)
+        {
+            if (componentType == null)
+            {
+                throw new ArgumentNullException(nameof(componentType));
+            }
+
+            if (disallow)
+            {
+                s_registeredDisallowMultiple.Add(componentType);
+            }
+            else
+            {
+                s_registeredDisallowMultiple.Remove(componentType);
+            }
+        }
+
+        public static void ClearAttributeRegistrations()
+        {
+            s_registeredRequiredComponents.Clear();
+            s_registeredDisallowMultiple.Clear();
+        }
+
+        public static T CreateUnassignedReference<T>(string fieldName, string ownerName = "MonoBehaviour")
+            where T : Component, new()
+        {
+            T placeholder = new T();
+            placeholder.AttachedRuntimeType = typeof(T);
+            placeholder.MarkAsUnassignedReference(fieldName, ownerName);
+            return placeholder;
+        }
+
+        internal IReadOnlyList<Type> ResolveRequiredComponents(Type componentType)
+        {
+            IReadOnlyList<Type> fromVirtual = RequiredComponents;
+            bool hasRegistered = s_registeredRequiredComponents.TryGetValue(componentType, out Type[]? registered)
+                && registered != null
+                && registered.Length > 0;
+            if (!hasRegistered)
+            {
+                return fromVirtual ?? Array.Empty<Type>();
+            }
+
+            if (fromVirtual == null || fromVirtual.Count == 0)
+            {
+                return registered!;
+            }
+
+            List<Type> combined = new List<Type>(fromVirtual.Count + registered!.Length);
+            for (int i = 0; i < fromVirtual.Count; i++)
+            {
+                if (fromVirtual[i] != null && !combined.Contains(fromVirtual[i]))
+                {
+                    combined.Add(fromVirtual[i]);
+                }
+            }
+
+            for (int i = 0; i < registered.Length; i++)
+            {
+                if (registered[i] != null && !combined.Contains(registered[i]))
+                {
+                    combined.Add(registered[i]);
+                }
+            }
+
+            return combined;
+        }
+
+        internal bool ResolveDisallowMultiple(Type componentType) =>
+            DisallowMultiple || s_registeredDisallowMultiple.Contains(componentType);
 
         public override string name
         {
-            get => gameObject != null ? gameObject.name : base.name;
+            get
+            {
+                ThrowIfDestroyed();
+                return _gameObject != null ? _gameObject.name : base.name;
+            }
             set
             {
-                if (gameObject != null)
+                ThrowIfDestroyed();
+                if (_gameObject != null)
                 {
-                    gameObject.name = value;
+                    _gameObject.name = value;
                 }
                 else
                 {
@@ -33,17 +174,32 @@ namespace UnityEngine
 
         public string tag
         {
-            get => gameObject != null ? gameObject.tag : "Untagged";
+            get
+            {
+                ThrowIfDestroyed();
+                return _gameObject != null ? _gameObject.tag : "Untagged";
+            }
             set
             {
-                if (gameObject != null)
+                ThrowIfDestroyed();
+                if (_gameObject != null)
                 {
-                    gameObject.tag = value;
+                    _gameObject.tag = value;
                 }
             }
         }
 
-        public bool CompareTag(string tag) => gameObject != null && gameObject.CompareTag(tag);
+        public bool CompareTag(string tag)
+        {
+            ThrowIfDestroyed();
+            if (_gameObject != null)
+            {
+                return _gameObject.CompareTag(tag);
+            }
+
+            GameObject.ValidateTagDefined(tag);
+            return string.Equals("Untagged", tag, StringComparison.Ordinal);
+        }
 
         public T? GetComponent<T>() where T : class => gameObject != null ? gameObject.GetComponent<T>() : null;
 

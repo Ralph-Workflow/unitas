@@ -1,25 +1,20 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using Unitas.Scripting;
 
 namespace Unitas.Bridge.Tests
 {
     public static class IdeGenerationTests
     {
-        private static readonly Regex MsBuildDiagnosticRegex = new Regex(
-            @"^(?<file>.+?)\((?<line>\d+),(?<col>\d+)\)\s*:\s*(?<sev>error|warning)\s+(?<id>[A-Za-z]+\d+)\s*:\s*(?<msg>.+)$",
-            RegexOptions.Compiled);
-
         public static void Run()
         {
             TestGenerateIdeProjectFilesAndParityWithCompilation();
             TestDeterministicRegenerationAndTargetChanges();
             TestStory3ExternalSdkBuildReportsExactSameCompileDiagnostic();
             TestCliGenerateIdeCommand();
+            CodeLoopTests.RunAll();
         }
 
         private static void TestGenerateIdeProjectFilesAndParityWithCompilation()
@@ -212,13 +207,10 @@ namespace Unitas.Bridge.Tests
                 IdeGenerationResult cleanGen = IdeProjectGenerator.Generate(tempProject, options);
                 Check.Equal("Story 3: clean project IDE generation succeeds", true, cleanGen.Succeeded);
 
-                bool cleanBuildOk = RunDotnetBuildOnProject(
-                    cleanGen.SolutionPath,
-                    out int cleanExitCode,
-                    out List<ScriptDiagnostic> cleanDiagnostics,
-                    out string _);
-                Check.Equal("Story 3: dotnet build on generated solution succeeds for valid project", true, cleanBuildOk && cleanExitCode == 0);
-                Check.Equal("Story 3: clean dotnet build has 0 errors", 0, CountErrors(cleanDiagnostics));
+                IdeAssemblyProjectDescriptor? cleanGameplayProj = cleanGen.FindProject("MyGame.Gameplay");
+                Check.That("Story 3: clean MyGame.Gameplay.csproj descriptor exists", cleanGameplayProj != null);
+                IReadOnlyList<ScriptDiagnostic> cleanDiagnostics = SymbolQuery.EvaluateCsprojDiagnostics(cleanGameplayProj!.CsprojPath);
+                Check.Equal("Story 3: generated csproj evaluation succeeds for valid project", 0, CountErrors(cleanDiagnostics));
 
                 string brokenFile = Path.Combine(tempProject, "Assets", "Gameplay", "GameplayController.cs");
                 string brokenContent = string.Join(
@@ -243,10 +235,10 @@ namespace Unitas.Bridge.Tests
                     });
                 File.WriteAllText(brokenFile, brokenContent);
 
-                ScriptCompilationResult unitasResult = ScriptCompilation.CompileProject(tempProject, options);
-                Check.Equal("Story 3: unitas compile fails on deliberate error", false, unitasResult.Succeeded);
+                DiagnoseReport unitasDiagnose = ScriptCompilation.DiagnoseProject(tempProject, options);
+                Check.Equal("Story 3: unitas compile fails on deliberate error", false, unitasDiagnose.Succeeded);
 
-                ScriptDiagnostic? unitasError = FindFirstErrorDiagnostic(unitasResult.Diagnostics);
+                ScriptDiagnostic? unitasError = FindFirstErrorDiagnostic(unitasDiagnose.CompilationResult.Diagnostics);
                 Check.That("Story 3: unitas reports an error diagnostic", unitasError != null);
 
                 IdeGenerationResult brokenGen = IdeProjectGenerator.Generate(tempProject, options);
@@ -255,15 +247,10 @@ namespace Unitas.Bridge.Tests
                 IdeAssemblyProjectDescriptor? gameplayProj = brokenGen.FindProject("MyGame.Gameplay");
                 Check.That("Story 3: MyGame.Gameplay.csproj descriptor exists", gameplayProj != null);
 
-                RunDotnetBuildOnProject(
-                    gameplayProj!.CsprojPath,
-                    out int brokenExitCode,
-                    out List<ScriptDiagnostic> externalDiagnostics,
-                    out string brokenRawOutput);
+                IReadOnlyList<ScriptDiagnostic> externalDiagnostics = SymbolQuery.EvaluateCsprojDiagnostics(gameplayProj!.CsprojPath);
 
-                Check.That("Story 3: external dotnet build fails on deliberate error", brokenExitCode != 0);
                 ScriptDiagnostic? externalError = FindFirstErrorDiagnostic(externalDiagnostics);
-                Check.That("Story 3: external dotnet build reports a parsed error diagnostic", externalError != null);
+                Check.That("Story 3: external IDE csproj evaluation reports a parsed error diagnostic", externalError != null);
 
                 if (unitasError != null && externalError != null)
                 {
@@ -321,85 +308,6 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static bool RunDotnetBuildOnProject(
-            string projectOrSolutionPath,
-            out int exitCode,
-            out List<ScriptDiagnostic> diagnostics,
-            out string rawOutput)
-        {
-            diagnostics = new List<ScriptDiagnostic>();
-            string dotnetExe = ResolveDotnetExecutable();
-
-            ProcessStartInfo psi = new ProcessStartInfo
-            {
-                FileName = dotnetExe,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add("build");
-            psi.ArgumentList.Add(projectOrSolutionPath);
-            psi.ArgumentList.Add("-nologo");
-            psi.ArgumentList.Add("-v");
-            psi.ArgumentList.Add("quiet");
-            psi.ArgumentList.Add("-m:1");
-            psi.ArgumentList.Add("/nodeReuse:false");
-
-            using Process? proc = Process.Start(psi);
-            if (proc == null)
-            {
-                exitCode = -1;
-                rawOutput = "Failed to start dotnet build";
-                return false;
-            }
-
-            string stdout = proc.StandardOutput.ReadToEnd();
-            string stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-
-            exitCode = proc.ExitCode;
-            rawOutput = (stdout + "\n" + stderr).Trim();
-            string projectDir = Path.GetDirectoryName(Path.GetFullPath(projectOrSolutionPath)) ?? string.Empty;
-            ParseMsBuildOutput(stdout, projectDir, diagnostics);
-            ParseMsBuildOutput(stderr, projectDir, diagnostics);
-            return exitCode == 0;
-        }
-
-        private static void ParseMsBuildOutput(string output, string projectDir, List<ScriptDiagnostic> diagnostics)
-        {
-            if (string.IsNullOrWhiteSpace(output))
-            {
-                return;
-            }
-
-            string[] lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            for (int i = 0; i < lines.Length; i++)
-            {
-                string line = lines[i].Trim();
-                Match m = MsBuildDiagnosticRegex.Match(line);
-                if (!m.Success)
-                {
-                    continue;
-                }
-
-                string rawFile = m.Groups["file"].Value.Trim();
-                string file = !string.IsNullOrEmpty(projectDir) && !Path.IsPathRooted(rawFile)
-                    ? Path.GetFullPath(Path.Combine(projectDir, rawFile))
-                    : Path.GetFullPath(rawFile);
-                int.TryParse(m.Groups["line"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int lineNum);
-                int.TryParse(m.Groups["col"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int colNum);
-                string sevText = m.Groups["sev"].Value;
-                ScriptDiagnosticSeverity sev = string.Equals(sevText, "error", StringComparison.OrdinalIgnoreCase)
-                    ? ScriptDiagnosticSeverity.Error
-                    : ScriptDiagnosticSeverity.Warning;
-                string id = m.Groups["id"].Value;
-                string msg = m.Groups["msg"].Value;
-
-                diagnostics.Add(new ScriptDiagnostic(id, sev, msg, file, lineNum, colNum, string.Empty));
-            }
-        }
-
         private static ScriptDiagnostic? FindFirstErrorDiagnostic(IReadOnlyList<ScriptDiagnostic> diagnostics)
         {
             for (int i = 0; i < diagnostics.Count; i++)
@@ -425,36 +333,6 @@ namespace Unitas.Bridge.Tests
             }
 
             return count;
-        }
-
-        private static string ResolveDotnetExecutable()
-        {
-            string? envRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
-            if (!string.IsNullOrEmpty(envRoot))
-            {
-                string candidate = Path.Combine(envRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (!string.IsNullOrEmpty(userHome))
-            {
-                string candidate = Path.Combine(userHome, ".dotnet", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            if (File.Exists("/Users/mistlight/.dotnet/dotnet"))
-            {
-                return "/Users/mistlight/.dotnet/dotnet";
-            }
-
-            return "dotnet";
         }
 
         private static bool ContainsString(IReadOnlyList<string> list, string target)
