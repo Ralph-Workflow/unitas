@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps dotnet-build dotnet-format dotnet-test
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run
 
 VERIFY_BUDGET_SECONDS := 30
 VERIFY_START := $(shell date +%s)
@@ -30,7 +30,7 @@ verify-suite-gates:
 verify-dotnet-gates:
 	@$(MAKE) --no-print-directory dotnet-build
 	@$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
-	$(MAKE) --no-print-directory dotnet-test; rc=$$?; \
+	$(MAKE) --no-print-directory dotnet-test-run; rc=$$?; \
 	wait $$pf || rc=1; \
 	exit $$rc
 
@@ -65,14 +65,19 @@ secret-scan:
 deps:
 	@python3 tools/verify.py timed deps $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py deps
 
-dotnet-build:
+runtime-build:
+	@python3 tools/verify.py timed runtime-build $(VERIFY_BUDGET_SECONDS) cargo build -p unitas-runtime
+
+dotnet-build: runtime-build
 	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) dotnet build bridge/Unitas.sln --configuration Release -p:AnalysisMode=All
 
 dotnet-format:
 	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) dotnet format bridge/Unitas.sln --verify-no-changes --no-restore
 
-dotnet-test:
-	@cargo build -p unitas-runtime
+dotnet-test: runtime-build
+	@$(MAKE) --no-print-directory dotnet-test-run
+
+dotnet-test-run:
 	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests
 	@python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 

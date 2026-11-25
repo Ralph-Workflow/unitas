@@ -478,6 +478,9 @@ impl PlayableGraph {
         handle: PlayableHandle,
         time: f64,
     ) -> Result<(), PlayableError> {
+        if self.destroyed {
+            return Err(PlayableError::GraphDestroyed);
+        }
         let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };
@@ -495,6 +498,9 @@ impl PlayableGraph {
         handle: PlayableHandle,
         speed: f64,
     ) -> Result<(), PlayableError> {
+        if self.destroyed {
+            return Err(PlayableError::GraphDestroyed);
+        }
         let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };
@@ -511,6 +517,9 @@ impl PlayableGraph {
         handle: PlayableHandle,
         duration: f64,
     ) -> Result<(), PlayableError> {
+        if self.destroyed {
+            return Err(PlayableError::GraphDestroyed);
+        }
         let Some(node) = self.node_mut(handle) else {
             return Err(PlayableError::UnknownPlayable);
         };

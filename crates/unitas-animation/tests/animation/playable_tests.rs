@@ -373,6 +373,27 @@ fn a_handle_from_another_graph_is_never_accepted() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
+fn a_destroyed_graph_refuses_playable_mutations() -> Result<(), Box<dyn Error>> {
+    let mut graph = PlayableGraph::new("Destroyed");
+    let clip = AnimationClipPlayable::create(&mut graph, constant_position_clip("Clip", 1.0));
+    graph.destroy();
+
+    assert_eq!(
+        graph.set_playable_time(clip.handle(), 1.0),
+        Err(PlayableError::GraphDestroyed)
+    );
+    assert_eq!(
+        graph.set_playable_speed(clip.handle(), 2.0),
+        Err(PlayableError::GraphDestroyed)
+    );
+    assert_eq!(
+        graph.set_playable_duration(clip.handle(), 3.0),
+        Err(PlayableError::GraphDestroyed)
+    );
+    Ok(())
+}
+
+#[test]
 fn invalid_connections_and_masks_are_rejected() -> Result<(), Box<dyn Error>> {
     let mut graph = PlayableGraph::new("Invalid");
     let mixer = AnimationMixerPlayable::create(&mut graph, 1);

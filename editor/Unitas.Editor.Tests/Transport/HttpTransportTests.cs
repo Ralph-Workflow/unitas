@@ -18,6 +18,9 @@ namespace Unitas.Editor.Tests
             ConcurrentHttpClientsHaveIsolatedSessionsScopesAndAuditRecordsWhilePersonSessionRemainsUnaffected()
                 .GetAwaiter()
                 .GetResult();
+            ConcurrentClientsKeepTheirOwnAuditIdentity()
+                .GetAwaiter()
+                .GetResult();
             HttpSelfWideningAndUnknownPrimitiveErrorsAreMappedAndAudited()
                 .GetAwaiter()
                 .GetResult();
@@ -237,6 +240,117 @@ namespace Unitas.Editor.Tests
             }
         }
 
+        private static async Task ConcurrentClientsKeepTheirOwnAuditIdentity()
+        {
+            McpHost host = BuildTestHost();
+            HttpTransportHost transportHost = new HttpTransportHost(host, 0);
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
+            try
+            {
+                HttpClientTransport transportA = CreateClientTransport(
+                    transportHost.EndpointUri,
+                    "agent-alpha",
+                    "person-alpha");
+                HttpClientTransport transportB = CreateClientTransport(
+                    transportHost.EndpointUri,
+                    "agent-beta",
+                    "person-beta");
+                try
+                {
+                    McpClient clientA = await ConnectClientAsync(
+                        transportA,
+                        "agent-alpha",
+                        cts.Token).ConfigureAwait(false);
+                    try
+                    {
+                        McpClient clientB = await ConnectClientAsync(
+                            transportB,
+                            "agent-beta",
+                            cts.Token).ConfigureAwait(false);
+                        try
+                        {
+                            await clientB.CallToolAsync(
+                                new CallToolRequestParams { Name = "scene.inspect" },
+                                cts.Token).ConfigureAwait(false);
+                            await clientA.ReadResourceAsync(
+                                new Uri("unitas://project/manifest"),
+                                (RequestOptions?)null,
+                                cts.Token).ConfigureAwait(false);
+
+                            string? sessionA = transportHost.TryGetHostSessionId("agent-alpha");
+                            string? sessionB = transportHost.TryGetHostSessionId("agent-beta");
+                            Check.That(
+                                "http: concurrent client A has a host session",
+                                !string.IsNullOrEmpty(sessionA));
+                            Check.That(
+                                "http: concurrent client B has a host session",
+                                !string.IsNullOrEmpty(sessionB));
+                            Check.That(
+                                "http: concurrent clients keep distinct sessions",
+                                !string.Equals(sessionA, sessionB, StringComparison.Ordinal));
+
+                            IReadOnlyList<AuditRecord> records = host.Audit.Records;
+                            Check.That(
+                                "http: concurrent clients produce audit records",
+                                records.Count >= 2);
+                            bool sawClientBCall = false;
+                            bool sawClientACall = false;
+                            foreach (AuditRecord record in records)
+                            {
+                                if (record.TargetKind == AuditTargetKind.Tool
+                                    && record.Target == "scene.inspect")
+                                {
+                                    sawClientBCall = true;
+                                    Check.Equal(
+                                        "http: client B audit record carries agent-beta",
+                                        "agent-beta",
+                                        record.Identity.Agent);
+                                    Check.Equal(
+                                        "http: client B audit record carries person-beta",
+                                        "person-beta",
+                                        record.Identity.AuthorizedBy);
+                                }
+                                else if (record.TargetKind == AuditTargetKind.Resource
+                                    && record.Target == "unitas://project/manifest")
+                                {
+                                    sawClientACall = true;
+                                    Check.Equal(
+                                        "http: client A audit record carries agent-alpha",
+                                        "agent-alpha",
+                                        record.Identity.Agent);
+                                    Check.Equal(
+                                        "http: client A audit record carries person-alpha",
+                                        "person-alpha",
+                                        record.Identity.AuthorizedBy);
+                                }
+                            }
+
+                            Check.That("http: client B call is audited", sawClientBCall);
+                            Check.That("http: client A call is audited", sawClientACall);
+                        }
+                        finally
+                        {
+                            await clientB.DisposeAsync().ConfigureAwait(false);
+                        }
+                    }
+                    finally
+                    {
+                        await clientA.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    await transportA.DisposeAsync().ConfigureAwait(false);
+                    await transportB.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                await transportHost.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
         private static async Task HttpSelfWideningAndUnknownPrimitiveErrorsAreMappedAndAudited()
         {
             McpHost host = BuildTestHost();
@@ -342,6 +456,10 @@ namespace Unitas.Editor.Tests
                         && record.Outcome is AuditOutcome.Allowed)
                     {
                         sawEditAllowedForA = true;
+                        Check.Equal(
+                            "http: allowed scene.edit record carries agent-alpha",
+                            "agent-alpha",
+                            record.Identity.Agent);
                     }
 
                     if (record.TargetKind == AuditTargetKind.Tool
@@ -379,6 +497,10 @@ namespace Unitas.Editor.Tests
                         && record.Outcome is AuditOutcome.Allowed)
                     {
                         sawBuildAllowedForB = true;
+                        Check.Equal(
+                            "http: allowed project.build record carries agent-beta",
+                            "agent-beta",
+                            record.Identity.Agent);
                     }
 
                     if (record.TargetKind == AuditTargetKind.Resource

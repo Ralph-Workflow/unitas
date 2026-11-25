@@ -28,6 +28,7 @@ namespace Unitas.Editor.Mcp
         public const string DefaultAuthorizedBy = "http-local";
         public const string AgentHeaderName = "X-Unitas-Agent";
         public const string AuthorizedByHeaderName = "X-Unitas-Authorized-By";
+        public const string SessionIdHeaderName = "Mcp-Session-Id";
         public const int MissingScopeErrorCode = -32001;
         public const int SelfWideningErrorCode = -32002;
         public const int ServerErrorCode = -32000;
@@ -38,7 +39,7 @@ namespace Unitas.Editor.Mcp
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> agentToHostSession =
             new Dictionary<string, string>(StringComparer.Ordinal);
-        private readonly Dictionary<string, PendingIdentity> pendingHeaders =
+        private readonly Dictionary<string, PendingIdentity> pendingIdentities =
             new Dictionary<string, PendingIdentity>(StringComparer.Ordinal);
         private readonly List<string> createdSessionIds = new List<string>();
         private WebApplication? app;
@@ -228,14 +229,22 @@ namespace Unitas.Editor.Mcp
         {
             string? headerAgent = ExtractHeader(httpContext, AgentHeaderName);
             string? headerAuthorizedBy = ExtractHeader(httpContext, AuthorizedByHeaderName);
-            string connectionKey = BuildConnectionKey(httpContext);
-            if (!string.IsNullOrEmpty(connectionKey)
-                && (!string.IsNullOrEmpty(headerAgent) || !string.IsNullOrEmpty(headerAuthorizedBy)))
+            if (!string.IsNullOrEmpty(headerAgent) || !string.IsNullOrEmpty(headerAuthorizedBy))
             {
-                lock (host)
+                PendingIdentity identity = new PendingIdentity(headerAgent, headerAuthorizedBy);
+                httpContext.Response.OnStarting(() =>
                 {
-                    pendingHeaders[connectionKey] = new PendingIdentity(headerAgent, headerAuthorizedBy);
-                }
+                    string? sessionId = httpContext.Response.Headers[SessionIdHeaderName].ToString();
+                    if (!string.IsNullOrEmpty(sessionId))
+                    {
+                        lock (host)
+                        {
+                            pendingIdentities[sessionId] = identity;
+                        }
+                    }
+
+                    return Task.CompletedTask;
+                });
             }
 
             ConfigureMcpServerOptions(options);
@@ -281,29 +290,18 @@ namespace Unitas.Editor.Mcp
                     : ("mcp-http-client-" + (createdSessionIds.Count + 1));
                 string authorizedBy = DefaultAuthorizedBy;
 
-                if (pendingHeaders.Count > 0)
+                if (!string.IsNullOrEmpty(mcpSessionKey)
+                    && pendingIdentities.TryGetValue(mcpSessionKey, out PendingIdentity? pending))
                 {
-                    string? matchedKey = null;
-                    PendingIdentity? matchedPending = null;
-                    foreach (KeyValuePair<string, PendingIdentity> entry in pendingHeaders)
+                    pendingIdentities.Remove(mcpSessionKey);
+                    if (!string.IsNullOrEmpty(pending.Agent))
                     {
-                        matchedKey = entry.Key;
-                        matchedPending = entry.Value;
-                        break;
+                        agentName = pending.Agent!;
                     }
 
-                    if (matchedKey != null && matchedPending != null)
+                    if (!string.IsNullOrEmpty(pending.AuthorizedBy))
                     {
-                        pendingHeaders.Remove(matchedKey);
-                        if (!string.IsNullOrEmpty(matchedPending.Agent))
-                        {
-                            agentName = matchedPending.Agent!;
-                        }
-
-                        if (!string.IsNullOrEmpty(matchedPending.AuthorizedBy))
-                        {
-                            authorizedBy = matchedPending.AuthorizedBy!;
-                        }
+                        authorizedBy = pending.AuthorizedBy!;
                     }
                 }
 
@@ -507,11 +505,6 @@ namespace Unitas.Editor.Mcp
             }
 
             return null;
-        }
-
-        private static string BuildConnectionKey(HttpContext httpContext)
-        {
-            return httpContext.TraceIdentifier ?? Guid.NewGuid().ToString("N");
         }
 
         private static JsonObject ToArgumentsJsonObject(
