@@ -3,6 +3,7 @@ pub mod binary_ser;
 pub mod inflate;
 pub mod json;
 pub mod material;
+pub mod merge;
 pub mod meta;
 pub mod model;
 pub mod packages;

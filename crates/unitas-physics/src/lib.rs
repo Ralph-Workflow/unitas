@@ -1,11 +1,17 @@
+pub mod articulation;
 mod body;
 mod character;
+pub mod cloth;
 mod error;
 mod event;
 pub mod matrix;
+pub mod navigation;
 pub mod particles;
 mod query;
+pub mod simulate;
+pub mod terrain;
 pub mod two_d;
+pub mod wheel;
 mod world;
 
 pub use body::{BodyDesc, BodyRole, Shape};

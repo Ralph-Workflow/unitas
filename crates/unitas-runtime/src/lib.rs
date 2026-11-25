@@ -1,14 +1,18 @@
 mod abi;
 pub mod animation;
+pub mod cinemachine;
 mod error;
 pub mod input;
+pub mod navigation;
 pub mod particles;
 pub mod physics;
+pub mod resources;
 mod runtime;
 mod scene_query;
-pub mod window;
-pub mod resources;
 pub mod scripting;
+pub mod terrain;
+pub mod timeline;
+pub mod window;
 
 pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};
