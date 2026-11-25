@@ -1,14 +1,24 @@
 use std::borrow::Borrow;
 use std::collections::{HashMap, VecDeque};
 
+use crate::changes::{ChangeKind, SceneChange};
 use crate::entity::{Entity, EntityId};
 use crate::error::CoreError;
 use crate::transform::{compose_world, usable_rotation, Transform};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NodeState {
+    Live,
+    PendingDestroy,
+    Vacant,
+}
 
 #[derive(Debug)]
 struct Node {
     entity: Entity,
     transform: Transform,
+    version: u64,
+    state: NodeState,
 }
 
 #[derive(Debug)]
@@ -16,6 +26,9 @@ pub struct SceneGraph {
     nodes: Vec<Node>,
     index: HashMap<EntityId, usize>,
     next_id: u64,
+    pending: Vec<usize>,
+    vacant: Vec<usize>,
+    changes: Vec<SceneChange>,
 }
 
 pub struct BreadthFirstIter<'a> {
@@ -58,6 +71,9 @@ impl SceneGraph {
             nodes: Vec::new(),
             index: HashMap::new(),
             next_id: 0,
+            pending: Vec::new(),
+            vacant: Vec::new(),
+            changes: Vec::new(),
         }
     }
 
@@ -68,13 +84,31 @@ impl SceneGraph {
     pub fn add_entity(&mut self, name: impl Into<String>) -> EntityId {
         let id = EntityId::new(self.next_id);
         self.next_id += 1;
-        self.index.insert(id, self.nodes.len());
-        self.nodes.push(Node {
+        let node = Node {
             entity: Entity {
                 id,
                 name: name.into(),
             },
             transform: Transform::default(),
+            version: 0,
+            state: NodeState::Live,
+        };
+        let index = match self.vacant.pop() {
+            Some(slot) => {
+                self.nodes[slot] = node;
+                slot
+            }
+            None => {
+                self.nodes.push(node);
+                self.nodes.len() - 1
+            }
+        };
+        self.index.insert(id, index);
+        self.changes.push(SceneChange {
+            entity: id,
+            kind: ChangeKind::Created,
+            version: 0,
+            parent: None,
         });
         id
     }
@@ -90,10 +124,18 @@ impl SceneGraph {
             for child in &mut node.transform.children {
                 *child = EntityId::new(base + child.as_u64());
             }
-            shifted.insert(new_id, position);
+            if node.state == NodeState::Live {
+                shifted.insert(new_id, position);
+            }
         }
         self.index = shifted;
         self.next_id += base;
+        for change in &mut self.changes {
+            change.entity = EntityId::new(base + change.entity.as_u64());
+            if let Some(parent) = change.parent {
+                change.parent = Some(EntityId::new(base + parent.as_u64()));
+            }
+        }
     }
 
     pub fn entity(&self, id: impl Borrow<EntityId>) -> Option<&Entity> {
@@ -112,8 +154,10 @@ impl SceneGraph {
     }
 
     pub fn transform_mut(&mut self, id: impl Borrow<EntityId>) -> Option<&mut Transform> {
-        let index = self.index.get(id.borrow())?;
-        Some(&mut self.nodes[*index].transform)
+        let entity_id = *id.borrow();
+        let index = *self.index.get(&entity_id)?;
+        self.record(index, ChangeKind::TransformChanged, None);
+        Some(&mut self.nodes[index].transform)
     }
 
     pub fn world_transform(&self, id: impl Borrow<EntityId>) -> Option<Transform> {
@@ -170,7 +214,7 @@ impl SceneGraph {
     pub fn roots(&self) -> Vec<EntityId> {
         self.nodes
             .iter()
-            .filter(|node| node.transform.parent.is_none())
+            .filter(|node| node.state == NodeState::Live && node.transform.parent.is_none())
             .map(|node| node.entity.id)
             .collect()
     }
@@ -180,11 +224,20 @@ impl SceneGraph {
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.index.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.index.is_empty()
+    }
+
+    pub fn version(&self, id: impl Borrow<EntityId>) -> Option<u64> {
+        let index = *self.index.get(id.borrow())?;
+        Some(self.nodes[index].version)
+    }
+
+    pub fn take_changes(&mut self) -> Vec<SceneChange> {
+        std::mem::take(&mut self.changes)
     }
 
     pub fn attach(&mut self, child: EntityId, parent: EntityId) -> Result<(), CoreError> {
@@ -199,18 +252,76 @@ impl SceneGraph {
         if self.creates_cycle(child, parent) {
             return Err(CoreError::AttachCycle { child, parent });
         }
+        let previous_parent = self.nodes[child_index].transform.parent;
         self.detach_from_parent(child);
         self.nodes[child_index].transform.parent = Some(parent);
         self.nodes[parent_index].transform.children.push(child);
+        if previous_parent != Some(parent) {
+            self.record(child_index, ChangeKind::Reparented, Some(parent));
+        }
         Ok(())
     }
 
     pub fn detach(&mut self, child: EntityId) -> Result<(), CoreError> {
-        if !self.index.contains_key(&child) {
-            return Err(CoreError::UnknownEntity(child));
+        let index = match self.index.get(&child) {
+            Some(index) => *index,
+            None => return Err(CoreError::UnknownEntity(child)),
+        };
+        if self.nodes[index].transform.parent.is_none() {
+            return Ok(());
         }
         self.detach_from_parent(child);
+        self.record(index, ChangeKind::Reparented, None);
         Ok(())
+    }
+
+    pub fn mark_destroyed(&mut self, id: impl Borrow<EntityId>) -> Result<(), CoreError> {
+        let entity_id = *id.borrow();
+        let root = match self.index.get(&entity_id) {
+            Some(index) => *index,
+            None => return Err(CoreError::UnknownEntity(entity_id)),
+        };
+        let mut order = Vec::new();
+        let mut stack = vec![root];
+        while let Some(current) = stack.pop() {
+            order.push(current);
+            let children = self.nodes[current].transform.children.clone();
+            for child in children.iter().rev() {
+                if let Some(child_index) = self.index.get(child).copied() {
+                    stack.push(child_index);
+                }
+            }
+        }
+        for index in order {
+            let entity = self.nodes[index].entity.id;
+            self.detach_from_parent(entity);
+            self.index.remove(&entity);
+            self.nodes[index].state = NodeState::PendingDestroy;
+            self.nodes[index].transform.children.clear();
+            self.record(index, ChangeKind::Destroyed, None);
+            self.pending.push(index);
+        }
+        Ok(())
+    }
+
+    pub fn sweep_destroyed(&mut self) -> Vec<EntityId> {
+        let pending = std::mem::take(&mut self.pending);
+        let mut swept = Vec::with_capacity(pending.len());
+        for index in pending {
+            let entity = self.nodes[index].entity.id;
+            swept.push(entity);
+            self.nodes[index] = Node {
+                entity: Entity {
+                    id: entity,
+                    name: String::new(),
+                },
+                transform: Transform::default(),
+                version: 0,
+                state: NodeState::Vacant,
+            };
+            self.vacant.push(index);
+        }
+        swept
     }
 
     pub fn iter_breadth_first(&self) -> BreadthFirstIter<'_> {
@@ -275,6 +386,19 @@ impl SceneGraph {
         if let Some(index) = self.index.get(&child) {
             self.nodes[*index].transform.parent = None;
         }
+    }
+
+    fn record(&mut self, index: usize, kind: ChangeKind, parent: Option<EntityId>) {
+        let node = &mut self.nodes[index];
+        node.version += 1;
+        let version = node.version;
+        let entity = node.entity.id;
+        self.changes.push(SceneChange {
+            entity,
+            kind,
+            version,
+            parent,
+        });
     }
 
     fn creates_cycle(&self, child: EntityId, parent: EntityId) -> bool {
