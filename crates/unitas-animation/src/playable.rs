@@ -41,6 +41,7 @@ pub trait PlayableBehaviour {
 pub enum PlayableError {
     GraphDestroyed,
     UnknownPlayable,
+    UnknownOutput,
     InvalidPort,
     InvalidLayer,
     CyclicConnection,
@@ -53,6 +54,9 @@ impl std::fmt::Display for PlayableError {
             Self::UnknownPlayable => {
                 write!(formatter, "the playable handle is not in the graph")
             }
+            Self::UnknownOutput => {
+                write!(formatter, "the playable output handle is not in the graph")
+            }
             Self::InvalidPort => write!(formatter, "the playable port index is out of range"),
             Self::InvalidLayer => {
                 write!(formatter, "the layer mixer layer index is out of range")
@@ -63,6 +67,39 @@ impl std::fmt::Display for PlayableError {
 }
 
 impl std::error::Error for PlayableError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioSourceBinding {
+    pub source_name: String,
+    pub mixer_group: String,
+    pub assigned_clip: Option<String>,
+}
+
+impl AudioSourceBinding {
+    pub fn new(source_name: impl Into<String>, mixer_group: impl Into<String>) -> Self {
+        Self {
+            source_name: source_name.into(),
+            mixer_group: mixer_group.into(),
+            assigned_clip: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SampledAudioClip {
+    pub clip_id: String,
+    pub weight: f32,
+    pub time: f64,
+    pub looping: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioOutputState {
+    pub audio_source: AudioSourceBinding,
+    pub active_clips: Vec<SampledAudioClip>,
+    pub effective_volume: f32,
+    pub is_playing: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlayableHandle {
@@ -122,6 +159,15 @@ enum PlayableNode {
         layers: Vec<LayerMixerLayer>,
         state: PlayableState,
     },
+    AudioClip {
+        clip_id: String,
+        looping: bool,
+        state: PlayableState,
+    },
+    AudioMixer {
+        inputs: Vec<MixerInput>,
+        state: PlayableState,
+    },
     Script {
         behaviour: Box<dyn PlayableBehaviour>,
         state: PlayableState,
@@ -134,6 +180,8 @@ impl PlayableNode {
             Self::Clip { state, .. }
             | Self::Mixer { state, .. }
             | Self::LayerMixer { state, .. }
+            | Self::AudioClip { state, .. }
+            | Self::AudioMixer { state, .. }
             | Self::Script { state, .. } => state,
         }
     }
@@ -143,14 +191,16 @@ impl PlayableNode {
             Self::Clip { state, .. }
             | Self::Mixer { state, .. }
             | Self::LayerMixer { state, .. }
+            | Self::AudioClip { state, .. }
+            | Self::AudioMixer { state, .. }
             | Self::Script { state, .. } => state,
         }
     }
 
     fn inputs(&self) -> Vec<PlayableHandle> {
         match self {
-            Self::Clip { .. } | Self::Script { .. } => Vec::new(),
-            Self::Mixer { inputs, .. } => inputs
+            Self::Clip { .. } | Self::AudioClip { .. } | Self::Script { .. } => Vec::new(),
+            Self::Mixer { inputs, .. } | Self::AudioMixer { inputs, .. } => inputs
                 .iter()
                 .filter_map(|input| input.source)
                 .collect::<Vec<PlayableHandle>>(),
@@ -180,6 +230,7 @@ struct PlayableOutput {
     name: String,
     source: Option<PlayableHandle>,
     pose: Vec<SampledBinding>,
+    audio: Option<AudioOutputState>,
 }
 
 pub struct PlayableGraph {
@@ -276,7 +327,7 @@ impl PlayableGraph {
             return Err(PlayableError::UnknownPlayable);
         };
         match node {
-            PlayableNode::Mixer { inputs, .. } => {
+            PlayableNode::Mixer { inputs, .. } | PlayableNode::AudioMixer { inputs, .. } => {
                 let Some(input) = inputs.get_mut(destination_port as usize) else {
                     return Err(PlayableError::InvalidPort);
                 };
@@ -310,7 +361,7 @@ impl PlayableGraph {
             return Err(PlayableError::UnknownPlayable);
         };
         match node {
-            PlayableNode::Mixer { inputs, .. } => {
+            PlayableNode::Mixer { inputs, .. } | PlayableNode::AudioMixer { inputs, .. } => {
                 let Some(input) = inputs.get_mut(destination_port as usize) else {
                     return Err(PlayableError::InvalidPort);
                 };
@@ -330,7 +381,7 @@ impl PlayableGraph {
 
     pub fn input_weight(&self, destination: PlayableHandle, destination_port: u32) -> Option<f32> {
         match self.node(destination)? {
-            PlayableNode::Mixer { inputs, .. } => inputs
+            PlayableNode::Mixer { inputs, .. } | PlayableNode::AudioMixer { inputs, .. } => inputs
                 .get(destination_port as usize)
                 .map(|input| input.weight),
             PlayableNode::LayerMixer { layers, .. } => layers
@@ -355,11 +406,66 @@ impl PlayableGraph {
             name: name.into(),
             source: Some(source),
             pose: Vec::new(),
+            audio: None,
         });
         Ok(PlayableOutputHandle {
             index: self.outputs.len() - 1,
             graph_id: self.id,
         })
+    }
+
+    pub fn create_audio_output(
+        &mut self,
+        name: impl Into<String>,
+        source: PlayableHandle,
+        audio_source: AudioSourceBinding,
+    ) -> Result<PlayableOutputHandle, PlayableError> {
+        if self.destroyed {
+            return Err(PlayableError::GraphDestroyed);
+        }
+        if self.node(source).is_none() {
+            return Err(PlayableError::UnknownPlayable);
+        }
+        self.outputs.push(PlayableOutput {
+            name: name.into(),
+            source: Some(source),
+            pose: Vec::new(),
+            audio: Some(AudioOutputState {
+                audio_source,
+                active_clips: Vec::new(),
+                effective_volume: 0.0,
+                is_playing: self.state == PlayState::Playing,
+            }),
+        });
+        Ok(PlayableOutputHandle {
+            index: self.outputs.len() - 1,
+            graph_id: self.id,
+        })
+    }
+
+    pub fn set_audio_output_target(
+        &mut self,
+        output: PlayableOutputHandle,
+        audio_source: AudioSourceBinding,
+    ) -> Result<(), PlayableError> {
+        if self.destroyed {
+            return Err(PlayableError::GraphDestroyed);
+        }
+        if output.graph_id != self.id {
+            return Err(PlayableError::UnknownOutput);
+        }
+        let Some(entry) = self.outputs.get_mut(output.index) else {
+            return Err(PlayableError::UnknownOutput);
+        };
+        let Some(audio) = entry.audio.as_mut() else {
+            return Err(PlayableError::UnknownOutput);
+        };
+        audio.audio_source = audio_source;
+        Ok(())
+    }
+
+    pub fn audio_output_state(&self, output: PlayableOutputHandle) -> Option<&AudioOutputState> {
+        self.output(output).and_then(|entry| entry.audio.as_ref())
     }
 
     pub fn output_name(&self, output: PlayableOutputHandle) -> Option<&str> {
@@ -416,6 +522,11 @@ impl PlayableGraph {
             }
             if let PlayableNode::Script { behaviour, .. } = node {
                 behaviour.on_graph_stop();
+            }
+        }
+        for output in &mut self.outputs {
+            if let Some(audio) = output.audio.as_mut() {
+                audio.is_playing = false;
             }
         }
     }
@@ -632,6 +743,8 @@ impl PlayableGraph {
                 }
                 PlayableNode::Mixer { state, .. }
                 | PlayableNode::LayerMixer { state, .. }
+                | PlayableNode::AudioClip { state, .. }
+                | PlayableNode::AudioMixer { state, .. }
                 | PlayableNode::Script { state, .. } => {
                     state.time += advanced;
                 }
@@ -671,12 +784,85 @@ impl PlayableGraph {
     fn refresh_output_poses(&mut self) {
         let sources: Vec<Option<PlayableHandle>> =
             self.outputs.iter().map(|output| output.source).collect();
+        let is_playing = self.state == PlayState::Playing;
         for (index, source) in sources.into_iter().enumerate() {
             let pose = match source {
                 Some(handle) => self.evaluate_node(handle),
                 None => Vec::new(),
             };
+            let audio_clips = match source {
+                Some(handle) => self.evaluate_audio_node(handle, 1.0),
+                None => Vec::new(),
+            };
             self.outputs[index].pose = pose;
+            if let Some(audio) = self.outputs[index].audio.as_mut() {
+                let effective_volume: f32 = audio_clips
+                    .iter()
+                    .map(|clip| clip.weight)
+                    .sum::<f32>()
+                    .clamp(0.0, 1.0);
+                let dominant = audio_clips
+                    .iter()
+                    .filter(|clip| clip.weight > 0.0)
+                    .max_by(|left, right| {
+                        left.weight
+                            .partial_cmp(&right.weight)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|clip| clip.clip_id.clone());
+                audio.audio_source.assigned_clip = dominant;
+                audio.active_clips = audio_clips;
+                audio.effective_volume = effective_volume;
+                audio.is_playing = is_playing && !audio.active_clips.is_empty();
+            }
+        }
+    }
+
+    fn evaluate_audio_node(
+        &self,
+        handle: PlayableHandle,
+        parent_weight: f32,
+    ) -> Vec<SampledAudioClip> {
+        let Some(node) = self.nodes.get(handle.index) else {
+            return Vec::new();
+        };
+        match node {
+            PlayableNode::AudioClip {
+                clip_id,
+                looping,
+                state,
+            } => {
+                if parent_weight <= 0.0 {
+                    return Vec::new();
+                }
+                let sample_time = if *looping && state.duration > 0.0 {
+                    state.time.rem_euclid(state.duration)
+                } else if state.duration > 0.0 {
+                    state.time.min(state.duration)
+                } else {
+                    state.time
+                };
+                vec![SampledAudioClip {
+                    clip_id: clip_id.clone(),
+                    weight: parent_weight,
+                    time: sample_time,
+                    looping: *looping,
+                }]
+            }
+            PlayableNode::AudioMixer { inputs, .. } => {
+                let mut clips = Vec::new();
+                for input in inputs {
+                    let Some(source) = input.source else {
+                        continue;
+                    };
+                    if input.weight <= 0.0 {
+                        continue;
+                    }
+                    clips.extend(self.evaluate_audio_node(source, parent_weight * input.weight));
+                }
+                clips
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -736,7 +922,9 @@ impl PlayableGraph {
                 }
                 pose
             }
-            PlayableNode::Script { .. } => Vec::new(),
+            PlayableNode::AudioClip { .. }
+            | PlayableNode::AudioMixer { .. }
+            | PlayableNode::Script { .. } => Vec::new(),
         }
     }
 
@@ -753,10 +941,13 @@ impl PlayableGraph {
                 !matches!(clip.wrap_mode, WrapMode::Loop | WrapMode::PingPong)
                     && state.time >= state.duration
             }
+            PlayableNode::AudioClip { looping, state, .. } => {
+                !*looping && state.duration > 0.0 && state.time >= state.duration
+            }
             PlayableNode::Script { state, .. } => {
                 state.duration > 0.0 && state.time >= state.duration
             }
-            PlayableNode::Mixer { inputs, .. } => {
+            PlayableNode::Mixer { inputs, .. } | PlayableNode::AudioMixer { inputs, .. } => {
                 !inputs.is_empty()
                     && inputs
                         .iter()
@@ -902,5 +1093,96 @@ impl ScriptPlayable {
 
     pub fn handle(&self) -> PlayableHandle {
         self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioClipPlayable {
+    handle: PlayableHandle,
+}
+
+impl AudioClipPlayable {
+    pub fn create(
+        graph: &mut PlayableGraph,
+        clip_id: impl Into<String>,
+        duration: f64,
+        looping: bool,
+    ) -> Self {
+        let duration = if duration.is_finite() {
+            duration.max(0.0)
+        } else {
+            0.0
+        };
+        let handle = graph.add_node(PlayableNode::AudioClip {
+            clip_id: clip_id.into(),
+            looping,
+            state: PlayableState {
+                duration,
+                ..PlayableState::default()
+            },
+        });
+        Self { handle }
+    }
+
+    pub fn handle(&self) -> PlayableHandle {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioMixerPlayable {
+    handle: PlayableHandle,
+}
+
+impl AudioMixerPlayable {
+    pub fn create(graph: &mut PlayableGraph, input_count: usize) -> Self {
+        let inputs = (0..input_count)
+            .map(|_| MixerInput {
+                source: None,
+                weight: 1.0,
+            })
+            .collect();
+        let handle = graph.add_node(PlayableNode::AudioMixer {
+            inputs,
+            state: PlayableState::default(),
+        });
+        Self { handle }
+    }
+
+    pub fn handle(&self) -> PlayableHandle {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioPlayableOutput {
+    handle: PlayableOutputHandle,
+}
+
+impl AudioPlayableOutput {
+    pub fn create(
+        graph: &mut PlayableGraph,
+        name: impl Into<String>,
+        source: PlayableHandle,
+        audio_source: AudioSourceBinding,
+    ) -> Result<Self, PlayableError> {
+        let handle = graph.create_audio_output(name, source, audio_source)?;
+        Ok(Self { handle })
+    }
+
+    pub fn handle(&self) -> PlayableOutputHandle {
+        self.handle
+    }
+
+    pub fn set_target(
+        &self,
+        graph: &mut PlayableGraph,
+        audio_source: AudioSourceBinding,
+    ) -> Result<(), PlayableError> {
+        graph.set_audio_output_target(self.handle, audio_source)
+    }
+
+    pub fn state<'a>(&self, graph: &'a PlayableGraph) -> Option<&'a AudioOutputState> {
+        graph.audio_output_state(self.handle)
     }
 }

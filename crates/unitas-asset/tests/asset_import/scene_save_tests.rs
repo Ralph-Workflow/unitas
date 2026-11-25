@@ -3,10 +3,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use unitas_asset::binary_ser::{
-    Endianness, SerializedAsset, SerializedFile, SerializedFileHeader, SerializedFileMetadata,
-    TypedValue, SUPPORTED_VERSION,
+    BinarySerError, Endianness, SerializedAsset, SerializedFile, SerializedFileHeader,
+    SerializedFileMetadata, TypedValue, SUPPORTED_VERSION,
 };
-use unitas_asset::scene::assemble_scene_file;
+use unitas_asset::meta::GuidIndex;
+use unitas_asset::scene::{assemble_scene_bundle_with_guids, assemble_scene_file};
 use unitas_asset::scene_save::{self, SceneFile, SceneSaveError};
 use unitas_asset::unity_yaml::{self, Node};
 
@@ -145,6 +146,156 @@ fn document_identities(stream: &unity_yaml::Stream) -> Vec<(i64, String)> {
             (document.file_id, name)
         })
         .collect()
+}
+
+#[test]
+fn ser001_outcome5_unsupported_or_missing_values_surface_as_reported_states_and_never_silently_default_across_load_edit_save(
+) -> TestResult {
+    let root = temp_root("unsupported_or_missing_no_silent_default");
+    fs::create_dir_all(&root)?;
+    let text_path = root.join("ReportedStateScene.unity");
+    let binary_path = root.join("ReportedStateAsset.asset");
+
+    let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_ObjectHideFlags: 0\n  m_Name: EmitterHost\n--- !u!4 &101\nTransform:\n  m_ObjectHideFlags: 0\n  m_GameObject: {fileID: 100}\n  serializedVersion: 2\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!108 &102\nLight:\n  m_ObjectHideFlags: 0\n  m_GameObject: {fileID: 100}\n  m_Type: 2\n  m_Color: {r: 0.25, g: 0.75, b: 0.5, a: 1}\n  m_Intensity: 3.5\n--- !u!82 &103\nAudioSource:\n  m_ObjectHideFlags: 0\n  m_GameObject: {fileID: 100}\n  m_Enabled: 1\n  m_audioClip: {fileID: 8300000, guid: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, type: 3}\n  m_Volume: 0.8\n";
+    fs::write(&text_path, scene_yaml)?;
+
+    let empty_guids = GuidIndex::default();
+    let mut stream = unity_yaml::parse_file(&text_path)?;
+    let initial_bundle = assemble_scene_bundle_with_guids(&stream, &empty_guids)?;
+    assert_eq!(initial_bundle.render.lights.len(), 1);
+    assert!(!initial_bundle.render.lights[0].directional);
+    assert!(
+        initial_bundle.render.lights[0]
+            .unsupported_diagnostic
+            .as_deref()
+            .map(|d| d.contains("point light") && d.contains("not supported"))
+            .unwrap_or(false),
+        "unsupported point light did not surface a reported diagnostic"
+    );
+    assert_eq!(initial_bundle.audio_bindings.len(), 1);
+    assert_eq!(
+        initial_bundle.audio_bindings[0].1.clip_guid.as_deref(),
+        Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+    );
+    assert!(
+        initial_bundle.audio_bindings[0]
+            .1
+            .clip_diagnostic
+            .as_deref()
+            .map(|d| d.contains("unresolved AudioClip guid eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"))
+            .unwrap_or(false),
+        "missing AudioClip reference did not surface a reported diagnostic"
+    );
+    assert_eq!(initial_bundle.diagnostics.len(), 2);
+
+    let baked_payload = b"\xfe\xed\xfa\xceunsupported-baked-payload";
+    let binary_initial = build_mixed_mode_typed_v22_binary("BinaryCarrier", baked_payload);
+    fs::write(&binary_path, &binary_initial)?;
+    let mut binary_asset = SerializedAsset::read(&fs::read(&binary_path)?)?;
+    let bin_file = binary_asset
+        .as_binary_mut()
+        .ok_or("expected mutable binary asset")?;
+    let unsupported_decode = bin_file.decode_object(2002);
+    assert_eq!(
+        unsupported_decode,
+        Err(BinarySerError::UnsupportedTypeTree {
+            path_id: 2002,
+            class_id: 1120,
+            type_name: String::from("BakedBlob"),
+        })
+    );
+    let mut decoded_go = bin_file.decode_object(1001)?;
+    assert_eq!(
+        decoded_go.set("m_MissingField", TypedValue::I32(0)),
+        Err(BinarySerError::FieldNotFound {
+            type_name: String::from("GameObject"),
+            field: String::from("m_MissingField"),
+        })
+    );
+    decoded_go.set(
+        "m_Name",
+        TypedValue::String(String::from("BinaryCarrierEdited")),
+    )?;
+    bin_file.update_object(1001, &decoded_go)?;
+    scene_save::save_asset(&binary_path, &binary_asset)?;
+
+    assert!(set_field(
+        &mut stream.documents[0].root,
+        &["GameObject", "m_Name"],
+        "EmitterHostEdited"
+    ));
+    scene_save::save_stream(&text_path, &stream)?;
+
+    let reloaded_stream = unity_yaml::parse_file(&text_path)?;
+    let reloaded_light = reloaded_stream.documents[2]
+        .root
+        .get("Light")
+        .ok_or("missing Light document after save")?;
+    assert_eq!(
+        reloaded_light.get("m_Type").and_then(Node::as_i64),
+        Some(2),
+        "unsupported light m_Type silently became a default"
+    );
+    assert_eq!(
+        reloaded_light.get("m_Intensity").and_then(Node::as_f64),
+        Some(3.5)
+    );
+    let reloaded_audio = reloaded_stream.documents[3]
+        .root
+        .get("AudioSource")
+        .ok_or("missing AudioSource document after save")?;
+    let reloaded_clip = reloaded_audio
+        .get("m_audioClip")
+        .ok_or("missing m_audioClip after save")?;
+    assert_eq!(
+        reloaded_clip.get("fileID").and_then(Node::as_i64),
+        Some(8300000),
+        "missing clip fileID silently became default 0"
+    );
+    assert_eq!(
+        reloaded_clip.get("guid").and_then(Node::as_str),
+        Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+        "missing clip guid was silently dropped or defaulted"
+    );
+
+    let reloaded_bundle = assemble_scene_bundle_with_guids(&reloaded_stream, &empty_guids)?;
+    assert!(!reloaded_bundle.render.lights[0].directional);
+    assert!(reloaded_bundle.render.lights[0]
+        .unsupported_diagnostic
+        .is_some());
+    assert_eq!(
+        reloaded_bundle.audio_bindings[0].1.clip_guid.as_deref(),
+        Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+    );
+    assert!(reloaded_bundle.audio_bindings[0]
+        .1
+        .clip_diagnostic
+        .is_some());
+    assert_eq!(reloaded_bundle.diagnostics.len(), 2);
+
+    let reloaded_binary = SerializedAsset::read(&fs::read(&binary_path)?)?;
+    let reloaded_bin_file = reloaded_binary
+        .as_binary()
+        .ok_or("expected binary asset after save")?;
+    assert_eq!(
+        reloaded_bin_file
+            .decode_object(1001)?
+            .get("m_Name")
+            .and_then(TypedValue::as_str),
+        Some("BinaryCarrierEdited")
+    );
+    assert_eq!(
+        reloaded_bin_file.decode_object(2002),
+        Err(BinarySerError::UnsupportedTypeTree {
+            path_id: 2002,
+            class_id: 1120,
+            type_name: String::from("BakedBlob"),
+        })
+    );
+    assert_eq!(reloaded_bin_file.object_bytes(1)?, baked_payload.as_slice());
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
 }
 
 #[test]

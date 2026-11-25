@@ -327,11 +327,40 @@ pub struct EffectiveTargetSetting {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedProjectSettings {
     pub fixed_timestep: f64,
+    pub maximum_allowed_timestep: f64,
+    pub time_scale: f64,
     pub gravity: [f64; 3],
     pub layer_collision_matrix: [u32; 32],
+    pub gravity_2d: [f64; 2],
+    pub layer_collision_matrix_2d: [u32; 32],
     pub identity: ProjectIdentity,
     pub default_scripting_defines: String,
     pub target_scripting_defines: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixedStepBoundaryEvaluation {
+    pub fixed_timestep: f64,
+    pub fixed_steps_executed: usize,
+    pub simulated_seconds: f64,
+    pub residual_accumulator_seconds: f64,
+    pub gravity_y_displacement_meters: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollisionBoundaryEvaluation {
+    pub layer_a: usize,
+    pub layer_b: usize,
+    pub collides_3d: bool,
+    pub collides_2d: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecompileBoundaryEvaluation {
+    pub target_group_id: String,
+    pub target_name: String,
+    pub active_symbols: Vec<String>,
+    pub source: SettingValueSource,
 }
 
 impl LoadedProjectSettings {
@@ -352,6 +381,84 @@ impl LoadedProjectSettings {
             return false;
         }
         (self.layer_collision_matrix[layer_a] & (1u32 << layer_b)) != 0
+    }
+
+    pub fn layers_collide_2d(&self, layer_a: usize, layer_b: usize) -> bool {
+        if layer_a >= 32 || layer_b >= 32 {
+            return false;
+        }
+        (self.layer_collision_matrix_2d[layer_a] & (1u32 << layer_b)) != 0
+    }
+
+    pub fn evaluate_fixed_step_boundary(
+        &self,
+        frame_delta_seconds: f64,
+    ) -> FixedStepBoundaryEvaluation {
+        let clamped_delta = frame_delta_seconds
+            .max(0.0)
+            .min(self.maximum_allowed_timestep);
+        let scaled_delta = clamped_delta * self.time_scale.max(0.0);
+        let dt = self.fixed_timestep;
+        if !dt.is_finite() || dt <= 0.0 {
+            return FixedStepBoundaryEvaluation {
+                fixed_timestep: dt,
+                fixed_steps_executed: 0,
+                simulated_seconds: 0.0,
+                residual_accumulator_seconds: scaled_delta,
+                gravity_y_displacement_meters: 0.0,
+            };
+        }
+        let mut accumulator = scaled_delta;
+        let mut steps = 0usize;
+        let mut velocity_y = 0.0f64;
+        let mut position_y = 0.0f64;
+        while accumulator + 1e-12 >= dt {
+            accumulator = (accumulator - dt).max(0.0);
+            steps += 1;
+            velocity_y += self.gravity[1] * dt;
+            position_y += velocity_y * dt;
+        }
+        FixedStepBoundaryEvaluation {
+            fixed_timestep: dt,
+            fixed_steps_executed: steps,
+            simulated_seconds: (steps as f64) * dt,
+            residual_accumulator_seconds: accumulator,
+            gravity_y_displacement_meters: position_y,
+        }
+    }
+
+    pub fn evaluate_collision_boundary(
+        &self,
+        layer_a: usize,
+        layer_b: usize,
+    ) -> CollisionBoundaryEvaluation {
+        CollisionBoundaryEvaluation {
+            layer_a,
+            layer_b,
+            collides_3d: self.layers_collide(layer_a, layer_b),
+            collides_2d: self.layers_collide_2d(layer_a, layer_b),
+        }
+    }
+
+    pub fn evaluate_recompile_boundary(
+        &self,
+        target_group_id: &str,
+        target_name: &str,
+    ) -> RecompileBoundaryEvaluation {
+        let effective = self.effective_scripting_defines(target_group_id, target_name);
+        let active_symbols = effective
+            .effective_value
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        RecompileBoundaryEvaluation {
+            target_group_id: effective.target_group_id,
+            target_name: effective.target_name,
+            active_symbols,
+            source: effective.source,
+        }
     }
 
     pub fn effective_scripting_defines(
@@ -397,13 +504,49 @@ pub fn parse_layer_collision_matrix(hex: &str) -> [u32; 32] {
     matrix
 }
 
+pub fn format_layer_collision_matrix(matrix: &[u32; 32]) -> String {
+    let mut out = String::with_capacity(256);
+    for &mask in matrix {
+        let swapped = mask.swap_bytes();
+        out.push_str(&format!("{swapped:08x}"));
+    }
+    out
+}
+
 pub fn load_project_settings(
     settings_dir: &Path,
 ) -> Result<LoadedProjectSettings, ProjectSettingsError> {
     let time_path = settings_dir.join("TimeManager.asset");
-    let fixed_timestep = parse_time_manager(&time_path)?
-        .map(|t| t.fixed_timestep)
-        .unwrap_or(DEFAULT_FIXED_TIMESTEP);
+    let mut fixed_timestep = DEFAULT_FIXED_TIMESTEP;
+    let mut maximum_allowed_timestep = 0.33333334;
+    let mut time_scale = 1.0;
+    if time_path.exists() {
+        let stream = unity_yaml::parse_file(&time_path)?;
+        if let Ok(t) = parse_time_manager_stream(&stream) {
+            fixed_timestep = t.fixed_timestep;
+        }
+        if let Some(body) = stream
+            .documents
+            .iter()
+            .filter(|d| !d.stripped)
+            .find_map(|d| d.root.get("TimeManager"))
+        {
+            if let Some(max_dt) = body
+                .get("m_MaximumAllowedTimestep")
+                .and_then(Node::as_f64)
+                .filter(|v| v.is_finite() && *v > 0.0)
+            {
+                maximum_allowed_timestep = max_dt;
+            }
+            if let Some(scale) = body
+                .get("m_TimeScale")
+                .and_then(Node::as_f64)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+            {
+                time_scale = scale;
+            }
+        }
+    }
 
     let dynamics_path = settings_dir.join("DynamicsManager.asset");
     let mut gravity = DEFAULT_GRAVITY;
@@ -425,6 +568,30 @@ pub fn load_project_settings(
         {
             if let Some(hex) = body.get("m_LayerCollisionMatrix").and_then(Node::as_str) {
                 layer_collision_matrix = parse_layer_collision_matrix(hex);
+            }
+        }
+    }
+
+    let physics2d_path = settings_dir.join("Physics2DSettings.asset");
+    let mut gravity_2d = [0.0, -9.81];
+    let mut layer_collision_matrix_2d = [0xFFFF_FFFFu32; 32];
+    if physics2d_path.exists() {
+        let stream = unity_yaml::parse_file(&physics2d_path)?;
+        if let Some(body) = stream
+            .documents
+            .iter()
+            .filter(|d| !d.stripped)
+            .find_map(|d| d.root.get("Physics2DSettings"))
+        {
+            if let Some(g_node) = body.get("m_Gravity") {
+                if let (Some(gx), Some(gy)) =
+                    (parse_finite_f64(g_node, "x"), parse_finite_f64(g_node, "y"))
+                {
+                    gravity_2d = [gx, gy];
+                }
+            }
+            if let Some(hex) = body.get("m_LayerCollisionMatrix").and_then(Node::as_str) {
+                layer_collision_matrix_2d = parse_layer_collision_matrix(hex);
             }
         }
     }
@@ -460,8 +627,12 @@ pub fn load_project_settings(
 
     Ok(LoadedProjectSettings {
         fixed_timestep,
+        maximum_allowed_timestep,
+        time_scale,
         gravity,
         layer_collision_matrix,
+        gravity_2d,
+        layer_collision_matrix_2d,
         identity,
         default_scripting_defines,
         target_scripting_defines,

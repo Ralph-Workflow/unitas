@@ -853,19 +853,61 @@ fn prj001_ser005_unity_2020_3_and_2021_3_migration_preview_first_save_notice_bui
         report_after_cache_delete.inventory
     );
 
+    let snap_before_build = snapshot(&project_2021)?;
+    let initial_paths: Vec<PathBuf> = snap_before_build.iter().map(|(p, _)| p.clone()).collect();
+
     let sln_path = project_2021.join("project_2021.sln");
     let csproj_path = project_2021.join("Assembly-CSharp.csproj");
     let build_out_dir = root.join("Builds/Standalone");
     write_file(&sln_path, "Microsoft Visual Studio Solution File")?;
     write_file(&csproj_path, "<Project Sdk=\"Microsoft.NET.Sdk\" />")?;
+
+    let assembled_main =
+        unitas_asset::scene::assemble_scene_file(&project_2021.join("Assets/Scenes/Main.unity"))?;
+    assert_eq!(assembled_main.len(), 1);
+    let staged_scene_bytes = fs::read(project_2021.join("Assets/Scenes/Main.unity"))?;
+    fs::create_dir_all(build_out_dir.join("scenes"))?;
+    fs::write(
+        build_out_dir.join("scenes/000_Main.unity"),
+        &staged_scene_bytes,
+    )?;
+    write_file(
+        &build_out_dir.join("bundle.manifest"),
+        &format!(
+            "format_version=1\nproduct_name=Sample\nstartup_scene_staged_path=scenes/000_Main.unity\nentry_count=1\nentry.0.root_object_count={}\n",
+            assembled_main.roots().len()
+        ),
+    )?;
     write_file(&build_out_dir.join("SamplePlayer.app"), "player_binary")?;
 
     for generated in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
         assert!(!project_2021.join(generated).exists());
     }
+    assert!(
+        !project_2021
+            .join("ProjectSettings/UnitasVersion.txt")
+            .exists(),
+        "SER-005 outcome 17: opening and building alone must not write UnitasVersion.txt"
+    );
     assert!(sln_path.is_file());
     assert!(csproj_path.is_file());
     assert!(build_out_dir.join("SamplePlayer.app").is_file());
+    assert!(build_out_dir.join("bundle.manifest").is_file());
+    assert!(build_out_dir.join("scenes/000_Main.unity").is_file());
+
+    let snap_after_build = snapshot(&project_2021)?;
+    let added_at_project_root: Vec<PathBuf> = snap_after_build
+        .iter()
+        .map(|(p, _)| p.clone())
+        .filter(|p| !initial_paths.contains(p))
+        .collect();
+    assert_eq!(
+        added_at_project_root,
+        vec![
+            PathBuf::from("Assembly-CSharp.csproj"),
+            PathBuf::from("project_2021.sln"),
+        ]
+    );
 
     let review_policy_rel = PathBuf::from("ProjectSettings/UnitasReviewPolicy.json");
     let unitas_version_rel = PathBuf::from("ProjectSettings/UnitasVersion.txt");

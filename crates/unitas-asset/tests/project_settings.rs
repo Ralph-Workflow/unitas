@@ -724,3 +724,166 @@ fn prj007_outcome10_per_target_scripting_defines_collision_matrix_and_fixed_time
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+#[test]
+fn prj007_outcome10_fixed_timestep_collision_matrix_and_scripting_defines_change_behavior_at_feature_boundaries(
+) -> TestResult {
+    let root = temp_settings_dir("prj007_outcome10_boundaries")?;
+    let time_path = root.join("TimeManager.asset");
+    let dynamics_path = root.join("DynamicsManager.asset");
+    let physics2d_path = root.join("Physics2DSettings.asset");
+    let player_path = root.join("ProjectSettings.asset");
+
+    let initial_time = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!5 &1\nTimeManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_FixedTimestep: 0.02\n  m_MaximumAllowedTimestep: 0.33333334\n  m_TimeScale: 1\n";
+    let initial_dynamics = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 13\n  m_Gravity: {x: 0, y: -10, z: 0}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n";
+    let initial_physics2d = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 5\n  m_Gravity: {x: 0, y: -9.81}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n";
+    let initial_player = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 26\n  companyName: UnitasStudio\n  productName: BoundaryApp\n  bundleVersion: 1.0.0\n  scriptingDefineSymbols:\n    default: GLOBAL_DEFAULT\n    1: STANDALONE_BUILD\n    7: ANDROID_BUILD;MOBILE_INPUT\n";
+
+    fs::write(&time_path, initial_time)?;
+    fs::write(&dynamics_path, initial_dynamics)?;
+    fs::write(&physics2d_path, initial_physics2d)?;
+    fs::write(&player_path, initial_player)?;
+
+    let baseline_settings = unitas_asset::project_settings::load_project_settings(&root)?;
+    let baseline_time_eval = baseline_settings.evaluate_fixed_step_boundary(0.10);
+    assert_eq!(baseline_time_eval.fixed_timestep, 0.02);
+    assert_eq!(baseline_time_eval.fixed_steps_executed, 5);
+    assert!((baseline_time_eval.simulated_seconds - 0.10).abs() < 1e-12);
+    assert!(baseline_time_eval.residual_accumulator_seconds < 1e-12);
+    assert!((baseline_time_eval.gravity_y_displacement_meters - (-0.06)).abs() < 1e-12);
+
+    let baseline_collision_0_1 = baseline_settings.evaluate_collision_boundary(0, 1);
+    assert!(baseline_collision_0_1.collides_3d);
+    assert!(baseline_collision_0_1.collides_2d);
+    let baseline_collision_2_3 = baseline_settings.evaluate_collision_boundary(2, 3);
+    assert!(baseline_collision_2_3.collides_3d);
+    assert!(baseline_collision_2_3.collides_2d);
+
+    let baseline_android_recompile = baseline_settings.evaluate_recompile_boundary("7", "Android");
+    assert_eq!(
+        baseline_android_recompile.active_symbols,
+        vec![String::from("ANDROID_BUILD"), String::from("MOBILE_INPUT")]
+    );
+    assert_eq!(
+        baseline_android_recompile.source,
+        unitas_asset::project_settings::SettingValueSource::TargetOverride
+    );
+
+    let mut time_stream = unity_yaml::parse_file(&time_path)?;
+    assert!(set_settings_scalar(
+        &mut time_stream.documents[0].root,
+        &["TimeManager", "m_FixedTimestep"],
+        "0.01"
+    ));
+    scene_save::save_stream(&time_path, &time_stream)?;
+
+    let mut updated_matrix_3d = baseline_settings.layer_collision_matrix;
+    updated_matrix_3d[0] &= !(1u32 << 1);
+    updated_matrix_3d[1] &= !(1u32 << 0);
+    let updated_hex_3d =
+        unitas_asset::project_settings::format_layer_collision_matrix(&updated_matrix_3d);
+    let mut dynamics_stream = unity_yaml::parse_file(&dynamics_path)?;
+    assert!(set_settings_scalar(
+        &mut dynamics_stream.documents[0].root,
+        &["PhysicsManager", "m_LayerCollisionMatrix"],
+        &updated_hex_3d
+    ));
+    scene_save::save_stream(&dynamics_path, &dynamics_stream)?;
+
+    let mut updated_matrix_2d = baseline_settings.layer_collision_matrix_2d;
+    updated_matrix_2d[2] &= !(1u32 << 3);
+    updated_matrix_2d[3] &= !(1u32 << 2);
+    let updated_hex_2d =
+        unitas_asset::project_settings::format_layer_collision_matrix(&updated_matrix_2d);
+    let mut physics2d_stream = unity_yaml::parse_file(&physics2d_path)?;
+    assert!(set_settings_scalar(
+        &mut physics2d_stream.documents[0].root,
+        &["Physics2DSettings", "m_LayerCollisionMatrix"],
+        &updated_hex_2d
+    ));
+    scene_save::save_stream(&physics2d_path, &physics2d_stream)?;
+
+    let mut player_stream = unity_yaml::parse_file(&player_path)?;
+    assert!(set_settings_scalar(
+        &mut player_stream.documents[0].root,
+        &["PlayerSettings", "scriptingDefineSymbols", "7"],
+        "ANDROID_BUILD;MOBILE_INPUT;VULKAN_BACKEND"
+    ));
+    scene_save::save_stream(&player_path, &player_stream)?;
+
+    let active_session_eval = baseline_settings.evaluate_fixed_step_boundary(0.10);
+    assert_eq!(
+        active_session_eval.fixed_steps_executed, 5,
+        "PRJ-007 Outcome 10: active play session keeps prior fixed timestep until NextPlaySession boundary"
+    );
+
+    let reloaded_settings = unitas_asset::project_settings::load_project_settings(&root)?;
+    assert_eq!(
+        reloaded_settings.fixed_timestep_boundary(),
+        unitas_asset::project_settings::SettingBoundary::NextPlaySession
+    );
+    let next_session_eval = reloaded_settings.evaluate_fixed_step_boundary(0.10);
+    assert_eq!(next_session_eval.fixed_timestep, 0.01);
+    assert_eq!(next_session_eval.fixed_steps_executed, 10);
+    assert_ne!(
+        next_session_eval.fixed_steps_executed,
+        baseline_time_eval.fixed_steps_executed
+    );
+    assert!((next_session_eval.simulated_seconds - 0.10).abs() < 1e-12);
+    assert!(
+        (next_session_eval.gravity_y_displacement_meters - (-0.055)).abs() < 1e-12,
+        "PRJ-007 Outcome 10: changing fixed timestep from 0.02 to 0.01 changes semi-implicit Euler integration trajectory at NextPlaySession boundary"
+    );
+    assert_ne!(
+        next_session_eval.gravity_y_displacement_meters,
+        baseline_time_eval.gravity_y_displacement_meters
+    );
+
+    assert_eq!(
+        reloaded_settings.collision_matrix_boundary(),
+        unitas_asset::project_settings::SettingBoundary::NextPhysicsStep
+    );
+    let updated_collision_0_1 = reloaded_settings.evaluate_collision_boundary(0, 1);
+    assert!(!updated_collision_0_1.collides_3d);
+    assert!(updated_collision_0_1.collides_2d);
+    let updated_collision_1_0 = reloaded_settings.evaluate_collision_boundary(1, 0);
+    assert!(!updated_collision_1_0.collides_3d);
+    assert_ne!(
+        updated_collision_0_1.collides_3d,
+        baseline_collision_0_1.collides_3d
+    );
+
+    let updated_collision_2_3 = reloaded_settings.evaluate_collision_boundary(2, 3);
+    assert!(updated_collision_2_3.collides_3d);
+    assert!(!updated_collision_2_3.collides_2d);
+    let updated_collision_3_2 = reloaded_settings.evaluate_collision_boundary(3, 2);
+    assert!(!updated_collision_3_2.collides_2d);
+    assert_ne!(
+        updated_collision_2_3.collides_2d,
+        baseline_collision_2_3.collides_2d
+    );
+
+    let updated_android_recompile = reloaded_settings.evaluate_recompile_boundary("7", "Android");
+    assert_eq!(
+        updated_android_recompile.active_symbols,
+        vec![
+            String::from("ANDROID_BUILD"),
+            String::from("MOBILE_INPUT"),
+            String::from("VULKAN_BACKEND")
+        ]
+    );
+    assert_ne!(
+        updated_android_recompile.active_symbols,
+        baseline_android_recompile.active_symbols
+    );
+
+    for path in [&time_path, &dynamics_path, &physics2d_path, &player_path] {
+        let before = fs::read_to_string(path)?;
+        let parsed = unity_yaml::parse(&before)?;
+        scene_save::save_stream(path, &parsed)?;
+        assert_eq!(fs::read_to_string(path)?, before);
+    }
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
