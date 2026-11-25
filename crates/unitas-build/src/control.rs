@@ -40,7 +40,7 @@ impl InjectedInput {
         match self {
             InjectedInput::Key { key, pressed } => runtime.input_key_event(key, pressed),
             InjectedInput::MouseButton { button, pressed } => {
-                runtime.input_mouse_button_event(button, pressed)
+                runtime.input_mouse_button_event(button, pressed);
             }
             InjectedInput::PointerMove { x, y } => runtime.input_pointer_move(x, y),
             InjectedInput::Scroll { x, y } => runtime.input_scroll(x, y),
@@ -54,8 +54,12 @@ enum Request {
     Pause,
     Stop,
     State,
-    Step { frames: u64 },
-    InjectInput { events: Vec<InjectedInput> },
+    Step {
+        frames: u64,
+    },
+    InjectInput {
+        events: Vec<InjectedInput>,
+    },
     Capture {
         width: u32,
         height: u32,
@@ -253,8 +257,8 @@ impl ControlSession {
 }
 
 fn load_runtime(scene_path: &Path) -> Result<Runtime, ProtocolError> {
-    let mut runtime = Runtime::new()
-        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+    let mut runtime =
+        Runtime::new().map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
     runtime
         .load_scene(scene_path)
         .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
@@ -363,8 +367,7 @@ fn capture_object_json(object: &CaptureObject) -> Value {
 
 #[cfg(feature = "device")]
 fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let first = u32::from(chunk[0]);
@@ -743,7 +746,7 @@ mod tests {
     #[cfg(feature = "device")]
     #[test]
     fn base64_encoding_pads_the_last_group() {
-        assert_eq!(base64_encode(b""), String::from(""));
+        assert_eq!(base64_encode(b""), String::new());
         assert_eq!(base64_encode(b"f"), String::from("Zg=="));
         assert_eq!(base64_encode(b"fo"), String::from("Zm8="));
         assert_eq!(base64_encode(b"foo"), String::from("Zm9v"));

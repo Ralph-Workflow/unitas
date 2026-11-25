@@ -54,7 +54,7 @@ namespace Unitas.Editor.Tests.Core
 
         private static void CompleteOperationWrapsResultInUntrustedEnvelope()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
             host.GrantScope(session, Scope.Build, GrantAuthority.Person);
             string operationId = host.StartOperation(session, "build.macos", Scope.Build);

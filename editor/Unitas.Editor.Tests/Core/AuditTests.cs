@@ -97,7 +97,7 @@ namespace Unitas.Editor.Tests.Core
             {
                 AuditStore firstStore = AuditStore.ForProject(projectDir, stateRoot);
                 FixedClock clock = new FixedClock(2_000);
-                McpHost firstHost = new McpHost(clock, PersonCredential.Absent, new AuditLog(firstStore));
+                using McpHost firstHost = new McpHost(clock, PersonCredential.Absent, new AuditLog(firstStore));
                 BuiltinDefaults.Register(firstHost);
                 firstHost.RegisterTool(
                     new ToolDefinition(
@@ -134,7 +134,7 @@ namespace Unitas.Editor.Tests.Core
 
                 AuditStore secondStore = AuditStore.ForProject(projectDir, stateRoot);
                 clock.Advance(50);
-                McpHost secondHost = new McpHost(clock, PersonCredential.Absent, new AuditLog(secondStore));
+                using McpHost secondHost = new McpHost(clock, PersonCredential.Absent, new AuditLog(secondStore));
                 BuiltinDefaults.Register(secondHost);
 
                 Check.Equal("audit_persistence: reloaded count after restart", 2, secondHost.Audit.Count);
@@ -181,7 +181,7 @@ namespace Unitas.Editor.Tests.Core
             {
                 AuditStore store = AuditStore.ForProject(projectDir, stateRoot);
                 FixedClock clock = new FixedClock(5_000);
-                McpHost host = new McpHost(
+                using McpHost host = new McpHost(
                     clock,
                     PersonCredential.FromToken("secret-person-token"),
                     new AuditLog(store));
@@ -327,7 +327,7 @@ namespace Unitas.Editor.Tests.Core
 
                 AuditStore store = AuditStore.ForProject(projectDir, stateRoot);
                 FixedClock clock = new FixedClock(9_000);
-                McpHost host = new McpHost(clock, PersonCredential.Absent, new AuditLog(store));
+                using McpHost host = new McpHost(clock, PersonCredential.Absent, new AuditLog(store));
                 BuiltinDefaults.Register(host);
                 AuditTools.Register(host);
 

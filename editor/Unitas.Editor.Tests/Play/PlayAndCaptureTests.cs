@@ -16,7 +16,7 @@ namespace Unitas.Editor.Tests.Play
 
         private static void PlaySessionLifecycleAndIsolationWithWorker()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults();
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = PlayTools.Register(host);
             CaptureTool.Register(host, manager);
 
@@ -165,7 +165,7 @@ namespace Unitas.Editor.Tests.Play
 
         private static void WorkerCrashEndsOnlyThatPlaySessionAndHostContinues()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults();
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = PlayTools.Register(host);
 
             string sessionId = host.CreateSession(new SessionIdentity("agent-crash-test", "http", "person-1"));
@@ -258,7 +258,7 @@ namespace Unitas.Editor.Tests.Play
         private static void PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential()
         {
             PersonCredential credential = PersonCredential.FromToken("person-secret-token");
-            McpHost host = new McpHost(new SystemClock(), credential);
+            using McpHost host = new McpHost(new SystemClock(), credential);
             BuiltinDefaults.Register(host);
             using PlaySessionManager manager = PlayTools.Register(host);
 
@@ -342,7 +342,7 @@ namespace Unitas.Editor.Tests.Play
 
         private static void LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults();
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = PlayTools.Register(host);
             CaptureTool.Register(host, manager);
 

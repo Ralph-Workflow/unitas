@@ -77,7 +77,7 @@ namespace Unitas.Editor.Tests
 
         private static void UnrecognizedArgumentsAreReportedByNameAndReturnInvalidInvocation()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
             using StringWriter output = new StringWriter();
             int exitCode = HeadlessCli.Run(
                 host,
@@ -104,7 +104,7 @@ namespace Unitas.Editor.Tests
 
         private static void MissingOptionValueReportsOptionByNameAndReturnsInvalidInvocation()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
             CliResult result = HeadlessCli.Execute(
                 host,
                 MissingProjectPathValArgs);
@@ -118,7 +118,7 @@ namespace Unitas.Editor.Tests
 
         private static void NonExistentProjectPathReturnsProjectOpenFailed()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
             string missingPath = Path.Combine(Path.GetTempPath(), "unitas-cli-missing-" + Guid.NewGuid().ToString("N"));
             using StringWriter output = new StringWriter();
             int exitCode = HeadlessCli.Run(
@@ -141,7 +141,7 @@ namespace Unitas.Editor.Tests
             string tempProject = CreateTempProjectDirectory();
             try
             {
-                McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+                using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
 
                 CliResult runTestsResult = HeadlessCli.Execute(
                     host,
@@ -219,7 +219,7 @@ namespace Unitas.Editor.Tests
             string tempProject = CreateTempProjectDirectory();
             try
             {
-                McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+                using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
                 host.RegisterTool(
                     new ToolDefinition(
                         "editor.execute_method",
@@ -288,7 +288,7 @@ namespace Unitas.Editor.Tests
             {
                 string sampleProjectDir = ResolveSampleProjectDirectory(tempDir);
                 string logFilePath = Path.Combine(tempDir, "headless-smoke.log");
-                McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+                using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
 
                 using StringWriter output = new StringWriter();
                 int exitCode = HeadlessCli.Run(

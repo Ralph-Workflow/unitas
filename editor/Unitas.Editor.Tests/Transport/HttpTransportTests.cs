@@ -28,7 +28,7 @@ namespace Unitas.Editor.Tests
 
         private static async Task ConcurrentHttpClientsHaveIsolatedSessionsScopesAndAuditRecordsWhilePersonSessionRemainsUnaffected()
         {
-            McpHost host = BuildTestHost();
+            using McpHost host = BuildTestHost();
             string personSessionId = host.CreateSession(
                 new SessionIdentity("editor-person", "local-ui", "person-local"));
             host.GrantScope(personSessionId, Scope.Deploy, GrantAuthority.Person);
@@ -242,7 +242,7 @@ namespace Unitas.Editor.Tests
 
         private static async Task ConcurrentClientsKeepTheirOwnAuditIdentity()
         {
-            McpHost host = BuildTestHost();
+            using McpHost host = BuildTestHost();
             HttpTransportHost transportHost = new HttpTransportHost(host, 0);
             using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
@@ -353,7 +353,7 @@ namespace Unitas.Editor.Tests
 
         private static async Task HttpSelfWideningAndUnknownPrimitiveErrorsAreMappedAndAudited()
         {
-            McpHost host = BuildTestHost();
+            using McpHost host = BuildTestHost();
             HttpTransportHost transportHost = new HttpTransportHost(host, 0);
             using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
@@ -570,7 +570,7 @@ namespace Unitas.Editor.Tests
 
         private static McpHost BuildTestHost()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.inspect",

@@ -18,7 +18,7 @@ namespace Unitas.Editor.Tests
 
         private static void AbsentNativeLibraryYieldsNamedNonFatalOutcome()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             string missingPath = "/nonexistent/unitas/path/libunitas_editor_abi_missing.dylib";
 
             NativeLoadOutcome outcome = host.TryRegisterNativeLibrary(missingPath);
@@ -78,7 +78,7 @@ namespace Unitas.Editor.Tests
                 + "\"origin\":\"unitas://native/build\"}]}",
                 (name, argsJson) => "{\"tool\":\"" + name + "\",\"received\":" + argsJson + "}");
 
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             NativeLoadOutcome outcome = host.RegisterNativeSource(source);
             Check.That(
                 "native-bridge: fake source loads cleanly",
@@ -141,7 +141,7 @@ namespace Unitas.Editor.Tests
                     return "{\"error\":{\"kind\":\"tool-failed\",\"message\":\"native subsystem fault\"}}";
                 });
 
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             host.RegisterNativeSource(source);
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
 
@@ -169,7 +169,7 @@ namespace Unitas.Editor.Tests
 
         private static void LiveFfiLibraryDescribesRegistersAndInvokesRustNativeTool()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             NativeLoadOutcome outcome = host.TryRegisterNativeLibrary();
             Check.That(
                 "native-bridge: live libunitas_editor_abi loads from build output",

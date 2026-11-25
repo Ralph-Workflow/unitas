@@ -19,7 +19,7 @@ namespace Unitas.Editor.Tests
         // Port of registry.rs scope_refusal_names_missing_scope_and_grant_allows_call.
         private static void ScopeRefusalNamesMissingScopeAndGrantAllowsCall()
         {
-            McpHost host = MakeHost();
+            using McpHost host = MakeHost();
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
 
             JsonNode read = host.CallTool(session, "scene.inspect", new JsonObject());
@@ -54,7 +54,7 @@ namespace Unitas.Editor.Tests
         // Port of registry.rs self_widening_via_tool_or_session_authority_is_refused_and_audited.
         private static void SelfWideningViaToolOrSessionAuthorityIsRefusedAndAudited()
         {
-            McpHost host = MakeHost();
+            using McpHost host = MakeHost();
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
 
             McpError? viaGrant = Catch(() => host.GrantScope(session, Scope.Deploy, GrantAuthority.SessionInherited));
@@ -81,7 +81,7 @@ namespace Unitas.Editor.Tests
         // Port of registry.rs resource_read_marks_untrusted_and_operations_track_completion.
         private static void ResourceReadMarksUntrustedAndOperationsTrackCompletion()
         {
-            McpHost host = MakeHost();
+            using McpHost host = MakeHost();
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "person-1"));
 
             JsonNode resource = host.ReadResource(session, "unitas://project/logs");
@@ -113,7 +113,7 @@ namespace Unitas.Editor.Tests
         // New: a native-registered tool goes through the same scope gate as a built-in.
         private static void NativeRegisteredToolIsScopeGated()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             host.RegisterNativeTools(
                 new[]
                 {
@@ -146,7 +146,7 @@ namespace Unitas.Editor.Tests
         // New: a native-registered tool is enveloped and audited identically to a built-in.
         private static void NativeRegisteredToolIsEnvelopedAndAuditedLikeBuiltin()
         {
-            McpHost host = MakeHost();
+            using McpHost host = MakeHost();
             host.RegisterNativeTools(
                 new[]
                 {
@@ -193,7 +193,7 @@ namespace Unitas.Editor.Tests
 
         private static McpHost MakeHost()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.inspect",

@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
 {
-    public sealed partial class McpHost
+    public sealed partial class McpHost : IDisposable
     {
         private readonly IClock clock;
         private readonly Authorizer authorizer;
@@ -13,6 +13,7 @@ namespace Unitas.Editor.Mcp
         private readonly OperationStore operations;
         private readonly AuditLog auditLog;
         private readonly IPersonCredential personCredential;
+        private IDisposable? ownedResource;
 
         // shortcut: the Contract's Authorizer exposes no session lookup, so the host
         // mirrors each session's identity at creation time for audit records; revisit
@@ -378,6 +379,20 @@ namespace Unitas.Editor.Mcp
             }
 
             return Scope.ReadProject;
+        }
+
+        public void OwnResource(IDisposable resource)
+        {
+            ArgumentNullException.ThrowIfNull(resource);
+            ownedResource = resource;
+        }
+
+        public void Dispose()
+        {
+            IDisposable? resource = ownedResource;
+            ownedResource = null;
+            resource?.Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 }

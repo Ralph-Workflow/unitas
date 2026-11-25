@@ -1,3 +1,13 @@
+macro_rules! ffi_export {
+    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
+            #[used]
+            static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
+            $body
+        }
+    };
+}
+
 use crate::descriptor::{Scope, ToolDescriptor};
 use crate::dispatch::{error_json, AbiError, DispatchTable};
 use serde_json::json;
@@ -72,15 +82,31 @@ fn allocate_c_string(text: &str) -> usize {
     address
 }
 
+fn allocate_c_buffer(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    let boxed = vec![0u8; capacity].into_boxed_slice();
+    let address = boxed.as_ptr() as usize;
+    let Ok(mut map) = string_registry().lock() else {
+        return 0;
+    };
+    map.insert(address, boxed);
+    address
+}
+
 fn read_c_string(address: usize) -> Option<Result<String, ()>> {
     if address == 0 {
         return None;
     }
     let map = string_registry().lock().ok()?;
     let bytes = map.get(&address)?;
-    let payload = bytes.split_last().map_or(&[][..], |(_, rest)| rest);
+    let end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
     Some(
-        std::str::from_utf8(payload)
+        std::str::from_utf8(&bytes[..end])
             .map(str::to_owned)
             .map_err(|_| ()),
     )
@@ -134,6 +160,7 @@ fn invoke_json(name_addr: usize, args_addr: usize) -> String {
     })
 }
 
+ffi_export! {
 pub extern "C" fn unitas_editor_install_builtin_tools() -> i32 {
     catch_unwind(|| match ensure_default_dispatch_table() {
         Ok(()) => 0,
@@ -141,14 +168,18 @@ pub extern "C" fn unitas_editor_install_builtin_tools() -> i32 {
     })
     .unwrap_or(-1)
 }
+}
 
+ffi_export! {
 pub extern "C" fn unitas_editor_tools_describe() -> usize {
     match catch_unwind(|| allocate_c_string(&describe_json())) {
         Ok(ptr) => ptr,
         Err(_) => panic_error(),
     }
 }
+}
 
+ffi_export! {
 pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> usize {
     match catch_unwind(AssertUnwindSafe(|| {
         allocate_c_string(&invoke_json(name, args_json))
@@ -157,7 +188,15 @@ pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> us
         Err(_) => panic_error(),
     }
 }
+}
 
+ffi_export! {
+pub extern "C" fn unitas_editor_string_buffer(capacity: usize) -> usize {
+    allocate_c_buffer(capacity)
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_editor_string_free(ptr: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if ptr != 0 {
@@ -166,6 +205,7 @@ pub extern "C" fn unitas_editor_string_free(ptr: usize) {
             }
         }
     }));
+}
 }
 
 #[cfg(test)]

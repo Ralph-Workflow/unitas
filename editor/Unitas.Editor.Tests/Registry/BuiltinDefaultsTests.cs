@@ -15,7 +15,7 @@ namespace Unitas.Editor.Tests
 
         private static void RegistersProjectStatusToolAndKnowledgeScopesResource()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             BuiltinDefaults.Register(host);
 
             IReadOnlyList<ToolDefinition> tools = host.ListTools();
@@ -50,7 +50,7 @@ namespace Unitas.Editor.Tests
 
         private static void BuiltinDefaultsAreReadProjectScopedAndUntrusted()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             BuiltinDefaults.Register(host);
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
 
@@ -88,7 +88,7 @@ namespace Unitas.Editor.Tests
 
         private static void RegisteringBuiltinDefaultsTwiceFailsWithDuplicateTool()
         {
-            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
             BuiltinDefaults.Register(host);
             bool threwDuplicate = false;
             try

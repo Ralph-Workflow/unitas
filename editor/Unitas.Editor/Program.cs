@@ -18,7 +18,7 @@ namespace Unitas.Editor
 
             if (HeadlessCli.IsCliInvocation(args))
             {
-                McpHost cliHost = BuiltinDefaults.CreateStartupHost(args);
+                using McpHost cliHost = BuiltinDefaults.CreateStartupHost(args);
                 return HeadlessCli.Run(cliHost, args);
             }
 
@@ -58,6 +58,7 @@ namespace Unitas.Editor
                 finally
                 {
                     await transportHost.DisposeAsync().ConfigureAwait(false);
+                    host.Dispose();
                 }
 
                 return 0;

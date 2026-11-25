@@ -22,7 +22,7 @@ namespace Unitas.Editor.Tests
 
         private static async Task StdioInitializeToolsAndResourcesRoundTrip()
         {
-            McpHost host = BuildTestHost();
+            using McpHost host = BuildTestHost();
             StdioTransportHost transportHost = new StdioTransportHost(host);
 
             Pipe clientToServer = new Pipe();
@@ -204,7 +204,7 @@ namespace Unitas.Editor.Tests
 
         private static async Task StdioErrorMappingPreservesJsonRpcCodes()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
             StdioTransportHost transportHost = new StdioTransportHost(host);
 
             Pipe clientToServer = new Pipe();
@@ -274,7 +274,7 @@ namespace Unitas.Editor.Tests
 
         private static McpHost BuildTestHost()
         {
-            McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
+            using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.inspect",
