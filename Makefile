@@ -36,11 +36,11 @@ verify-suite-gates:
 
 verify-dotnet-gates:
 	@rc=0; \
-	python3 tools/verify.py timed dotnet-restore $(VERIFY_BUDGET_SECONDS) $(DOTNET_RESTORE_COMMAND) || rc=1; \
-	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
 	$(MAKE) --no-print-directory runtime-build & pr=$$!; \
-	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) --no-restore || rc=1; \
+	python3 tools/verify.py timed dotnet-restore $(VERIFY_BUDGET_SECONDS) $(DOTNET_RESTORE_COMMAND) || rc=1; \
 	wait $$pr || rc=1; \
+	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) --no-restore || rc=1; \
+	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
 	$(MAKE) --no-print-directory dotnet-test-run || rc=1; \
 	wait $$pf || rc=1; \
 	exit $$rc
@@ -49,8 +49,10 @@ test:
 	@python3 tools/verify.py timed test-suite $(SUITE_BUDGET_SECONDS) $(MAKE) --no-print-directory test-steps
 
 test-steps:
-	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q
-	@python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace
+	@rc=0; \
+	python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
+	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace & p2=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
