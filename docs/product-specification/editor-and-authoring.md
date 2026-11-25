@@ -4,7 +4,8 @@
 
 This specification defines the visual editor: the views that present project
 and runtime state, direct authoring of scenes and content, play mode, undo and
-recovery, commands, source-control-aware editing and semantic merge, and the
+recovery, commands, drawing of project and package editor extensions,
+source-control status, history, diff, and commit, semantic merge, and the
 review, approval, and reversal of changes made by agents.
 
 The editor is the unitas IDE. It owns the open project's model and every
@@ -15,10 +16,14 @@ which exposes every editor operation. People use the same operations, on the
 same project model, through the visual editor. The visual editor's purposes
 are to make project and runtime state clear, to support direct authoring of
 scenes and content, and to let a developer review, approve, and reverse agent
-changes. It does not aim for
-parity with the breadth, customization, or polish of the Unity Editor's
-authoring surfaces; a Unity Editor workflow that this document does not name is
-not promised by it.
+changes. Its views and workflows are defined by
+this specification and by the authoring requirements of each content kind's
+owning specification, not copied from the Unity Editor. The editor extensions
+that a project and its packages declare (custom inspectors, drawers, editor
+windows, scene view tools, and settings pages) draw and run in it, as defined
+in [Custom editor extensions](#custom-editor-extensions), so the authoring
+surfaces that a Unity 2022.3 project and its packages bring with them are
+available in unitas.
 
 The editor is itself a unitas project: it is built by unitas and runs as a
 unitas engine instance on the unitas player, not as a separate native
@@ -65,7 +70,7 @@ documented Unity 2022.3 LTS meaning.
 
 ### Required behavior
 
-The workspace is a fixed set of purposeful views:
+The workspace provides these built-in views:
 
 * project browser;
 * scene hierarchy;
@@ -75,13 +80,19 @@ The workspace is a fixed set of purposeful views:
 * console and diagnostics;
 * compatibility report;
 * agent activity and change review (EDT-008);
+* source control (EDT-007);
 * build status;
-* play controls.
+* play controls;
+* project settings and preferences.
 
-Each view can be shown, hidden, resized, and focused. Free-form docking,
-tearing views into floating windows, and arbitrary tabbed arrangements are not
-promised. Selection is shared across views and identifies the same underlying
-object or asset in each.
+Editor windows that the project and its packages declare open as further views
+(see [Custom editor extensions](#custom-editor-extensions)). Each view, built-in
+or declared, can be shown, hidden, resized, focused, docked beside or inside
+another view, grouped with others as tabs, and torn off into a floating window,
+including on another display. A view can be opened more than once where its
+kind allows it, such as a second inspector locked to one object. Selection is
+shared across views and identifies the same underlying object or asset in
+each. (EDT-006)
 
 The arrangement, view visibility, view sizes, and other personal preferences
 are stored per user and per project, outside shared project content, so changing
@@ -130,22 +141,76 @@ and managed references (`[SerializeReference]`).
 * Runtime values are visually distinct from saved edit-time values.
 * Built-in presentation attributes are honored: `[HideInInspector]`,
   `[Header]`, `[Space]`, `[Tooltip]`, `[Range]`, `[Min]`, `[Multiline]`,
-  `[TextArea]`, `[ColorUsage]`, `[GradientUsage]`, `[Delayed]`, and
-  `[InspectorName]`.
+  `[TextArea]`, `[ColorUsage]`, `[GradientUsage]`, `[Delayed]`,
+  `[InspectorName]`, `[NonReorderable]`, `[ContextMenuItem]`, and `[HelpURL]`.
 * Edits validate before being represented as successfully saved.
 
 ### Custom editor extensions
 
-Custom inspectors (`Editor` subclasses), property drawers (`PropertyDrawer`,
-`DecoratorDrawer`), and editor windows (`EditorWindow`) are recognized, but
-drawing their user interface is Unsupported, as listed in the
-[index](INDEX.md). For a type with a custom inspector or drawer, the inspector
-uses the default presentation of the same serialized properties and states that
-a custom presentation exists but is not drawn. The commands those extensions
-declare, such as `[MenuItem]` and `[ContextMenu]` methods, appear as ordinary
-commands (EDT-006); their execution and content effects are owned by RUN-010 in
-[Scripting runtime](scripting-runtime.md). An editor window that cannot be drawn
-is listed with its declared title and its available commands.
+Custom editor extensions that the project and its packages declare are drawn
+in the visual editor. Their API behavior, and the rule that they run only in a
+trusted project and outside the editor process, are owned by RUN-010 in
+[Scripting runtime](scripting-runtime.md).
+
+* **Custom inspectors** (`Editor` subclasses, through `OnInspectorGUI` or
+  `CreateInspectorGUI`) draw in the inspector in place of the default
+  presentation of their target, with their header and preview. (EDT-002)
+* **Property and decorator drawers** (`PropertyDrawer` and `DecoratorDrawer`,
+  with IMGUI or UI Toolkit) draw their fields wherever the field appears:
+  default and custom inspectors, arrays and lists, nested values, and import
+  settings. (EDT-002)
+* **Editor windows** (`EditorWindow`, through `OnGUI` or `CreateGUI`) open as
+  workspace views that dock, group as tabs, and float like built-in views.
+  Utility windows, popups, drop-downs, and modal windows open with the
+  behavior their show method declares. A window's position and docking are
+  restored with the workspace arrangement. (EDT-006)
+* **Scene view extensions** (`Editor.OnSceneGUI` with `Handles`,
+  `SceneView.duringSceneGui`, editor tools, and overlays) draw in the scene
+  view, as defined in [Gizmos and debug drawing](#gizmos-and-debug-drawing).
+  (EDT-003)
+* **Settings providers** draw as project settings or preferences pages, and
+  search finds them by their keywords. (EDT-006)
+
+A person can switch any custom inspector to the default presentation of the
+same serialized properties and back. Edits made through extension controls
+follow the inspector rules above: validation beside the property, mixed values
+in multi-object editing, and one undo operation per gesture (EDT-005). The
+commands that extensions declare, such as `[MenuItem]` and `[ContextMenu]`
+methods, appear as ordinary commands (EDT-006). When an extension throws, hangs,
+or has not run because the project is untrusted or not yet compiled, its view
+shows the state that RUN-010 defines, and the rest of the editor keeps working.
+
+#### Extension controls through MCP
+
+Every control an extension draws is also exposed to agents through MCP as a
+structured, operable element, so that structured feature parity holds (AUT-001
+in [Automation and MCP](automation-and-mcp.md)).
+
+* Each inspector, window, settings page, and scene view extension exposes an
+  element tree. Each element states its kind (for example button, toggle,
+  text field, number field, slider, popup, mask, object field, foldout, list,
+  label, help box, or handle), its label and tooltip, its current value and
+  options, whether it is enabled, its bounds, and, when known, the serialized
+  property it edits.
+* An element keeps its identity across redraws while the extension draws it
+  in the same position of its tree, so an agent can read it, change it, and
+  read it again.
+* An agent sets values, presses buttons, toggles, selects options, expands
+  foldouts, reorders and resizes lists, scrolls, invokes context menu items,
+  and moves handles to a stated position, rotation, scale, or value. The
+  extension receives each operation as the same events that a person's input
+  produces, so its code observes the same change, and the result is the same
+  as for a person.
+* A region that an extension draws without standard controls, such as a
+  custom canvas, is exposed as an element with its bounds. It accepts pointer
+  and keyboard input at stated coordinates, and its image can be captured as
+  visual evidence (AUT-002).
+* Edits made by agent operations join the agent session's change set
+  (EDT-008) and its undo history (EDT-005). Reading elements requires the
+  read-project scope; operating them runs project code and requires the
+  execute-project-code scope and the scope of the edit (AUT-007).
+* In headless sessions, extensions run their layout and event handling
+  without a window, so the same element trees and operations are available.
 
 ## Scene view
 
@@ -164,8 +229,9 @@ is listed with its declared title and its available commands.
 
 The scene view supports perspective, orthographic, axis-aligned, and two-
 dimensional views. It displays selection outlines, pivots, centers, grids,
-snapping, bounds, cameras, lights, colliders, audio ranges, navigation data, and
-the built-in handles of built-in components. (EDT-003)
+snapping, bounds, cameras, lights, colliders, audio ranges, navigation data,
+the built-in handles of built-in components, and the handles, tools, and
+overlays that project and package editor extensions declare. (EDT-003)
 
 Picking remains accurate for nested, rotated, scaled, transparent, inactive,
 and overlapping objects. The user can cycle or choose among ambiguous hits.
@@ -186,9 +252,24 @@ Lines and rays from `Debug.DrawLine` and `Debug.DrawRay` appear in the scene
 view, and in the game view while its gizmo display is enabled, with their color,
 duration, and `depthTest` behavior. A zero duration draws for one frame.
 
-Custom scene-view drawing performed by custom editors (for example
-`Editor.OnSceneGUI` handles) is part of custom editor extension drawing and is
-Unsupported. Structured capture of gizmo and debug-line data for agents and
+Custom scene-view drawing is drawn in the scene view. (EDT-003)
+
+* `Editor.OnSceneGUI` runs for each selected object whose custom editor
+  declares it, and `SceneView.duringSceneGui` handlers run for every scene
+  view, with Unity's event order.
+* `Handles` controls draw and respond to dragging with their color, matrix,
+  and snapping. A handle drag forms one undo operation, and the target's new
+  values appear in the inspector as the drag proceeds.
+* Editor tools declared with `[EditorTool]` appear among the scene view's
+  tools, globally or for the component types they declare, and are also
+  commands (EDT-006).
+* Scene view overlays declared with `[Overlay]` appear in the scene view, can
+  be shown, hidden, moved, and collapsed, and are restored with the workspace
+  arrangement.
+* Handles, tools, and overlays are exposed to agents as structured, operable
+  elements, as defined in [Extension controls through MCP](#extension-controls-through-mcp).
+
+Structured capture of gizmo and debug-line data for agents and
 tests is owned by DIA-001 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
@@ -234,7 +315,24 @@ The visual editor provides no text-editing surface for script source.
 Opening a script, from the project browser, a component's script field, a
 console entry, a compiler diagnostic, a stack frame, or a test result, opens the
 configured external editor at the script's file and, when known, its line and
-column. The external editor is a per-user preference. When none is configured,
+column. The external editor is a per-user preference.
+
+The IDE integration packages that the project includes
+(`com.unity.ide.visualstudio`, `com.unity.ide.rider`, and
+`com.unity.ide.vscode`) add their editors as choices of that preference, and
+the external-editor preference page draws each package's own preferences, such
+as which kinds of packages get generated project files and the command-line
+arguments to pass, as an editor extension (RUN-010). Changing them has the
+package's documented effect, including on project-file generation and
+regeneration (DIA-002 in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)),
+and agents read and change the same preferences through MCP (AUT-001). When
+the package's editor is chosen, opening a script reaches the IDE through the
+package's own launch behavior. When the IDE the package names is not
+installed, the preference page states this and opening a script falls back as
+below.
+
+When none is configured,
 the operating system's default handler for the file type is used and the
 editor states which application was asked to open it. When the launch fails,
 the editor reports the configured command, the file, and the failure, and the
@@ -349,6 +447,52 @@ Text-serialized assets remain reviewable as text, while the editor also presents
 semantic object and property context for them. Source-control status never
 substitutes for actual save success.
 
+### Git workflows
+
+For a project inside a Git working tree, the editor provides source-control
+status, history, diff, and commit in the source-control view, in the project
+browser and hierarchy, and through MCP with the same results. (EDT-007)
+
+* **Status.** Each asset shows whether it is unchanged, modified, added,
+  deleted, renamed, untracked, ignored, conflicted, or staged. An asset and its
+  `.meta` file are presented together, and a change to only one of them is
+  flagged, since a lone `.meta` change or a missing `.meta` breaks references.
+  The view shows the current branch, its upstream, and how far it is ahead or
+  behind.
+* **History.** The history of the project, of a folder, and of one asset lists
+  commits with author, time, message, and the assets they changed, and follows
+  renames.
+* **Diff.** Any two revisions, or a revision and the working tree, compare as
+  text and, for scenes, prefabs, and other serialized assets, as the semantic
+  diff defined below.
+* **Commit.** A person selects changes to stage, with each asset's `.meta`
+  file staged with it unless they deselect it, writes a message, and commits.
+  Unsaved editor changes in the selection are named before the commit, so
+  that a commit never silently omits them. The commit uses the person's Git
+  identity, configuration, signing, and hooks; a hook that rejects the commit
+  reports its output and leaves the staged state unchanged.
+* **Large files.** Files tracked by Git LFS show their lock state, and a
+  person can lock and unlock them where the remote supports locking. A file
+  whose content was never fetched is shown as an LFS pointer, not as a
+  corrupt asset, and is reported as missing content (SER-004 in
+  [Serialization and prefabs](serialization-and-prefabs.md)).
+* **Updates from outside.** Checkouts, pulls, merges, and stashes made outside
+  the editor are detected without a manual refresh and handled as external
+  changes. A merge conflict in a serialized asset opens in the semantic
+  three-way merge below.
+
+Agent sessions use the same operations through MCP under the permission scopes
+of AUT-007 in [Automation and MCP](automation-and-mcp.md). A commit made for an
+agent session contains only applied changes, never items held for approval
+(EDT-008), and records the agent session that requested it.
+
+The Version Control package (`com.unity.collab-proxy`) and the project's
+Plastic SCM and Unity Version Control settings, including the project's
+version control mode (PRJ-007 in [Projects and assets](project-and-assets.md)),
+are kept unchanged as project content. The package's own windows draw as
+editor extensions (RUN-010) and operate when its service and account are
+available.
+
 ### Semantic diff and three-way merge
 
 unitas compares and merges Unity scenes, prefabs, and other YAML-serialized
@@ -371,10 +515,13 @@ rather than text lines. (EDT-007)
 * Before a merge result is written, it is validated: references resolve or
   are reported, and no unknown serialized data is discarded without being
   listed. A merge with unresolved conflicts is never written as merged.
-* Assets in binary serialization form, and assets whose types cannot be read,
-  are reported as not semantically mergeable rather than merged by text.
-  Serialization forms are owned by SER-005 in
+* Assets in binary serialization form are compared and merged at the same
+  object and property level, and the merge result is written in the asset's
+  own serialization form. Serialization forms are owned by SER-005 in
   [Serialization and prefabs](serialization-and-prefabs.md).
+* An asset that is corrupt, or whose serialized form or type cannot be read,
+  is reported as not semantically mergeable, naming the reason, and is never
+  merged by text.
 
 Semantic diff and merge are available in the visual editor, from the command
 line so a source-control client can invoke them as external diff and merge
@@ -529,9 +676,10 @@ the keyboard.
    across all open scenes, and deleting a parent shows its complete descendant
    scope first. (EDT-001)
 3. A component whose script declares `[Range]`, `[Header]`, and a custom
-   `PropertyDrawer` shows the range and header, uses default presentation for
-   the drawer's field, and states that the custom drawer is not drawn.
-   (EDT-002)
+   `PropertyDrawer` shows the range and header and draws the drawer's field
+   with the drawer's own controls, and an agent reads and sets that field
+   through the drawer's controls over MCP with the same result as a person.
+   (EDT-002, AUT-001)
 4. A script's `OnDrawGizmosSelected` gizmo appears only while its object is
    selected, and a `Debug.DrawLine` with a two-second duration remains visible
    for two seconds of play time. (EDT-003)
@@ -600,3 +748,46 @@ the keyboard.
     operation regardless of actor. (EDT-005)
 27. A change set that edits per-project unitas configuration lists that change
     ahead of its other items. (EDT-008)
+28. A custom inspector drawn with `OnInspectorGUI` and another drawn with
+    `CreateInspectorGUI` each replace their target's default presentation;
+    an agent reads each inspector's element tree with labels, values, and
+    bound property paths, presses a button and sets a field in each, and the
+    resulting edits match a person's, join undo, and appear in the agent
+    session's change set. (EDT-002, AUT-001)
+29. A project `EditorWindow` opened from its `[MenuItem]` docks beside the
+    inspector, groups as a tab with the console, tears off into a floating
+    window, and returns to the same place when the project reopens; an agent
+    operates the same window's controls through MCP. (EDT-006, AUT-001)
+30. An `Editor.OnSceneGUI` position handle moves its target when a person
+    drags it and when an agent sets the handle's position through MCP, each
+    as one undo operation with the same resulting values, and an
+    `[EditorTool]` tool and an `[Overlay]` appear in the scene view.
+    (EDT-003, AUT-001)
+31. A custom inspector that throws shows the error in place while the rest of
+    the editor keeps working, and the person switches it to the default
+    presentation; in the same project untrusted, the default presentation
+    shows with the statement that the extension has not run. (EDT-002)
+32. A custom window that draws its own canvas without standard controls is
+    exposed to an agent as a region with bounds that accepts pointer input at
+    stated coordinates and can be captured as an image. (EDT-006, AUT-001)
+33. In a Git working tree, the source-control view shows a modified scene with
+    its `.meta` file, flags a `.meta` file changed alone, lists the scene's
+    history across a rename, shows a semantic diff between two revisions, and
+    commits the selected changes with the person's Git identity; an agent
+    obtains the same status, history, and diff through MCP. (EDT-007)
+34. A commit requested while a selected scene has unsaved editor changes names
+    those changes first, and a rejecting commit hook reports its output and
+    leaves the staged state unchanged. (EDT-007)
+35. A project with the Version Control package and Unity Version Control
+    settings opens, keeps those settings unchanged through save, and draws
+    the package's window. (EDT-007)
+36. The preference page of an installed IDE integration package draws the
+    package's own preferences, changing which packages get generated project
+    files regenerates them accordingly, and an agent reads and changes the
+    same preference through MCP. (EDT-006, DIA-002)
+37. A three-way merge of a binary-serialized scene changed on two branches
+    combines changes to different properties, surfaces a same-property
+    conflict, and writes the result in binary form; a corrupt asset is
+    reported as not semantically mergeable with the reason. (EDT-007)
+38. A `SettingsProvider` page appears among the project settings, search finds
+    it by its keywords, and an agent edits its fields through MCP. (EDT-006)

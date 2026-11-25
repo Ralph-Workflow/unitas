@@ -4,7 +4,7 @@
 
 This specification defines how project data retains meaning across save, load,
 Unity interoperability, duplication, instantiation, prefab inheritance, script
-changes, and missing or unsupported content. It owns PRJ-003 and SER-001
+changes, and missing or unknown content. It owns PRJ-003 and SER-001
 through SER-005 in the [Feature catalog](feature-catalog.md): asset identity
 and references, serialized values, scenes and additive scene sets, prefabs and
 variants, missing and unknown content, and serialization forms and generated
@@ -12,8 +12,9 @@ caches.
 
 These are desired end-state requirements, not claims about currently shipped
 capability. Unity 2022.3 LTS serialization is the baseline. Projects saved by
-Unity 2020.3 LTS or Unity 2021.3 LTS are migrated to that baseline, as defined
-in [Serialized version migration](#serialized-version-migration).
+earlier Unity releases, including Unity 2020.3 LTS and Unity 2021.3 LTS, are
+migrated to that baseline, as defined in
+[Serialized version migration](#serialized-version-migration).
 Package-defined serialization is covered only for the package versions listed
 in the supported package matrix (CMP-002 in
 [Compatibility contract](compatibility-contract.md)).
@@ -61,10 +62,14 @@ unambiguous.
   of unchanged named or identified sub-assets.
 * Unrecognized `.meta` fields and importer settings are preserved across
   saves.
-* References to Unity built-in resources, such as default materials, built-in
-  meshes, default UI sprites, and built-in fonts, resolve to content with the
-  same identity and observable role; a built-in resource with no equivalent is
-  reported Unsupported and remains a reference with its original identity.
+* References to Unity built-in resources resolve to content with the same
+  identity and observable role. This covers every object in Unity 2022.3 LTS's
+  built-in resource sets (`unity default resources` and
+  `unity_builtin_extra`), including default materials, built-in meshes,
+  default UI sprites and skins, built-in fonts, built-in shaders, the default
+  skybox, and default textures. A reference whose identifier names no object
+  in those sets remains a missing reference with its original identity, and
+  is reported.
 
 ## Serialization contract
 
@@ -72,11 +77,15 @@ Serialization preserves the values and relationships that constitute supported
 project content. A successful load followed by a save does not change the
 observable meaning of unchanged content.
 
-Supported value families include booleans, signed and unsigned numbers,
-floating-point values, strings, enums, flags enums, vectors, quaternions,
-matrices, colors, rectangles, bounds, layer masks, animation curves, gradients,
-arrays, lists, nested `[Serializable]` values, object references, and managed
-references declared with `[SerializeReference]`.
+Supported value families include booleans, characters, signed and unsigned
+numbers, floating-point values, strings, enums, flags enums, vectors and
+integer vectors, quaternions, matrices, colors and 32-bit colors, rectangles
+and integer rectangles, bounds and integer bounds, `Hash128`, layer masks,
+animation curves, gradients, `GUIStyle` and `RectOffset` values, arrays,
+lists, nested `[Serializable]` values, object references,
+`LazyLoadReference<T>`, `ExposedReference<T>`, serialized events (RUN-008 in
+[Scripting runtime](scripting-runtime.md)), and managed references declared
+with `[SerializeReference]`.
 
 ### Required behavior
 
@@ -86,11 +95,11 @@ references declared with `[SerializeReference]`.
 * Internal references within a duplicated hierarchy target the corresponding
   duplicated objects, as in Unity.
 * External references remain external.
-* Intentional null, missing target, incompatible target, and unsupported value
-  remain distinguishable.
+* Intentional null, missing target, incompatible target, and unknown or
+  unreadable value remain distinguishable.
 * Floating-point special values (infinity, negative infinity, NaN, negative
   zero) and full single- and double-precision values round-trip unchanged.
-* Saving cannot silently replace unreadable or unsupported data with defaults.
+* Saving cannot silently replace unreadable or unknown data with defaults.
 * Unknown data that can be safely retained survives unrelated edits.
 
 ## Script field behavior
@@ -198,8 +207,8 @@ and its scene-level settings references (lighting settings, baked lighting
 data, occlusion data, and navigation data).
 
 Opening and saving one scene does not alter unopened scenes. If part of a
-scene is unsupported, supported sibling content remains available and the
-unsupported records retain location and identity. A scene is not reported
+scene is unknown, missing, or unreadable, its sibling content remains
+available and those records retain location and identity. A scene is not reported
 fully compatible simply because its hierarchy can be displayed.
 
 ### Additive scene sets
@@ -328,8 +337,10 @@ unchanged asset writes no change.
 
 ### Serialized version migration
 
-This document owns the migration of projects saved by Unity 2020.3 LTS and
-Unity 2021.3 LTS to the Unity 2022.3 LTS baseline:
+This document owns the migration to the Unity 2022.3 LTS baseline of projects
+saved by every earlier Unity release that Unity 2022.3 LTS upgrades,
+including Unity 2020.3 LTS, Unity 2021.3 LTS, earlier LTS releases, and
+non-LTS releases:
 
 * Objects recorded with an older `serializedVersion`, and settings and
   `.meta` importer data in older forms, are read and upgraded to the forms
@@ -339,18 +350,20 @@ Unity 2021.3 LTS to the Unity 2022.3 LTS baseline:
   edit or by the explicit upgrade action (PRJ-001 in
   [Projects and assets](project-and-assets.md)); opening never rewrites
   unchanged assets.
-* Saved assets always use the forms Unity 2022.3 LTS writes; unitas does not
-  write 2020.3 LTS or 2021.3 LTS forms. In a project whose
+* Saved assets always use the forms Unity 2022.3 LTS writes, as Unity 2022.3
+  LTS does after an upgrade. In a project whose
   `ProjectVersion.txt` still declares an earlier release, the first save that
   writes an upgraded form first lists the assets and states that they then
   need Unity 2022.3 LTS to open in Unity.
-* Behavior that differs between Unity 2020.3 LTS or 2021.3 LTS and Unity
-  2022.3 LTS is not matched; migrated content behaves as it does in Unity
-  2022.3 LTS.
+* Behavior that differs between the earlier release and Unity 2022.3 LTS is
+  not matched; migrated content behaves as it does in Unity 2022.3 LTS.
 * A serialized form newer than Unity 2022.3 LTS, written by a later Unity
-  release, is reported with the affected asset and preserved rather than
-  downgraded. A save that cannot retain it is blocked until the user
-  explicitly chooses to discard the identified data.
+  release, is read wherever its fields map to the Unity 2022.3 LTS form of
+  the same object, and the object is editable and playable with those values.
+  Fields that the 2022.3 LTS form has no place for are preserved, and the
+  asset reports them by name. An edit that keeps them saves them unchanged;
+  a save that cannot retain them is blocked until the user explicitly
+  chooses to discard the identified data.
 
 ### Generated caches and unitas-owned state
 
@@ -406,8 +419,8 @@ requires an explicit user-visible boundary before commitment.
 4. A field renamed with `[FormerlySerializedAs]` keeps its value; a removed
    `[SerializeReference]` type is reported missing and its data returns when
    the type is restored. (SER-001)
-5. Unsupported or missing values cannot silently become defaults, and a failed
-   save leaves the prior valid content identifiable. (SER-001)
+5. Unknown, unreadable, or missing values cannot silently become defaults, and
+   a failed save leaves the prior valid content identifiable. (SER-001)
 6. In an additive scene set, saving one scene writes only that scene, new
    objects go to the active scene, and the set reopens with the same scenes.
    (SER-002)
@@ -456,3 +469,15 @@ requires an explicit user-visible boundary before commitment.
     using the standard Unity ignore template, while a change to per-project
     review policy appears as a change to a tracked unitas project file.
     (SER-005)
+20. A reference to the built-in default skybox material, the built-in
+    `Arial` font, and the default UI sprite each resolves to content with the
+    same identity and role, and a reference to an identifier outside Unity's
+    built-in resource sets stays missing with its identity. (PRJ-003)
+21. A Unity 2019.4 LTS project opens with every asset's values, identities,
+    references, and overrides equal to those Unity 2022.3 LTS produces when it
+    upgrades the same project. (SER-005)
+22. An asset saved by a Unity release later than 2022.3 LTS opens with its
+    mappable fields editable, an edit saves its unmappable fields unchanged,
+    and the asset report names those fields. (SER-005)
+23. A component with `Vector3Int`, `RectInt`, `Hash128`, and
+    `LazyLoadReference<T>` fields round-trips every value unchanged. (SER-001)

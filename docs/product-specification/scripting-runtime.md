@@ -6,7 +6,8 @@ This specification defines the observable C# scripting and runtime behavior of
 unitas: compilation and assemblies, the Unity object model, lifecycle and
 messages, coroutines, asynchronous work and threading, time, runtime scene
 management, resource loading, serialized events and delayed invocation, web
-requests and file locations, editor-time scripts, and jobs. It owns RUN-001
+requests, sockets, and file locations, editor-time scripts and editor
+extensions, Visual Scripting, jobs, and Entities. It owns RUN-001
 through RUN-011 in the [Feature catalog](feature-catalog.md). Compatibility
 means that supported Unity scripts retain their public meaning, not merely that
 similarly named types compile.
@@ -135,8 +136,9 @@ LTS defines for the selected target, including:
 * symbols added by version defines and by response files.
 
 A `csc.rsp` response file contributes defines, warning suppression, warnings
-as errors, and other compiler options Unity 2022.3 accepts; an option unitas
-does not honor is reported naming the option and file.
+as errors, nullable context, additional references, and every other compiler
+option Unity 2022.3 accepts, each with Unity's effect. An option that Unity
+2022.3 rejects is reported naming the option and file, as Unity reports it.
 
 The C# language version is C# 9. The API compatibility level is .NET Standard
 2.1 or .NET Framework, as the project's Player settings choose per target.
@@ -275,15 +277,47 @@ their log file to the location Unity uses on each target and honor the
 by DIA-003 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
-### Recognized unsupported content
+### Visual Scripting
 
-Visual Scripting graphs, script machines, and state machines are recognized
-and reported Unsupported, as declared in the [Index](INDEX.md). Their graphs do
-not execute; the GameObjects that carry them, and every other component on
-those objects, remain usable, and the report names each affected object.
+With the Visual Scripting package (`com.unity.visualscripting`, scoped by
+CMP-002 in the [Compatibility contract](compatibility-contract.md)), script
+graphs and state graphs run as the package defines, in editor play sessions,
+headless play sessions, and players. (RUN-002)
 
-Where an API is unavailable, the product identifies the exact type or member
-and its consequence. An inert placeholder is not reported as support.
+* Script machines and state machines run their graphs, whether embedded in the
+  machine or referenced as graph assets, and receive the package's lifecycle,
+  physics, input, UI, and custom events at Unity's points in the frame.
+* Flow graphs execute their nodes, including control flow, coroutine flow,
+  member invocation nodes for project and Unity types, subgraphs, and super
+  states; state graphs evaluate their states and transitions in the package's
+  order.
+* Graph, object, scene, application, and saved variables keep the package's
+  scope and lifetime; saved variables persist between runs as the package
+  defines (SAV-001 in
+  [Accessibility, localization, and persistence](accessibility-localization-persistence.md)).
+* The node library is generated from the project's assemblies and the type
+  options the project selects, and regenerating it after a script change makes
+  new types and members available as nodes.
+* Players built with ahead-of-time compilation include the code that the
+  graphs' reflected members need, so a graph runs the same as in the editor
+  (BLD-003 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)).
+* Graphs are authored in the package's graph window, drawn as an editor
+  extension as defined in
+  [Custom editor drawing and gizmos](#custom-editor-drawing-and-gizmos).
+  Through automation, an agent reads and edits the same graphs as structured
+  nodes, ports, connections, values, and variables, and its edits are saved in
+  the package's serialized form.
+* A node that refers to a type or member that no longer exists, for example
+  after a rename, is reported naming the graph, node, and member. The node
+  stays in the graph with its connections, and the rest of the graph runs as
+  the package defines for a missing member. An exception thrown inside a
+  graph is logged naming the graph, node, and owning object.
+
+Every public type and member of the scripting profile is available. None
+behaves as an inert placeholder. A member that needs a device capability or
+platform service that the running target lacks reports that status naming the
+member, as defined for each owning feature.
 
 ## Object identity and lifetime
 
@@ -562,10 +596,23 @@ their later attempts to touch destroyed objects or main-thread APIs are
 reported as such. Ending a play session does not silently cancel such work, as
 in Unity.
 
-On targets without threads, such as the browser, thread creation and blocking
-waits are Platform-limited: the build report and runtime diagnostics name the
-affected API and calling member (PLT-001 in
+Browser players run explicitly created threads, the thread pool, `Task.Run`
+work, timers, and blocking waits with the same results as desktop players.
+This is unitas behavior; Unity's browser players have no managed threads. It
+requires the page that hosts the player to be cross-origin isolated, which the
+browser demands before it shares memory between threads, and the browser build
+output states the response headers the host must serve (PLT-001 in
 [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)).
+
+* When the hosting page is not cross-origin isolated, the player still
+  starts. It reports at startup that browser threading is unavailable and
+  names the missing headers. Thread creation and blocking waits then fail
+  with Unity's browser behavior, and runtime diagnostics name the API and the
+  calling member.
+* A per-target project setting keeps Unity's browser behavior, in which
+  thread creation and blocking waits fail as in Unity, so that a project
+  written around that behavior runs unchanged. The build report states which
+  behavior a browser build uses.
 
 ## Runtime scene management
 
@@ -645,10 +692,22 @@ Every asset in a `Resources` folder is included in players (BLD-001).
 ### Streaming assets
 
 Files under `StreamingAssets` are copied unprocessed into players and are
-reachable through `Application.streamingAssetsPath`. Direct file access works
-where the target permits it; on Android packages and the browser, access goes
-through `UnityWebRequest`, and direct file access there is reported as
-Platform-limited naming the calling member.
+reachable through `Application.streamingAssetsPath`. `UnityWebRequest`
+reads them on every target. Direct read access through `System.IO` also works
+on every target, including Android packages and the browser, where Unity
+offers only `UnityWebRequest`; this is unitas behavior:
+
+* On Android, a read of a path under `streamingAssetsPath` reads the file
+  from inside the package. Writes, deletes, and directory creation there fail
+  with the .NET exception for a read-only location, naming the path.
+* On the browser, streaming assets are fetched and held before the first
+  scene loads, so direct reads complete synchronously. A project setting
+  lists files to leave out of that preload, such as large media. A direct
+  read of a file that was left out fails with `FileNotFoundException`, and the
+  diagnostic names the file and the setting. `UnityWebRequest` still reads it.
+* A per-target project setting keeps Unity's behavior, in which direct file
+  access to streaming assets fails on those targets, so that a project that
+  tests for that failure runs unchanged.
 
 ### AssetBundles
 
@@ -663,12 +722,18 @@ synchronously and asynchronously, and expose their assets and scenes.
 * `AssetBundle.Unload(true)` destroys assets loaded from the bundle;
   `Unload(false)` leaves them alive and detached, so reloading the bundle
   produces new copies, as in Unity.
-* A bundle built for another target, built by Unity rather than unitas
-  (BLD-005 in
+* A bundle built by Unity 2022.3 LTS for the running target loads with the
+  same behavior as a bundle that unitas built (BLD-005 in
   [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)),
-  or with a serialized form unitas cannot read (SER-005 in [Serialization and prefabs](serialization-and-prefabs.md)),
-  is reported Unsupported naming the bundle and reason rather than partially
-  loaded.
+  including bundles built without type trees. Its shaders render through the
+  translation owned by REN-002 in
+  [Rendering and animation](rendering-and-animation.md). A Unity-built bundle
+  and a unitas-built bundle can depend on each other in the same player.
+* A bundle built for another target, one written by a Unity version whose
+  serialized form is not part of the baseline, and one that is truncated or
+  corrupt (SER-005 in [Serialization and prefabs](serialization-and-prefabs.md))
+  fail to load with a diagnostic naming the bundle and the reason, and are
+  never partially loaded.
 
 Bundles are built and read with LZMA, LZ4, or no compression.
 `AssetBundle.RecompressAssetBundleAsync` converts between compression forms.
@@ -683,8 +748,9 @@ written on the target is reported with the target and path.
 With the Addressables package (scoped by CMP-002 in the
 [Compatibility contract](compatibility-contract.md)), assets load by address
 key, label, `AssetReference`, and resource location. In players, Addressables
-content and catalogs are the ones unitas built (BLD-005); content built by
-Unity is reported Unsupported naming the catalog or bundle. Load, instantiate, and
+content and catalogs built by unitas (BLD-005) and those built by Unity 2022.3
+LTS load alike, including a remote catalog that a shipped Unity player already
+uses. Load, instantiate, and
 download operations return handles with status, progress, result, and
 exception. Each load increments a reference count; `Release` and
 `ReleaseInstance` decrement it, and content unloads when its count reaches zero.
@@ -692,8 +758,10 @@ Releasing an invalid or already-released handle is reported. Local and remote
 catalogs, catalog update checks, content updates, download size queries, and
 dependency downloads behave as the package defines, and an invalid key fails
 with the package's exception. `WaitForCompletion` completes an operation
-synchronously where the package version allows it; on the browser it is
-Platform-limited and reported naming the calling member. In the editor, the
+synchronously where the package version allows it. On the browser it does so
+whenever browser threading is in effect, as defined in
+[Threading and async/await](#threading-and-asyncawait); otherwise it fails as
+in Unity, with a diagnostic naming the calling member and the reason. In the editor, the
 selected Addressables play mode script (asset database, simulated groups, or
 existing build) is honored and reported.
 
@@ -768,6 +836,59 @@ blocked on mobile targets unless the project setting or platform policy
 allows it, and missing network permission. Requests made by editor scripts
 run only in a trusted project. Request URL, method, status, timing, and
 result are recorded in diagnostics, with credential-bearing headers redacted.
+
+### Sockets
+
+`System.Net.Sockets` behaves under the scripting profile as .NET defines, in
+editor play sessions, headless sessions, and players, including under
+ahead-of-time compilation (BLD-003). (RUN-009)
+
+* TCP through `Socket`, `TcpClient`, `TcpListener`, and `NetworkStream`
+  connects, listens, accepts, sends, receives, and shuts down, with blocking,
+  non-blocking, and asynchronous forms, including `SocketAsyncEventArgs`,
+  `Poll`, and `Select`.
+* UDP through `Socket` and `UdpClient` sends and receives datagrams, sends
+  broadcasts when `EnableBroadcast` is set, and joins and leaves IPv4 and IPv6
+  multicast groups with the time-to-live, loopback, and interface options
+  .NET defines.
+* IPv4, IPv6, and dual-mode sockets, `Dns` resolution, socket options,
+  timeouts, and `NetworkInterface` enumeration, which games use to find
+  broadcast addresses, behave as .NET defines on the host or device.
+* Failures raise `SocketException` with the `SocketError` code .NET assigns,
+  such as connection refused, timed out, host unreachable, address already in
+  use, and access denied.
+
+Per target:
+
+* Desktop, Dedicated Server, and editor hosts provide every form above. A
+  firewall prompt or refusal from the operating system appears as that
+  system's outcome.
+* Android players add the network permissions that the project's sockets
+  need, as Unity's internet-access Player setting defines. While a socket has
+  joined a multicast group, the player holds the Wi-Fi multicast lock that
+  Android requires for multicast reception and adds its permission. This is
+  unitas behavior; a project setting keeps Unity's behavior, in which the
+  project acquires the lock itself.
+* iOS players declare the local-network usage description from Player
+  settings, so local-network access prompts the user. Multicast and broadcast
+  on iOS require the multicast entitlement from Apple; without it, the build
+  report names the entitlement and the affected calls fail with the platform's
+  error.
+* Console players provide sockets when the platform SDK is installed, and
+  perform the network-availability steps that each platform requires before
+  the first connection.
+* Browsers give pages no raw TCP or UDP access. On the browser target, socket
+  creation fails with the .NET platform-not-supported exception, and the
+  build report lists each use naming the calling member.
+  `System.Net.WebSockets.ClientWebSocket` works on every target, including the
+  browser, where it uses the browser's WebSocket connection; this is unitas
+  behavior.
+
+Open sockets, with their protocol, local and remote endpoints, and state, are
+inspectable in the editor and through automation. Sockets still open when a
+play session ends are reported with their origin, as defined for outliving
+work in [Threading and async/await](#threading-and-asyncawait), and are not
+closed silently.
 
 ### File locations
 
@@ -864,26 +985,34 @@ shortcuts, and methods marked `[ContextMenu]` or referenced by
 `[ContextMenuItem]` appear as named, invokable commands in the editor command
 palette (EDT-006 in [Editor and authoring](editor-and-authoring.md)) and as
 automation tools. A validation function that returns false appears as a
-disabled command with its reason. Commands from custom editor extensions
-remain available even though their custom drawing is not.
+disabled command with its reason. Commands from custom editor extensions are
+available in the same way, alongside the extensions' drawn user interface.
 
 ### Editor APIs
 
-At minimum, the following editor APIs are Supported:
+The public `UnityEditor` API of Unity 2022.3 LTS is provided with Unity's
+meaning, including:
 
 * `AssetDatabase` create, import, refresh, move, rename, copy, delete, find,
-  load, and GUID-to-path conversion;
-* `EditorUtility.SetDirty`, dialogs, and progress bars;
+  load, GUID-to-path conversion, labels, and asset editing batches;
+* `EditorUtility.SetDirty`, dialogs, progress bars, and object copying;
 * `SerializedObject` and `SerializedProperty` reading and writing, including
   `ApplyModifiedProperties` and `Update`;
-* `Undo.RecordObject` and `Undo.RegisterCreatedObjectUndo`;
-* `EditorPrefs`;
+* `Undo` recording, created and destroyed object registration, groups,
+  collapsing, and named operations;
+* `EditorPrefs`, `SessionState`, and `EditorApplication`;
+* `Selection`, `EditorGUIUtility`, `DragAndDrop`, `GenericMenu`, and
+  `TypeCache`;
 * `EditorSceneManager` scene opening and saving;
-* `PrefabUtility` instantiation, applying, reverting, and unpacking.
+* `PrefabUtility` instantiation, applying, reverting, and unpacking;
+* `CompilationPipeline` assembly and compilation events;
+* the drawing and extension APIs defined in
+  [Custom editor drawing and gizmos](#custom-editor-drawing-and-gizmos).
 
-Every other editor member carries its own compatibility state in the API
-reference owned by AUT-006 in [Automation and MCP](automation-and-mcp.md), and
-calling an Unsupported member reports the member. Edits made through these
+The API reference owned by AUT-006 in [Automation and MCP](automation-and-mcp.md)
+records each editor member and its state. A member whose effect belongs to
+another feature performs that feature's behavior, as its owning specification
+defines. Edits made through these
 APIs join undo history (EDT-005) and are attributed to the person or agent
 session that invoked the script (EDT-008), as defined in
 [Editor and authoring](editor-and-authoring.md).
@@ -914,10 +1043,81 @@ Unity-readable form.
 
 ### Custom editor drawing and gizmos
 
-Drawing custom inspectors, property drawers, and editor windows is
-Unsupported, as declared in the [Index](INDEX.md); affected objects use the
-default inspector presentation, and the report names each custom drawer that
-is not drawn. `OnDrawGizmos`, `OnDrawGizmosSelected`, and `Gizmos` drawing
+Custom editor extensions that the project and its packages declare run with
+Unity's meaning and are drawn in the visual editor, where their presentation is
+owned by EDT-002, EDT-003, and EDT-006 in
+[Editor and authoring](editor-and-authoring.md). Like other editor scripts,
+they run only in a trusted project (PRJ-008), outside the editor process, in
+the process that runs project code (AUT-004). (RUN-010)
+
+* **Custom inspectors.** `Editor` subclasses selected by `[CustomEditor]`,
+  including `editorForChildClasses` and `[CanEditMultipleObjects]`, draw
+  through `OnInspectorGUI` with IMGUI or through `CreateInspectorGUI` with UI
+  Toolkit. When both are present, `CreateInspectorGUI` takes precedence when it
+  returns an element, as in Unity. `serializedObject`, `target`, `targets`,
+  `DrawDefaultInspector`, `Repaint`, `RequiresConstantRepaint`, header and
+  preview callbacks (`OnHeaderGUI`, `HasPreviewGUI`, `OnPreviewGUI`,
+  `OnInteractivePreviewGUI`), and `RenderStaticPreview` for project browser
+  thumbnails behave as in Unity. Custom editors for importers
+  (`AssetImporterEditor` and `ScriptedImporterEditor`) draw in the import
+  settings with Unity's apply and revert behavior.
+* **Property and decorator drawers.** `PropertyDrawer` types selected by
+  `[CustomPropertyDrawer]` for a type or a `PropertyAttribute`, including
+  `useForChildren`, draw through `OnGUI` and `GetPropertyHeight` with IMGUI or
+  through `CreatePropertyGUI` with UI Toolkit. `DecoratorDrawer` types draw
+  above their field. Drawers apply inside default inspectors, custom
+  inspectors, arrays and lists, and nested values, as in Unity.
+* **Editor windows.** `EditorWindow` subclasses open through `GetWindow`,
+  `CreateWindow`, `Show`, `ShowUtility`, `ShowPopup`, `ShowAsDropDown`,
+  `ShowAuxWindow`, and `ShowModal`, and draw through `OnGUI` with IMGUI or
+  `CreateGUI` with UI Toolkit. They receive `OnEnable`, `OnDisable`,
+  `OnDestroy`, `OnFocus`, `OnLostFocus`, `OnSelectionChange`,
+  `OnHierarchyChange`, `OnProjectChange`, `OnInspectorUpdate`, and `Update`
+  under Unity's conditions. `titleContent`, `position`, `minSize`, `maxSize`,
+  `wantsMouseMove`, and `Close` have Unity's effect, and a window's serialized
+  fields survive domain reload and editor restart as in Unity.
+* **Scene view extensions.** `Editor.OnSceneGUI`,
+  `SceneView.duringSceneGui`, `[DrawGizmo]` methods, `EditorTool` types
+  declared with `[EditorTool]`, and scene view overlays declared with
+  `[Overlay]` draw in the scene view. `Handles` draws and operates position,
+  rotation, scale, free-move, slider, radius, disc, button, and label handles,
+  and draws lines, arcs, discs, and other shapes with Unity's color, matrix,
+  depth test, and size rules; `HandleUtility` picking, nearest-control, and
+  size functions behave as in Unity.
+* **Settings and preferences pages.** `SettingsProvider` types registered with
+  `[SettingsProvider]` appear among the project settings or preferences pages,
+  as their scope declares, with keywords that search finds.
+* **IMGUI controls.** `GUI`, `GUILayout`, `EditorGUI`, and `EditorGUILayout`
+  controls, including fields for every serialized value kind,
+  `PropertyField`, foldouts, popups, masks, sliders, object fields with the
+  object picker, scroll views, toggles, buttons, help boxes, and layout groups,
+  return Unity's values. `Event.current` delivers Unity's event types in
+  Unity's order, including the layout and repaint passes, keyboard and mouse
+  events, context clicks, validated and executed commands, and drag-and-drop
+  updates. Control identifiers, `GUIUtility.hotControl`, `keyboardControl`,
+  `BeginChangeCheck`, `EndChangeCheck`, `GUI.changed`, `GUIStyle`,
+  `EditorStyles`, `GUISkin`, and `GUIContent` with icons and tooltips behave as
+  in Unity. Runtime IMGUI is owned by UI-002 in
+  [UI, audio, and input](ui-audio-input.md).
+* **UI Toolkit in the editor.** Editor UXML and USS, `VisualElement` trees,
+  `UnityEditor.UIElements` controls, `PropertyField`, `InspectorElement`,
+  `IMGUIContainer`, and binding to serialized properties through
+  `bindingPath`, `Bind`, and `Unbind` behave as in Unity, including
+  `ListView` and `TreeView`.
+
+Extension code that throws while drawing or handling an event logs the
+exception naming the extension type, the method, and the inspected object or
+window. Unity's error for unbalanced layout groups is logged in the same way.
+The rest of the editor keeps working, and the affected inspector or window
+shows the error in place. A person or agent can switch an inspector to the
+default presentation of the same serialized properties at any time. An
+extension that does not return within the configured limit is reported as
+hung, as defined by AUT-004, and its view shows the default presentation until
+it returns. In an untrusted project, or while no compilation of the extension
+has succeeded, the default presentation is shown and the view states that the
+extension has not run and why.
+
+`OnDrawGizmos`, `OnDrawGizmosSelected`, and `Gizmos` drawing
 calls are drawn in the scene view for review (EDT-003) and captured as
 structured data (DIA-001 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)).
@@ -961,17 +1161,84 @@ acceleration is available on a target is reported as a performance property
 same results. `Unity.Mathematics` types and functions have the same semantics
 in managed and Burst-compiled code.
 
-On targets without worker threads, such as the browser, jobs run on the main
-thread with the same results, and the absence of parallelism is reported as a
-performance property (PRF-001), not as a compatibility limitation.
+Browser players run jobs on worker threads in parallel whenever browser
+threading is in effect, as defined in
+[Threading and async/await](#threading-and-asyncawait). When it is not in
+effect, jobs run on the main thread with the same results, and the absence of
+parallelism is reported as a performance property (PRF-001), not as a
+compatibility limitation.
 
-### Entities content
+### Entities
 
-Entities and Entities Graphics (`com.unity.rendering.hybrid` and
-`com.unity.entities.graphics`) content is recognized and reported Unsupported, as declared
-in the [Index](INDEX.md), naming each affected asset, subscene, and script.
-Jobs, Burst-compiled code, and native containers that do not depend on those
-packages remain Supported.
+With the Entities (`com.unity.entities`) and Entities Graphics
+(`com.unity.entities.graphics`) packages, scoped by CMP-002 in the
+[Compatibility contract](compatibility-contract.md), entity content behaves as
+the packages define, in the editor, headless sessions, and players. Content
+authored for the Hybrid Renderer (`com.unity.rendering.hybrid`), which Entities
+Graphics replaced, renders as Entities Graphics content after its package
+migrates (PRJ-006 in [Projects and assets](project-and-assets.md)). (RUN-011)
+
+* **Worlds.** The default world is created at startup by the package's
+  bootstrap, or by the project's `ICustomBootstrap`, and is not created when
+  the project defines the automatic-bootstrap-disabling symbols the package
+  reads. Additional worlds, `World.DefaultGameObjectInjectionWorld`, and the
+  editor world behave as the package defines, and world system groups update
+  at their positions in the player loop
+  ([Player loop](#player-loop)).
+* **Entities and components.** `EntityManager` creates and destroys entities
+  and adds and removes components, with structural changes behaving as the
+  package defines. Unmanaged, managed, shared, enableable, cleanup, tag, and
+  chunk components, dynamic buffers, blob assets, aspects, and entity command
+  buffers with their playback systems keep the package's semantics, including
+  archetype and chunk layout as observed through the package's API.
+* **Systems.** `ISystem` and `SystemBase` systems receive their create,
+  start-running, update, stop-running, and destroy callbacks. Default and
+  custom system groups, `[UpdateInGroup]`, `[UpdateBefore]`, `[UpdateAfter]`,
+  `[CreateBefore]`, `[CreateAfter]`, and `[RequireMatchingQueriesForUpdate]`
+  order and gate updates as the package defines. `SystemAPI`, `EntityQuery`
+  with change and enabled filters, `IJobEntity`, `IJobChunk`, and
+  `Entities.ForEach` run through the package's source generators (see
+  [Analyzers and source generators](#analyzers-and-source-generators)), and
+  `ISystem` code marked `[BurstCompile]` follows
+  [Burst and Unity.Mathematics](#burst-and-unitymathematics).
+* **Baking.** `Baker<T>` types convert authoring GameObjects and components
+  into entities with the package's transform usage flags, additional entities,
+  declared dependencies, and baking systems, including `[BakingType]` and
+  `[TemporaryBakingType]` components. Changing an authoring object, or an asset
+  a baker declared as a dependency, rebakes the affected entities
+  incrementally, including while play mode runs with the subscene open.
+* **Subscenes.** A `SubScene` component's scene is baked into entity scene
+  data at import and for builds. Open subscenes are edited as ordinary scenes
+  in the hierarchy (EDT-001). Closed subscenes and their sections stream in and
+  out through the package's scene loading API with its progress and
+  completion states, at runtime and in players.
+* **Transforms.** `LocalTransform`, `LocalToWorld`, `Parent`, `Child`, and
+  `PostTransformMatrix` update as the package's transform systems define.
+* **Rendering.** Entities Graphics renders baked entities with their meshes,
+  materials, `[MaterialProperty]` overrides, level of detail, light probes, and
+  culling in the project's render pipeline, as owned by REN-002 and REN-006 in
+  [Rendering and animation](rendering-and-animation.md).
+
+The packages' editor windows and entity inspectors draw as editor extensions
+([Custom editor drawing and gizmos](#custom-editor-drawing-and-gizmos)).
+Through automation, worlds, systems with their update order and timing,
+entities with their archetypes and component values, and subscene states are
+readable as structured data, and an agent edits the authoring content that
+baking reads.
+
+Failures name their source:
+
+* A baker that throws reports the baker type, the authoring object, and the
+  subscene; the other bakers' output is kept.
+* Entity scene data that was baked by another package version, or that no
+  longer matches its authoring scene, is rebaked from the authoring scene
+  rather than loaded stale.
+* A subscene whose authoring scene is missing is reported naming the subscene
+  and the scene GUID (SER-004 in
+  [Serialization and prefabs](serialization-and-prefabs.md)).
+* A structural change made while it is forbidden, and access to a component an
+  entity lacks, raise the package's exceptions naming the entity and component
+  type. Safety checks follow [Native containers](#native-containers).
 
 ## Logging and exception behavior
 
@@ -1001,8 +1268,10 @@ that an exception did not occur merely because extended details were omitted.
 4. A failed script edit identifies its source location and does not destroy the
    last inspectable valid project state; fixing it recompiles only the affected
    assemblies and their dependents. (RUN-007)
-5. Unsupported APIs and values are reported precisely instead of behaving as
-   successful no-ops. (RUN-002)
+5. Every public API of the scripting profile that a project calls performs
+   its Unity effect, none behaves as a successful no-op, and a call that needs
+   a capability the running device lacks reports that status naming the
+   member. (RUN-002)
 6. A project with scripts under `Plugins`, `Editor`, and assembly definitions
    using references, platform exclusion, define constraints, version defines,
    and an `.asmref` compiles into the same assemblies Unity produces, and a
@@ -1039,8 +1308,11 @@ that an exception did not occur merely because extended details were omitted.
     naming the API; an awaited delay started on the main thread resumes on the
     main thread in the frame loop; a task still running when play ends is
     reported with its origin. (RUN-004)
-16. A browser build of a project that creates a thread reports the API and
-    calling member as Platform-limited. (RUN-004)
+16. A browser build served from a cross-origin isolated page runs a project
+    that creates a thread and blocks on its result with the same results as a
+    desktop build; served without isolation, or built with the setting that
+    keeps Unity's browser behavior, thread creation fails as in Unity and
+    diagnostics name the API, the calling member, and the reason. (RUN-004)
 17. `LoadSceneAsync` with `allowSceneActivation` false holds at 0.9 progress
     until released, after which `Awake`, `OnEnable`, `sceneLoaded`, and `Start`
     occur in Unity's order, and a single load preserves only
@@ -1079,9 +1351,9 @@ that an exception did not occur merely because extended details were omitted.
     validation fails, and its `AssetDatabase` edits are undoable and
     attributed to the invoking agent session. (RUN-010)
 28. An `AssetPostprocessor` and a `ScriptedImporter` run during import in a
-    trusted project and not in an untrusted one, and a custom inspector is
-    reported Unsupported while the object's default inspector remains
-    editable. (RUN-010)
+    trusted project and not in an untrusted one, and a custom inspector draws
+    its controls in the trusted project while the untrusted project shows the
+    default inspector and states that the extension has not run. (RUN-010)
 29. No `UnityEditor` assembly is present in a built player, and a runtime
     script that references `UnityEditor` unguarded fails the build with the
     file and member named. (RUN-007, RUN-010)
@@ -1114,10 +1386,11 @@ that an exception did not occur merely because extended details were omitted.
     logged from a worker thread with type and stack trace, `Debug.Assert` is
     absent from a build without `UNITY_ASSERTIONS`, and a player honors
     `-logFile`. (RUN-002)
-37. A Visual Scripting script machine and an Entities subscene are each
-    reported Unsupported naming the affected objects, while the GameObject that
-    carries the script machine, and a job using `NativeArray` in the same
-    project, keep working. (RUN-002, RUN-011)
+37. A Visual Scripting script machine whose flow graph moves its object on
+    `Update` and fires a custom event runs the same in an editor play session
+    and an ahead-of-time compiled player, and an Entities subscene in the same
+    project bakes, streams in, and renders its entities while a job using
+    `NativeArray` keeps working. (RUN-002, RUN-011)
 38. On an Android player, an `AndroidJavaClass` call reaches Java and an
     `AndroidJavaProxy` callback reaches managed code; on a desktop build, the
     same calls are listed as Platform-limited naming the calling member, and an
@@ -1138,8 +1411,8 @@ that an exception did not occur merely because extended details were omitted.
     (RUN-001)
 42. An LZ4 AssetBundle downloaded with a version hash is cached and reused on
     the next request, a CRC mismatch fails naming the bundle, and
-    Addressables `WaitForCompletion` in a browser build is reported
-    Platform-limited. (RUN-006)
+    Addressables `WaitForCompletion` in a browser build with browser threading
+    in effect completes synchronously. (RUN-006)
 43. A `BuildPipeline.BuildPlayer` call from a `[MenuItem]` command produces the
     same build as the equivalent unitas build request, runs preprocess,
     scene-processing, and postprocess callbacks in `callbackOrder`, returns a
@@ -1148,6 +1421,58 @@ that an exception did not occur merely because extended details were omitted.
 44. An editor script that calls `EditorUtility.DisplayDialog` during an agent
     session returns `ok` without blocking unless the agent session supplied an
     answer, and the dialog is reported as a structured event. (RUN-010)
-45. On a browser build, an `IJobParallelFor` job runs on the main thread with
-    the same results as on a desktop build, and the report lists the absence
-    of parallelism as a performance property. (RUN-011)
+45. On a browser build with browser threading in effect, an `IJobParallelFor`
+    job runs on worker threads with the same results as on a desktop build;
+    without it, the job runs on the main thread with the same results and the
+    report lists the absence of parallelism as a performance property.
+    (RUN-011)
+46. A custom inspector that uses `OnInspectorGUI`, a second that uses
+    `CreateInspectorGUI`, an attribute `PropertyDrawer`, and a
+    `DecoratorDrawer` each draw in the inspector with Unity's values and
+    layout, edit their serialized properties with undo, and apply across a
+    multi-object selection when the editor declares `[CanEditMultipleObjects]`.
+    (RUN-010)
+47. An `EditorWindow` opened from a `[MenuItem]` draws with `OnGUI`, another
+    draws with `CreateGUI`, each receives `OnSelectionChange` when the
+    selection changes, and the first keeps its serialized field values after a
+    domain reload. (RUN-010)
+48. An `Editor.OnSceneGUI` position handle and radius handle move and resize
+    their target, and an `[EditorTool]` tool appears among the scene view
+    tools, for a person dragging in the scene view and for an agent operating
+    the same handles through MCP, with the same resulting values. (RUN-010)
+49. A custom inspector that throws in `OnInspectorGUI` logs the exception
+    naming the editor type, method, and object, shows the error in place, and
+    switches to the default presentation on request, while the rest of the
+    editor keeps working. (RUN-010)
+50. A Visual Scripting node that calls a method renamed since the graph was
+    saved is reported naming the graph, node, and member, and an agent
+    reconnects the graph to the renamed method through automation. (RUN-002)
+51. Entities baking of an authoring prefab produces entities whose components
+    match the baker's output, editing an authoring value in an open subscene
+    rebakes it during play mode, and a throwing baker is reported naming the
+    baker, authoring object, and subscene. (RUN-011)
+52. Systems ordered with `[UpdateInGroup]`, `[UpdateBefore]`, and
+    `[UpdateAfter]` update in that order, and an agent reads the world's
+    systems, update order, and an entity's component values through
+    automation. (RUN-011)
+53. A Unity-built AssetBundle and a Unity-built Addressables remote catalog,
+    both for the running target, load in a unitas player with their assets,
+    scenes, and dependencies, and a truncated bundle fails naming the bundle
+    without partial loading. (RUN-006)
+54. On Android and on a browser build, `File.ReadAllText` on a path under
+    `Application.streamingAssetsPath` returns the file's contents; a write on
+    Android fails naming the path; and with the setting that keeps Unity's
+    behavior, the same read fails as in Unity. (RUN-006)
+55. A TCP client and listener exchange data, a UDP broadcast and an IPv4
+    multicast datagram reach a second player on the local network on desktop
+    and Android, a refused connection raises `SocketException` with
+    `ConnectionRefused`, and a browser build lists its socket uses naming the
+    calling members while its `ClientWebSocket` connection succeeds. (RUN-009)
+56. A `csc.rsp` that enables a nullable context and adds a reference compiles
+    with that effect, as in Unity 2022.3. (RUN-007)
+57. An editor script that calls `Selection`, `Undo` grouping,
+    `EditorGUIUtility.PingObject`, and `TypeCache` gets Unity's results, and
+    the call's edits form one undoable operation attributed to the invoking
+    session. (RUN-010)
+58. A `SettingsProvider` page appears among the project settings with its
+    keywords searchable and edits its settings asset. (RUN-010)

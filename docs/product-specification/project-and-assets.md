@@ -89,11 +89,19 @@ The project's declared Unity version is read from
 of Unity 2022.3 LTS.
 
 * A project declaring Unity 2022.3 LTS opens directly.
-* A project declaring Unity 2020.3 LTS or Unity 2021.3 LTS opens by migrating
-  its serialized forms to the 2022.3 baseline, as defined by SER-005 in
+* A project declaring any earlier Unity release that Unity 2022.3 LTS can
+  upgrade, including Unity 2020.3 LTS, Unity 2021.3 LTS, earlier LTS
+  releases, and non-LTS releases, opens by migrating its serialized forms to
+  the 2022.3 baseline, as defined by SER-005 in
   [Serialization and prefabs](serialization-and-prefabs.md). The project is
   reported as migrated, with its declared release. Behavior that differs
   between the declared release and Unity 2022.3 LTS is not matched.
+* A project declaring a Unity release later than 2022.3 LTS opens for full
+  editing with a warning that names the declared release and states that the
+  project runs with Unity 2022.3 LTS behavior. Content in a serialized form
+  that only the later release writes is preserved and reported per asset, as
+  defined by SER-005, and the rest of the project is editable, playable, and
+  buildable.
 * Opening never rewrites `ProjectVersion.txt` and never rewrites unchanged
   assets. Recording Unity 2022.3 LTS as the project's version is an explicit
   upgrade action that lists the assets, settings, and packages it affects
@@ -106,11 +114,10 @@ of Unity 2022.3 LTS.
 
 * A directory that is not a recognizable project explains which required
   project signals are absent.
-* A project declaring a Unity release earlier than 2020.3 LTS, a non-LTS
-  release other than 2022.3, or a release later than 2022.3 LTS opens for
-  read-only inspection when its content can be classified
-  safely; otherwise opening is refused with the version boundary explained. It
-  is never silently treated as a fully supported version.
+* A project declaring a release so old that Unity 2022.3 LTS has no upgrade
+  path for its serialized forms opens for read-only inspection, and the report
+  names the declared release and each asset whose form no Unity 2022.3 LTS
+  upgrade path reads. Its readable content remains inspectable.
 * A partially readable project remains inspectable while unreadable items retain
   specific errors.
 * Case-only renames, Unicode names, long paths, read-only files, broken symbolic
@@ -243,16 +250,18 @@ which assets were imported again and why.
 Diagnostics state:
 
 * The asset and sub-object involved.
-* The unsupported, invalid, or ambiguous value.
+* The invalid, corrupt, or ambiguous value.
 * The observable consequence.
 * Whether the asset remains partially usable.
 * The target or quality context when the issue is conditional.
 
-Supported import settings, including per-target overrides, survive open, edit,
-save, reimport, and reopening without unexplained changes. Settings recognized
-but not honored are reported Unsupported. Read-only content remains inspectable,
-and an attempted edit reports that it was not committed rather than appearing
-saved.
+Every import setting that the Unity 2022.3 LTS importers define is honored,
+and import settings, including per-target overrides, survive open, edit, save,
+reimport, and reopening without unexplained changes. An import setting key that
+no Unity 2022.3 LTS importer defines, such as one written by a later Unity
+release, is preserved and reported Unknown with the key named. Read-only
+content remains inspectable, and an attempted edit reports that it was not
+committed rather than appearing saved.
 
 Project-supplied scripted importers and asset postprocessors run only in
 trusted projects; their behavior is owned by RUN-010 in
@@ -260,12 +269,15 @@ trusted projects; their behavior is owned by RUN-010 in
 
 ## Texture and image assets
 
-PNG, JPEG, TGA, PSD, DDS, KTX2, EXR, HDR, BMP, and TIFF sources are Supported.
-GIF is Partially supported: only the first frame imports, and the asset
-reports that later frames are excluded. IFF and PICT sources are Unsupported
-and are reported with the file named. A file that uses an encoding or feature
-of a supported format that unitas does not support is reported Partially
-supported or Unsupported with that feature named.
+PNG, JPEG, TGA, PSD, DDS, KTX2, EXR, HDR, BMP, TIFF, GIF, IFF, and PICT
+sources are Supported. A GIF imports its first frame, as Unity imports it, and
+the asset shows the frame count of the source. Every encoding and feature of
+these formats that Unity 2022.3 LTS reads is read, including 8-bit, 16-bit, and
+floating-point channels, indexed and grayscale color, embedded color profiles,
+interlaced and progressive encodings, compressed and uncompressed variants,
+and multilayer PSD and TIFF files, which import as Unity composites them. A
+file whose data is truncated, corrupt, or contradicts its own header is
+reported as failed with the file and the invalid feature named.
 
 An image asset exposes dimensions, color-space interpretation, alpha behavior,
 wrap mode, filtering, mip behavior, normal-map interpretation, sprite settings,
@@ -285,17 +297,26 @@ readability, and target-specific quality. The texture importer honors:
 
 The preview distinguishes source appearance from the in-game result. Changes to
 delivery quality do not modify the source image. Invalid dimensions, missing
-layers, unsupported pixel encodings, ambiguous alpha, and target limitations
-produce specific diagnostics. Normal maps and data textures are not silently
+layers, corrupt pixel data, ambiguous alpha, and target hardware limits, such
+as a texture larger than the target GPU's maximum size, produce specific
+diagnostics. Normal maps and data textures are not silently
 treated as ordinary color images.
 
 ## Model and mesh assets
 
-FBX, glTF/GLB, and OBJ sources are Supported, with the same per-file reporting
-of unsupported format features. Content-creation application formats (such as
-`.blend`, `.max`, `.ma`, `.mb`, `.c4d`, `.lxo`, and `.3ds`) are Unsupported
-and are reported with the file named; unitas never launches a
-content-creation application to convert them.
+FBX, glTF/GLB, OBJ, COLLADA (`.dae`), DXF, and 3DS sources are Supported and
+import directly. Content-creation application formats (`.blend`, `.max`,
+`.ma`, `.mb`, `.c4d`, `.lxo`, and `.jas`) are Supported as Unity supports
+them: the importer converts the file through the content-creation application
+installed on the machine and imports the result with the same sub-assets and
+identities Unity produces. Conversion runs only in a trusted project
+(PRJ-008), because it runs an external program. The user selects the
+application installation, or unitas locates it in its standard locations.
+When the application is absent, the asset reports Externally unavailable,
+naming the file, the application, and that installing it resolves the state;
+an import result produced earlier for unchanged inputs remains usable. A
+conversion that the application rejects reports the file and the
+application's own error.
 
 A model exposes only capabilities its source format and file contain. FBX and
 glTF/GLB may contain hierarchy, materials, skeletons, skinning, animation, and
@@ -329,15 +350,19 @@ behavior at runtime is owned by ANI-001 and ANI-002 in
 [Rendering and animation](rendering-and-animation.md).
 
 Invalid topology, missing bones, invalid weights, degenerate bounds, ambiguous
-units, absent normals, and unsupported animation data are reported separately.
+units, absent normals, and malformed animation data are reported separately.
 The asset never appears fully ready merely because some geometry was readable.
 
 ## Audio assets
 
 WAV, AIFF, MP3, and OGG sources are Supported. Tracker modules (`.mod`, `.it`,
-`.s3m`, `.xm`) are Unsupported and are reported with the file named. An audio
-asset exposes duration, channel layout, sample rate, load behavior, looping
-suitability, preview controls, and target-specific quality.
+`.s3m`, `.xm`) are Supported: each imports as an `AudioClip` that plays the
+module's patterns, instruments, and samples with its tempo, looping, and
+channel effects, and that honors the import settings Unity offers for tracker
+modules. A module that uses an effect command its format does not define is
+reported with the file, pattern, and command named. An audio asset exposes
+duration, channel layout, sample rate, load behavior, looping suitability,
+preview controls, and target-specific quality.
 
 The audio importer honors Force To Mono, Normalize, Ambisonic, Load In
 Background, Preload Audio Data, load type, and per-target compression format
@@ -346,8 +371,11 @@ optimize, or override). Load-type behavior at runtime is owned by AUD-001 in
 [UI, audio, and input](ui-audio-input.md).
 
 The user can tell whether audio is immediately available, progressively
-available, or unavailable during play. Unsupported channel layouts, corrupt
-frames, truncated data, inaudible clips, and target codec limits are explicit.
+available, or unavailable during play. Every channel layout from mono to 7.1
+imports. Corrupt frames, truncated data, and inaudible clips are explicit. A
+compression format that the selected target cannot decode in hardware is
+decoded in software on that target, and the import result states the
+decoding cost.
 Preview failure is distinct from runtime incompatibility.
 
 ## Text and other recognized asset families
@@ -486,10 +514,10 @@ Unity-readable form. Each family below links its effect to the owning feature:
 * Settings changed outside the editor are detected as external changes.
 * Unknown settings keys and settings for unrecognized packages are preserved
   across saves.
-* Settings that are recognized but not honored are reported Unsupported with
-  their consequence. Settings for unsupported families listed in the
-  [Index](INDEX.md), such as HDRP or Visual Effect Graph settings, are
-  preserved and reported Unsupported.
+* Every setting in each family above is honored by its owning feature.
+  Settings of a package, such as HDRP or Visual Effect Graph settings, are
+  honored by the package's owning feature, take the state its CMP-002 matrix
+  entry records, and are preserved across saves in every state.
 
 ## Acceptance outcomes
 
@@ -535,14 +563,16 @@ Unity-readable form. Each family below links its effect to the owning feature:
     project is refused. (PRJ-008)
 14. A texture imported as Sprite in Multiple mode yields the same named sprite
     sub-assets and identities as in Unity; per-target compression overrides
-    survive reimport; an EXR imports, a GIF imports its first frame with the
-    exclusion reported, and a PICT file is reported Unsupported. (PRJ-004)
+    survive reimport; an EXR imports, a GIF imports its first frame and shows
+    its frame count, and a PICT file and an IFF file import. (PRJ-004)
 15. An FBX imported with a Humanoid rig, split clips with loop pose and baked
     root rotation, Optimal compression, and extracted materials produces the
-    avatar, clips, and materials Unity produces; a `.blend` file is reported
-    Unsupported without launching any application. (PRJ-004)
+    avatar, clips, and materials Unity produces; in a trusted project with
+    Blender installed, a `.blend` file imports with the sub-assets Unity
+    produces, and on a machine without Blender it reports Externally
+    unavailable, naming the application. (PRJ-004, PRJ-008)
 16. An AIFF clip imports with per-target Vorbis compression and Force To Mono
-    honored, and an `.xm` module is reported Unsupported. (PRJ-004)
+    honored, and an `.xm` module imports and plays its patterns. (PRJ-004)
 17. A `.json` and a `.bytes` file import as `TextAsset` with content equal to
     the file, and an avatar mask, an audio mixer, and a Sprite Atlas v2 asset
     are each identified with their family. (PRJ-002, PRJ-004)
@@ -553,3 +583,13 @@ Unity-readable form. Each family below links its effect to the owning feature:
     the three failures and a partial success, and after a forced interruption
     the next open reuses unchanged results and lists what it imported again.
     (PRJ-004)
+20. A project declaring Unity 2019.4 LTS opens as migrated with Unity 2022.3
+    LTS behavior, and a project declaring a release later than 2022.3 LTS opens
+    for editing with a warning that names the release, while an asset in a
+    form only that release writes is preserved and reported. (PRJ-001)
+21. A COLLADA model, a DXF model, and a 3DS model each import with their
+    hierarchy and geometry, and a 7.1 WAV imports with its channel layout.
+    (PRJ-004)
+22. An import setting key that no Unity 2022.3 LTS importer defines is
+    preserved across reimport and save and reported Unknown with the key
+    named. (PRJ-004, PRJ-007)

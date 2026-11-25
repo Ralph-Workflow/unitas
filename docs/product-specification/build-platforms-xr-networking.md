@@ -66,7 +66,8 @@ Every result records:
 * the license that governs the included unitas player components and the
   obligations recorded for it (see [Licensing](#licensing));
 * the third-party components included in the player and their notices;
-* unsupported or platform-limited project behavior.
+* project behavior that is Platform-limited on the target because the target
+  lacks a capability, and content reported Unknown or invalid.
 
 Cancellation leaves no artifact presented as a successful player. Repeated
 builds with the same project state, build choices, toolchain, dependency
@@ -111,9 +112,11 @@ iOS builds produce an Xcode project that `UnityEditor.iOS.Xcode` APIs
 (`PBXProject`, `PlistDocument`, and `ProjectCapabilityManager`) can modify from
 `[PostProcessBuild]` methods and `IPostprocessBuildWithReport` callbacks.
 
-A template, template field, or API member that unitas does not honor is
-reported in the build result, naming the file or member; it is never silently
-ignored.
+Every template, template placeholder, and `UnityEditor.Android` and
+`UnityEditor.iOS.Xcode` member that Unity 2022.3 LTS defines is honored. A
+template that is malformed, or that uses a placeholder Unity 2022.3 LTS does
+not define, is reported in the build result, naming the file and the field;
+it is never silently ignored.
 
 ## Signing, notarization, and store packaging
 
@@ -155,12 +158,20 @@ performs the same editor operations; it is not a second implementation. A single
   `-executeMethod`, with editor-time script behavior as defined by RUN-010 in
   [Scripting runtime](scripting-runtime.md).
 
-The Unity command-line arguments that build and test scripts commonly use
-(`-batchmode`, `-nographics`, `-quit`, `-projectPath`, `-buildTarget`,
-`-executeMethod`, `-logFile`, `-runTests`, `-testPlatform`, `-testResults`) are
-accepted, and each selects the corresponding operation or option defined in
-this section. An argument that unitas does not recognize is
-reported by name; it is never silently ignored.
+Every Unity 2022.3 LTS editor command-line argument that selects a project,
+an operation, a build, a test option, or logging is accepted, and each selects
+the corresponding operation or option defined in this section. These include
+`-batchmode`, `-nographics`, `-quit`, `-projectPath`, `-buildTarget`,
+`-standaloneBuildSubtarget`, the per-target player build arguments (such as
+`-buildWindows64Player`, `-buildOSXUniversalPlayer`, and
+`-buildLinux64Player`), `-executeMethod`, `-logFile`, `-stackTraceLogType`,
+`-runTests`, `-testPlatform`, `-testResults`, `-testFilter`,
+`-testCategory`, `-assemblyNames`, `-accept-apiupdate`, and
+`-disable-assembly-updater`. Unity license arguments (such as `-serial`,
+`-username`, `-password`, and `-returnlicense`) are accepted without effect,
+because unitas needs no Unity license, and the output states that they were
+ignored. An argument that Unity 2022.3 LTS does not define is reported by
+name; it is never silently ignored.
 
 Every invocation produces machine-readable output that states each requested
 operation, its outcome, its diagnostics with locations, and the location of its
@@ -208,12 +219,41 @@ just-in-time compilation and IL2CPP selects ahead-of-time compilation. Selecting
 a backend that the target does not permit is reported as an invalid
 configuration before the build starts.
 
-Ahead-of-time limitations are reported at build time, naming the type and
-member involved, when they are statically detectable. These include generic
-instantiations that cannot be generated ahead of time, `System.Reflection.Emit`,
-the C# `dynamic` keyword, and compilation of expression trees. When such a
-limitation is reached at runtime, the player raises an
-`ExecutionEngineException` naming the method that could not be executed.
+Ahead-of-time targets run the same managed code with the same behavior as
+just-in-time targets. A game developer moving a project from a desktop target
+to iOS, a console, or the browser changes no code to keep it running:
+
+* **Generics:** every generic instantiation runs, including instantiations
+  that no code names at build time. Full generic sharing covers generic
+  virtual and interface methods, instantiations over value types and
+  reference types created through `MakeGenericType` and `MakeGenericMethod`,
+  and generic types that deserializers and dependency-injection containers
+  construct at runtime. A shared instantiation has the same results as one
+  compiled for its exact type arguments, and the build result lists the
+  instantiations it shares as a performance finding.
+* **Reflection-based serializers:** `XmlSerializer`, `DataContractSerializer`,
+  `BinaryFormatter`, `System.Text.Json` and Newtonsoft Json in their
+  reflection modes, and serializers that generate code at runtime produce the
+  same output and read the same input as on just-in-time targets.
+* **Dynamic code:** `System.Reflection.Emit`, `DynamicMethod`, compiled
+  expression trees, and the C# `dynamic` keyword run on every target. Where
+  the target forbids generating native code at runtime, the code runs through
+  an interpreter with the same results, and the build result lists each
+  statically detectable use, naming the type and member, as a performance
+  finding. `RuntimeFeature.IsDynamicCodeSupported` reports true on every
+  target. `RuntimeFeature.IsDynamicCodeCompiled` reports whether that code is
+  compiled to native code or interpreted, so libraries that choose a faster
+  path for interpreted targets keep working.
+* **Reflection:** reflection over types, members, attributes, and generic
+  definitions returns the same results on every target, subject only to the
+  project's stripping settings below.
+
+The only managed-code failures specific to ahead-of-time targets are those
+that the project's own stripping settings cause. Unity 2022.3 LTS raises
+`ExecutionEngineException` or `NotSupportedException` for some of these
+operations under IL2CPP. In unitas, code that catches those exceptions to
+choose a fallback path keeps working, because the guarded operation
+succeeds.
 
 The Unity 2022.3 LTS managed stripping levels (Disabled, Minimal, Low, Medium,
 and High) remove unused managed code with equivalent
@@ -231,11 +271,17 @@ available on a target is reported as a performance property of the build.
 
 ## Target families
 
-Targets are Windows x86-64 and ARM64, macOS Apple Silicon and Intel, Linux
-x86-64 and AArch64, Android ARM64 and x86-64, iOS ARM64, browser delivery,
-Linux-based handheld devices (for example Steam Deck), XR devices reached
-through the XR Plugin Management providers that CMP-002 lists, and licensed
-console environments when the user possesses required access.
+Targets are Windows x86-64, x86, and ARM64, Universal Windows Platform
+x86-64 and ARM64, macOS Apple Silicon and Intel, Linux x86-64 and AArch64,
+Android ARM64, ARMv7, and x86-64 (including Android TV and ChromeOS devices),
+iOS ARM64 and the iOS simulator, tvOS ARM64, browser delivery, Linux-based
+handheld devices (for example Steam Deck), XR devices reached through the XR
+Plugin Management providers that CMP-002 lists, and embedded Linux. Licensed
+console environments (PlayStation, Xbox, and Nintendo Switch families) and
+QNX are supported when the platform holder's SDK is installed and the user
+holds the platform holder's entitlement. Every target delivers the full set of
+feature families that its hardware can run; a family is never withheld from a
+target because of engine work.
 
 Compatibility reporting distinguishes targets and capabilities derived from the
 Unity 2022.3 LTS baseline from unitas extensions such as WebGPU, visionOS-
@@ -251,10 +297,10 @@ Proprietary platform access is never implied by the existence of a target name.
 
 ## Dedicated server players
 
-Windows and Linux dedicated server players build from the Dedicated Server
-target and run with no rendering or audio output. A project migrated from Unity
-2020.3 LTS with the Server Build option enabled opens with the Dedicated Server
-target selected. A server build defines `UNITY_SERVER`, applies server-build
+Windows, Linux, and macOS dedicated server players build from the Dedicated
+Server target and run with no rendering or audio output. A project migrated
+from Unity 2020.3 LTS with the Server Build option enabled opens with the
+Dedicated Server target selected. A server build defines `UNITY_SERVER`, applies server-build
 asset stripping, and runs with `-batchmode -nographics`. Graphics and audio API
 use in a server player is reported as Platform-limited, naming the API.
 
@@ -272,8 +318,8 @@ clipboard, file-selection, deep-link, notification, permission, vibration,
 haptic, and controller features accurately report support and denial.
 Unavailable capabilities return explicit state rather than apparent success.
 
-Editor play and built-player behavior remain equivalent for supported runtime
-features except where an editor-only capability is explicitly identified.
+Editor play and built-player behavior remain equivalent for every runtime
+feature except where an editor-only capability is explicitly identified.
 
 ## Browser behavior
 
@@ -299,35 +345,96 @@ game logic, operating-system interruption, or focus loss.
 
 ## XR and spatial behavior
 
-XR behavior is provided through XR Plugin Management and the XR Interaction
-Toolkit within the version lines that CMP-002 lists. An XR provider plug-in is
-reported against its own package and version; a provider that the matrix does
-not list is Unknown. XR content imports with its identity, and the public types
-and members of those packages keep their Unity 2022.3 LTS names and
-signatures; the behavior is the behavior this section defines, and every known
-difference from Unity is listed in the API reference owned by AUT-006 in
-[Automation and MCP](automation-and-mcp.md).
+XR behavior is provided through XR Plugin Management, the OpenXR provider
+plug-in (`com.unity.xr.openxr`), XR Hands (`com.unity.xr.hands`), and the XR
+Interaction Toolkit within the version lines that CMP-002 lists. An XR
+provider plug-in is reported against its own package and version; a provider
+that the matrix does not list is Unknown. XR content imports with its
+identity, and the public types and members of those packages keep their Unity
+2022.3 LTS names and signatures; the behavior is the behavior this section
+defines, and every known difference from Unity is listed in the API reference
+owned by AUT-006 in [Automation and MCP](automation-and-mcp.md).
 
 XR exposes tracked head and controller poses, tracking state, declared actions,
-device capabilities, render views, recentering, interaction, supported haptics,
-and focus state.
+device capabilities, render views, recentering, interaction, the haptics each
+device offers, and focus state.
 
 Projects distinguish unavailable hardware, initialization failure, denied
-permission, lost or limited tracking, unsupported features, and application
-interruption. World scale, seated or standing mode, locomotion, comfort choices,
-world-space UI, selection, grabbing, and spatial audio have inspectable state.
+permission, lost or limited tracking, features the device or runtime does not
+offer, and application interruption. World scale, seated or standing mode,
+locomotion, comfort choices, world-space UI, selection, grabbing, and spatial
+audio have inspectable state.
 
 XR playtests record device, runtime, refresh behavior, frame timing, tracking
 events, input capabilities, comfort settings, and failures. A desktop preview is
 not represented as proof of real-device correctness.
 
+### OpenXR
+
+As a developer targeting OpenXR devices, I select the OpenXR loader per target
+in XR Plugin Management, and the player starts its XR session on the device's
+active OpenXR runtime.
+
+* **Runtime and session:** the player reports the active runtime's name,
+  version, and the OpenXR API version it negotiated. The OpenXR session states
+  (idle, ready, synchronized, visible, focused, stopping, loss pending, and
+  exiting) are observable. Visible and focused drive `OnApplicationFocus` and
+  `OnApplicationPause` (PLT-001). Loss pending ends the session and reports
+  it; the player restarts the session when the runtime becomes available again.
+* **Features and feature groups:** the `OpenXRFeature` set enabled per target
+  in OpenXR settings decides which OpenXR extensions the player requests. The
+  same holds for project-supplied `OpenXRFeature` subclasses, which run their
+  hooks in a trusted project (PRJ-008). An enabled feature whose extension the
+  runtime does not offer stays disabled. It reports the feature and the
+  missing extension, and the rest of the session continues.
+* **Interaction profiles:** each enabled interaction profile (for example
+  Khronos Simple Controller, Oculus Touch, Valve Index, HTC Vive, Microsoft
+  Motion Controller, Eye Gaze, and Hand Interaction) produces the Input System
+  devices and controls that the profile defines (INP-002). The runtime's
+  current binding for each hand is observable. Haptic impulses sent to a
+  controller reach the runtime with their amplitude, duration, and frequency.
+* **Render modes and spaces:** multi-pass and single-pass instanced rendering,
+  depth submission, and the runtime's preferred view configuration render
+  every eye view. The tracking origin mode (device, floor, or unbounded where
+  the runtime offers it) and `XRInputSubsystem.TryRecenter` behave as the
+  device reports them. Play area boundary points are readable when the runtime
+  provides them.
+* **Failures:** no active runtime, a runtime that refuses to create a session,
+  and a runtime that does not offer a required view configuration each
+  produce a distinct initialization failure that names the runtime and the
+  cause. With the XR Plugin Management setting to initialize on startup off,
+  the project starts the loader by script, and the failure is returned to that
+  script.
+
+### Hand tracking
+
+As a developer of hand-tracked interaction, I read tracked hands through XR
+Hands on any device whose runtime exposes hand tracking.
+
+* `XRHandSubsystem` provides a left and a right `XRHand`. Each hand reports
+  its tracking state, its root pose, and the pose and tracking state of each
+  `XRHandJointID` joint (wrist, palm, and four or five joints per finger).
+  Each joint's radius and velocities are reported where the runtime provides
+  them.
+* `updatedHands` is raised for each hand update with its update type (dynamic
+  or before render) and flags that name which hands and joints changed. A hand
+  that loses tracking reports not tracked with its last pose, and it reports
+  tracked again when it is reacquired.
+* Hand shape and hand pose assets (`XRHandShape`, `XRHandPose`) evaluate
+  against the current joints with their authored tolerances. Gestures built on
+  them report detection and loss.
+* The OpenXR Hand Interaction profile and the hand-tracking aim data make pinch,
+  poke, grab, and aim usable by the XR Interaction Toolkit's interactors.
+* A device without hand tracking reports that hand tracking is absent, and the
+  subsystem is not started; projects that offer controller input continue
+  with controllers.
+
 ## Networking behavior
 
-Networked play is provided through Netcode for GameObjects within the version
-line that CMP-002 lists, with Unity Transport (`com.unity.transport`) as its
-transport dependency. Netcode for Entities is recognized and reported
-Unsupported, as declared in the [index](INDEX.md). Netcode content imports with
-its identity, and the API shape below keeps its Unity 2022.3 LTS names and
+Networked play is provided through Netcode for GameObjects, Netcode for
+Entities (`com.unity.netcode`), and Unity Transport (`com.unity.transport`),
+within the version lines that CMP-002 lists. Netcode content imports with its
+identity, and the API shape below keeps its Unity 2022.3 LTS names and
 signatures; the behavior is the behavior this section defines, and every known
 difference from Unity is listed in the AUT-006 API reference.
 
@@ -384,11 +491,94 @@ mismatch, timeout, host departure, and deliberate disconnection.
 As a developer, I can associate logs, objects, state changes, traffic, and
 errors with the correct participant. Multiple local test instances, including
 headless instances, retain distinct identity. Simulated latency, jitter, loss,
-duplication, and reordering are visibly marked as test conditions.
+duplication, and reordering, including those that the Unity Transport
+simulator applies, are visibly marked as test conditions.
 
 Network success is separate from local gameplay success. A locally correct
 action is not reported as synchronized until the declared remote observation
 occurs. Conflicts, authority rejection, and stale state are explicit.
+
+### Netcode for Entities
+
+As a developer of a server-authoritative, predicted game built on Entities
+(RUN-011 in [Scripting runtime](scripting-runtime.md)), I use Netcode for
+Entities in client and server worlds.
+
+* **Worlds and bootstrap:** `ClientServerBootstrap` creates client, server,
+  thin-client, and local simulation worlds as the project's bootstrap
+  requests. In the editor, the Multiplayer PlayMode Tools settings decide the
+  play mode type and the number of thin clients. A connection is an entity with
+  `NetworkStreamConnection`. It receives `NetworkId` when the server accepts
+  it, and `NetworkStreamInGame` marks it as in game.
+* **Ghosts:** a prefab with ghost authoring becomes a ghost. The server
+  serializes every `[GhostField]` of its ghost components into snapshots,
+  using each field's quantization, smoothing, and send-data rules. Clients
+  receive interpolated ghosts and predicted ghosts according to the ghost's
+  supported and default modes, and owner-predicted ghosts are predicted on
+  the owner's client. `GhostOwner` identifies the owner. Ghost relevancy
+  rules, importance scaling, and the snapshot size limit decide which ghosts
+  each connection receives, and a ghost that leaves relevancy is despawned on
+  that client.
+* **Time and prediction:** `NetworkTime` reports the server tick, interpolation
+  tick, and prediction tick on clients. `PredictedSimulationSystemGroup`
+  rolls predicted ghosts back to the last received snapshot and resimulates
+  to the current prediction tick, with partial ticks where the frame calls
+  for them. A misprediction is corrected in the next resimulation, and
+  prediction-error smoothing applies.
+* **Commands, inputs, and RPCs:** `IInputComponentData` and `ICommandData`
+  carry each client's input for each tick to the server and to prediction.
+  `InputEvent` fields count discrete presses exactly once. `IRpcCommand`
+  RPCs are delivered reliably in send order to the server or to the targeted
+  connections, and an RPC that is not registered on the receiver is reported
+  with its type.
+* **Physics and lag compensation:** predicted physics runs inside the
+  prediction loop. With lag compensation enabled, server queries against
+  `PhysicsWorldHistorySingleton` use the collision world at the tick the
+  client saw.
+* **Failures:** a protocol version mismatch between client and server, which
+  covers the netcode version, the game version, and the RPC and component
+  collection hashes, refuses the connection with the version-mismatch outcome.
+  Ghosts that do not fit in a snapshot are sent in later snapshots in order
+  of importance, and development builds report the deferral.
+
+### Unity Transport
+
+As a developer, I use Unity Transport directly or through either netcode
+package.
+
+* **Driver and connections:** `NetworkDriver` binds, listens, connects, and
+  disconnects with IPv4 and IPv6 `NetworkEndpoint` values. `ScheduleUpdate`
+  and `PopEvent` deliver connect, data, and disconnect events per connection,
+  and each disconnect carries its reason (timeout, closed by remote, refused,
+  maximum connection attempts reached, or protocol error).
+* **Settings:** `NetworkSettings` sets connect timeout, maximum connection
+  attempts, disconnect timeout, heartbeat timeout, and send and receive queue
+  sizes, and each value produces the outcome it names.
+* **Pipelines:** `ReliableSequencedPipelineStage` delivers every message once,
+  in order, within its window size, and reports a full window to the sender.
+  `UnreliableSequencedPipelineStage` drops messages that arrive after a newer
+  one, and `FragmentationPipelineStage` splits and reassembles messages up to
+  its payload capacity. Stages combine in the order the pipeline declares.
+* **Network simulator:** `SimulatorPipelineStage`, configured through
+  `WithSimulatorStageParameters`, applies its packet delay, packet jitter,
+  packet drop interval or percentage, packet duplication percentage, and
+  fuzzing to each packet that passes through it. Netcode for GameObjects'
+  `UnityTransport.SetDebugSimulatorParameters` applies delay, jitter, and drop
+  rate the same way in development builds. Every simulated condition is
+  marked as a test condition in logs, profiles, and playtest records, and a
+  release build contains no active simulator stage.
+* **Secure and relayed connections:** `WithSecureServerParameters` and
+  `WithSecureClientParameters` establish encrypted connections with the
+  configured certificates, and a certificate mismatch refuses the connection
+  with the authentication-failure outcome. `RelayServerData` connects through
+  a relay server, and an expired or invalid relay allocation produces the
+  service-failure outcome (see
+  [Online and platform services](#online-and-platform-services)).
+* **Browser targets:** on browser targets, the driver uses WebSocket
+  connections, and a browser player connects to any server that listens with
+  the WebSocket network interface. Because browsers offer no raw UDP, a UDP
+  endpoint configured in a browser player reports Platform-limited, naming
+  the endpoint.
 
 ## Online and platform services
 
@@ -410,7 +600,10 @@ one version is not evidence that every version or provider behaves identically.
 
 A developer or authorized agent can deploy, install, launch, and remove a built
 player on a selected connected device or on the local host: an Android device
-or emulator, an iOS device or simulator, a desktop host, or a local browser.
+or emulator, an iOS or tvOS device or simulator, a standalone XR headset, a
+Linux-based handheld reached over the local network, a desktop host, a local
+browser, or a licensed console development kit when the platform holder's SDK
+is installed.
 Device discovery lists each device with its name, target, architecture,
 operating system version, and connection state, and states why a listed device
 is unusable, such as being locked, unauthorized for debugging, on an
@@ -439,10 +632,43 @@ changed bundles and a new content catalog. Every content build result states
 which shipped player versions can load the content it produced, and records
 the unitas version, the target, and the bundles and catalog it produced.
 
-A player that encounters content built for an incompatible player version, or
-content built by Unity rather than by unitas, reports each affected bundle by
-name with the reason, and does not load that content partially. Runtime loading
-behavior is owned by RUN-006 in [Scripting runtime](scripting-runtime.md).
+A unitas player loads AssetBundles and Addressables content built by Unity
+2022.3 LTS and by the earlier Unity releases whose projects unitas migrates
+(SER-005 in [Serialization and prefabs](serialization-and-prefabs.md)), for
+the player's target, as well as content built by unitas. A shipped Unity game
+can therefore move to a unitas player and keep its existing content delivery:
+
+* **Bundle archives:** uncompressed, LZ4, LZ4HC, and LZMA bundle archives load
+  through every `AssetBundle` loading form, including file, memory, stream,
+  file offset, and `UnityWebRequestAssetBundle` downloads with cache, version,
+  hash, and CRC checks. A CRC mismatch fails the load with the expected and
+  found values.
+* **Serialized content:** objects in a bundle load with the same values,
+  references, and identities they have in the Unity player, whether the bundle
+  carries type trees or was built without them. Script references resolve to
+  the player's script types by assembly, namespace, and class name. A script
+  type absent from the player leaves a missing-script record, as SER-004
+  defines.
+* **Shaders and materials:** shaders in Unity-built bundles render through the
+  same translation that REN-006 in
+  [Rendering and animation](rendering-and-animation.md) applies to project
+  shaders. Each variant that the bundle carries is available, and a variant
+  the bundle stripped is reported by shader and keyword set.
+* **Manifests, dependencies, and catalogs:** `AssetBundleManifest` content,
+  bundle dependencies, and Addressables content catalogs in the forms that
+  the listed Addressables line writes load and resolve. This includes remote
+  catalogs with their hash files and catalogs produced by content updates.
+  Dependencies resolve by bundle name across Unity-built and unitas-built
+  bundles in the same player.
+* **Failures:** a bundle built for another target, a bundle built by a Unity
+  release outside the supported lines, a truncated or corrupt archive, and a
+  catalog that names a missing bundle each report the affected bundle by name
+  with the reason, and that content is not loaded partially.
+
+A player that encounters content built for an incompatible unitas player
+version reports each affected bundle by name with the reason, and does not
+load that content partially. Runtime loading behavior is owned by RUN-006 in
+[Scripting runtime](scripting-runtime.md).
 
 ## Licensing
 
@@ -559,10 +785,14 @@ included unitas components.
 6. Two command-line invocations on the same project at once follow the AUT-004
    same-project concurrency rules, and neither corrupts the project. (BLD-002,
    AUT-004)
-7. An iOS build reports a statically detectable `System.Reflection.Emit` use by
-   type and member, and a development build at High stripping that reflects on a
-   stripped member raises an exception naming the member and the preservation
-   mechanisms; preserving it with `link.xml` removes the exception. (BLD-003)
+7. An iOS build runs code that uses `System.Reflection.Emit`, `dynamic`, a
+   compiled expression tree, and a generic virtual method instantiated only at
+   runtime with the results they have under just-in-time compilation, and its
+   build result lists the `Reflection.Emit` use by type and member as a
+   performance finding; a development build at High stripping that reflects on
+   a stripped member raises an exception naming the member and the
+   preservation mechanisms; preserving it with `link.xml` removes the
+   exception. (BLD-003)
 8. A built player launches the configured scene and handles focus, pause,
    permissions, and shutdown correctly on its platform. (PLT-001)
 9. Mobile and browser lifecycle changes, including backgrounding, page refresh,
@@ -623,9 +853,11 @@ included unitas components.
     one from an agent session holding the build and read-project scopes, and
     never writes the credential to its logs. (BLD-004, AUT-007)
 25. After a player ships, a content update produces only the changed bundles and
-    a new catalog that the shipped player loads; content built for an
-    incompatible player version or by Unity is reported by bundle name and
-    reason and is not loaded partially. (BLD-005, RUN-006)
+    a new catalog that the shipped player loads; Addressables content and a
+    remote catalog built by Unity 2022.3 LTS for the same target load in a
+    unitas player with the same values and references; content built for an
+    incompatible player version or for another target is reported by bundle
+    name and reason and is not loaded partially. (BLD-005, RUN-006)
 26. A player built from a project that makes no network requests opens no
     network connection, the editor and its MCP interface send project content only to
     authorized MCP clients and to destinations a person directed, unitas crash
@@ -635,7 +867,7 @@ included unitas components.
 27. An Android build honors a custom `mainTemplate.gradle` and an `.androidlib`
     folder, runs `IPostGenerateGradleAndroidProject`, and can export the Gradle
     project; an iOS build's `[PostProcessBuild]` method adds a capability
-    through `ProjectCapabilityManager`; an unhonored template field is reported
+    through `ProjectCapabilityManager`; a malformed template field is reported
     by file and field. (BLD-001)
 28. With connection approval enabled, a rejected client receives the refused
     outcome with the callback's reason, a client's attempt to spawn an object
@@ -646,3 +878,48 @@ included unitas components.
 29. A project's XR Interaction Toolkit content imports with its identity, and
     each known XR behavior difference from Unity is listed in the AUT-006 API
     reference. (XR-001, AUT-006)
+30. A player using the OpenXR loader starts a session on the active runtime,
+    reports the runtime's name and version and each session state change,
+    produces Input System devices for the Oculus Touch and Hand Interaction
+    profiles, and reports an enabled feature whose extension the runtime lacks
+    while the session continues; with no active runtime, initialization fails
+    with a cause naming the runtime. (XR-001, INP-002)
+31. On a device with hand tracking, XR Hands reports both hands' joint poses
+    each update, a hand that leaves view reports not tracked and is reacquired,
+    an `XRHandShape` for a pinch is detected, and the XR Interaction Toolkit
+    grabs an object with a pinch; on a device without hand tracking, the
+    absence is reported and controllers continue to work. (XR-001)
+32. A Netcode for Entities game with a server, two clients, and a thin client
+    in the editor spawns a predicted ghost owned by one client, replicates its
+    `[GhostField]` values to the other client as an interpolated ghost,
+    corrects a misprediction on resimulation, and refuses a client whose
+    protocol version differs with the version-mismatch outcome. (NET-001,
+    RUN-011)
+33. A Unity Transport driver with a reliable sequenced pipeline and a
+    simulator stage set to 100 ms delay, 20 ms jitter, and 5 percent drop
+    delivers every reliable message once and in order, its logs mark the
+    simulated conditions as test conditions, and the release build contains no
+    active simulator stage; a browser player connects to the same server over
+    WebSocket. (NET-001, PLT-001)
+34. A Windows x86 build, an Android ARMv7 build, a tvOS build, and a Universal
+    Windows Platform build each produce their target's artifact, and a console
+    target on a host with the platform holder's SDK installed builds and
+    deploys to a development kit. (PLT-001, BLD-001, BLD-004)
+35. A macOS dedicated server player runs with `-batchmode -nographics` and
+    defines `UNITY_SERVER`. (PLT-001)
+36. An iOS player and a browser player each deserialize a save file with
+    `XmlSerializer` and with `BinaryFormatter` into a generic container type
+    created through `MakeGenericType`, and produce the same objects and the
+    same bytes on reserialization as a desktop just-in-time player. (BLD-003)
+37. A console player built at Disabled stripping runs a dependency-injection
+    container that emits constructors with `DynamicMethod` and resolves a
+    generic service over a value type that no code names at build time.
+    `RuntimeFeature.IsDynamicCodeSupported` reports true and
+    `RuntimeFeature.IsDynamicCodeCompiled` reports false, and the build result
+    lists the emitted code and shared instantiation as performance findings.
+    (BLD-003)
+38. The same project built at High stripping without a `link.xml` entry for the
+    container's resolved type fails in a development build. The failure is
+    the stripping exception naming the member, the stripping level, and the
+    preservation mechanisms, and it is the only ahead-of-time failure the
+    build or player reports. (BLD-003)

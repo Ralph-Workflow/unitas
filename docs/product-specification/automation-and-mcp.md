@@ -62,7 +62,11 @@ availability, disabled reason, and result (EDT-006). Every view's state—
 hierarchy, inspector values, scene and game view selection and camera, console,
 compatibility report, build status, play state, and agent activity—is readable
 as structured data. Commands that a project contributes through `[MenuItem]`,
-`[ContextMenu]`, and custom editor extensions are tools as well. (AUT-001)
+`[ContextMenu]`, and custom editor extensions are tools as well. The controls
+and values that custom inspectors, property drawers, and editor windows draw
+are readable as structured data, and their controls are operable through
+tools, as defined by RUN-010 in [Scripting runtime](scripting-runtime.md).
+(AUT-001)
 
 Where a person sees an image, an agent can request the same image and the
 structured state behind it, as defined in [Visual evidence](#visual-evidence).
@@ -155,15 +159,15 @@ held state of agent writes; only a person can. (AUT-002, AUT-007)
 
 ## Structured Editing
 
-An agent can perform the supported equivalents of object, component, asset,
-scene, prefab, settings, and build-configuration edits. A request validates all
+An agent can perform every object, component, asset, scene, prefab,
+settings, and build-configuration edit that a person can make. A request validates all
 targets before changing any of them; validation failure leaves the request
 unchanged. Operations that permit partial application declare that behavior
 before execution and report which changes were accepted, rejected, conflicted,
 or not attempted, with affected identities and resulting revisions. (AUT-002)
 
 Related edits can be grouped into one visible undo operation. A change that
-would discard unsupported serialized meaning, affect additional objects, or
+would discard unknown serialized meaning, affect additional objects, or
 invalidate references identifies that scope before commitment.
 
 Every edit becomes part of the agent session's change set (EDT-008). Under the
@@ -181,8 +185,11 @@ receives one of: applied, not applied, or still running. (AUT-002)
 ## Play and Test Control
 
 An agent can enter and exit play mode, pause, advance frames, start declared
-scenarios (TST-002), run project tests (TST-003), inject supported input,
-inspect checkpoints, capture requested visual or state evidence, and stop a run.
+scenarios (TST-002), run project tests (TST-003), inject input from every
+device family that INP-001 and INP-002 in
+[UI, audio, and input](ui-audio-input.md) define (keyboard, mouse, touch, pen,
+gamepad, joystick, and sensors) and from XR devices (XR-001), inspect
+checkpoints, capture requested visual or state evidence, and stop a run.
 It can operate development players built with remote control enabled.
 (AUT-002)
 
@@ -206,7 +213,8 @@ way it does in a unitas player. (AUT-002)
 
 ### Visual evidence
 
-A capture request names a camera, a display, or an editor view, and states the
+A capture request names a camera, a display, an XR render view, or an editor
+view, and states the
 resolution, region, image format, and optionally a frame sequence. A capture
 can include an identity map that resolves any pixel to the GameObject, renderer,
 or UI element drawn there, and the screen-space bounds of named objects. A
@@ -588,8 +596,10 @@ undo boundary.
 ## Acceptance Stories
 
 * For a sample project, every acceptance outcome of the
-  [editor](editor-and-authoring.md) that does not concern visual presentation
-  is reproduced by an agent through MCP alone, with the same results. (AUT-001)
+  [editor](editor-and-authoring.md) is reproduced by an agent through MCP
+  alone, with the same results; an outcome that concerns visual presentation
+  is established through the captures and identity maps of
+  [Visual evidence](#visual-evidence). (AUT-001, AUT-002)
 * Every command in the editor's command palette is discoverable as an MCP tool
   with the same identifier and availability. (AUT-001, AUT-002)
 * With the machine's network disabled, an agent using a generic MCP client opens
@@ -597,7 +607,7 @@ undo boundary.
   makes no model or network requests. (AUT-001, AUT-006)
 * Human and automation compatibility reports agree for the same project state.
   (AUT-001)
-* An agent finds a scene object by stable identity, changes a supported property,
+* An agent finds a scene object by stable identity, changes a property,
   and a developer immediately sees and can undo that exact edit. (AUT-002,
   AUT-003)
 * A multi-object edit reports partial validation without claiming all objects
@@ -668,7 +678,7 @@ undo boundary.
   the untrusted-project outcome, and its request for trust does not grant it.
   (AUT-007)
 * A denied platform or filesystem operation exposes no sensitive content and is
-  distinct from an unsupported product feature. (AUT-007)
+  distinct from a product error. (AUT-007)
 * After an agent session's reads, a refused edit, and an accepted change, the
   exported audit log lists each with its time, identity, scope, and outcome; the
   agent session's request to delete an audit record is refused; and the accepted
@@ -701,3 +711,8 @@ undo boundary.
 * An editor-method invocation in a headless session supplied with an answer for
   a dialog title chooses that button and records the dialog and answer; a
   dialog with no answer returns the no-person-present outcome. (AUT-002)
+* An agent reads the fields a project's custom inspector draws for a component,
+  changes one through the inspector's control, and the change appears in the
+  agent session's change set. (AUT-001, RUN-010)
+* During an XR play session, an agent injects a controller pose and a trigger
+  press, and captures the left-eye render view. (AUT-002, XR-001)

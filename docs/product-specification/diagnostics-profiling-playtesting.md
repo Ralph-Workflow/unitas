@@ -247,7 +247,7 @@ recorded hardware, operating system, and target, for:
 * visual editor responsiveness to input and MCP request latency for
   representative inspection and edit requests;
 * runtime frame-time overhead relative to the Unity reference player on the
-  benchmark projects (CMP-001 in [Playable samples and benchmarks](sample-games.md)),
+  benchmark projects (CMP-001 in [Playable samples and benchmarks](sample-games/INDEX.md)),
   same target and hardware;
 * player startup time;
 * editor, headless, and player memory overhead;
@@ -416,7 +416,7 @@ correctness.
 ## Sample-game validation
 
 The official samples, their acceptance scenarios, and their pass criteria are
-owned by SMP-001 in [Playable samples and benchmarks](sample-games.md). Their
+owned by SMP-001 in [Playable samples and benchmarks](sample-games/INDEX.md). Their
 scenarios are structured scenarios as defined in this document (TST-002).
 
 ## Acceptance stories

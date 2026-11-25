@@ -57,6 +57,18 @@ The `Rigidbody` scripting surface behaves as in Unity, including:
   and report sleeping.
 * `ConstantForce` applies its force, relative force, torque, and relative
   torque every step.
+* `includeLayers`, `excludeLayers`, and `layerOverridePriority` on bodies and
+  colliders add or remove layers from the collision matrix for that body or
+  collider, with the higher priority deciding a conflict between the two
+  sides of a pair.
+* `Physics.ContactEvent` delivers the step's contact pairs to subscribers
+  after the step, and `Physics.ContactModifyEvent` and
+  `Physics.ContactModifyEventCCD` let scripts change or ignore individual
+  contact points before the solver uses them, for colliders that request
+  contact modification.
+* `Physics.ComputePenetration`, `Physics.ClosestPoint`, `Collider.ClosestPoint`,
+  and `Physics.BakeMesh` return separation, closest points, and a cooked
+  mesh for the requested shapes.
 
 Colliders expose shape, center, orientation where applicable, trigger state,
 enabled state, material, contact offset, layer participation, and owning body.
@@ -64,9 +76,9 @@ Changing object activation, collider enablement, hierarchy, scale, or body role
 updates its physical participation at a defined simulation boundary.
 
 Physics materials produce observable friction and restitution behavior,
-including their friction and bounce combine modes. Invalid or unsupported
-combinations identify the affected collider or body and do not silently
-simulate as an unrelated shape.
+including their friction and bounce combine modes. Invalid combinations
+identify the affected collider or body and do not silently simulate as an
+unrelated shape.
 
 ### Mesh colliders
 
@@ -99,9 +111,15 @@ The project's physics settings change simulation and queries as follows:
   `Physics.SyncTransforms` applies pending changes on request.
 * Queries hit triggers, queries hit backfaces, reuse collision callbacks, and
   the contact pairs mode apply as in Unity.
+* The solver type (projected or temporal Gauss-Seidel), friction type,
+  broadphase type with its world bounds and subdivisions, enhanced
+  determinism, adaptive force, improved patch friction, contact generation
+  mode, unified heightmaps, default maximum depenetration velocity, and the
+  cloth gravity and inter-collision settings apply as in Unity.
 
-A setting that is recognized but not honored is reported with its name and
-consequence; it is never silently ignored.
+Every physics setting that Unity 2022.3 LTS defines is honored. A settings key
+that Unity 2022.3 LTS does not define is preserved and reported Unknown with
+its name.
 
 ## Simulation timing and ownership
 
@@ -456,8 +474,8 @@ Scripts read and change terrain through `TerrainData.GetHeights`/`SetHeights`,
 including binary storage, is owned by SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md).
 
-Large terrain content communicates loading, memory, rendering, and physics
-limitations. Missing layers or vegetation assets remain identifiable and do not
+Large terrain content communicates its loading, memory, rendering, and physics
+cost. Missing layers or vegetation assets remain identifiable and do not
 silently substitute unrelated content.
 
 ### Terrain rendering and trees
@@ -472,9 +490,13 @@ Terrain Standard material and the URP Terrain Lit material, and custom terrain
 materials follow the shader rules owned by REN-002 in
 [Rendering and animation](rendering-and-animation.md).
 
-SpeedTree 7 (`.spm`) and SpeedTree 8 (`.st`) assets are Partially supported:
-geometry, materials, and LOD are supported; SpeedTree wind animation is
-excluded and reported on each affected tree.
+SpeedTree 7 (`.spm`) and SpeedTree 8 (`.st`) assets are Supported: geometry,
+materials, LOD and LOD transitions, billboards, and SpeedTree wind animation.
+Wind follows the asset's wind quality setting (none, fastest, fast, better,
+best, or palm), responds to the `WindZone` components in the scene, and
+animates trunks, branches, leaves, and billboards consistently, in the
+Built-in Render Pipeline and URP. A tree whose wind data is missing or
+malformed renders without wind and reports the tree and the asset.
 
 ### Wind zones
 
@@ -486,15 +508,38 @@ Wind effects on particles are owned by REN-004 in
 
 ### Large worlds
 
-Positions, rotations, and simulation use single-precision (32-bit)
-floating-point values. unitas does not silently rebase the world origin or
-switch to higher precision, so rendering, physics, animation, and navigation
-far from the origin lose precision in proportion to the distance, visible as
-positional jitter and coarser contacts and paths. The editor and automation
-identify objects with any world-position component of magnitude 100,000 units
-or more (the threshold at which Unity warns about precision) and the systems
-on them whose results are affected. A project that moves its content toward
-the origin by script regains the precision of that smaller range.
+The large-world project setting selects how precision behaves far from the
+origin. A project opened from Unity starts with the Unity behavior; a person
+or agent can change the setting at any time, and the change takes effect at
+the next play session.
+
+* **Unity single precision** keeps Unity's behavior. Positions, rotations, and
+  simulation use single-precision (32-bit) floating-point values, and unitas
+  does not rebase the world origin, so rendering, physics, animation,
+  navigation, and audio far from the origin lose precision in proportion to
+  the distance, visible as positional jitter and coarser contacts and paths.
+  A project that moves its content toward the origin by script keeps working
+  as it does in Unity.
+* **unitas large world** keeps rendering, physics, animation, navigation,
+  particles, trails, and audio as precise far from the origin as near it,
+  for worlds at least 10,000,000 units across. unitas shifts the world origin
+  to follow a focus object, the main camera by default, when the focus moves
+  more than a configurable distance from the current origin. A shift moves
+  every scene object, physics body, navigation data set, terrain, particle,
+  trail, and audio source by the same offset between two frames, keeps
+  velocities, contacts, sleeping state, paths, and interpolation unchanged,
+  and raises an origin-shift notification with the offset before the next
+  frame's scripts run. Scripts read and write `Transform.position` and every
+  other position API relative to the current origin, with their Unity
+  signatures. Scripts that cache world positions apply the offset from the
+  notification. Every world-space value that the editor, automation, logs,
+  and scenarios report also carries the cumulative origin offset, so a
+  position is identifiable across shifts.
+
+In either mode, the editor and automation identify objects with any
+world-position component of magnitude 100,000 units or more from the current
+origin (the threshold at which Unity warns about precision) and the systems
+on them whose results are affected.
 
 ## Diagnostics
 
@@ -562,4 +607,17 @@ terrain region, or setting.
     raises an error naming the agent. (NAV-001)
 16. A terrain using instanced drawing, instanced detail grass, and billboarded
     trees renders with the URP Terrain Lit material, and a SpeedTree 8 tree
-    renders with its LODs while its wind is reported as excluded. (ENV-001)
+    renders with its LODs and sways in its wind quality setting under a
+    `WindZone`. (ENV-001)
+17. Two colliders on layers that the collision matrix separates collide when
+    one collider's `includeLayers` adds the other's layer, and a
+    `Physics.ContactModifyEvent` subscriber that ignores a contact point stops
+    that point from pushing the bodies apart. (PHY-001)
+18. With the temporal Gauss-Seidel solver and enhanced determinism selected in
+    the physics settings, the same simulation run twice on one target yields
+    identical results. (PHY-001)
+19. With the unitas large world setting, a vehicle driven 5,000,000 units from
+    the origin shows no positional jitter, its wheel contacts stay as precise
+    as near the origin, and a script subscribed to the origin-shift
+    notification receives each offset; with the Unity single precision
+    setting, the same project has no origin shifts. (ENV-001, PHY-004)

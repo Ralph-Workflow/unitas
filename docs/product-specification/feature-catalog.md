@@ -118,8 +118,8 @@ detailed specification names the identifiers it demonstrates.
 | TST-001 | Manual playtest sessions and tester feedback | Native | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) |
 | TST-002 | Structured scenarios, input replay, comparison, and coverage | Native | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) |
 | TST-003 | Project unit and integration tests | Semantic | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) |
-| SMP-001 | Complete playable sample suite | Native | [Playable samples and benchmarks](sample-games.md) |
-| CMP-001 | Behavioral compatibility benchmark suite | Native | [Playable samples and benchmarks](sample-games.md) |
+| SMP-001 | Complete playable sample suite | Native | [Playable samples and benchmarks](sample-games/INDEX.md) |
+| CMP-001 | Behavioral compatibility benchmark suite | Native | [Playable samples and benchmarks](sample-games/INDEX.md) |
 | CMP-002 | Supported package and version matrix | Native | [Compatibility contract](compatibility-contract.md) |
 | CMP-003 | Third-party and asset-store content | Native | [Compatibility contract](compatibility-contract.md) |
 | CMP-004 | Product versioning, release readiness, and interface stability | Native | [Compatibility contract](compatibility-contract.md) |

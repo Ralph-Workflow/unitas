@@ -49,8 +49,9 @@ unitas is agent-first:
   the same project model, through the same operations, that agents use
   through MCP. Its purpose is to make project and runtime state clear, to support
   direct authoring of scenes and content, and to let a developer review,
-  approve, and reverse agent changes. It does not aim for parity with the
-  breadth or polish of the Unity Editor's authoring surfaces.
+  approve, and reverse agent changes. It is a complete,
+  commercial-quality authoring environment for every content type the engine
+  supports.
 * Script source is edited and debugged in the developer's own code editor,
   IDE, or agent. unitas provides the compilation, diagnostics, project files,
   and debugging connection that those tools need; it does not provide a
@@ -64,8 +65,9 @@ unitas is agent-first:
 ### Compatibility baseline
 
 The compatibility baseline is the documented, observable behavior of Unity
-2022.3 LTS, a finished release line. Projects saved by Unity 2020.3 LTS or
-2021.3 LTS open by migrating their serialized forms to the 2022.3 baseline;
+2022.3 LTS, a finished release line. Projects saved by Unity 2020.3 LTS,
+2021.3 LTS, or any other earlier release that Unity 2022.3 LTS can upgrade, open
+by migrating their serialized forms to the 2022.3 baseline;
 behavior that differs between those releases and 2022.3 is not matched
 separately. Unity releases after 2022.3 LTS are outside the baseline; a
 later-release feature becomes part of unitas only when a specification adopts
@@ -101,34 +103,30 @@ Behavior provided by Unity packages is in scope only for the package families
 and version lines that the supported package matrix lists (CMP-002, owned by
 the [Compatibility contract](compatibility-contract.md)). A package that the
 matrix does not list is reported as Unknown until it is assessed; it is never
-assumed to be supported.
+assumed to be supported. The matrix grows until it covers every package that
+Unity publishes as released or verified for Unity 2022.3 LTS.
 
-### Content that is recognized but reported unsupported
+### Full Unity 2022.3 LTS content coverage
 
-The following content and project choices are recognized. They are reported
-with the Unsupported state and their observable consequence, and the rest of
-the project remains usable:
+unitas supports every content family, package line in the supported package
+matrix, and built-in feature that a Unity 2022.3 LTS game uses. That includes
+the High Definition Render Pipeline, custom scriptable render pipelines,
+Entities and Entities Graphics, Netcode for Entities, Visual Effect Graph, UI
+Toolkit runtime panels, Visual Scripting, Enlighten realtime global
+illumination, AssetBundles and Addressables content built by Unity, baking of
+lightmaps, probes, and occlusion data inside unitas, and the drawing of custom
+editor extensions. Each is owned by the specification that the
+[Compatibility contract](compatibility-contract.md) names for it.
 
-* High Definition Render Pipeline (HDRP) assets, materials, volumes, and
-  settings.
-* Projects that implement their own scriptable render pipeline instead of the
-  Built-in Render Pipeline or the Universal Render Pipeline (URP).
-* Entities (ECS), Entities Graphics, and Netcode for Entities content.
-* Visual Effect Graph assets.
-* UI Toolkit runtime panels and documents.
-* Visual Scripting graphs.
-* Enlighten realtime global illumination data.
-* Loading AssetBundles and Addressables content built by Unity in a unitas
-  player; such content is rebuilt by unitas, as defined by BLD-005 in
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
-* Baking lightmaps and occlusion culling data inside unitas. Lightmaps,
-  light probes, reflection probe captures, and occlusion data that Unity baked
-  remain supported as project content, as defined in
-  [Rendering and animation](rendering-and-animation.md).
-* Drawing the user interface of custom editor extensions (custom inspectors,
-  property drawers, and editor windows). The commands and content effects of
-  those extensions remain supported, as defined in
-  [Scripting runtime](scripting-runtime.md).
+No content family is out of scope because of engine effort. Content is
+reported with a state other than Supported only when it is:
+
+* malformed, corrupt, missing, or ambiguous
+* from a package line that is not yet assessed
+* dependent on hardware, an entitlement, or an SDK that is absent
+
+A gap found anywhere else is a defect, to be fixed until the content is
+Supported.
 
 ### Licensing
 
@@ -171,7 +169,7 @@ opens.
 | Players and targets | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) | Build configuration, headless operation, scripting backends, player behavior, target coverage, licensing, installation, platform services, XR, and online play |
 | Quality and verification | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) | Diagnostics, external debugging, profiling, engine performance commitments, scenarios, project tests, replay, comparison, coverage, and tester feedback |
 | Inclusive and durable games | [Accessibility, localization, and persistence](accessibility-localization-persistence.md) | Accessible editor and player features, localization, saves, settings, and data evolution |
-| Demonstrable outcomes | [Playable samples and benchmarks](sample-games.md) | Complete games, agent authoring benchmarks, and behavioral benchmarks proving declared feature combinations |
+| Demonstrable outcomes | [Playable samples and benchmarks](sample-games/INDEX.md) | Complete games, agent authoring benchmarks, and behavioral benchmarks proving declared feature combinations |
 
 ## Coverage Rules
 

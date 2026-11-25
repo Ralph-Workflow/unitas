@@ -24,8 +24,9 @@ CMP-004 Native, CMP-005 Native.
 ## Compatibility Baseline
 
 The compatibility baseline is the documented, observable behavior of Unity
-2022.3 LTS. Projects saved by Unity 2020.3 LTS or Unity 2021.3 LTS open by
-migrating their serialized forms to the 2022.3 forms, as owned by SER-005 in
+2022.3 LTS. Projects saved by Unity 2020.3 LTS, Unity 2021.3 LTS, or any
+other earlier release that Unity 2022.3 LTS can upgrade, open by migrating
+their serialized forms to the 2022.3 forms, as owned by SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md); behavior that
 differs between those releases and Unity 2022.3 LTS is not matched. Unity
 releases after 2022.3 LTS are outside the baseline; a feature of a later
@@ -85,7 +86,7 @@ Evidence for a claim depends on its tier:
 
 * Exact and Semantic claims are established by behavioral compatibility
   benchmarks (CMP-001, owned by
-  [Playable samples and benchmarks](sample-games.md)) whose expectations are
+  [Playable samples and benchmarks](sample-games/INDEX.md)) whose expectations are
   observations of Unity 2022.3 LTS.
 * Familiar and Native claims are established by the acceptance outcomes of the
   owning unitas specification and by unitas-approved references. They are not
@@ -111,6 +112,14 @@ Every assessed behavior has one state:
   materially different on the selected target.
 * **Externally unavailable:** the behavior requires an entitlement, service,
   device, private SDK, account, or permission that is absent.
+
+Partially supported, Unsupported, and Platform-limited describe the
+product's current measured state. They are never the declared end state for
+content or behavior that Unity 2022.3 LTS supports. Every such finding is a
+defect against its owning feature, to be closed until the behavior is
+Supported. Platform-limited applies only where the target itself lacks the
+capability. Externally unavailable applies only where an absent entitlement,
+service, device, SDK, account, or permission prevents the behavior.
 
 The editor and automation interfaces expose the same compatibility state.
 
@@ -191,7 +200,8 @@ Matrix rules:
 * A version line means the versions of that package line that the Unity
   Package Manager marks as released or verified for Unity 2022.3 LTS. A version
   inside the line that is not released for Unity 2022.3 LTS is Unknown.
-* A project saved by Unity 2020.3 LTS or 2021.3 LTS that resolves an earlier
+* A project saved by an earlier release that Unity 2022.3 LTS can upgrade, and
+  that resolves an earlier
   line of a listed package (for example URP 10.x or 12.x) has that package's
   serialized content migrated as SER-005 defines and is assessed against the
   listed line; behavior of the earlier line that differs from the listed line
@@ -225,7 +235,7 @@ Matrix rules:
 | Package | Unity 2022.3 LTS version line | Tier | State | Owning specification |
 |---|---|---|---|---|
 | Universal Render Pipeline (`com.unity.render-pipelines.universal`) | 14.x | Native | Supported, including the Forward, Forward+, and Deferred rendering paths | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Shader Graph (`com.unity.shadergraph`) | 14.x | Native | Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported; a graph that uses a node unitas cannot represent is reported per graph and node under REN-006 | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Shader Graph (`com.unity.shadergraph`) | 14.x | Native | Supported, including graph targets for URP, HDRP, the Built-in Render Pipeline, and Visual Effect Graph, and every node of the 14.x line | [Rendering and animation](rendering-and-animation.md) (REN-006) |
 | Post Processing v2 (`com.unity.postprocessing`) | 3.x | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
 | 2D Sprite (`com.unity.2d.sprite`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
 | 2D Tilemap Editor (`com.unity.2d.tilemap`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
@@ -249,29 +259,30 @@ Matrix rules:
 | Collections (`com.unity.collections`) | Released or verified | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
 | Newtonsoft Json (`com.unity.nuget.newtonsoft-json`) | 3.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-009) |
 | Unity Test Framework (`com.unity.test-framework`) | 1.x | Semantic | Supported | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (TST-003) |
-| IDE integration (`com.unity.ide.visualstudio`, `com.unity.ide.rider`, `com.unity.ide.vscode`) | Released or verified | Native | Partially supported: project-file generation and debugger attachment are provided by DIA-002; the packages' preference user interface is not drawn (RUN-010) | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (DIA-002) |
-| Version Control (`com.unity.collab-proxy`) | Released or verified | Native | Partially supported: the package and its settings are preserved as project content; no version-control client is provided | [Editor and authoring](editor-and-authoring.md) (EDT-007) |
+| IDE integration (`com.unity.ide.visualstudio`, `com.unity.ide.rider`, `com.unity.ide.vscode`) | Released or verified | Native | Supported: project-file generation, debugger attachment (DIA-002), and the packages' preferences | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (DIA-002) |
+| Version Control (`com.unity.collab-proxy`) | Released or verified | Native | Supported: the package and its settings are preserved, and the editor provides source-control status, history, diff, and commit (EDT-007) | [Editor and authoring](editor-and-authoring.md) (EDT-007) |
+| High Definition Render Pipeline (`com.unity.render-pipelines.high-definition`) | 14.x | Native | Supported: assets, materials, volumes, and settings | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Custom scriptable render pipelines (the Scriptable Render Pipeline API) | 14.x core | Native | Supported: project render pipeline assets that implement their own pipeline | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Visual Effect Graph (`com.unity.visualeffectgraph`) | 14.x | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-004) |
+| Entities (`com.unity.entities`) and Entities Graphics (`com.unity.entities.graphics`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
+| Netcode for Entities (`com.unity.netcode`) | 1.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
+| Unity Transport (`com.unity.transport`) | 1.x and 2.x | Familiar | Supported, including its network simulator pipeline | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
+| OpenXR Plugin (`com.unity.xr.openxr`) | 1.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| XR Hands (`com.unity.xr.hands`) | 1.x | Familiar | Supported on devices that expose hand tracking | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| UI Toolkit runtime (`UIDocument`, UXML, USS, panel settings) | built into Unity 2022.3 LTS | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
+| Visual Scripting (`com.unity.visualscripting`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-002) |
+| AR Foundation (`com.unity.xr.arfoundation`) with Apple ARKit (`com.unity.xr.arkit`) and Google ARCore (`com.unity.xr.arcore`) | 5.x | Familiar | Supported on devices that expose AR tracking | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| Unity Gaming Services SDKs (`com.unity.services.*`, including Authentication, Lobby, Relay, Cloud Save, and Analytics) | Released or verified | Familiar | Supported: the SDK behavior runs, and calls reach the services when the project has a service account and credentials; without them, calls return the services' own unavailable errors | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001, PRD-002) |
 
 "Released or verified" means the versions the Unity Package Manager marks as
 released or verified for Unity 2022.3 LTS.
 
-The following families are recognized and reported Unsupported, as declared in
-the [index](INDEX.md). Each finding states the observable consequence, and the
-rest of the project remains usable.
-
-| Family | Recognized form | State | Owning specification |
-|---|---|---|---|
-| High Definition Render Pipeline | `com.unity.render-pipelines.high-definition` assets, materials, volumes, and settings | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Custom scriptable render pipelines | A project render pipeline asset that is neither the Built-in Render Pipeline nor URP | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Entities and Entities Graphics | `com.unity.entities`, `com.unity.entities.graphics`, and `com.unity.rendering.hybrid` content | Unsupported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
-| Netcode for Entities | `com.unity.netcode` content | Unsupported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
-| Visual Effect Graph | `com.unity.visualeffectgraph` assets | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-004) |
-| UI Toolkit runtime panels | Runtime panel settings, UXML documents, and `UIDocument` components | Unsupported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
-| Visual Scripting | `com.unity.visualscripting` graphs and machines | Unsupported | [Scripting runtime](scripting-runtime.md) (RUN-002) |
-| Enlighten realtime global illumination | Realtime GI settings and Enlighten realtime lighting data; baked lighting remains Supported content | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
-| Unity-built AssetBundles and Addressables content | AssetBundles and Addressables content built by Unity and loaded in a unitas player; unitas rebuilds that content from the project | Unsupported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (BLD-005) |
-| Baking inside unitas | Requests to bake lightmaps or occlusion culling data; Unity-baked lightmaps, light probes, reflection probe captures, and occlusion data remain Supported content | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
-| Custom editor extension drawing | Custom inspectors, property drawers, and editor windows; their commands and content effects remain Supported | Unsupported | [Scripting runtime](scripting-runtime.md) (RUN-010) |
+The matrix grows until it lists every package Unity publishes as released or
+verified for Unity 2022.3 LTS. No package family and no built-in Unity feature
+is excluded from unitas because of engine effort. A package line is reported
+Unknown only until it is assessed. Each assessment ends with the line Supported
+in the matrix, or with every gap recorded as a defect against its owning
+feature.
 
 ## Third-Party and Asset-Store Content
 
@@ -308,10 +319,12 @@ reported as project content under its folder.
 A native plugin with no binary for the selected target or architecture is
 Platform-limited for that target, naming the library and the missing
 architecture. Behavior of a precompiled assembly beyond the Unity APIs it
-references is Unknown until assessed. Use of non-public `UnityEngine` or
-`UnityEditor` members, including through reflection, is outside the
-compatibility surface and is reported Unsupported, naming the member, unless an
-owning specification names that member.
+references is Unknown until assessed. Non-public `UnityEngine` and
+`UnityEditor` members that packages and projects reach through reflection are
+supported where an owning specification names them. Any other non-public
+member is reported Unknown, naming the member and the code that uses it. Each
+member found in assessed third-party content is then added to its owning
+specification and supported.
 
 Updating, adding, or removing a third-party package reassesses the findings it
 affects. A vendor's own statement of compatibility with unitas is never treated
@@ -437,16 +450,18 @@ are available to people and agents through automation.
   as Supported with their tiers and owning specifications, while an unlisted package and a
   preview version of a listed package are each reported Unknown. (CMP-002)
 * A project containing HDRP assets and a Visual Scripting graph reports each as
-  Unsupported with its observable consequence, and its URP scenes remain
-  editable and playable. (CMP-002)
+  Supported with its tier and owning specification, renders its HDRP scenes,
+  and runs its graph. (CMP-002)
 * A locally modified embedded copy of a listed package is not matched to the
   released version and is assessed as third-party content. (CMP-002, CMP-003)
 * An Asset Store package containing scripts, a native plugin without an ARM64
   binary, and a custom shader produces findings for each item that name the
   vendor package, version, source, affected features, and dependent scenes; its
   summary never reads Supported while any of its content is Unknown. (CMP-003)
-* Reflection on a non-public `UnityEditor` member in a vendor package is
-  reported Unsupported, naming the member. (CMP-003)
+* Reflection on a non-public `UnityEditor` member in a vendor package that no
+  owning specification names is reported Unknown, naming the member and the
+  calling code. After assessment, the member is specified and supported.
+  (CMP-003)
 * A compatibility report and a build result each record the unitas version, and
   comparing reports from two versions identifies differences caused by the
   version change. (CMP-004)
@@ -480,14 +495,15 @@ are available to people and agents through automation.
   its owning catalog feature. (CMP-002)
 * A project that uses Enlighten realtime global illumination, loads Unity-built
   AssetBundles, and includes the Rider IDE and Version Control packages reports
-  the first two Unsupported and the last two Partially supported with their
-  named exclusions. (CMP-002, REN-003, BLD-005, DIA-002, EDT-007)
+  all four as Supported. Its realtime GI updates, its bundles load, and its
+  source-control status appears in the editor. (CMP-002, REN-003, BLD-005,
+  DIA-002, EDT-007)
 * A release that finds an earlier Supported claim inaccurate and does not fix it
   lowers the state and lists the corrected claim in its release notes with the
   affected catalog identifiers. (CMP-004)
-* A Shader Graph asset that uses a node unitas cannot represent is reported by
-  graph and node, and an HDRP graph target is reported Unsupported. (CMP-002,
-  REN-006)
+* A Shader Graph asset that uses any node of the 14.x line compiles and renders
+  on its URP, HDRP, Built-in, and Visual Effect Graph targets. A malformed graph
+  is reported by graph and node. (CMP-002, REN-006)
 * A release line reports its security and correction patch periods and end of
   support, and an installation past end of support identifies itself as
   unsupported while continuing to run. (CMP-005)

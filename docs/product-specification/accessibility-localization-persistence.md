@@ -43,7 +43,7 @@ baseline is Unity 2022.3 LTS:
 
 ## Accessible editor experience
 
-Core editor workflows are keyboard operable and expose accessible names,
+Every editor workflow is keyboard operable and exposes accessible names,
 roles, values, focus, selection, expanded state, validation, progress, and
 status to the host platform's accessibility interface. Information does not
 depend on color, pointer hover, spatial layout, animation, or a screenshot
@@ -60,10 +60,14 @@ As a developer, I can:
 * inspect the same state through structured automation.
 
 Commands contributed by custom editor extensions appear as keyboard-reachable
-commands with accessible names. Custom editor extension drawing is Unsupported
-as listed in the [index](INDEX.md), so an extension never removes
-accessibility from the default inspector presentation used in its place or from
-unrelated editor functions.
+commands with accessible names. Custom inspectors, property drawers, and
+editor windows drawn by extensions (RUN-010 in
+[Scripting runtime](scripting-runtime.md)) take part in the same keyboard
+focus order as the rest of the editor. Their IMGUI and UI Toolkit controls
+expose accessible names taken from their labels, along with their roles,
+values, and states. A control that an extension draws without a label is
+reported, naming the extension and the control. An extension never removes
+accessibility from unrelated editor functions.
 
 ## Accessibility features available to games
 
@@ -74,10 +78,31 @@ reduced motion, and configurable timing where the game exposes it. The input,
 UI, text, and audio building blocks for these are owned by
 [UI, audio, and input](ui-audio-input.md).
 
-Unity 2022.3 LTS offers no player screen-reader API. Any
-assistive-technology metadata that unitas offers to players is a unitas
-extension, identified as such, and is not represented as Unity-compatible
-behavior.
+Unity 2022.3 LTS offers no player screen-reader API. unitas provides one as
+the player accessibility extension. It is identified as a unitas extension and
+is not represented as Unity-compatible behavior:
+
+* In a running player, uGUI, TextMeshPro, and UI Toolkit controls are exposed
+  to the platform screen reader on every target that has one: Narrator and
+  other UI Automation clients on Windows, VoiceOver on macOS and iOS, TalkBack
+  on Android, Orca on Linux, and the browser's screen reader on the browser
+  target. Each control exposes an accessible name taken from its visible
+  label, a role (button, toggle, slider, dropdown, text field, list, tab,
+  dialog, or image), its value, its state (selected, checked, disabled, or
+  expanded), and its focus. The screen reader's focus follows the selected
+  control of the event system and the focused element of UI Toolkit panels.
+* Project scripts can set or override a control's name, description, role,
+  and value, mark content as decorative so it is not announced, and announce
+  a message through the screen reader, for example when a score changes.
+* Game code can read whether a screen reader is running and the player's
+  platform preferences for reduced motion, high contrast, text scale, and
+  captions, and is notified when they change. A target that does not report a
+  preference returns an explicit not-reported state, not a default value.
+* The project setting **Player accessibility extension** is on by default. A
+  project that provides its own narration turns it off, and then the player
+  exposes no controls to the screen reader, as in Unity 2022.3.
+* A control that has no name from its label or from a script is reported in
+  diagnostics and in accessibility playtest results, naming the control.
 
 The player retains accessibility choices across sessions when the project
 requests persistence. A first-run flow can expose essential accessibility
@@ -92,6 +117,10 @@ alternatives that the game provides.
 Scenarios can evaluate keyboard-only, controller-only, touch-only, high-scale
 UI, captions, reduced motion, contrast, color-independent cues, focus order,
 navigation, time limits, and interruption recovery.
+
+Scenarios can also drive the player accessibility extension: they read the
+names, roles, values, and states the screen reader receives, move screen-reader
+focus, and record announcements.
 
 A result identifies the input method and accessibility settings used. Passing a
 pointer flow is not represented as passing keyboard, controller, touch, or
@@ -145,6 +174,14 @@ When the project uses Localization 1.x:
   string, or the fallback) is honored and diagnosed.
 * Pseudo-localization locales produce their expanded, accented, or bracketed
   output so layout expansion can be tested.
+* Localized property variants (the Game Object Localizer and its tracked
+  properties) apply per-locale values to component properties, including
+  RectTransform size and position, fonts, and colors, when the locale changes.
+* String table collections export to and import from CSV and XLIFF with their
+  keys, key identifiers, comments, and metadata. An entry whose key is
+  missing, duplicated, or conflicting in the imported file is reported with
+  the file, row, and key. Google Sheets synchronization works when the project
+  has the Google service account or credentials it needs.
 
 A project that implements localization without the package (for example with
 its own tables of strings) is ordinary project content; its behavior follows
@@ -153,7 +190,7 @@ from the scripts and assets it uses.
 ### Required behavior
 
 As a player, I can select an available locale and see the change applied to
-supported content. Locale selection persists when the project requests it and
+all localized content. Locale selection persists when the project requests it and
 remains distinguishable from device locale and project default.
 
 Changing locale updates every bound localized string and asset without
@@ -162,10 +199,18 @@ corrupt saved game state or confuse content identity with translated display
 text.
 
 A locale is right-to-left when its Locale asset metadata or the project's
-localization settings mark it so. For each locale, the right-to-left state and
-the support state of the text system that renders it, as defined by TXT-001 in
-[UI, audio, and input](ui-audio-input.md), are reported. The presence of
-Unicode characters alone is not treated as full language support.
+localization settings mark it so. Text in every locale, including Arabic,
+Hebrew, Persian, Urdu, Indic, Thai, Lao, Khmer, and Myanmar locales, is shaped
+and bidirectionally ordered as defined by TXT-001 in
+[UI, audio, and input](ui-audio-input.md). For each locale, the report states
+its right-to-left state and whether the project's fonts cover it: every
+character in the locale's tables has a glyph in the font or its fallback
+chain, and each font that renders a complex script has shaping data for it.
+A locale whose content is covered is reported fully supported. A locale with
+gaps is reported with each missing glyph or missing shaping data, and the font
+and entry affected. When the project's Text layout mode is Unity per-line
+reversal, the report states that its right-to-left and complex-script
+locales rely on pre-shaped text.
 
 Missing translations remain visibly diagnosable and do not silently masquerade
 as translated content.
@@ -179,7 +224,8 @@ changing saved project content, and identify:
 * missing localized assets;
 * fallback use;
 * truncated, clipped, overlapping, or overflowing text;
-* missing glyphs and unsupported script behavior (as reported by TXT-001);
+* missing glyphs, and fonts that lack shaping data for a locale's script (as
+  reported by TXT-001);
 * content variables absent from or inconsistent with a translation;
 * layouts that fail under right-to-left direction or expanded strings.
 
@@ -190,8 +236,10 @@ accessibility, and gameplay preferences. `PlayerPrefs` (`SetInt`, `SetFloat`,
 `SetString`, `GetInt`, `GetFloat`, `GetString`, `HasKey`, `DeleteKey`,
 `DeleteAll`, and `Save`) behaves as in Unity and stores data in the same
 per-user location that Unity uses for the target, company name, and product
-name. Preference failures, such as exceeding the browser storage quota, are
-reported to gameplay code as in Unity and in diagnostics.
+name. On the browser target, `PlayerPrefs` has no fixed size limit, unlike
+Unity 2022.3's 1 MB limit there; it is bounded only by the storage quota the
+browser grants the page. Preference failures, such as exceeding that quota,
+are reported to gameplay code as in Unity and in diagnostics.
 
 Project assets, shared project settings, editor preferences, player preferences,
 and game-progress data remain distinct. Clearing one category does not silently
@@ -220,30 +268,43 @@ As a developer, I can distinguish:
 * local data from cloud or externally synchronized data;
 * a user cancellation from an I/O or permission failure.
 
-For each target, unitas documents in its product knowledge (AUT-006 in
-[Automation and MCP](automation-and-mcp.md)) when `PlayerPrefs.Save` and a file
-write under `Application.persistentDataPath` become durable (including the
-browser target's synchronized storage), whether a crash loses `PlayerPrefs`
-changes not yet saved, and whether a prior file survives interruption, quota
-exhaustion, and process termination during a write. Engine storage behavior
-matches that documentation: a write that fails for lack of space or
-permission reports the failure to the calling code, and the engine never
-reports a write as complete before it is durable under that documentation.
+Engine storage gives the same guarantees on every target:
+
+* `PlayerPrefs.Save` returns after the preferences are durable. Changes not
+  yet saved are written when the player quits normally and are lost if the
+  process crashes first, as in Unity.
+* A file written under `Application.persistentDataPath` is durable once the
+  call that closes or flushes it returns. On the browser target, a closed file
+  is copied to the page's persistent browser storage automatically, without
+  project code, and is durable when that copy completes. Until then the file
+  is reported as pending synchronization, and closing the page first finishes
+  any pending copy that the browser allows.
+* Replacing a file with a completed file through `File.Replace` is atomic on
+  every target, including the browser target: after interruption, quota
+  exhaustion, or process termination, either the prior file or the new one is
+  present, never a mix or neither.
+* A write that fails for lack of space or permission reports the failure to
+  the calling code, and the engine never reports a write as complete or
+  synchronized before it is durable.
+
 A game that writes to a new file and replaces the prior one only after the
-write completes keeps its prior valid save on every target whose
-documentation says the replacement is atomic.
+write completes keeps its prior valid save on every target. unitas states
+these guarantees, and each target's storage location and quota, in its product
+knowledge (AUT-006 in [Automation and MCP](automation-and-mcp.md)).
 
 ### Serializers for save data
 
 * `JsonUtility` and Newtonsoft Json (`com.unity.nuget.newtonsoft-json` 3.x) are
   Supported on every scripting backend.
-* `System.Xml.Serialization.XmlSerializer` is Supported, with the
-  ahead-of-time compilation limits defined by BLD-003 in
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
-* `BinaryFormatter` is Partially supported: it is unavailable on the browser
-  target, and it is subject to the BLD-003 ahead-of-time compilation limits.
-* A serialization that fails because of ahead-of-time compilation or managed
-  code stripping names the type and member that could not be serialized.
+* `System.Xml.Serialization.XmlSerializer` and `BinaryFormatter` are
+  Supported on every scripting backend and every target, including the
+  browser target. On ahead-of-time backends (BLD-003 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
+  they serialize and deserialize the same data as on just-in-time backends,
+  for every type the project serializes with them.
+* A serialization that fails because the project's managed code stripping
+  settings removed a type or member names that type and member and the
+  preservation mechanisms that would retain it, as defined by BLD-003.
 
 ## Save evolution and migration
 
@@ -252,8 +313,8 @@ meaning of supported player progress and settings. A migration identifies input
 version, resulting version, outcome, and any data that cannot retain meaning.
 
 Migration can be playtested using representative older saves. A failed
-migration leaves the original data available on targets whose documented
-storage behavior keeps the prior file, and does not masquerade as a new game.
+migration that writes its result to a new file leaves the original data
+available on every target, and does not masquerade as a new game.
 
 ## Cloud and conflict behavior
 
@@ -272,7 +333,8 @@ unavailable, or controlled by an external platform service.
 
 ## Acceptance stories
 
-1. Core editor authoring, diagnostics, and play controls are usable by keyboard,
+1. Editor authoring, diagnostics, and play controls, including custom
+   inspectors and editor windows drawn by extensions, are usable by keyboard,
    expose readable accessible state, and present the same state through
    automation. (ACC-001)
 2. A game can offer captions, scalable UI, remappable controls, reduced motion,
@@ -286,25 +348,43 @@ unavailable, or controlled by an external platform service.
    language rules select and its culture's number and date format. (LOC-001)
 5. Previewing a pseudo-localized or right-to-left locale in the editor or
    through automation reports missing translations, missing assets, overflow,
-   and the reported right-to-left and text-system support state without
-   changing saved content. (LOC-001)
+   the right-to-left state, and the locale's font coverage without changing
+   saved content; ar, he, hi, and th locales whose fonts cover their content
+   render shaped, bidirectionally ordered text and are reported fully
+   supported. (LOC-001)
 6. `PlayerPrefs` values survive a player restart in Unity's per-target
    location, and clearing preferences does not remove save data. (SAV-001)
 7. A playtest scenario that terminates the player during a save file write
    under `Application.persistentDataPath`, and one that exhausts storage
-   quota, each observe the outcome that the target's product-knowledge
-   documentation states, and a write-then-replace save keeps the prior valid
-   save on targets documented as atomic. (SAV-001)
+   quota, each find the prior valid save intact after a write-then-replace
+   save on every target, including the browser target, and the failed write
+   is reported to the calling code. (SAV-001)
 8. Older saves that a project's load code accepts migrate with reported input
    version, resulting version, and outcome; corrupt, incompatible, absent, and
    failed data remain distinct outcomes. (SAV-001)
 9. For a project using Localization members whose unitas behavior differs from
    Unity 2022.3, each difference appears in the AUT-006 API reference and in the
    project compatibility report. (LOC-001)
-10. Save data round-trips through `JsonUtility`, Newtonsoft Json, and
-   `XmlSerializer` on each scripting backend; `BinaryFormatter` is reported
-   Partially supported and unavailable on the browser target; and a type
-   removed by stripping produces a diagnostic naming the type. (SAV-001)
-11. Product knowledge available through automation states, for each target,
-    when `PlayerPrefs.Save` and persistent-data file writes are durable and
-    what a crash loses. (SAV-001)
+10. Save data round-trips through `JsonUtility`, Newtonsoft Json,
+   `XmlSerializer`, and `BinaryFormatter` on each scripting backend and every
+   target, including the browser target, and a type removed by stripping
+   produces a diagnostic naming the type. (SAV-001)
+11. On every target, `PlayerPrefs` values saved with `PlayerPrefs.Save` and a
+    closed persistent-data file survive a crash immediately afterwards (on the
+    browser target, once its synchronization completes), and
+    product knowledge available through automation states these guarantees
+    and each target's storage quota. (SAV-001)
+12. With the player accessibility extension on, the platform screen reader on
+    Windows, macOS, iOS, Android, Linux, and the browser target announces each
+    uGUI and UI Toolkit control's name, role, value, and state as focus moves,
+    a script announcement is spoken, game code reads the platform's reduced
+    motion and text scale preferences, and with the extension off no control
+    is exposed. (ACC-001)
+13. On the browser target, `PlayerPrefs` stores more than 1 MB up to the
+    browser's quota, and a save file closed under
+    `Application.persistentDataPath` is present after the page reloads.
+    (SAV-001)
+14. A string table collection exported to CSV and XLIFF and imported back
+    keeps its keys, identifiers, and comments, and a Game Object Localizer
+    changes a RectTransform width and a font when the locale changes.
+    (LOC-001)
