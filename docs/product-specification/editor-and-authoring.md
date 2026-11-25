@@ -28,11 +28,20 @@ here (EDT-008). Automation rules are owned by
 [Automation and MCP](automation-and-mcp.md) and are not restated here.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. The project's declared Unity release (2020.3 LTS through 2022.3 LTS)
-is the behavioral baseline, with 2022.3 LTS as the principal reference, as
-defined in the [Compatibility contract](compatibility-contract.md);
-package-dependent features are bounded by the supported package matrix (CMP-002)
-in the [Compatibility contract](compatibility-contract.md).
+capability. Package-dependent features are bounded by the supported package
+matrix (CMP-002) in the [Compatibility contract](compatibility-contract.md).
+
+### Compatibility tiers
+
+Every feature this document owns is in the Native tier, as defined in the
+[Compatibility contract](compatibility-contract.md): EDT-001, EDT-002, EDT-003,
+EDT-004, EDT-005, EDT-006, EDT-007, and EDT-008 are Native. The visual editor's
+behavior is defined by this specification, not by the Unity Editor. Unity
+project content that the editor presents and saves keeps the identity and
+serialization guarantees of its own owners (for example SER-001 and PRJ-003 in
+[Serialization and prefabs](serialization-and-prefabs.md)), and script-visible
+editor API shapes such as `[MenuItem]` and `OnDrawGizmosSelected` keep their
+documented Unity 2022.3 LTS meaning.
 
 ## Workspace
 
@@ -162,8 +171,8 @@ and exact resulting values. Cancelling a manipulation restores the prior state.
 The scene view draws gizmos from `OnDrawGizmos` and `OnDrawGizmosSelected`
 using the `Gizmos` drawing calls (lines, rays, wire and solid cubes and spheres,
 meshes, frustums, icons) with their color and matrix state. `OnDrawGizmosSelected`
-draws for each selected object and for each ancestor of a selected object, as in
-Unity. Gizmo drawing can be toggled globally and per component type.
+draws for each selected object and for each ancestor of a selected object. Gizmo
+drawing can be toggled globally and per component type.
 
 Lines and rays from `Debug.DrawLine` and `Debug.DrawRay` appear in the scene
 view, and in the game view while its gizmo display is enabled, with their color,
@@ -294,9 +303,13 @@ references, hierarchy, scene ownership, prefab overrides, and selection—not
 only displayed values. (EDT-005)
 
 Edits made by agents participate in the same history and are attributed to the
-agent session that made them. Undo applies to the most recent operation
-regardless of actor; reversing one agent change set out of order is done through
-change review (EDT-008).
+agent session that made them. Undo requested by a person applies to the most
+recent operation regardless of actor. Undo and redo requested by an agent
+session apply only to that agent session's own operations; when a newer
+operation by another actor changed the same content, the request returns a
+conflict naming that operation and changes nothing. Reversing another actor's
+change requires the review scope (AUT-007) and is done through change review
+(EDT-008).
 
 An operation that cannot be undone communicates this before commitment. New
 edits after undo make the abandoned redo branch explicit. External file changes
@@ -392,8 +405,9 @@ rejected, or reverted, and are readable through MCP as well as in the editor.
 
 ### Review policies
 
-Each project and each agent session has one of two review policies, chosen by
-the developer:
+Each project and each agent session has one of two review policies, set only by
+a person (AUT-007). A project's policy is require approval until a person
+changes it:
 
 * **Apply immediately:** agent changes take effect in the project and the open
   editor at once. Accepting marks items as reviewed; rejecting an unreviewed
@@ -402,9 +416,9 @@ the developer:
   developer can preview, including in the scene view and inspector, without the
   project files changing. Approving applies them; rejecting discards them.
 
-A session's policy, when set, overrides the project's policy for that session;
-a new session inherits the project's policy. An agent session cannot change its
-own review policy.
+An agent session's policy, when set, overrides the project's policy for that
+agent session; a new agent session inherits the project's policy. An agent
+session cannot set any review policy, including its own.
 
 ### Isolated proposal environment
 
@@ -416,8 +430,8 @@ agent sessions. Results are recorded against the change set and name the
 proposed revision they ran on. Approval shows the latest results and states
 whether the proposal changed after they were produced.
 
-Agent-authored code is not compiled into the editor process or a headless
-server process until it is approved, except in that isolated environment.
+Agent-authored code is not compiled into the editor process or into a headless
+session (AUT-004) until it is approved, except in that isolated environment.
 
 ### Risk flags
 
@@ -428,6 +442,7 @@ category:
 * changes to scenario expectations, approved visual references, and comparison
   tolerances;
 * changes to project settings and package manifests;
+* changes to per-project unitas configuration (AUT-007);
 * changes to build configuration and signing configuration;
 * changes to editor-time scripts (scripts in editor assemblies or using
   `UnityEditor`);
@@ -445,15 +460,24 @@ file-level changes attributed to that invocation. Changes the code makes outside
 the project folder are reported as untracked effects of that invocation; they
 cannot be reverted through change review.
 
+Under the require-approval policy, project code invoked by an agent session runs
+in the isolated proposal environment. Files it creates, changes, or deletes in
+the project become proposed items of that agent session's change set, and the
+project files are unchanged until approval. Effects outside the project folder
+cannot be held for approval, so such an invocation returns a confirmation-required
+outcome (AUT-007) unless a standing grant covers it.
+
 ### Who can review
 
 Accepting, approving, rejecting, or reverting a change set requires a person, or
 an agent session to which a person granted the review scope for that project
 (AUT-007 in [Automation and MCP](automation-and-mcp.md)). An agent session never
-accepts or approves a change set it authored; such a request returns a
-permission outcome and changes nothing. When no visual editor is running, a
-person reviews and approves through the command line or through an MCP client
-authenticated as that person.
+accepts or approves a change set authored by itself, or by any agent session
+authorized by the same credential or bound to the same grant; such a request
+returns a permission outcome and changes nothing. When no visual editor is
+running, a person reviews and approves through an interactive command-line
+invocation or through an MCP client using that person's person credential
+(AUT-007).
 
 ### Accept, reject, and revert
 
@@ -474,11 +498,12 @@ operation, its play sessions, and the objects and assets it is changing. Changes
 from an active agent session appear in the views as they happen, marked with
 that agent session.
 
-The developer can hold agent writes for all sessions or for one session. While
+The developer can hold agent writes for all agent sessions or for one agent
+session. While
 writes are held, read and inspection requests continue; write requests return a
 distinct held outcome naming who held them, and nothing changes. Permitting
-writes again does not replay held requests. Holding and permitting are not
-available to agents.
+writes again does not replay held requests. Holding and permitting are
+person-only actions (AUT-007).
 
 ## Accessibility
 
@@ -555,3 +580,15 @@ the keyboard.
 23. Entering play mode while an agent's proposed change is held for approval
     runs the play session without that change unless the developer is
     previewing it. (EDT-004, EDT-008)
+24. Under the require-approval policy, a `[MenuItem]` command invoked by an
+    agent session that writes a project file leaves the file unchanged and adds
+    the write as a proposed item; a command that would also write outside the
+    project folder returns confirmation-required. (EDT-008)
+25. An agent session holding the review scope cannot accept a change set made by
+    another agent session authorized by the same credential, and receives a
+    permission outcome. (EDT-008)
+26. An agent session's undo request returns a conflict when a person has since
+    edited the same property, and a person's undo applies to the most recent
+    operation regardless of actor. (EDT-005)
+27. A change set that edits per-project unitas configuration lists that change
+    ahead of its other items. (EDT-008)

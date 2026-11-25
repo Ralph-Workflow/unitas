@@ -9,6 +9,14 @@ scenarios that succeed in editor play mode, headless through MCP, and on
 declared player targets. Agent authoring benchmarks show that an agent can
 change a sample through MCP alone.
 
+Compatibility tiers of the features this specification owns, as recorded in
+the [Feature catalog](feature-catalog.md) and defined in the
+[Compatibility contract](compatibility-contract.md): SMP-001 Native, CMP-001
+Native. The playable samples are original unitas games; their acceptance is
+defined by their own scenarios and unitas-approved references, not by
+comparison with output from Unity. Only the compatibility benchmarks compare
+with Unity 2022.3 LTS, and only for Exact-tier and Semantic-tier behavior.
+
 Every sample provides controls, gameplay objective, expected presentation,
 feature coverage, supported targets, accessibility information, known
 limitations, and repeatable acceptance scenarios. Samples use redistributable
@@ -23,7 +31,11 @@ Each playable sample includes:
 * At least one automated happy-path scenario and one failure or recovery
   scenario.
 * Manual playtest guidance for behavior that requires human judgment.
-* Expected screenshots or other references for stable visual checkpoints.
+* unitas-approved reference images, as defined by TST-002 in
+  [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md),
+  for stable visual checkpoints; visual checkpoints of Familiar-tier and
+  Native-tier features are judged against these references, never against
+  Unity screenshots.
 * Performance expectations stated separately for representative target classes.
 * A compatibility report that identifies every feature the sample exercises.
 * A saved or reproducible state for reaching important test situations quickly.
@@ -169,18 +181,28 @@ feature as passing on hardware that does not expose it.
 ## Compatibility Benchmark Projects
 
 Focused benchmark projects isolate behavior whose correctness is difficult to
-infer from a complete game. The set covers serialization and references,
-prefabs and overrides, C# APIs and lifecycle order, time and coroutines, scene
-loading, shader and material behavior, animation transitions, physics contacts
-and queries, UI layout and event routing, input phases, audio timing, asset
-loading, save evolution, and target lifecycle.
+infer from a complete game. Benchmarks of Exact-tier and Semantic-tier behavior
+compare unitas with observations of Unity 2022.3 LTS; that set covers
+serialization and references, prefabs and overrides, C# APIs and lifecycle
+order, time and coroutines, scene loading, physics contacts and queries, asset
+and resource loading, project tests, and save evolution.
 
-Each benchmark states its input project, Unity reference version, preconditions,
-observable expected behavior, permitted variation, unsupported conditions, and
-result evidence. A benchmark remains unchanged when unitas fails it; the result
-reports the incompatibility rather than changing the expectation to match the
-engine. Each benchmark result records the unitas version and the Unity
-reference version it was compared against.
+Benchmarks of Familiar-tier and Native-tier behavior, including shader and
+material behavior, animation transitions, UI layout and event routing, input
+phases, audio timing, and target lifecycle, check the behavior that the owning
+unitas specification defines against unitas-approved references. They are
+never compared with Unity output, and a difference from Unity in them is a
+listed difference, not a benchmark failure.
+
+Each benchmark states its input project, tier, reference (Unity 2022.3 LTS for
+Exact-tier and Semantic-tier benchmarks, the owning unitas specification and
+its approved references otherwise), preconditions, observable expected
+behavior, permitted variation, unsupported conditions, and result evidence. A
+benchmark remains unchanged when unitas fails it; the result reports the
+incompatibility rather than changing the expectation to match the engine. Each
+benchmark result records the unitas version and, for Exact-tier and
+Semantic-tier benchmarks, the Unity 2022.3 LTS release it was compared
+against.
 
 An upstream Unity project is included only when its license permits
 redistribution. Otherwise, the benchmark records acquisition prerequisites and
@@ -228,10 +250,10 @@ A run succeeds only when every criterion is observed:
 * the change set contains only changes attributed to the agent session, each
   shown as a semantic property-level difference for content and a text
   difference for scripts, with no unrelated serialized changes;
-* the changed files remain Unity-readable under the round-trip expectations of
-  the [Compatibility contract](compatibility-contract.md), and, where the Unity
-  reference version is available, the changed project shows the same new
-  behavior in it;
+* the changed files remain Unity-readable under the Exact-tier round-trip
+  expectations of the [Compatibility contract](compatibility-contract.md), and,
+  where Unity 2022.3 LTS is available, the changed project opens in it with the
+  new scenes, prefabs, serialized values, and references intact;
 * accepting the change set keeps the change, and rejecting it returns the
   project to its starting content.
 
@@ -295,8 +317,17 @@ failure of AUT-001 naming the capability.
   an agent failure, and a missing MCP capability is reported by name. (SMP-001,
   AUT-001)
 * A compatibility benchmark that unitas fails keeps its expectation unchanged,
-  reports the incompatibility with its evidence, and records the unitas and
-  Unity reference versions. (CMP-001, CMP-004)
+  reports the incompatibility with its evidence, and records the unitas version
+  and, for an Exact-tier or Semantic-tier benchmark, the Unity 2022.3 LTS
+  release it was compared against. (CMP-001, CMP-004)
+* A Semantic-tier benchmark of coroutine and lifecycle order compares unitas
+  with Unity 2022.3 LTS observations, while a Familiar-tier benchmark of UI
+  layout passes against its unitas-approved reference even where its layout
+  differs from Unity's, and that difference is listed. (CMP-001, RUN-003,
+  UI-001)
+* A sample's visual checkpoint is judged against its unitas-approved reference
+  image, and no sample acceptance scenario requires output identical to Unity.
+  (SMP-001, TST-002)
 * An upstream Unity project whose license does not permit redistribution is
   represented by acquisition prerequisites and expected behavior without copied
   content. (CMP-001)

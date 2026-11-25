@@ -15,10 +15,18 @@ capability that a person can use but an agent cannot is incomplete, whatever
 its state in the visual editor. Every feature specification relies on this
 document for automation rules instead of restating them.
 
-Throughout this document, an **agent session** is one authorized MCP connection
-and its identity; a **play session** is one running instance of the game in
-play mode, in the editor, headless, or in a player. An agent session can start
-several play sessions.
+The terms **agent session**, **play session**, and **headless session** are
+defined once, in [Sessions and project state](#sessions-and-project-state);
+every specification uses them with those meanings.
+
+### Compatibility tiers
+
+Every feature this document owns is in the Native tier, as defined in the
+[Compatibility contract](compatibility-contract.md): AUT-001, AUT-002, AUT-003,
+AUT-004, AUT-005, AUT-006, AUT-007, and AUT-008 are Native. The agent and MCP
+layer is defined entirely by this specification; it has no Unity counterpart to
+match. Where it exposes Unity project content or Unity-shaped APIs, those keep
+the tier of their owning features.
 
 ## User Outcome
 
@@ -49,7 +57,10 @@ Agents and people receive the same compatibility states, as defined in the
 [Compatibility contract](compatibility-contract.md). A capability that the visual
 editor offers and automation does not, or that behaves differently through
 automation, leaves that capability incomplete; such a gap is never presented to
-an agent as a permission refusal.
+an agent as a permission refusal. The person-only actions enumerated in
+[People and person-only actions](#people-and-person-only-actions) are the only
+exception: agents can discover and request each of them, and their
+unavailability to agents is not a parity gap. (AUT-001)
 
 ### Client and network independence
 
@@ -167,12 +178,17 @@ cannot claim the result of an ordinary player path.
 
 ### Time control
 
+This section is the single owner of the run conditions of play sessions in the
+editor and in headless sessions; other specifications reference it.
+
 A play session can run with a fixed simulated frame delta, honoring
 `Time.captureFramerate` as defined by RUN-004 in
 [Scripting runtime](scripting-runtime.md); advance a requested number of frames
 as fast as the host allows; start from a saved state; and seed
 `UnityEngine.Random` at start. The play session's result records each of these
-conditions. (AUT-002)
+conditions. With no condition requested, frames advance as fast as they
+complete, and `Application.targetFrameRate` limits the frame rate in the same
+way it does in a unitas player. (AUT-002)
 
 ### Visual evidence
 
@@ -183,6 +199,23 @@ or UI element drawn there, and the screen-space bounds of named objects. A
 capture also records the cameras, objects, and settings that produced it.
 Annotated overlays are produced as separate images and never alter the
 unannotated capture. (AUT-002)
+
+### Audio evidence
+
+An audio capture request names an `AudioListener` or an audio mixer output and a
+time range. The result contains the samples at the output sample rate with their
+channel layout, the DSP time at which the capture starts, and the voices (audio
+sources and clips) that contributed to it. (AUT-002)
+
+### Modal dialogs
+
+A play session, an editor-method invocation, or a command-line invocation can
+supply answers in advance for modal editor dialogs (for example those shown by
+`EditorUtility.DisplayDialog`), each matched by dialog title and naming the
+button to choose. Each dialog shown and the answer used, or the absence of an
+answer, are recorded in the invocation's result. A dialog with no supplied
+answer in a headless session returns the no-person-present outcome rather than
+waiting. (AUT-002)
 
 ## Human-Agent Shared Context
 
@@ -200,18 +233,36 @@ outcome that names who held them, and nothing changes; inspection continues.
 
 ## Headless and Concurrent Agent Sessions
 
+### Sessions and project state
+
+This is the only definition of these terms in the specification:
+
+* An **agent session** is one authorized MCP connection together with its
+  identity, granted scopes, and change sets.
+* A **play session** is one running instance of the game in play mode, in the
+  visual editor, in a headless session, or in a player. An agent session can
+  start several play sessions.
+* A **headless session** is a period during which the MCP server or a
+  command-line invocation (BLD-002 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
+  has a project open with no visual editor attached.
+
+All processes on one machine that open the same project location—the visual
+editor, the MCP server, and command-line invocations—attach to one shared
+project state as separate actors, unless an invocation requests isolated state.
+A process that cannot attach reports that the project is in use and names the
+process holding it. Opening the visual editor on a project in a headless session
+ends that headless session without taking over its agent sessions or play
+sessions. (AUT-004)
+
 ### Headless operation
 
-The MCP server operates on a project without the visual editor running and
-without a display. Every tool and resource behaves the same headless as with the
-editor open, except that requests which need a person (for example granting
-project trust or confirming an action) return an outcome stating that no person
-is present. Rendering, captures, play sessions, tests, and builds run headless.
-(AUT-004)
-
-When the visual editor opens a project that a headless server is already
-serving, both attach to the same project state; neither silently takes over
-the other's agent sessions or play sessions.
+The MCP server operates on a project in a headless session, without a display.
+Every tool and resource behaves the same in a headless session as with the
+editor open, except that requests which need a person (for example confirming an
+action or approving a change set) return an outcome stating that no person is
+present. Rendering, captures, play sessions, tests, and builds run in headless
+sessions. (AUT-004)
 
 ### Transports and authentication
 
@@ -341,14 +392,17 @@ unitas exposes its own documentation to agents as MCP resources. (AUT-006)
 * **API reference.** A reference for the UnityEngine-compatible scripting
   surface lists each type and member with its compatibility state as defined in
   the [Compatibility contract](compatibility-contract.md) (a Partially supported
-  member names its exclusions; a Platform-limited member names its targets) and
-  the Unity baseline releases in which it exists.
+  member names its exclusions; a Platform-limited member names its targets),
+  its tier, and every difference from its documented Unity 2022.3 LTS meaning
+  that its tier permits.
 * **Behavior documentation.** Documentation of each feature's behavior is
   derived from this product specification and states the same limits.
 * **Diagnostic explanations.** Each diagnostic and compatibility finding
   identifier resolves to an explanation of its meaning, its consequence, and
   the actions that resolve it.
-* **Guides.** Task guides cover the agent workflows in this document.
+* **Guides.** Task guides cover the agent workflows in this document, and state
+  the limit of the permission model (AUT-007) for agents that also have shell
+  or file access.
 
 The knowledge resources describe the running unitas version exactly; content
 for another version is never served as current. People read the same content in
@@ -382,7 +436,11 @@ Permissions are expressed as a fixed set of scopes that discovery lists: (AUT-00
 * **Build:** create player and content builds.
 * **Sign:** apply signing identities to builds.
 * **Deploy:** install and run builds on connected devices.
-* **External network:** make requests to services outside the local machine.
+* **External network:** have unitas make requests outside the local machine on
+  the agent session's behalf, such as package and git fetches, networked
+  deployment, and service submission. Requests made by project code that the
+  agent session runs are governed by the execute-project-code scope and project
+  trust, not by this scope or the confirmation boundary.
 * **Review:** accept, approve, reject, and revert change sets of other agent
   sessions (EDT-008).
 
@@ -395,13 +453,15 @@ changes nothing.
 A new agent session holds only the read-project scope until a person grants
 more. A person can grant scopes to one agent session or bind a grant to an agent
 identity and a project, in which case it persists until revoked. For unattended
-runs, grants come only from invocation configuration that the user controls,
-such as the command-line invocation or a per-user configuration file; an agent
-session cannot widen its own scopes or those of another agent session.
+runs, grants come only from standing grants in per-user configuration that a
+person set (see [Configuration](#configuration)); an agent session cannot widen
+its own scopes or those of another agent session.
 
 Holding both the edit-scripts and execute-project-code scopes amounts to running
 arbitrary code with the privileges of the operating-system account running
-unitas. The grant prompt states this whenever a grant would combine them.
+unitas. The grant prompt states this whenever a grant would combine them. The
+prompt for the execute-project-code scope also states that project code the
+agent session runs can read files marked secret.
 
 ### Confirmation boundary
 
@@ -409,7 +469,8 @@ Irreversible or externally visible requests—deletion outside the undo history,
 deployment to a device, signing for distribution, requests to external network
 services, and submission to a store or service—return a confirmation-required
 outcome. They proceed only after a person confirms them in the visual editor or
-through an MCP client authenticated as that person, or under a standing grant
+through an MCP client using that person's person credential, or under a standing
+grant
 that a person made for that action. An agent session's own confirmation never
 satisfies the boundary. (AUT-007)
 
@@ -418,15 +479,71 @@ satisfies the boundary. (AUT-007)
 A person can mark files, folders, asset fields, and settings as secret, in
 per-user or per-project unitas configuration. Agents cannot read secret values;
 a result that would contain one shows the value as withheld and names the
-secret marking. Secret values never appear in logs, evidence, captures, diffs,
-or error details. An agent cannot infer access to a secret, account, device,
+secret marking. unitas never includes a secret value in its own results, logs,
+evidence, captures, diffs, or error details, and it redacts a marked value
+wherever it appears in output produced by project code. Project code that an
+agent session runs can read secret files. An agent cannot infer access to a secret, account, device,
 service, or proprietary platform merely from project references to it.
 (AUT-007)
+
+### People and person-only actions
+
+A person acts through a person credential. unitas issues a person credential
+only through an interactive prompt in the visual editor or in an interactive
+terminal. A person credential is distinct from every agent-session credential
+and cannot be obtained, created, or listed through MCP. Requests that arrive
+over the standard input/output transport, and non-interactive command-line
+invocations, are never treated as a person's. (AUT-007)
+
+The following actions are person-only:
+
+* granting and revoking project trust and consent to fetch packages (PRJ-008 in
+  [Projects and assets](project-and-assets.md)), which are never available
+  through MCP;
+* granting and revoking scopes, standing grants, and credentials;
+* setting review policies, and holding and permitting agent writes (EDT-008);
+* accepting and approving change sets (EDT-008), except that an agent session a
+  person granted the review scope can accept or approve change sets authored
+  under a different credential and grant;
+* confirming a request at the confirmation boundary;
+* marking files, folders, asset fields, and settings as secret;
+* enabling network transports and product telemetry;
+* accepting toolchain license terms.
+
+Agents can discover and request each person-only action; the request is
+recorded (AUT-008) and presented to a person.
+
+The permission model constrains only what agents do through MCP. An agent that
+also has shell or file access as the same operating-system account can act
+outside it; the grant prompt and product knowledge (AUT-006) state this.
+
+### Configuration
+
+**Per-user configuration** is unitas-owned state (SER-005 in
+[Serialization and prefabs](serialization-and-prefabs.md)). It holds trust
+records, grants, standing grants, credentials, personal secret markings, the
+HTTP transport origin list, evidence and operation retention periods and storage
+limits, the hang limit, per-agent-session limits, and commercial license
+activation. (AUT-007)
+
+**Per-project configuration** is unitas-specific project content (SER-005). It
+holds the project's review policy, project secret markings, and crash-report
+destinations (DIA-003 in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)).
+
+Only a person changes either configuration. A change to per-project
+configuration made through MCP, by project code, or outside unitas (for example
+by a source-control pull) takes effect only after a person confirms it; until
+then the previous configuration applies and the pending change is reported.
+
+Defaults are: review policy require approval; HTTP transport origin list
+loopback only; no standing grants; no crash-report destinations. Every other
+default is declared per release in product knowledge (AUT-006).
 
 ## Audit Log and Provenance
 
 Every request an agent session makes is recorded in a per-project audit log
-held in unitas-owned state outside project content. Each record has the time,
+held in unitas-owned state (SER-005) outside project content. Each record has the time,
 agent session identity, tool or resource, scope used, outcome, and affected
 identities. Reads, refusals, permission and trust requests, approvals and
 rejections, builds, deployments, and external network requests are all
@@ -539,3 +656,31 @@ undo boundary.
   exported audit log lists each with its time, identity, scope, and outcome; the
   agent session's request to delete an audit record is refused; and the accepted
   change's provenance appears in no project file. (AUT-008)
+* A person credential cannot be obtained or listed through MCP, and a request
+  arriving over standard input/output that tries to confirm a deployment is not
+  treated as a person's. (AUT-007)
+* An agent session requests project trust through MCP; the request is recorded
+  and shown to a person, and trust is granted only through the visual editor or
+  an interactive terminal. (AUT-001, AUT-007)
+* A per-project configuration change that sets the review policy to apply
+  immediately, arriving by a source-control pull, has no effect until a person
+  confirms it. (AUT-007)
+* A new project uses the require-approval review policy, and its HTTP transport
+  accepts only loopback origins. (AUT-007)
+* Project code run by an agent session that makes an HTTP request needs the
+  execute-project-code scope, not the external-network scope, while a package
+  fetch requested by the agent session needs the external-network scope and
+  confirmation. (AUT-007)
+* A secret value printed to the log by project code appears redacted in the log
+  entry returned to the agent session. (AUT-007)
+* While a headless session holds a project, a command-line invocation on the
+  same project location attaches to the shared project state as a separate
+  actor, and an invocation that cannot attach reports the holder. (AUT-004)
+* A play session started with no run conditions advances frames as fast as they
+  complete, limited by `Application.targetFrameRate`. (AUT-002)
+* An audio capture of the main listener over two seconds returns samples at the
+  output rate with channel layout, start DSP time, and the contributing audio
+  sources. (AUT-002)
+* An editor-method invocation in a headless session supplied with an answer for
+  a dialog title chooses that button and records the dialog and answer; a
+  dialog with no answer returns the no-person-present outcome. (AUT-002)

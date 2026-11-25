@@ -11,9 +11,9 @@ variants, missing and unknown content, and serialization forms and generated
 caches.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. Stock Unity 2022.3 LTS serialization is the baseline, and a project
-declaring an earlier baseline release keeps that release's serialized forms
-(see [Serialization forms](#serialization-forms-and-generated-caches)).
+capability. Unity 2022.3 LTS serialization is the baseline. Projects saved by
+Unity 2020.3 LTS or Unity 2021.3 LTS are migrated to that baseline, as defined
+in [Serialized version migration](#serialized-version-migration).
 Package-defined serialization is covered only for the package versions listed
 in the supported package matrix (CMP-002 in
 [Compatibility contract](compatibility-contract.md)).
@@ -24,6 +24,14 @@ document is available to authorized agents through automation as defined in
 scenes, prefabs, and assets is owned by EDT-007 in
 [Editor and authoring](editor-and-authoring.md); this document defines the
 identities and values that merge preserves.
+
+### Compatibility tiers
+
+PRJ-003, SER-001, SER-002, SER-003, SER-004, and SER-005 are Exact: values,
+identities, ordering, references, overrides, and saved forms round-trip
+exactly as Unity 2022.3 LTS reads and writes them, and any divergence is a
+defect. Tiers are defined in the
+[Compatibility contract](compatibility-contract.md).
 
 ## Asset identity and references
 
@@ -320,14 +328,29 @@ unchanged asset writes no change.
 
 ### Serialized version migration
 
-Objects recorded with an older `serializedVersion` are read and upgraded to
-the form of the project's baseline Unity release. An asset is written in the
-upgraded form only when it is saved because of an edit; opening never
-rewrites unchanged assets. Saved content uses forms the project's declared
-Unity release can read, so a project declaring Unity 2020.3 LTS is never saved
-in a form only a later release reads. A serialized form newer than the
-project's declared release is reported with the affected asset and is
-preserved rather than downgraded silently.
+This document owns the migration of projects saved by Unity 2020.3 LTS and
+Unity 2021.3 LTS to the Unity 2022.3 LTS baseline:
+
+* Objects recorded with an older `serializedVersion`, and settings and
+  `.meta` importer data in older forms, are read and upgraded to the forms
+  Unity 2022.3 LTS uses, with the same values, identities, references, and
+  overrides that Unity 2022.3 LTS produces when it upgrades the same project.
+* An asset is written in the upgraded form only when it is saved because of an
+  edit or by the explicit upgrade action (PRJ-001 in
+  [Projects and assets](project-and-assets.md)); opening never rewrites
+  unchanged assets.
+* Saved assets always use the forms Unity 2022.3 LTS writes; unitas does not
+  write 2020.3 LTS or 2021.3 LTS forms. In a project whose
+  `ProjectVersion.txt` still declares an earlier release, the first save that
+  writes an upgraded form first lists the assets and states that they then
+  need Unity 2022.3 LTS to open in Unity.
+* Behavior that differs between Unity 2020.3 LTS or 2021.3 LTS and Unity
+  2022.3 LTS is not matched; migrated content behaves as it does in Unity
+  2022.3 LTS.
+* A serialized form newer than Unity 2022.3 LTS, written by a later Unity
+  release, is reported with the affected asset and preserved rather than
+  downgraded. A save that cannot retain it is blocked until the user
+  explicitly chooses to discard the identified data.
 
 ### Generated caches and unitas-owned state
 
@@ -337,22 +360,28 @@ preserved rather than downgraded silently.
   and behavior.
 * unitas never writes into Unity-generated folders. After unitas changes
   assets, Unity detects and reimports them as it would any external edit.
-* unitas-owned machine and session state, such as import results, caches,
-  editor view state, and session records, is stored where Unity does not
-  import it as project content and where a repository using the standard Unity
-  ignore template does not show it as an untracked change.
+* unitas-owned state is machine, session, and per-user data: import results,
+  caches, editor view state, session records, and per-user configuration
+  (such as trust records and personal preferences). It is stored where Unity
+  does not import it as project content and where a repository using the
+  standard Unity ignore template does not show it as an untracked change.
 * Deleting unitas-owned caches and reopening the project produces the same
   identities, import results, and behavior.
-* unitas-specific project content intended for source control, such as the
-  recorded unitas version (PRD-001 in
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
-  and playtest scenarios, is stored in files that Unity does not import or
-  misinterpret.
+* unitas-specific project content is shared data intended for source
+  control: the recorded unitas version (PRD-001 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)),
+  per-project configuration (such as review policy, secret markings, and
+  crash-report destinations), and playtest scenarios. It is stored in files
+  that Unity does not import or misinterpret. The recorded unitas version is
+  written only when unitas saves another change to the project, and is listed
+  with that save; opening never writes it.
 * Generated IDE project files (`.sln` and `.csproj`) are written at the
   project root as defined by DIA-002 in
   [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
-  They are the only files unitas writes outside project content and
-  unitas-owned state, and either unitas or Unity may regenerate them.
+  They, and artifacts written to a location that a person or invocation names
+  (build outputs, test results, logs, symbols, exports), are the only files
+  unitas writes outside project content and unitas-owned state. Either unitas
+  or Unity may regenerate the IDE project files.
 
 ## Save integrity and interoperability
 
@@ -396,12 +425,12 @@ requires an explicit user-visible boundary before commitment.
     same targets, and assigning a reference to an object in another scene in
     the editor produces the diagnostic and saves no reference. (SER-004)
 12. In a Mixed-mode project, an edited binary asset stays binary, an edited text
-    asset stays text, baked lighting and navigation data are readable, and an
-    asset with an older `serializedVersion` is rewritten only after an edit, in
-    a form the declared Unity release reads. (SER-005)
+    asset stays text, and baked lighting and navigation data are readable.
+    (SER-005)
 13. Opening, editing, and saving a project without `Library/` writes nothing
     into Unity-generated folders, and a repository using the standard Unity
-    ignore template shows only the edited assets as changed. (SER-005)
+    ignore template shows only the edited assets and the recorded unitas
+    version file as changed. (SER-005)
 14. A component with a property, a `readonly` field, a dictionary, and an
     interface-typed field saves none of them; a null field of a custom
     `[Serializable]` class reloads as a default-constructed instance; a
@@ -412,6 +441,18 @@ requires an explicit user-visible boundary before commitment.
 16. An object with `HideFlags.DontSaveInEditor` is absent from the saved scene,
     an object with `HideInHierarchy` is not shown in the hierarchy, and
     automation lists both with their flags. (SER-001)
-17. After unitas opens a project, the only files written outside project
-    content and unitas-owned state are the generated `.sln` and `.csproj`
-    files at the project root. (SER-005)
+17. After unitas opens a project and runs a build to a named output folder,
+    the only files written outside project content and unitas-owned state are
+    the generated `.sln` and `.csproj` files at the project root and the build
+    output in the named folder; opening alone writes no recorded unitas
+    version. (SER-005)
+18. A Unity 2021.3 LTS project opens with every asset's values, identities,
+    references, and overrides equal to those Unity 2022.3 LTS produces when it
+    upgrades the same project; an asset with an older `serializedVersion` is
+    rewritten only after an edit, in the Unity 2022.3 LTS form, and the first
+    such save first lists the assets that will then need Unity 2022.3 LTS.
+    (SER-005)
+19. Per-user configuration and caches never appear as changes in a repository
+    using the standard Unity ignore template, while a change to per-project
+    review policy appears as a change to a tracked unitas project file.
+    (SER-005)

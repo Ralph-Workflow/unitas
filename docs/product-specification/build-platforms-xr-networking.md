@@ -17,6 +17,14 @@ owned by [Automation and MCP](automation-and-mcp.md). Package-provided behavior
 families and version lines listed in the supported package matrix (CMP-002) of
 the [Compatibility contract](compatibility-contract.md).
 
+Compatibility tiers of the features this specification owns, as recorded in
+the [Feature catalog](feature-catalog.md) and defined in the
+[Compatibility contract](compatibility-contract.md): BLD-001 Native, BLD-002
+Native, BLD-003 Native, BLD-004 Native, BLD-005 Native, PLT-001 Native, XR-001
+Familiar, NET-001 Familiar, LIC-001 Native, PRD-001 Native, PRD-002 Native.
+Unity build settings, player settings, and package content are imported and
+honored as this specification defines; the behavior is unitas-defined.
+
 ## Build configuration
 
 As a developer or authorized agent, I can select scenes and order, product
@@ -89,6 +97,24 @@ beyond those present in the project's own content. It loads native libraries
 only from its own installation locations. When a release build contains any
 development-only capability, the build result names that capability.
 
+## Native project generation
+
+Android builds honor the custom templates in `Assets/Plugins/Android`
+(`AndroidManifest.xml`, `mainTemplate.gradle`, `launcherTemplate.gradle`,
+`baseProjectTemplate.gradle`, `gradleTemplate.properties`, and
+`settingsTemplate.gradle`) and `.androidlib` folders, merge the manifests of
+the project, its plug-ins, and its libraries, and can export a Gradle project
+instead of a finished package. `IPostGenerateGradleAndroidProject` callbacks
+run on the generated Gradle project before it is built.
+
+iOS builds produce an Xcode project that `UnityEditor.iOS.Xcode` APIs
+(`PBXProject`, `PlistDocument`, and `ProjectCapabilityManager`) can modify from
+`[PostProcessBuild]` methods and `IPostprocessBuildWithReport` callbacks.
+
+A template, template field, or API member that unitas does not honor is
+reported in the build result, naming the file or member; it is never silently
+ignored.
+
 ## Signing, notarization, and store packaging
 
 Each target reports its signing requirement and current signing state:
@@ -123,14 +149,15 @@ display, no visual editor, and no interactive session. A single invocation can:
   [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md);
 * run structured scenarios, as defined by TST-002 in the same specification;
 * produce player builds for one or more targets;
-* execute a named static editor method in the project, equivalent to Unity's
+* execute a named static editor method in the project, corresponding to Unity's
   `-executeMethod`, with editor-time script behavior as defined by RUN-010 in
   [Scripting runtime](scripting-runtime.md).
 
 The Unity command-line arguments that build and test scripts commonly use
 (`-batchmode`, `-nographics`, `-quit`, `-projectPath`, `-buildTarget`,
 `-executeMethod`, `-logFile`, `-runTests`, `-testPlatform`, `-testResults`) are
-accepted with equivalent meaning. An argument that unitas does not recognize is
+accepted, and each selects the corresponding operation or option defined in
+this section. An argument that unitas does not recognize is
 reported by name; it is never silently ignored.
 
 Every invocation produces machine-readable output that states each requested
@@ -165,11 +192,9 @@ state is reused; a stale, incompatible, or corrupt cache is detected, rebuilt,
 and reported. A run using a restored cache produces the same results and
 artifacts as a run from a clean state.
 
-Multiple invocations on one machine run concurrently on different projects
-without interfering. Concurrent invocations on the same project either operate
-on isolated state or the later invocation reports that the project is in use,
-naming the holder, and waits or exits as the invocation requested; neither run
-corrupts project state.
+Concurrent invocations, on different projects or on the same project, follow
+the headless session and same-project concurrency rules owned by AUT-004 in
+[Automation and MCP](automation-and-mcp.md).
 
 ## Scripting backends, ahead-of-time compilation, and code stripping
 
@@ -185,11 +210,11 @@ Ahead-of-time limitations are reported at build time, naming the type and
 member involved, when they are statically detectable. These include generic
 instantiations that cannot be generated ahead of time, `System.Reflection.Emit`,
 the C# `dynamic` keyword, and compilation of expression trees. When such a
-limitation is reached at runtime, the player raises the Unity-compatible
-exception naming the method that could not be executed.
+limitation is reached at runtime, the player raises an
+`ExecutionEngineException` naming the method that could not be executed.
 
-The Unity managed stripping levels (Disabled, Minimal on baseline releases that
-offer it, Low, Medium, and High) remove unused managed code with equivalent
+The Unity 2022.3 LTS managed stripping levels (Disabled, Minimal, Low, Medium,
+and High) remove unused managed code with equivalent
 observable effect. `link.xml` files in the project and its packages,
 `[Preserve]`, `[AlwaysLinkAssembly]`, and `[RequireAttributeUsages]` are honored.
 The build result reports the stripping level used and the assemblies, types,
@@ -211,9 +236,9 @@ through the XR Plugin Management providers that CMP-002 lists, and licensed
 console environments when the user possesses required access.
 
 Compatibility reporting distinguishes targets and capabilities derived from the
-Unity 2020.3–2022.3 baseline from unitas extensions such as WebGPU, visionOS-
-class devices, and architecture variants not offered uniformly by those Unity
-releases. An extension is not presented as evidence of Unity parity.
+Unity 2022.3 LTS baseline from unitas extensions such as WebGPU, visionOS-
+class devices, and architecture variants that Unity 2022.3 LTS does not offer.
+An extension is not presented as a Unity 2022.3 LTS target.
 
 A target carries one of the compatibility states defined in the
 [Compatibility contract](compatibility-contract.md); an Externally unavailable
@@ -224,12 +249,12 @@ Proprietary platform access is never implied by the existence of a target name.
 
 ## Dedicated server players
 
-Windows and Linux dedicated server players build and run with no rendering or
-audio output. Unity 2020.3 projects select them through the Server Build
-option, and Unity 2021.2 and later projects through the Dedicated Server
-target. A server build defines `UNITY_SERVER`, applies server-build asset
-stripping, and runs with `-batchmode -nographics`. Graphics and audio API use
-in a server player is reported as Platform-limited, naming the API.
+Windows and Linux dedicated server players build from the Dedicated Server
+target and run with no rendering or audio output. A project migrated from Unity
+2020.3 LTS with the Server Build option enabled opens with the Dedicated Server
+target selected. A server build defines `UNITY_SERVER`, applies server-build
+asset stripping, and runs with `-batchmode -nographics`. Graphics and audio API
+use in a server player is reported as Platform-limited, naming the API.
 
 ## Player lifecycle
 
@@ -275,7 +300,11 @@ game logic, operating-system interruption, or focus loss.
 XR behavior is provided through XR Plugin Management and the XR Interaction
 Toolkit within the version lines that CMP-002 lists. An XR provider plug-in is
 reported against its own package and version; a provider that the matrix does
-not list is Unknown.
+not list is Unknown. XR content imports with its identity, and the public types
+and members of those packages keep their Unity 2022.3 LTS names and
+signatures; the behavior is the behavior this section defines, and every known
+difference from Unity is listed in the API reference owned by AUT-006 in
+[Automation and MCP](automation-and-mcp.md).
 
 XR exposes tracked head and controller poses, tracking state, declared actions,
 device capabilities, render views, recentering, interaction, supported haptics,
@@ -293,8 +322,53 @@ not represented as proof of real-device correctness.
 ## Networking behavior
 
 Networked play is provided through Netcode for GameObjects within the version
-line that CMP-002 lists. Netcode for Entities is recognized and reported
-Unsupported, as declared in the [index](INDEX.md).
+line that CMP-002 lists, with Unity Transport (`com.unity.transport`) as its
+transport dependency. Netcode for Entities is recognized and reported
+Unsupported, as declared in the [index](INDEX.md). Netcode content imports with
+its identity, and the API shape below keeps its Unity 2022.3 LTS names and
+signatures; the behavior is the behavior this section defines, and every known
+difference from Unity is listed in the AUT-006 API reference.
+
+* **`NetworkManager` start modes and connection approval:** `StartHost` runs a
+  server and a local client in one instance, `StartServer` runs a server with
+  no local client, and `StartClient` connects to a server. A start call while
+  the instance is already running returns `false` and is reported. `Shutdown`
+  disconnects every client and despawns every spawned object. When connection
+  approval is enabled, no client's player object is spawned until the approval
+  callback approves it; a rejected client receives the refused-connection
+  outcome with the reason the callback supplied.
+* **`NetworkObject` spawn, despawn, and ownership:** only the server spawns
+  and despawns network objects; a client call raises an exception naming the
+  object. A spawned object appears on every connected client, and on each
+  late-joining client, with the same `NetworkObjectId`. `ChangeOwnership` and
+  `RemoveOwnership` deliver `OnLostOwnership` to the previous owner and
+  `OnGainedOwnership` to the new owner. `OnNetworkSpawn` and `OnNetworkDespawn`
+  run on every participant that observes the spawn or despawn.
+* **`NetworkVariable` permissions:** a write by a participant that the
+  variable's write permission (server or owner) does not allow raises an
+  exception and sends nothing. A participant that the read permission
+  (everyone or owner) excludes never receives the value. `OnValueChanged` runs
+  on each receiving participant with the previous and new values, and a
+  late-joining client receives the current value when the object spawns for it.
+* **`ServerRpc` and `ClientRpc` delivery:** a `ServerRpc` runs only on the
+  server; with `RequireOwnership` set, a call from a non-owner is rejected and
+  reported, naming the RPC and the caller. A `ClientRpc` runs on every client,
+  or on the clients that its `ClientRpcParams` target. Reliable RPCs sent on the
+  same object arrive in the order they were sent.
+* **`NetworkTransform` and `NetworkAnimator`:** the authoritative participant
+  (the server, or the owner when the component declares owner authority)
+  changes the synchronized position, rotation, and scale axes, and other
+  participants receive interpolated values. A change made by a non-authoritative
+  participant is overwritten by the next authoritative update and reported in
+  development builds. `NetworkAnimator` replicates the authoritative animator's
+  parameters, triggers, and state changes.
+* **Network scene management:** the server loads and unloads network scenes;
+  every client loads the same scenes and reports completion through scene
+  events, and a late-joining client synchronizes the loaded scenes before it
+  receives spawned objects in them.
+* **Unity Transport:** the configured address and port select the endpoint, and
+  the transport's connection and disconnect timeouts produce the timeout
+  outcome.
 
 When a supported networking package and version is declared for the project, a
 game can represent sessions, connections, player identity, ownership, messages,
@@ -344,10 +418,15 @@ reason.
 
 A development player opens its profiler, debugger, log-stream, and
 remote-control connections only when it was built with those options. It
-accepts a connection only from a session that holds that build's pairing
-credential, and it reports each accepted and refused connection. These
-operations are available through MCP under the deploy permission scope owned
-by AUT-007 in [Automation and MCP](automation-and-mcp.md).
+accepts a connection only from a client that holds the pairing credential
+generated by that build. The credential is recorded in the build result, is
+readable by people and by agent sessions that hold the build permission scope,
+and is never written to player logs. The player reports each accepted and
+refused connection. Profiler and log-stream connections additionally require
+the read-project scope, and debugger and remote-control connections require the
+execute-project-code scope, as owned by AUT-007 in
+[Automation and MCP](automation-and-mcp.md). Deployment operations are
+available through MCP under the deploy permission scope that AUT-007 defines.
 
 ## Content builds and post-release content updates
 
@@ -377,17 +456,23 @@ reported before a build starts.
 
 Every build result records which license governs the unitas player components
 included in that player and the obligations the product associates with it. For
-a GPLv3 build, the result states that the GPLv3 applies to the included unitas
-components, that recipients of the player are entitled to their corresponding
-source, and how the build makes that source available or where it is offered;
-the player includes the GPLv3 license text. For a commercially licensed build,
+a GPLv3 build, the result states that the player is conveyed under the GPLv3
+as a work that includes the unitas components; that the obligation to provide
+Corresponding Source extends to the whole conveyed work, including project code
+and content compiled or linked into it, except separate works merely
+aggregated with it; and how the build makes that source available or where it
+is offered. The player includes the GPLv3 license text. The result also states
+that the GPLv3 distribution of unitas carries no linking exception and that
+the commercial license is the route for distributing a player without these
+obligations. For a commercially licensed build,
 the result identifies the commercial license that governs the included unitas
 components.
 
 Each release publishes a licensing table that states, for every target, its
 status with respect to GPLv3 distribution. For the targets that the release's
 licensing table lists as conflicting with GPLv3 distribution (at minimum
-licensed console environments), the build result and target status state that
+licensed console environments, and each store whose terms the table records as
+adding restrictions on recipients), the build result and target status state that
 distribution requires the commercial license. A development build for
 such a target is not blocked on that basis.
 
@@ -406,8 +491,8 @@ unitas installs on Windows, macOS, and Linux host systems, on the host
 architectures each release declares. Multiple unitas versions install side by
 side, and each project opens with the version the user or invocation selects.
 
-A project records the unitas version last used with it in unitas-owned project
-state, without altering any Unity-readable file; that storage location is owned
+A project records the unitas version last used to save it as unitas-specific
+project content, without altering any Unity-readable file; that storage location is owned
 by SER-005 in [Serialization and prefabs](serialization-and-prefabs.md).
 Opening a project with a different unitas version than the recorded one states
 both versions before any change is saved, and never silently migrates
@@ -440,8 +525,12 @@ accept those terms.
 ## Product data flows, telemetry, and privacy
 
 A player contains no telemetry, analytics, or network connection that the game
-itself did not request. The editor, the command line, and the MCP server send no
-project content to any destination. Usage reporting and crash reporting for
+itself did not request. The editor, the command line, and the MCP server send
+project content only to MCP clients and external tools that a person authorized
+(AUT-004, AUT-007 in [Automation and MCP](automation-and-mcp.md)) and to
+devices and services that a person directed, such as deployment targets,
+package registries, and crash-report destinations. unitas never sends project
+content to its publisher or to any other party on its own initiative. Usage reporting and crash reporting for
 unitas itself are off until a person enables them; when enabled, each lists the data it sends
 and its destination, and neither ever blocks offline use. Apple target builds
 include a privacy manifest that covers the required-reason APIs used by the
@@ -465,9 +554,9 @@ included unitas components.
 5. A continuous-integration run that restores a cache from an earlier run
    produces the same results and artifacts as a clean run, and a corrupt cache
    is rebuilt and reported. (BLD-002)
-6. Two invocations on the same project at once either run on isolated state or
-   the second reports the project in use with its holder; neither corrupts the
-   project. (BLD-002)
+6. Two command-line invocations on the same project at once follow the AUT-004
+   same-project concurrency rules, and neither corrupts the project. (BLD-002,
+   AUT-004)
 7. An iOS build reports a statically detectable `System.Reflection.Emit` use by
    type and member, and a development build at High stripping that reflects on a
    stripped member raises an exception naming the member and the preservation
@@ -485,9 +574,10 @@ included unitas components.
 12. A multiplayer sample using Netcode for GameObjects distinguishes connection,
     synchronization, gameplay, and service failures and identifies the affected
     participant across local and headless instances. (NET-001)
-13. A GPLv3 build's result records that the GPLv3 governs the included unitas
-    components, the corresponding-source obligation, and the included
-    third-party notices; a console build states that distribution requires the
+13. A GPLv3 build's result records that the player is conveyed under the GPLv3,
+    that the Corresponding Source obligation covers the whole conveyed work
+    including project code compiled into it, that no linking exception applies,
+    and the included third-party notices; a console build states that distribution requires the
     commercial license; and every license report states it is not legal advice.
     (LIC-001)
 14. A build with a recognized commercial license records that license as
@@ -527,13 +617,30 @@ included unitas components.
 24. An agent lists connected devices, sees an Android device reported as
     unauthorized for debugging, then deploys, launches, and removes a player on
     an emulator; a development player refuses a profiler connection from a
-    session without its pairing credential. (BLD-004, AUT-007)
+    client without the pairing credential recorded in its build result, accepts
+    one from an agent session holding the build and read-project scopes, and
+    never writes the credential to its logs. (BLD-004, AUT-007)
 25. After a player ships, a content update produces only the changed bundles and
     a new catalog that the shipped player loads; content built for an
     incompatible player version or by Unity is reported by bundle name and
     reason and is not loaded partially. (BLD-005, RUN-006)
 26. A player built from a project that makes no network requests opens no
-    network connection, the editor and MCP server send no project content
-    anywhere, unitas crash reporting stays off until a person enables it, and an iOS
+    network connection, the editor and MCP server send project content only to
+    authorized MCP clients and to destinations a person directed, unitas crash
+    reporting stays off until a person enables it, and an iOS
     build includes a privacy manifest for the included unitas components.
     (PRD-002)
+27. An Android build honors a custom `mainTemplate.gradle` and an `.androidlib`
+    folder, runs `IPostGenerateGradleAndroidProject`, and can export the Gradle
+    project; an iOS build's `[PostProcessBuild]` method adds a capability
+    through `ProjectCapabilityManager`; an unhonored template field is reported
+    by file and field. (BLD-001)
+28. With connection approval enabled, a rejected client receives the refused
+    outcome with the callback's reason, a client's attempt to spawn an object
+    raises an exception naming it, a non-owner `ServerRpc` with
+    `RequireOwnership` is rejected and reported, and a late-joining client
+    receives current `NetworkVariable` values and loaded network scenes before
+    spawned objects. (NET-001)
+29. A project's XR Interaction Toolkit content imports with its identity, and
+    each known XR behavior difference from Unity is listed in the AUT-006 API
+    reference. (XR-001, AUT-006)

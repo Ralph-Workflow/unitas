@@ -16,18 +16,28 @@ and serialization forms and generated caches (SER-005) are owned by
 relies on those contracts and does not restate them.
 
 These are desired end-state requirements, not claims about currently shipped
-capability. The project's declared Unity release, from Unity 2020.3 LTS through
-Unity 2022.3 LTS, is its behavioral baseline, with Unity 2022.3 LTS as the
-principal reference, as defined in the
-[Compatibility contract](compatibility-contract.md). Package behavior is covered only for the package families and
-version lines listed in the supported package matrix (CMP-002 in
-[Compatibility contract](compatibility-contract.md)).
+capability. The behavioral baseline is the documented, observable behavior of
+Unity 2022.3 LTS, as defined in the
+[Compatibility contract](compatibility-contract.md). Package behavior is
+covered only for the package families and version lines listed in the
+supported package matrix (CMP-002 in the same document).
+
+### Compatibility tiers
+
+PRJ-001, PRJ-005, and PRJ-007 are Exact: project recognition, dependency
+relationships, and project settings match Unity 2022.3 LTS exactly, and any
+divergence is a defect. PRJ-004 and PRJ-006 are Semantic: import and package
+resolution behave as Unity 2022.3 LTS does in ordinary use, and a found
+difference is reported Partially supported with the difference named. PRJ-002
+and PRJ-008 are Native: the asset browser and project trust are defined by
+this document. Tiers are defined in the
+[Compatibility contract](compatibility-contract.md).
 
 Every capability in this document, including opening, searching, importing,
 package changes, and settings changes, is available to authorized agents
 through automation as defined in [Automation and MCP](automation-and-mcp.md).
-Granting project trust is the one exception: agents can request it but cannot
-grant it.
+Granting project trust and fetch consent are person-only actions (AUT-007):
+agents can request them but cannot grant them.
 
 ## Project opening
 
@@ -60,9 +70,8 @@ detailed contract is owned by SER-005 in
 Opening communicates progress and remains inspectable during long operations.
 The project can be closed or an operation cancelled without presenting a partial
 result as complete. Reopening unchanged content produces the same asset
-identities and dependency relationships. A project with at least 100,000
-assets opens and remains operable through automation; the timing budgets that
-apply are declared per release by PRF-002 in
+identities and dependency relationships. The project scale that opening
+supports and its timing budgets are owned by PRF-002 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
 The editor detects files added, removed, renamed, moved, or changed outside the
@@ -74,35 +83,41 @@ Source-control and merge workflows are owned by EDT-007 in
 ### Unity versions and upgrades
 
 The project's declared Unity version is read from
-`ProjectSettings/ProjectVersion.txt`. A project declaring a release from Unity
-2020.3 LTS through Unity 2022.3 LTS opens with that release as its baseline:
-version-specific APIs, scripting defines (RUN-007 in
-[Scripting runtime](scripting-runtime.md)), settings, and behavior follow the
-declared release.
+`ProjectSettings/ProjectVersion.txt`. Every supported project runs with Unity
+2022.3 LTS behavior: APIs, scripting defines (RUN-007 in
+[Scripting runtime](scripting-runtime.md)), settings, and behavior are those
+of Unity 2022.3 LTS.
 
-* Older serialized forms within the baseline range are read and migrated as
-  defined by SER-005; unchanged assets are not rewritten by opening.
-* Opening never rewrites `ProjectVersion.txt`. Changing the project's declared
-  Unity version is an explicit action that lists the assets, settings,
-  packages, and behaviors the change affects before it is committed.
+* A project declaring Unity 2022.3 LTS opens directly.
+* A project declaring Unity 2020.3 LTS or Unity 2021.3 LTS opens by migrating
+  its serialized forms to the 2022.3 baseline, as defined by SER-005 in
+  [Serialization and prefabs](serialization-and-prefabs.md). The project is
+  reported as migrated, with its declared release. Behavior that differs
+  between the declared release and Unity 2022.3 LTS is not matched.
+* Opening never rewrites `ProjectVersion.txt` and never rewrites unchanged
+  assets. Recording Unity 2022.3 LTS as the project's version is an explicit
+  upgrade action that lists the assets, settings, and packages it affects
+  before it is committed.
 * A project that declares no version, or a version that cannot be parsed, is
   reported with the missing or invalid value and opens only after the user
-  chooses a baseline release.
+  confirms that it is to be treated as a Unity 2022.3 LTS project.
 
 ### Edge cases
 
 * A directory that is not a recognizable project explains which required
   project signals are absent.
-* A project created by a Unity version outside the 2020.3 LTS through 2022.3
-  LTS range opens for read-only inspection when its content can be classified
+* A project declaring a Unity release earlier than 2020.3 LTS, a non-LTS
+  release other than 2022.3, or a release later than 2022.3 LTS opens for
+  read-only inspection when its content can be classified
   safely; otherwise opening is refused with the version boundary explained. It
   is never silently treated as a fully supported version.
 * A partially readable project remains inspectable while unreadable items retain
   specific errors.
 * Case-only renames, Unicode names, long paths, read-only files, broken symbolic
   links, and platform-specific filename conflicts have explicit outcomes.
-* Two simultaneous editor instances, or an editor and a headless session, do
-  not silently overwrite one another.
+* Several unitas sessions on one project, including editors and headless
+  sessions, follow the concurrency rules owned by AUT-004 in
+  [Automation and MCP](automation-and-mcp.md).
 * A project already open in Unity is opened with a warning that both
   applications can write project files; external writes are handled as
   external changes.
@@ -130,8 +145,13 @@ and other editor-load hooks, build callbacks, and code contained in packages.
   plugins, and packages that contain code.
 * Package content is fetched from the registries, git repositories, and URLs
   that a project names only after the user consents to fetching for that
-  project. Consent can be given with trust or separately. Without consent,
+  project. Consent can be given with trust or separately. On the command line,
+  the explicit trust argument also gives fetch consent for that invocation,
+  and a separate fetch-consent argument gives consent alone. Without consent,
   unfetched packages are reported unresolved.
+* Trust and fetch consent are person-only actions (AUT-007 in
+  [Automation and MCP](automation-and-mcp.md)) and are never granted through
+  MCP.
 * Trust is recorded per user and per project location, outside the project's
   files, so cloning or copying a repository never carries trust. The user can
   revoke trust; revocation returns the project to restricted mode at the next
@@ -149,11 +169,9 @@ and other editor-load hooks, build callbacks, and code contained in packages.
   user created, or through an explicit trust argument on a command-line
   invocation that the user or the user's continuous-integration configuration
   starts. An MCP request can never create either.
-* An agent session that holds both the permission to edit scripts and the
-  permission to execute project code (AUT-007 in
-  [Automation and MCP](automation-and-mcp.md)) can run code of its choosing
-  with the privileges of the account running unitas. The prompt that grants
-  the second of these permissions states this.
+* The consequences of granting agent sessions permission to edit scripts and
+  to execute project code in a trusted project are owned by AUT-007 in
+  [Automation and MCP](automation-and-mcp.md).
 
 ## Asset browser
 
@@ -336,8 +354,8 @@ Preview failure is distinct from runtime incompatibility.
 
 Files with the extensions `.txt`, `.json`, `.bytes`, `.csv`, `.xml`, `.html`,
 `.htm`, `.yaml`, and `.fnt` import as `TextAsset` with `text` and `bytes`
-exactly equal to the file content. `.md` files import as `TextAsset` in
-baseline releases that import them that way.
+exactly equal to the file content. `.md` files import as Unity 2022.3 LTS imports
+them.
 
 The browser identifies scenes, prefabs, materials, shaders, compute shaders,
 shader include files (`.hlsl`, `.cginc`), shader variant collections,
@@ -380,7 +398,7 @@ resolved from its declared source:
 records the resolved version, source, and dependencies of every package, and
 resolution reproduces those versions; git packages resolve to their locked
 revision. `testables`, `resolutionStrategy`, and `enableLockFile` behave as
-Unity declares.
+in Unity.
 
 ### Resolution
 
@@ -479,9 +497,10 @@ Unity-readable form. Each family below links its effect to the owning feature:
 1. Opening the same unchanged project twice, with or without Unity's `Library/`
    folder present, yields identical asset identities and reference targets.
    (PRJ-001)
-2. A project declaring Unity 2020.3 LTS opens with 2020.3 behavior, its
-   unchanged assets are not rewritten, and `ProjectVersion.txt` is unchanged
-   after opening and saving. (PRJ-001)
+2. A project declaring Unity 2021.3 LTS opens with Unity 2022.3 LTS behavior
+   and is reported as migrated; its unchanged assets and `ProjectVersion.txt`
+   are not rewritten by opening, and the upgrade action lists the affected
+   assets, settings, and packages before writing. (PRJ-001)
 3. Moving a referenced asset preserves the reference; deleting it exposes a
    missing reference; restoring it can restore the reference. (PRJ-002)
 4. Search with combined filters returns only assets matching every filter and
@@ -510,29 +529,28 @@ Unity-readable form. Each family below links its effect to the owning feature:
 12. A compatibility report can account for every recognized project asset,
     package, and setting. (PRJ-001, PRJ-006, PRJ-007)
 13. A continuous-integration run started with an explicit trust argument
-    compiles and runs project code, the same run without the argument or a
-    per-user trust record stays restricted, and an MCP request to trust the
+    compiles and runs project code and fetches its git package; a run with
+    only the fetch-consent argument fetches the package but runs no project
+    code; the same run without either argument or a per-user trust record
+    stays restricted and fetches nothing; and an MCP request to trust the
     project is refused. (PRJ-008)
-14. Granting an agent session the execute-project-code permission while it
-    holds the edit-scripts permission shows a prompt stating that the session
-    can run code with the privileges of the account running unitas. (PRJ-008)
-15. A texture imported as Sprite in Multiple mode yields the same named sprite
+14. A texture imported as Sprite in Multiple mode yields the same named sprite
     sub-assets and identities as in Unity; per-target compression overrides
     survive reimport; an EXR imports, a GIF imports its first frame with the
     exclusion reported, and a PICT file is reported Unsupported. (PRJ-004)
-16. An FBX imported with a Humanoid rig, split clips with loop pose and baked
+15. An FBX imported with a Humanoid rig, split clips with loop pose and baked
     root rotation, Optimal compression, and extracted materials produces the
     avatar, clips, and materials Unity produces; a `.blend` file is reported
     Unsupported without launching any application. (PRJ-004)
-17. An AIFF clip imports with per-target Vorbis compression and Force To Mono
+16. An AIFF clip imports with per-target Vorbis compression and Force To Mono
     honored, and an `.xm` module is reported Unsupported. (PRJ-004)
-18. A `.json` and a `.bytes` file import as `TextAsset` with content equal to
+17. A `.json` and a `.bytes` file import as `TextAsset` with content equal to
     the file, and an avatar mask, an audio mixer, and a Sprite Atlas v2 asset
     are each identified with their family. (PRJ-002, PRJ-004)
-19. Importing a `.unitypackage` lists its contents and GUID collisions before
+18. Importing a `.unitypackage` lists its contents and GUID collisions before
     writing, and its scripts do not run in a project that is not trusted.
     (PRJ-004, PRJ-008)
-20. A first-open import with three corrupt textures completes the rest, reports
+19. A first-open import with three corrupt textures completes the rest, reports
     the three failures and a partial success, and after a forced interruption
     the next open reuses unchanged results and lists what it imported again.
     (PRJ-004)

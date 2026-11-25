@@ -6,9 +6,23 @@ This specification defines how developers, testers, and agents observe,
 reproduce, debug, measure, test, and communicate project behavior, and the
 performance and scale commitments unitas itself makes.
 
-Every capability here runs in the visual editor, headless, and through MCP with
-the same results. Automation rules are owned by
+Every capability here runs in the visual editor, in headless sessions, and
+through MCP with the same results. Automation rules, and the terms agent
+session, play session, and headless session, are owned by AUT-004 in
 [Automation and MCP](automation-and-mcp.md) and are not restated here.
+
+### Compatibility tiers
+
+Each feature this document owns has the tier recorded in the
+[Feature catalog](feature-catalog.md), as defined in the
+[Compatibility contract](compatibility-contract.md):
+
+* Native: DIA-001, DIA-002, DIA-003, PRF-001, PRF-002, TST-001, and TST-002.
+  Their behavior is defined by this specification. Unity-shaped APIs they
+  observe, such as `Debug.DrawLine` and `ProfilerMarker`, keep their documented
+  Unity 2022.3 LTS meaning.
+* Semantic: TST-003. Project tests written for the Unity Test Framework behave
+  as they do under Unity 2022.3 LTS in ordinary use.
 
 ## Unified diagnostics
 
@@ -46,8 +60,8 @@ world-space coordinates after the active `Gizmos.matrix`, color, duration,
 An agent or scenario can read the captured items for a frame or time range
 without rendering an image. Visual display of the same items in the scene and
 game views is owned by EDT-003 in [Editor and authoring](editor-and-authoring.md).
-In built players, as in Unity, `Debug.DrawLine` and `Debug.DrawRay` draw
-nothing and gizmo callbacks are not invoked; capture is unavailable there and
+In built players, `Debug.DrawLine` and `Debug.DrawRay` draw nothing and gizmo
+callbacks are not invoked; capture is unavailable there and
 is reported as such rather than as an empty result.
 
 ## Runtime inspection
@@ -121,8 +135,9 @@ unitas-compatible surface.
 * The files are regenerated when the assembly layout, defines, references, or
   target change, without a manual step, and their content depends only on the
   project and the selected target, not on the machine.
-* The files are written to the project root, as Unity's IDE integration writes
-  them, so standard Unity source-control ignore rules exclude them; they are
+* The files are written to the project root with one `.csproj` per assembly
+  named after the assembly, so source-control ignore rules that exclude
+  `*.csproj` and `*.sln` at the project root exclude them; they are
   generated content as defined by SER-005 in
   [Serialization and prefabs](serialization-and-prefabs.md).
 * Generation can be turned off per user. Opening a project never requires the
@@ -130,8 +145,13 @@ unitas-compatible surface.
 
 ### Debugging through the Debug Adapter Protocol
 
-unitas provides a Debug Adapter Protocol (DAP) endpoint. A DAP client attaches
-to:
+unitas provides a Debug Adapter Protocol (DAP) endpoint. It listens only on the
+loopback interface unless network connections are enabled as defined by AUT-004
+in [Automation and MCP](automation-and-mcp.md), and it requires a credential that
+unitas issues to the person or agent session. Attaching, setting breakpoints, and
+reading values require the read-project scope; evaluating expressions, setting
+values, and attaching to edit-time script execution require the
+execute-project-code scope (AUT-007). A DAP client attaches to:
 
 * the editor's play session and edit-time script execution (editor scripts,
   `[InitializeOnLoad]` code, and commands);
@@ -150,12 +170,12 @@ An attached client can:
 * read and expand locals, arguments, `this`, static fields, and evaluated
   expressions; an evaluation that could have side effects is marked as such;
 * see Unity objects with their name, type, and instance ID; a destroyed Unity
-  object is shown as destroyed (it compares equal to `null` through Unity's
-  equality) while its managed fields remain readable.
+  object is shown as destroyed (it compares equal to `null` through the
+  `UnityEngine.Object` equality operator) while its managed fields remain readable.
 
 While a breakpoint holds execution, the frame loop does not advance. After
 resuming, the next frame's `Time.deltaTime` is limited by
-`Time.maximumDeltaTime`, as in Unity.
+`Time.maximumDeltaTime`.
 
 A breakpoint that cannot bind (for example in a file not part of any compiled
 assembly, or in code stripped from the player) is reported as unbound with the
@@ -189,8 +209,8 @@ active voices, bodies, contacts, and simulation expense.
 
 Custom samples from `Profiler.BeginSample` and `Profiler.EndSample`,
 `ProfilerMarker`, and `CustomSampler` appear under their names in the thread
-and frame where they ran. In players, they appear only in development builds,
-as in Unity.
+and frame where they ran. In players, they are recorded only in development
+builds.
 
 Profiling runs in the editor, headless, and against connected development
 players. An agent can start and stop a capture and read it as structured data.
@@ -264,6 +284,16 @@ object state, scenes, UI, input, animation, audio, physics, navigation, time,
 logs, debug drawing, rendered images, performance, persistence, networking, or
 completion. (TST-002)
 
+A scenario is unitas-specific project content (SER-005 in
+[Serialization and prefabs](serialization-and-prefabs.md)) stored in a versioned
+text format whose schema is published through product knowledge (AUT-006).
+People, and agent sessions holding the edit-content scope, create and edit
+scenarios; an agent session's changes to scenarios are items of its change set
+(EDT-008). A reference image or checkpoint expectation is approved when a
+person, or an agent session holding the review scope, accepts the change-set
+item that adds or changes it; an unapproved reference is never used to pass a
+comparison.
+
 A result records:
 
 * setup success or failure;
@@ -292,7 +322,10 @@ behavior are not presumed deterministic.
 
 ## Visual validation
 
-Rendered frames and sequences can be compared with approved references at
+Visual references are unitas-approved captures produced by unitas rendering, not
+Unity screenshots; rendering is Native tier and pixel identity with Unity is not
+promised. Rendered frames and sequences can be compared with approved references
+at
 declared target, resolution, aspect, quality, scene, camera, time, and state.
 Results identify changed regions, magnitude, permitted tolerances, and whether
 the comparison was evaluable. (TST-002)
@@ -442,3 +475,13 @@ scenarios are structured scenarios as defined in this document (TST-002).
 22. The published budgets include hierarchy and asset queries, search,
     selection, property edits, undo, and save on the scale-floor reference
     projects. (PRF-002)
+23. A DAP client on another machine cannot connect while network connections are
+    disabled, and an agent session holding only the read-project scope can set
+    breakpoints and read values but receives a permission outcome when it
+    evaluates an expression. (DIA-002)
+24. A scenario file round-trips through its published schema, an agent session's
+    edit to it appears as a change-set item, and a visual reference it adds is
+    not used for comparison until the item is accepted. (TST-002)
+25. A visual comparison of a translated Unity material passes against a
+    unitas-approved capture without reference to any Unity screenshot.
+    (TST-002)

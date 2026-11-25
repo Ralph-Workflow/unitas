@@ -3,18 +3,36 @@
 ## User Outcome
 
 As the owner of a supported Unity project, I can determine before editing,
-playing, or building which project behaviors unitas supports, which have stated
-limits, and which cannot yet be represented. Compatibility information refers
-to my actual assets, scenes, scripts, settings, packages, and targets.
+playing, or building which project behaviors unitas supports, at which
+compatibility tier, which have stated limits, and which cannot yet be
+represented. Compatibility information refers to my actual assets, scenes,
+scripts, settings, packages, and targets.
+
+## Scope
+
+This specification owns the compatibility baseline, the compatibility tiers,
+the compatibility states, the project compatibility report, the supported
+package matrix, third-party content assessment, product versioning and release
+readiness, and the support lifecycle. Every report, matrix entry, and
+declaration it defines is available to people and to agents through
+automation, as defined in [Automation and MCP](automation-and-mcp.md).
+
+Compatibility tiers of the features this specification owns, as recorded in
+the [Feature catalog](feature-catalog.md): CMP-002 Native, CMP-003 Native,
+CMP-004 Native, CMP-005 Native.
 
 ## Compatibility Baseline
 
-The compatibility baseline covers declared behavior from Unity 2020.3 LTS
-through Unity 2022.3 LTS, with Unity 2022.3 LTS as the principal behavioral
-reference. A project can contain older serialized forms or settings where those
-releases supported migration to the baseline.
+The compatibility baseline is the documented, observable behavior of Unity
+2022.3 LTS. Projects saved by Unity 2020.3 LTS or Unity 2021.3 LTS open by
+migrating their serialized forms to the 2022.3 forms, as owned by SER-005 in
+[Serialization and prefabs](serialization-and-prefabs.md); behavior that
+differs between those releases and Unity 2022.3 LTS is not matched. Unity
+releases after 2022.3 LTS are outside the baseline; a feature of a later
+release is part of unitas only where a specification adopts it explicitly.
 
-Compatibility includes, when the feature is declared supported:
+Compatibility includes, to the extent the tier of the owning feature promises
+it:
 
 * The meaning and identity of project content.
 * Serialized values and object references.
@@ -25,6 +43,58 @@ Compatibility includes, when the feature is declared supported:
 
 Matching names, file extensions, public members, or screen layouts alone is not
 compatibility.
+
+## Compatibility Tiers
+
+Every catalog feature has exactly one tier, recorded in the
+[Feature catalog](feature-catalog.md). A behavior takes the tier of the catalog
+feature that owns it, and no section of a specification claims a higher tier
+than its feature's. The tier states what is promised; the compatibility state
+states how much of that promise holds for specific content and targets.
+
+* **Exact:** content identity and serialization match Unity 2022.3 LTS
+  exactly. Values, identities (GUIDs and local identifiers), ordering,
+  references, prefab overrides, and round-trip saving are preserved without
+  change. Any divergence is a defect; until it is corrected, the affected
+  behavior is reported Partially supported, naming the divergence.
+* **Semantic:** the documented, observable behavior of Unity 2022.3 LTS in
+  ordinary use applies. Ordinary use means using public, documented APIs and
+  editor-saved content as the Unity 2022.3 LTS documentation describes them.
+  Undocumented behavior, internal ordering that Unity does not document, and
+  bug-for-bug reproduction of Unity defects are not promised. A found
+  difference is reported, and the affected behavior is Partially supported,
+  naming the difference.
+* **Familiar:** Unity content imports with its identity, and public types and
+  members keep their Unity 2022.3 LTS names and signatures (API shape). The
+  unitas specification text defines the behavior; Familiar sections state that
+  behavior concretely and do not defer to Unity's behavior. Every known
+  difference from Unity 2022.3 LTS is listed in the API reference owned by
+  AUT-006 in [Automation and MCP](automation-and-mcp.md) and in the project
+  compatibility report for content that relies on it.
+* **Native:** behavior is unitas-defined. Unity content (shaders, materials,
+  settings, build configuration, and editor extensions) is imported or
+  translated. Translated shaders and materials do not promise pixel identity
+  with Unity; visual acceptance uses unitas-approved references as defined by
+  TST-002 in
+  [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md),
+  not Unity screenshots. Scripting-visible members of Native features, such as
+  `Camera.WorldToScreenPoint`, keep the meaning their Unity 2022.3 LTS
+  documentation states.
+
+Evidence for a claim depends on its tier:
+
+* Exact and Semantic claims are established by behavioral compatibility
+  benchmarks (CMP-001, owned by
+  [Playable samples and benchmarks](sample-games.md)) whose expectations are
+  observations of Unity 2022.3 LTS.
+* Familiar and Native claims are established by the acceptance outcomes of the
+  owning unitas specification and by unitas-approved references. They are not
+  established or refuted by comparison with Unity output, and every difference
+  from Unity 2022.3 LTS is listed in the AUT-006 API reference and in project
+  compatibility reports.
+
+Behavior outside a feature's tier is reported with a compatibility state and is
+never silently approximated.
 
 ## Compatibility States
 
@@ -54,7 +124,9 @@ Each finding includes:
 
 * Stable identity and location of the affected content.
 * Feature and behavior being assessed.
-* Compatibility state.
+* Compatibility tier of the owning feature and compatibility state.
+* For Familiar and Native features, each listed difference from Unity 2022.3
+  LTS that the content relies on.
 * Observable consequence during editing, play, testing, or building.
 * Conditions under which the finding applies.
 * Related findings when one limitation causes multiple downstream effects.
@@ -75,13 +147,14 @@ the wrong object receiving an event, a reference resolving to a different
 asset, a save losing a value, a collision failing to occur, or a control
 performing another action.
 
-Wherever any unitas specification says "as in Unity", "Unity's rules", "Unity's
-conditions", or "as the package defines", the reference is the documented and
-observable behavior of the Unity release that the project declares in
-`ProjectSettings/ProjectVersion.txt`, or of the package version listed in the
-supported package matrix that the project resolves. When the declared Unity
-release and the resolved package version differ in that behavior, the declared
-Unity release controls.
+In sections of Exact-tier and Semantic-tier features, wherever a
+specification says "as in Unity", "Unity's rules", "Unity's conditions", or "as
+the package defines", the reference is the documented and observable behavior
+of Unity 2022.3 LTS, or of the package version in the supported package matrix
+that the project resolves. When Unity 2022.3 LTS and that package version
+differ in a behavior, Unity 2022.3 LTS controls. These phrases carry no meaning
+in sections of Familiar-tier and Native-tier features, which state their
+behavior directly.
 
 ## Round-Trip Expectations
 
@@ -109,22 +182,31 @@ different API result, or ignored setting while reporting full support.
 ## Supported Package Matrix
 
 Unity package behavior is in scope only for the packages and version lines in
-the matrix below. The matrix, each package's state, and the owning
+the matrix below. The matrix, each package's tier and state, and the owning
 specification are available to people and to agents through automation, as
 defined in [Automation and MCP](automation-and-mcp.md).
 
 Matrix rules:
 
-* A version line for a baseline editor release means the versions of that
-  package line that the Unity Package Manager marks as released or verified for
-  that editor release. A version inside the named line that is not released for
-  the project's editor release is Unknown.
+* A version line means the versions of that package line that the Unity
+  Package Manager marks as released or verified for Unity 2022.3 LTS. A version
+  inside the line that is not released for Unity 2022.3 LTS is Unknown.
+* A project saved by Unity 2020.3 LTS or 2021.3 LTS that resolves an earlier
+  line of a listed package (for example URP 10.x or 12.x) has that package's
+  serialized content migrated as SER-005 defines and is assessed against the
+  listed line; behavior of the earlier line that differs from the listed line
+  is not matched.
 * A package, or a package version, that the matrix does not list is Unknown
   until it is assessed. Preview, experimental, and prerelease versions are
   Unknown unless the matrix lists them.
-* A Supported package provides the behavior its owning specification names;
-  any limitation that specification states still applies. A Partially supported
-  package names its excluded behavior in the matrix.
+* A package takes the tier of its owning catalog feature.
+* A Supported package provides the documented public behavior of the listed
+  version, subject to the limitations its owning specification states; for a
+  package whose owning feature is in the Familiar or Native tier, the owning
+  specification defines the behavior where it says so. Behavior that the owning
+  specification neither names nor excludes is Unknown until assessed and is
+  reported as such. A Partially supported package names its excluded behavior
+  in the matrix.
 * Packages that a listed version requires as dependencies are covered to the
   extent the listed package's behavior depends on them. Project code that uses a
   dependency's own API directly is assessed on its own and is Unknown until
@@ -137,41 +219,41 @@ Matrix rules:
   engine rather than matrix entries; their behavior is owned by the feature
   specifications.
 * The project compatibility report states, for every package in the project,
-  the package identifier, the resolved version, its matrix state, and the
-  owning specification.
+  the package identifier, the resolved version, its tier, its matrix state, and
+  the owning specification.
 
-| Package | 2020.3 LTS | 2021.3 LTS | 2022.3 LTS | State | Owning specification |
-|---|---|---|---|---|---|
-| Universal Render Pipeline (`com.unity.render-pipelines.universal`) | 10.x | 12.x | 14.x | Supported | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Shader Graph (`com.unity.shadergraph`) | 10.x | 12.x | 14.x | Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported; a graph that uses a node unitas cannot represent is reported per graph and node under REN-006 | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Post Processing v2 (`com.unity.postprocessing`) | 3.x | 3.x | 3.x | Supported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
-| 2D Sprite (`com.unity.2d.sprite`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
-| 2D Tilemap Editor (`com.unity.2d.tilemap`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
-| 2D Tilemap Extras (`com.unity.2d.tilemap.extras`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
-| 2D Animation (`com.unity.2d.animation`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
-| 2D Pixel Perfect (`com.unity.2d.pixel-perfect`) | Released or verified | Released or verified | Released or verified | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
-| 2D PSD Importer (`com.unity.2d.psdimporter`) | Released or verified | Released or verified | Released or verified | Supported | [Projects and assets](project-and-assets.md) (PRJ-004) |
-| Cinemachine (`com.unity.cinemachine`) | 2.x | 2.x | 2.x | Supported | [Rendering and animation](rendering-and-animation.md) (CIN-001) |
-| Timeline (`com.unity.timeline`) | 1.x | 1.x | 1.x | Supported | [Rendering and animation](rendering-and-animation.md) (CIN-001) |
-| uGUI (`com.unity.ugui`) | 1.0.x | 1.0.x | 1.0.x | Supported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
-| TextMeshPro (`com.unity.textmeshpro`) | 3.0.x | 3.0.x | 3.0.x | Supported | [UI, audio, and input](ui-audio-input.md) (TXT-001) |
-| Input System (`com.unity.inputsystem`) | 1.x | 1.x | 1.x | Supported | [UI, audio, and input](ui-audio-input.md) (INP-002) |
-| Localization (`com.unity.localization`) | 1.x | 1.x | 1.x | Supported | [Accessibility, localization, and persistence](accessibility-localization-persistence.md) (LOC-001) |
-| Addressables (`com.unity.addressables`) | 1.x | 1.x | 1.x | Supported | [Scripting runtime](scripting-runtime.md) (RUN-006) |
-| Burst (`com.unity.burst`) | 1.x | 1.x | 1.x | Supported: results are equivalent within the declared floating-point mode; native acceleration on a target is a reported performance property | [Scripting runtime](scripting-runtime.md) (RUN-011) |
-| Mathematics (`com.unity.mathematics`) | 1.x | 1.x | 1.x | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
-| Collections (`com.unity.collections`) | Released or verified | Released or verified | Released or verified | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
-| Newtonsoft Json (`com.unity.nuget.newtonsoft-json`) | 3.x | 3.x | 3.x | Supported | [Scripting runtime](scripting-runtime.md) (RUN-009) |
-| AI Navigation (`com.unity.ai.navigation`) | Not listed | Not listed | 1.x | Supported | [Physics, navigation, and terrain](physics-navigation-terrain.md) (NAV-001) |
-| Unity Test Framework (`com.unity.test-framework`) | 1.x | 1.x | 1.x | Supported | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (TST-003) |
-| Netcode for GameObjects (`com.unity.netcode.gameobjects`) | 1.x | 1.x | 1.x | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
-| XR Plugin Management (`com.unity.xr.management`) | 4.x | 4.x | 4.x | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
-| XR Interaction Toolkit (`com.unity.xr.interaction.toolkit`) | 2.x | 2.x | 2.x | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| Package | Unity 2022.3 LTS version line | Tier | State | Owning specification |
+|---|---|---|---|---|
+| Universal Render Pipeline (`com.unity.render-pipelines.universal`) | 14.x | Native | Supported, including the Forward, Forward+, and Deferred rendering paths | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Shader Graph (`com.unity.shadergraph`) | 14.x | Native | Partially supported: graph targets for HDRP and Visual Effect Graph are Unsupported; a graph that uses a node unitas cannot represent is reported per graph and node under REN-006 | [Rendering and animation](rendering-and-animation.md) (REN-006) |
+| Post Processing v2 (`com.unity.postprocessing`) | 3.x | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
+| 2D Sprite (`com.unity.2d.sprite`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| 2D Tilemap Editor (`com.unity.2d.tilemap`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| 2D Tilemap Extras (`com.unity.2d.tilemap.extras`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| 2D Animation (`com.unity.2d.animation`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| 2D Pixel Perfect (`com.unity.2d.pixel-perfect`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| 2D PSD Importer (`com.unity.2d.psdimporter`) | Released or verified | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-005) |
+| Cinemachine (`com.unity.cinemachine`) | 2.x | Familiar | Supported | [Rendering and animation](rendering-and-animation.md) (CIN-001) |
+| Timeline (`com.unity.timeline`) | 1.x | Familiar | Supported | [Rendering and animation](rendering-and-animation.md) (CIN-001) |
+| uGUI (`com.unity.ugui`) | 1.0.x | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
+| TextMeshPro (`com.unity.textmeshpro`) | 3.0.x | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (TXT-001) |
+| Input System (`com.unity.inputsystem`) | 1.x | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (INP-002) |
+| Localization (`com.unity.localization`) | 1.x | Familiar | Supported | [Accessibility, localization, and persistence](accessibility-localization-persistence.md) (LOC-001) |
+| AI Navigation (`com.unity.ai.navigation`) | 1.x | Familiar | Supported | [Physics, navigation, and terrain](physics-navigation-terrain.md) (NAV-001) |
+| Netcode for GameObjects (`com.unity.netcode.gameobjects`) | 1.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
+| XR Plugin Management (`com.unity.xr.management`) | 4.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| XR Interaction Toolkit (`com.unity.xr.interaction.toolkit`) | 2.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
+| Addressables (`com.unity.addressables`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-006) |
+| Burst (`com.unity.burst`) | 1.x | Semantic | Supported: results are equivalent within the declared floating-point mode; native acceleration on a target is a reported performance property | [Scripting runtime](scripting-runtime.md) (RUN-011) |
+| Mathematics (`com.unity.mathematics`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
+| Collections (`com.unity.collections`) | Released or verified | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
+| Newtonsoft Json (`com.unity.nuget.newtonsoft-json`) | 3.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-009) |
+| Unity Test Framework (`com.unity.test-framework`) | 1.x | Semantic | Supported | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (TST-003) |
+| IDE integration (`com.unity.ide.visualstudio`, `com.unity.ide.rider`, `com.unity.ide.vscode`) | Released or verified | Native | Partially supported: project-file generation and debugger attachment are provided by DIA-002; the packages' preference user interface is not drawn (RUN-010) | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) (DIA-002) |
+| Version Control (`com.unity.collab-proxy`) | Released or verified | Native | Partially supported: the package and its settings are preserved as project content; no version-control client is provided | [Editor and authoring](editor-and-authoring.md) (EDT-007) |
 
 "Released or verified" means the versions the Unity Package Manager marks as
-released or verified for that baseline editor release. "Not listed" means no
-version of the package is in the matrix for that baseline; a project that uses
-one is Unknown for it.
+released or verified for Unity 2022.3 LTS.
 
 The following families are recognized and reported Unsupported, as declared in
 the [index](INDEX.md). Each finding states the observable consequence, and the
@@ -186,6 +268,8 @@ rest of the project remains usable.
 | Visual Effect Graph | `com.unity.visualeffectgraph` assets | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-004) |
 | UI Toolkit runtime panels | Runtime panel settings, UXML documents, and `UIDocument` components | Unsupported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
 | Visual Scripting | `com.unity.visualscripting` graphs and machines | Unsupported | [Scripting runtime](scripting-runtime.md) (RUN-002) |
+| Enlighten realtime global illumination | Realtime GI settings and Enlighten realtime lighting data; baked lighting remains Supported content | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
+| Unity-built AssetBundles and Addressables content | AssetBundles and Addressables content built by Unity and loaded in a unitas player; unitas rebuilds that content from the project | Unsupported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (BLD-005) |
 | Baking inside unitas | Requests to bake lightmaps or occlusion culling data; Unity-baked lightmaps, light probes, reflection probe captures, and occlusion data remain Supported content | Unsupported | [Rendering and animation](rendering-and-animation.md) (REN-003) |
 | Custom editor extension drawing | Custom inspectors, property drawers, and editor windows; their commands and content effects remain Supported | Unsupported | [Scripting runtime](scripting-runtime.md) (RUN-010) |
 
@@ -246,10 +330,13 @@ releases identified by a prerelease suffix:
 * A minor release can add features, targets, and package lines, and can raise a
   behavior's state (for example from Unknown or Partially supported to
   Supported).
-* Lowering the state of a Supported behavior, removing a package line or target,
-  changing Supported behavior other than to correct a deviation, or removing an
-  automation tool, resource, command-line argument, or field after its
-  deprecation window occurs only in a major release.
+* Deliberately lowering the state of a Supported behavior, removing a package
+  line or target, changing Supported behavior other than to correct a
+  deviation, or removing an automation tool, resource, command-line argument,
+  or field after its deprecation window occurs only in a major release.
+* Any release lowers a state when the earlier claim is found inaccurate and
+  that release does not correct the deviation; its release notes list the
+  change as a corrected claim with the affected catalog identifiers.
 
 Every project compatibility report, build result, test and scenario result, and
 benchmark result records the unitas version that produced it. Reports produced
@@ -346,8 +433,8 @@ are available to people and agents through automation.
   than reported as an engine failure or a supported build. (PLT-001)
 * Reassessment after a project change updates only affected findings and makes
   the report's project state clear. (CMP-002, CMP-003)
-* A project using URP 14.x and Input System 1.x on Unity 2022.3 reports both as
-  Supported with their owning specifications, while an unlisted package and a
+* A project using URP 14.x and Input System 1.x on Unity 2022.3 LTS reports both
+  as Supported with their tiers and owning specifications, while an unlisted package and a
   preview version of a listed package are each reported Unknown. (CMP-002)
 * A project containing HDRP assets and a Visual Scripting graph reports each as
   Unsupported with its observable consequence, and its URP scenes remain
@@ -377,9 +464,27 @@ are available to people and agents through automation.
 * A readiness declaration for a target with a failing benchmark lists the
   failing behavior as an exclusion of that family's Partially supported claim.
   (CMP-004, CMP-001)
-* A project declaring Unity 2021.3 in `ProjectVersion.txt` is assessed against
-  2021.3 behavior wherever a specification refers to Unity's behavior, including
-  where a resolved package version documents different behavior. (CMP-002)
+* A project saved by Unity 2021.3 LTS with URP 12.x opens with its serialized
+  forms migrated, is assessed against Unity 2022.3 LTS and the URP 14.x line,
+  and its report does not claim 2021.3-specific behavior. (CMP-002)
+* A report finding for a Semantic-tier behavior cites Unity 2022.3 LTS as its
+  reference and is backed by a CMP-001 benchmark, while a finding for a
+  Familiar-tier behavior cites the owning unitas specification and lists each
+  difference from Unity 2022.3 LTS that the content relies on. (CMP-002,
+  CMP-001)
+* A translated material is accepted against a unitas-approved reference image,
+  and its report never presents a pixel difference from a Unity screenshot as
+  a compatibility failure. (CMP-002, REN-002, TST-002)
+* A Supported package behavior that its owning specification neither names nor
+  excludes is reported Unknown, and the matrix shows each package's tier from
+  its owning catalog feature. (CMP-002)
+* A project that uses Enlighten realtime global illumination, loads Unity-built
+  AssetBundles, and includes the Rider IDE and Version Control packages reports
+  the first two Unsupported and the last two Partially supported with their
+  named exclusions. (CMP-002, REN-003, BLD-005, DIA-002, EDT-007)
+* A release that finds an earlier Supported claim inaccurate and does not fix it
+  lowers the state and lists the corrected claim in its release notes with the
+  affected catalog identifiers. (CMP-004)
 * A Shader Graph asset that uses a node unitas cannot represent is reported by
   graph and node, and an HDRP graph target is reported Unsupported. (CMP-002,
   REN-006)

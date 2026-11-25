@@ -17,6 +17,18 @@ automation, including inspecting bodies, running queries, stepping simulation,
 and building navigation data, as defined in
 [Automation and MCP](automation-and-mcp.md).
 
+### Compatibility tiers
+
+PHY-001, PHY-002, and PHY-003 are Semantic: they behave as Unity 2022.3 LTS
+does in ordinary use, and a found difference is reported Partially supported
+with the difference named. PHY-004, NAV-001, and ENV-001 are Familiar: Unity
+content imports with its identity, public types and members keep their Unity
+2022.3 LTS names and signatures, and this document defines their behavior.
+Every difference from Unity 2022.3 LTS in a Familiar feature is listed in the
+API reference (AUT-006 in [Automation and MCP](automation-and-mcp.md)) and in
+project compatibility reports. Tiers are defined in the
+[Compatibility contract](compatibility-contract.md).
+
 ## Three-dimensional physics
 
 As a developer, I can use static, kinematic, and dynamic bodies with box,
@@ -250,10 +262,21 @@ damper, target position), and forward and sideways friction curves (extremum
 slip and value, asymptote slip and value, stiffness). Motor torque, brake
 torque, and steer angle change wheel behavior on the next simulation step.
 Each wheel exposes `isGrounded`, `rpm`, sprung mass, `GetGroundHit`, and
-`GetWorldPose`. `ConfigureVehicleSubsteps` changes wheel substepping as in
-Unity. Wheel behavior is equivalent to Unity within the floating-point
-variation the [Compatibility contract](compatibility-contract.md) allows, and
-is not promised to be bit-identical.
+`GetWorldPose`.
+
+* The suspension pushes the attached body with a force set by the spring,
+  damper, and the wheel's compression relative to the target position; a
+  wheel whose ray finds no ground within the suspension distance reports
+  `isGrounded` false and applies no force.
+* Friction force along each direction follows the authored friction curve as
+  a function of slip, scaled by stiffness and the ground collider's
+  material.
+* `ConfigureVehicleSubsteps(speedThreshold, stepsBelowThreshold,
+  stepsAboveThreshold)` sets how many wheel substeps run in each simulation
+  step, depending on whether the vehicle's speed is below or above the
+  threshold.
+* Wheel results are repeatable for the same inputs on the same target. They
+  are not promised to match Unity's numeric results.
 
 ### Articulation bodies
 
@@ -262,30 +285,43 @@ hierarchies with fixed, prismatic, revolute, and spherical joints. Each joint
 axis has motion (locked, limited, or free), limits, and a drive with
 stiffness, damping, force limit, target, and target velocity. The root can be
 immovable. Scripts read and write joint positions, velocities, and forces in
-reduced coordinates and apply forces and torques. Members that do not exist in
-the project's baseline Unity release are unavailable to its scripts, as for
-any version-specific API.
+reduced coordinates and apply forces and torques.
+
+* A locked axis permits no motion; a limited axis keeps the joint position
+  between its lower and upper limits; a free axis has no limit.
+* A drive applies force toward its target position and target velocity in
+  proportion to stiffness and damping, never exceeding its force limit.
+* An immovable root does not move under simulation, and its children move
+  relative to it.
 
 ### Cloth
 
 As an artist, I can simulate `Cloth` on a skinned mesh with per-vertex
 constraints (maximum distance and surface penetration), stretching and
 bending stiffness, damping, external and random acceleration, world velocity
-and acceleration scale, friction, and self-collision. Cloth collides only with
-the sphere, capsule, and sphere-pair capsule colliders assigned to it, as in
-Unity; it does not collide with other scene colliders. `ClearTransformMotion`
-and teleport behavior reset cloth motion as in Unity.
+and acceleration scale, friction, and self-collision.
+
+* A vertex never moves farther from its skinned position than its maximum
+  distance; a maximum distance of zero pins the vertex to the skinned mesh.
+* Cloth collides only with the sphere colliders, capsule colliders, and
+  sphere-pair capsules assigned to its component; it does not collide with
+  other scene colliders.
+* `ClearTransformMotion` and a teleport of the cloth's transform discard
+  accumulated motion so the cloth does not swing from the jump.
 
 ### Simulation control
 
 The simulation mode decides when physics advances:
 
-* `Physics.simulationMode` (Fixed Update, Update, or Script) and, in baseline
-  releases that use it, `Physics.autoSimulation`, behave as in the project's
-  baseline Unity release.
-* In script mode, physics advances only when a script calls
-  `Physics.Simulate`, by the requested step, and collision and trigger
-  callbacks for that step occur during the call.
+* With `Physics.simulationMode` set to Fixed Update, physics advances once per
+  fixed step; with Update, once per frame by that frame's delta time; with
+  Script, only when a script calls `Physics.Simulate`. The obsolete
+  `Physics.autoSimulation` reads true for Fixed Update and false for Script,
+  and setting it selects those modes.
+* `Physics.Simulate(step)` advances the default physics scene by the
+  requested step, and collision and trigger callbacks for that step occur
+  during the call. Calling it outside Script mode reports an error and does
+  not advance the simulation.
 * `Physics2D.simulationMode` and `Physics2D.Simulate` provide the same control
   for 2D physics.
 
@@ -347,15 +383,25 @@ As a developer, I can define agent radius, height, base offset, speed, angular
 speed, acceleration, stopping distance, auto braking, auto repath, obstacle
 avoidance quality, and priority.
 
-The `NavMeshAgent` scripting surface behaves as in Unity, including
-`SetDestination`, `destination`, `path` and `SetPath`, `ResetPath`,
-`isStopped`, `Warp`, `Move`, `nextPosition`, `updatePosition`,
-`updateRotation`, `updateUpAxis`, `autoRepath`, and queries filtered by
-`NavMeshQueryFilter`. With `updatePosition` off, the agent's simulated
-position advances in `nextPosition` while the transform stays where scripts
-put it. An agent that is not placed on navigation data reports `isOnNavMesh`
-false, and calling `SetDestination` or the path-dependent members produces
-Unity's error naming the agent rather than a silent no-op.
+The `NavMeshAgent` scripting surface includes `SetDestination`,
+`destination`, `path` and `SetPath`, `ResetPath`, `isStopped`, `Warp`, `Move`,
+`nextPosition`, `updatePosition`, `updateRotation`, `updateUpAxis`,
+`autoRepath`, and queries filtered by `NavMeshQueryFilter`:
+
+* With `updatePosition` off, the agent's simulated position advances in
+  `nextPosition` while the transform stays where scripts put it; with
+  `updateRotation` off, the agent does not rotate its transform; with
+  `updateUpAxis` off, the agent does not align its transform's up axis to the
+  navigation surface.
+* `isStopped` true halts movement along the current path without discarding
+  it; `ResetPath` discards it.
+* `Warp` moves the agent to a position on navigation data without a path and
+  returns false when no navigation data is near that position.
+* With `autoRepath` on, an agent whose path becomes invalid requests a new
+  path to the same destination.
+* An agent that is not placed on navigation data reports `isOnNavMesh` false,
+  and calling `SetDestination` or the path-dependent members raises an error
+  that names the agent and the member rather than doing nothing silently.
 
 At runtime an agent can request a destination and expose:
 
@@ -404,9 +450,9 @@ terrains.
 Scripts read and change terrain through `TerrainData.GetHeights`/`SetHeights`,
 `SetHeightsDelayLOD` with `SyncHeightmap`, `GetAlphamaps`/`SetAlphamaps`,
 `SetHoles`, `SetDetailLayer`, and `SetTreeInstances`, and query it with
-`Terrain.SampleHeight`. Runtime terrain changes affect rendering and collision
-at the point the corresponding Unity member does: immediately for
-`SetHeights`, and at `SyncHeightmap` for `SetHeightsDelayLOD`. The serialized form of terrain data,
+`Terrain.SampleHeight`. Runtime terrain changes affect rendering and collision immediately for
+`SetHeights`, and at the next `SyncHeightmap` call for
+`SetHeightsDelayLOD`. The serialized form of terrain data,
 including binary storage, is owned by SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md).
 
@@ -440,15 +486,15 @@ Wind effects on particles are owned by REN-004 in
 
 ### Large worlds
 
-Positions, rotations, and simulation use single-precision values as in Unity.
-Rendering, physics, animation, and navigation far from the world origin show
-precision loss equivalent to Unity within the floating-point variation the
-[Compatibility contract](compatibility-contract.md) allows; unitas does not
-silently rebase the world origin or change precision. The editor and
-automation identify objects with any world-position component of magnitude
-100,000 units or more (the threshold at which Unity warns about precision)
-and the systems on them whose results are affected. Projects that move content toward the
-origin by script observe the same results as in Unity.
+Positions, rotations, and simulation use single-precision (32-bit)
+floating-point values. unitas does not silently rebase the world origin or
+switch to higher precision, so rendering, physics, animation, and navigation
+far from the origin lose precision in proportion to the distance, visible as
+positional jitter and coarser contacts and paths. The editor and automation
+identify objects with any world-position component of magnitude 100,000 units
+or more (the threshold at which Unity warns about precision) and the systems
+on them whose results are affected. A project that moves its content toward
+the origin by script regains the precision of that smaller range.
 
 ## Diagnostics
 
@@ -513,7 +559,7 @@ terrain region, or setting.
 15. An agent with `updatePosition` off advances `nextPosition` while its
     transform stays put, `Warp` relocates it without a path, and an agent
     placed off navigation data reports `isOnNavMesh` false and `SetDestination`
-    produces Unity's error naming the agent. (NAV-001)
+    raises an error naming the agent. (NAV-001)
 16. A terrain using instanced drawing, instanced detail grass, and billboarded
     trees renders with the URP Terrain Lit material, and a SpeedTree 8 tree
     renders with its LODs while its wind is reported as excluded. (ENV-001)

@@ -31,11 +31,10 @@ Play, agent, and headless sessions are defined by AUT-004 in
 
 ### Compatibility tiers
 
-Every feature in this specification is in the Semantic tier, as recorded in the
+RUN-001, RUN-002, RUN-003, RUN-004, RUN-005, RUN-006, RUN-007, RUN-008,
+RUN-009, RUN-010, and RUN-011 are all in the Semantic tier, as recorded in the
 [Feature catalog](feature-catalog.md) and defined in the
-[Compatibility contract](compatibility-contract.md): RUN-001, RUN-002, RUN-003,
-RUN-004, RUN-005, RUN-006, RUN-007, RUN-008, RUN-009, RUN-010, and RUN-011 are
-Semantic. Throughout this specification, ``as in Unity'' and ``Unity's''
+[Compatibility contract](compatibility-contract.md). Throughout this specification, "as in Unity" and "Unity's"
 behavior, rules, errors, and ordering mean the documented, observable behavior
 of Unity 2022.3 LTS in ordinary use. Undocumented quirks are not promised; a
 found difference is reported as Partially supported naming the difference.
@@ -104,7 +103,8 @@ meaning for:
 * define constraints, which exclude the assembly when the expression over
   defined symbols is false;
 * version defines, which add a symbol when a named package, module, or the
-  Unity version matches a version range.
+  Unity version matches a version range; the Unity version evaluated is the
+  project's Unity 2022.3 LTS version.
 
 Assembly definition reference (`.asmref`) files add their folder's scripts to
 the referenced assembly. Duplicate assembly names, reference cycles, references
@@ -116,33 +116,33 @@ the unresolved references.
 
 ### Defines, compiler options, and language profile
 
-The compilation for each assembly and target defines the symbols Unity defines
-for the project's recorded Unity version and the selected target, including:
+The compilation for each assembly and target defines the symbols Unity 2022.3
+LTS defines for the selected target, including:
 
-* `UNITY_EDITOR` and the host-specific editor symbols in editor and headless
-  editor sessions, and never in players;
-* `UNITY_2020_3_OR_NEWER`, `UNITY_2021_3_OR_NEWER`, `UNITY_2022_3_OR_NEWER`,
-  and the corresponding release-specific version symbols;
+* `UNITY_EDITOR` and the host-specific editor symbols in the editor and in
+  headless sessions, and never in players;
+* the Unity 2022.3 version symbols, including `UNITY_2022_3`,
+  `UNITY_2022_3_OR_NEWER`, and every earlier `_OR_NEWER` symbol Unity 2022.3
+  defines, such as `UNITY_2020_3_OR_NEWER` and `UNITY_2021_3_OR_NEWER`;
 * platform symbols such as `UNITY_STANDALONE`, `UNITY_STANDALONE_WIN`,
-  `UNITY_IOS`, `UNITY_ANDROID`, and `UNITY_WEBGL`;
+  `UNITY_SERVER` for the Dedicated Server target, `UNITY_IOS`,
+  `UNITY_ANDROID`, and `UNITY_WEBGL`;
 * `DEVELOPMENT_BUILD` in development players;
 * scripting backend and API compatibility symbols such as `ENABLE_MONO`,
-  `ENABLE_IL2CPP`, `NET_STANDARD_2_0`, `NET_STANDARD_2_1`, and `NET_4_6`;
+  `ENABLE_IL2CPP`, `NET_STANDARD_2_1`, `NET_STANDARD`, and `NET_4_6`;
 * the scripting define symbols set per target in Player settings (PRJ-007 in
   [Projects and assets](project-and-assets.md));
 * symbols added by version defines and by response files.
 
 A `csc.rsp` response file contributes defines, warning suppression, warnings
-as errors, and other compiler options Unity accepts for that version; an
-option unitas does not honor is reported naming the option and file.
+as errors, and other compiler options Unity 2022.3 accepts; an option unitas
+does not honor is reported naming the option and file.
 
-The C# language version and API compatibility level follow the project's
-Unity version: C# 8 for Unity 2020.3 and C# 9 for Unity 2021.3 and 2022.3,
-with the .NET Standard and .NET Framework API compatibility levels that the
-project's Player settings select. Language features that Unity's compiler does
-not support for that version, such as covariant return types, are diagnosed as
-in Unity. The unitas profile is never wider than the project's version
-without being reported.
+The C# language version is C# 9. The API compatibility level is .NET Standard
+2.1 or .NET Framework, as the project's Player settings choose per target.
+C# 9 features that Unity 2022.3's compiler does not support, such as covariant
+return types, are diagnosed as in Unity. Language versions or APIs beyond this
+profile are reported, never silently accepted.
 
 ### Native interop
 
@@ -159,7 +159,7 @@ Platform-limited naming the calling member.
 ### Analyzers and source generators
 
 Roslyn analyzers and source generators labeled for use as analyzers run against
-the assemblies that Unity's rules for the project's version apply them to, and
+the assemblies that Unity 2022.3's analyzer scoping rules apply them to, and
 only in a trusted project. Analyzer diagnostics carry their own identifiers and
 severities, honor rule set files, and appear with compiler diagnostics.
 Generated sources are inspectable and navigable. An analyzer or generator that
@@ -201,11 +201,12 @@ recompile after play ends, or stop play and recompile.
 
 ## Runtime type behavior
 
-The scripting profile for a project is the C# language version and API
+The scripting profile for a project is the C# language version and the API
 compatibility level defined in
-[Defines, compiler options, and language profile](#defines-compiler-options-and-language-profile)
-for that project's Unity version and Player settings. Compatibility reports
-state the profile in effect for the project. A supported type or member has compatible
+[Defines, compiler options, and language profile](#defines-compiler-options-and-language-profile),
+with the API compatibility level that the project's Player settings choose.
+Compatibility reports state the profile in effect for the project. A supported
+type or member has compatible
 effects, return values, exceptions, null behavior, timing, object lifetime, and
 platform limits.
 
@@ -242,8 +243,8 @@ return Unity's values for the running context:
 
 * In the editor and in headless sessions, `platform` reports the host editor
   value (`WindowsEditor`, `OSXEditor`, or `LinuxEditor`).
-* `unityVersion` reports the Unity version the project declares, not a unitas
-  version.
+* `unityVersion` reports the project's Unity 2022.3 LTS version, including
+  for a project migrated from an earlier release, never a unitas version.
 * `Application.Quit` is ignored during an editor play session and on targets
   that forbid an application from quitting itself, as in Unity, and otherwise
   ends the player with the quit messages defined in
@@ -312,8 +313,8 @@ Object discovery:
 The discovery and component APIs behave as in Unity:
 
 * `Object.FindObjectOfType` and `FindObjectsOfType`, with and without
-  `includeInactive`, and `FindObjectsByType`, `FindFirstObjectByType`, and
-  `FindAnyObjectByType` in the baseline releases that define them;
+  `includeInactive`, `FindObjectsByType`, `FindFirstObjectByType`, and
+  `FindAnyObjectByType`;
 * `GameObject.Find`, which returns active objects only and accepts
   hierarchy path syntax;
 * `GameObject.FindWithTag`, `FindGameObjectsWithTag`, and `CompareTag`, which
@@ -322,8 +323,8 @@ The discovery and component APIs behave as in Unity:
   objects;
 * `Transform.Find` by child name or relative path;
 * `GetComponent`, `GetComponents`, `GetComponentInChildren`,
-  `GetComponentInParent`, and their plural forms, with `includeInactive` where
-  the baseline release defines it, and `TryGetComponent`.
+  `GetComponentInParent`, and their plural forms, with `includeInactive`, and
+  `TryGetComponent`.
 
 In the editor and editor play sessions, an unassigned serialized reference or
 an absent requested component returns Unity's editor placeholder object, so
@@ -475,9 +476,9 @@ effects. Target frame rate and frame pacing are owned by REN-007 in
 
 `Time.captureFramerate` set above zero makes each rendered frame advance game
 time by exactly one over that value, regardless of wall-clock time, as in
-Unity. A play session can also run on a fixed simulated frame delta,
-independent of wall-clock time; starting, stopping, and stepping that mode is
-the play control owned by AUT-002 in [Automation and MCP](automation-and-mcp.md).
+Unity. Running a headless play session on a fixed simulated frame delta, and
+the conditions for stepping it, are the time control owned by AUT-002 in
+[Automation and MCP](automation-and-mcp.md).
 
 As a developer, I can distinguish:
 
@@ -491,7 +492,7 @@ As a developer, I can distinguish:
 
 `PlayerLoop.GetDefaultPlayerLoop`, `PlayerLoop.GetCurrentPlayerLoop`, and
 `PlayerLoop.SetPlayerLoop` expose the `PlayerLoopSystem` tree with the
-subsystem types of the project's Unity version. A system inserted by script
+subsystem types of Unity 2022.3 LTS. A system inserted by script
 code runs at its position in every frame of editor play sessions, headless
 play sessions, and players. Removing or reordering built-in systems has the
 effect it has in Unity, including the loss of the work those systems perform.
@@ -662,8 +663,10 @@ synchronously and asynchronously, and expose their assets and scenes.
 * `AssetBundle.Unload(true)` destroys assets loaded from the bundle;
   `Unload(false)` leaves them alive and detached, so reloading the bundle
   produces new copies, as in Unity.
-* A bundle built for another target, or with a serialized form unitas cannot
-  read (SER-005 in [Serialization and prefabs](serialization-and-prefabs.md)),
+* A bundle built for another target, built by Unity rather than unitas
+  (BLD-005 in
+  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)),
+  or with a serialized form unitas cannot read (SER-005 in [Serialization and prefabs](serialization-and-prefabs.md)),
   is reported Unsupported naming the bundle and reason rather than partially
   loaded.
 
@@ -679,7 +682,9 @@ written on the target is reported with the target and path.
 
 With the Addressables package (scoped by CMP-002 in the
 [Compatibility contract](compatibility-contract.md)), assets load by address
-key, label, `AssetReference`, and resource location. Load, instantiate, and
+key, label, `AssetReference`, and resource location. In players, Addressables
+content and catalogs are the ones unitas built (BLD-005); content built by
+Unity is reported Unsupported naming the catalog or bundle. Load, instantiate, and
 download operations return handles with status, progress, result, and
 exception. Each load increments a reference count; `Release` and
 `ReleaseInstance` decrement it, and content unloads when its count reaches zero.
@@ -689,8 +694,8 @@ dependency downloads behave as the package defines, and an invalid key fails
 with the package's exception. `WaitForCompletion` completes an operation
 synchronously where the package version allows it; on the browser it is
 Platform-limited and reported naming the calling member. In the editor, the
-selected Addressables play mode script (asset database, simulated groups, or existing build) is honored
-and reported.
+selected Addressables play mode script (asset database, simulated groups, or
+existing build) is honored and reported.
 
 ### Residency
 
@@ -752,8 +757,8 @@ form and multipart bodies; raw and file upload handlers; buffer, file,
 texture, asset bundle, and audio clip download handlers; request and response
 headers; timeout; redirect limit; upload and download progress; `Abort`; and
 disposal of handlers. Results distinguish success, connection error, protocol
-error with the response code, and data processing error, using the result
-model of the project's Unity version.
+error with the response code, and data processing error, reported
+through `UnityWebRequest.Result`.
 
 Server certificates are validated by the platform; a `CertificateHandler`
 can accept or reject certificates where the target allows it. Target
@@ -885,10 +890,12 @@ session that invoked the script (EDT-008), as defined in
 
 In a headless session or when an agent session invoked the script, modal
 dialogs and progress bars never block. Each is reported as a structured event,
-and a dialog returns its default button (`ok` for
-`EditorUtility.DisplayDialog`) unless the agent session or command-line
-invocation supplied an answer for that dialog (AUT-004 in
-[Automation and MCP](automation-and-mcp.md)).
+and a dialog returns the answer supplied for it as defined by AUT-002 in
+[Automation and MCP](automation-and-mcp.md): a play session, an editor-method
+invocation, or a command-line invocation can supply answers by dialog title and
+button, and each dialog and the answer used is recorded. A dialog with no
+supplied answer returns its default button (`ok` for
+`EditorUtility.DisplayDialog`).
 
 ### Build scripting API
 
@@ -1000,12 +1007,13 @@ that an exception did not occur merely because extended details were omitted.
    using references, platform exclusion, define constraints, version defines,
    and an `.asmref` compiles into the same assemblies Unity produces, and a
    reference cycle is reported naming both definitions. (RUN-007)
-7. Code guarded by `UNITY_EDITOR`, `UNITY_2021_3_OR_NEWER`, a platform symbol,
-   `DEVELOPMENT_BUILD`, and a `csc.rsp` define compiles in or out exactly as in
-   Unity for the editor and for a release and a development player of two
-   targets. (RUN-007)
-8. A C# 9 feature in a Unity 2020.3 project is diagnosed as Unity diagnoses it,
-   and the same source compiles in a Unity 2022.3 project. (RUN-002, RUN-007)
+7. Code guarded by `UNITY_EDITOR`, `UNITY_2022_3_OR_NEWER`, a platform
+   symbol including `UNITY_SERVER`, `DEVELOPMENT_BUILD`, and a `csc.rsp`
+   define compiles in or out exactly as in Unity 2022.3 for the editor and for
+   a release and a development player of two targets. (RUN-007)
+8. A project migrated from Unity 2020.3 compiles with C# 9 and the Unity 2022.3
+   defines, and a covariant return type is diagnosed as Unity 2022.3
+   diagnoses it. (RUN-002, RUN-007)
 9. A trusted project's source generator adds types that gameplay scripts use,
    and its analyzer reports a warning with the analyzer's identifier; in the
    same project untrusted, neither runs and the report says so. (RUN-007)
@@ -1099,7 +1107,7 @@ that an exception did not occur merely because extended details were omitted.
     time by one thirtieth of a second regardless of wall-clock duration.
     (RUN-004)
 35. In a headless session, `Application.platform` reports the host editor
-    value, `Application.unityVersion` reports the project's declared version,
+    value, `Application.unityVersion` reports the project's 2022.3 LTS version,
     `Application.Quit` is ignored during play, and `SystemInfo.graphicsDeviceType`
     is `Null` without a graphics device. (RUN-002)
 36. A handler on `Application.logMessageReceivedThreaded` receives entries
