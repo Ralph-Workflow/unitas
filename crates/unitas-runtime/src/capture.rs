@@ -2,9 +2,7 @@ use unitas_render::RenderError;
 use unitas_render::capture::{CaptureFrame, CaptureInstance};
 use unitas_render::ui_pass::{GlyphTextPainter, composite_ui_onto_capture};
 
-use crate::presenter::{
-    GpuFramePresenter, effect_model_mat4, scene_gpu_meshes, transform_to_mat4,
-};
+use crate::presenter::{GpuFramePresenter, effect_model_mat4, scene_gpu_meshes, transform_to_mat4};
 use crate::runtime::Runtime;
 
 const UNNAMED_OBJECT: &str = "object";
@@ -93,9 +91,7 @@ fn capture_instances<'a>(
     }
     let effect_mesh = runtime.effect_mesh();
     for item in runtime.particle_draw_list() {
-        let name = runtime
-            .entity_name(item.entity)
-            .unwrap_or(UNNAMED_OBJECT);
+        let name = runtime.entity_name(item.entity).unwrap_or(UNNAMED_OBJECT);
         instances.push(CaptureInstance {
             name,
             mesh: effect_mesh,
@@ -105,9 +101,7 @@ fn capture_instances<'a>(
         });
     }
     for item in runtime.trail_draw_list() {
-        let name = runtime
-            .entity_name(item.entity)
-            .unwrap_or(UNNAMED_OBJECT);
+        let name = runtime.entity_name(item.entity).unwrap_or(UNNAMED_OBJECT);
         instances.push(CaptureInstance {
             name,
             mesh: effect_mesh,
@@ -216,8 +210,11 @@ mod tests {
         let indices: Vec<u32> = mesh.indices.clone();
         let mesh_handle = runtime.register_render_mesh(positions, normals, indices);
         let material_handle = runtime.register_render_material([0.2, 0.4, 0.8, 1.0]);
-        let _renderer_handle =
-            runtime.register_render_renderer(Some(entity), Some(mesh_handle), Some(material_handle));
+        let _renderer_handle = runtime.register_render_renderer(
+            Some(entity),
+            Some(mesh_handle),
+            Some(material_handle),
+        );
         let camera_handle = runtime.register_render_camera(None);
         presenter.bind_scene(&runtime);
         let headless_bmp = runtime
@@ -243,11 +240,17 @@ mod tests {
             .find_entity_by_name("ScriptedObject")
             .ok_or("scene entity ScriptedObject was not loaded")?;
         let mesh = cube(1.0);
-        let mesh_handle =
-            runtime.register_render_mesh(mesh.positions.clone(), mesh.normals.clone(), mesh.indices.clone());
+        let mesh_handle = runtime.register_render_mesh(
+            mesh.positions.clone(),
+            mesh.normals.clone(),
+            mesh.indices.clone(),
+        );
         let material_handle = runtime.register_render_material([0.2, 0.4, 0.8, 1.0]);
-        let _renderer_handle =
-            runtime.register_render_renderer(Some(entity), Some(mesh_handle), Some(material_handle));
+        let _renderer_handle = runtime.register_render_renderer(
+            Some(entity),
+            Some(mesh_handle),
+            Some(material_handle),
+        );
         let camera_handle = runtime.register_render_camera(None);
         presenter.bind_scene(&runtime);
         let frame = capture_offscreen(&mut presenter, &runtime, WIDTH, HEIGHT)?;

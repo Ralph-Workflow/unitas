@@ -402,9 +402,7 @@ namespace UnityEngine
                 IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
                 if (_nativeEntityId != 0 && runtimeProvider != null)
                 {
-                    T probe = new T();
-                    DeregisterLiveObject(probe);
-                    if (!TryValidateAndAddRequirements(probe, typeof(T), out string? _))
+                    if (!TryValidateAndAddRequirementsForType(typeof(T), out string? _))
                     {
                         return null!;
                     }
@@ -447,9 +445,7 @@ namespace UnityEngine
                 IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
                 if (_nativeEntityId != 0 && runtimeProvider != null)
                 {
-                    Component probe = InstantiateComponent(componentType);
-                    DeregisterLiveObject(probe);
-                    if (!TryValidateAndAddRequirements(probe, componentType, out string? _))
+                    if (!TryValidateAndAddRequirementsForType(componentType, out string? _))
                     {
                         return null!;
                     }
@@ -483,9 +479,7 @@ namespace UnityEngine
                 IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
                 if (_nativeEntityId != 0 && runtimeProvider != null)
                 {
-                    T probe = new T();
-                    DeregisterLiveObject(probe);
-                    if (!TryValidateAndAddRequirements(probe, typeof(T), out string? refusal))
+                    if (!TryValidateAndAddRequirementsForType(typeof(T), out string? refusal))
                     {
                         return new ComponentOperationResult(false, null, refusal);
                     }
@@ -528,9 +522,7 @@ namespace UnityEngine
                 IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
                 if (_nativeEntityId != 0 && runtimeProvider != null)
                 {
-                    Component probe = InstantiateComponent(componentType);
-                    DeregisterLiveObject(probe);
-                    if (!TryValidateAndAddRequirements(probe, componentType, out string? refusal))
+                    if (!TryValidateAndAddRequirementsForType(componentType, out string? refusal))
                     {
                         return new ComponentOperationResult(false, null, refusal);
                     }
@@ -661,6 +653,39 @@ namespace UnityEngine
             }
 
             return TryRemoveComponentForAgent(target);
+        }
+
+        private bool TryValidateAndAddRequirementsForType(Type componentType, out string? refusalReason)
+        {
+            refusalReason = null;
+            if (Component.IsDisallowMultipleRegistered(componentType) && GetComponent(componentType) != null)
+            {
+                refusalReason =
+                    "Can't add component '"
+                    + componentType.Name
+                    + "' to "
+                    + name
+                    + " because such a component is already added to the game object!";
+                Debug.LogError(refusalReason, this);
+                return false;
+            }
+
+            IReadOnlyList<Type> requiredTypes = Component.GetRegisteredRequiredComponents(componentType);
+            for (int i = 0; i < requiredTypes.Count; i++)
+            {
+                Type reqType = requiredTypes[i];
+                if (reqType == null || !typeof(Component).IsAssignableFrom(reqType))
+                {
+                    continue;
+                }
+
+                if (GetComponent(reqType) == null && !reqType.IsAbstract)
+                {
+                    AddComponent(reqType);
+                }
+            }
+
+            return true;
         }
 
         private bool TryValidateAndAddRequirements(Component component, Type componentType, out string? refusalReason)

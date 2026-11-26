@@ -2376,16 +2376,19 @@ def run_package_shard(
     shard: tuple[str, list[tuple[str, str]]],
 ) -> list[tuple[str, int, float, str]]:
     package_dir, binaries = shard
-    results: list[tuple[str, int, float, str]] = []
-    for name, executable in binaries:
-        started = time.monotonic()
-        completed = subprocess.run(
-            [executable], cwd=package_dir, check=False, capture_output=True, text=True
-        )
-        elapsed = time.monotonic() - started
-        output = (completed.stdout or "") + (completed.stderr or "")
-        results.append((name, completed.returncode, elapsed, output))
-    return results
+    with ThreadPoolExecutor(max_workers=min(2, max(1, len(binaries)))) as pool:
+
+        def run_one(item: tuple[str, str]) -> tuple[str, int, float, str]:
+            name, executable = item
+            started = time.monotonic()
+            completed = subprocess.run(
+                [executable], cwd=package_dir, check=False, capture_output=True, text=True
+            )
+            elapsed = time.monotonic() - started
+            output = (completed.stdout or "") + (completed.stderr or "")
+            return name, completed.returncode, elapsed, output
+
+        return list(pool.map(run_one, binaries))
 
 
 def run_cargo_test() -> int:

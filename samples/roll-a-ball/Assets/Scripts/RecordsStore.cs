@@ -7,7 +7,6 @@ namespace Unitas.Samples.RollABall
         private const string MedalsKey = "records.medals";
         private const string QualityKey = "settings.quality";
 
-        // Runtime-created MonoBehaviours get no native dispatch, so persistence runs from this static hook.
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         public static void RestoreAndSave()
         {

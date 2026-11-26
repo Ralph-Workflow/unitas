@@ -8,8 +8,15 @@ namespace Unitas.Bridge.Tests
 {
     public sealed class RuntimeObjectProbeScript : MonoBehaviour
     {
+        public static int ConstructorCallCount { get; set; }
+
         private readonly List<string> _events = new List<string>();
         private readonly List<Collider?> _triggerColliders = new List<Collider?>();
+
+        public RuntimeObjectProbeScript()
+        {
+            ConstructorCallCount++;
+        }
 
         public IReadOnlyList<string> Events => _events;
 
@@ -74,8 +81,10 @@ namespace Unitas.Bridge.Tests
                 GameObject runtimeObject = new GameObject("RuntimeProbe");
                 Check.That("Runtime GameObject receives non-zero native entity id", runtimeObject.NativeEntityId != 0UL);
 
+                RuntimeObjectProbeScript.ConstructorCallCount = 0;
                 RuntimeObjectProbeScript probe = runtimeObject.AddComponent<RuntimeObjectProbeScript>();
                 Check.That("AddComponent returns non-null probe script", probe != null);
+                Check.Equal("AddComponent constructs runtime MonoBehaviour once", 1, RuntimeObjectProbeScript.ConstructorCallCount);
                 Check.That("Probe script is attached to the runtime GameObject", ReferenceEquals(probe!.gameObject, runtimeObject));
                 Check.Equal("Runtime GameObject holds one probe script component", 1, runtimeObject.GetComponents<RuntimeObjectProbeScript>().Length);
 

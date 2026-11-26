@@ -13,9 +13,8 @@ namespace Unitas.Bridge.Tests
     /// </summary>
     public static class UiClickPumpTests
     {
-        // The script GUID of the uGUI Button component, the same fixture GUID
-        // the other bridge test scenes use, so the secret scan knows it.
-        private const string UiButtonGuid = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
+        // The script GUID of the uGUI Button component in UnityEngine.UI.dll.
+        private const string UiButtonGuid = "4e29b1a8efbd4b44bb3f3716e73f07ff";
         private const string ButtonObjectName = "PlayButton";
         private const double FrameSeconds = 0.016;
         private const double ButtonCenterX = 400.0;
@@ -167,7 +166,7 @@ MonoBehaviour:
 MonoBehaviour:
   m_GameObject: {fileID: 20}
   m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 1a2b3c4d5e6f708192a3b4c5d6e7f809, type: 3}
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
   m_TargetGraphic: {fileID: 33}
   m_Interactable: 1
 ";

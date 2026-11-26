@@ -149,7 +149,22 @@ namespace UnityEngine
         }
 
         internal bool ResolveDisallowMultiple(Type componentType) =>
-            DisallowMultiple || s_registeredDisallowMultiple.Contains(componentType);
+            DisallowMultiple || IsDisallowMultipleRegistered(componentType);
+
+        internal static bool IsDisallowMultipleRegistered(Type componentType) =>
+            s_registeredDisallowMultiple.Contains(componentType);
+
+        internal static IReadOnlyList<Type> GetRegisteredRequiredComponents(Type componentType)
+        {
+            if (s_registeredRequiredComponents.TryGetValue(componentType, out Type[]? registered)
+                && registered != null
+                && registered.Length > 0)
+            {
+                return registered;
+            }
+
+            return Array.Empty<Type>();
+        }
 
         public override string name
         {
