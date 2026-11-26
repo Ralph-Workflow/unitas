@@ -307,20 +307,17 @@ The named non-default profiles, each with the five required fields:
   status of that run; staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
-  GPU/audio/input artifacts; fails hard when run; last run not recorded in a
-  durable source as of 2026-11-25 — the lane writes its capture under the
-  ignored `target/` path and no CI job runs it, so a refresh run that records
-  a committed baseline or a CI run id is due before the horizon of one
-  milestone passes.
+  GPU/audio/input artifacts; fails hard when run; last run 2026-11-26, recorded
+  in this tree by the re-approved render-graph baseline
+  `tools/approved_gpu_reference.bmp` and the gate-lane review entry below;
+  staleness horizon one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
   or presentation; evidence: per-measurement OK/FAIL lines with value_ms
   against ceiling_ms, and value_bytes against ceiling_bytes for the PlayerLoop
-  per-frame allocation measurement; fails hard when run; last run not recorded
-  in a durable source as of 2026-11-25 — the lane prints its measurements and
-  keeps no report in the tracked tree, so a refresh run that records a
-  committed baseline or a CI run id is due before the horizon of one milestone
-  passes. The lane reports eight measurements: import
+  per-frame allocation measurement; fails hard when run; last run 2026-11-26,
+  recorded in the gate-lane review entry below; staleness horizon one
+  milestone. The lane reports eight measurements: import
   throughput, scene load, physics step, particle eval, animation eval, the
   100,000-GameObject frame loop, the managed-to-native scripting call cost, and
   the PlayerLoop per-frame managed allocation. Each area owns the measurements
@@ -339,8 +336,8 @@ The named non-default profiles, each with the five required fields:
 | Profile | Last run | Durable source |
 |---|---|---|
 | `make verify-samples` | 2026-11-26 | the re-approved S8 reference baselines under `samples/roll-a-ball/References/` |
-| `make verify-device` | not recorded in this tree | a refresh run that names a durable source is due before the horizon of one milestone passes |
-| `make verify-perf` | 2026-11-25 | the gate-lane review entry for the 2026-11-25 policy remediation pass |
+| `make verify-device` | 2026-11-26 | the re-approved render-graph baseline `tools/approved_gpu_reference.bmp` and this gate-lane review entry |
+| `make verify-perf` | 2026-11-26 | this gate-lane review entry |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |
 RALPH-FACT: verification_time_budget: 26.24 seconds wall for `make verify` on an Apple Silicon host on 2026-11-25, of which 22.37 seconds is controllable time above the recorded 3.87-second full-gate cost floor; the full .NET formatter took 21.49s of that run. This is the measurement each re-measurement is compared against, not a limit the gate fails on
 RALPH-FACT: verification_cost_floor: full gate floor 3.87s (measured via `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 3.87s (the recorded fast path is the full gate, so it carries the full gate floor, measured via the same `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), and default suite floor 0.67s (measured via `pytest --collect-only -q` at 0.52s and `cargo test --workspace --no-run` at 0.15s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-25

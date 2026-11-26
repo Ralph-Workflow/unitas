@@ -3,7 +3,7 @@ use crate::gpu::{RenderError, Renderer};
 use crate::image::Rgba8;
 use crate::math::Mat4;
 use crate::mesh::Mesh;
-use crate::raster::DirectionalLight;
+use crate::model::DirectionalLight;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScreenBounds {
@@ -237,12 +237,12 @@ mod tests {
             },
         ];
         let plain_instances = vec![
-            crate::raster::MeshInstance {
+            crate::model::MeshInstance {
                 mesh: &left,
                 model: identity(),
                 color: [0.2, 0.4, 0.8],
             },
-            crate::raster::MeshInstance {
+            crate::model::MeshInstance {
                 mesh: &right,
                 model: identity(),
                 color: [0.6, 0.2, 0.8],

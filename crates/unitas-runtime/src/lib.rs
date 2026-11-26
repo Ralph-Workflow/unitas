@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod navigation;
 pub mod particles;
 pub mod physics;
+pub mod presenter;
 pub mod resources;
 mod runtime;
 mod runtime_objects;
@@ -29,6 +30,10 @@ pub use dylib::{RuntimeDylib, RuntimeDylibError};
 pub use error::RuntimeError;
 pub use input::*;
 pub use jobs::job_system;
+pub use presenter::{
+    FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding, GpuWindowPresenter,
+    WindowError, scene_gpu_meshes, transform_to_mat4, view_matrix_from_transform,
+};
 pub use runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
     unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,

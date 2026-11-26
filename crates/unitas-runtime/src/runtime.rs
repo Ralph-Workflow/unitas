@@ -26,9 +26,7 @@ use unitas_physics::{
 };
 use unitas_render::image::Image;
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
-use unitas_render::{
-    Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, cube, look_at, render_scene,
-};
+use unitas_render::{Camera, DirectionalLight, Mat4, Mesh, Renderer, Vec3, cube, look_at};
 
 use self::ui_components::UiComponents;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
@@ -38,6 +36,7 @@ use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::PhysicsRuntimeWorld;
+use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
 
@@ -338,7 +337,8 @@ pub struct Runtime {
     pub(crate) input: InputState,
     pub(crate) render: RenderWorld,
     pub(crate) ui_screen_size: Option<[f32; 2]>,
-    pub(crate) ui_painter: Option<GlyphTextPainter>,
+    pub(crate) ui_painter: Mutex<Option<GlyphTextPainter>>,
+    pub(crate) gpu_renderer: Option<Arc<Renderer>>,
     pub(crate) pending_ui_clicks: Vec<u64>,
     pub(crate) ui_pressed_button: Option<EntityId>,
     pub(crate) project_identity: ProjectIdentity,
@@ -379,7 +379,8 @@ impl Runtime {
             input: InputState::with_default_axes(),
             render: RenderWorld::default(),
             ui_screen_size: None,
-            ui_painter: None,
+            ui_painter: Mutex::new(None),
+            gpu_renderer: None,
             pending_ui_clicks: Vec::new(),
             ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
@@ -2134,7 +2135,7 @@ impl Runtime {
 
     /// The draw items of the visible canvas content, laid out against the
     /// given screen size.
-    fn ui_draw_items_for(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
+    pub(crate) fn ui_draw_items_for(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
         let mut items = Vec::new();
         for scene in &self.scenes {
             items.extend(scene.ui.draw_items(screen_size));
@@ -2658,38 +2659,6 @@ fn toward_light_direction(rotation: [f32; 4], travel: [f32; 3]) -> [f32; 3] {
     [-rotated[0], -rotated[1], -rotated[2]]
 }
 
-fn model_matrix(transform: &Transform) -> Mat4 {
-    let rotation = transform.rotation;
-    let (x, y, z, w) = (rotation[0], rotation[1], rotation[2], rotation[3]);
-    let (sx, sy, sz) = (transform.scale[0], transform.scale[1], transform.scale[2]);
-    let mut values = [0.0f32; 16];
-    values[0] = (1.0 - 2.0 * (y * y + z * z)) * sx;
-    values[1] = (2.0 * (x * y + w * z)) * sx;
-    values[2] = (2.0 * (x * z - w * y)) * sx;
-    values[4] = (2.0 * (x * y - w * z)) * sy;
-    values[5] = (1.0 - 2.0 * (x * x + z * z)) * sy;
-    values[6] = (2.0 * (y * z + w * x)) * sy;
-    values[8] = (2.0 * (x * z + w * y)) * sz;
-    values[9] = (2.0 * (y * z - w * x)) * sz;
-    values[10] = (1.0 - 2.0 * (x * x + y * y)) * sz;
-    values[12] = transform.translation[0];
-    values[13] = transform.translation[1];
-    values[14] = transform.translation[2];
-    values[15] = 1.0;
-    Mat4::from_cols_array(values)
-}
-
-fn effect_model(position: [f32; 3], size: f32) -> Mat4 {
-    let transform = Transform {
-        translation: position,
-        rotation: IDENTITY_ROTATION,
-        scale: [size, size, size],
-        parent: None,
-        children: Vec::new(),
-    };
-    model_matrix(&transform)
-}
-
 pub(crate) fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
     let near = params.near_clip_plane.max(0.001);
     let far = params.far_clip_plane.max(near + 0.001);
@@ -3109,36 +3078,6 @@ impl Runtime {
         })
     }
 
-    fn render_instances(&self) -> Vec<MeshInstance<'_>> {
-        let mut instances = Vec::new();
-        for renderable in self.scene_renderables() {
-            let Some(transform) = self.entity_transform(renderable.entity) else {
-                continue;
-            };
-            instances.push(MeshInstance {
-                mesh: renderable.mesh,
-                model: model_matrix(&transform),
-                color: renderable.color,
-            });
-        }
-        let effect_mesh = &self.render.effect_mesh;
-        for item in self.particle_draw_list() {
-            instances.push(MeshInstance {
-                mesh: effect_mesh,
-                model: effect_model(item.position, item.size),
-                color: [item.color[0], item.color[1], item.color[2]],
-            });
-        }
-        for item in self.trail_draw_list() {
-            instances.push(MeshInstance {
-                mesh: effect_mesh,
-                model: effect_model(item.position, item.width),
-                color: [item.color[0], item.color[1], item.color[2]],
-            });
-        }
-        instances
-    }
-
     pub(crate) fn render_frame(
         &mut self,
         camera: u64,
@@ -3154,27 +3093,27 @@ impl Runtime {
             Some(state) => *state,
             None => return Err(RenderError::UnknownHandle),
         };
-        let basis = match self.camera_basis(state.entity) {
-            Some(basis) => basis,
-            None => {
-                return Err(RenderError::InvalidArgument(
-                    "camera entity is not in a loaded scene".to_string(),
-                ));
-            }
-        };
-        let projection = projection_for(&state.params, width as f32 / height as f32);
-        let light = self.directional_light();
-        let instances = self.render_instances();
-        let mut image = render_scene(
-            &instances,
-            &projection,
-            basis.view,
-            &light,
-            state.params.background_color,
-            width,
-            height,
-        );
-        image = self.composite_canvas_onto_frame(image, width, height);
+        if let Some(entity) = state.entity
+            && self.world_transform_of(entity).is_none()
+        {
+            return Err(RenderError::InvalidArgument(
+                "camera entity is not in a loaded scene".to_string(),
+            ));
+        }
+        let renderer = self.gpu_renderer()?;
+        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
+        presenter.set_meshes(scene_gpu_meshes(self));
+        let default = GpuCameraBinding::default();
+        presenter.set_camera_binding(GpuCameraBinding {
+            entity: state.entity,
+            camera: projection_for(&state.params, default.camera.aspect),
+            view: default.view,
+            background: state.params.background_color,
+        });
+        presenter.set_light(self.directional_light());
+        let image = presenter
+            .render_offscreen(self, width, height)
+            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
         let bytes = image.to_bmp_bytes();
         if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
             camera_state.viewport = Some((width, height));
@@ -3182,9 +3121,71 @@ impl Runtime {
         Ok(bytes)
     }
 
+    pub(crate) fn render_id_map(
+        &mut self,
+        camera: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::InvalidArgument(
+                "frame size must be greater than zero".to_string(),
+            ));
+        }
+        let state = match self.render.cameras.get(&camera) {
+            Some(state) => *state,
+            None => return Err(RenderError::UnknownHandle),
+        };
+        if let Some(entity) = state.entity
+            && self.world_transform_of(entity).is_none()
+        {
+            return Err(RenderError::InvalidArgument(
+                "camera entity is not in a loaded scene".to_string(),
+            ));
+        }
+        let renderer = self.gpu_renderer()?;
+        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
+        presenter.set_meshes(scene_gpu_meshes(self));
+        let default = GpuCameraBinding::default();
+        presenter.set_camera_binding(GpuCameraBinding {
+            entity: state.entity,
+            camera: projection_for(&state.params, default.camera.aspect),
+            view: default.view,
+            background: state.params.background_color,
+        });
+        presenter.set_light(self.directional_light());
+        let frame = crate::capture::capture_offscreen(&mut presenter, self, width, height)
+            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
+        let mut bytes = Vec::with_capacity(frame.id_map.len() * 4);
+        for id in frame.id_map {
+            bytes.extend_from_slice(&id.to_le_bytes());
+        }
+        if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
+            camera_state.viewport = Some((width, height));
+        }
+        Ok(bytes)
+    }
+
+    pub fn capture_scene_frame(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<unitas_render::CaptureFrame, RenderError> {
+        if width == 0 || height == 0 {
+            return Err(RenderError::InvalidArgument(
+                "frame size must be greater than zero".to_string(),
+            ));
+        }
+        let renderer = self.gpu_renderer()?;
+        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
+        presenter.bind_scene(self);
+        crate::capture::capture_offscreen(&mut presenter, self, width, height)
+            .map_err(|error| RenderError::DeviceFailed(error.to_string()))
+    }
+
     /// Draws the canvas content of the loaded scenes onto a rendered frame, so
     /// the interface is part of the picture instead of only its state.
-    fn composite_canvas_onto_frame(&mut self, image: Image, width: u32, height: u32) -> Image {
+    pub(crate) fn composite_canvas_image(&self, image: Image, width: u32, height: u32) -> Image {
         let items = self.ui_draw_items_for([width as f32, height as f32]);
         if items.is_empty() {
             return image;
@@ -3195,12 +3196,40 @@ impl Runtime {
             ids: None,
         };
         if items.iter().any(|item| item.text.is_some()) {
-            let painter = self.ui_painter.get_or_insert_with(GlyphTextPainter::new);
+            let mut painter = self
+                .ui_painter
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let painter = painter.get_or_insert_with(GlyphTextPainter::new);
             composite_ui(&mut target, &items, 1, Some(painter));
         } else {
             composite_ui(&mut target, &items, 1, None);
         }
         Image::from_rgba8(rgba)
+    }
+
+    /// The renderer every frame of this runtime is rendered by.
+    pub(crate) fn gpu_renderer(&mut self) -> Result<Arc<Renderer>, RenderError> {
+        if let Some(renderer) = &self.gpu_renderer {
+            return Ok(Arc::clone(renderer));
+        }
+        let renderer = Renderer::new()
+            .map(Arc::new)
+            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
+        self.gpu_renderer = Some(Arc::clone(&renderer));
+        Ok(renderer)
+    }
+
+    /// The mesh the particle and trail effects are drawn with.
+    pub(crate) fn effect_mesh(&self) -> &Mesh {
+        &self.render.effect_mesh
+    }
+
+    /// The name of an entity of the loaded scenes.
+    pub(crate) fn entity_name(&self, entity: EntityId) -> Option<&str> {
+        self.scene_graph()
+            .and_then(|graph| graph.entity(entity))
+            .map(|entity| entity.name())
     }
 
     pub(crate) fn camera_world_to_screen_point(

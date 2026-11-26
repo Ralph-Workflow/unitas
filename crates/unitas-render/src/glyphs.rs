@@ -250,7 +250,7 @@ pub struct Rect {
     pub height: f32,
 }
 
-pub fn rasterize(
+pub fn shape_glyph_quads(
     fonts: &mut FontLibrary,
     cache: &mut SwashCache,
     atlas: &mut GlyphAtlas,
@@ -335,7 +335,6 @@ pub fn draw_text(frame: &mut Rgba8, atlas: &GlyphAtlas, quads: &[TexturedQuad], 
     }
 }
 
-#[cfg(feature = "device")]
 const TEXT_SHADER_SOURCE: &str = r"
 struct Globals {
     resolution: vec2<f32>,
@@ -376,10 +375,8 @@ fn fs_main(fs_in: VertexOut) -> @location(0) vec4<f32> {
 }
 ";
 
-#[cfg(feature = "device")]
 const TEXT_VERTEX_FLOATS: usize = 8;
 
-#[cfg(feature = "device")]
 const TEXT_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
@@ -398,21 +395,18 @@ const TEXT_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
     },
 ];
 
-#[cfg(feature = "device")]
 const TEXT_VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
     array_stride: (TEXT_VERTEX_FLOATS * 4) as u64,
     step_mode: wgpu::VertexStepMode::Vertex,
     attributes: &TEXT_VERTEX_ATTRIBUTES,
 };
 
-#[cfg(feature = "device")]
 pub struct GlyphResources {
     pub texture: wgpu::Texture,
     pub bind_group: wgpu::BindGroup,
     pub uniform: wgpu::Buffer,
 }
 
-#[cfg(feature = "device")]
 pub struct TextFrame<'a> {
     pub encoder: &'a mut wgpu::CommandEncoder,
     pub view: &'a wgpu::TextureView,
@@ -420,13 +414,11 @@ pub struct TextFrame<'a> {
     pub clip: Rect,
 }
 
-#[cfg(feature = "device")]
 pub struct TextPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
-#[cfg(feature = "device")]
 impl TextPipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -668,7 +660,6 @@ impl TextPipeline {
     }
 }
 
-#[cfg(feature = "device")]
 pub fn build_geometry(quads: &[TexturedQuad]) -> (Vec<f32>, Vec<u32>) {
     let mut vertices = Vec::with_capacity(quads.len() * 4 * TEXT_VERTEX_FLOATS);
     let mut indices = Vec::with_capacity(quads.len() * 6);
@@ -918,9 +909,9 @@ mod tests {
 
         let mut cache = SwashCache::new();
         let mut atlas_a = GlyphAtlas::new(256, 256);
-        let quads_a = rasterize(&mut fonts, &mut cache, &mut atlas_a, &first);
+        let quads_a = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas_a, &first);
         let mut atlas_b = GlyphAtlas::new(256, 256);
-        let quads_b = rasterize(&mut fonts, &mut cache, &mut atlas_b, &first);
+        let quads_b = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas_b, &first);
         assert!(!quads_a.is_empty());
         assert_eq!(quads_a, quads_b);
         assert_eq!(atlas_a, atlas_b);
@@ -928,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn smoke_rasterizes_one_glyph_into_atlas() -> Result<(), Box<dyn std::error::Error>> {
+    fn smoke_packs_one_glyph_into_atlas() -> Result<(), Box<dyn std::error::Error>> {
         let mut fonts = FontLibrary::new();
         if !fonts.load_system_fonts() {
             return Ok(());
@@ -938,27 +929,27 @@ mod tests {
         assert_eq!(layout.glyphs.len(), 1);
         let mut cache = SwashCache::new();
         let mut atlas = GlyphAtlas::new(64, 64);
-        let quads = rasterize(&mut fonts, &mut cache, &mut atlas, &layout);
+        let quads = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
         assert_eq!(quads.len(), 1);
         let region = atlas
             .region(&layout.glyphs[0].cache_key)
-            .ok_or("the atlas holds no region for the rasterized glyph")?;
+            .ok_or("the atlas holds no region for the shaped glyph")?;
         assert!(region.width > 0 && region.height > 0);
         assert!(atlas.image.pixels.chunks_exact(4).any(|px| px[3] > 0));
         Ok(())
     }
 
     #[test]
-    fn rasterized_phrase_coverage_is_letterform_like() -> Result<(), Box<dyn std::error::Error>> {
+    fn shaped_phrase_coverage_is_letterform_like() -> Result<(), Box<dyn std::error::Error>> {
         let mut fonts = FontLibrary::new();
         if !fonts.load_system_fonts() {
-            return Err("no system fonts are available to rasterize the HUD phrase".into());
+            return Err("no system fonts are available to shape the HUD phrase".into());
         }
         let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
         let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
         let mut cache = SwashCache::new();
         let mut atlas = GlyphAtlas::new(1024, 1024);
-        let quads = rasterize(&mut fonts, &mut cache, &mut atlas, &layout);
+        let quads = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
         assert!(!quads.is_empty(), "the phrase produced no glyph quads");
         let columns = layout.width.ceil() as usize;
         let mut inked_columns = vec![false; columns];
@@ -992,14 +983,14 @@ mod tests {
                 }
             }
         }
-        assert!(inked + partial > 0, "the rasterized phrase carries no ink");
+        assert!(inked + partial > 0, "the shaped phrase carries no ink");
         assert!(
             blank > 0,
-            "the rasterized phrase fills every glyph pixel, which means solid blocks"
+            "the shaped phrase fills every glyph pixel, which means solid blocks"
         );
         assert!(
             partial > 0,
-            "the rasterized mask is uniformly opaque, which means solid blocks"
+            "the shaped mask is uniformly opaque, which means solid blocks"
         );
         assert!(
             inked_columns.iter().any(|column| *column),
@@ -1013,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_reuses_atlas_regions() {
+    fn glyph_packing_reuses_atlas_regions() {
         let mut fonts = FontLibrary::new();
         if !fonts.load_system_fonts() {
             return;
@@ -1022,9 +1013,9 @@ mod tests {
         let layout = layout_text(&mut fonts, "aaaa", None, &style);
         let mut cache = SwashCache::new();
         let mut atlas = GlyphAtlas::new(256, 256);
-        let quads_first = rasterize(&mut fonts, &mut cache, &mut atlas, &layout);
+        let quads_first = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
         let region_count = atlas.regions.len();
-        let quads_second = rasterize(&mut fonts, &mut cache, &mut atlas, &layout);
+        let quads_second = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
         assert_eq!(quads_first, quads_second);
         assert_eq!(atlas.regions.len(), region_count);
         assert!(region_count < quads_first.len() || quads_first.len() <= 4);

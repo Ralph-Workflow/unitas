@@ -31,6 +31,8 @@ namespace UnityEngine
         void UpdateLight(ulong lightHandle, Vector3 direction, Color color, float intensity);
 
         byte[] RenderFrame(ulong cameraHandle, uint width, uint height);
+
+        uint[] RenderIdMap(ulong cameraHandle, uint width, uint height);
     }
 
     public sealed class Camera : Behaviour
@@ -220,6 +222,23 @@ namespace UnityEngine
 
             File.WriteAllBytes(path, frame);
             LastCaptureFailure = null;
+        }
+
+        public uint[] CaptureIdMap()
+        {
+            IRenderProvider? provider = Provider;
+            if (provider == null)
+            {
+                return Array.Empty<uint>();
+            }
+
+            ulong cameraHandle = EnsureNativeCamera();
+            if (cameraHandle == 0UL)
+            {
+                return Array.Empty<uint>();
+            }
+
+            return provider.RenderIdMap(cameraHandle, (uint)_pixelWidth, (uint)_pixelHeight);
         }
 
         private void PushSettings()

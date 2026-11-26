@@ -1,33 +1,28 @@
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use unitas_render::camera::{look_at, Camera};
-use unitas_render::image::Image;
+use unitas_render::gpu::{GpuMaterialInstance, Renderer};
 use unitas_render::math::{Mat4, Vec3};
 use unitas_render::mesh::{cube, Mesh};
-use unitas_render::raster::{
-    render_scene, render_scene_materials, BlendMode, DirectionalLight, Material, MaterialInstance,
-    MeshInstance,
+use unitas_render::model::{
+    effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
 };
+use unitas_render::render_graph::{RenderGraph, RenderPassKind};
 
-/// FNV-1a 64 over the pixel bytes of the opaque fixture, captured from the
-/// scene of `perspective_camera_renders_cube_center_and_background`
-/// (crates/unitas-render/tests/render/render_tests.rs:266) before the
-/// translucency work; the opaque path must keep producing these bytes.
-const OPAQUE_CUBE_FIXTURE_HASH: u64 = 0xfa8e_17c5_2e3b_83b5;
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+fn shared_renderer() -> Result<MutexGuard<'static, Renderer>, String> {
+    static RENDERER: OnceLock<Result<Mutex<Renderer>, String>> = OnceLock::new();
+    let slot = RENDERER.get_or_init(|| {
+        Renderer::new()
+            .map(Mutex::new)
+            .map_err(|error| error.to_string())
+    });
+    let mutex = match slot {
+        Ok(mutex) => mutex,
+        Err(message) => return Err(String::clone(message)),
+    };
+    match mutex.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => Ok(poisoned.into_inner()),
     }
-    hash
-}
-
-fn pixel_bytes(image: &Image) -> Vec<u8> {
-    image
-        .pixels
-        .iter()
-        .flat_map(|pixel| pixel.iter().copied())
-        .collect()
 }
 
 fn camera() -> Camera {
@@ -70,7 +65,10 @@ fn quad(extent: f32) -> Mesh {
     Mesh::from_buffers(&positions, &normals, &indices)
 }
 
-fn opaque_cube_fixture() -> Image {
+#[test]
+fn opaque_cube_renders_shaded_center_and_background_deterministically(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let instances = [MeshInstance {
         mesh: &mesh,
@@ -85,207 +83,70 @@ fn opaque_cube_fixture() -> Image {
         color: [0.9, 0.8, 0.7],
         intensity: 0.5,
     };
-    render_scene(
+    let first = renderer.render_offscreen(
         &instances,
         &camera(),
         view(),
         &light,
         [0.2, 0.4, 0.6],
-        64,
-        64,
-    )
-}
-
-#[test]
-fn opaque_cube_render_bytes_are_unchanged() {
-    let image = opaque_cube_fixture();
-    assert_eq!(fnv1a(&pixel_bytes(&image)), OPAQUE_CUBE_FIXTURE_HASH);
-    assert_eq!(image.get_pixel(32, 32), [194, 92, 43]);
-    assert_eq!(image.get_pixel(0, 0), [51, 102, 153]);
-}
-
-#[test]
-fn translucent_quad_blends_over_opaque_background() {
-    let mesh = quad(2.0);
-    let opaque = Material::plain();
-    let translucent = Material {
-        alpha: 0.5,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let instances = [
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, 1.0),
-            color: [0.0, 0.0, 1.0],
-            material: &opaque,
-        },
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, -0.5),
-            color: [1.0, 0.0, 0.0],
-            material: &translucent,
-        },
-    ];
-    let image = render_scene_materials(
-        &instances,
-        &camera(),
-        view(),
-        &unlit_light(),
-        [0.0, 0.5, 0.0],
-        32,
-        32,
-    );
-    // The translucent red quad is drawn after the opaque blue quad, so the
-    // centre pixel is 0.5 * red + 0.5 * blue.
-    assert_eq!(image.get_pixel(16, 16), [128, 0, 128]);
-    assert_eq!(image.get_pixel(0, 0), [0, 128, 0]);
-}
-
-#[test]
-fn translucent_quads_are_drawn_back_to_front() {
-    let mesh = quad(2.0);
-    let red = Material {
-        alpha: 0.5,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let blue = Material {
-        alpha: 0.5,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let instances = [
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, -0.5),
-            color: [1.0, 0.0, 0.0],
-            material: &red,
-        },
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, 0.5),
-            color: [0.0, 0.0, 1.0],
-            material: &blue,
-        },
-    ];
-    let image = render_scene_materials(
-        &instances,
-        &camera(),
-        view(),
-        &unlit_light(),
-        [0.0, 0.0, 0.0],
-        32,
-        32,
-    );
-    // The far blue quad is drawn first even though the near red quad is
-    // listed first, so the centre pixel is 0.5 * red + (0.5 * blue) * 0.5.
-    assert_eq!(image.get_pixel(16, 16), [128, 0, 64]);
-}
-
-#[cfg(feature = "device")]
-#[test]
-fn gpu_blends_translucent_quad_over_opaque_background_like_the_cpu_raster(
-) -> Result<(), Box<dyn std::error::Error>> {
-    use unitas_render::gpu::{GpuMaterialInstance, Renderer, GPU_CPU_MEAN_ERROR_TOLERANCE};
-
-    let renderer = match Renderer::new() {
-        Ok(renderer) => renderer,
-        Err(error) => {
-            eprintln!("skipping GPU test, no GPU device available: {error}");
-            return Ok(());
-        }
-    };
-    let mesh = quad(2.0);
-    let opaque = Material::plain();
-    let translucent = Material {
-        alpha: 0.5,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let gpu_instances = [
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, 1.0),
-            color: [0.0, 0.0, 1.0],
-            material: &opaque,
-        },
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, -0.5),
-            color: [1.0, 0.0, 0.0],
-            material: &translucent,
-        },
-    ];
-    let cpu_instances = [
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, 1.0),
-            color: [0.0, 0.0, 1.0],
-            material: &opaque,
-        },
-        MaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, -0.5),
-            color: [1.0, 0.0, 0.0],
-            material: &translucent,
-        },
-    ];
-    let gpu = renderer.render_offscreen_materials(
-        &gpu_instances,
-        &camera(),
-        view(),
-        &unlit_light(),
-        [0.0, 0.5, 0.0],
-        (32, 32),
+        (64, 64),
     )?;
-    let cpu = render_scene_materials(
-        &cpu_instances,
+    let second = renderer.render_offscreen(
+        &instances,
         &camera(),
         view(),
-        &unlit_light(),
-        [0.0, 0.5, 0.0],
-        32,
-        32,
-    );
-    assert_eq!(gpu.get_pixel(16, 16), [128, 0, 128]);
-    assert_eq!(gpu.get_pixel(0, 0), [0, 128, 0]);
-    let mut total = 0.0f32;
-    let mut samples = 0usize;
-    for (gpu_pixel, cpu_pixel) in gpu.pixels.iter().zip(cpu.pixels.iter()) {
-        for channel in 0..3 {
-            total += (f32::from(gpu_pixel[channel]) - f32::from(cpu_pixel[channel])).abs();
-            samples += 1;
-        }
-    }
-    let mean_error = total / samples as f32;
-    assert!(
-        mean_error <= GPU_CPU_MEAN_ERROR_TOLERANCE,
-        "gpu/cpu mean channel error {mean_error} exceeds the declared tolerance {GPU_CPU_MEAN_ERROR_TOLERANCE}"
-    );
+        &light,
+        [0.2, 0.4, 0.6],
+        (64, 64),
+    )?;
+    assert_eq!(first.pixels, second.pixels);
+    assert_eq!(first.get_pixel(32, 32), [194, 92, 43]);
+    assert_eq!(first.get_pixel(0, 0), [51, 102, 153]);
     Ok(())
 }
 
-#[cfg(feature = "device")]
 #[test]
-fn gpu_draws_translucent_quads_back_to_front() -> Result<(), Box<dyn std::error::Error>> {
-    use unitas_render::gpu::{GpuMaterialInstance, Renderer};
-
-    let renderer = match Renderer::new() {
-        Ok(renderer) => renderer,
-        Err(error) => {
-            eprintln!("skipping GPU test, no GPU device available: {error}");
-            return Ok(());
-        }
+fn translucent_quad_blends_over_opaque_background() -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
+    let mesh = quad(2.0);
+    let opaque = Material::plain();
+    let translucent = Material {
+        alpha: 0.5,
+        blend: BlendMode::Blend,
+        ..Material::plain()
     };
+    let instances = [
+        GpuMaterialInstance::from(MaterialInstance {
+            mesh: &mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, 1.0),
+            color: [0.0, 0.0, 1.0],
+            material: &opaque,
+        }),
+        GpuMaterialInstance::from(MaterialInstance {
+            mesh: &mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, -0.5),
+            color: [1.0, 0.0, 0.0],
+            material: &translucent,
+        }),
+    ];
+    let image = renderer.render_offscreen_materials(
+        &instances,
+        &camera(),
+        view(),
+        &unlit_light(),
+        [0.0, 0.5, 0.0],
+        (32, 32),
+    )?;
+    assert_eq!(image.get_pixel(16, 16), [128, 0, 128]);
+    assert_eq!(image.get_pixel(0, 0), [0, 128, 0]);
+    Ok(())
+}
+
+#[test]
+fn translucent_quads_are_drawn_back_to_front() -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = quad(2.0);
     let red = Material {
         alpha: 0.5,
@@ -297,7 +158,7 @@ fn gpu_draws_translucent_quads_back_to_front() -> Result<(), Box<dyn std::error:
         blend: BlendMode::Blend,
         ..Material::plain()
     };
-    let instances = [
+    let near_first = [
         GpuMaterialInstance {
             mesh: &mesh,
             attributes: None,
@@ -313,14 +174,99 @@ fn gpu_draws_translucent_quads_back_to_front() -> Result<(), Box<dyn std::error:
             material: &blue,
         },
     ];
-    let gpu = renderer.render_offscreen_materials(
-        &instances,
+    let far_first = [near_first[1], near_first[0]];
+    let near_first_image = renderer.render_offscreen_materials(
+        &near_first,
         &camera(),
         view(),
         &unlit_light(),
         [0.0, 0.0, 0.0],
         (32, 32),
     )?;
-    assert_eq!(gpu.get_pixel(16, 16), [128, 0, 64]);
+    let far_first_image = renderer.render_offscreen_materials(
+        &far_first,
+        &camera(),
+        view(),
+        &unlit_light(),
+        [0.0, 0.0, 0.0],
+        (32, 32),
+    )?;
+    assert_eq!(near_first_image.get_pixel(16, 16), [128, 0, 64]);
+    assert_eq!(far_first_image.get_pixel(16, 16), [128, 0, 64]);
+    Ok(())
+}
+
+#[test]
+fn nearer_opaque_occludes_farther_translucent_and_alpha_boundaries_hold(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
+    let mesh = quad(2.0);
+    let opaque = Material::plain();
+    let translucent = Material {
+        alpha: 0.5,
+        blend: BlendMode::Blend,
+        ..Material::plain()
+    };
+    let invisible = Material {
+        alpha: 0.0,
+        blend: BlendMode::Blend,
+        ..Material::plain()
+    };
+    let full_blend = Material {
+        alpha: 1.0,
+        blend: BlendMode::Blend,
+        ..Material::plain()
+    };
+    assert!((effective_alpha(&opaque) - 1.0).abs() < 1e-6);
+    assert!((effective_alpha(&translucent) - 0.5).abs() < 1e-6);
+    assert!(effective_alpha(&invisible).abs() < 1e-6);
+    assert!((effective_alpha(&full_blend) - 1.0).abs() < 1e-6);
+    assert_eq!(
+        RenderGraph::offscreen(false).pass_order(),
+        vec![RenderPassKind::Opaque, RenderPassKind::Transparent]
+    );
+
+    let occluded_instances = [
+        GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, 1.0),
+            color: [1.0, 0.0, 0.0],
+            material: &translucent,
+        },
+        GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, -0.5),
+            color: [0.0, 0.0, 1.0],
+            material: &opaque,
+        },
+    ];
+    let occluded = renderer.render_offscreen_materials(
+        &occluded_instances,
+        &camera(),
+        view(),
+        &unlit_light(),
+        [0.0, 0.0, 0.0],
+        (32, 32),
+    )?;
+    assert_eq!(occluded.get_pixel(16, 16), [0, 0, 255]);
+
+    let zero_alpha_instances = [GpuMaterialInstance {
+        mesh: &mesh,
+        attributes: None,
+        model: translated(0.0, 0.0, -0.5),
+        color: [1.0, 0.0, 0.0],
+        material: &invisible,
+    }];
+    let zero_alpha_image = renderer.render_offscreen_materials(
+        &zero_alpha_instances,
+        &camera(),
+        view(),
+        &unlit_light(),
+        [0.0, 1.0, 0.0],
+        (32, 32),
+    )?;
+    assert_eq!(zero_alpha_image.get_pixel(16, 16), [0, 255, 0]);
     Ok(())
 }

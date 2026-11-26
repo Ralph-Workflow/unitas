@@ -38,6 +38,9 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, EntryPoint = "unitas_runtime_render_frame", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_render_frame(ulong handle, ulong camera, uint width, uint height);
 
+        [DllImport(LibraryName, EntryPoint = "unitas_runtime_render_id_map", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_render_id_map(ulong handle, ulong camera, uint width, uint height);
+
         [DllImport(LibraryName, EntryPoint = "unitas_runtime_render_camera_world_to_screen_point", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_camera_world_to_screen_point(ulong handle, ulong camera, float x, float y, float z, IntPtr outBuffer);
 

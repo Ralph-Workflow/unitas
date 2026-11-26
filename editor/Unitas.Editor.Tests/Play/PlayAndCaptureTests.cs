@@ -359,27 +359,16 @@ namespace Unitas.Editor.Tests.Play
 
             int captureWidth = 64;
             int captureHeight = 36;
-            JsonObject captureEnvelope;
-            try
-            {
-                captureEnvelope = (JsonObject)host.CallTool(
-                    sessionId,
-                    "capture",
-                    new JsonObject
-                    {
-                        ["playSessionId"] = playSessionId,
-                        ["width"] = captureWidth,
-                        ["height"] = captureHeight,
-                        ["id_map"] = true,
-                    });
-            }
-            catch (McpError.InvalidRequest refusal)
-            {
-                Check.That(
-                    "live_worker_capture: a player without the device feature refuses the capture and names the requirement",
-                    refusal.Message.Contains("capture requires the device feature", StringComparison.Ordinal));
-                return;
-            }
+            JsonObject captureEnvelope = (JsonObject)host.CallTool(
+                sessionId,
+                "capture",
+                new JsonObject
+                {
+                    ["playSessionId"] = playSessionId,
+                    ["width"] = captureWidth,
+                    ["height"] = captureHeight,
+                    ["id_map"] = true,
+                });
 
             Check.That(
                 "live_worker_capture: capture response is wrapped in untrusted envelope",

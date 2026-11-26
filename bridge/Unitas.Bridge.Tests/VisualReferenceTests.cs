@@ -364,6 +364,11 @@ namespace Unitas.Bridge.Tests
             {
                 return BuildBmp((int)width, (int)height, 0, 0, FillBlue, _diffWidth, _diffHeight);
             }
+
+            public uint[] RenderIdMap(ulong cameraHandle, uint width, uint height)
+            {
+                return Array.Empty<uint>();
+            }
         }
     }
 }

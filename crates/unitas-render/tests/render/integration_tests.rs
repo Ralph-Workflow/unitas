@@ -4,7 +4,11 @@ use unitas_asset::meta;
 use unitas_asset::{
     parse_material, parse_material_with_guids, GuidIndex, MaterialError, MetaError,
 };
-use unitas_render::{cube, look_at, render, render_with_view, Camera, Vec3};
+use unitas_render::{
+    cube, look_at, Camera, DirectionalLight, Mat4, MeshInstance, RenderScene, Vec3,
+};
+
+use super::render_tests::shared_renderer;
 
 fn decode_bmp_pixel(bmp: &[u8], width: u32, height: u32, x: u32, y: u32) -> [u8; 3] {
     let row_bytes = (width as usize) * 3;
@@ -55,27 +59,42 @@ fn material_to_pixel_end_to_end_pipeline() -> Result<(), Box<dyn std::error::Err
         Some("Standard".to_string())
     );
 
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let rgb = [material.color[0], material.color[1], material.color[2]];
-    let light_dir = Vec3::new(0.0, 0.0, -1.0);
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 1.0,
+    };
     let width = 64;
     let height = 64;
-
-    let img1 = render(
-        std::slice::from_ref(&mesh),
-        &camera,
-        rgb,
-        light_dir,
-        width,
-        height,
-    );
     let view = look_at(
         Vec3::new(0.0, 0.0, -5.0),
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
     );
-    let img2 = render_with_view(&[mesh], &camera, view, rgb, light_dir, width, height);
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model: Mat4::identity(),
+        color: rgb,
+    }];
+    let img1 = renderer.render_offscreen(
+        &instances,
+        &camera,
+        view,
+        &light,
+        [0.0, 0.0, 0.0],
+        (width, height),
+    )?;
+    let scene = RenderScene {
+        camera: &camera,
+        view,
+        light: &light,
+        background: [0.0, 0.0, 0.0],
+    };
+    let img2 = renderer.render_offscreen_scene(&instances, scene, width, height)?;
 
     let silhouette_1 = img1.pixels.iter().filter(|&&px| px != [0, 0, 0]).count();
     let silhouette_2 = img2.pixels.iter().filter(|&&px| px != [0, 0, 0]).count();

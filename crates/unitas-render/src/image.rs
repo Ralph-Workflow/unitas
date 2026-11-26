@@ -69,8 +69,6 @@ impl Image {
         }
     }
 
-    /// Bilinear sample with clamp-to-edge, matching the GPU sampler: `uv`
-    /// maps to texel centers at `(u * width - 0.5, v * height - 0.5)`.
     pub fn sample_bilinear(&self, u: f32, v: f32) -> [f32; 3] {
         let w = self.width as f32;
         let h = self.height as f32;
@@ -106,7 +104,6 @@ impl Image {
         out
     }
 
-    /// The pixels as an RGBA buffer whose alpha is opaque.
     pub fn to_rgba8(&self) -> Rgba8 {
         let mut rgba = Rgba8::new(self.width, self.height);
         for (index, pixel) in self.pixels.iter().enumerate() {
@@ -119,7 +116,6 @@ impl Image {
         rgba
     }
 
-    /// The image of an RGBA buffer, dropping the alpha channel.
     pub fn from_rgba8(rgba: Rgba8) -> Image {
         let mut image = Image::new(rgba.width, rgba.height);
         for (index, pixel) in image.pixels.iter_mut().enumerate() {

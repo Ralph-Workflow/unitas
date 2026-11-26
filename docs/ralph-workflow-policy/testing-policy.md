@@ -629,6 +629,6 @@ Criterion 8 verdict authority: a capture-backed criterion 8 verdict is agent-pro
 
 Appearance assertions may protect implementation details and accessibility behaviour, but they must not be submitted as visual design proof. Tests and development results must identify the capture set and the visual verdict that supports a UI plan item.
 
-RALPH-FACT: visual_verdict_artifact: none — the repository has no visual surface
-RALPH-FACT: visual_capture_handle: none — the repository has no visual surface
-RALPH-FACT: design_capture_command: none — the repository has no design surface
+RALPH-FACT: visual_verdict_artifact: none — engine and sample rendering are verified deterministically through the wgpu render graph (headless GPU tests in the default automated lane, committed BMP reference baselines under samples/roll-a-ball/References/ via make verify-samples, and tools/approved_gpu_reference.bmp via make verify-device), while no Ralph criterion-8 web/DOM design review surface is active in this phase
+RALPH-FACT: visual_capture_handle: none — headless offscreen wgpu render-graph capture (including per-pixel object-id maps) runs deterministically in the default automated lane and in make verify-samples and make verify-device, while no Ralph criterion-8 web/DOM visual capture handle is active in this phase
+RALPH-FACT: design_capture_command: none — visual reference verification runs through make verify-samples and make verify-device against committed BMP baselines produced by the wgpu render graph, while no Ralph criterion-8 web/DOM design capture command is active in this phase

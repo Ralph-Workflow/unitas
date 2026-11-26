@@ -137,14 +137,12 @@ fn blend_pixel(pixels: &mut [u8], offset: usize, color: [f32; 4]) {
     pixels[offset + 3] = (alpha * 255.0).round() as u8;
 }
 
-#[cfg(feature = "text")]
 pub struct GlyphTextPainter {
     pub fonts: crate::glyphs::FontLibrary,
     pub cache: crate::glyphs::SwashCache,
     pub atlas: crate::glyphs::GlyphAtlas,
 }
 
-#[cfg(feature = "text")]
 impl GlyphTextPainter {
     pub fn new() -> Self {
         let mut fonts = crate::glyphs::FontLibrary::new();
@@ -157,14 +155,12 @@ impl GlyphTextPainter {
     }
 }
 
-#[cfg(feature = "text")]
 impl Default for GlyphTextPainter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "text")]
 impl UiTextPainter for GlyphTextPainter {
     fn paint(
         &mut self,
@@ -180,8 +176,12 @@ impl UiTextPainter for GlyphTextPainter {
         }
         let style = crate::glyphs::TextStyle::new(size_px, size_px, color);
         let layout = crate::glyphs::layout_text(&mut self.fonts, text, None, &style);
-        let mut quads =
-            crate::glyphs::rasterize(&mut self.fonts, &mut self.cache, &mut self.atlas, &layout);
+        let mut quads = crate::glyphs::shape_glyph_quads(
+            &mut self.fonts,
+            &mut self.cache,
+            &mut self.atlas,
+            &layout,
+        );
         for quad in &mut quads {
             quad.x += x;
             quad.y += y;
@@ -196,7 +196,6 @@ impl UiTextPainter for GlyphTextPainter {
     }
 }
 
-#[cfg(feature = "device")]
 pub fn composite_ui_onto_capture<T: UiElement>(
     frame: &mut crate::capture::CaptureFrame,
     items: &[T],

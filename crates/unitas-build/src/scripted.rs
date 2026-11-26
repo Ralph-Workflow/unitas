@@ -205,6 +205,18 @@ impl ScriptedPlayer {
         })
     }
 
+    pub fn capture_scene(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<unitas_render::CaptureFrame, PlayerStartupError> {
+        self.runtime
+            .capture_scene(self.handle, width, height)
+            .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+                message: error.to_string(),
+            })
+    }
+
     pub fn shutdown(&mut self) -> Result<(), PlayerStartupError> {
         let stage = (self.shutdown)();
         let _ = self.runtime.destroy(self.handle);

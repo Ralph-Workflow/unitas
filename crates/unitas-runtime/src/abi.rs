@@ -3475,6 +3475,86 @@ pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u6
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_render_buffer_word(handle: u64, offset: u64) -> u64 {
+    let Ok(start) = usize::try_from(offset) else {
+        return 0;
+    };
+    with_runtime_state(handle, |state| {
+        if start >= state.render_buffer.len() {
+            return 0;
+        }
+        let end = (start + 8).min(state.render_buffer.len());
+        let mut chunk = [0u8; 8];
+        chunk[..end - start].copy_from_slice(&state.render_buffer[start..end]);
+        u64::from_le_bytes(chunk)
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_capture_scene(
+    handle: u64,
+    width: u32,
+    height: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match state.runtime.capture_scene_frame(width, height) {
+            Ok(frame) => {
+                let bytes = encode_capture_frame(&frame);
+                let count = bytes.len();
+                state.render_buffer = bytes;
+                state.clear_error();
+                match i32::try_from(count) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        state.set_error(
+                            "-2 invalid argument: capture size exceeds the supported range",
+                        );
+                        -2
+                    }
+                }
+            }
+            Err(error) => {
+                state.set_error(&error.to_string());
+                error.class()
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+fn encode_capture_frame(frame: &unitas_render::CaptureFrame) -> Vec<u8> {
+    let image_bytes = frame.image.as_bytes();
+    let id_count = frame.id_map.len();
+    let object_count = frame.objects.len();
+    let mut bytes =
+        Vec::with_capacity(16 + image_bytes.len() + (id_count * 4) + (object_count * 32));
+    bytes.extend_from_slice(&frame.image.width.to_le_bytes());
+    bytes.extend_from_slice(&frame.image.height.to_le_bytes());
+    bytes.extend_from_slice(&(id_count as u32).to_le_bytes());
+    bytes.extend_from_slice(&(object_count as u32).to_le_bytes());
+    bytes.extend_from_slice(image_bytes);
+    for id in &frame.id_map {
+        bytes.extend_from_slice(&id.to_le_bytes());
+    }
+    for object in &frame.objects {
+        bytes.extend_from_slice(&object.id.to_le_bytes());
+        bytes.extend_from_slice(&object.bounds.x.to_le_bytes());
+        bytes.extend_from_slice(&object.bounds.y.to_le_bytes());
+        bytes.extend_from_slice(&object.bounds.width.to_le_bytes());
+        bytes.extend_from_slice(&object.bounds.height.to_le_bytes());
+        let name_bytes = object.name.as_bytes();
+        bytes.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(name_bytes);
+    }
+    bytes
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_render_mesh_create(
     handle: u64,
     positions: *const f32,
@@ -3780,6 +3860,41 @@ pub extern "C" fn unitas_runtime_render_frame(
                     Err(_) => {
                         state.set_error(
                             "-2 invalid argument: frame size exceeds the supported range",
+                        );
+                        -2
+                    }
+                }
+            }
+            Err(error) => {
+                state.set_error(&error.to_string());
+                error.class()
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_id_map(
+    handle: u64,
+    camera: u64,
+    width: u32,
+    height: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        match state.runtime.render_id_map(camera, width, height) {
+            Ok(bytes) => {
+                let count = bytes.len();
+                state.render_buffer = bytes;
+                state.clear_error();
+                match i32::try_from(count) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        state.set_error(
+                            "-2 invalid argument: id map size exceeds the supported range",
                         );
                         -2
                     }

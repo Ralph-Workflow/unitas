@@ -4,13 +4,14 @@ use std::sync::{Mutex, MutexGuard};
 use crate::camera::Camera;
 use crate::capture::{CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds};
 use crate::glyphs::{
-    layout_text, rasterize, FontLibrary, GlyphAtlas, GlyphResources, Rect, SwashCache, TextFrame,
-    TextPipeline, TextStyle,
+    layout_text, shape_glyph_quads, FontLibrary, GlyphAtlas, GlyphResources, Rect, SwashCache,
+    TextFrame, TextPipeline, TextStyle,
 };
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, MeshAttributes};
-use crate::raster::{effective_alpha, DirectionalLight, Material, MeshInstance};
+use crate::model::{effective_alpha, DirectionalLight, Material, MaterialInstance, MeshInstance};
+use crate::render_graph::{RenderGraph, RenderPassKind};
 
 const VERTEX_FLOATS: usize = 11;
 const VERTEX_STRIDE: u64 = 44;
@@ -22,14 +23,9 @@ const COPY_ROW_ALIGNMENT: u64 = 256;
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const SHADOW_UNIFORM_BYTES: u64 = 80;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 
-// Lit model shared with the CPU raster in raster.rs: ambient*albedo +
-// light_color * (lambert*diffuse + blinn_phong_spec) * intensity + emissive,
-// where specular is gated by metallic*smoothness and normal maps perturb the
-// shading normal in tangent space.
 const SHADER_SOURCE: &str = r"
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -56,15 +52,6 @@ struct MaterialParams {
 @group(2) @binding(3) var material_sampler: sampler;
 @group(2) @binding(4) var<uniform> material: MaterialParams;
 
-struct ShadowParams {
-    light_view_proj: mat4x4<f32>,
-    params: vec4<f32>,
-};
-
-@group(3) @binding(0) var shadow_map: texture_depth_2d;
-@group(3) @binding(1) var shadow_sampler: sampler_comparison;
-@group(3) @binding(2) var<uniform> shadow: ShadowParams;
-
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
@@ -72,8 +59,7 @@ struct VertexOut {
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec3<f32>,
     @location(4) world_pos: vec3<f32>,
-    @location(5) shadow_pos: vec4<f32>,
-    @location(6) alpha: f32,
+    @location(5) alpha: f32,
 };
 
 @vertex
@@ -93,54 +79,8 @@ fn vs_main(
     out.color = inst.color.rgb;
     out.uv = uv;
     out.world_pos = world.xyz;
-    out.shadow_pos = shadow.light_view_proj * world;
     out.alpha = inst.color.a;
     return out;
-}
-
-@vertex
-fn vs_shadow(
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) tangent: vec3<f32>,
-) -> VertexOut {
-    var out: VertexOut;
-    let world = inst.model * vec4<f32>(position, 1.0);
-    out.clip_position = shadow.light_view_proj * world;
-    out.normal = normal;
-    out.tangent = tangent;
-    out.color = vec3<f32>(0.0, 0.0, 0.0);
-    out.uv = uv;
-    out.world_pos = world.xyz;
-    out.shadow_pos = out.clip_position;
-    out.alpha = 1.0;
-    return out;
-}
-
-fn shadow_factor(vs_out: VertexOut) -> f32 {
-    if (shadow.params.z < 0.5) {
-        return 1.0;
-    }
-    let proj = vs_out.shadow_pos;
-    if (proj.w <= 0.0) {
-        return 1.0;
-    }
-    let ndc = proj.xy / proj.w;
-    let uv = ndc * vec2<f32>(0.5, 0.5) + vec2<f32>(0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        return 1.0;
-    }
-    let depth = proj.z / proj.w - shadow.params.x;
-    let texel = shadow.params.y;
-    var sum = 0.0;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            sum += textureSampleCompare(shadow_map, shadow_sampler, uv + offset, depth);
-        }
-    }
-    return sum / 9.0;
 }
 
 fn surface_color(vs_out: VertexOut) -> vec3<f32> {
@@ -164,9 +104,8 @@ fn surface_color(vs_out: VertexOut) -> vec3<f32> {
     let shininess = 8.0 + smoothness * 248.0;
     let specular = pow(max(dot(n, half_dir), 0.0), shininess) * metallic * smoothness;
     let diffuse = albedo * (1.0 - metallic);
-    let shadowed = shadow_factor(vs_out);
     let shade = globals.light_color.w * albedo
-        + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w * shadowed;
+        + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w;
     return shade + emissive;
 }
 
@@ -280,9 +219,6 @@ pub struct GpuInstance<'a> {
     pub lit: bool,
 }
 
-/// A mesh drawn with a lit [`Material`] (textures, metallic/smoothness, and
-/// optional alpha blending). Unlike [`GpuInstance`], unlit drawing is not
-/// offered: textured surfaces are lit by construction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GpuMaterialInstance<'a> {
     pub mesh: &'a Mesh,
@@ -290,6 +226,33 @@ pub struct GpuMaterialInstance<'a> {
     pub model: Mat4,
     pub color: [f32; 3],
     pub material: &'a Material,
+}
+
+impl<'a> From<MaterialInstance<'a>> for GpuMaterialInstance<'a> {
+    fn from(instance: MaterialInstance<'a>) -> Self {
+        Self {
+            mesh: instance.mesh,
+            attributes: instance.attributes,
+            model: instance.model,
+            color: instance.color,
+            material: instance.material,
+        }
+    }
+}
+
+impl<'a, 'b> From<&'a MaterialInstance<'b>> for GpuMaterialInstance<'b>
+where
+    'b: 'a,
+{
+    fn from(instance: &'a MaterialInstance<'b>) -> Self {
+        Self {
+            mesh: instance.mesh,
+            attributes: instance.attributes,
+            model: instance.model,
+            color: instance.color,
+            material: instance.material,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -367,13 +330,14 @@ pub struct Renderer {
     queue: wgpu::Queue,
     global_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
+    material_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     offscreen_pipelines: Pipelines,
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
+    material_sampler: wgpu::Sampler,
     material_bind: wgpu::BindGroup,
-    shadow_bind: wgpu::BindGroup,
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
 }
@@ -426,6 +390,57 @@ fn solid_texture(device: &wgpu::Device, queue: &wgpu::Queue, rgba: [u8; 4]) -> w
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
+fn image_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    image: &Image,
+    fallback: [u8; 4],
+) -> wgpu::TextureView {
+    let width = image.width;
+    let height = image.height;
+    if width == 0 || height == 0 {
+        return solid_texture(device, queue, fallback);
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("material-image"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut rgba = Vec::with_capacity((width as usize) * (height as usize) * 4);
+    for &[r, g, b] in &image.pixels {
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
@@ -434,8 +449,6 @@ fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     }
 }
 
-// Blend choice for translucent surfaces: source-over, src-alpha over
-// one-minus-src-alpha.
 fn blend_color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
@@ -696,44 +709,12 @@ impl Renderer {
                 },
             ],
         });
-        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("shadow"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(SHADOW_UNIFORM_BYTES),
-                    },
-                    count: None,
-                },
-            ],
-        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
             bind_group_layouts: &[
                 Some(&global_layout),
                 Some(&instance_layout),
                 Some(&material_layout),
-                Some(&shadow_layout),
             ],
             immediate_size: 0,
         });
@@ -796,83 +777,6 @@ impl Renderer {
                 },
             ],
         });
-        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("shadow"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            ..Default::default()
-        });
-        let shadow_map = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow-default"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let shadow_view = shadow_map.create_view(&wgpu::TextureViewDescriptor::default());
-        {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("shadow-default-clear"),
-            });
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow-default-clear"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            drop(pass);
-            queue.submit(Some(encoder.finish()));
-        }
-        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("shadow-uniform"),
-            size: SHADOW_UNIFORM_BYTES,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &shadow_uniform,
-            0,
-            bytemuck::cast_slice::<f32, u8>(&[0.0f32; 20]),
-        );
-        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow-default"),
-            layout: &shadow_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: shadow_uniform.as_entire_binding(),
-                },
-            ],
-        });
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
         fonts.load_system_fonts();
@@ -889,13 +793,14 @@ impl Renderer {
             queue,
             global_layout,
             instance_layout,
+            material_layout,
             pipeline_layout,
             shader,
             offscreen_pipelines,
             capture_pipelines,
             uniforms: Mutex::new(uniforms),
+            material_sampler,
             material_bind,
-            shadow_bind,
             surface: Mutex::new(None),
             text: Mutex::new(text),
         })
@@ -979,8 +884,6 @@ impl Renderer {
         self.render_offscreen_items(plain_draw_items(instances), scene, size, overlay)
     }
 
-    /// Offscreen render of lit [`Material`] instances; shares the exact draw
-    /// path of [`Renderer::render_offscreen_with`] (no side path).
     pub fn render_offscreen_materials(
         &self,
         instances: &[GpuMaterialInstance<'_>],
@@ -1016,6 +919,7 @@ impl Renderer {
             light,
             background,
         } = scene;
+        let graph = RenderGraph::offscreen(!overlay.is_empty());
         let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen-color"),
             size: wgpu::Extent3d {
@@ -1034,53 +938,93 @@ impl Renderer {
         let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let prepared = self.prepare_draw_items(&items, camera, view, light)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("offscreen"),
             });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("offscreen"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(background_color(background)),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.draw_scene(
-                &mut pass,
-                &self.offscreen_pipelines,
-                &items,
-                camera,
-                view,
-                light,
-            )?;
-        }
-        if !overlay.is_empty() {
-            self.draw_text_overlay(
-                &mut encoder,
-                &color_view,
-                OFFSCREEN_FORMAT,
-                (width, height),
-                1.0,
-                overlay,
-            );
+        for graph_pass in graph.passes() {
+            match graph_pass.kind {
+                RenderPassKind::Opaque => {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-opaque"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &color_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(background_color(background)),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    self.draw_pass_indices(
+                        &mut pass,
+                        &self.offscreen_pipelines,
+                        &items,
+                        &prepared,
+                        &opaque_order(&items),
+                    );
+                }
+                RenderPassKind::Transparent => {
+                    let indices = transparent_order(&items, view);
+                    if !indices.is_empty() {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("offscreen-transparent"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &color_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &depth_view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        self.draw_pass_indices(
+                            &mut pass,
+                            &self.offscreen_pipelines,
+                            &items,
+                            &prepared,
+                            &indices,
+                        );
+                    }
+                }
+                RenderPassKind::UiOverlay => {
+                    self.draw_text_overlay(
+                        &mut encoder,
+                        &color_view,
+                        OFFSCREEN_FORMAT,
+                        (width, height),
+                        1.0,
+                        overlay,
+                    );
+                }
+                RenderPassKind::CaptureIds => {}
+            }
         }
 
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
@@ -1133,6 +1077,7 @@ impl Renderer {
                 objects: Vec::new(),
             });
         }
+        let graph = RenderGraph::capture();
         let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("capture-color"),
             size: wgpu::Extent3d {
@@ -1166,57 +1111,7 @@ impl Renderer {
         let id_view = id_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let items = capture_draw_items(instances);
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("capture"),
-            });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("capture"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &color_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(background_color(background)),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &id_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                ],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.draw_scene(
-                &mut pass,
-                &self.capture_pipelines,
-                &items,
-                camera,
-                view,
-                light,
-            )?;
-        }
-
+        let prepared = self.prepare_draw_items(&items, camera, view, light)?;
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
         let color_readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("capture-color-readback"),
@@ -1230,48 +1125,150 @@ impl Renderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &color_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &color_readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row as u32),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &id_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &id_readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row as u32),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("capture"),
+            });
+        for graph_pass in graph.passes() {
+            match graph_pass.kind {
+                RenderPassKind::Opaque => {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("capture-opaque"),
+                        color_attachments: &[
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: &color_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(background_color(background)),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: &id_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                        ],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    self.draw_pass_indices(
+                        &mut pass,
+                        &self.capture_pipelines,
+                        &items,
+                        &prepared,
+                        &opaque_order(&items),
+                    );
+                }
+                RenderPassKind::Transparent => {
+                    let indices = transparent_order(&items, view);
+                    if !indices.is_empty() {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("capture-transparent"),
+                            color_attachments: &[
+                                Some(wgpu::RenderPassColorAttachment {
+                                    view: &color_view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                }),
+                                Some(wgpu::RenderPassColorAttachment {
+                                    view: &id_view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                }),
+                            ],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &depth_view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        self.draw_pass_indices(
+                            &mut pass,
+                            &self.capture_pipelines,
+                            &items,
+                            &prepared,
+                            &indices,
+                        );
+                    }
+                }
+                RenderPassKind::CaptureIds => {
+                    encoder.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &color_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &color_readback,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(bytes_per_row as u32),
+                                rows_per_image: Some(height),
+                            },
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    encoder.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &id_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &id_readback,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(bytes_per_row as u32),
+                                rows_per_image: Some(height),
+                            },
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                RenderPassKind::UiOverlay => {}
+            }
+        }
         self.queue.submit(Some(encoder.finish()));
         let color_data = self.read_buffer(&color_readback)?;
         let id_data = self.read_buffer(&id_readback)?;
@@ -1408,48 +1405,90 @@ impl Renderer {
         let depth_view = surface_state
             .depth
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let items = plain_draw_items(instances);
+        let prepared = self.prepare_draw_items(&items, &camera, view, light)?;
+        let graph = RenderGraph::surface(!overlay.is_empty());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("surface"),
             });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("surface"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(background_color(background)),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.draw_scene(
-                &mut pass,
-                &surface_state.pipelines,
-                &plain_draw_items(instances),
-                &camera,
-                view,
-                light,
-            )?;
-        }
-        if !overlay.is_empty() {
-            let scale = size.0 as f32 / surface_state.config_size.0 as f32;
-            let format = surface_state.format;
-            self.draw_text_overlay(&mut encoder, &color_view, format, size, scale, overlay);
+        for graph_pass in graph.passes() {
+            match graph_pass.kind {
+                RenderPassKind::Opaque => {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("surface-opaque"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &color_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(background_color(background)),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    self.draw_pass_indices(
+                        &mut pass,
+                        &surface_state.pipelines,
+                        &items,
+                        &prepared,
+                        &opaque_order(&items),
+                    );
+                }
+                RenderPassKind::Transparent => {
+                    let indices = transparent_order(&items, view);
+                    if !indices.is_empty() {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("surface-transparent"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &color_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &depth_view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        self.draw_pass_indices(
+                            &mut pass,
+                            &surface_state.pipelines,
+                            &items,
+                            &prepared,
+                            &indices,
+                        );
+                    }
+                }
+                RenderPassKind::UiOverlay => {
+                    let scale = size.0 as f32 / surface_state.config_size.0 as f32;
+                    let format = surface_state.format;
+                    self.draw_text_overlay(&mut encoder, &color_view, format, size, scale, overlay);
+                }
+                RenderPassKind::CaptureIds => {}
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(surface_texture);
@@ -1483,7 +1522,7 @@ impl Renderer {
             let scaled = item.size_px * scale;
             let style = TextStyle::new(scaled, scaled, item.color);
             let layout = layout_text(fonts, &item.text, None, &style);
-            let mut item_quads = rasterize(fonts, cache, atlas, &layout);
+            let mut item_quads = shape_glyph_quads(fonts, cache, atlas, &layout);
             let dx = item.x * scale;
             let dy = item.y * scale;
             for quad in &mut item_quads {
@@ -1552,6 +1591,7 @@ impl Renderer {
         &self,
         mesh: &Mesh,
         attributes: Option<&MeshAttributes>,
+        material: Option<&Material>,
     ) -> Result<Option<MeshBuffers>, RenderError> {
         if mesh.positions.is_empty() || mesh.indices.is_empty() {
             return Ok(None);
@@ -1561,9 +1601,6 @@ impl Renderer {
             vertex_data.extend_from_slice(&[position.x, position.y, position.z]);
             let normal = mesh.normals.get(index).copied().unwrap_or(Vec3::ZERO);
             vertex_data.extend_from_slice(&[normal.x, normal.y, normal.z]);
-            // The layout declares uv and tangent after the normal; a Mesh
-            // without attributes carries neither, so they stay zero (flat
-            // albedo lookup, no normal map).
             let uv = attributes
                 .and_then(|attrs| attrs.uvs.get(index).copied())
                 .unwrap_or([0.0, 0.0]);
@@ -1591,26 +1628,81 @@ impl Renderer {
             mapped_at_creation: false,
         });
         self.queue.write_buffer(&index_buffer, 0, index_bytes);
+        let material_bind = material.map(|mat| self.create_material_bind_group(mat));
         Ok(Some(MeshBuffers {
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: mesh.indices.len() as u32,
+            material_bind,
         }))
     }
 
-    fn draw_scene(
+    fn create_material_bind_group(&self, material: &Material) -> wgpu::BindGroup {
+        let albedo = match &material.albedo {
+            Some(image) => image_texture(&self.device, &self.queue, image, [255, 255, 255, 255]),
+            None => solid_texture(&self.device, &self.queue, [255, 255, 255, 255]),
+        };
+        let normal = match &material.normal {
+            Some(image) => image_texture(&self.device, &self.queue, image, [128, 128, 255, 255]),
+            None => solid_texture(&self.device, &self.queue, [128, 128, 255, 255]),
+        };
+        let emissive = match &material.emissive {
+            Some(image) => image_texture(&self.device, &self.queue, image, [0, 0, 0, 255]),
+            None => solid_texture(&self.device, &self.queue, [0, 0, 0, 255]),
+        };
+        let params = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material-params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let metallic = material.metallic.clamp(0.0, 1.0);
+        let smoothness = material.smoothness.clamp(0.0, 1.0);
+        let alpha = effective_alpha(material);
+        self.queue.write_buffer(
+            &params,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&[metallic, smoothness, alpha, 0.0]),
+        );
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material"),
+            layout: &self.material_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&albedo),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&emissive),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn prepare_draw_items(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        pipelines: &Pipelines,
         items: &[DrawItem<'_>],
         camera: &Camera,
         view: Mat4,
         light: &DirectionalLight,
-    ) -> Result<(), RenderError> {
+    ) -> Result<Vec<Option<MeshBuffers>>, RenderError> {
         let view_proj = camera.projection_matrix() * view;
         let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(items.len());
         for item in items {
-            meshes.push(self.upload_mesh(item.instance.mesh, item.attributes)?);
+            meshes.push(self.upload_mesh(item.instance.mesh, item.attributes, item.material)?);
         }
 
         let mut state = lock(&self.uniforms);
@@ -1638,10 +1730,6 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
-        // Every instance occupies its own aligned slot: the draw loop below
-        // steps the dynamic offset by a slot, so packed instance data would
-        // drift out of alignment with the bound uniform and draw every mesh
-        // with another mesh's transform.
         let mut instance_data: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
         for (index, item) in items.iter().enumerate() {
             let start = index * SLOT_FLOATS;
@@ -1661,9 +1749,20 @@ impl Renderer {
                 bytemuck::cast_slice::<f32, u8>(&instance_data),
             );
         }
+        Ok(meshes)
+    }
 
+    fn draw_pass_indices(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipelines: &Pipelines,
+        items: &[DrawItem<'_>],
+        meshes: &[Option<MeshBuffers>],
+        indices: &[usize],
+    ) {
+        let state = lock(&self.uniforms);
         pass.set_bind_group(0, &state.global_bind_group, &[]);
-        for index in draw_order(items, view) {
+        for &index in indices {
             let item = &items[index];
             let mesh = match &meshes[index] {
                 Some(mesh) => mesh,
@@ -1674,8 +1773,8 @@ impl Renderer {
                 &state.instance_bind_group,
                 &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
             );
-            pass.set_bind_group(2, &self.material_bind, &[]);
-            pass.set_bind_group(3, &self.shadow_bind, &[]);
+            let material_bind = mesh.material_bind.as_ref().unwrap_or(&self.material_bind);
+            pass.set_bind_group(2, material_bind, &[]);
             let pipeline = match (item.instance.lit, item.alpha < 1.0) {
                 (true, true) => &pipelines.lit_blend,
                 (true, false) => &pipelines.lit,
@@ -1687,7 +1786,6 @@ impl Renderer {
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
         }
-        Ok(())
     }
 
     fn read_buffer(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, RenderError> {
@@ -1717,11 +1815,13 @@ struct MeshBuffers {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    material_bind: Option<wgpu::BindGroup>,
 }
 
 struct DrawItem<'a> {
     instance: GpuInstance<'a>,
     attributes: Option<&'a MeshAttributes>,
+    material: Option<&'a Material>,
     alpha: f32,
     object_id: u32,
 }
@@ -1732,6 +1832,7 @@ fn plain_draw_items<'a>(instances: &[GpuInstance<'a>]) -> Vec<DrawItem<'a>> {
         .map(|instance| DrawItem {
             instance: *instance,
             attributes: None,
+            material: None,
             alpha: 1.0,
             object_id: 0,
         })
@@ -1749,6 +1850,7 @@ fn material_draw_items<'a>(instances: &[GpuMaterialInstance<'a>]) -> Vec<DrawIte
                 lit: true,
             },
             attributes: instance.attributes,
+            material: Some(instance.material),
             alpha: effective_alpha(instance.material),
             object_id: 0,
         })
@@ -1767,25 +1869,27 @@ fn capture_draw_items<'a>(instances: &[CaptureInstance<'a>]) -> Vec<DrawItem<'a>
                 lit: instance.lit,
             },
             attributes: None,
+            material: None,
             alpha: 1.0,
             object_id: (index + 1) as u32,
         })
         .collect()
 }
 
-/// The draw order the GPU and the CPU raster share: opaque instances first in
-/// input order, then the translucent ones back to front (smallest view-space z
-/// first; look_at is right-handed, so visible points have negative view z).
-fn draw_order(items: &[DrawItem<'_>], view: Mat4) -> Vec<usize> {
-    let mut opaque: Vec<usize> = Vec::new();
-    let mut translucent: Vec<usize> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        if item.alpha < 1.0 {
-            translucent.push(index);
-        } else {
-            opaque.push(index);
-        }
-    }
+fn opaque_order(items: &[DrawItem<'_>]) -> Vec<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| (item.alpha >= 1.0).then_some(index))
+        .collect()
+}
+
+fn transparent_order(items: &[DrawItem<'_>], view: Mat4) -> Vec<usize> {
+    let mut translucent: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| (item.alpha < 1.0).then_some(index))
+        .collect();
     translucent.sort_by(|&a, &b| {
         let depth_a = view
             .mul_mat4(&items[a].instance.model)
@@ -1799,8 +1903,7 @@ fn draw_order(items: &[DrawItem<'_>], view: Mat4) -> Vec<usize> {
             .partial_cmp(&depth_b)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    opaque.extend(translucent);
-    opaque
+    translucent
 }
 
 fn create_uniforms(
@@ -1959,12 +2062,13 @@ fn capture_objects(
     objects
 }
 
-#[cfg(all(test, feature = "device"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::camera::look_at;
-    use crate::mesh::{cube, uv_sphere};
-    use crate::raster::render_scene;
+    use crate::mesh::cube;
+    use crate::model::BlendMode;
+    use crate::render_graph::RenderTargetKind;
 
     const WIDTH: u32 = 128;
     const HEIGHT: u32 = 128;
@@ -2021,22 +2125,6 @@ mod tests {
         }
     }
 
-    fn mean_channel_error(gpu: &Image, cpu: &Image) -> f32 {
-        let mut total = 0.0f32;
-        let mut samples = 0usize;
-        for (gpu_pixel, cpu_pixel) in gpu.pixels.iter().zip(cpu.pixels.iter()) {
-            for channel in 0..3 {
-                total += (f32::from(gpu_pixel[channel]) - f32::from(cpu_pixel[channel])).abs();
-                samples += 1;
-            }
-        }
-        if samples == 0 {
-            0.0
-        } else {
-            total / samples as f32
-        }
-    }
-
     fn grid_mesh(cells: u32) -> Mesh {
         let stride = cells + 1;
         let mut positions = Vec::with_capacity((stride * stride) as usize);
@@ -2066,58 +2154,25 @@ mod tests {
         }
     }
 
+    fn uv_quad(extent: f32) -> (Mesh, MeshAttributes) {
+        let positions = [
+            [-extent, -extent, 0.0],
+            [-extent, extent, 0.0],
+            [extent, extent, 0.0],
+            [extent, -extent, 0.0],
+        ];
+        let normals = [[0.0, 0.0, -1.0]; 4];
+        let indices = [0u32, 1, 2, 0, 2, 3];
+        let mesh = Mesh::from_buffers(&positions, &normals, &indices);
+        let uvs = vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+        let attributes = mesh.attributes_with_uvs(uvs);
+        (mesh, attributes)
+    }
+
     #[test]
     fn renderer_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Renderer>();
-    }
-
-    #[test]
-    fn offscreen_render_matches_cpu_reference() -> Result<(), Box<dyn std::error::Error>> {
-        let renderer = match renderer_or_skip() {
-            Some(renderer) => renderer,
-            None => return Ok(()),
-        };
-        let cube_mesh = cube(1.0);
-        let sphere_mesh = uv_sphere(0.6, 32, 16);
-        let instances = vec![
-            MeshInstance {
-                mesh: &cube_mesh,
-                model: model(Vec3::new(-0.9, 0.0, 0.0), 0.8),
-                color: [0.9, 0.3, 0.2],
-            },
-            MeshInstance {
-                mesh: &sphere_mesh,
-                model: model(Vec3::new(0.9, 0.0, 0.0), 1.0),
-                color: [0.2, 0.6, 0.9],
-            },
-        ];
-        let gpu = renderer.render_offscreen(
-            &instances,
-            &camera(),
-            view(),
-            &light(),
-            BACKGROUND,
-            (WIDTH, HEIGHT),
-        )?;
-        let cpu = render_scene(
-            &instances,
-            &camera(),
-            view(),
-            &light(),
-            BACKGROUND,
-            WIDTH,
-            HEIGHT,
-        );
-        assert_eq!(gpu.width, cpu.width);
-        assert_eq!(gpu.height, cpu.height);
-        let error = mean_channel_error(&gpu, &cpu);
-        eprintln!("gpu/cpu mean channel error {error} of {WIDTH}x{HEIGHT}");
-        assert!(
-            error <= GPU_CPU_MEAN_ERROR_TOLERANCE,
-            "gpu/cpu mean channel error {error} exceeds declared tolerance {GPU_CPU_MEAN_ERROR_TOLERANCE}"
-        );
-        Ok(())
     }
 
     struct OverlayInk {
@@ -2419,17 +2474,196 @@ mod tests {
             background: [0.0, 0.0, 0.0],
         };
         let gpu = renderer.render_offscreen_scene(&instances, scene, 64, 64)?;
-        let cpu = render_scene(
-            &instances,
-            scene.camera,
-            scene.view,
-            scene.light,
-            scene.background,
-            64,
-            64,
-        );
         assert_ne!(gpu.get_pixel(32, 32), [0, 0, 0]);
-        assert!(mean_channel_error(&gpu, &cpu) <= GPU_CPU_MEAN_ERROR_TOLERANCE);
+        Ok(())
+    }
+
+    #[test]
+    fn textured_quad_samples_expected_texels() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let (mesh, attributes) = uv_quad(2.0);
+        let mut texture = Image::new(2, 2);
+        texture.pixels[0] = [255, 0, 0];
+        texture.pixels[1] = [0, 255, 0];
+        texture.pixels[2] = [0, 0, 255];
+        texture.pixels[3] = [255, 255, 255];
+        let material = Material {
+            albedo: Some(texture),
+            ..Material::plain()
+        };
+        let instances = [GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: Some(&attributes),
+            model: Mat4::identity(),
+            color: [1.0, 1.0, 1.0],
+            material: &material,
+        }];
+        let unlit_ambient = DirectionalLight {
+            direction: Vec3::new(0.4, 0.7, 0.6),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.0,
+        };
+        let image = renderer.render_offscreen_materials(
+            &instances,
+            &camera(),
+            view(),
+            &unlit_ambient,
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        let top_left = image.get_pixel(6, 6);
+        assert!(top_left[0] > 200 && top_left[1] < 40 && top_left[2] < 40);
+        let top_right = image.get_pixel(25, 6);
+        assert!(top_right[1] > 200 && top_right[0] < 40 && top_right[2] < 40);
+        let bottom_left = image.get_pixel(6, 25);
+        assert!(bottom_left[2] > 200 && bottom_left[0] < 40 && bottom_left[1] < 40);
+        let bottom_right = image.get_pixel(25, 25);
+        assert!(bottom_right[0] > 200 && bottom_right[1] > 200 && bottom_right[2] > 200);
+        Ok(())
+    }
+
+    #[test]
+    fn emissive_is_visible_with_a_black_albedo_and_no_light(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let (mesh, attributes) = uv_quad(1.0);
+        let mut emissive = Image::new(1, 1);
+        emissive.pixels[0] = [255, 32, 0];
+        let material = Material {
+            albedo: None,
+            emissive: Some(emissive),
+            ..Material::plain()
+        };
+        let instances = [GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: Some(&attributes),
+            model: Mat4::identity(),
+            color: [0.0, 0.0, 0.0],
+            material: &material,
+        }];
+        let unlit_ambient = DirectionalLight {
+            direction: Vec3::new(0.4, 0.7, 0.6),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.0,
+        };
+        let image = renderer.render_offscreen_materials(
+            &instances,
+            &camera(),
+            view(),
+            &unlit_ambient,
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        let pixel = image.get_pixel(16, 16);
+        assert!(
+            (i32::from(pixel[0]) - 255).abs() <= 1 && (i32::from(pixel[1]) - 32).abs() <= 1,
+            "emissive pixel {pixel:?} does not match the emissive texture"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn render_graph_executes_passes_in_order_and_produces_expected_frame(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let offscreen_graph = RenderGraph::offscreen(true);
+        assert_eq!(
+            offscreen_graph.pass_order(),
+            vec![
+                RenderPassKind::Opaque,
+                RenderPassKind::Transparent,
+                RenderPassKind::UiOverlay,
+            ]
+        );
+        assert!(offscreen_graph
+            .passes()
+            .iter()
+            .all(|pass| pass.target == RenderTargetKind::OffscreenColorDepth));
+
+        let surface_graph = RenderGraph::surface(false);
+        assert_eq!(
+            surface_graph.pass_order(),
+            vec![RenderPassKind::Opaque, RenderPassKind::Transparent]
+        );
+        assert!(surface_graph
+            .passes()
+            .iter()
+            .all(|pass| pass.target == RenderTargetKind::SurfaceColorDepth));
+
+        let capture_graph = RenderGraph::capture();
+        assert_eq!(
+            capture_graph.pass_order(),
+            vec![
+                RenderPassKind::Opaque,
+                RenderPassKind::Transparent,
+                RenderPassKind::CaptureIds,
+            ]
+        );
+        assert!(capture_graph
+            .passes()
+            .iter()
+            .all(|pass| pass.target == RenderTargetKind::CaptureColorIdDepth));
+
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let positions: [[f32; 3]; 4] = [
+            [-1.5, -1.5, 0.0],
+            [-1.5, 1.5, 0.0],
+            [1.5, 1.5, 0.0],
+            [1.5, -1.5, 0.0],
+        ];
+        let normals: [[f32; 3]; 4] = [[0.0, 0.0, -1.0]; 4];
+        let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let quad = Mesh::from_buffers(&positions, &normals, &indices);
+        let opaque_mat = Material::plain();
+        let transparent_mat = Material {
+            alpha: 0.5,
+            blend: BlendMode::Blend,
+            ..Material::plain()
+        };
+        let instances = [
+            GpuMaterialInstance {
+                mesh: &quad,
+                attributes: None,
+                model: model(Vec3::new(0.0, 0.0, -1.0), 1.0),
+                color: [1.0, 0.0, 0.0],
+                material: &transparent_mat,
+            },
+            GpuMaterialInstance {
+                mesh: &quad,
+                attributes: None,
+                model: model(Vec3::ZERO, 1.0),
+                color: [0.0, 0.0, 1.0],
+                material: &opaque_mat,
+            },
+        ];
+        let unlit_ambient = DirectionalLight {
+            direction: Vec3::new(0.0, 0.0, -1.0),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.0,
+        };
+        let frame = renderer.render_offscreen_materials(
+            &instances,
+            &camera(),
+            view(),
+            &unlit_ambient,
+            [0.0, 0.0, 0.0],
+            (32, 32),
+        )?;
+        let center = frame.get_pixel(16, 16);
+        assert!(
+            (i32::from(center[0]) - 128).abs() <= 2
+                && center[1] == 0
+                && (i32::from(center[2]) - 128).abs() <= 2,
+            "expected blended center near [128, 0, 128], got {center:?}"
+        );
         Ok(())
     }
 }

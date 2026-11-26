@@ -51,6 +51,7 @@ impl fmt::Display for RuntimeError {
 pub enum RenderError {
     UnknownHandle,
     InvalidArgument(String),
+    DeviceFailed(String),
 }
 
 impl RenderError {
@@ -58,6 +59,7 @@ impl RenderError {
         match self {
             RenderError::UnknownHandle => -1,
             RenderError::InvalidArgument(_) => -2,
+            RenderError::DeviceFailed(_) => -4,
         }
     }
 }
@@ -68,6 +70,9 @@ impl fmt::Display for RenderError {
             RenderError::UnknownHandle => write!(formatter, "-1 unknown handle"),
             RenderError::InvalidArgument(message) => {
                 write!(formatter, "-2 invalid argument: {message}")
+            }
+            RenderError::DeviceFailed(message) => {
+                write!(formatter, "-4 render error: {message}")
             }
         }
     }

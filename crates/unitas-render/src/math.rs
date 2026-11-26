@@ -212,11 +212,8 @@ impl Mat4 {
         }
     }
 
-    /// Inverse for an affine matrix (last row 0,0,0,1); `None` when the
-    /// linear part is singular.
     pub fn inverse(&self) -> Option<Self> {
         let m = &self.data;
-        // 3x3 linear part, column-major: a(c, r) = m[c * 4 + r].
         let a = [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]];
         let c0 = a[4] * a[8] - a[5] * a[7];
         let c1 = a[2] * a[7] - a[1] * a[8];
@@ -226,7 +223,6 @@ impl Mat4 {
             return None;
         }
         let inv_det = 1.0 / det;
-        // Adjugate (transposed cofactor matrix), row-major pairs (row, col).
         let cof = [
             c0,
             c1,
@@ -238,9 +234,6 @@ impl Mat4 {
             a[1] * a[6] - a[0] * a[7],
             a[0] * a[4] - a[1] * a[3],
         ];
-        // The cofactor table is column-major: cof[c * 3 + r] holds C(r, c).
-        // The inverse needs the adjugate, A^-1 = C^T / det, so read the
-        // cofactor table row-major here.
         let b = |row: usize, col: usize| cof[row * 3 + col] * inv_det;
         let tx = m[12];
         let ty = m[13];

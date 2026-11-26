@@ -985,14 +985,11 @@ mod tests {
     }
 }
 
-/// Crispness proof through the real cosmic-text glyph pipeline: the label's
-/// overlay item is laid out and rasterized per resolution scale, so text is
-/// reshaped instead of stretched.
 #[cfg(test)]
 mod text_glyph_tests {
     use super::UiTextItem;
     use unitas_render::glyphs::{
-        FontLibrary, GlyphAtlas, SwashCache, TextStyle, layout_text, rasterize,
+        FontLibrary, GlyphAtlas, SwashCache, TextStyle, layout_text, shape_glyph_quads,
     };
 
     fn layout_at_scale(
@@ -1009,10 +1006,10 @@ mod text_glyph_tests {
         );
         let mut cache = SwashCache::new();
         let mut atlas = GlyphAtlas::new(1024, 1024);
-        let quads = rasterize(fonts, &mut cache, &mut atlas, &layout);
+        let quads = shape_glyph_quads(fonts, &mut cache, &mut atlas, &layout);
         assert!(
             !quads.is_empty(),
-            "label text must rasterize into glyph quads at scale {scale}"
+            "label text must pack into glyph quads at scale {scale}"
         );
         let max_quad_height = quads.iter().map(|quad| quad.height).fold(0.0f32, f32::max);
         (layout.width, max_quad_height, quads.len())

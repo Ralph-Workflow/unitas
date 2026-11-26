@@ -1,12 +1,29 @@
 use std::ops::{Add, Sub};
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use unitas_render::camera::{look_at, Camera};
+use unitas_render::gpu::{RenderScene, Renderer};
 use unitas_render::image::Image;
 use unitas_render::math::{Mat4, Vec3, Vec4};
 use unitas_render::mesh::{cube, uv_sphere, Mesh};
-use unitas_render::raster::{
-    render, render_scene, render_with_view, DirectionalLight, MeshInstance,
-};
+use unitas_render::model::{DirectionalLight, MeshInstance};
+
+pub(crate) fn shared_renderer() -> Result<MutexGuard<'static, Renderer>, String> {
+    static RENDERER: OnceLock<Result<Mutex<Renderer>, String>> = OnceLock::new();
+    let slot = RENDERER.get_or_init(|| {
+        Renderer::new()
+            .map(Mutex::new)
+            .map_err(|error| error.to_string())
+    });
+    let mutex = match slot {
+        Ok(mutex) => mutex,
+        Err(message) => return Err(String::clone(message)),
+    };
+    match mutex.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => Ok(poisoned.into_inner()),
+    }
+}
 
 fn shaded_byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -193,24 +210,42 @@ fn uv_sphere_mesh_has_exact_vertex_and_index_counts_and_unit_normals() {
 }
 
 #[test]
-fn raster_render_centered_cube_fills_center_pixel_and_is_deterministic() {
+fn render_offscreen_centered_cube_fills_center_pixel_and_is_deterministic(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let cam = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let color = [1.0, 0.5, 0.25];
-    let light_dir = Vec3::new(0.0, 0.0, -1.0);
-
-    let img1 = render(std::slice::from_ref(&mesh), &cam, color, light_dir, 64, 64);
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 1.0,
+    };
     let view = look_at(
         Vec3::new(0.0, 0.0, -5.0),
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
     );
-    let img2 = render_with_view(&[mesh], &cam, view, color, light_dir, 64, 64);
+    let instances = [MeshInstance {
+        mesh: &mesh,
+        model: Mat4::identity(),
+        color,
+    }];
+    let img1 =
+        renderer.render_offscreen(&instances, &cam, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
+    let scene = RenderScene {
+        camera: &cam,
+        view,
+        light: &light,
+        background: [0.0, 0.0, 0.0],
+    };
+    let img2 = renderer.render_offscreen_scene(&instances, scene, 64, 64)?;
 
     let non_bg_count = img1.pixels.iter().filter(|&&px| px != [0, 0, 0]).count();
     assert!(non_bg_count > 0);
     assert_eq!(img1.get_pixel(32, 32), [255, 128, 64]);
     assert_eq!(img1.to_bmp_bytes(), img2.to_bmp_bytes());
+    Ok(())
 }
 
 #[test]
@@ -263,7 +298,9 @@ fn bmp_writer_emits_valid_uncompressed_24bit_bmp_with_padded_row_stride() {
 }
 
 #[test]
-fn perspective_camera_renders_cube_center_and_background() {
+fn perspective_camera_renders_cube_center_and_background() -> Result<(), Box<dyn std::error::Error>>
+{
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let view = look_at(
@@ -283,7 +320,8 @@ fn perspective_camera_renders_cube_center_and_background() {
         intensity: 0.5,
     };
 
-    let image = render_scene(&instances, &camera, view, &light, [0.2, 0.4, 0.6], 64, 64);
+    let image =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.2, 0.4, 0.6], (64, 64))?;
 
     let front_face_normal = model
         .mul_vec4(Vec4::from_direction(Vec3::new(0.0, 0.0, -1.0)))
@@ -301,10 +339,13 @@ fn perspective_camera_renders_cube_center_and_background() {
     assert_eq!(expected_center, [194, 92, 43]);
     assert_eq!(image.get_pixel(32, 32), expected_center);
     assert_eq!(image.get_pixel(0, 0), [51, 102, 153]);
+    Ok(())
 }
 
 #[test]
-fn orthographic_camera_renders_cube_center_and_background() {
+fn orthographic_camera_renders_cube_center_and_background() -> Result<(), Box<dyn std::error::Error>>
+{
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::orthographic(4.0, 1.0, 0.1, 100.0);
     let view = look_at(
@@ -324,7 +365,14 @@ fn orthographic_camera_renders_cube_center_and_background() {
         intensity: 1.0,
     };
 
-    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.25, 0.5], 64, 64);
+    let image = renderer.render_offscreen(
+        &instances,
+        &camera,
+        view,
+        &light,
+        [0.0, 0.25, 0.5],
+        (64, 64),
+    )?;
 
     let lambert = 1.0_f32;
     let t = 1.0_f32;
@@ -336,10 +384,12 @@ fn orthographic_camera_renders_cube_center_and_background() {
     assert_eq!(expected_center, [128, 128, 128]);
     assert_eq!(image.get_pixel(32, 32), expected_center);
     assert_eq!(image.get_pixel(0, 0), [0, 64, 128]);
+    Ok(())
 }
 
 #[test]
-fn zero_intensity_light_renders_material_color() {
+fn zero_intensity_light_renders_material_color() -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let view = look_at(
@@ -359,7 +409,8 @@ fn zero_intensity_light_renders_material_color() {
         intensity: 0.0,
     };
 
-    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 64, 64);
+    let image =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
 
     let t = 0.0_f32;
     let expected_center = [
@@ -369,10 +420,12 @@ fn zero_intensity_light_renders_material_color() {
     ];
     assert_eq!(expected_center, [255, 128, 64]);
     assert_eq!(image.get_pixel(32, 32), expected_center);
+    Ok(())
 }
 
 #[test]
-fn zero_sized_image_is_empty() {
+fn zero_sized_image_is_empty() -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let view = look_at(
@@ -391,24 +444,29 @@ fn zero_sized_image_is_empty() {
         intensity: 1.0,
     };
 
-    let zero_width = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 0, 8);
+    let zero_width =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (0, 8))?;
     assert_eq!(zero_width.width, 0);
     assert_eq!(zero_width.height, 8);
     assert!(zero_width.pixels.is_empty());
 
-    let zero_height = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 8, 0);
+    let zero_height =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (8, 0))?;
     assert_eq!(zero_height.width, 8);
     assert_eq!(zero_height.height, 0);
     assert!(zero_height.pixels.is_empty());
 
-    let zero_both = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 0, 0);
+    let zero_both =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (0, 0))?;
     assert_eq!(zero_both.width, 0);
     assert_eq!(zero_both.height, 0);
     assert!(zero_both.pixels.is_empty());
+    Ok(())
 }
 
 #[test]
-fn nearer_instance_occludes_farther_instance() {
+fn nearer_instance_occludes_farther_instance() -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
     let mesh = cube(1.0);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let view = look_at(
@@ -434,18 +492,19 @@ fn nearer_instance_occludes_farther_instance() {
         intensity: 0.0,
     };
 
-    let far_only = render_scene(
+    let far_only = renderer.render_offscreen(
         std::slice::from_ref(&far_instance),
         &camera,
         view,
         &light,
         [0.0, 0.0, 0.0],
-        64,
-        64,
-    );
+        (64, 64),
+    )?;
     assert_eq!(far_only.get_pixel(32, 32), [0, 0, 255]);
 
     let instances = [far_instance, near_instance];
-    let image = render_scene(&instances, &camera, view, &light, [0.0, 0.0, 0.0], 64, 64);
+    let image =
+        renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
     assert_eq!(image.get_pixel(32, 32), [255, 0, 0]);
+    Ok(())
 }

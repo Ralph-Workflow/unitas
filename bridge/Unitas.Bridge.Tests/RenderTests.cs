@@ -163,6 +163,7 @@ MonoBehaviour:
 
                 camera.CaptureToFile(path);
                 Check.That("Capture without a provider writes no file", !File.Exists(path));
+                Check.Equal("CaptureIdMap without a provider returns an empty array", 0, camera.CaptureIdMap().Length);
             }
             finally
             {
@@ -382,6 +383,11 @@ MonoBehaviour:
                         screenPoint.x >= minX - 1f && screenPoint.x <= maxX + 1f && screenPoint.y >= minY - 1f && screenPoint.y <= maxY + 1f);
 
                     int[] before = ReadPixel(frame, FrameWidth, FrameHeight, screenPoint.x, screenPoint.y);
+                    uint[] idMap = camera.CaptureIdMap();
+                    Check.Equal("CaptureIdMap returns width * height entries", FrameWidth * FrameHeight, idMap.Length);
+                    int idCol = Math.Max(0, Math.Min(FrameWidth - 1, (int)Math.Floor(screenPoint.x)));
+                    int idRow = Math.Max(0, Math.Min(FrameHeight - 1, (int)Math.Floor((FrameHeight - 1f) - screenPoint.y)));
+                    Check.That("CaptureIdMap resolves the rendered object at the projected centre", idMap[(idRow * FrameWidth) + idCol] > 0U);
                     material.SetColor(new Color(1f, 0f, 0f, 1f));
                     camera.CaptureToFile(capturePath);
                     byte[] recoloured = File.ReadAllBytes(capturePath);
@@ -536,6 +542,11 @@ MonoBehaviour:
             public byte[] RenderFrame(ulong cameraHandle, uint width, uint height)
             {
                 return Array.Empty<byte>();
+            }
+
+            public uint[] RenderIdMap(ulong cameraHandle, uint width, uint height)
+            {
+                return Array.Empty<uint>();
             }
         }
     }

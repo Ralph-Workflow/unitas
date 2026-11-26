@@ -221,6 +221,37 @@ namespace Unitas.Bridge
             return frame;
         }
 
+        public uint[] RenderIdMap(ulong cameraHandle, uint width, uint height)
+        {
+            if (_runtimeHandle == 0UL || cameraHandle == 0UL)
+            {
+                return Array.Empty<uint>();
+            }
+
+            int byteCount = RuntimeInterop.unitas_runtime_render_id_map(_runtimeHandle, cameraHandle, width, height);
+            if (byteCount < 0)
+            {
+                throw new InvalidOperationException("Failed to render id map (error code " + byteCount.ToString(CultureInfo.InvariantCulture) + "): " + GetErrorMessage());
+            }
+
+            if (byteCount == 0)
+            {
+                return Array.Empty<uint>();
+            }
+
+            IntPtr buffer = (IntPtr)RuntimeInterop.unitas_runtime_render_buffer(_runtimeHandle, (ulong)byteCount);
+            if (buffer == IntPtr.Zero)
+            {
+                throw new InvalidOperationException("Failed to allocate render buffer in native runtime.");
+            }
+
+            byte[] bytes = new byte[byteCount];
+            Marshal.Copy(buffer, bytes, 0, byteCount);
+            uint[] ids = new uint[byteCount / sizeof(uint)];
+            Buffer.BlockCopy(bytes, 0, ids, 0, ids.Length * sizeof(uint));
+            return ids;
+        }
+
         private void ThrowIfFailed(int result, string message)
         {
             if (result == 0)

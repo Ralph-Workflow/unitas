@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
+use unitas_render::{CaptureFrame, CaptureObject};
+use unitas_runtime::Runtime;
 
 use crate::player::ScriptHost;
 use crate::scripted::ScriptedPlayer;
@@ -79,10 +81,7 @@ pub enum ProtocolError {
     UnknownTool(String),
     NotPlaying,
     CaptureWithoutIdMap,
-    #[cfg(not(feature = "device"))]
-    CaptureRequiresDevice,
-    #[cfg(feature = "device")]
-    CaptureUnsupported,
+    CaptureFailed(String),
     FrameFailed(String),
     SessionStartFailed(String),
 }
@@ -98,14 +97,7 @@ impl ProtocolError {
             ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
-            #[cfg(not(feature = "device"))]
-            ProtocolError::CaptureRequiresDevice => {
-                String::from("capture requires the device feature")
-            }
-            #[cfg(feature = "device")]
-            ProtocolError::CaptureUnsupported => {
-                String::from("capture requires the device feature; the scripted control session does not support capture")
-            }
+            ProtocolError::CaptureFailed(message) => format!("capture failed: {message}"),
             ProtocolError::FrameFailed(message) => format!("frame failed: {message}"),
             ProtocolError::SessionStartFailed(message) => {
                 format!("session start failed: {message}")
@@ -118,6 +110,7 @@ pub struct ControlSession {
     bundle_dir: PathBuf,
     startup_scene_path: PathBuf,
     player: Option<ScriptedPlayer>,
+    fallback_runtime: Option<Runtime>,
     state: SessionState,
     frames: u64,
     delta_seconds: f64,
@@ -131,14 +124,19 @@ impl ControlSession {
         delta_seconds: f64,
         random_seed: u64,
     ) -> Result<Self, ProtocolError> {
-        // The control protocol owns stdout; the managed host logs to stderr.
         std::env::set_var("UNITAS_MANAGED_LOG_TO_STDERR", "1");
         let player = ScriptedPlayer::boot(bundle_dir, startup_scene_path)
             .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+        let fallback_runtime = if player.is_none() {
+            Some(load_fallback_runtime(startup_scene_path)?)
+        } else {
+            None
+        };
         Ok(Self {
             bundle_dir: bundle_dir.to_path_buf(),
             startup_scene_path: startup_scene_path.to_path_buf(),
             player,
+            fallback_runtime,
             state: SessionState::Paused,
             frames: 0,
             delta_seconds,
@@ -200,12 +198,21 @@ impl ControlSession {
             let _ = player.shutdown();
         }
         self.player = None;
+        if let Some(runtime) = self.fallback_runtime.as_mut() {
+            let _ = runtime.shutdown();
+        }
+        self.fallback_runtime = None;
         self.state = SessionState::Stopped;
     }
 
     fn restart(&mut self) -> Result<(), ProtocolError> {
         self.player = ScriptedPlayer::boot(&self.bundle_dir, &self.startup_scene_path)
             .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+        self.fallback_runtime = if self.player.is_none() {
+            Some(load_fallback_runtime(&self.startup_scene_path)?)
+        } else {
+            None
+        };
         self.frames = 0;
         Ok(())
     }
@@ -217,6 +224,10 @@ impl ControlSession {
         for _ in 0..frames {
             if let Some(player) = self.player.as_mut() {
                 player
+                    .tick(self.delta_seconds)
+                    .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
+            } else if let Some(runtime) = self.fallback_runtime.as_mut() {
+                runtime
                     .tick(self.delta_seconds)
                     .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
             }
@@ -233,18 +244,39 @@ impl ControlSession {
             for event in events {
                 event.apply(player);
             }
+        } else if let Some(runtime) = self.fallback_runtime.as_mut() {
+            for event in events {
+                match *event {
+                    InjectedInput::Key { key, pressed } => runtime.input_key_event(key, pressed),
+                    InjectedInput::MouseButton { button, pressed } => {
+                        runtime.input_mouse_button_event(button, pressed);
+                    }
+                    InjectedInput::PointerMove { x, y } => runtime.input_pointer_move(x, y),
+                }
+            }
         }
         Ok(())
     }
 
-    fn capture(&mut self, _width: u32, _height: u32, id_map: bool) -> Result<Value, ProtocolError> {
+    fn capture(&mut self, width: u32, height: u32, id_map: bool) -> Result<Value, ProtocolError> {
         if !id_map {
             return Err(ProtocolError::CaptureWithoutIdMap);
         }
         if self.state == SessionState::Stopped {
             return Err(ProtocolError::NotPlaying);
         }
-        Err(capture_refusal())
+        let frame = if let Some(player) = self.player.as_ref() {
+            player
+                .capture_scene(width, height)
+                .map_err(|error| ProtocolError::CaptureFailed(error.to_string()))?
+        } else if let Some(runtime) = self.fallback_runtime.as_mut() {
+            runtime
+                .capture_scene_frame(width, height)
+                .map_err(|error| ProtocolError::CaptureFailed(error.to_string()))?
+        } else {
+            return Err(ProtocolError::NotPlaying);
+        };
+        Ok(capture_frame_json(&frame))
     }
 
     fn state_payload(&self) -> Value {
@@ -271,14 +303,62 @@ impl ControlSession {
     }
 }
 
-#[cfg(not(feature = "device"))]
-fn capture_refusal() -> ProtocolError {
-    ProtocolError::CaptureRequiresDevice
+fn load_fallback_runtime(scene_path: &Path) -> Result<Runtime, ProtocolError> {
+    let mut runtime =
+        Runtime::new().map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+    runtime
+        .load_scene(scene_path)
+        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+    Ok(runtime)
 }
 
-#[cfg(feature = "device")]
-fn capture_refusal() -> ProtocolError {
-    ProtocolError::CaptureUnsupported
+fn capture_frame_json(frame: &CaptureFrame) -> Value {
+    let objects: Vec<Value> = frame.objects.iter().map(capture_object_json).collect();
+    json!({
+        "ok": true,
+        "width": frame.image.width,
+        "height": frame.image.height,
+        "image": base64_encode(frame.image.as_bytes()),
+        "id_map": frame.id_map,
+        "objects": objects,
+    })
+}
+
+fn capture_object_json(object: &CaptureObject) -> Value {
+    json!({
+        "id": object.id,
+        "name": object.name,
+        "bounds": {
+            "x": object.bounds.x,
+            "y": object.bounds.y,
+            "width": object.bounds.width,
+            "height": object.bounds.height,
+        },
+    })
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = u32::from(chunk[0]);
+        let second = chunk.get(1).copied().map_or(0, u32::from);
+        let third = chunk.get(2).copied().map_or(0, u32::from);
+        let triple = (first << 16) | (second << 8) | third;
+        encoded.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        encoded.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        encoded.push(if chunk.len() > 1 {
+            ALPHABET[((triple >> 6) & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            ALPHABET[(triple & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+    }
+    encoded
 }
 
 fn parse_request(line: &str) -> Result<Request, ProtocolError> {
@@ -674,37 +754,22 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "device"))]
     #[test]
-    fn capture_without_the_device_feature_is_refused() -> Result<(), String> {
+    fn capture_returns_offscreen_image_id_map_and_objects() -> Result<(), String> {
         let mut session = session(23)?;
-        let result = session.dispatch(&Request::Capture {
-            width: 8,
-            height: 8,
-            id_map: true,
-        });
-        assert_eq!(result, Err(ProtocolError::CaptureRequiresDevice));
-        assert_eq!(
-            ProtocolError::CaptureRequiresDevice.outcome(),
-            String::from("capture requires the device feature")
-        );
-        Ok(())
-    }
-
-    #[cfg(feature = "device")]
-    #[test]
-    fn capture_is_refused_by_the_scripted_control_session() -> Result<(), String> {
-        let mut session = session(23)?;
-        let result = session.dispatch(&Request::Capture {
-            width: 8,
-            height: 8,
-            id_map: true,
-        });
-        assert_eq!(result, Err(ProtocolError::CaptureUnsupported));
-        assert_eq!(
-            ProtocolError::CaptureUnsupported.outcome(),
-            String::from("capture requires the device feature; the scripted control session does not support capture")
-        );
+        let payload = session
+            .dispatch(&Request::Capture {
+                width: 16,
+                height: 8,
+                id_map: true,
+            })
+            .map_err(|error| error.outcome())?;
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["width"], json!(16));
+        assert_eq!(payload["height"], json!(8));
+        assert_eq!(payload["id_map"].as_array().map(Vec::len), Some(128));
+        assert!(payload["image"].as_str().is_some());
+        assert!(payload["objects"].as_array().is_some());
         Ok(())
     }
 

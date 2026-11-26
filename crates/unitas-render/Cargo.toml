@@ -7,16 +7,11 @@ edition = "2021"
 [lints]
 workspace = true
 
-[features]
-default = []
-text = ["dep:cosmic-text"]
-device = ["dep:wgpu", "dep:bytemuck", "dep:pollster", "text"]
-
 [dependencies]
-bytemuck = { version = "1", optional = true }
-cosmic-text = { version = "0.12", optional = true }
-pollster = { version = "0.4", optional = true }
-wgpu = { version = "30", optional = true }
+bytemuck = "1"
+cosmic-text = "0.12"
+pollster = "0.4"
+wgpu = "30"
 
 [dev-dependencies]
 unitas-asset = { path = "../unitas-asset" }

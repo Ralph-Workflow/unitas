@@ -24,15 +24,11 @@ impl Mesh {
         }
     }
 
-    /// Builds per-vertex UV/tangent attributes for this mesh; tangents are
-    /// derived from the positions, normals, and the supplied UV layout.
     pub fn attributes_with_uvs(&self, uvs: Vec<[f32; 2]>) -> MeshAttributes {
         MeshAttributes::compute(self, uvs)
     }
 }
 
-/// Per-vertex shading attributes kept alongside a [`Mesh`] (the mesh struct
-/// itself stays positions/normals/indices so imported buffers remain cheap).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MeshAttributes {
     pub uvs: Vec<[f32; 2]>,
@@ -40,9 +36,6 @@ pub struct MeshAttributes {
 }
 
 impl MeshAttributes {
-    /// Accumulates per-triangle UV-gradient tangents and normalizes them;
-    /// vertices that receive no tangent (or a degenerate UV triangle) get
-    /// `Vec3::ZERO`, which both render paths treat as "no normal map".
     pub fn compute(mesh: &Mesh, uvs: Vec<[f32; 2]>) -> Self {
         let mut tangents = vec![Vec3::ZERO; mesh.positions.len()];
         for tri in mesh.indices.chunks_exact(3) {
