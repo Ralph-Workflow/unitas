@@ -310,10 +310,12 @@ namespace UnityEngine
                 File.WriteAllBytes(tempPath, utf8Bytes);
                 if (File.Exists(targetPath))
                 {
-                    File.Delete(targetPath);
+                    File.Replace(tempPath, targetPath, null);
                 }
-
-                File.Move(tempPath, targetPath);
+                else
+                {
+                    File.Move(tempPath, targetPath);
+                }
                 _loadedFilePath = targetPath;
                 _lastLoadState = PlayerPrefsLoadState.Loaded;
                 _lastLoadError = null;
@@ -357,15 +359,15 @@ namespace UnityEngine
 
         private static string ResolveStorageDirectory()
         {
-            if (!string.IsNullOrEmpty(_storageDirectoryOverride))
-            {
-                return Path.GetFullPath(_storageDirectoryOverride);
-            }
-
             string? armedRoot = Application.PersistentDataPathOverride;
             if (!string.IsNullOrEmpty(armedRoot))
             {
                 return Path.Combine(Path.GetFullPath(armedRoot), "prefs");
+            }
+
+            if (!string.IsNullOrEmpty(_storageDirectoryOverride))
+            {
+                return Path.GetFullPath(_storageDirectoryOverride);
             }
 
             string preferencesRoot = Application.ResolvePlayerPrefsPathForTarget(

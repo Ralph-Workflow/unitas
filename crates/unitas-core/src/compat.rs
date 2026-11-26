@@ -2802,7 +2802,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "the roll-a-ball sample restores its records, medals, and unlocked-arena set from PlayerPrefs on the next launch and writes and restores a best-run ghost file under Application.persistentDataPath",
+                behavior: "the roll-a-ball sample restores its records, medals, and unlocked-arena set from PlayerPrefs on the next launch and writes and restores a ghost file under Application.persistentDataPath",
                 location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
                 evidence: &[
                     "samples/roll-a-ball/Assets/Scripts/SavedState.cs::RestoreAndSave",
@@ -2810,6 +2810,12 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                     "samples/roll-a-ball/Scenarios/persist_state_write.json::persist_state_write",
                 ],
                 missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the sample's ghost file records the ball's real per-fixed-step run and the restored route matches that recorded run within 0.01 m",
+                location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
+                evidence: &[],
+                missing: Some("the sample's ghost route is a synthesized straight line stepped from the ball's start position, not the ball's real per-fixed-step trajectory, and the replay comparison runs against that synthesized route instead of a recorded run"),
             },
             OwnedCapabilityPart {
                 behavior: "the engine states each target's PlayerPrefs durability point, persistent-data write durability point, crash loss window, and write-then-replace guarantees",
@@ -2829,7 +2835,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "save data round-trips through JsonUtility, Newtonsoft Json, XmlSerializer, and BinaryFormatter on each scripting backend and every target including the browser, and a type removed by managed code stripping produces a diagnostic naming the type",
                 location: "crates/unitas-runtime/src/runtime.rs",
                 evidence: &[],
-                missing: Some("the native scripting backend provides no JsonUtility, Newtonsoft Json, XmlSerializer, or BinaryFormatter, the C# bridge demonstrates JsonUtility, Newtonsoft Json, and XmlSerializer on the desktop mono backend only, BinaryFormatter round-trips on no backend, the browser target round-trip is not demonstrated, and a type removed by managed code stripping produces no diagnostic naming the type"),
+                missing: Some("the native scripting backend provides no JsonUtility, Newtonsoft Json, XmlSerializer, or BinaryFormatter, the C# bridge round-trips a save envelope through JsonUtility, Newtonsoft Json, and XmlSerializer on the desktop mono backend only, the bridge reports BinaryFormatter as partially supported and unavailable on the browser target but round-trips no payload through it, the browser target round-trip is not demonstrated, and the stripped-type diagnostic that names the type and member is produced by the bridge test harness and not by the shipped save path"),
             },
             OwnedCapabilityPart {
                 behavior: "product knowledge available through automation states the per-target durability guarantees and each target's storage quota",
@@ -2853,7 +2859,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "the roll-a-ball sample's settings all persist through PlayerPrefs and take effect immediately",
                 location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
                 evidence: &[],
-                missing: Some("the sample persists only the quality setting: its master, music, and effects volumes, fullscreen mode, resolution, vertical sync, ghost, camera shake, and reduced motion do not persist through PlayerPrefs"),
+                missing: Some("the sample persists its records, medals, unlocked-arena set and the quality setting through PlayerPrefs, but the stored quality value is only read back and logged and never applied to the render quality, and the sample defines no master, music, or effects volume, fullscreen mode, resolution, vertical sync, camera shake, or reduced motion setting to persist"),
             },
         ],
     },
@@ -3019,7 +3025,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "in editor and headless sessions the file locations resolve to the locations Unity uses on that host, so data the project wrote while running under Unity is found",
                 location: "bridge/UnityEngine/Application.cs",
                 evidence: &[],
-                missing: Some("the editor and headless file locations are not shown to match the locations Unity uses on that host, so data written while running under Unity is not demonstrated to be found"),
+                missing: Some("the editor targets are shown to resolve to the same persistent-data location as the player targets, but the headless session's file locations are not shown to match the locations Unity uses on that host, and data written while running under Unity is not demonstrated to be found"),
             },
             OwnedCapabilityPart {
                 behavior: "a file location that is not writable or not directly accessible on a target is reported with the target and the path",

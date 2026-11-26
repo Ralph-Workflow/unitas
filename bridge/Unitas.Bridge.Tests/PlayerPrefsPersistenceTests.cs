@@ -16,6 +16,9 @@ namespace Unitas.Bridge.Tests
             TestStory7QuotaExhaustionAndInterruptedSaveFileWriteKeepThePriorValidSavePerTarget();
             TestCorruptPlayerPrefsFileLogsDiagnosticNamingFilePathAndReasonAndFallsBackToDefaults();
             TestDeleteAllAndPersistentDataPathSaveFilesRemainMutuallyIsolated();
+            TestDeleteKeyAndDeleteAllLeaveSaveDataUnderTheArmedSaveDirectoryUntouched();
+            TestPlayerPrefsSaveFailureReportsReasonAndErrorForQuotaAndInterruption();
+            TestArmedPersistentDataPathComposesThePreferencesDirectoryApartFromSaveData();
         }
 
         public static void RunAll() => Run();
@@ -427,6 +430,163 @@ namespace Unitas.Bridge.Tests
                 PlayerPrefs.Reload();
                 Check.Equal("Deleting save files under persistentDataPath leaves PlayerPrefs int intact", 2, PlayerPrefs.GetInt("graphics_quality"));
                 Check.Equal("Deleting save files under persistentDataPath leaves PlayerPrefs string intact", "keyboard_mouse", PlayerPrefs.GetString("control_scheme"));
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestDeleteKeyAndDeleteAllLeaveSaveDataUnderTheArmedSaveDirectoryUntouched()
+        {
+            string tempDir = CreateTempRoot();
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            PlayerPrefs.StorageDirectoryOverride = null;
+            Application.PersistentDataPathOverride = tempDir;
+            PlayerPrefs.Reload();
+            try
+            {
+                string savePath = Path.Combine(Path.GetFullPath(Application.persistentDataPath), "campaign_slot_01.json");
+                File.WriteAllText(savePath, "{\"version\":2,\"chapter\":5}");
+                byte[] savePayloadBytes = File.ReadAllBytes(savePath);
+
+                PlayerPrefs.SetInt("graphics_quality", 3);
+                PlayerPrefs.SetString("control_scheme", "gamepad");
+                PlayerPrefs.Save();
+
+                PlayerPrefs.DeleteKey("graphics_quality");
+                PlayerPrefs.Save();
+
+                Check.Equal("DeleteKey removes the key from PlayerPrefs", false, PlayerPrefs.HasKey("graphics_quality"));
+                Check.That("The save file under the armed save-data directory survives PlayerPrefs.DeleteKey", File.Exists(savePath));
+                Check.Equal(
+                    "The save file bytes under the armed save-data directory are unchanged after PlayerPrefs.DeleteKey",
+                    Convert.ToBase64String(savePayloadBytes),
+                    Convert.ToBase64String(File.ReadAllBytes(savePath)));
+
+                PlayerPrefs.DeleteAll();
+                PlayerPrefs.Save();
+
+                Check.That("The save file under the armed save-data directory survives PlayerPrefs.DeleteAll", File.Exists(savePath));
+                Check.Equal(
+                    "The save file bytes under the armed save-data directory are unchanged after PlayerPrefs.DeleteAll",
+                    Convert.ToBase64String(savePayloadBytes),
+                    Convert.ToBase64String(File.ReadAllBytes(savePath)));
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestPlayerPrefsSaveFailureReportsReasonAndErrorForQuotaAndInterruption()
+        {
+            string tempDir = CreateTempRoot();
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            PlayerPrefs.StorageDirectoryOverride = tempDir;
+            Application.PersistentDataPathOverride = null;
+            PlayerPrefs.Reload();
+            try
+            {
+                string iniPath = PlayerPrefs.StorageFilePath;
+                PlayerPrefs.SetInt("checkpoint_stage", 4);
+                PlayerPrefs.SetString("save_owner", "PlayerOne");
+                PlayerPrefs.Save();
+
+                bool quotaFailed = false;
+                try
+                {
+                    PlayerPrefs.SimulatedQuotaBytes = 1;
+                    try
+                    {
+                        PlayerPrefs.Save();
+                    }
+                    catch (PlayerPrefsException)
+                    {
+                        quotaFailed = true;
+                    }
+
+                    Check.That("A quota-exhausted PlayerPrefs save fails", quotaFailed);
+                    Check.Equal(
+                        "A quota-exhausted PlayerPrefs save reports the QuotaExceeded failure reason",
+                        (int)StorageFailureReason.QuotaExceeded,
+                        (int)PlayerPrefs.LastSaveFailureReason);
+                    string? quotaError = PlayerPrefs.LastSaveError;
+                    Check.That(
+                        "A quota-exhausted PlayerPrefs save reports an error naming the target path",
+                        !string.IsNullOrEmpty(quotaError) && quotaError.Contains(iniPath, StringComparison.Ordinal));
+                }
+                finally
+                {
+                    PlayerPrefs.ResetSimulationControls();
+                }
+
+                bool interrupted = false;
+                try
+                {
+                    PlayerPrefs.SimulatedInterruptionAfterBytes = 4;
+                    try
+                    {
+                        PlayerPrefs.Save();
+                    }
+                    catch (PlayerPrefsException)
+                    {
+                        interrupted = true;
+                    }
+
+                    Check.That("An interrupted PlayerPrefs save fails", interrupted);
+                    Check.Equal(
+                        "An interrupted PlayerPrefs save reports the IoError failure reason",
+                        (int)StorageFailureReason.IoError,
+                        (int)PlayerPrefs.LastSaveFailureReason);
+                    string? interruptedError = PlayerPrefs.LastSaveError;
+                    Check.That(
+                        "An interrupted PlayerPrefs save reports an error naming the target path",
+                        !string.IsNullOrEmpty(interruptedError) && interruptedError.Contains(iniPath, StringComparison.Ordinal));
+                }
+                finally
+                {
+                    PlayerPrefs.ResetSimulationControls();
+                }
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestArmedPersistentDataPathComposesThePreferencesDirectoryApartFromSaveData()
+        {
+            string tempDir = CreateTempRoot();
+            string seamDirectory = Path.Combine(tempDir, "seam_preferences");
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            Application.PersistentDataPathOverride = tempDir;
+            PlayerPrefs.StorageDirectoryOverride = seamDirectory;
+            PlayerPrefs.Reload();
+            try
+            {
+                string saveDataDirectory = Path.GetFullPath(Application.persistentDataPath);
+                string preferencesDirectory = Path.GetDirectoryName(Path.GetFullPath(PlayerPrefs.StorageFilePath)) ?? string.Empty;
+
+                Check.Equal(
+                    "The preferences directory composes as <armed root>/prefs when the persistent data path is armed",
+                    Path.Combine(saveDataDirectory, "prefs"),
+                    preferencesDirectory);
+                Check.That(
+                    "The preferences directory differs from the save-data directory",
+                    !string.Equals(preferencesDirectory, saveDataDirectory, StringComparison.Ordinal));
             }
             finally
             {

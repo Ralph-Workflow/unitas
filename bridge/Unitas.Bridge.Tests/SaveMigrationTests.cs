@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -20,8 +21,11 @@ namespace Unitas.Bridge.Tests
             TestStory7InterruptedSaveFileWriteKeepsThePriorValidSaveByteIdentical();
             TestStory7QuotaExhaustedSaveFileWriteKeepsThePriorValidSaveAndLeavesNoStagingFile();
             TestStory7BinarySaveFilePayloadRoundTripsByteIdentical();
+            TestStory7SaveWriteFailuresReportTheReasonAndKeepThePriorValidSaveIntact();
+            TestStory7SuccessiveWritesNeverRemoveTheTargetFileBeforeTheNewContentIsInPlace();
             TestStory11ProductKnowledgeStatesPerTargetDurabilityAndCrashLossWindow();
             TestStory26PersistentDataPathResolvesPerTargetToUnityCompanyProductLocation();
+            TestStory26PlayerPrefsStoragePrefersTheArmedPersistentDataPathOverTheInternalSeam();
             TestStory35ApplicationReportsProject2022_3VersionAndIgnoresQuitDuringPlay();
         }
 
@@ -280,6 +284,123 @@ namespace Unitas.Bridge.Tests
             }
         }
 
+        private static void TestStory7SaveWriteFailuresReportTheReasonAndKeepThePriorValidSaveIntact()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":1,\"chapter\":5}");
+                byte[] priorBytes = File.ReadAllBytes(savePath);
+                string fullTargetPath = Path.GetFullPath(savePath);
+
+                bool quotaRefused = false;
+                StorageFailureReason quotaReason = StorageFailureReason.None;
+                string? quotaError = null;
+                SaveMigration.SimulatedQuotaBytes = 8;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":2,\"chapter\":9}");
+                }
+                catch (SaveStorageQuotaException)
+                {
+                    quotaRefused = true;
+                    quotaReason = SaveMigration.LastWriteFailureReason;
+                    quotaError = SaveMigration.LastWriteError;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a quota exhausted save file write reaches the caller as a quota refusal", quotaRefused);
+                Check.That("Story 7 a quota exhausted save file write leaves the prior valid save byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
+                Check.Equal("Story 7 a quota exhausted save file write leaves no staging file behind", 0, Directory.GetFiles(tempDir, "*.tmp*").Length);
+                Check.Equal("Story 7 a quota exhausted save file write reports the quota failure reason", (int)StorageFailureReason.QuotaExceeded, (int)quotaReason);
+                Check.That("Story 7 a quota exhausted save file write reports an error naming the target file", quotaError != null && quotaError.Length > 0 && quotaError.Contains(fullTargetPath, StringComparison.Ordinal));
+
+                bool interrupted = false;
+                StorageFailureReason interruptionReason = StorageFailureReason.None;
+                string? interruptionError = null;
+                SaveMigration.SimulatedInterruptionAfterBytes = 4;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":2,\"chapter\":9}");
+                }
+                catch (SaveWriteInterruptionException)
+                {
+                    interrupted = true;
+                    interruptionReason = SaveMigration.LastWriteFailureReason;
+                    interruptionError = SaveMigration.LastWriteError;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 an interrupted save file write reaches the caller as an interruption", interrupted);
+                Check.That("Story 7 an interrupted save file write leaves the prior valid save byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
+                Check.Equal("Story 7 an interrupted save file write reports the io failure reason", (int)StorageFailureReason.IoError, (int)interruptionReason);
+                Check.That("Story 7 an interrupted save file write reports an error naming the target file", interruptionError != null && interruptionError.Length > 0 && interruptionError.Contains(fullTargetPath, StringComparison.Ordinal));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory7SuccessiveWritesNeverRemoveTheTargetFileBeforeTheNewContentIsInPlace()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":1,\"chapter\":5}");
+
+                const int writeCount = 32;
+                int missingObservations = 0;
+                long observations = 0;
+                bool stop = false;
+                Thread poller = new Thread(() =>
+                {
+                    while (!Volatile.Read(ref stop))
+                    {
+                        Interlocked.Increment(ref observations);
+                        if (!File.Exists(savePath))
+                        {
+                            Interlocked.Increment(ref missingObservations);
+                        }
+                    }
+                });
+                poller.IsBackground = true;
+                poller.Start();
+
+                try
+                {
+                    for (int i = 0; i < writeCount; i++)
+                    {
+                        SaveMigration.WriteSaveFileAtomically(savePath, "{\"chapter\":9,\"revision\":\"" + new string('x', i + 1) + "\"}");
+                    }
+                }
+                finally
+                {
+                    Volatile.Write(ref stop, true);
+                    poller.Join();
+                }
+
+                Check.That("Story 7 the replace safety observation polled the target file", observations > 0);
+                Check.Equal("Story 7 successive writes never leave the target file missing", 0, missingObservations);
+                Check.Equal(
+                    "Story 7 the last successive write lands in the target file",
+                    "{\"chapter\":9,\"revision\":\"" + new string('x', writeCount) + "\"}",
+                    File.ReadAllText(savePath));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
         private static void TestStory11ProductKnowledgeStatesPerTargetDurabilityAndCrashLossWindow()
         {
             IReadOnlyList<PersistenceDurabilityContract> contracts = SaveMigration.GetAllTargetDurabilityContracts();
@@ -374,6 +495,42 @@ namespace Unitas.Bridge.Tests
             {
                 Application.PlatformOverride = null;
                 Application.Host = savedHost;
+            }
+        }
+
+        private static void TestStory26PlayerPrefsStoragePrefersTheArmedPersistentDataPathOverTheInternalSeam()
+        {
+            string armedRoot = CreateTempRoot();
+            string seamRoot = CreateTempRoot();
+            string? savedSeam = PlayerPrefs.StorageDirectoryOverride;
+            string? savedArmed = Application.PersistentDataPathOverride;
+            try
+            {
+                PlayerPrefs.StorageDirectoryOverride = seamRoot;
+                Application.PersistentDataPathOverride = armedRoot;
+                PlayerPrefs.Reload();
+
+                Check.Equal(
+                    "Story 26 the armed persistent data path outranks the internal storage directory seam",
+                    Path.Combine(Path.GetFullPath(armedRoot), "prefs", "PlayerPrefs.ini"),
+                    Path.GetFullPath(PlayerPrefs.StorageFilePath));
+
+                Application.PersistentDataPathOverride = null;
+                PlayerPrefs.StorageDirectoryOverride = seamRoot;
+                PlayerPrefs.Reload();
+
+                Check.Equal(
+                    "Story 26 the internal storage directory seam applies when no persistent data path is armed",
+                    Path.Combine(Path.GetFullPath(seamRoot), "PlayerPrefs.ini"),
+                    Path.GetFullPath(PlayerPrefs.StorageFilePath));
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedArmed;
+                PlayerPrefs.StorageDirectoryOverride = savedSeam;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(armedRoot);
+                CleanupTempRoot(seamRoot);
             }
         }
 

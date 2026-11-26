@@ -349,10 +349,12 @@ namespace UnityEngine
                 File.WriteAllBytes(tempPath, content);
                 if (File.Exists(fullTargetPath))
                 {
-                    File.Delete(fullTargetPath);
+                    File.Replace(tempPath, fullTargetPath, null);
                 }
-
-                File.Move(tempPath, fullTargetPath);
+                else
+                {
+                    File.Move(tempPath, fullTargetPath);
+                }
                 _lastWriteFailureReason = StorageFailureReason.None;
                 _lastWriteError = null;
             }
