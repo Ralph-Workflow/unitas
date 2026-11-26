@@ -295,9 +295,11 @@ def check_tools(report: dict[str, object], steps: object) -> tuple[bool, str]:
     if not isinstance(tools, list) or not tools:
         return False, "the benchmark report advertises no tools"
     advertised = {name for name in tools if isinstance(name, str)}
+    if not isinstance(steps, list):
+        steps = []
     used = {
         step["tool"]
-        for step in steps or []
+        for step in steps
         if isinstance(step, dict) and isinstance(step.get("tool"), str)
     }
     missing = sorted(used - advertised)

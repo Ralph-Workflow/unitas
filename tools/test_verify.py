@@ -1328,21 +1328,26 @@ def test_timed_gate_timeout_cites_the_time_budget_policy() -> None:
 
 def test_timed_gate_terminates_its_child_when_the_runner_is_signalled(tmp_path: Path) -> None:
     marker = tmp_path / "child.txt"
+    release = tmp_path / "release.txt"
     script = (
         "import pathlib, time\n"
         f"pathlib.Path({str(marker)!r}).write_text('started')\n"
-        "time.sleep(1)\n"
+        f"release = pathlib.Path({str(release)!r})\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.05)\n"
         f"pathlib.Path({str(marker)!r}).write_text('finished')\n"
     )
     runner = subprocess.Popen(
         [sys.executable, "tools/verify.py", "timed", "probe", "30", sys.executable, "-c", script],
         cwd=verify.REPO_ROOT,
     )
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 20
     while not marker.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
+        time.sleep(0.05)
+    assert marker.exists(), "the timed gate never started its child"
     runner.terminate()
     assert runner.wait(timeout=10) == SIGNALLED_EXIT_CODE
+    release.write_text("release", encoding="utf-8")
     time.sleep(1.5)
     assert marker.read_text(encoding="utf-8") == "started"
 

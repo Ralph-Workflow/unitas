@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import tokenize
 import tomllib
@@ -383,6 +384,8 @@ SUITE_BUDGET_RE = re.compile(r"(?m)^SUITE_BUDGET_SECONDS\s*:?=\s*(\d+)")
 RUST_TEST_GATE_RUNNER = "verify.py cargo-test"
 MONOLITHIC_RUST_TEST_PATTERN = re.compile(r"cargo test --workspace")
 CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
+RUST_TEST_CONCURRENCY = 4
+RUST_TEST_PACKAGE_CONCURRENCY = 2
 LANE_LIMIT_FACTS = (
     ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),
     ("verification-policy.md", "fast_path_command", "fast_path_enforced_limit"),
@@ -2372,23 +2375,18 @@ def cargo_test_binaries() -> tuple[int, list[tuple[str, str, str]]]:
     )
 
 
-def run_package_shard(
-    shard: tuple[str, list[tuple[str, str]]],
-) -> list[tuple[str, int, float, str]]:
-    package_dir, binaries = shard
-    with ThreadPoolExecutor(max_workers=min(2, max(1, len(binaries)))) as pool:
-
-        def run_one(item: tuple[str, str]) -> tuple[str, int, float, str]:
-            name, executable = item
-            started = time.monotonic()
-            completed = subprocess.run(
-                [executable], cwd=package_dir, check=False, capture_output=True, text=True
-            )
-            elapsed = time.monotonic() - started
-            output = (completed.stdout or "") + (completed.stderr or "")
-            return name, completed.returncode, elapsed, output
-
-        return list(pool.map(run_one, binaries))
+def run_one_test_binary(
+    item: tuple[str, str, str, threading.Semaphore],
+) -> tuple[str, int, float, str]:
+    name, executable, package_dir, package_slot = item
+    with package_slot:
+        started = time.monotonic()
+        completed = subprocess.run(
+            [executable], cwd=package_dir, check=False, capture_output=True, text=True
+        )
+    elapsed = time.monotonic() - started
+    output = (completed.stdout or "") + (completed.stderr or "")
+    return name, completed.returncode, elapsed, output
 
 
 def run_cargo_test() -> int:
@@ -2408,20 +2406,26 @@ def run_cargo_test() -> int:
     shards: dict[str, list[tuple[str, str]]] = {}
     for name, executable, package_dir in binaries:
         shards.setdefault(package_dir, []).append((name, executable))
-    with ThreadPoolExecutor(max_workers=len(shards)) as pool:
-        results = list(pool.map(run_package_shard, sorted(shards.items())))
+    package_slots = {
+        package_dir: threading.Semaphore(RUST_TEST_PACKAGE_CONCURRENCY) for package_dir in shards
+    }
+    tasks = [
+        (name, executable, package_dir, package_slots[package_dir])
+        for name, executable, package_dir in binaries
+    ]
+    with ThreadPoolExecutor(max_workers=min(RUST_TEST_CONCURRENCY, len(tasks))) as pool:
+        results = list(pool.map(run_one_test_binary, tasks))
     executed = time.monotonic() - started - compiled
     failures = 0
-    for shard in results:
-        for name, code, elapsed, output in shard:
-            sys.stdout.write(f"rust test {name}: exit {code} ({elapsed:.2f}s)\n")
-            if code != 0:
-                failures += 1
-                sys.stdout.write(output)
-                sys.stderr.write(
-                    "a Rust test binary failed: fix the test or the code it covers, never the "
-                    "gate (docs/ralph-workflow-policy/testing-policy.md)\n"
-                )
+    for name, code, elapsed, output in results:
+        sys.stdout.write(f"rust test {name}: exit {code} ({elapsed:.2f}s)\n")
+        if code != 0:
+            failures += 1
+            sys.stdout.write(output)
+            sys.stderr.write(
+                "a Rust test binary failed: fix the test or the code it covers, never the "
+                "gate (docs/ralph-workflow-policy/testing-policy.md)\n"
+            )
     sys.stdout.write(
         f"rust test: {len(binaries)} binaries in {len(shards)} package shards "
         f"(compile {compiled:.2f}s, execution {executed:.2f}s)\n"
