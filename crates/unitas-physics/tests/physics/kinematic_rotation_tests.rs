@@ -95,8 +95,12 @@ fn externally_driven_kinematic_rotation_carries_a_resting_marble() -> Result<(),
 
     let advanced =
         (angle_around_platform(start) - angle_around_platform(carried)).rem_euclid(360.0);
-    // An unlocked marble rolls on the rotating surface and lags the
-    // platform's own rotation instead of being carried rigidly with it.
+    // The rotating surface carries the marble around the platform axis and
+    // the marble lags the platform's own rotation instead of being welded to
+    // it. The bound only pins that the marble rides around the axis: the
+    // exact carry rate depends on whether the marble rolls on its contact
+    // patch (2w/7 of the platform sweep) or is dragged by the surface, so the
+    // check must not pin one of them.
     assert!(
         advanced > 30.0,
         "the marble must ride around the platform axis, it advanced {advanced} degrees"

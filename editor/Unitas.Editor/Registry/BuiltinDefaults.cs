@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json.Nodes;
 
@@ -27,12 +28,24 @@ namespace Unitas.Editor.Mcp
                         host.OpenProject(projectPath);
                     }
 
+                    string root = ProjectAccess.ResolveRoot(host, arguments, "project.status");
+                    JsonArray scenes = new JsonArray();
+                    int objectsTotal = 0;
+                    foreach (JsonObject scene in ScanScenes(root))
+                    {
+                        objectsTotal += scene["objects"]?.GetValue<int>() ?? 0;
+                        scenes.Add(scene);
+                    }
+
                     return ToolOutput.Untrusted(
                         "unitas://project/status",
                         new JsonObject
                         {
                             ["state"] = "ready",
-                            ["projectPath"] = host.ProjectPath,
+                            ["projectPath"] = root,
+                            ["scenes"] = scenes,
+                            ["objectsTotal"] = objectsTotal,
+                            ["trust"] = TrustState(host),
                         });
                 });
 
@@ -58,6 +71,82 @@ namespace Unitas.Editor.Mcp
                             ["scopes"] = scopes,
                         });
                 });
+        }
+
+        // Unity keeps scenes under Assets; anchoring there also avoids the
+        // generated root folders (Library, obj, ...) that project.list filters.
+        private static IEnumerable<JsonObject> ScanScenes(string root)
+        {
+            string assets = Path.Combine(root, "Assets");
+            string start = Directory.Exists(assets) ? assets : root;
+            string[] sceneFiles;
+            try
+            {
+                sceneFiles = Directory.GetFiles(start, "*.unity", SearchOption.AllDirectories);
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                yield break;
+            }
+
+            Array.Sort(sceneFiles, StringComparer.Ordinal);
+            foreach (string sceneFile in sceneFiles)
+            {
+                yield return new JsonObject
+                {
+                    ["path"] = sceneFile.Substring(root.Length).TrimStart('/', '\\').Replace('\\', '/'),
+                    ["name"] = Path.GetFileNameWithoutExtension(sceneFile),
+                    ["objects"] = CountGameObjects(sceneFile),
+                };
+            }
+        }
+
+        // Scene inspection the asset pipeline already trusts: a GameObject is a
+        // class-1 YAML document, so counting document headers is the object count.
+        private static int CountGameObjects(string sceneFile)
+        {
+            int count = 0;
+            try
+            {
+                foreach (string line in File.ReadLines(sceneFile))
+                {
+                    if (line.StartsWith("--- !u!1 ", StringComparison.Ordinal))
+                    {
+                        count++;
+                    }
+                }
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                return 0;
+            }
+
+            return count;
+        }
+
+        // Trust state of the open project for the calling session: running project
+        // code is the trusted verb, so probe the ExecuteProjectCode grant the same
+        // way the headless CLI maps it to refused-untrusted-project.
+        private static JsonObject TrustState(McpHost host)
+        {
+            bool mayRunProjectCode = false;
+            string? sessionId = host.CurrentSessionId;
+            if (sessionId != null)
+            {
+                try
+                {
+                    host.RequireScope(sessionId, Scope.ExecuteProjectCode);
+                    mayRunProjectCode = true;
+                }
+                catch (McpError)
+                {
+                }
+            }
+
+            return new JsonObject
+            {
+                ["mayRunProjectCode"] = mayRunProjectCode,
+            };
         }
 
         public static void RegisterAll(McpHost host, PlaySessionManager playSessions)

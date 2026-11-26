@@ -293,11 +293,13 @@ fn phy_001_story_1_dynamic_box_on_static_floor_receives_enter_once_stay_while_re
     );
     assert!(world.is_sleeping(box_body));
     let resting_pos = world.position(box_body).unwrap_or([0.0; 3]);
-    // Unlocked rotations let the box micro-roll while it settles, so the
-    // resting pose agrees with the drop point only to centimeter scale.
+    // Rolling physics lets the box micro-slide and settle during impact before
+    // sleeping, so lateral rest position varies at the contact-recovery scale
+    // (rapier prediction distance 2e-3) rather than at 1e-3. 1e-2 stays well
+    // inside the box half-extent and still excludes any real slide-off.
     assert!(
         (resting_pos[0] - 0.0).abs() <= 1e-2
-            && (resting_pos[1] - 0.5).abs() <= 1e-2
+            && (resting_pos[1] - 0.5).abs() <= 1e-3
             && (resting_pos[2] - 0.0).abs() <= 1e-2,
         "PHY-001 story 1: resting box position {resting_pos:?} must agree with floor top within allowed floating-point variation"
     );

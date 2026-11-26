@@ -11,8 +11,11 @@ namespace Unitas.Bridge.Tests
 {
     internal static class RollABallGameState
     {
-        internal const int TotalPickups = 4;
-        internal const string WinMessage = "All 4 pickups collected, press R to play again.";
+        // Mirrors the sample game's ScoreManager: the spec (01-roll-a-ball.md)
+        // holds twelve pickups per arena, so the double must reach twelve
+        // collects and log the same win message the real game logs.
+        internal const int TotalPickups = 12;
+        internal const string WinMessage = "All 12 pickups collected, press R to play again.";
 
         internal static readonly HashSet<string> Collected = new HashSet<string>(StringComparer.Ordinal);
 
@@ -109,21 +112,61 @@ namespace Unitas.Bridge.Tests
         }
     }
 
+    // Rotation double for the sample's Rotator script slot; collection is not
+    // trigger-based here because the real game destroys the scene-authored
+    // pickups and collects code-spawned ones with a managed distance check.
     public sealed class RollABallPickupScript : MonoBehaviour
     {
-        public override void OnTriggerEnter(Collider? other)
+    }
+
+    // ScoreManager double: mirrors the real game's managed distance check
+    // against the twelve fixed pickup positions it spawns at Start.
+    public sealed class RollABallScoreScript : MonoBehaviour
+    {
+        private const float CollectRadius = 1.6f;
+        private static readonly Vector3[] PickupPositions =
         {
-            if (other == null || !string.Equals(other.gameObject.name, "PlayerBall", StringComparison.Ordinal))
+            new Vector3(0f, 0.75f, 2.25f),
+            new Vector3(-2.25f, 0.75f, 4.5f),
+            new Vector3(-4.5f, 0.75f, 1.5f),
+            new Vector3(-4.5f, 0.75f, -1.5f),
+            new Vector3(-4.5f, 0.75f, -4.5f),
+            new Vector3(-1.5f, 0.75f, -4.5f),
+            new Vector3(1.5f, 0.75f, -4.5f),
+            new Vector3(4.5f, 0.75f, -4.5f),
+            new Vector3(4.5f, 0.75f, -1.5f),
+            new Vector3(4.5f, 0.75f, 1.5f),
+            new Vector3(4.5f, 0.75f, 4.5f),
+            new Vector3(1.5f, 0.75f, 4.5f),
+        };
+
+        public override void Update()
+        {
+            GameObject? player = GameObject.Find("PlayerBall");
+            if (player == null || RollABallGameState.Won)
             {
                 return;
             }
 
-            RollABallGameState.Collect(gameObject.name);
-        }
-    }
+            Vector3 position;
+            IPhysicsProvider? provider = Physics.Provider;
+            if (provider != null && provider.TryGetBodyPosition(player.NativeEntityId, out Vector3 bodyPosition))
+            {
+                position = bodyPosition;
+            }
+            else
+            {
+                position = player.transform.position;
+            }
 
-    public sealed class RollABallScoreScript : MonoBehaviour
-    {
+            for (int index = 0; index < PickupPositions.Length; index++)
+            {
+                if (Vector3.Distance(PickupPositions[index], position) <= CollectRadius)
+                {
+                    RollABallGameState.Collect("Pickup#" + (index + 1));
+                }
+            }
+        }
     }
 
     public static class RollABallScenarioTests

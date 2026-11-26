@@ -58,14 +58,15 @@ fn force_mode_acceleration_applies_a_times_dt_regardless_of_mass() -> Result<(),
     let mut world = World::with_gravity(NO_GRAVITY);
     let light = EntityId::new(1);
     let heavy = EntityId::new(2);
-    // Spawn the boxes apart: overlapped spawns make contact resolution
-    // contaminate the force-mode measurement this test isolates.
-    let mut light_body = body(BodyRole::Dynamic, 2.0);
-    light_body.position = [-2.0, 0.0, 0.0];
-    let mut heavy_body = body(BodyRole::Dynamic, 8.0);
-    heavy_body.position = [2.0, 0.0, 0.0];
-    world.add_body(light, light_body)?;
-    world.add_body(heavy, heavy_body)?;
+    world.add_body(light, body(BodyRole::Dynamic, 2.0))?;
+    // The two bodies must not overlap: two coincident dynamic boxes form a
+    // deep-interpenetration contact whose separation lawfully exchanges
+    // x-momentum, corrupting the velocity pin. The expected 1.5 derives from
+    // ForceMode::Acceleration alone: dv = a*dt = 3.0*0.5 = 1.5, independent
+    // of mass (verified exact for isolated bodies).
+    let mut heavy_desc = body(BodyRole::Dynamic, 8.0);
+    heavy_desc.position = [3.0, 0.0, 0.0];
+    world.add_body(heavy, heavy_desc)?;
     world.add_force(light, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.add_force(heavy, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.step(0.5)?;
