@@ -2379,9 +2379,41 @@ namespace Unitas.Bridge
             camera.backgroundColor = settings.BackgroundColor;
         }
 
+        // The native scene importer knows the uGUI components, but they are not
+        // user scripts, so they never reach the glue registry; the managed slice
+        // materializes them so a scene's buttons and labels exist here too.
+        private const string UiButtonScriptGuid = "4e29b1a8efbd4b44bb3f3716e73f07ff";
+        private const string UiTextScriptGuid = "5f7201a12d95ffc409449d95f23cf332";
+
+        private static readonly Dictionary<(ulong Hi, ulong Lo), Func<MonoBehaviour>> UiComponentFactories = BuildUiComponentFactories();
+
+        private static Dictionary<(ulong Hi, ulong Lo), Func<MonoBehaviour>> BuildUiComponentFactories()
+        {
+            Dictionary<(ulong, ulong), Func<MonoBehaviour>> factories = new Dictionary<(ulong, ulong), Func<MonoBehaviour>>();
+            AddUiComponentFactory(factories, UiButtonScriptGuid, () => new UnityEngine.UI.Button());
+            AddUiComponentFactory(factories, UiTextScriptGuid, () => new UnityEngine.UI.Text());
+            return factories;
+        }
+
+        private static void AddUiComponentFactory(Dictionary<(ulong, ulong), Func<MonoBehaviour>> factories, string guid, Func<MonoBehaviour> factory)
+        {
+            (ulong hi, ulong lo) = ScriptGlueRegistry.ParseGuid(guid);
+            factories[(hi, lo)] = factory;
+        }
+
+        private static bool TryCreateManagedComponent(ulong guidHi, ulong guidLo, out MonoBehaviour? script)
+        {
+            if (UiComponentFactories.TryGetValue((guidHi, guidLo), out Func<MonoBehaviour>? factory))
+            {
+                script = factory();
+                return script != null;
+            }
+            return ScriptGlueRegistry.TryCreate(guidHi, guidLo, out script, out IUnitasMessageHandler? _);
+        }
+
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
-            if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
+            if (!TryCreateManagedComponent(guidHi, guidLo, out MonoBehaviour? script) || script is null)
             {
                 return 0;
             }

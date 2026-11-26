@@ -13,8 +13,8 @@ namespace Unitas.Bridge.Tests
     /// </summary>
     public static class UiClickPumpTests
     {
-        // The script GUID of the uGUI Button component in UnityEngine.UI.dll.
-        private const string UiButtonGuid = "4e29b1a8efbd4b44bb3f3716e73f07ff";
+        // The script GUID of the uGUI Button component, the one the native
+        // scene importer recognizes, so the native side owns the button.
         private const string ButtonObjectName = "PlayButton";
         private const double FrameSeconds = 0.016;
         private const double ButtonCenterX = 400.0;
@@ -31,7 +31,6 @@ namespace Unitas.Bridge.Tests
             try
             {
                 ScriptGlueRegistry.Clear();
-                ScriptGlueRegistry.Register<Button>(UiButtonGuid, () => new Button());
                 ClickReachesTheManagedButton(scenePath);
             }
             finally
