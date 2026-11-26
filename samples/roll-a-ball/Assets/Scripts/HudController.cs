@@ -26,7 +26,8 @@ namespace Unitas.Samples.RollABall
 
         private new void Awake()
         {
-            _manager = GameObject.Find("ScoreManager")?.GetComponent<ScoreManager>();
+            // The scene names the object that carries the score manager after the sensor it hosts.
+            _manager = GameObject.Find("PickupSensor")?.GetComponent<ScoreManager>();
             _scoreLabel = FindText("ScoreLabel");
             _comboLabel = FindText("ComboLabel");
             _timerLabel = FindText("TimerLabel");

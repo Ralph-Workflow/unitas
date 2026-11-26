@@ -298,11 +298,19 @@ The named non-default profiles, each with the five required fields:
   area that registers an unsafe zone owns that zone's stages; trigger: every
   change that touches a registered unsafe zone; evidence: per-stage exit
   statuses, with the sanitizer, Loom, fuzz, and Kani stages declared but not
-  yet wired; fails hard when run; last run not recorded in this tree as of
-  2026-11-25, so a refresh run that names a durable source is due before the
-  horizon of one milestone passes.
+  yet wired; fails hard when run; last run 2026-11-26, recorded in the gate-lane
+  review entry below; staleness horizon one milestone.
 - Lane, ownership, and policy records name subsystems or areas, never
   worktrees, branches, or agents.
+
+### Gate-lane review 2026-11-26
+
+| Profile | Last run | Durable source |
+|---|---|---|
+| `make verify-samples` | 2026-11-26 | the re-approved S8 reference baselines under `samples/roll-a-ball/References/` |
+| `make verify-device` | not recorded in this tree | a refresh run that names a durable source is due before the horizon of one milestone passes |
+| `make verify-perf` | 2026-11-25 | the gate-lane review entry for the 2026-11-25 policy remediation pass |
+| `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |
 RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; a warm Apple Silicon run on 2026-11-25 took 26.24s wall with the full .NET formatter (21.49s), and the measured floor for the suite group's cargo work on the same host on 2026-11-25 was 9.28s for `cargo test --workspace --lib --tests --bins` run alone. This is a measurement, not a guarantee under shared-host contention
 RALPH-FACT: verification_cost_floor: full gate floor 3.87s (measured via `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 3.87s (the recorded fast path is the full gate, so it carries the full gate floor, measured via the same `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), and default suite floor 0.67s (measured via `pytest --collect-only -q` at 0.52s and `cargo test --workspace --no-run` at 0.15s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-25
 RALPH-FACT: verification_contention_measurement: on 2026-11-25 the shared host ran other worktrees' gates at load average 39-44, and the same tree measured 9.28s for `cargo test --workspace --lib --tests --bins` alone while the gate's timed wrapper measured 37.89s-115.88s for the same command inside `make verify`; the timed wrapper fails the run when a gate exceeds the budget the Makefile declares, so the gate failed as designed on those contended runs. Reduction plan owned by presentation and player: the suite group runs its static subgroup and its test subgroup concurrently in separate cargo target directories, so the suite group's wall time is the slower subgroup rather than their sum, and the timing-sensitive `StdioTransportTests` editor shard runs alone before the batched shards so its in-process deadline is not starved by sibling shards

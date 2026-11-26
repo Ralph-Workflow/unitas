@@ -232,6 +232,13 @@
       "contains": "All 12 pickups collected, press R to play again."
     },
     {
+      "id": "results_panel_shown",
+      "after_step": 37,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Results panel shown"
+    },
+    {
       "id": "retry_logged",
       "after_step": 37,
       "kind": "log",

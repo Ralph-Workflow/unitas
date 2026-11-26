@@ -74,7 +74,7 @@ namespace Unitas.Editor.Tests.Play
             Check.Equal("scenario-run: collect setup ok", true, content["setup"]?["ok"]?.GetValue<bool>() ?? false);
 
             JsonArray checkpoints = (JsonArray)content["checkpoints"]!;
-            Check.Equal("scenario-run: collect reports 4 checkpoints", 4, checkpoints.Count);
+            Check.Equal("scenario-run: collect reports 5 checkpoints", 5, checkpoints.Count);
             int passed = 0;
             foreach (JsonNode? node in checkpoints)
             {
@@ -88,7 +88,7 @@ namespace Unitas.Editor.Tests.Play
                 }
             }
 
-            Check.Equal("scenario-run: collect all 4 checkpoints passed", 4, passed);
+            Check.Equal("scenario-run: collect all 5 checkpoints passed", 5, passed);
             JsonObject totalFrames = FindCheckpoint(content, "frame_count_sanity");
             Check.Equal(
                 "scenario-run: collect total frames observed",

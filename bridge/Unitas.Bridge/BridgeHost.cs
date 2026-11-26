@@ -45,6 +45,7 @@ namespace Unitas.Bridge
         private readonly NativeSceneBackend _defaultSceneBackend;
         private readonly RuntimeAnimationProvider _animationProvider;
         private readonly RuntimeRenderProvider _renderProvider;
+        private readonly RuntimeUiProvider _uiProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
         // Scene handles are process-unique, not per host: the replaced-scene purge in
@@ -101,6 +102,7 @@ namespace Unitas.Bridge
             _defaultSceneBackend = new NativeSceneBackend(runtimeHandle);
             _animationProvider = new RuntimeAnimationProvider(runtimeHandle);
             _renderProvider = new RuntimeRenderProvider(runtimeHandle);
+            _uiProvider = new RuntimeUiProvider(runtimeHandle);
             _sceneProvider = _defaultSceneProvider;
             _sceneBackend = _defaultSceneBackend;
 
@@ -159,6 +161,7 @@ namespace Unitas.Bridge
             MeshFilter.Provider = _renderProvider;
             MeshRenderer.Provider = _renderProvider;
             Light.Provider = _renderProvider;
+            UnityEngine.UI.Ui.Provider = _uiProvider;
             Unitas.Bridge.Messaging.MessageDispatcher.EnsureInstalled();
             UnitySynchronizationContext.Install();
             Time.PushTimeScaleToHost();
@@ -875,6 +878,10 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(Animator.Provider, _animationProvider))
                 {
                     Animator.Provider = null;
+                }
+                if (ReferenceEquals(UnityEngine.UI.Ui.Provider, _uiProvider))
+                {
+                    UnityEngine.UI.Ui.Provider = null;
                 }
                 if (result != 0)
                 {

@@ -150,6 +150,7 @@ namespace Unitas.PlayerHost
                 try
                 {
                     host.Tick(deltaSeconds);
+                    UnityEngine.UI.Ui.PumpClicks();
                     PublishHud(hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
                     return (int)PlayerHostStage.Ok;
                 }
