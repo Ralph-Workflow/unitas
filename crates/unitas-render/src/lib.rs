@@ -10,6 +10,8 @@ pub mod raster;
 
 #[cfg(feature = "device")]
 pub mod gpu;
+#[cfg(feature = "device")]
+pub mod shadow;
 
 pub use camera::{look_at, Camera};
 pub use image::{Image, Rgba8};
@@ -27,3 +29,5 @@ pub use gpu::{
     GpuInstance, GpuRenderer, RenderError, RenderScene, Renderer, TextOverlayItem,
     GPU_CPU_MEAN_ERROR_TOLERANCE,
 };
+#[cfg(feature = "device")]
+pub use shadow::{ShadowQuality, ShadowSettings};

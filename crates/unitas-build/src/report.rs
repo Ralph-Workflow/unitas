@@ -7,8 +7,8 @@ use unitas_core::compat::{
 };
 
 use crate::bundle::{
-    ContentBuildMode, ContentBuildResult, ContentCatalogEntry, ContentRejectionReason,
-    RejectedContentBundle,
+    BundleManifest, ContentBuildMode, ContentBuildResult, ContentCatalogEntry,
+    ContentRejectionReason, RejectedContentBundle,
 };
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing::{licensing_record, LicensingRecord, ThirdPartyNotice};
@@ -318,6 +318,9 @@ pub struct BuildReport {
     /// Content-derived identifier shared with the bundle manifest; stamped by
     /// `with_build_identifier` from the staged manifest.
     pub build_identifier: String,
+    /// Staged asset paths included in the bundle, from the staged manifest
+    /// entries.
+    pub assets: Vec<String>,
     pub included_scenes: Vec<String>,
     pub outcome: BuildOutcome,
     pub elapsed_ms: u64,
@@ -354,7 +357,7 @@ impl BuildReport {
                 .cmp(&left.size_bytes)
                 .then_with(|| left.path.cmp(&right.path))
         });
-        Self {
+        let mut report = Self {
             target: config.target,
             architecture: config.target.arch(),
             configuration: config.mode(),
@@ -363,6 +366,7 @@ impl BuildReport {
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
             build_identifier: String::new(),
+            assets: Vec::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -382,7 +386,11 @@ impl BuildReport {
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
             licensing: Some(licensing_record(&config.application_identifier)),
+        };
+        if let Some(output_dir) = report.output_location.clone() {
+            report.stamp_from_staged_manifest(&output_dir);
         }
+        report
     }
 
     pub fn failed(
@@ -399,6 +407,7 @@ impl BuildReport {
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
             build_identifier: String::new(),
+            assets: Vec::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -443,6 +452,7 @@ impl BuildReport {
             application_identifier: config.application_identifier.clone(),
             version: config.version.clone(),
             build_identifier: String::new(),
+            assets: Vec::new(),
             included_scenes: config
                 .scenes
                 .iter()
@@ -470,6 +480,32 @@ impl BuildReport {
     pub fn with_build_identifier(mut self, build_identifier: impl Into<String>) -> Self {
         self.build_identifier = build_identifier.into();
         self
+    }
+
+    /// Records the staged asset paths included in the bundle.
+    pub fn with_assets(mut self, assets: Vec<String>) -> Self {
+        self.assets = assets;
+        self
+    }
+
+    /// Fills `build_identifier` and `assets` from the staged bundle manifest
+    /// in the build output directory, so the report shares the bundle's
+    /// content identity; explicit stamps made via `with_build_identifier` or
+    /// `with_assets` win.
+    fn stamp_from_staged_manifest(&mut self, output_location: &Path) {
+        let Ok(manifest) = BundleManifest::load_from_dir(output_location) else {
+            return;
+        };
+        if self.build_identifier.is_empty() {
+            self.build_identifier = manifest.build_identifier.clone();
+        }
+        if self.assets.is_empty() {
+            self.assets = manifest
+                .entries
+                .iter()
+                .map(|entry| entry.staged_path.clone())
+                .collect();
+        }
     }
 
     /// Records the staged `Managed/` payload with per-file sizes.
@@ -532,6 +568,7 @@ impl BuildReport {
             true,
         );
         push_kv_string_array(&mut out, 2, "included_scenes", &self.included_scenes, true);
+        push_kv_string_array(&mut out, 2, "assets", &self.assets, true);
         push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
         push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
         push_kv_diagnostics(&mut out, 2, "errors", &self.errors, true);
@@ -607,6 +644,14 @@ impl BuildReport {
             Some(value) => value.as_str("build_identifier")?.to_string(),
         };
         let included_scenes = get_required_string_list(obj, "included_scenes")?;
+        let assets = match obj.get("assets") {
+            None | Some(JsonValue::Null) => Vec::new(),
+            Some(value) => value
+                .as_array("assets")?
+                .iter()
+                .map(|item| item.as_str("assets").map(str::to_string))
+                .collect::<Result<Vec<String>, ReportParseError>>()?,
+        };
 
         let outcome_str = get_required_str(obj, "outcome")?;
         let outcome = BuildOutcome::from_name(outcome_str).ok_or_else(|| {
@@ -638,6 +683,7 @@ impl BuildReport {
             application_identifier,
             version,
             build_identifier,
+            assets,
             included_scenes,
             outcome,
             elapsed_ms,
@@ -2036,6 +2082,7 @@ fn get_required_rejected_bundles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundle::stage_bundle_for_host;
 
     fn sample_config() -> BuildConfiguration {
         BuildConfiguration::new(
@@ -2183,6 +2230,8 @@ mod tests {
             "\"application_identifier\"",
             "\"version\"",
             "\"included_scenes\"",
+            "\"assets\"",
+            "\"build_identifier\"",
             "\"outcome\"",
             "\"elapsed_ms\"",
             "\"errors\"",
@@ -2201,6 +2250,73 @@ mod tests {
             );
         }
 
+        let round_tripped = BuildReport::from_json(&json)?;
+        assert_eq!(round_tripped, report);
+        Ok(())
+    }
+
+    #[test]
+    fn succeeded_report_stamps_build_identifier_and_assets_from_the_staged_manifest(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("the crate directory has no repository root")?;
+        let output_dir = root.join("target").join(format!(
+            "unitas-build-report-tests/stamped_report_{}",
+            std::process::id()
+        ));
+        if output_dir.exists() {
+            std::fs::remove_dir_all(&output_dir)?;
+        }
+        std::fs::create_dir_all(&output_dir)?;
+        let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("scene_alpha.unity");
+        let config = BuildConfiguration::new(
+            vec![scene],
+            "Unitas",
+            "StampedGame",
+            "com.unitas.stamped",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
+
+        let report = BuildReport::succeeded(
+            &config,
+            25,
+            staged.output_dir.clone(),
+            staged.launch_artifact_path.clone(),
+            staged.manifest.total_content_bytes,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(!report.build_identifier.is_empty());
+        assert_eq!(report.build_identifier, staged.manifest.build_identifier);
+        let expected_assets: Vec<String> = staged
+            .manifest
+            .entries
+            .iter()
+            .map(|entry| entry.staged_path.clone())
+            .collect();
+        assert!(!expected_assets.is_empty());
+        assert_eq!(report.assets, expected_assets);
+
+        let json = report.to_json();
+        for required_key in [
+            "\"included_scenes\"",
+            "\"assets\"",
+            "\"total_size_bytes\"",
+            "\"build_identifier\"",
+        ] {
+            assert!(
+                json.contains(required_key),
+                "missing key {required_key} in JSON"
+            );
+        }
         let round_tripped = BuildReport::from_json(&json)?;
         assert_eq!(round_tripped, report);
         Ok(())

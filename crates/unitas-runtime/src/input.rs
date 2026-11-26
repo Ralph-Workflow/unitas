@@ -1,4 +1,33 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::sync::Arc;
+
+pub const GAMEPAD_AXIS_LEFT_X: u32 = 0;
+pub const GAMEPAD_AXIS_LEFT_Y: u32 = 1;
+pub const GAMEPAD_AXIS_RIGHT_X: u32 = 2;
+pub const GAMEPAD_AXIS_RIGHT_Y: u32 = 3;
+pub const GAMEPAD_AXIS_LEFT_TRIGGER: u32 = 4;
+pub const GAMEPAD_AXIS_RIGHT_TRIGGER: u32 = 5;
+pub const GAMEPAD_AXIS_COUNT: usize = 6;
+
+pub const GAMEPAD_BUTTON_SOUTH: u32 = 0;
+pub const GAMEPAD_BUTTON_EAST: u32 = 1;
+pub const GAMEPAD_BUTTON_WEST: u32 = 2;
+pub const GAMEPAD_BUTTON_NORTH: u32 = 3;
+pub const GAMEPAD_BUTTON_LEFT_SHOULDER: u32 = 4;
+pub const GAMEPAD_BUTTON_RIGHT_SHOULDER: u32 = 5;
+pub const GAMEPAD_BUTTON_SELECT: u32 = 6;
+pub const GAMEPAD_BUTTON_START: u32 = 7;
+pub const GAMEPAD_BUTTON_LEFT_STICK: u32 = 8;
+pub const GAMEPAD_BUTTON_RIGHT_STICK: u32 = 9;
+pub const GAMEPAD_BUTTON_LEFT_TRIGGER: u32 = 10;
+pub const GAMEPAD_BUTTON_RIGHT_TRIGGER: u32 = 11;
+pub const GAMEPAD_BUTTON_DPAD_UP: u32 = 12;
+pub const GAMEPAD_BUTTON_DPAD_DOWN: u32 = 13;
+pub const GAMEPAD_BUTTON_DPAD_LEFT: u32 = 14;
+pub const GAMEPAD_BUTTON_DPAD_RIGHT: u32 = 15;
+
+pub const GAMEPAD_STICK_DEAD_ZONE: f64 = 0.2;
 
 pub const STATE_DOWN: u32 = 1;
 pub const STATE_PRESSED: u32 = 2;
@@ -28,6 +57,28 @@ pub const KEY_MOUSE_2: u32 = 325;
 pub enum ButtonSource {
     Key(u32),
     MouseButton(u32),
+    GamepadButton(u32),
+}
+
+type RumbleFn = dyn Fn(f64, f64) -> bool + Send + Sync;
+
+#[derive(Clone)]
+pub struct RumbleHandler(Arc<RumbleFn>);
+
+impl RumbleHandler {
+    pub fn new(handler: impl Fn(f64, f64) -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(handler))
+    }
+
+    pub fn play(&self, low: f64, high: f64) -> bool {
+        (self.0)(low, high)
+    }
+}
+
+impl fmt::Debug for RumbleHandler {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RumbleHandler")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +154,12 @@ pub fn parse_button_token(name: &str) -> Option<ButtonSource> {
         if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
             return Some(ButtonSource::Key(u32::from(byte)));
         }
+    }
+    if let Some(index) = normalized
+        .strip_prefix("joystick button ")
+        .and_then(|index| index.trim().parse::<u32>().ok())
+    {
+        return Some(ButtonSource::GamepadButton(index));
     }
     match normalized.as_str() {
         "backspace" => Some(ButtonSource::Key(KEY_BACKSPACE)),
@@ -253,6 +310,13 @@ pub struct InputState {
     prev_buttons_down: HashMap<String, bool>,
     buttons_pressed: HashSet<String>,
     buttons_released: HashSet<String>,
+    gamepad_id: Option<u32>,
+    gamepad_axes: [f64; GAMEPAD_AXIS_COUNT],
+    gamepad_buttons_down: HashSet<u32>,
+    gamepad_buttons_pressed: HashSet<u32>,
+    gamepad_buttons_released: HashSet<u32>,
+    queued_gamepad_buttons: Vec<(u32, bool)>,
+    rumble_handler: Option<RumbleHandler>,
 }
 
 impl Default for InputState {
@@ -284,6 +348,13 @@ impl InputState {
             prev_buttons_down: HashMap::new(),
             buttons_pressed: HashSet::new(),
             buttons_released: HashSet::new(),
+            gamepad_id: None,
+            gamepad_axes: [0.0; GAMEPAD_AXIS_COUNT],
+            gamepad_buttons_down: HashSet::new(),
+            gamepad_buttons_pressed: HashSet::new(),
+            gamepad_buttons_released: HashSet::new(),
+            queued_gamepad_buttons: Vec::new(),
+            rumble_handler: None,
         }
     }
 
@@ -325,6 +396,7 @@ impl InputState {
         self.pointer_dy = 0.0;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
+        self.clear_gamepad_state();
         for entries in self.axes.values_mut() {
             for entry in entries {
                 entry.reset();
@@ -384,6 +456,56 @@ impl InputState {
         self.queue_scroll(x, y);
     }
 
+    pub fn connect_gamepad(&mut self, id: u32) {
+        if self.gamepad_id == Some(id) {
+            return;
+        }
+        self.gamepad_id = Some(id);
+        self.clear_gamepad_state();
+    }
+
+    pub fn disconnect_gamepad(&mut self, id: u32) {
+        if self.gamepad_id != Some(id) {
+            return;
+        }
+        self.gamepad_id = None;
+        self.clear_gamepad_state();
+    }
+
+    pub fn set_gamepad_axis(&mut self, axis: u32, value: f64) {
+        let Some(slot) = self.gamepad_axes.get_mut(axis as usize) else {
+            return;
+        };
+        *slot = if value.is_finite() {
+            value.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn set_gamepad_button(&mut self, button: u32, pressed: bool) {
+        self.queued_gamepad_buttons.push((button, pressed));
+    }
+
+    pub fn set_rumble_handler(&mut self, handler: Option<RumbleHandler>) {
+        self.rumble_handler = handler;
+    }
+
+    pub fn rumble(&self, low: f64, high: f64) -> bool {
+        let Some(handler) = &self.rumble_handler else {
+            return false;
+        };
+        handler.play(clamp_rumble(low), clamp_rumble(high))
+    }
+
+    fn clear_gamepad_state(&mut self) {
+        self.gamepad_axes = [0.0; GAMEPAD_AXIS_COUNT];
+        self.gamepad_buttons_down.clear();
+        self.gamepad_buttons_pressed.clear();
+        self.gamepad_buttons_released.clear();
+        self.queued_gamepad_buttons.clear();
+    }
+
     pub fn is_key_down(&self, key: u32) -> bool {
         self.keys_down.contains(&key)
     }
@@ -419,6 +541,8 @@ impl InputState {
         self.keys_released.clear();
         self.mouse_pressed.clear();
         self.mouse_released.clear();
+        self.gamepad_buttons_pressed.clear();
+        self.gamepad_buttons_released.clear();
         self.buttons_pressed.clear();
         self.buttons_released.clear();
 
@@ -458,12 +582,27 @@ impl InputState {
             }
         }
 
+        let queued_gamepad = std::mem::take(&mut self.queued_gamepad_buttons);
+        for (button, pressed) in queued_gamepad {
+            if pressed {
+                if self.gamepad_buttons_down.insert(button) {
+                    self.gamepad_buttons_pressed.insert(button);
+                }
+            } else if self.gamepad_buttons_down.remove(&button) {
+                self.gamepad_buttons_released.insert(button);
+            }
+        }
+
         let keys_down = &self.keys_down;
         let mouse_down = &self.mouse_down;
         let keys_pressed = &self.keys_pressed;
         let mouse_pressed = &self.mouse_pressed;
         let keys_released = &self.keys_released;
         let mouse_released = &self.mouse_released;
+        let gamepad_down = &self.gamepad_buttons_down;
+        let gamepad_pressed = &self.gamepad_buttons_pressed;
+        let gamepad_released = &self.gamepad_buttons_released;
+        let gamepad_axes = self.gamepad_axes;
         let pointer_dx = self.pointer_dx;
         let pointer_dy = self.pointer_dy;
         let scroll_y = self.scroll_y;
@@ -473,19 +612,31 @@ impl InputState {
             let mut any_button_source_pressed = false;
             let mut any_button_source_released = false;
 
+            let gamepad_button = gamepad_button_for_name(name);
+            if gamepad_button.is_some_and(|button| gamepad_down.contains(&button)) {
+                any_button_source_down = true;
+            }
+            if gamepad_button.is_some_and(|button| gamepad_pressed.contains(&button)) {
+                any_button_source_pressed = true;
+            }
+            if gamepad_button.is_some_and(|button| gamepad_released.contains(&button)) {
+                any_button_source_released = true;
+            }
+            let analog = gamepad_axis_value(&gamepad_axes, name);
+
             for entry in entries.iter_mut() {
                 for src in entry
                     .positive_sources
                     .iter()
                     .chain(entry.negative_sources.iter())
                 {
-                    if is_source_in(src, keys_down, mouse_down) {
+                    if is_source_in(src, keys_down, mouse_down, gamepad_down) {
                         any_button_source_down = true;
                     }
-                    if is_source_in(src, keys_pressed, mouse_pressed) {
+                    if is_source_in(src, keys_pressed, mouse_pressed, gamepad_pressed) {
                         any_button_source_pressed = true;
                     }
-                    if is_source_in(src, keys_released, mouse_released) {
+                    if is_source_in(src, keys_released, mouse_released, gamepad_released) {
                         any_button_source_released = true;
                     }
                 }
@@ -495,16 +646,21 @@ impl InputState {
                         let pos_down = entry
                             .positive_sources
                             .iter()
-                            .any(|src| is_source_in(src, keys_down, mouse_down));
+                            .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
                         let neg_down = entry
                             .negative_sources
                             .iter()
-                            .any(|src| is_source_in(src, keys_down, mouse_down));
+                            .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
 
-                        let raw_target = match (pos_down, neg_down) {
+                        let digital: f64 = match (pos_down, neg_down) {
                             (true, false) => 1.0,
                             (false, true) => -1.0,
                             _ => 0.0,
+                        };
+                        let raw_target = if analog.abs() > digital.abs() {
+                            analog
+                        } else {
+                            digital
                         };
 
                         if raw_target == 0.0 {
@@ -657,10 +813,52 @@ impl InputState {
     }
 }
 
-fn is_source_in(src: &ButtonSource, keys: &HashSet<u32>, mouse: &HashSet<u32>) -> bool {
+fn is_source_in(
+    src: &ButtonSource,
+    keys: &HashSet<u32>,
+    mouse: &HashSet<u32>,
+    gamepad: &HashSet<u32>,
+) -> bool {
     match *src {
         ButtonSource::Key(key) => keys.contains(&key),
         ButtonSource::MouseButton(button) => mouse.contains(&button),
+        ButtonSource::GamepadButton(button) => gamepad.contains(&button),
+    }
+}
+
+fn gamepad_axis_for_name(name: &str) -> Option<u32> {
+    match name {
+        "Horizontal" => Some(GAMEPAD_AXIS_LEFT_X),
+        "Vertical" => Some(GAMEPAD_AXIS_LEFT_Y),
+        _ => None,
+    }
+}
+
+fn gamepad_button_for_name(name: &str) -> Option<u32> {
+    match name {
+        "Fire1" => Some(GAMEPAD_BUTTON_SOUTH),
+        _ => None,
+    }
+}
+
+fn gamepad_axis_value(axes: &[f64; GAMEPAD_AXIS_COUNT], name: &str) -> f64 {
+    let Some(index) = gamepad_axis_for_name(name) else {
+        return 0.0;
+    };
+    let Some(value) = axes.get(index as usize) else {
+        return 0.0;
+    };
+    if value.abs() <= GAMEPAD_STICK_DEAD_ZONE {
+        return 0.0;
+    }
+    *value
+}
+
+fn clamp_rumble(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -679,5 +877,87 @@ fn keycode_from_mouse_button(button: u32) -> Option<u32> {
         1 => Some(KEY_MOUSE_1),
         2 => Some(KEY_MOUSE_2),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamepad_stick_and_buttons_drive_the_named_axes_and_buttons() {
+        let mut input = InputState::with_default_axes();
+        input.connect_gamepad(1);
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 1.0);
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_Y, -1.0);
+        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, true);
+        input.begin_frame(0.5);
+
+        let horizontal = input.axis("Horizontal").unwrap_or(-999.0);
+        assert!((horizontal - 1.0).abs() < 1e-9);
+        let vertical = input.axis("Vertical").unwrap_or(-999.0);
+        assert!((vertical - (-1.0)).abs() < 1e-9);
+        assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
+        assert_eq!(input.axis_raw("Vertical"), Some(-1.0));
+        assert_eq!(
+            input.button_state("Fire1"),
+            Some(STATE_DOWN | STATE_PRESSED)
+        );
+    }
+
+    #[test]
+    fn gamepad_stick_dead_zone_zeroes_small_deflections() {
+        let mut input = InputState::with_default_axes();
+        input.connect_gamepad(1);
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, GAMEPAD_STICK_DEAD_ZONE * 0.5);
+        input.begin_frame(0.5);
+        assert_eq!(input.axis_raw("Horizontal"), Some(0.0));
+
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 0.5);
+        input.begin_frame(0.5);
+        assert_eq!(input.axis_raw("Horizontal"), Some(0.5));
+    }
+
+    #[test]
+    fn gamepad_hot_plug_leaves_the_keyboard_state_untouched() {
+        let mut input = InputState::with_default_axes();
+        input.queue_key_event(KEY_SPACE, true);
+        input.begin_frame(0.5);
+        assert_eq!(input.key_state(KEY_SPACE), STATE_DOWN | STATE_PRESSED);
+
+        input.connect_gamepad(1);
+        input.begin_frame(0.5);
+        assert_eq!(input.key_state(KEY_SPACE), STATE_DOWN);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, true);
+        input.begin_frame(0.5);
+        assert_eq!(
+            input.button_state("Fire1"),
+            Some(STATE_DOWN | STATE_PRESSED)
+        );
+
+        input.disconnect_gamepad(1);
+        input.begin_frame(0.5);
+        assert_eq!(input.key_state(KEY_SPACE), STATE_DOWN);
+        assert_eq!(input.button_state("Fire1"), Some(STATE_RELEASED));
+    }
+
+    #[test]
+    fn rumble_without_a_device_is_a_silent_no_op() {
+        let input = InputState::new();
+        assert!(!input.rumble(0.5, 0.25));
+    }
+
+    #[test]
+    fn joystick_button_tokens_bind_gamepad_buttons_to_named_axes() {
+        assert_eq!(
+            parse_button_token("joystick button 0"),
+            Some(ButtonSource::GamepadButton(0))
+        );
+        assert_eq!(
+            parse_button_token("Joystick Button 3"),
+            Some(ButtonSource::GamepadButton(3))
+        );
+        assert_eq!(parse_button_token("joystick button"), None);
     }
 }

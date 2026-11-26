@@ -1,14 +1,17 @@
-//! macOS application bundle packaging for the player (BLD-001, BLD-002).
+//! macOS application bundle and Windows/Linux directory packaging for the
+//! player (BLD-001, BLD-002).
 
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::bundle::{
     BundleManifest, BUNDLE_MANIFEST_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
     MANAGED_DIR_NAME,
 };
 use crate::licensing::{third_party_notices_text, LicensingRecord};
+use crate::targets::BuildTarget;
 
 pub const APP_BUNDLE_EXTENSION: &str = "app";
 pub const CONTENTS_DIR_NAME: &str = "Contents";
@@ -19,6 +22,9 @@ pub const PLAYER_BINARY_FILENAME: &str = "unitas-player";
 pub const LICENSE_TEXT_FILENAME: &str = "LICENSE";
 pub const THIRD_PARTY_NOTICES_FILENAME: &str = "THIRD-PARTY-NOTICES.txt";
 pub const STAGED_ASSETS_DIR_NAME: &str = "Assets";
+/// Suffix of the per-game data directory in Windows/Linux layouts, matching
+/// the convention players expect (`<Product>_Data`).
+pub const DATA_DIR_SUFFIX: &str = "_Data";
 
 /// A macOS application bundle produced from a staged player bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +40,7 @@ pub struct PackagedApp {
 pub enum PackageError {
     Io { path: PathBuf, message: String },
     MissingPlayerBinary { path: PathBuf },
+    CodeSign { path: PathBuf, message: String },
 }
 
 impl fmt::Display for PackageError {
@@ -49,11 +56,27 @@ impl fmt::Display for PackageError {
                     path.display()
                 )
             }
+            PackageError::CodeSign { path, message } => {
+                write!(
+                    formatter,
+                    "failed to code sign '{}': {message}",
+                    path.display()
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for PackageError {}
+
+/// A Windows or Linux player directory produced from a staged player bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagedPlayer {
+    pub app_dir: PathBuf,
+    pub executable_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub manifest_path: PathBuf,
+}
 
 /// The name the application bundle and its executable carry.
 pub fn bundle_name(product_name: &str) -> String {
@@ -150,6 +173,8 @@ pub fn package_macos_app(
         third_party_notices_text(licensing).as_bytes(),
     )?;
 
+    ad_hoc_sign_if_needed(app_path)?;
+
     Ok(PackagedApp {
         app_path: app_path.to_path_buf(),
         info_plist_path,
@@ -157,6 +182,137 @@ pub fn package_macos_app(
         player_binary_path,
         resources_dir,
     })
+}
+
+/// Packages a staged player bundle as a Windows player directory.
+///
+/// The layout follows the convention Windows players expect: the product
+/// directory carries `<Product>.exe` next to `<Product>_Data/`, which holds
+/// the staged bundle contents (manifest, assets, managed payload) and the
+/// license texts.
+pub fn package_windows_app(
+    manifest: &BundleManifest,
+    staged_dir: &Path,
+    output_dir: &Path,
+    player_binary: &Path,
+    licensing: &LicensingRecord,
+    license_text: Option<&Path>,
+) -> Result<PackagedPlayer, PackageError> {
+    package_player_directory(
+        manifest,
+        staged_dir,
+        output_dir,
+        player_binary,
+        licensing,
+        license_text,
+        BuildTarget::WINDOWS_X86_64,
+    )
+}
+
+/// Packages a staged player bundle as a Linux player directory.
+///
+/// The layout mirrors the Windows one: the product directory carries the
+/// `<Product>` executable next to `<Product>_Data/` with the staged bundle
+/// contents and license texts.
+pub fn package_linux_app(
+    manifest: &BundleManifest,
+    staged_dir: &Path,
+    output_dir: &Path,
+    player_binary: &Path,
+    licensing: &LicensingRecord,
+    license_text: Option<&Path>,
+) -> Result<PackagedPlayer, PackageError> {
+    package_player_directory(
+        manifest,
+        staged_dir,
+        output_dir,
+        player_binary,
+        licensing,
+        license_text,
+        BuildTarget::LINUX_X86_64,
+    )
+}
+
+fn package_player_directory(
+    manifest: &BundleManifest,
+    staged_dir: &Path,
+    output_dir: &Path,
+    player_binary: &Path,
+    licensing: &LicensingRecord,
+    license_text: Option<&Path>,
+    target: BuildTarget,
+) -> Result<PackagedPlayer, PackageError> {
+    if !player_binary.is_file() {
+        return Err(PackageError::MissingPlayerBinary {
+            path: player_binary.to_path_buf(),
+        });
+    }
+    let base_name = bundle_name(&manifest.product_name);
+    let app_dir = output_dir.join(&base_name);
+    let data_dir = app_dir.join(format!("{base_name}{DATA_DIR_SUFFIX}"));
+    create_dir_all(&data_dir)?;
+
+    copy_staged_bundle(staged_dir, &data_dir)?;
+
+    let executable_path = app_dir.join(target.executable_name(&manifest.product_name));
+    copy_file(player_binary, &executable_path)?;
+    make_executable(&executable_path)?;
+
+    if let Some(text) = license_text {
+        if text.is_file() {
+            copy_file(text, &data_dir.join(LICENSE_TEXT_FILENAME))?;
+        }
+    }
+    write_file(
+        &data_dir.join(THIRD_PARTY_NOTICES_FILENAME),
+        third_party_notices_text(licensing).as_bytes(),
+    )?;
+
+    let manifest_path = data_dir.join(BUNDLE_MANIFEST_FILENAME);
+    Ok(PackagedPlayer {
+        app_dir,
+        executable_path,
+        data_dir,
+        manifest_path,
+    })
+}
+
+/// Ad-hoc code-signs the app bundle when the host can sign and no signature
+/// is present yet, so a locally packaged app stays launchable.
+#[cfg(target_os = "macos")]
+fn ad_hoc_sign_if_needed(app_path: &Path) -> Result<(), PackageError> {
+    let already_signed = Command::new("codesign")
+        .arg("--verify")
+        .arg(app_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if already_signed {
+        return Ok(());
+    }
+    let output = Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(app_path)
+        .output()
+        .map_err(|error| PackageError::CodeSign {
+            path: app_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(PackageError::CodeSign {
+            path: app_path.to_path_buf(),
+            message: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ad_hoc_sign_if_needed(path: &Path) -> Result<(), PackageError> {
+    let _ = path;
+    Ok(())
 }
 
 fn launcher_script(executable_name: &str) -> String {
@@ -436,6 +592,185 @@ mod tests {
                 String::from_utf8_lossy(&launcher_run.stderr)
             );
         }
+        Ok(())
+    }
+
+    fn dummy_player_binary(output_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
+        let binary = output_dir.join("unitas-player-dummy");
+        fs::write(&binary, b"unitas dummy player binary")?;
+        Ok(binary)
+    }
+
+    #[test]
+    fn packaged_windows_app_lays_out_executable_and_data_directory() -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("windows_app")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
+        let licensing = licensing_record("com.unitas.packaged");
+        let binary = dummy_player_binary(&output_dir)?;
+        let packaged = package_windows_app(
+            &staged.manifest,
+            &output_dir,
+            &output_dir.join("windows-layout"),
+            &binary,
+            &licensing,
+            None,
+        )?;
+
+        assert_eq!(
+            packaged.app_dir,
+            output_dir.join("windows-layout").join("PackagedGame")
+        );
+        assert_eq!(
+            packaged.executable_path,
+            packaged.app_dir.join("PackagedGame.exe")
+        );
+        assert!(packaged.executable_path.is_file());
+        assert!(is_executable(&packaged.executable_path)?);
+        assert_eq!(
+            packaged.data_dir,
+            packaged.app_dir.join("PackagedGame_Data")
+        );
+        assert_eq!(
+            packaged.manifest_path,
+            packaged.data_dir.join(BUNDLE_MANIFEST_FILENAME)
+        );
+        assert!(packaged.manifest_path.is_file());
+        assert!(packaged
+            .data_dir
+            .join(STAGED_ASSETS_DIR_NAME)
+            .join("scene_000_scene_alpha.unity")
+            .is_file());
+        assert!(packaged
+            .data_dir
+            .join(THIRD_PARTY_NOTICES_FILENAME)
+            .is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn packaged_linux_app_lays_out_executable_and_data_directory() -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("linux_app")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
+        let licensing = licensing_record("com.unitas.packaged");
+        let binary = dummy_player_binary(&output_dir)?;
+        let packaged = package_linux_app(
+            &staged.manifest,
+            &output_dir,
+            &output_dir.join("linux-layout"),
+            &binary,
+            &licensing,
+            None,
+        )?;
+
+        assert_eq!(
+            packaged.app_dir,
+            output_dir.join("linux-layout").join("PackagedGame")
+        );
+        assert_eq!(
+            packaged.executable_path,
+            packaged.app_dir.join("PackagedGame")
+        );
+        assert!(packaged.executable_path.is_file());
+        assert!(is_executable(&packaged.executable_path)?);
+        assert_eq!(
+            packaged.data_dir,
+            packaged.app_dir.join("PackagedGame_Data")
+        );
+        assert!(packaged.manifest_path.is_file());
+        assert!(packaged
+            .data_dir
+            .join(STAGED_ASSETS_DIR_NAME)
+            .join("scene_000_scene_alpha.unity")
+            .is_file());
+        assert!(packaged
+            .data_dir
+            .join(THIRD_PARTY_NOTICES_FILENAME)
+            .is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn windows_and_linux_packaging_fail_without_a_player_binary() -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("desktop_app_without_binary")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
+        let licensing = licensing_record("com.unitas.packaged");
+        for packaged in [
+            package_windows_app(
+                &staged.manifest,
+                &output_dir,
+                &output_dir.join("windows-layout"),
+                Path::new("target/does-not-exist/unitas-player"),
+                &licensing,
+                None,
+            ),
+            package_linux_app(
+                &staged.manifest,
+                &output_dir,
+                &output_dir.join("linux-layout"),
+                Path::new("target/does-not-exist/unitas-player"),
+                &licensing,
+                None,
+            ),
+        ] {
+            assert!(matches!(
+                packaged,
+                Err(PackageError::MissingPlayerBinary { .. })
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn packaged_macos_app_carries_an_ad_hoc_code_signature() -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("macos_app_signed")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
+        let app_path = staged
+            .application_bundle_path
+            .clone()
+            .ok_or("a macOS build produces an application bundle")?;
+        let verify = Command::new("codesign")
+            .arg("--verify")
+            .arg("--deep")
+            .arg(&app_path)
+            .output()?;
+        assert!(
+            verify.status.success(),
+            "the packaged app has no valid code signature: {}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
         Ok(())
     }
 

@@ -104,8 +104,9 @@ namespace Unitas.PlayerHost
                     host = null;
                     return (int)PlayerHostStage.Ok;
                 }
-                catch (Exception)
+                catch (Exception u0debug)
                 {
+                    Console.Error.WriteLine($"U0DEBUG Init failed: {u0debug}");
                     return (int)PlayerHostStage.BootFailed;
                 }
                 finally

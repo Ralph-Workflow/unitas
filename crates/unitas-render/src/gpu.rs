@@ -11,6 +11,7 @@ use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, MeshAttributes};
 use crate::raster::{BlendMode, DirectionalLight, Material, MeshInstance};
+use crate::shadow::{self, ShadowSettings};
 
 const VERTEX_FLOATS: usize = 11;
 const VERTEX_STRIDE: u64 = 44;
@@ -23,6 +24,7 @@ const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const SHADOW_UNIFORM_BYTES: u64 = 80;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 
@@ -57,6 +59,15 @@ struct MaterialParams {
 @group(2) @binding(3) var material_sampler: sampler;
 @group(2) @binding(4) var<uniform> material: MaterialParams;
 
+struct ShadowParams {
+    light_view_proj: mat4x4<f32>,
+    params: vec4<f32>,
+};
+
+@group(3) @binding(0) var shadow_map: texture_depth_2d;
+@group(3) @binding(1) var shadow_sampler: sampler_comparison;
+@group(3) @binding(2) var<uniform> shadow: ShadowParams;
+
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
@@ -64,6 +75,7 @@ struct VertexOut {
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec3<f32>,
     @location(4) world_pos: vec3<f32>,
+    @location(5) shadow_pos: vec4<f32>,
 };
 
 @vertex
@@ -83,7 +95,52 @@ fn vs_main(
     out.color = inst.color.rgb;
     out.uv = uv;
     out.world_pos = world.xyz;
+    out.shadow_pos = shadow.light_view_proj * world;
     return out;
+}
+
+@vertex
+fn vs_shadow(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec3<f32>,
+) -> VertexOut {
+    var out: VertexOut;
+    let world = inst.model * vec4<f32>(position, 1.0);
+    out.clip_position = shadow.light_view_proj * world;
+    out.normal = normal;
+    out.tangent = tangent;
+    out.color = vec3<f32>(0.0, 0.0, 0.0);
+    out.uv = uv;
+    out.world_pos = world.xyz;
+    out.shadow_pos = out.clip_position;
+    return out;
+}
+
+fn shadow_factor(vs_out: VertexOut) -> f32 {
+    if (shadow.params.z < 0.5) {
+        return 1.0;
+    }
+    let proj = vs_out.shadow_pos;
+    if (proj.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = proj.xy / proj.w;
+    let uv = ndc * vec2<f32>(0.5, 0.5) + vec2<f32>(0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return 1.0;
+    }
+    let depth = proj.z / proj.w - shadow.params.x;
+    let texel = shadow.params.y;
+    var sum = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let offset = vec2<f32>(f32(x), f32(y)) * texel;
+            sum += textureSampleCompare(shadow_map, shadow_sampler, uv + offset, depth);
+        }
+    }
+    return sum / 9.0;
 }
 
 fn surface_color(vs_out: VertexOut) -> vec4<f32> {
@@ -107,8 +164,9 @@ fn surface_color(vs_out: VertexOut) -> vec4<f32> {
     let shininess = 8.0 + smoothness * 248.0;
     let specular = pow(max(dot(n, half_dir), 0.0), shininess) * metallic * smoothness;
     let diffuse = albedo * (1.0 - metallic);
+    let shadowed = shadow_factor(vs_out);
     let shade = globals.light_color.w * albedo
-        + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w;
+        + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w * shadowed;
     return vec4<f32>(shade + emissive, material.params.z);
 }
 
@@ -310,13 +368,18 @@ pub struct Renderer {
     global_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
+    shadow_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     sampler: wgpu::Sampler,
+    shadow_sampler: wgpu::Sampler,
     default_albedo: wgpu::TextureView,
     default_normal: wgpu::TextureView,
     default_emissive: wgpu::TextureView,
     default_material_bind: wgpu::BindGroup,
+    shadow_default_bind: wgpu::BindGroup,
+    shadow_uniform: wgpu::Buffer,
+    shadow_pipeline: wgpu::RenderPipeline,
     offscreen_pipelines: Pipelines,
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
@@ -538,24 +601,6 @@ impl Renderer {
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("scene"),
-            bind_group_layouts: &[
-                Some(&global_layout),
-                Some(&instance_layout),
-                Some(&material_layout),
-            ],
-            immediate_size: 0,
-        });
-        let offscreen_pipelines =
-            create_pipelines(&device, &pipeline_layout, &shader, OFFSCREEN_FORMAT);
-        let capture_pipelines = create_capture_pipelines(
-            &device,
-            &pipeline_layout,
-            &shader,
-            OFFSCREEN_FORMAT,
-            ID_FORMAT,
-        );
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("material"),
             entries: &[
@@ -607,6 +652,82 @@ impl Renderer {
                 },
             ],
         });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(SHADOW_UNIFORM_BYTES),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene"),
+            bind_group_layouts: &[
+                Some(&global_layout),
+                Some(&instance_layout),
+                Some(&material_layout),
+                Some(&shadow_layout),
+            ],
+            immediate_size: 0,
+        });
+        let offscreen_pipelines =
+            create_pipelines(&device, &pipeline_layout, &shader, OFFSCREEN_FORMAT);
+        let capture_pipelines = create_capture_pipelines(
+            &device,
+            &pipeline_layout,
+            &shader,
+            OFFSCREEN_FORMAT,
+            ID_FORMAT,
+        );
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow-depth"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(VERTEX_LAYOUT)],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("material"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -614,7 +735,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let default_albedo = solid_texture(&device, &queue, [255, 255, 255, 255]);
@@ -657,6 +778,87 @@ impl Renderer {
                 },
             ],
         });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow_map_default = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow-default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_map_default_view =
+            shadow_map_default.create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("shadow-default-clear"),
+            });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow-default-clear"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view: &shadow_map_default_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        },
+                    ),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            queue.submit(Some(encoder.finish()));
+        }
+        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow-uniform"),
+            size: SHADOW_UNIFORM_BYTES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &shadow_uniform,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&[0.0f32; 20]),
+        );
+        let shadow_default_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow-default"),
+            layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&shadow_map_default_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: shadow_uniform.as_entire_binding(),
+                },
+            ],
+        });
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
         fonts.load_system_fonts();
@@ -674,13 +876,18 @@ impl Renderer {
             global_layout,
             instance_layout,
             material_layout,
+            shadow_layout,
             pipeline_layout,
             shader,
             sampler,
+            shadow_sampler,
             default_albedo,
             default_normal,
             default_emissive,
             default_material_bind,
+            shadow_default_bind,
+            shadow_uniform,
+            shadow_pipeline,
             offscreen_pipelines,
             capture_pipelines,
             uniforms: Mutex::new(uniforms),

@@ -1,6 +1,26 @@
 use unitas_render::{Camera, Mat4, Mesh, Vec3, look_at};
 
-use crate::input::{InputState, KEY_MOUSE_0};
+use crate::input::{
+    InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_MOUSE_0, KEY_RETURN,
+    KEY_RIGHT_ARROW, KEY_UP_ARROW, STATE_PRESSED,
+};
+
+/// Color of the always-visible focus border drawn around the focused widget.
+pub const FOCUS_INDICATOR_COLOR: [f32; 3] = [1.0, 0.9, 0.0];
+
+const FOCUS_BORDER_THICKNESS: f32 = 2.0;
+
+/// Text produced by [`Ui::text_overlay`] for the render overlay path.
+/// Mirrors `unitas_render::TextOverlayItem`, which is only available with the
+/// device feature; the host maps these into the overlay verbatim.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiTextItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub size_px: f32,
+    pub color: [f32; 4],
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
@@ -101,6 +121,12 @@ pub enum Widget {
         hover_color: [f32; 3],
         pressed_color: [f32; 3],
     },
+    Label {
+        rect: UiRect,
+        text: String,
+        size_px: f32,
+        color: [f32; 4],
+    },
 }
 
 impl Widget {
@@ -109,6 +135,7 @@ impl Widget {
             Widget::Panel { rect, .. } => rect,
             Widget::Image { rect, .. } => rect,
             Widget::Button { rect, .. } => rect,
+            Widget::Label { rect, .. } => rect,
         }
     }
 }
@@ -116,6 +143,7 @@ impl Widget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiEvent {
     Clicked(String),
+    Cancel,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +157,8 @@ pub struct Ui {
     widgets: Vec<Widget>,
     hovered: Option<usize>,
     active: Option<usize>,
+    focus: Option<String>,
+    focus_axis_prev: [f64; 2],
 }
 
 impl Default for Ui {
@@ -143,6 +173,8 @@ impl Ui {
             widgets: Vec::new(),
             hovered: None,
             active: None,
+            focus: None,
+            focus_axis_prev: [0.0; 2],
         }
     }
 
@@ -150,6 +182,8 @@ impl Ui {
         self.widgets.clear();
         self.hovered = None;
         self.active = None;
+        // `focus` survives the rebuild: it is a button id validated lazily
+        // against the current widgets, so immediate-mode callers keep it.
     }
 
     pub fn panel(&mut self, rect: UiRect, color: [f32; 3]) {
@@ -175,6 +209,110 @@ impl Ui {
             hover_color,
             pressed_color,
         });
+    }
+
+    pub fn label(&mut self, rect: UiRect, text: &str, size_px: f32, color: [f32; 4]) {
+        self.widgets.push(Widget::Label {
+            rect,
+            text: text.to_string(),
+            size_px,
+            color,
+        });
+    }
+
+    /// Resolves label widgets into text items for the render overlay path.
+    pub fn text_overlay(&self, screen: &Rect) -> Vec<UiTextItem> {
+        self.widgets
+            .iter()
+            .filter_map(|widget| match widget {
+                Widget::Label {
+                    rect,
+                    text,
+                    size_px,
+                    color,
+                } => {
+                    let resolved = rect.resolve(screen);
+                    Some(UiTextItem {
+                        text: text.clone(),
+                        x: resolved.x,
+                        y: resolved.y,
+                        size_px: *size_px,
+                        color: *color,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn focused(&self) -> Option<&str> {
+        let order = self.focus_order();
+        self.focus
+            .as_deref()
+            .filter(|id| order.contains(id))
+            .or_else(|| order.first().copied())
+    }
+
+    fn focus_order(&self) -> Vec<&str> {
+        self.widgets
+            .iter()
+            .filter_map(|widget| match widget {
+                Widget::Button { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Applies keyboard/gamepad focus navigation for one frame: arrow keys and
+    /// the named `Horizontal`/`Vertical` axes move focus (wrapping), the named
+    /// `Submit` button (or Return) clicks the focused button, and the named
+    /// `Cancel` button (or Escape) emits [`UiEvent::Cancel`].
+    pub fn handle_focus(&mut self, input: &InputState) -> Vec<UiEvent> {
+        let horizontal = input.axis_raw("Horizontal").unwrap_or(0.0);
+        let vertical = input.axis_raw("Vertical").unwrap_or(0.0);
+        let mut step = 0i32;
+        if input.is_key_pressed(KEY_RIGHT_ARROW)
+            || (self.focus_axis_prev[0] <= 0.0 && horizontal > 0.0)
+        {
+            step = 1;
+        } else if input.is_key_pressed(KEY_LEFT_ARROW)
+            || (self.focus_axis_prev[0] >= 0.0 && horizontal < 0.0)
+        {
+            step = -1;
+        } else if input.is_key_pressed(KEY_DOWN_ARROW)
+            || (self.focus_axis_prev[1] <= 0.0 && vertical > 0.0)
+        {
+            step = 1;
+        } else if input.is_key_pressed(KEY_UP_ARROW)
+            || (self.focus_axis_prev[1] >= 0.0 && vertical < 0.0)
+        {
+            step = -1;
+        }
+        self.focus_axis_prev = [horizontal, vertical];
+        if step != 0 {
+            let order = self.focus_order();
+            if !order.is_empty() {
+                let current = self
+                    .focused()
+                    .and_then(|id| order.iter().position(|candidate| *candidate == id));
+                let next = match current {
+                    Some(index) => (index as i32 + step).rem_euclid(order.len() as i32) as usize,
+                    None if step > 0 => 0,
+                    None => order.len() - 1,
+                };
+                self.focus = Some(order[next].to_string());
+            }
+        }
+        let mut events = Vec::new();
+        let submit = named_button_pressed(input, "Submit") || input.is_key_pressed(KEY_RETURN);
+        let cancel = named_button_pressed(input, "Cancel") || input.is_key_pressed(KEY_ESCAPE);
+        if submit && let Some(id) = self.focused() {
+            events.push(UiEvent::Clicked(id.to_string()));
+        }
+        if cancel {
+            events.push(UiEvent::Cancel);
+        }
+        events
     }
 
     pub fn hovered(&self) -> Option<&str> {
@@ -216,37 +354,93 @@ impl Ui {
     }
 
     pub fn draw_list(&self, screen: &Rect) -> Vec<UiQuad> {
-        self.widgets
-            .iter()
-            .enumerate()
-            .map(|(index, widget)| {
-                let rect = widget.rect().resolve(screen);
-                let color = match widget {
-                    Widget::Panel { color, .. } => *color,
-                    Widget::Image { tint, .. } => *tint,
-                    Widget::Button {
-                        color,
-                        hover_color,
-                        pressed_color,
-                        ..
-                    } => {
-                        if self.active == Some(index) {
-                            *pressed_color
-                        } else if self.hovered == Some(index) {
-                            *hover_color
-                        } else {
-                            *color
-                        }
-                    }
-                };
-                UiQuad {
-                    mesh: unit_quad(),
-                    model: quad_model(&rect),
+        let focused_id = self.focused();
+        let mut quads = Vec::new();
+        for (index, widget) in self.widgets.iter().enumerate() {
+            // Labels render through the text overlay path, not as quads.
+            if let Widget::Label { .. } = widget {
+                continue;
+            }
+            let rect = widget.rect().resolve(screen);
+            let color = match widget {
+                Widget::Panel { color, .. } => *color,
+                Widget::Image { tint, .. } => *tint,
+                Widget::Button {
                     color,
+                    hover_color,
+                    pressed_color,
+                    ..
+                } => {
+                    if self.active == Some(index) {
+                        *pressed_color
+                    } else if self.hovered == Some(index) {
+                        *hover_color
+                    } else {
+                        *color
+                    }
                 }
-            })
-            .collect()
+                Widget::Label { .. } => unreachable!("labels are skipped above"),
+            };
+            let is_focused = matches!(
+                widget,
+                Widget::Button { id, .. } if focused_id == Some(id.as_str())
+            );
+            quads.push(UiQuad {
+                mesh: unit_quad(),
+                model: quad_model(&rect),
+                color,
+            });
+            if is_focused {
+                quads.extend(focus_border_quads(&rect));
+            }
+        }
+        quads
     }
+}
+
+fn named_button_pressed(input: &InputState, name: &str) -> bool {
+    input
+        .button_state(name)
+        .is_some_and(|state| state & STATE_PRESSED != 0)
+}
+
+/// Four thin edge quads forming an always-visible border around `rect`.
+fn focus_border_quads(rect: &Rect) -> Vec<UiQuad> {
+    let thickness = FOCUS_BORDER_THICKNESS.min(rect.width * 0.5).max(1.0);
+    let edges = [
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: thickness,
+        },
+        Rect {
+            x: rect.x,
+            y: rect.y + rect.height - thickness,
+            width: rect.width,
+            height: thickness,
+        },
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: thickness,
+            height: rect.height,
+        },
+        Rect {
+            x: rect.x + rect.width - thickness,
+            y: rect.y,
+            width: thickness,
+            height: rect.height,
+        },
+    ];
+    edges
+        .iter()
+        .map(|edge| UiQuad {
+            mesh: unit_quad(),
+            model: quad_model(edge),
+            color: FOCUS_INDICATOR_COLOR,
+        })
+        .collect()
 }
 
 pub fn ui_quad_mesh() -> Mesh {
@@ -297,7 +491,10 @@ fn unit_quad() -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::InputState;
+    use crate::input::{
+        AxisConfig, InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_RETURN,
+        KEY_RIGHT_ARROW, KEY_SPACE, KEY_UP_ARROW,
+    };
 
     fn press(input: &mut InputState, button: u32, pressed: bool) {
         input.queue_mouse_button_event(button, pressed);
@@ -307,6 +504,47 @@ mod tests {
     fn move_to(input: &mut InputState, x: f64, y: f64) {
         input.queue_pointer_move(x, y);
         input.begin_frame(1.0 / 60.0);
+    }
+
+    fn press_key(input: &mut InputState, key: u32) {
+        input.queue_key_event(key, true);
+        input.begin_frame(1.0 / 60.0);
+    }
+
+    fn release_key(input: &mut InputState, key: u32) {
+        input.queue_key_event(key, false);
+        input.begin_frame(1.0 / 60.0);
+    }
+
+    fn button_axis(name: &str, positive_button: &str) -> AxisConfig {
+        AxisConfig {
+            name: name.to_string(),
+            negative_button: String::new(),
+            positive_button: positive_button.to_string(),
+            alt_negative_button: String::new(),
+            alt_positive_button: String::new(),
+            gravity: 1000.0,
+            dead: 0.001,
+            sensitivity: 1000.0,
+            snap: false,
+            invert: false,
+            axis_type: 0,
+            axis: 0,
+        }
+    }
+
+    fn three_button_ui() -> Ui {
+        let mut ui = Ui::new();
+        for (id, x) in [("alpha", -120.0), ("bravo", 0.0), ("charlie", 120.0)] {
+            ui.button(
+                id,
+                UiRect::new(Anchor::Center, [x, -20.0], [100.0, 40.0]),
+                [0.2; 3],
+                [0.3; 3],
+                [0.4; 3],
+            );
+        }
+        ui
     }
 
     #[test]
@@ -559,6 +797,178 @@ mod tests {
     }
 
     #[test]
+    fn label_emits_text_overlay_item_at_resolved_rect() {
+        let screen = Rect::screen(800.0, 600.0);
+        let mut ui = Ui::new();
+        ui.panel(
+            UiRect::new(Anchor::TopLeft, [0.0, 0.0], [300.0, 100.0]),
+            [0.1; 3],
+        );
+        ui.label(
+            UiRect::new(Anchor::TopLeft, [10.0, 10.0], [200.0, 40.0]),
+            "Score: 42",
+            24.0,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        let items = ui.text_overlay(&screen);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "Score: 42");
+        assert_eq!((items[0].x, items[0].y), (10.0, 10.0));
+        assert_eq!(items[0].size_px, 24.0);
+        // The label renders through the text overlay path, not as a quad.
+        assert_eq!(ui.draw_list(&screen).len(), 1);
+    }
+
+    #[test]
+    fn focus_defaults_to_first_button() {
+        let ui = three_button_ui();
+        assert_eq!(ui.focused(), Some("alpha"));
+    }
+
+    #[test]
+    fn focus_order_wraps_forward_and_backward() {
+        let mut ui = three_button_ui();
+        let mut input = InputState::new();
+        press_key(&mut input, KEY_RIGHT_ARROW);
+        assert!(ui.handle_focus(&input).is_empty());
+        assert_eq!(ui.focused(), Some("bravo"));
+        release_key(&mut input, KEY_RIGHT_ARROW);
+        press_key(&mut input, KEY_RIGHT_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("charlie"));
+        release_key(&mut input, KEY_RIGHT_ARROW);
+        press_key(&mut input, KEY_RIGHT_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("alpha"));
+        release_key(&mut input, KEY_RIGHT_ARROW);
+        press_key(&mut input, KEY_LEFT_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("charlie"));
+        release_key(&mut input, KEY_LEFT_ARROW);
+        press_key(&mut input, KEY_DOWN_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("alpha"));
+        release_key(&mut input, KEY_DOWN_ARROW);
+        press_key(&mut input, KEY_UP_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("charlie"));
+    }
+
+    #[test]
+    fn named_axes_move_focus_on_direction_edges() {
+        let mut ui = three_button_ui();
+        let mut input = InputState::with_default_axes();
+        let d = u32::from(b'd');
+        let a = u32::from(b'a');
+        press_key(&mut input, d);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("bravo"));
+        // Holding the key must not retrigger; only a direction change does.
+        input.begin_frame(1.0 / 60.0);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("bravo"));
+        release_key(&mut input, d);
+        press_key(&mut input, a);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("alpha"));
+    }
+
+    #[test]
+    fn submit_activates_the_focused_button() {
+        let mut ui = three_button_ui();
+        let mut input = InputState::new();
+        press_key(&mut input, KEY_RETURN);
+        let events = ui.handle_focus(&input);
+        assert_eq!(events, vec![UiEvent::Clicked("alpha".to_string())]);
+    }
+
+    #[test]
+    fn named_submit_and_cancel_buttons_drive_focus() {
+        let mut ui = three_button_ui();
+        ui.focus = Some("charlie".to_string());
+        let mut input = InputState::new();
+        input.set_axes(vec![
+            button_axis("Submit", "space"),
+            button_axis("Cancel", "escape"),
+        ]);
+        press_key(&mut input, KEY_SPACE);
+        let events = ui.handle_focus(&input);
+        assert_eq!(events, vec![UiEvent::Clicked("charlie".to_string())]);
+        release_key(&mut input, KEY_SPACE);
+        press_key(&mut input, KEY_ESCAPE);
+        let events = ui.handle_focus(&input);
+        assert_eq!(events, vec![UiEvent::Cancel]);
+    }
+
+    #[test]
+    fn focus_survives_widget_rebuild() {
+        let mut ui = three_button_ui();
+        let mut input = InputState::new();
+        press_key(&mut input, KEY_RIGHT_ARROW);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("bravo"));
+        // Immediate-mode rebuild: clear and re-declare the same buttons;
+        // focus is tracked by button id, so it is preserved.
+        ui.clear();
+        for (id, x) in [("alpha", -120.0), ("bravo", 0.0), ("charlie", 120.0)] {
+            ui.button(
+                id,
+                UiRect::new(Anchor::Center, [x, -20.0], [100.0, 40.0]),
+                [0.2; 3],
+                [0.3; 3],
+                [0.4; 3],
+            );
+        }
+        assert_eq!(ui.focused(), Some("bravo"));
+    }
+
+    #[test]
+    fn focused_widget_emits_distinct_focus_indicator() {
+        let screen = Rect::screen(800.0, 600.0);
+        let button_rect = UiRect::new(Anchor::Center, [-50.0, -20.0], [100.0, 40.0]);
+        let mut ui = Ui::new();
+        ui.panel(
+            UiRect::new(Anchor::TopLeft, [0.0, 0.0], [300.0, 200.0]),
+            [0.2, 0.3, 0.4],
+        );
+        ui.label(
+            UiRect::new(Anchor::TopLeft, [10.0, 10.0], [100.0, 20.0]),
+            "hint",
+            16.0,
+            [1.0; 4],
+        );
+        let quads = ui.draw_list(&screen);
+        assert_eq!(
+            quads.len(),
+            1,
+            "panel only; no focusable widget, no indicator"
+        );
+        assert!(
+            quads.iter().all(|quad| quad.color != FOCUS_INDICATOR_COLOR),
+            "widgets must never use the indicator color"
+        );
+        ui.button("alpha", button_rect, [0.2; 3], [0.3; 3], [0.4; 3]);
+        let quads = ui.draw_list(&screen);
+        let indicators: Vec<&UiQuad> = quads
+            .iter()
+            .filter(|quad| quad.color == FOCUS_INDICATOR_COLOR)
+            .collect();
+        assert_eq!(
+            indicators.len(),
+            4,
+            "the focused button draws a four-edge focus border"
+        );
+        for quad in &indicators {
+            assert_eq!(quad.mesh.indices, vec![0, 1, 2, 0, 2, 3]);
+        }
+        assert_eq!(
+            quads.len(),
+            2 + 4,
+            "panel + button quads plus the focus border"
+        );
+    }
+
+    #[test]
     fn ui_camera_maps_screen_corners_to_ndc() {
         let camera = ui_camera(800.0, 600.0);
         let view_projection = camera.projection_matrix().mul_mat4(&ui_view(800.0, 600.0));
@@ -571,5 +981,68 @@ mod tests {
         let center = view_projection.project_point(Vec3::new(400.0, 300.0, 0.0));
         assert!(center.x.abs() < 1e-5);
         assert!(center.y.abs() < 1e-5);
+    }
+}
+
+/// Crispness proof through the real cosmic-text glyph pipeline: the label's
+/// overlay item is laid out and rasterized per resolution scale, so text is
+/// reshaped instead of stretched. Gated on `device` because
+/// `unitas_render::glyphs` only compiles with the device feature.
+#[cfg(all(test, feature = "device"))]
+mod text_glyph_tests {
+    use super::UiTextItem;
+    use unitas_render::glyphs::{
+        FontLibrary, GlyphAtlas, SwashCache, TextStyle, layout_text, rasterize,
+    };
+
+    fn layout_at_scale(
+        fonts: &mut FontLibrary,
+        item: &UiTextItem,
+        scale: f32,
+    ) -> (f32, f32, usize) {
+        let size_px = item.size_px * scale;
+        let style = TextStyle::new(size_px, size_px * 1.25, item.color);
+        let layout = layout_text(fonts, &item.text, None, &style);
+        assert!(
+            !layout.glyphs.is_empty(),
+            "label text must shape into glyphs at scale {scale}"
+        );
+        let mut cache = SwashCache::new();
+        let mut atlas = GlyphAtlas::new(1024, 1024);
+        let quads = rasterize(fonts, &mut cache, &mut atlas, &layout);
+        assert!(
+            !quads.is_empty(),
+            "label text must rasterize into glyph quads at scale {scale}"
+        );
+        let max_quad_height = quads.iter().map(|quad| quad.height).fold(0.0f32, f32::max);
+        (layout.width, max_quad_height, quads.len())
+    }
+
+    #[test]
+    fn label_text_layout_produces_glyph_quads_at_multiple_resolutions() {
+        let mut fonts = FontLibrary::new();
+        if !fonts.load_system_fonts() {
+            return;
+        }
+        let item = UiTextItem {
+            text: "Score: 42".to_string(),
+            x: 10.0,
+            y: 10.0,
+            size_px: 24.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        let (width_lo, height_lo, quads_lo) = layout_at_scale(&mut fonts, &item, 1.0);
+        let (width_hi, height_hi, quads_hi) = layout_at_scale(&mut fonts, &item, 2.0);
+        assert!(width_lo > 0.0 && height_lo > 0.0);
+        assert!(width_hi > width_lo, "higher resolution must reshape wider");
+        assert!(
+            (width_hi - width_lo * 2.0).abs() < width_lo * 0.2,
+            "width should track the resolution scale, got {width_lo} vs {width_hi}"
+        );
+        assert!(
+            height_hi > height_lo,
+            "glyph quads must grow with the resolution scale"
+        );
+        assert!(quads_hi >= quads_lo);
     }
 }

@@ -384,6 +384,13 @@ advisory_reviewed = "2026-11-25"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
+name = "fnv"
+version = "1.0.7"
+license = "Apache-2.0/MIT"
+advisory_reviewed = "2026-11-26"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 license = "Zlib"
@@ -444,6 +451,20 @@ name = "getrandom"
 version = "0.4.3"
 license = "MIT OR Apache-2.0"
 advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "gilrs"
+version = "0.11.2"
+license = "Apache-2.0/MIT"
+advisory_reviewed = "2026-11-26"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "gilrs-core"
+version = "0.6.8"
+license = "Apache-2.0/MIT"
+advisory_reviewed = "2026-11-26"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
@@ -559,6 +580,20 @@ advisory_reviewed = "2026-11-25"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
+name = "inotify"
+version = "0.11.5"
+license = "ISC"
+advisory_reviewed = "2026-11-26"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.8"
+license = "ISC"
+advisory_reviewed = "2026-11-26"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
 name = "itoa"
 version = "1.0.19"
 license = "MIT OR Apache-2.0"
@@ -654,6 +689,13 @@ name = "libredox"
 version = "0.1.25"
 license = "MIT"
 advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "libudev-sys"
+version = "0.1.4"
+license = "MIT"
+advisory_reviewed = "2026-11-26"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
@@ -766,6 +808,13 @@ name = "ndk-sys"
 version = "0.6.0+11769913"
 license = "MIT OR Apache-2.0"
 advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "nix"
+version = "0.31.4"
+license = "MIT"
+advisory_reviewed = "2026-11-26"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
@@ -955,6 +1004,13 @@ name = "objc2-foundation"
 version = "0.3.2"
 license = "MIT"
 advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+license = "Zlib OR Apache-2.0 OR MIT"
+advisory_reviewed = "2026-11-26"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]
@@ -1627,6 +1683,20 @@ name = "unicode-width"
 version = "0.2.3"
 license = "MIT OR Apache-2.0"
 advisory_reviewed = "2026-11-25"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "uuid"
+version = "1.29.3"
+license = "Apache-2.0 OR MIT"
+advisory_reviewed = "2026-11-26"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+
+[[package]]
+name = "vec_map"
+version = "0.8.2"
+license = "MIT/Apache-2.0"
+advisory_reviewed = "2026-11-26"
 note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
 
 [[package]]

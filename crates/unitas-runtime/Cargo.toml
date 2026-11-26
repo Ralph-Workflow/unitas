@@ -76,7 +76,7 @@ ref_option = "allow"
 
 [features]
 default = []
-device = ["dep:winit", "unitas-render/device", "unitas-audio/device"]
+device = ["dep:gilrs", "dep:winit", "unitas-render/device", "unitas-audio/device"]
 
 [dependencies]
 libloading = "0.8"
@@ -85,6 +85,7 @@ unitas-asset = { path = "../unitas-asset" }
 unitas-audio = { path = "../unitas-audio" }
 unitas-core = { path = "../unitas-core" }
 unitas-physics = { path = "../unitas-physics" }
+gilrs = { version = "0.11.2", optional = true }
 unitas-render = { path = "../unitas-render" }
 winit = { version = "0.30.13", optional = true }
 

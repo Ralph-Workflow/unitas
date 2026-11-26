@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
+use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
+use gilrs::{Axis, Button, Error as GilrsError, EventType, GamepadId, Gilrs};
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
@@ -31,9 +33,15 @@ use winit::window::{Window, WindowId};
 
 use crate::Runtime;
 use crate::input::{
+    GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_RIGHT_X, GAMEPAD_AXIS_RIGHT_Y,
+    GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT, GAMEPAD_BUTTON_DPAD_RIGHT,
+    GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_EAST, GAMEPAD_BUTTON_LEFT_SHOULDER,
+    GAMEPAD_BUTTON_LEFT_STICK, GAMEPAD_BUTTON_LEFT_TRIGGER, GAMEPAD_BUTTON_NORTH,
+    GAMEPAD_BUTTON_RIGHT_SHOULDER, GAMEPAD_BUTTON_RIGHT_STICK, GAMEPAD_BUTTON_RIGHT_TRIGGER,
+    GAMEPAD_BUTTON_SELECT, GAMEPAD_BUTTON_SOUTH, GAMEPAD_BUTTON_START, GAMEPAD_BUTTON_WEST,
     InputState, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT,
     KEY_LEFT_ARROW, KEY_LEFT_CONTROL, KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW,
-    KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW,
+    KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW, RumbleHandler,
 };
 use crate::runtime::RenderCameraParams;
 
@@ -805,6 +813,154 @@ pub fn run_windowed_gpu(
     Ok(())
 }
 
+const RUMBLE_DURATION_MILLIS: u32 = 200;
+
+struct GamepadBackend {
+    gilrs: Gilrs,
+    active: Option<GamepadId>,
+    effect: Option<Effect>,
+}
+
+impl GamepadBackend {
+    fn new() -> Option<Self> {
+        let gilrs = match Gilrs::new() {
+            Ok(gilrs) => gilrs,
+            Err(GilrsError::NotImplemented(gilrs)) => gilrs,
+            Err(_) => return None,
+        };
+        let mut backend = Self {
+            gilrs,
+            active: None,
+            effect: None,
+        };
+        let connected: Vec<GamepadId> = backend.gilrs.gamepads().map(|(id, _)| id).collect();
+        if let Some(id) = connected.first().copied() {
+            backend.active = Some(id);
+        }
+        Some(backend)
+    }
+
+    fn poll(&mut self, input: &mut InputState) {
+        while let Some(event) = self.gilrs.next_event() {
+            match event.event {
+                EventType::Connected => {
+                    self.active = Some(event.id);
+                    input.connect_gamepad(gamepad_device_id(event.id));
+                }
+                EventType::Disconnected => {
+                    if self.active == Some(event.id) {
+                        self.active = None;
+                        self.effect = None;
+                    }
+                    input.disconnect_gamepad(gamepad_device_id(event.id));
+                }
+                EventType::ButtonPressed(button, _) => {
+                    if let Some(index) = gamepad_button_index(button) {
+                        input.set_gamepad_button(index, true);
+                    }
+                }
+                EventType::ButtonReleased(button, _) => {
+                    if let Some(index) = gamepad_button_index(button) {
+                        input.set_gamepad_button(index, false);
+                    }
+                }
+                EventType::AxisChanged(axis, value, _) => {
+                    if let Some(index) = gamepad_axis_index(axis) {
+                        input.set_gamepad_axis(index, f64::from(value));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn rumble(&mut self, low: f64, high: f64) -> bool {
+        let Some(id) = self.active else {
+            return false;
+        };
+        let Some(gamepad) = self.gilrs.connected_gamepad(id) else {
+            return false;
+        };
+        if !gamepad.is_ff_supported() {
+            return false;
+        }
+        let duration = Ticks::from_ms(RUMBLE_DURATION_MILLIS);
+        let mut builder = EffectBuilder::new();
+        builder.add_effect(BaseEffect {
+            kind: BaseEffectType::Strong {
+                magnitude: rumble_magnitude(low),
+            },
+            scheduling: Replay {
+                play_for: duration,
+                with_delay: duration,
+                ..Default::default()
+            },
+            envelope: Default::default(),
+        });
+        builder.add_effect(BaseEffect {
+            kind: BaseEffectType::Weak {
+                magnitude: rumble_magnitude(high),
+            },
+            scheduling: Replay {
+                play_for: duration,
+                with_delay: duration,
+                ..Default::default()
+            },
+            envelope: Default::default(),
+        });
+        let Ok(effect) = builder
+            .gamepads(&[id])
+            .repeat(Repeat::For(duration))
+            .finish(&mut self.gilrs)
+        else {
+            return false;
+        };
+        if effect.play().is_err() {
+            return false;
+        }
+        self.effect = Some(effect);
+        true
+    }
+}
+
+fn gamepad_device_id(id: GamepadId) -> u32 {
+    u32::try_from(usize::from(id)).unwrap_or(u32::MAX)
+}
+
+fn gamepad_axis_index(axis: Axis) -> Option<u32> {
+    match axis {
+        Axis::LeftStickX => Some(GAMEPAD_AXIS_LEFT_X),
+        Axis::LeftStickY => Some(GAMEPAD_AXIS_LEFT_Y),
+        Axis::RightStickX => Some(GAMEPAD_AXIS_RIGHT_X),
+        Axis::RightStickY => Some(GAMEPAD_AXIS_RIGHT_Y),
+        _ => None,
+    }
+}
+
+fn gamepad_button_index(button: Button) -> Option<u32> {
+    match button {
+        Button::South => Some(GAMEPAD_BUTTON_SOUTH),
+        Button::East => Some(GAMEPAD_BUTTON_EAST),
+        Button::West => Some(GAMEPAD_BUTTON_WEST),
+        Button::North => Some(GAMEPAD_BUTTON_NORTH),
+        Button::LeftTrigger => Some(GAMEPAD_BUTTON_LEFT_TRIGGER),
+        Button::RightTrigger => Some(GAMEPAD_BUTTON_RIGHT_TRIGGER),
+        Button::Select => Some(GAMEPAD_BUTTON_SELECT),
+        Button::Start => Some(GAMEPAD_BUTTON_START),
+        Button::LeftThumb => Some(GAMEPAD_BUTTON_LEFT_STICK),
+        Button::RightThumb => Some(GAMEPAD_BUTTON_RIGHT_STICK),
+        Button::DPadUp => Some(GAMEPAD_BUTTON_DPAD_UP),
+        Button::DPadDown => Some(GAMEPAD_BUTTON_DPAD_DOWN),
+        Button::DPadLeft => Some(GAMEPAD_BUTTON_DPAD_LEFT),
+        Button::DPadRight => Some(GAMEPAD_BUTTON_DPAD_RIGHT),
+        _ => None,
+    }
+}
+
+fn rumble_magnitude(value: f64) -> u16 {
+    (value.clamp(0.0, 1.0) * f64::from(u16::MAX)) as u16
+}
+
 struct WindowApp<'a> {
     runtime: &'a mut Runtime,
     presenter: &'a mut dyn FramePresenter,
@@ -816,6 +972,7 @@ struct WindowApp<'a> {
     presented_frames: u64,
     presenting_started: Option<Instant>,
     presenting_finished: Option<Instant>,
+    gamepad: Option<Arc<Mutex<GamepadBackend>>>,
 }
 
 impl<'a> WindowApp<'a> {
@@ -824,6 +981,18 @@ impl<'a> WindowApp<'a> {
         config: &WindowConfig,
         presenter: &'a mut dyn FramePresenter,
     ) -> Self {
+        let gamepad = GamepadBackend::new().map(|backend| Arc::new(Mutex::new(backend)));
+        if let Some(backend) = &gamepad {
+            let handler_backend = Arc::clone(backend);
+            runtime
+                .input_mut()
+                .set_rumble_handler(Some(RumbleHandler::new(
+                    move |low, high| match handler_backend.lock() {
+                        Ok(mut backend) => backend.rumble(low, high),
+                        Err(_) => false,
+                    },
+                )));
+        }
         Self {
             runtime,
             presenter,
@@ -835,7 +1004,18 @@ impl<'a> WindowApp<'a> {
             presented_frames: 0,
             presenting_started: None,
             presenting_finished: None,
+            gamepad,
         }
+    }
+
+    fn poll_gamepad(&mut self) {
+        let Some(gamepad) = &self.gamepad else {
+            return;
+        };
+        let Ok(mut backend) = gamepad.lock() else {
+            return;
+        };
+        backend.poll(self.runtime.input_mut());
     }
 
     fn sustained_fps_line(&self) -> Option<String> {
@@ -856,6 +1036,7 @@ impl<'a> WindowApp<'a> {
         if event_loop.exiting() {
             return;
         }
+        self.poll_gamepad();
         let now = Instant::now();
         let delta_seconds = match self.config.fixed_frame_delta_seconds {
             Some(fixed) if fixed.is_finite() && fixed > 0.0 => fixed,
