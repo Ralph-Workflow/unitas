@@ -18,6 +18,11 @@ namespace Unitas.Editor.Tests
             SetPropertyInverseRestoresBytes();
             CreateThenInverseRestoresBytes();
             DestroyThenInverseRestoresBytes();
+            ReparentThenInverseRestoresBytes();
+            ReparentRefusesACycle();
+            SetActiveThenInverseRestoresBytes();
+            DuplicateThenInverseRestoresBytes();
+            InspectReportsTheComponentsAndProperties();
             MalformedHeaderReportsFileAndLine();
             HierarchyMatchesTheSampleScene();
         }
@@ -107,6 +112,147 @@ namespace Unitas.Editor.Tests
 
             document.Apply(op);
             Check.That("scene: redo of a destroy is byte-identical", destroyedText == document.Save());
+        }
+
+        private static void ReparentThenInverseRestoresBytes()
+        {
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+
+            SceneOp op = SceneOp.Reparent(1000000091, 1000000021);
+            SceneOp inverse = document.Apply(op);
+            Check.Equal("scene: reparent returns a reparent inverse", "Reparent", inverse.Kind.ToString());
+            Check.Equal(
+                "scene: the reparented object knows its new parent",
+                "1000000021",
+                Format(document.Find(1000000091).ParentFileId));
+
+            document.Apply(inverse);
+            Check.That(
+                "scene: undo of a reparent restores the original bytes",
+                original.SequenceEqual(Encoding.UTF8.GetBytes(document.Save())));
+        }
+
+        private static void ReparentRefusesACycle()
+        {
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
+
+            bool cycleRefused = false;
+            try
+            {
+                document.Apply(SceneOp.Reparent(1000000081, 1000000091));
+            }
+            catch (SceneParseException error)
+            {
+                cycleRefused = true;
+                Check.That("scene: the cycle refusal gives a reason", error.Reason.Contains("cycle", StringComparison.Ordinal));
+            }
+
+            Check.That("scene: a reparent that would create a cycle is refused", cycleRefused);
+
+            bool selfRefused = false;
+            try
+            {
+                document.Apply(SceneOp.Reparent(1000000091, 1000000091));
+            }
+            catch (SceneParseException error)
+            {
+                selfRefused = true;
+                Check.That("scene: the self-parent refusal gives a reason", error.Reason.Length > 0);
+            }
+
+            Check.That("scene: an object cannot be its own parent", selfRefused);
+            Check.That(
+                "scene: a refused reparent leaves the scene untouched",
+                original.SequenceEqual(Encoding.UTF8.GetBytes(document.Save())));
+        }
+
+        private static void SetActiveThenInverseRestoresBytes()
+        {
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+
+            SceneOp op = SceneOp.SetActive(1000000091, false);
+            SceneOp inverse = document.Apply(op);
+            Check.Equal("scene: set active returns a set active inverse", "SetActive", inverse.Kind.ToString());
+            Check.That(
+                "scene: the deactivated object is not active",
+                !document.Inspect(1000000091).Active);
+
+            document.Apply(inverse);
+            Check.That(
+                "scene: undo of an activation restores the original bytes",
+                original.SequenceEqual(Encoding.UTF8.GetBytes(document.Save())));
+        }
+
+        private static void DuplicateThenInverseRestoresBytes()
+        {
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            int before = document.Objects.Count;
+
+            SceneOp op = SceneOp.DuplicateGameObject(1000000091, "Pickup_1 Copy", -1);
+            SceneOp inverse = document.Apply(op);
+            Check.Equal("scene: duplicate returns a destroy inverse", "DestroyGameObject", inverse.Kind.ToString());
+            Check.Equal("scene: the copy is in the scene", before + 1, document.Objects.Count);
+
+            SceneObject copy = FindObject(document, "Pickup_1 Copy");
+            Check.Equal(
+                "scene: the copy keeps the parent of the object it copies",
+                "1000000081",
+                Format(copy.ParentFileId));
+            Check.Equal(
+                "scene: the copy keeps the position of the object it copies",
+                "{x: 3, y: 0.75, z: 3}",
+                document.Inspect(copy.FileId).Position);
+
+            document.Apply(inverse);
+            Check.That(
+                "scene: undo of a duplicate restores the original bytes",
+                original.SequenceEqual(Encoding.UTF8.GetBytes(document.Save())));
+        }
+
+        private static void InspectReportsTheComponentsAndProperties()
+        {
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            SceneInspection inspection = document.Inspect(1000000091);
+
+            Check.Equal("scene: the inspection names the object", "Pickup_1", inspection.Name);
+            Check.Equal("scene: the inspection names the parent", "1000000081", Format(inspection.ParentFileId));
+            Check.Equal("scene: the inspection reports the object as active", true, inspection.Active);
+            Check.Equal("scene: the inspection reports the position", "{x: 3, y: 0.75, z: 3}", inspection.Position);
+            Check.Equal("scene: the inspection reports the scale", "{x: 0.75, y: 0.75, z: 0.75}", inspection.Scale);
+            Check.Equal("scene: the inspection lists the components", 5, inspection.Components.Count);
+            Check.Equal("scene: the first component is the transform", "Transform", inspection.Components[0].Type);
+
+            bool foundPosition = false;
+            foreach (SceneProperty property in inspection.Components[0].Properties)
+            {
+                if (string.Equals(property.Name, "m_LocalPosition", StringComparison.Ordinal))
+                {
+                    foundPosition = true;
+                    Check.Equal(
+                        "scene: the transform reports its local position",
+                        "{x: 3, y: 0.75, z: 3}",
+                        property.Value);
+                }
+            }
+
+            Check.That("scene: the transform carries the local position", foundPosition);
+
+            bool unknownRefused = false;
+            try
+            {
+                document.Inspect(999999999);
+            }
+            catch (SceneParseException error)
+            {
+                unknownRefused = true;
+                Check.That("scene: the inspection of an unknown object gives a reason", error.Reason.Length > 0);
+            }
+
+            Check.That("scene: the inspection of an unknown object is refused", unknownRefused);
         }
 
         private static void MalformedHeaderReportsFileAndLine()

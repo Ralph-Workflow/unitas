@@ -31,6 +31,30 @@ namespace Unitas.Editor.Tests
             RecordsAnAuditEntryForTheInvocation();
             RegistryDroppedMethodsAreNotInvoked();
             DiscoversEditorCallableMethodsAndEmitsGlueRegistration();
+            TheLiveHostRegistersTheExecuteMethodTool();
+        }
+
+        private static void TheLiveHostRegistersTheExecuteMethodTool()
+        {
+            using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            using PlaySessionManager playSessions = new PlaySessionManager();
+            BuiltinDefaults.RegisterAll(host, playSessions);
+
+            ToolDefinition? definition = null;
+            foreach (ToolDefinition candidate in host.ListTools())
+            {
+                if (candidate.Name == "editor.execute_method")
+                {
+                    definition = candidate;
+                    break;
+                }
+            }
+
+            Check.That("execute-method: the live host registers the tool", definition != null);
+            Check.Equal(
+                "execute-method: the live host gates the tool with execute-project-code",
+                Scopes.AsString(Scope.ExecuteProjectCode),
+                Scopes.AsString(definition!.RequiredScope));
         }
 
         private static void ToolIsRegisteredWithExecuteProjectCodeScopeAndMethodSchema()

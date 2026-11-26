@@ -1,10 +1,10 @@
 {
   "name": "restart-recovery",
-  "scene": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+  "scene": "Assets/Scenes/RollABall.unity",
   "steps": [
     {
       "load_scene": {
-        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+        "path": "Assets/Scenes/RollABall.unity",
         "mode": "single"
       }
     },

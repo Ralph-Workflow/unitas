@@ -168,6 +168,82 @@ namespace Unitas.Bridge.Scripting
             Register(hi, lo, factory, handlerFactory);
         }
 
+        /// <summary>The built-in uGUI components a Unity scene states its interface with.</summary>
+        public enum BuiltInUiComponent
+        {
+            None = 0,
+            Button,
+            Text,
+            Image,
+            CanvasScaler,
+        }
+
+        /// <summary>
+        /// The script GUIDs Unity assigns to the built-in uGUI components. The
+        /// runtime hands them over as the high and low half of the GUID.
+        /// </summary>
+        private static class BuiltInUiGuids
+        {
+            internal const ulong ButtonHi = 0x4e29b1a8efbd4b44UL;
+            internal const ulong ButtonLo = 0xbb3f3716e73f07ffUL;
+            internal const ulong TextHi = 0x5f7201a12d95ffc4UL;
+            internal const ulong TextLo = 0x09449d95f23cf332UL;
+            internal const ulong ImageHi = 0xfe87c0e1cc204ed4UL;
+            internal const ulong ImageLo = 0x8ad3b37840f39efcUL;
+            internal const ulong CanvasScalerHi = 0x0cd44c1031e13a94UL;
+            internal const ulong CanvasScalerLo = 0x3bb63640046fad76UL;
+        }
+
+        /// <summary>
+        /// Registers the built-in uGUI components with the managed factories, so a
+        /// scene that states its interface with them resolves to the managed ones.
+        /// </summary>
+        public static void RegisterBuiltInUiComponents()
+        {
+            Register<UnityEngine.UI.Button>(
+                BuiltInUiGuids.ButtonHi,
+                BuiltInUiGuids.ButtonLo,
+                () => new UnityEngine.UI.Button());
+            Register<UnityEngine.UI.Text>(
+                BuiltInUiGuids.TextHi,
+                BuiltInUiGuids.TextLo,
+                () => new UnityEngine.UI.Text());
+            Register<UnityEngine.UI.Image>(
+                BuiltInUiGuids.ImageHi,
+                BuiltInUiGuids.ImageLo,
+                () => new UnityEngine.UI.Image());
+            Register<UnityEngine.UI.CanvasScaler>(
+                BuiltInUiGuids.CanvasScalerHi,
+                BuiltInUiGuids.CanvasScalerLo,
+                () => new UnityEngine.UI.CanvasScaler());
+        }
+
+        /// <summary>The built-in uGUI component a script GUID names, if it names one.</summary>
+        public static BuiltInUiComponent GetBuiltInUiComponent(ulong guidHi, ulong guidLo)
+        {
+            if (guidHi == BuiltInUiGuids.ButtonHi && guidLo == BuiltInUiGuids.ButtonLo)
+            {
+                return BuiltInUiComponent.Button;
+            }
+
+            if (guidHi == BuiltInUiGuids.TextHi && guidLo == BuiltInUiGuids.TextLo)
+            {
+                return BuiltInUiComponent.Text;
+            }
+
+            if (guidHi == BuiltInUiGuids.ImageHi && guidLo == BuiltInUiGuids.ImageLo)
+            {
+                return BuiltInUiComponent.Image;
+            }
+
+            if (guidHi == BuiltInUiGuids.CanvasScalerHi && guidLo == BuiltInUiGuids.CanvasScalerLo)
+            {
+                return BuiltInUiComponent.CanvasScaler;
+            }
+
+            return BuiltInUiComponent.None;
+        }
+
         public static void RegisterHandler(MonoBehaviour instance, IUnitasMessageHandler handler)
         {
             ArgumentNullException.ThrowIfNull(instance);

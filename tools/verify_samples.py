@@ -26,6 +26,7 @@ EDITOR_SCENARIOS = (
     "collect_all.json",
     "retry_clean.json",
     "scene_edit_restore.json",
+    "play_mode_edit_restore.json",
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
@@ -52,6 +53,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("slowmo_finish", "slowmo_finish.json", ("--repeat", "2"), False),
     ("destroy_semantics", "destroy_semantics.json", ("--repeat", "2"), False),
     ("retry_clean", "retry_clean.json", ("--repeat", "2"), False),
+    ("restart_recovery", "restart_recovery.scenario.json", ("--repeat", "2"), False),
     ("combo_multiplier", "combo_multiplier.json", ("--repeat", "2"), False),
     ("gold_window", "gold_window.json", ("--repeat", "2"), False),
     ("gold_collect", "gold_collect.json", ("--repeat", "2"), False),
@@ -63,6 +65,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
         ("--frame-rates", "30,60,144,240", "--repeat", "2"),
         False,
     ),
+    ("pointer_ui", "pointer_ui.scenario.json", ("--repeat", "2"), False),
     ("persist_write", "persist_write.json", (), True),
     ("persist_read", "persist_read.json", (), True),
     ("s8_title_checkpoint", "s8_title_checkpoint.scenario.json", (), False),

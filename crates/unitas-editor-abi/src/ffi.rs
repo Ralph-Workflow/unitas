@@ -35,6 +35,9 @@ pub fn builtin_dispatch_table() -> Result<DispatchTable, AbiError> {
         builder = builder.grant(scope);
     }
     let builder = crate::build_tools::register(builder)?;
+    let builder = crate::asset_tools::register(builder)?;
+    let builder = crate::compat_tools::register(builder)?;
+    let builder = crate::diagnostics_tools::register(builder)?;
     Ok(builder
         .tool(
             descriptor,

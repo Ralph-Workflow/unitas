@@ -15,6 +15,7 @@ namespace Unitas.Bridge
         private const uint CollisionPhaseEnter = 0;
         private const int GAME_OBJECT_CLASS = 1;
         private const int TRANSFORM_CLASS = 4;
+        private const int MONO_BEHAVIOUR_CLASS = 114;
         private const int PREFAB_INSTANCE_CLASS = 1001;
         private const int MaxPrefabInstanceDepth = 8;
         private const uint CollisionPhaseStay = 1;
@@ -41,6 +42,7 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
+        private readonly Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord> _sceneUiComponents = new Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>();
         private readonly List<GameObject> _materializedSceneCameras = new List<GameObject>();
         private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
@@ -165,6 +167,7 @@ namespace Unitas.Bridge
             MeshRenderer.Provider = _renderProvider;
             Light.Provider = _renderProvider;
             UnityEngine.UI.Ui.Provider = _uiProvider;
+            ScriptGlueRegistry.RegisterBuiltInUiComponents();
             Unitas.Bridge.Messaging.MessageDispatcher.EnsureInstalled();
             UnitySynchronizationContext.Install();
             Time.PushTimeScaleToHost();
@@ -903,6 +906,7 @@ namespace Unitas.Bridge
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
                 _sceneTransforms.Clear();
+                _sceneUiComponents.Clear();
                 StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
                 {
@@ -2483,7 +2487,84 @@ namespace Unitas.Bridge
                 audioSource.ApplyNativeConfig(entity, audioConfig, loadedClip);
             }
             SyncSimulatedTransform(owner);
+            ApplySceneUiComponent(entity, guidHi, guidLo, script);
             return handle;
+        }
+
+        /// <summary>
+        /// Seeds the managed uGUI component with the state the loaded scene states
+        /// for it, so a button that is not interactable stays that way and a label
+        /// shows the text the scene gave it.
+        /// </summary>
+        private void ApplySceneUiComponent(ulong entity, ulong guidHi, ulong guidLo, MonoBehaviour script)
+        {
+            ScriptGlueRegistry.BuiltInUiComponent kind = ScriptGlueRegistry.GetBuiltInUiComponent(guidHi, guidLo);
+            if (kind == ScriptGlueRegistry.BuiltInUiComponent.None)
+            {
+                return;
+            }
+
+            if (!_sceneUiComponents.TryGetValue((entity, kind), out ParsedUiComponentRecord state))
+            {
+                return;
+            }
+
+            script.enabled = state.Enabled;
+            switch (kind)
+            {
+                case ScriptGlueRegistry.BuiltInUiComponent.Button:
+                    if (script is UnityEngine.UI.Button button)
+                    {
+                        button.interactable = state.Interactable;
+                    }
+
+                    break;
+                case ScriptGlueRegistry.BuiltInUiComponent.Text:
+                    if (script is UnityEngine.UI.Text text)
+                    {
+                        text.fontSize = (int)state.FontSize;
+                        text.color = state.Color;
+                        text.text = state.Text;
+                    }
+
+                    break;
+                case ScriptGlueRegistry.BuiltInUiComponent.Image:
+                    if (script is UnityEngine.UI.Image image)
+                    {
+                        image.color = state.Color;
+                        image.sprite = state.Sprite;
+                    }
+
+                    break;
+                case ScriptGlueRegistry.BuiltInUiComponent.CanvasScaler:
+                    if (script is UnityEngine.UI.CanvasScaler scaler)
+                    {
+                        scaler.uiScaleMode = (UnityEngine.UI.CanvasScaler.ScaleMode)state.UiScaleMode;
+                        scaler.referenceResolution = state.ReferenceResolution;
+                        scaler.screenMatchMode = (UnityEngine.UI.CanvasScaler.ScreenMatchMode)state.ScreenMatchMode;
+                        scaler.matchWidthOrHeight = state.MatchWidthOrHeight;
+                    }
+
+                    break;
+            }
+        }
+
+        /// <summary>Reads the high and low half of a script GUID without failing on a malformed one.</summary>
+        private static bool TryParseScriptGuid(string guidHex, out ulong guidHi, out ulong guidLo)
+        {
+            guidHi = 0;
+            guidLo = 0;
+            if (guidHex.Length != 32)
+            {
+                return false;
+            }
+
+            if (!ulong.TryParse(guidHex.AsSpan(0, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out guidHi))
+            {
+                return false;
+            }
+
+            return ulong.TryParse(guidHex.AsSpan(16, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out guidLo);
         }
 
         private void OnAwake(ulong scriptHandle)
@@ -2776,6 +2857,7 @@ namespace Unitas.Bridge
                 _sceneCapsuleColliders.Clear();
                 _sceneTransforms.Clear();
                 _sceneCameras.Clear();
+                _sceneUiComponents.Clear();
                 DropMaterializedSceneObjects();
                 DropMaterializedSceneCameras();
                 _nextSceneEntityBase = 1;
@@ -2817,6 +2899,19 @@ namespace Unitas.Bridge
             List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
             List<KeyValuePair<string, SceneCameraSettings>> cameras = new List<KeyValuePair<string, SceneCameraSettings>>();
+            List<ParsedUiComponentRecord> uiComponents = new List<ParsedUiComponentRecord>();
+            string currentUiGuid = string.Empty;
+            string currentUiGameObjectFileId = string.Empty;
+            bool currentUiEnabled = true;
+            bool currentUiInteractable = true;
+            string currentUiText = string.Empty;
+            float currentUiFontSize = 14f;
+            Color currentUiColor = Color.white;
+            string currentUiSprite = string.Empty;
+            int currentUiScaleMode = 1;
+            Vector2 currentUiReferenceResolution = new Vector2(800f, 600f);
+            int currentUiScreenMatchMode = 0;
+            float currentUiMatchWidthOrHeight = 0.5f;
             List<ParsedTransformRecord> transforms = new List<ParsedTransformRecord>();
             List<PrefabInstanceInfo> prefabInstances = new List<PrefabInstanceInfo>();
             PrefabInstanceInfo? currentPrefabInstance = null;
@@ -2848,6 +2943,29 @@ namespace Unitas.Bridge
                             currentLocalRotation,
                             currentLocalScale));
                     }
+                    if (currentClassId == MONO_BEHAVIOUR_CLASS
+                        && !string.IsNullOrEmpty(currentUiGuid)
+                        && TryParseScriptGuid(currentUiGuid, out ulong scriptGuidHi, out ulong scriptGuidLo))
+                    {
+                        ScriptGlueRegistry.BuiltInUiComponent kind = ScriptGlueRegistry.GetBuiltInUiComponent(scriptGuidHi, scriptGuidLo);
+                        if (kind != ScriptGlueRegistry.BuiltInUiComponent.None)
+                        {
+                            uiComponents.Add(new ParsedUiComponentRecord(
+                                currentUiGameObjectFileId,
+                                kind,
+                                currentUiEnabled,
+                                currentUiInteractable,
+                                currentUiText,
+                                currentUiFontSize,
+                                currentUiColor,
+                                currentUiSprite,
+                                currentUiScaleMode,
+                                currentUiReferenceResolution,
+                                currentUiScreenMatchMode,
+                                currentUiMatchWidthOrHeight));
+                        }
+                    }
+
                     FlushDocument(
                         currentClassId,
                         currentFileId,
@@ -2894,6 +3012,18 @@ namespace Unitas.Bridge
                     currentCameraFarClipPlane = 1000f;
                     currentCameraOrthographic = false;
                     currentCameraOrthographicSize = 5f;
+                    currentUiGuid = string.Empty;
+                    currentUiGameObjectFileId = string.Empty;
+                    currentUiEnabled = true;
+                    currentUiInteractable = true;
+                    currentUiText = string.Empty;
+                    currentUiFontSize = 14f;
+                    currentUiColor = Color.white;
+                    currentUiSprite = string.Empty;
+                    currentUiScaleMode = 1;
+                    currentUiReferenceResolution = new Vector2(800f, 600f);
+                    currentUiScreenMatchMode = 0;
+                    currentUiMatchWidthOrHeight = 0.5f;
                     currentPrefabInstance = null;
                     currentModificationTarget = string.Empty;
                     currentModificationProperty = null;
@@ -3014,6 +3144,58 @@ namespace Unitas.Bridge
                     else if (line.StartsWith("orthographic size:", StringComparison.Ordinal))
                     {
                         currentCameraOrthographicSize = ParseFloatValue(line, currentCameraOrthographicSize);
+                    }
+                }
+                else if (currentClassId == MONO_BEHAVIOUR_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentUiGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_Script:", StringComparison.Ordinal))
+                    {
+                        currentUiGuid = ExtractGuidValue(line);
+                    }
+                    else if (line.StartsWith("m_Enabled:", StringComparison.Ordinal))
+                    {
+                        currentUiEnabled = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_Interactable:", StringComparison.Ordinal))
+                    {
+                        currentUiInteractable = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_Text:", StringComparison.Ordinal))
+                    {
+                        currentUiText = ParseStringValue(line);
+                    }
+                    else if (line.StartsWith("m_FontSize:", StringComparison.Ordinal))
+                    {
+                        currentUiFontSize = ParseFloatValue(line, 14f);
+                    }
+                    else if (line.StartsWith("m_Color:", StringComparison.Ordinal))
+                    {
+                        currentUiColor = ParseColorValue(line, currentUiColor);
+                    }
+                    else if (line.StartsWith("m_Sprite:", StringComparison.Ordinal))
+                    {
+                        currentUiSprite = ExtractGuidValue(line);
+                    }
+                    else if (line.StartsWith("m_UiScaleMode:", StringComparison.Ordinal))
+                    {
+                        currentUiScaleMode = (int)ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_ReferenceResolution:", StringComparison.Ordinal))
+                    {
+                        Vector3 resolution = ParseVector3Value(line, Vector3.zero);
+                        currentUiReferenceResolution = new Vector2(resolution.x, resolution.y);
+                    }
+                    else if (line.StartsWith("m_ScreenMatchMode:", StringComparison.Ordinal))
+                    {
+                        currentUiScreenMatchMode = (int)ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_MatchWidthOrHeight:", StringComparison.Ordinal))
+                    {
+                        currentUiMatchWidthOrHeight = ParseFloatValue(line, 0.5f);
                     }
                 }
                 else if (currentClassId == PREFAB_INSTANCE_CLASS)
@@ -3163,6 +3345,17 @@ namespace Unitas.Bridge
                         record.Rotation,
                         record.Scale);
                 }
+            }
+
+            for (int index = 0; index < uiComponents.Count; index++)
+            {
+                ParsedUiComponentRecord record = uiComponents[index];
+                if (!gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong uiLocalEntity))
+                {
+                    continue;
+                }
+
+                _sceneUiComponents[(_nextSceneEntityBase + uiLocalEntity, record.Kind)] = record;
             }
 
             Dictionary<string, string> transformGameObjects = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -4149,6 +4342,61 @@ namespace Unitas.Bridge
             public bool UseGravity { get; }
 
             public bool IsKinematic { get; }
+        }
+
+        private readonly struct ParsedUiComponentRecord
+        {
+            public ParsedUiComponentRecord(
+                string gameObjectFileId,
+                ScriptGlueRegistry.BuiltInUiComponent kind,
+                bool enabled,
+                bool interactable,
+                string text,
+                float fontSize,
+                Color color,
+                string sprite,
+                int uiScaleMode,
+                Vector2 referenceResolution,
+                int screenMatchMode,
+                float matchWidthOrHeight)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Kind = kind;
+                Enabled = enabled;
+                Interactable = interactable;
+                Text = text;
+                FontSize = fontSize;
+                Color = color;
+                Sprite = sprite;
+                UiScaleMode = uiScaleMode;
+                ReferenceResolution = referenceResolution;
+                ScreenMatchMode = screenMatchMode;
+                MatchWidthOrHeight = matchWidthOrHeight;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public ScriptGlueRegistry.BuiltInUiComponent Kind { get; }
+
+            public bool Enabled { get; }
+
+            public bool Interactable { get; }
+
+            public string Text { get; }
+
+            public float FontSize { get; }
+
+            public Color Color { get; }
+
+            public string Sprite { get; }
+
+            public int UiScaleMode { get; }
+
+            public Vector2 ReferenceResolution { get; }
+
+            public int ScreenMatchMode { get; }
+
+            public float MatchWidthOrHeight { get; }
         }
 
         private readonly struct ParsedSphereColliderRecord

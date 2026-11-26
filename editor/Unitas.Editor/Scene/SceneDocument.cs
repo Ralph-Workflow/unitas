@@ -96,9 +96,98 @@ namespace Unitas.Editor.Scene
                         return SceneOp.CreateGameObject(name, parentFileId).WithSnapshot(before);
                     }
 
+                case SceneOpKind.Reparent:
+                    {
+                        long previousParentFileId = ApplyReparent(op);
+                        return SceneOp.Reparent(op.FileId, previousParentFileId).WithSnapshot(before);
+                    }
+
+                case SceneOpKind.SetActive:
+                    {
+                        string previous = ApplySetActive(op);
+                        return SceneOp.SetActive(op.FileId, previous == "1").WithSnapshot(before);
+                    }
+
+                case SceneOpKind.DuplicateGameObject:
+                    {
+                        long created = ApplyDuplicateGameObject(op);
+                        return SceneOp.DestroyGameObject(created).WithSnapshot(before);
+                    }
+
                 default:
                     throw new SceneParseException(path, 0, "unsupported scene op kind " + op.Kind.ToString());
             }
+        }
+
+        /// <summary>Replaces the document text with the given snapshot, byte for byte.</summary>
+        public void Restore(string text)
+        {
+            ArgumentNullException.ThrowIfNull(text);
+            Load(text);
+        }
+
+        /// <summary>Everything the editor knows about one GameObject: its components and their properties.</summary>
+        public SceneInspection Inspect(long fileId)
+        {
+            SceneNode? gameObject = FindNode(fileId, GameObjectClassId);
+            if (gameObject == null)
+            {
+                throw new SceneParseException(path, 0, "no GameObject with fileID " + Format(fileId));
+            }
+
+            long parentFileId = 0;
+            string position = string.Empty;
+            string rotation = string.Empty;
+            string scale = string.Empty;
+            SceneNode? transform = FindTransformForGameObject(fileId);
+            if (transform != null)
+            {
+                long fatherTransformFileId = 0;
+                if (TryGetFileId(transform, "m_Father", out fatherTransformFileId) && fatherTransformFileId != 0)
+                {
+                    SceneNode? parentTransform = FindNode(fatherTransformFileId, TransformClassId);
+                    if (parentTransform != null)
+                    {
+                        TryGetFileId(parentTransform, "m_GameObject", out parentFileId);
+                    }
+                }
+
+                position = ReadScalar(transform, "m_LocalPosition");
+                rotation = ReadScalar(transform, "m_LocalRotation");
+                scale = ReadScalar(transform, "m_LocalScale");
+            }
+
+            List<SceneComponentInspection> components = new List<SceneComponentInspection>();
+            foreach (long componentFileId in ReadComponentIds(gameObject))
+            {
+                SceneNode? component = FindNode(componentFileId);
+                if (component == null)
+                {
+                    continue;
+                }
+
+                components.Add(new SceneComponentInspection(
+                    componentFileId,
+                    ReadTypeName(component),
+                    ReadProperties(component)));
+            }
+
+            List<long> childFileIds = new List<long>();
+            foreach (SceneObject child in Find(fileId).Children)
+            {
+                childFileIds.Add(child.FileId);
+            }
+
+            return new SceneInspection(
+                fileId,
+                UnquoteYamlScalar(ReadScalar(gameObject, "m_Name")),
+                parentFileId,
+                ReadScalar(gameObject, "m_IsActive") != "0",
+                position,
+                rotation,
+                scale,
+                childFileIds,
+                components);
         }
 
         public string Save()
@@ -396,7 +485,224 @@ namespace Unitas.Editor.Scene
             return name;
         }
 
+        private long ApplyReparent(SceneOp op)
+        {
+            SceneNode? gameObject = FindNode(op.FileId, GameObjectClassId);
+            if (gameObject == null)
+            {
+                throw new SceneParseException(path, 0, "no GameObject with fileID " + Format(op.FileId));
+            }
+
+            SceneNode? transform = FindTransformForGameObject(op.FileId);
+            if (transform == null)
+            {
+                throw new SceneParseException(path, 0, "GameObject " + Format(op.FileId) + " has no Transform");
+            }
+
+            // The target is checked before anything moves, so a refused reparent leaves
+            // the scene exactly as it was.
+            SceneNode? parentTransform = null;
+            if (op.ParentFileId != 0)
+            {
+                if (op.ParentFileId == op.FileId)
+                {
+                    throw new SceneParseException(path, 0, "an object cannot be its own parent");
+                }
+
+                if (IsDescendantOf(op.ParentFileId, op.FileId))
+                {
+                    throw new SceneParseException(path, 0, "reparenting would create a cycle");
+                }
+
+                if (FindNode(op.ParentFileId, GameObjectClassId) == null)
+                {
+                    throw new SceneParseException(path, 0, "no GameObject with fileID " + Format(op.ParentFileId));
+                }
+
+                parentTransform = FindTransformForGameObject(op.ParentFileId);
+                if (parentTransform == null)
+                {
+                    throw new SceneParseException(path, 0, "GameObject " + Format(op.ParentFileId) + " has no Transform");
+                }
+            }
+
+            long previousParentFileId = 0;
+            long fatherTransformFileId = 0;
+            if (TryGetFileId(transform, "m_Father", out fatherTransformFileId) && fatherTransformFileId != 0)
+            {
+                SceneNode? previousParentTransform = FindNode(fatherTransformFileId, TransformClassId);
+                if (previousParentTransform != null)
+                {
+                    TryGetFileId(previousParentTransform, "m_GameObject", out previousParentFileId);
+                    RemoveFileIdFromList(previousParentTransform, "m_Children", transform.FileId);
+                }
+            }
+            else
+            {
+                SceneNode? roots = FindNodeByClass(SceneRootsClassId);
+                if (roots != null)
+                {
+                    RemoveFileIdFromList(roots, "m_Roots", transform.FileId);
+                }
+            }
+
+            if (parentTransform != null)
+            {
+                AddFileIdToList(parentTransform, "m_Children", transform.FileId);
+                SetFileIdValue(transform, "m_Father", parentTransform.FileId);
+            }
+            else
+            {
+                SceneNode? roots = FindNodeByClass(SceneRootsClassId);
+                if (roots != null)
+                {
+                    AddFileIdToList(roots, "m_Roots", transform.FileId);
+                }
+
+                SetFileIdValue(transform, "m_Father", 0);
+            }
+
+            RebuildModel();
+            return previousParentFileId;
+        }
+
+        private string ApplySetActive(SceneOp op)
+        {
+            string previous = ApplySetProperty(SceneOp.SetProperty(op.FileId, "m_IsActive", op.Value));
+            return previous;
+        }
+
+        private long ApplyDuplicateGameObject(SceneOp op)
+        {
+            SceneNode? source = FindNode(op.FileId, GameObjectClassId);
+            if (source == null)
+            {
+                throw new SceneParseException(path, 0, "no GameObject with fileID " + Format(op.FileId));
+            }
+
+            SceneNode? sourceTransform = FindTransformForGameObject(op.FileId);
+            string name = op.ObjectName.Length > 0
+                ? op.ObjectName
+                : UnquoteYamlScalar(ReadScalar(source, "m_Name")) + " Copy";
+
+            long parentFileId = op.ParentFileId;
+            if (parentFileId < 0)
+            {
+                parentFileId = sourceTransform == null ? 0 : ParentGameObjectOf(sourceTransform);
+            }
+
+            SceneNode? parentTransform = null;
+            if (parentFileId != 0)
+            {
+                if (FindNode(parentFileId, GameObjectClassId) == null)
+                {
+                    throw new SceneParseException(path, 0, "no GameObject with fileID " + Format(parentFileId));
+                }
+
+                parentTransform = FindTransformForGameObject(parentFileId);
+                if (parentTransform == null)
+                {
+                    throw new SceneParseException(path, 0, "GameObject " + Format(parentFileId) + " has no Transform");
+                }
+            }
+
+            string position = sourceTransform == null ? string.Empty : ReadScalar(sourceTransform, "m_LocalPosition");
+            string rotation = sourceTransform == null ? string.Empty : ReadScalar(sourceTransform, "m_LocalRotation");
+            string scale = sourceTransform == null ? string.Empty : ReadScalar(sourceTransform, "m_LocalScale");
+            string active = ReadScalar(source, "m_IsActive");
+
+            long gameObjectFileId = NextFreeFileId(MaxFileId());
+            long transformFileId = NextFreeFileId(gameObjectFileId);
+            AppendNode(BuildGameObjectNode(gameObjectFileId, transformFileId, name, active));
+            AppendNode(BuildTransformNode(
+                transformFileId,
+                gameObjectFileId,
+                parentTransform == null ? 0 : parentTransform.FileId,
+                position,
+                rotation,
+                scale));
+            if (parentTransform != null)
+            {
+                AddFileIdToList(parentTransform, "m_Children", transformFileId);
+            }
+            else
+            {
+                SceneNode? roots = FindNodeByClass(SceneRootsClassId);
+                if (roots != null)
+                {
+                    AddFileIdToList(roots, "m_Roots", transformFileId);
+                }
+            }
+
+            RebuildModel();
+            return gameObjectFileId;
+        }
+
+        // The parent GameObject of a transform, or 0 when the transform is a scene root.
+        private long ParentGameObjectOf(SceneNode transform)
+        {
+            long fatherTransformFileId = 0;
+            if (!TryGetFileId(transform, "m_Father", out fatherTransformFileId) || fatherTransformFileId == 0)
+            {
+                return 0;
+            }
+
+            SceneNode? parentTransform = FindNode(fatherTransformFileId, TransformClassId);
+            if (parentTransform == null)
+            {
+                return 0;
+            }
+
+            long owner = 0;
+            TryGetFileId(parentTransform, "m_GameObject", out owner);
+            return owner;
+        }
+
+        // True when the candidate object hangs under the ancestor object, so moving the
+        // ancestor under the candidate would make a cycle.
+        private bool IsDescendantOf(long candidateFileId, long ancestorFileId)
+        {
+            long current = candidateFileId;
+            for (int depth = 0; depth < 1000 && current != 0; depth++)
+            {
+                if (current == ancestorFileId)
+                {
+                    return true;
+                }
+
+                if (!objectsByFileId.TryGetValue(current, out SceneObject? found))
+                {
+                    return false;
+                }
+
+                current = found.ParentFileId;
+            }
+
+            return false;
+        }
+
+        private void SetFileIdValue(SceneNode node, string key, long fileId)
+        {
+            int lineIndex;
+            int keyIndent;
+            if (!TryFindKeyLine(node, key, out lineIndex, out keyIndent))
+            {
+                throw new SceneParseException(path, 0, "document " + Format(node.FileId) + " has no '" + key + "' property");
+            }
+
+            string content = SceneYaml.Content(node.Body[lineIndex]);
+            int colon = content.IndexOf(':', StringComparison.Ordinal);
+            string prefix = content[..(colon + 1)];
+            string terminator = SceneYaml.Terminator(node.Body[lineIndex]);
+            node.Body[lineIndex] = prefix + " {fileID: " + Format(fileId) + "}" + terminator;
+        }
+
         private SceneNode BuildGameObjectNode(long gameObjectFileId, long transformFileId, string name)
+        {
+            return BuildGameObjectNode(gameObjectFileId, transformFileId, name, "1");
+        }
+
+        private SceneNode BuildGameObjectNode(long gameObjectFileId, long transformFileId, string name, string active)
         {
             SceneNode node = new SceneNode();
             node.Header = "--- !u!" + GameObjectClassId.ToString(CultureInfo.InvariantCulture) + " &" + Format(gameObjectFileId) + lineEnding;
@@ -416,11 +722,22 @@ namespace Unitas.Editor.Scene
             node.Body.Add("  m_Icon: {fileID: 0}" + lineEnding);
             node.Body.Add("  m_NavMeshLayer: 0" + lineEnding);
             node.Body.Add("  m_StaticEditorFlags: 0" + lineEnding);
-            node.Body.Add("  m_IsActive: 1" + lineEnding);
+            node.Body.Add("  m_IsActive: " + (active.Length == 0 ? "1" : active) + lineEnding);
             return node;
         }
 
         private SceneNode BuildTransformNode(long transformFileId, long gameObjectFileId, long fatherFileId)
+        {
+            return BuildTransformNode(transformFileId, gameObjectFileId, fatherFileId, string.Empty, string.Empty, string.Empty);
+        }
+
+        private SceneNode BuildTransformNode(
+            long transformFileId,
+            long gameObjectFileId,
+            long fatherFileId,
+            string position,
+            string rotation,
+            string scale)
         {
             SceneNode node = new SceneNode();
             node.Header = "--- !u!" + TransformClassId.ToString(CultureInfo.InvariantCulture) + " &" + Format(transformFileId) + lineEnding;
@@ -433,9 +750,9 @@ namespace Unitas.Editor.Scene
             node.Body.Add("  m_PrefabAsset: {fileID: 0}" + lineEnding);
             node.Body.Add("  m_GameObject: {fileID: " + Format(gameObjectFileId) + "}" + lineEnding);
             node.Body.Add("  serializedVersion: 2" + lineEnding);
-            node.Body.Add("  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}" + lineEnding);
-            node.Body.Add("  m_LocalPosition: {x: 0, y: 0, z: 0}" + lineEnding);
-            node.Body.Add("  m_LocalScale: {x: 1, y: 1, z: 1}" + lineEnding);
+            node.Body.Add("  m_LocalRotation: " + (rotation.Length == 0 ? "{x: 0, y: 0, z: 0, w: 1}" : rotation) + lineEnding);
+            node.Body.Add("  m_LocalPosition: " + (position.Length == 0 ? "{x: 0, y: 0, z: 0}" : position) + lineEnding);
+            node.Body.Add("  m_LocalScale: " + (scale.Length == 0 ? "{x: 1, y: 1, z: 1}" : scale) + lineEnding);
             node.Body.Add("  m_Children: []" + lineEnding);
             node.Body.Add("  m_Father: {fileID: " + Format(fatherFileId) + "}" + lineEnding);
             return node;
@@ -761,6 +1078,69 @@ namespace Unitas.Editor.Scene
             }
 
             return fileIds;
+        }
+
+        // The type a document declares, such as Transform or Rigidbody.
+        private static string ReadTypeName(SceneNode node)
+        {
+            foreach (string line in node.Body)
+            {
+                string content = SceneYaml.Content(line);
+                if (content.Trim().Length == 0)
+                {
+                    continue;
+                }
+
+                int colon = content.IndexOf(':', StringComparison.Ordinal);
+                return colon < 0 ? content.Trim() : content[..colon].Trim();
+            }
+
+            return string.Empty;
+        }
+
+        // The properties a document holds, one per key at the document's own key indent.
+        private static List<SceneProperty> ReadProperties(SceneNode node)
+        {
+            List<SceneProperty> properties = new List<SceneProperty>();
+            int baseIndent = BodyIndent(node);
+            foreach (string line in node.Body)
+            {
+                string content = SceneYaml.Content(line);
+                if (SceneYaml.Indent(content) != baseIndent + 2)
+                {
+                    continue;
+                }
+
+                string trimmed = content.Trim();
+                if (trimmed.StartsWith('-'))
+                {
+                    continue;
+                }
+
+                int colon = content.IndexOf(':', StringComparison.Ordinal);
+                if (colon < 0)
+                {
+                    continue;
+                }
+
+                properties.Add(new SceneProperty(
+                    content[..colon].Trim(),
+                    content[(colon + 1)..].Trim()));
+            }
+
+            return properties;
+        }
+
+        private static string UnquoteYamlScalar(string value)
+        {
+            if (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
+            {
+                return value[1..(value.Length - 1)]
+                    .Replace("\\\"", "\"", StringComparison.Ordinal)
+                    .Replace("\\\\", "\\", StringComparison.Ordinal);
+            }
+
+            return value;
         }
 
         private static string ReplaceScalar(string rest, string value)

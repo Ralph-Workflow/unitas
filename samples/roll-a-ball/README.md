@@ -16,8 +16,9 @@ reported with its real state, never hidden.
   collect burst, a landing dust effect and the collect chime.
 - One physics-probe scene, `Assets/Scenes/PhysicsLab.unity`, used by the
   physics scenarios; it is not an arena and carries no game scripts.
-- Seven scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
-  `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`.
+- Eight scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
+  `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`,
+  `HudController`.
   Every script file has its `.meta` file, `RecordsStore.cs.meta` included
   (GUID `6f708192a3b4c5d6e7f8091a2b3c4d5e`), so the GUID hygiene gap is
   closed.
@@ -34,13 +35,14 @@ reported with its real state, never hidden.
 | Scenario | State | Evidence |
 |---|---|---|
 | S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` passes in the lane's scripting step and in the headless editor-host step (see the lane state below) |
-| S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
+| S4 retry without leftover state | partly demonstrated | `Scenarios/restart_recovery.scenario.json` presses `R` in the middle of a run and asserts that the ball is back at its spawn point afterwards, that the pickups can be collected again and that the run reaches `All 12 pickups collected` after the retry; the run logs `Retry complete score 0 pickups 12 multiplier x1`, but no checkpoint asserts the score, the multiplier, the gold pickup's removal or the timer reset that the specification's S4 asks for |
+| S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
-| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` now drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`), but its click assertion does **not** pass yet: the native runtime detects the button hit and queues the clicked object id, and the managed `UnityEngine.UI.Button` wrapper exists, but the bridge does not yet install the managed uGUI provider that pumps those clicks into `Button.onClick`. The scenario is therefore not in the `make verify-samples` scenario list yet, and the lane stays green |
+| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
 | S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-26 with the HUD and the title panel in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
-| S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, proves the edit landed, undoes it and proves the scene file is byte identical to the original; the person-facing editor half and play-mode edit-state restoration are not demonstrated |
-| S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
+| S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
+| S11 collision edge, S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -93,12 +95,13 @@ cannot show).
   `References/README.md` for what that re-approval changed and for the one
   property it gives up (the canvas text is rasterized through the system font
   stack, so a machine with other fonts draws other letterforms).
-- The managed side of the interface is still open: the bridge installs no
-  `UnityEngine.UI.IUiProvider`, so a managed `Text.text` write does not reach
-  the canvas and a native click does not reach `Button.onClick`. The HUD
-  therefore shows the text the scene authored and the text the runtime state
-  holds, not the text `HudController` writes, and the pointer scenario is
-  still out of the lane.
+- The managed side of the interface is bound now: the bridge installs the
+  `UnityEngine.UI.IUiProvider`, binds the scene's uGUI `Text` and `Button`
+  components to their managed `UnityEngine.UI.Text` and
+  `UnityEngine.UI.Button` counterparts, and pumps the native click queue every
+  frame, so a managed `Text.text` write reaches the canvas and a native click
+  reaches `Button.onClick`. The HUD therefore shows the text `HudController`
+  writes, and the pointer scenario's click assertion passes.
 - The windowed player does not show the canvas either: the windowed path
   draws the scene and a text overlay, and the canvas draw items reach neither
   of them yet.
@@ -136,20 +139,39 @@ remains before S8 can be claimed complete.
 document is edited through the editor's own commands, not by writing files
 behind the editor's back. `Scenarios/scene_edit_restore.json` runs in the
 headless editor and does exactly that against the real
-`Assets/Scenes/RollABall.unity`: it records the scene file's digest, opens the
-scene (`scene.open`), moves a pickup with `scene.set_property` on the
-pickup's `Transform`, saves the scene (`scene.save`), and asserts that the
-file on disk really changed. It then undoes the edit (`editor.undo`), saves
-again, and asserts that the file is **byte identical** to the digest recorded
-before the edit. The scenario finishes by loading the restored scene in the
-runtime and checking the pickup's position, so the restored file is proved to
-be the playable scene it was, not just a matching byte sequence.
+`Assets/Scenes/RollABall.unity`: it records the scene file's digest and opens
+the scene (`scene.open`). It then creates a GameObject
+(`scene.create_object`), saves the scene (`scene.save`) and asserts that the
+file on disk really changed; it destroys that GameObject again
+(`scene.destroy_object`), saves, and asserts that the file is **byte
+identical** to the digest recorded before the edit, so the create-and-destroy
+round trip is exact. Next it moves a pickup with `scene.set_property` on the
+pickup's `Transform`, saves, and asserts that the file changed again. It then
+undoes the edit (`editor.undo`), saves again, and asserts that the file is
+**byte identical** to the digest recorded before the edit. The scenario
+finishes by loading the restored scene in the runtime and checking the
+pickup's position, so the restored file is proved to be the playable scene it
+was, not just a matching byte sequence.
 
 The edit is reachable by an agent through the same registry every other
-command uses: the eight scene commands (`scene.open`, `scene.hierarchy`,
+command uses: the scene commands (`scene.open`, `scene.hierarchy`,
 `scene.set_property`, `scene.create_object`, `scene.destroy_object`,
 `scene.save`, `editor.undo`, `editor.redo`) are MCP tools with scopes, and a
 scene edit is recorded as a change set that a person can review.
+
+**Demonstrated (play-mode edit state).**
+`Scenarios/play_mode_edit_restore.json` runs in the headless editor and drives
+a real play session: it moves the pickup at edit time (`scene.set_property`),
+saves the scene and records the digest of the saved file; it then enters play
+(`play.enter`), changes the same property in the running session
+(`play.set_runtime_property`) and leaves play again (`play.exit`). The editor
+reports that it captured the edit state when play was entered and restored it
+when play was left, and the scenario saves and asserts that the file on disk
+is still **byte identical** to the digest taken before the play session, so
+the runtime edit never reached the scene file. It then undoes the edit-time
+change (`editor.undo`), saves, and asserts that the file is **byte identical**
+to the digest recorded before any edit, and finishes by loading the restored
+scene in the runtime and checking the pickup's position.
 
 **Not demonstrated.**
 
@@ -157,11 +179,7 @@ scene edit is recorded as a change set that a person can review.
   view, inspector or hierarchy window yet, so a person cannot yet edit a scene
   by hand. The commands exist and are agent-facing; the windows that drive
   them do not.
-- **Play-mode edit-state restoration** is not shown: the scenario edits the
-  scene on disk outside a play session. Restoring the edit state of a running
-  play session is still open.
-- Only a **single-object property edit** is exercised. Creating and deleting
-  objects, multi-object selection, prefab variants and component templates are
+- Multi-object selection, prefab variants and component templates are
   implemented in the command surface but are not covered by this scenario.
 
 The specification text is not weakened by this note. The gap above is what
@@ -178,10 +196,19 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 23 steps and all 23 pass at
-the current tree: the 19 scripting scenarios (including `frame_independence`
-and the four `s8_*` visual checkpoints), the 2 headless editor scenarios,
-the native scripted launch and the packaged-player proof.
+**Current lane state (honest).** The lane runs 27 scenario steps: the 21
+scripting scenarios (including `frame_independence`, `pointer_ui`,
+`restart_recovery` and the four `s8_*` visual checkpoints), the 4 headless
+editor scenarios (`collect_all`, `retry_clean`, `scene_edit_restore`,
+`play_mode_edit_restore`), the native scripted launch and the packaged-player
+proof. That number counts the scenario steps only; before them the lane runs
+its three build steps — the runtime, the bridge and the player build. Every
+step of the last full-lane run was green; the steps added since
+(`restart_recovery` and `play_mode_edit_restore`) were verified on their own —
+the lane's scripting runner and the headless editor both report
+`restart_recovery` `passed` with 9 of 9 checkpoints, `--repeat 2` reports it
+repeatable, and the headless editor reports `play_mode_edit_restore`
+`passed`.
 
 - `editor-scenario-collect_all`, `editor-scenario-retry_clean`: these were
   red until the headless editor host learned to load the generated glue
@@ -199,6 +226,14 @@ The steps this note owns are recorded here rather than left implicit:
   The earlier `sweep: log order differs between rate 30 and rate 60` verdict
   was fixed upstream in commit `ad3ae72` and this paragraph was stale until
   now.
+- `restart_recovery`: the lane runs it with `--repeat 2`, so the retry has to
+  be reproducible as well as correct. The scenario presses `R` in the middle
+  of a run and asserts that the ball is back at its spawn point afterwards
+  (`restarted-position`), that the pickups can be collected again
+  (`pickup-1-again` through `pickup-4`), and that the run reaches `All 12
+  pickups collected` after the retry (`win-log`); it also pins the frame count
+  at the retry (`restarted-frames`, 45) and at the end of the run
+  (`total-frames`, 590).
 - `s8_title_checkpoint`, `s8_arena_countdown`, `s8_arena_x5_checkpoint`,
   `s8_results_gold_checkpoint`: the captures are wired into the lane and run,
   and each `render_capture` checkpoint passes its

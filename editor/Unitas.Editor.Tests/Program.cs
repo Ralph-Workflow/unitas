@@ -8,6 +8,11 @@ namespace Unitas.Editor.Tests
     {
         public static int Main(string[] args)
         {
+            if (args.Length > 0 && string.Equals(args[0], "--perf", StringComparison.Ordinal))
+            {
+                return EditorPerfTests.Run(args);
+            }
+
             // The suite table is explicit so the runner discovers suites without reflection.
             (string Name, Action Run)[] suites =
             {

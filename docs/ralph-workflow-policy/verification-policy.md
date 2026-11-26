@@ -313,15 +313,21 @@ The named non-default profiles, each with the five required fields:
   staleness horizon one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
-  or presentation; evidence: per-measurement OK/FAIL lines with value_ms
-  against ceiling_ms, and value_bytes against ceiling_bytes for the PlayerLoop
-  per-frame allocation measurement; fails hard when run; last run 2026-11-26,
-  recorded in the gate-lane review entry below; staleness horizon one
-  milestone. The lane reports eight measurements: import
-  throughput, scene load, physics step, particle eval, animation eval, the
-  100,000-GameObject frame loop, the managed-to-native scripting call cost, and
-  the PlayerLoop per-frame managed allocation. Each area owns the measurements
-  of its own subsystems inside the shared lane.
+  presentation, or the editor; evidence: per-measurement OK/FAIL lines with
+  value_ms against ceiling_ms, and value_bytes against ceiling_bytes for the
+  PlayerLoop per-frame allocation measurement; fails hard when run; last run
+  2026-11-26, recorded in the gate-lane review entry below; staleness horizon
+  one milestone. The lane reports thirteen measurements: import throughput,
+  scene load, physics step, particle eval, animation eval, the
+  100,000-GameObject frame loop, the managed-to-native scripting call cost, the
+  PlayerLoop per-frame managed allocation, and the five editor and MCP
+  measurements `editor_startup` (editor process start to a responsive MCP
+  state), `editor_project_open` (opening `samples/roll-a-ball` through the
+  editor's MCP surface), `editor_hierarchy_search_100k` (the hierarchy query at
+  the 100,000-GameObject scale floor), `editor_property_edit_undo` (the
+  property edit and its undo), and `editor_mcp_round_trip` (the MCP round
+  trip). Each area owns the measurements of its own subsystems inside the
+  shared lane.
 - `make verify-unsafe` — owner: editor and engine proof (lane runner); every
   area that registers an unsafe zone owns that zone's stages; trigger: every
   change that touches a registered unsafe zone; evidence: per-stage exit

@@ -17,6 +17,44 @@
     },
     {
       "editor_tool": {
+        "tool": "scene.create_object",
+        "arguments": {
+          "name": "LaneProbe"
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_changed": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.destroy_object",
+        "arguments": {
+          "fileId": 1000000534
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_unchanged": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
         "tool": "scene.set_property",
         "arguments": {
           "fileId": 1000000092,

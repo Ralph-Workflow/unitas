@@ -3,6 +3,50 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+const TOOL_ORIGIN: &str = "unitas://native/editor-abi";
+
+pub fn tool_descriptor(
+    name: &str,
+    description: &str,
+    properties: Value,
+    required: &[&str],
+    scope: Scope,
+) -> ToolDescriptor {
+    ToolDescriptor {
+        name: name.to_string(),
+        description: description.to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        }),
+        required_scope: scope,
+        origin: TOOL_ORIGIN.to_string(),
+    }
+}
+
+pub fn required_string(args: &Value, key: &str) -> Result<String, String> {
+    match args.get(key).and_then(Value::as_str) {
+        Some(text) if !text.trim().is_empty() => Ok(text.to_string()),
+        _ => Err(format!("a non-empty '{key}' argument is required")),
+    }
+}
+
+pub fn optional_string(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.trim().is_empty())
+}
+
+pub fn optional_bool(args: &Value, key: &str) -> bool {
+    args.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub fn optional_u64(args: &Value, key: &str) -> Option<u64> {
+    args.get(key).and_then(Value::as_u64)
+}
+
 pub type ToolHandler = Box<dyn Fn(&Value) -> Result<Value, String> + Send + Sync>;
 
 #[derive(Debug, PartialEq, Eq)]

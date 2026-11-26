@@ -77,4 +77,6 @@ ref_option = "allow"
 [dependencies]
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = "1"
+unitas-asset = { path = "../unitas-asset" }
 unitas-build = { path = "../unitas-build" }
+unitas-core = { path = "../unitas-core" }

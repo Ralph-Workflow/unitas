@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
+using UnityEditor;
 
 namespace Unitas.Editor.Tests
 {
@@ -16,6 +17,9 @@ namespace Unitas.Editor.Tests
             CompileReportsScriptDiagnostics();
             TestRunReturnsAPassFailSummary();
             HeadlessCliRunTestsIsSupported();
+            TheCommandPaletteListsTheRegisteredCommands();
+            TheCommandPaletteRunsACommand();
+            PlayModeRestoresTheEditTimeSceneState();
         }
 
         private static void RegistersAuthoringToolsWithLeastPrivilegeScopes()
@@ -368,6 +372,253 @@ namespace Unitas.Editor.Tests
             }
         }
 
+        private static void TheCommandPaletteListsTheRegisteredCommands()
+        {
+            using McpHost host = NewHost();
+            ChangeSetStore store = new ChangeSetStore(host);
+            SceneTools.Register(host, store);
+            CommandPaletteTools.Register(host);
+            string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+            host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
+
+            MenuItem.ClearRegisteredCommands();
+            try
+            {
+                MenuItem.RegisterCommand("Tools/Export Report", () => { });
+
+                JsonNode palette = host.CallTool(session, "editor.commands", new JsonObject());
+                JsonArray? commands = palette["content"]?["commands"] as JsonArray;
+                Check.That("authoring: the palette lists the commands", (commands?.Count ?? 0) > 0);
+
+                bool foundTool = false;
+                bool foundMenuCommand = false;
+                bool unavailable = false;
+                string disabledReason = string.Empty;
+                foreach (JsonNode? entry in commands ?? new JsonArray())
+                {
+                    string id = entry?["id"]?.GetValue<string>() ?? string.Empty;
+                    if (string.Equals(id, "scene.open", StringComparison.Ordinal))
+                    {
+                        foundTool = true;
+                    }
+
+                    if (string.Equals(entry?["menuPath"]?.GetValue<string>(), "Tools/Export Report", StringComparison.Ordinal))
+                    {
+                        foundMenuCommand = true;
+                    }
+
+                    if (string.Equals(id, "scene.set_property", StringComparison.Ordinal))
+                    {
+                        unavailable = entry?["available"]?.GetValue<bool>() == false;
+                        disabledReason = entry?["disabledReason"]?.GetValue<string>() ?? string.Empty;
+                    }
+                }
+
+                Check.That("authoring: the palette lists the commands of the tool registry", foundTool);
+                Check.That("authoring: the palette lists the menu commands of the project", foundMenuCommand);
+                Check.That("authoring: the palette marks a command the session may not run as unavailable", unavailable);
+                Check.That(
+                    "authoring: the palette names the reason a command is unavailable",
+                    disabledReason.Contains("edit-content", StringComparison.Ordinal));
+            }
+            finally
+            {
+                MenuItem.ClearRegisteredCommands();
+            }
+        }
+
+        private static void TheCommandPaletteRunsACommand()
+        {
+            using McpHost host = NewHost();
+            CommandPaletteTools.Register(host);
+            host.RegisterTool(
+                new ToolDefinition(
+                    "test.echo",
+                    "Echo the value it is given",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject(),
+                    },
+                    Scope.ReadProject),
+                arguments => ToolOutput.Untrusted(
+                    "unitas://test/echo",
+                    new JsonObject
+                    {
+                        ["echoed"] = arguments["value"]?.GetValue<string>() ?? string.Empty,
+                    }));
+            string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+            host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
+            host.GrantScope(session, Scope.ExecuteProjectCode, GrantAuthority.Person);
+
+            JsonNode invoked = host.CallTool(
+                session,
+                "editor.invoke_command",
+                new JsonObject
+                {
+                    ["command"] = "test.echo",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["value"] = "hello",
+                    },
+                });
+            Check.Equal(
+                "authoring: the palette runs the command it names",
+                "hello",
+                invoked["content"]?["result"]?["content"]?["echoed"]?.GetValue<string>() ?? string.Empty);
+
+            MenuItem.ClearRegisteredCommands();
+            try
+            {
+                bool ran = false;
+                MenuItem.RegisterCommand("Tools/Export Report", () => { ran = true; });
+                JsonNode menuInvoked = host.CallTool(
+                    session,
+                    "editor.invoke_command",
+                    new JsonObject
+                    {
+                        ["command"] = "Tools/Export Report",
+                    });
+                Check.Equal(
+                    "authoring: the palette reports the menu command it ran",
+                    "Tools/Export Report",
+                    menuInvoked["content"]?["menuPath"]?.GetValue<string>() ?? string.Empty);
+                Check.That("authoring: the menu command ran", ran);
+            }
+            finally
+            {
+                MenuItem.ClearRegisteredCommands();
+            }
+
+            McpError? refused = null;
+            try
+            {
+                host.CallTool(
+                    session,
+                    "editor.invoke_command",
+                    new JsonObject
+                    {
+                        ["command"] = "test.does_not_exist",
+                    });
+            }
+            catch (McpError failure)
+            {
+                refused = failure;
+            }
+
+            Check.That("authoring: the palette refuses an unknown command", refused != null);
+        }
+
+        private static void PlayModeRestoresTheEditTimeSceneState()
+        {
+            string project = CreateProjectWithSampleScene("playmode");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                using StubWorker worker = new StubWorker();
+                using PlaySessionManager manager = new PlaySessionManager(_ => worker);
+                PlayTools.Register(host, manager);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
+                host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
+                host.GrantScope(session, Scope.ExecuteProjectCode, GrantAuthority.Person);
+
+                host.CallTool(
+                    session,
+                    "scene.open",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Scenes/RollABall.unity",
+                    });
+                host.CallTool(
+                    session,
+                    "scene.set_property",
+                    new JsonObject
+                    {
+                        ["fileId"] = 1000000092L,
+                        ["path"] = "m_LocalPosition.x",
+                        ["value"] = "2.25",
+                    });
+
+                JsonNode entered = host.CallTool(session, "play.enter", new JsonObject());
+                Check.Equal(
+                    "authoring: entering play mode captures the edit-time state",
+                    "captured",
+                    entered["content"]?["editState"]?["status"]?.GetValue<string>() ?? string.Empty);
+
+                host.CallTool(
+                    session,
+                    "play.set_runtime_property",
+                    new JsonObject
+                    {
+                        ["fileId"] = 1000000092L,
+                        ["path"] = "m_LocalPosition.x",
+                        ["value"] = "99",
+                    });
+                Check.Equal(
+                    "authoring: the runtime change is in the scene while play mode runs",
+                    "{x: 99, y: 0.75, z: 3}",
+                    PositionOf(host, session, 1000000091L));
+
+                JsonNode exited = host.CallTool(session, "play.exit", new JsonObject());
+                Check.Equal(
+                    "authoring: leaving play mode restores the edit-time state",
+                    "restored",
+                    exited["content"]?["editState"]?["status"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "authoring: the runtime change is gone after play mode",
+                    "{x: 2.25, y: 0.75, z: 3}",
+                    PositionOf(host, session, 1000000091L));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static string PositionOf(McpHost host, string session, long fileId)
+        {
+            JsonNode inspected = host.CallTool(
+                session,
+                "scene.inspect_object",
+                new JsonObject
+                {
+                    ["fileId"] = fileId,
+                });
+            return inspected["content"]?["position"]?.GetValue<string>() ?? string.Empty;
+        }
+
+        private sealed class StubWorker : IPlayWorker
+        {
+            public bool HasExited => false;
+
+            public int? ExitCode => null;
+
+            public int? ProcessId => null;
+
+            public JsonObject SendCommand(JsonObject command)
+            {
+                return new JsonObject
+                {
+                    ["state"] = PlaySession.StatePlaying,
+                    ["frames"] = 0,
+                    ["delta_seconds"] = 1.0 / 60.0,
+                    ["random_seed"] = 1,
+                };
+            }
+
+            public void Kill()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
         private static McpHost NewHost()
         {
             return new McpHost(new FixedClock(1_700_000_000_000L));
@@ -425,6 +676,35 @@ namespace Unitas.Editor.Tests
             {
                 Directory.Delete(directory, true);
             }
+        }
+
+        private static string CreateProjectWithSampleScene(string label)
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-u3-" + label + "-" + Guid.NewGuid().ToString("N"));
+            string scenes = Path.Combine(root, "Assets", "Scenes");
+            Directory.CreateDirectory(scenes);
+            File.Copy(
+                Path.Combine(ResolveRepoRoot(), "samples", "roll-a-ball", "Assets", "Scenes", "RollABall.unity"),
+                Path.Combine(scenes, "RollABall.unity"));
+            return root;
+        }
+
+        private static string ResolveRepoRoot()
+        {
+            DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+            for (int depth = 0; depth < 12 && directory != null; depth++)
+            {
+                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "roll-a-ball")))
+                {
+                    return directory.FullName;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new DirectoryNotFoundException("repo root not found from current directory");
         }
     }
 }

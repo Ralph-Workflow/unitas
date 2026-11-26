@@ -17,10 +17,16 @@ namespace Unitas.Editor.Mcp
         public const string HierarchyOrigin = "unitas://scene/hierarchy";
         public const string EditOrigin = "unitas://scene/edit";
 
+        // A duplicate without a parent keeps the parent of the object it copies.
+        private const long KeepParentFileId = -1;
+
         // The registry lives for the whole process, so the open documents and their undo
         // histories are shared state behind one lock.
         private static readonly object Gate = new object();
         private static readonly Dictionary<string, OpenScene> Scenes = new Dictionary<string, OpenScene>(StringComparer.Ordinal);
+
+        // The edit-time state of every open scene, captured before play mode starts.
+        private static readonly Dictionary<string, string> EditStates = new Dictionary<string, string>(StringComparer.Ordinal);
         private static string? currentScene;
 
         public static void Register(McpHost host, ChangeSetStore store)
@@ -178,6 +184,122 @@ namespace Unitas.Editor.Mcp
                     Scope.EditContent),
                 _ => HandleRedo());
 
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.inspect_object",
+                    "Report one object of the open scene with the components and properties the scene file holds for it",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["fileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                        },
+                        ["required"] = new JsonArray("fileId"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandleInspectObject(host, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.reparent_object",
+                    "Move one GameObject of the open scene under a new parent and record the edit in the agent change set",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["fileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                            ["parentFileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                        },
+                        ["required"] = new JsonArray("fileId"),
+                    },
+                    Scope.EditContent),
+                arguments => HandleReparentObject(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.set_active",
+                    "Activate or deactivate one GameObject of the open scene and record the edit in the agent change set",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["fileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                            ["active"] = new JsonObject
+                            {
+                                ["type"] = "boolean",
+                            },
+                        },
+                        ["required"] = new JsonArray("fileId", "active"),
+                    },
+                    Scope.EditContent),
+                arguments => HandleSetActive(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.duplicate_object",
+                    "Copy one GameObject of the open scene with its transform and activation state and record the edit in the agent change set",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["fileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                            ["name"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["parentFileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                        },
+                        ["required"] = new JsonArray("fileId"),
+                    },
+                    Scope.EditContent),
+                arguments => HandleDuplicateObject(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.snapshot_edit_state",
+                    "Capture the edit-time state of the open scene so a later restore can bring it back byte for byte",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject(),
+                    },
+                    Scope.ReadProject),
+                _ => HandleSnapshotEditState());
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "scene.restore_edit_state",
+                    "Restore the captured edit-time state of the open scene and discard the changes made since the capture",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject(),
+                    },
+                    Scope.EditContent),
+                _ => HandleRestoreEditState());
+
             host.RegisterResource(
                 new ResourceDefinition(
                     HierarchyOrigin,
@@ -334,6 +456,369 @@ namespace Unitas.Editor.Mcp
                 ["changeSet"] = set.ToValue(),
             };
             return ToolOutput.Untrusted(EditOrigin, payload).WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleInspectObject(McpHost host, JsonNode arguments)
+        {
+            OpenScene scene = CurrentScene("scene.inspect_object");
+            long fileId = RequireLong(arguments, "fileId", "scene.inspect_object");
+
+            SceneInspection inspection;
+            lock (Gate)
+            {
+                RefreshModel(scene.Document);
+                try
+                {
+                    inspection = scene.Document.Inspect(fileId);
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest("scene.inspect_object cannot inspect the object: " + error.Message);
+                }
+            }
+
+            JsonArray childFileIds = new JsonArray();
+            foreach (long childFileId in inspection.ChildFileIds)
+            {
+                childFileIds.Add(childFileId);
+            }
+
+            JsonArray components = new JsonArray();
+            foreach (SceneComponentInspection component in inspection.Components)
+            {
+                JsonArray properties = new JsonArray();
+                foreach (SceneProperty property in component.Properties)
+                {
+                    properties.Add(new JsonObject
+                    {
+                        ["name"] = property.Name,
+                        ["value"] = property.Value,
+                    });
+                }
+
+                components.Add(new JsonObject
+                {
+                    ["fileId"] = component.FileId,
+                    ["type"] = component.Type,
+                    ["properties"] = properties,
+                });
+            }
+
+            JsonObject payload = new JsonObject
+            {
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = inspection.FileId,
+                ["name"] = inspection.Name,
+                ["parentFileId"] = inspection.ParentFileId,
+                ["active"] = inspection.Active,
+                ["position"] = inspection.Position,
+                ["rotation"] = inspection.Rotation,
+                ["scale"] = inspection.Scale,
+                ["childFileIds"] = childFileIds,
+                ["components"] = components,
+            };
+            return ToolOutput.Untrusted(HierarchyOrigin, payload);
+        }
+
+        private static ToolOutput HandleReparentObject(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            OpenScene scene = CurrentScene("scene.reparent_object");
+            long fileId = RequireLong(arguments, "fileId", "scene.reparent_object");
+            long parentFileId = OptionalLong(arguments, "parentFileId");
+
+            string previousParent = ParentOf(scene, fileId, "scene.reparent_object");
+            SceneOp op = SceneOp.Reparent(fileId, parentFileId);
+            SceneOp inverse;
+            lock (Gate)
+            {
+                inverse = ApplyOp(scene, op, "scene.reparent_object");
+                scene.History.Push(op, inverse);
+            }
+
+            JsonObject operation = new JsonObject
+            {
+                ["tool"] = "scene.reparent_object",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = fileId,
+                ["before"] = previousParent,
+                ["after"] = parentFileId.ToString(CultureInfo.InvariantCulture),
+            };
+            ChangeSet set = HoldChange(host, store, operation, "scene.reparent_object");
+
+            JsonObject payload = new JsonObject
+            {
+                ["status"] = "applied",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = fileId,
+                ["parentFileId"] = parentFileId,
+                ["before"] = previousParent,
+                ["after"] = parentFileId.ToString(CultureInfo.InvariantCulture),
+                ["changeId"] = set.Id,
+                ["changeSet"] = set.ToValue(),
+            };
+            return ToolOutput.Untrusted(EditOrigin, payload).WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleSetActive(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            OpenScene scene = CurrentScene("scene.set_active");
+            long fileId = RequireLong(arguments, "fileId", "scene.set_active");
+            bool active = RequireBool(arguments, "active", "scene.set_active");
+
+            string previous = ActiveOf(scene, fileId, "scene.set_active");
+            SceneOp op = SceneOp.SetActive(fileId, active);
+            SceneOp inverse;
+            lock (Gate)
+            {
+                inverse = ApplyOp(scene, op, "scene.set_active");
+                scene.History.Push(op, inverse);
+            }
+
+            JsonObject operation = new JsonObject
+            {
+                ["tool"] = "scene.set_active",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = fileId,
+                ["before"] = previous,
+                ["after"] = active ? "1" : "0",
+            };
+            ChangeSet set = HoldChange(host, store, operation, "scene.set_active");
+
+            JsonObject payload = new JsonObject
+            {
+                ["status"] = "applied",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = fileId,
+                ["active"] = active,
+                ["before"] = previous,
+                ["after"] = active ? "1" : "0",
+                ["changeId"] = set.Id,
+                ["changeSet"] = set.ToValue(),
+            };
+            return ToolOutput.Untrusted(EditOrigin, payload).WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleDuplicateObject(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            OpenScene scene = CurrentScene("scene.duplicate_object");
+            long fileId = RequireLong(arguments, "fileId", "scene.duplicate_object");
+            string? name = ProjectAccess.OptionalString(arguments, "name");
+            long requestedParentFileId = OptionalLongOrDefault(arguments, "parentFileId", KeepParentFileId);
+
+            string sourceName = NameOf(scene, fileId, "scene.duplicate_object");
+            string copyName = name ?? (sourceName + " Copy");
+            long parentFileId = requestedParentFileId;
+            if (parentFileId == KeepParentFileId)
+            {
+                parentFileId = ParentFileIdOf(scene, fileId, "scene.duplicate_object");
+            }
+
+            SceneOp op = SceneOp.DuplicateGameObject(fileId, copyName, parentFileId);
+            SceneOp inverse;
+            lock (Gate)
+            {
+                inverse = ApplyOp(scene, op, "scene.duplicate_object");
+                scene.History.Push(op, inverse);
+            }
+
+            JsonObject operation = new JsonObject
+            {
+                ["tool"] = "scene.duplicate_object",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = fileId,
+                ["name"] = copyName,
+                ["before"] = string.Empty,
+                ["after"] = copyName,
+            };
+            ChangeSet set = HoldChange(host, store, operation, "scene.duplicate_object");
+
+            JsonObject payload = new JsonObject
+            {
+                ["status"] = "applied",
+                ["scene"] = scene.RelativePath,
+                ["fileId"] = inverse.FileId,
+                ["sourceFileId"] = fileId,
+                ["name"] = copyName,
+                ["parentFileId"] = parentFileId,
+                ["changeId"] = set.Id,
+                ["changeSet"] = set.ToValue(),
+            };
+            return ToolOutput.Untrusted(EditOrigin, payload).WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleSnapshotEditState()
+        {
+            JsonObject? captured = TryCaptureEditState();
+            if (captured == null)
+            {
+                throw new McpError.InvalidRequest("scene.snapshot_edit_state requires an open scene: call scene.open first");
+            }
+
+            return ToolOutput.Untrusted(EditOrigin, captured);
+        }
+
+        private static ToolOutput HandleRestoreEditState()
+        {
+            JsonObject? restored = TryRestoreEditState();
+            if (restored == null)
+            {
+                throw new McpError.InvalidRequest("scene.restore_edit_state requires a captured edit-time state: call scene.snapshot_edit_state first");
+            }
+
+            return ToolOutput.Untrusted(EditOrigin, restored);
+        }
+
+        /// <summary>
+        /// Captures the edit-time state of the open scene. The play mode calls this when a
+        /// session starts, so the state the developer left behind is the state that comes back.
+        /// </summary>
+        public static JsonObject? TryCaptureEditState()
+        {
+            lock (Gate)
+            {
+                OpenScene? scene = CurrentSceneOrNull();
+                if (scene == null)
+                {
+                    return null;
+                }
+
+                string text = scene.Document.Save();
+                EditStates[scene.FullPath] = text;
+                return new JsonObject
+                {
+                    ["status"] = "captured",
+                    ["scene"] = scene.RelativePath,
+                    ["bytes"] = text.Length,
+                };
+            }
+        }
+
+        /// <summary>Restores the captured edit-time state of the open scene, byte for byte.</summary>
+        public static JsonObject? TryRestoreEditState()
+        {
+            lock (Gate)
+            {
+                OpenScene? scene = CurrentSceneOrNull();
+                if (scene == null)
+                {
+                    return null;
+                }
+
+                if (!EditStates.TryGetValue(scene.FullPath, out string? text))
+                {
+                    return null;
+                }
+
+                EditStates.Remove(scene.FullPath);
+                try
+                {
+                    scene.Document.Restore(text);
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest("scene.restore_edit_state cannot restore the scene: " + error.Message);
+                }
+
+                return new JsonObject
+                {
+                    ["status"] = "restored",
+                    ["scene"] = scene.RelativePath,
+                    ["bytes"] = text.Length,
+                };
+            }
+        }
+
+        /// <summary>
+        /// Applies a runtime change to the open scene. A runtime change is not an editor
+        /// edit: it stays out of the undo history and the play mode discards it on exit.
+        /// </summary>
+        public static JsonObject ApplyRuntimeProperty(long fileId, string path, string value)
+        {
+            OpenScene scene = CurrentScene("play.set_runtime_property");
+            lock (Gate)
+            {
+                SceneOp op = SceneOp.SetProperty(fileId, path, value);
+                SceneOp inverse = ApplyOp(scene, op, "play.set_runtime_property");
+                return new JsonObject
+                {
+                    ["status"] = "applied",
+                    ["scene"] = scene.RelativePath,
+                    ["fileId"] = fileId,
+                    ["path"] = path,
+                    ["before"] = inverse.Value,
+                    ["after"] = value,
+                };
+            }
+        }
+
+        private static OpenScene? CurrentSceneOrNull()
+        {
+            if (currentScene != null && Scenes.TryGetValue(currentScene, out OpenScene? scene))
+            {
+                return scene;
+            }
+
+            return null;
+        }
+
+        private static string ParentOf(OpenScene scene, long fileId, string toolName)
+        {
+            lock (Gate)
+            {
+                try
+                {
+                    return scene.Document.Inspect(fileId).ParentFileId.ToString(CultureInfo.InvariantCulture);
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest(toolName + " cannot read the object: " + error.Message);
+                }
+            }
+        }
+
+        private static string ActiveOf(OpenScene scene, long fileId, string toolName)
+        {
+            lock (Gate)
+            {
+                try
+                {
+                    return scene.Document.Inspect(fileId).Active ? "1" : "0";
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest(toolName + " cannot read the object: " + error.Message);
+                }
+            }
+        }
+
+        private static string NameOf(OpenScene scene, long fileId, string toolName)
+        {
+            lock (Gate)
+            {
+                try
+                {
+                    return scene.Document.Inspect(fileId).Name;
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest(toolName + " cannot read the object: " + error.Message);
+                }
+            }
+        }
+
+        private static long ParentFileIdOf(OpenScene scene, long fileId, string toolName)
+        {
+            lock (Gate)
+            {
+                try
+                {
+                    return scene.Document.Inspect(fileId).ParentFileId;
+                }
+                catch (SceneParseException error)
+                {
+                    throw new McpError.InvalidRequest(toolName + " cannot read the object: " + error.Message);
+                }
+            }
         }
 
         private static ToolOutput HandleSave()
@@ -604,6 +1089,44 @@ namespace Unitas.Editor.Mcp
             return 0;
         }
 
+        private static long OptionalLongOrDefault(JsonNode arguments, string propertyName, long defaultValue)
+        {
+            if (arguments is JsonObject obj && TryReadLong(obj[propertyName], out long number))
+            {
+                return number;
+            }
+
+            return defaultValue;
+        }
+
+        private static bool RequireBool(JsonNode arguments, string propertyName, string toolName)
+        {
+            if (arguments is JsonObject obj && obj[propertyName] is JsonValue value)
+            {
+                if (value.TryGetValue(out bool flag))
+                {
+                    return flag;
+                }
+
+                if (value.TryGetValue(out string? text))
+                {
+                    if (string.Equals(text, "1", StringComparison.Ordinal)
+                        || string.Equals(text, "true", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    if (string.Equals(text, "0", StringComparison.Ordinal)
+                        || string.Equals(text, "false", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            throw new McpError.InvalidRequest(toolName + " requires a '" + propertyName + "' argument");
+        }
+
         private static bool TryReadLong(JsonNode? node, out long number)
         {
             number = 0;
@@ -614,6 +1137,12 @@ namespace Unitas.Editor.Mcp
 
             if (value.TryGetValue(out number))
             {
+                return true;
+            }
+
+            if (value.TryGetValue(out int small))
+            {
+                number = small;
                 return true;
             }
 

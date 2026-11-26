@@ -166,6 +166,8 @@ namespace Unitas.Editor.Mcp
             TestTools.Register(host);
             BuildTools.Register(host);
             OperationTools.Register(host);
+            ExecuteMethodTools.Register(host);
+            CommandPaletteTools.Register(host);
             host.TryRegisterNativeLibrary();
         }
 

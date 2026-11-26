@@ -1834,6 +1834,17 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 ],
                 missing: None,
             },
+            OwnedCapabilityPart {
+                behavior: "the editor ABI exposes the asset search, preview, move, delete, restore, duplicate, favorites, and recents tools",
+                location: "crates/unitas-editor-abi/src/asset_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::assets_search_lists_project_assets_and_filters_by_label",
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::assets_preview_reports_class_size_and_state",
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::assets_move_delete_restore_and_duplicate_keep_the_project_consistent",
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::assets_favorites_and_recents_track_the_open_project",
+                ],
+                missing: None,
+            },
         ],
     },
     OwnedFeatureCapability {
@@ -1941,6 +1952,14 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 ],
                 missing: None,
             },
+            OwnedCapabilityPart {
+                behavior: "the editor ABI reports the dependencies, the reverse dependencies, and the cycles of an asset",
+                location: "crates/unitas-editor-abi/src/asset_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::assets_dependencies_report_direct_and_reverse_dependencies",
+                ],
+                missing: None,
+            },
         ],
     },
     OwnedFeatureCapability {
@@ -1996,6 +2015,15 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 location: "crates/unitas-asset/src/project_settings.rs",
                 evidence: &[
                     "crates/unitas-asset/tests/project_settings.rs::parses_all_project_settings_families_and_round_trips_edits",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the editor ABI inspects the setting families and writes one setting value back into its ProjectSettings file",
+                location: "crates/unitas-editor-abi/src/asset_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::settings_inspect_reports_the_project_settings_families",
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::settings_update_writes_the_value_back_into_the_project_settings_file",
                 ],
                 missing: None,
             },
@@ -2497,6 +2525,99 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                     "crates/unitas-core/tests/core/compat_tests.rs::cmp_002_every_owned_feature_reports_a_real_state_from_assess_project",
                 ],
                 missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the editor ABI reports the package matrix, the project findings, and the state of every owned feature",
+                location: "crates/unitas-editor-abi/src/compat_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::compat_package_matrix_reports_the_supported_packages",
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::compat_report_lists_findings_and_owned_feature_states",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "CMP-004",
+        owning_spec: "compatibility-contract.md",
+        capability: "Product versioning, release readiness, and interface stability",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the editor ABI reports the declared Unity version, the effective behavior version, and the migration state of a project",
+                location: "crates/unitas-editor-abi/src/compat_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::compat_version_info_reports_the_declared_and_effective_versions",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the release readiness and the interface stability of a product are checked",
+                location: "crates/unitas-editor-abi/src/compat_tools.rs",
+                evidence: &[],
+                missing: Some("the editor ABI reports the version information of a project and checks no release readiness and no interface stability"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "DIA-001",
+        owning_spec: "diagnostics-profiling-playtesting.md",
+        capability: "Logs, exceptions, diagnostics, and source navigation",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the editor ABI lists the trust, package, and import diagnostics of a project with severity, category, identifier, and message",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::diagnostics_list_reports_the_trust_blocked_script",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a finding navigates to the responsible content and opens its script location in the external editor",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[],
+                missing: Some("the editor ABI reports diagnostics but navigates to no content and opens no script location"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRF-001",
+        owning_spec: "diagnostics-profiling-playtesting.md",
+        capability: "CPU, frame, rendering, memory, physics, audio, and target profiling",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the editor ABI captures the timing markers and the counters of a project inspection pass",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::profiler_capture_reports_timing_markers_and_counters",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a running player reports its frame, rendering, memory, physics, and audio profiling",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[],
+                missing: Some("the editor ABI captures a project inspection pass and profiles no running player frame"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "ACC-001",
+        owning_spec: "accessibility-localization-persistence.md",
+        capability: "Accessible editor and game experiences",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the editor ABI reports the fonts, text assets, sorting layers, and input axes of a project",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/tests/editor_tools_tests.rs::accessibility_inspect_reports_fonts_text_assets_and_input_axes",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the accessibility roles, labels, focus order, and contrast of the scene content are inspected",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[],
+                missing: Some("the editor ABI reports the accessibility assets of a project and inspects no scene role, label, focus order, or contrast"),
             },
         ],
     },

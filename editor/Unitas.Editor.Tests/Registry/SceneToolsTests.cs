@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
@@ -10,6 +11,7 @@ namespace Unitas.Editor.Tests
         private const string SampleScene = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
         private const string ScenePath = "Assets/Scenes/RollABall.unity";
         private const long PickupFileId = 1000000091;
+        private const long PickupTransformFileId = 1000000092;
         private const long ArenaFileId = 1000000021;
 
         public static void Run()
@@ -21,6 +23,11 @@ namespace Unitas.Editor.Tests
             MutatingCallRecordsAChangeSet();
             CreateAndDestroyObjectRoundTrip();
             UndoWithAnEmptyHistoryReturnsAStructuredError();
+            InspectObjectReportsTheComponentsAndProperties();
+            ReparentMovesTheObjectAndRefusesACycle();
+            SetActiveTogglesTheObject();
+            DuplicateObjectCopiesTheObject();
+            SnapshotAndRestoreBringTheEditTimeSceneBack();
         }
 
         private static void RegistersTheSceneToolsWithLeastPrivilegeScopes()
@@ -29,7 +36,7 @@ namespace Unitas.Editor.Tests
             ChangeSetStore store = new ChangeSetStore(host);
             SceneTools.Register(host, store);
 
-            Check.Equal("scene: eight scene tools are registered", 8, host.ListTools().Count);
+            Check.Equal("scene: fourteen scene tools are registered", 14, host.ListTools().Count);
             Check.That("scene: scene.open requires read-project", Scope.ReadProject == ScopeOf(host, "scene.open"));
             Check.That("scene: scene.hierarchy requires read-project", Scope.ReadProject == ScopeOf(host, "scene.hierarchy"));
             Check.That("scene: scene.set_property requires edit-content", Scope.EditContent == ScopeOf(host, "scene.set_property"));
@@ -38,6 +45,12 @@ namespace Unitas.Editor.Tests
             Check.That("scene: scene.save requires edit-content", Scope.EditContent == ScopeOf(host, "scene.save"));
             Check.That("scene: editor.undo requires edit-content", Scope.EditContent == ScopeOf(host, "editor.undo"));
             Check.That("scene: editor.redo requires edit-content", Scope.EditContent == ScopeOf(host, "editor.redo"));
+            Check.That("scene: scene.inspect_object requires read-project", Scope.ReadProject == ScopeOf(host, "scene.inspect_object"));
+            Check.That("scene: scene.reparent_object requires edit-content", Scope.EditContent == ScopeOf(host, "scene.reparent_object"));
+            Check.That("scene: scene.set_active requires edit-content", Scope.EditContent == ScopeOf(host, "scene.set_active"));
+            Check.That("scene: scene.duplicate_object requires edit-content", Scope.EditContent == ScopeOf(host, "scene.duplicate_object"));
+            Check.That("scene: scene.snapshot_edit_state requires read-project", Scope.ReadProject == ScopeOf(host, "scene.snapshot_edit_state"));
+            Check.That("scene: scene.restore_edit_state requires edit-content", Scope.EditContent == ScopeOf(host, "scene.restore_edit_state"));
 
             Check.Equal("scene: the hierarchy resource is registered", 1, host.ListResources().Count);
             Check.Equal(
@@ -65,6 +78,12 @@ namespace Unitas.Editor.Tests
                 "scene.save",
                 "editor.undo",
                 "editor.redo",
+                "scene.inspect_object",
+                "scene.reparent_object",
+                "scene.set_active",
+                "scene.duplicate_object",
+                "scene.snapshot_edit_state",
+                "scene.restore_edit_state",
             })
             {
                 Check.That("scene: the live host registers " + name, FindTool(host, name) != null);
@@ -367,6 +386,312 @@ namespace Unitas.Editor.Tests
             {
                 DeleteDirectory(project);
             }
+        }
+
+        private static void InspectObjectReportsTheComponentsAndProperties()
+        {
+            string project = CreateProjectWithSampleScene("inspect");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                string session = NewEditingSession(host);
+                OpenSampleScene(host, session, project);
+
+                JsonNode inspected = host.CallTool(
+                    session,
+                    "scene.inspect_object",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                    });
+                Check.Equal(
+                    "scene: the inspection names the object",
+                    "Pickup_1",
+                    inspected["content"]?["name"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "scene: the inspection names the parent",
+                    "1000000081",
+                    inspected["content"]?["parentFileId"]?.GetValue<long>().ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+                Check.Equal(
+                    "scene: the inspection reports the position",
+                    "{x: 3, y: 0.75, z: 3}",
+                    inspected["content"]?["position"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "scene: the inspection reports the object as active",
+                    true,
+                    inspected["content"]?["active"]?.GetValue<bool>() ?? false);
+
+                JsonArray? components = inspected["content"]?["components"] as JsonArray;
+                Check.Equal("scene: the inspection lists the components", 5, components?.Count ?? 0);
+                Check.Equal(
+                    "scene: the first component of the inspection is the transform",
+                    "Transform",
+                    components?[0]?["type"]?.GetValue<string>() ?? string.Empty);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void ReparentMovesTheObjectAndRefusesACycle()
+        {
+            string project = CreateProjectWithSampleScene("reparent");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                ChangeReviewTools.Register(host, store);
+                string session = NewEditingSession(host);
+                OpenSampleScene(host, session, project);
+
+                JsonNode moved = host.CallTool(
+                    session,
+                    "scene.reparent_object",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                        ["parentFileId"] = ArenaFileId,
+                    });
+                Check.Equal(
+                    "scene: the reparent reports the new parent",
+                    "1000000021",
+                    moved["content"]?["parentFileId"]?.GetValue<long>().ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+                JsonNode hierarchy = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the hierarchy reports the new parent",
+                    "1000000021",
+                    ParentOf(hierarchy, PickupFileId));
+
+                McpError? refused = null;
+                try
+                {
+                    host.CallTool(
+                        session,
+                        "scene.reparent_object",
+                        new JsonObject
+                        {
+                            ["fileId"] = ArenaFileId,
+                            ["parentFileId"] = PickupFileId,
+                        });
+                }
+                catch (McpError failure)
+                {
+                    refused = failure;
+                }
+
+                Check.That("scene: a reparent that would create a cycle is refused", refused != null);
+                JsonNode afterRefusal = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the refused reparent leaves the parent alone",
+                    "1000000021",
+                    ParentOf(afterRefusal, PickupFileId));
+
+                host.CallTool(session, "editor.undo", new JsonObject());
+                JsonNode afterUndo = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the undo restores the previous parent",
+                    "1000000081",
+                    ParentOf(afterUndo, PickupFileId));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void SetActiveTogglesTheObject()
+        {
+            string project = CreateProjectWithSampleScene("setactive");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                string session = NewEditingSession(host);
+                OpenSampleScene(host, session, project);
+
+                host.CallTool(
+                    session,
+                    "scene.set_active",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                        ["active"] = false,
+                    });
+                JsonNode deactivated = host.CallTool(
+                    session,
+                    "scene.inspect_object",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                    });
+                Check.Equal(
+                    "scene: the deactivated object is not active",
+                    false,
+                    deactivated["content"]?["active"]?.GetValue<bool>() ?? true);
+
+                host.CallTool(session, "editor.undo", new JsonObject());
+                JsonNode activated = host.CallTool(
+                    session,
+                    "scene.inspect_object",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                    });
+                Check.Equal(
+                    "scene: the undo activates the object again",
+                    true,
+                    activated["content"]?["active"]?.GetValue<bool>() ?? false);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void DuplicateObjectCopiesTheObject()
+        {
+            string project = CreateProjectWithSampleScene("duplicate");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                string session = NewEditingSession(host);
+                OpenSampleScene(host, session, project);
+
+                JsonNode duplicated = host.CallTool(
+                    session,
+                    "scene.duplicate_object",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                    });
+                long copyFileId = duplicated["content"]?["fileId"]?.GetValue<long>() ?? 0;
+                Check.That("scene: the duplicate reports the new file id", copyFileId != 0);
+                Check.Equal(
+                    "scene: the duplicate names the copy",
+                    "Pickup_1 Copy",
+                    duplicated["content"]?["name"]?.GetValue<string>() ?? string.Empty);
+
+                JsonNode hierarchy = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the hierarchy reports the copy",
+                    "Pickup_1 Copy",
+                    NameOf(hierarchy, copyFileId));
+                Check.Equal(
+                    "scene: the copy keeps the parent of the object it copies",
+                    "1000000081",
+                    ParentOf(hierarchy, copyFileId));
+
+                host.CallTool(session, "editor.undo", new JsonObject());
+                JsonNode afterUndo = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the undo removes the copy",
+                    string.Empty,
+                    NameOf(afterUndo, copyFileId));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void SnapshotAndRestoreBringTheEditTimeSceneBack()
+        {
+            string project = CreateProjectWithSampleScene("editstate");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                string session = NewEditingSession(host);
+                OpenSampleScene(host, session, project);
+
+                host.CallTool(
+                    session,
+                    "scene.set_property",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupTransformFileId,
+                        ["path"] = "m_LocalPosition.x",
+                        ["value"] = "2.25",
+                    });
+
+                JsonNode captured = host.CallTool(session, "scene.snapshot_edit_state", new JsonObject());
+                Check.Equal(
+                    "scene: the snapshot reports the captured state",
+                    "captured",
+                    captured["content"]?["status"]?.GetValue<string>() ?? string.Empty);
+
+                host.CallTool(
+                    session,
+                    "scene.set_property",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupTransformFileId,
+                        ["path"] = "m_LocalPosition.x",
+                        ["value"] = "99",
+                    });
+                Check.Equal(
+                    "scene: the change after the snapshot is in the scene",
+                    "{x: 99, y: 0.75, z: 3}",
+                    PositionOf(host, session, PickupFileId));
+
+                JsonNode restored = host.CallTool(session, "scene.restore_edit_state", new JsonObject());
+                Check.Equal(
+                    "scene: the restore reports the restored state",
+                    "restored",
+                    restored["content"]?["status"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "scene: the restore brings the edit-time scene back",
+                    "{x: 2.25, y: 0.75, z: 3}",
+                    PositionOf(host, session, PickupFileId));
+
+                McpError? refused = null;
+                try
+                {
+                    host.CallTool(session, "scene.restore_edit_state", new JsonObject());
+                }
+                catch (McpError failure)
+                {
+                    refused = failure;
+                }
+
+                Check.That("scene: a restore without a captured state is refused", refused != null);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void OpenSampleScene(McpHost host, string session, string project)
+        {
+            host.CallTool(
+                session,
+                "scene.open",
+                new JsonObject
+                {
+                    ["projectPath"] = project,
+                    ["path"] = ScenePath,
+                });
+        }
+
+        private static string PositionOf(McpHost host, string session, long fileId)
+        {
+            JsonNode inspected = host.CallTool(
+                session,
+                "scene.inspect_object",
+                new JsonObject
+                {
+                    ["fileId"] = fileId,
+                });
+            return inspected["content"]?["position"]?.GetValue<string>() ?? string.Empty;
         }
 
         private static string NewEditingSession(McpHost host)

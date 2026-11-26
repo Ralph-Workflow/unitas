@@ -173,6 +173,7 @@ namespace Unitas.Bridge.Tests
     {
         private const string ScenarioDirectory = "samples/roll-a-ball/Scenarios/";
         private const string SceneRelativePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string SampleRelativeScenePath = "Assets/Scenes/RollABall.unity";
         private const string PlayerGuid = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
         private const string RotatorGuid = "2b3c4d5e6f708192a3b4c5d6e7f8091a";
         private const string ScoreGuid = "3c4d5e6f708192a3b4c5d6e7f8091a2b";
@@ -265,6 +266,10 @@ namespace Unitas.Bridge.Tests
             string text = File.ReadAllText(ResolveFixture(relativePath));
             string sceneFullPath = JsonSerializer.Serialize(ResolveFixture(SceneRelativePath));
             text = text.Replace(JsonSerializer.Serialize(SceneRelativePath), sceneFullPath, StringComparison.Ordinal);
+            text = text.Replace(
+                JsonSerializer.Serialize(SampleRelativeScenePath),
+                sceneFullPath,
+                StringComparison.Ordinal);
             return text;
         }
 

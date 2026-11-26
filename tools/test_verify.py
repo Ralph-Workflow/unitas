@@ -13,7 +13,7 @@ from itertools import product
 from typing import TYPE_CHECKING
 from unittest import mock
 
-from tools import verify, verify_samples
+from tools import verify, verify_perf, verify_samples
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1345,6 +1345,52 @@ def test_timed_gate_terminates_its_child_when_the_runner_is_signalled(tmp_path: 
     assert runner.wait(timeout=10) == SIGNALLED_EXIT_CODE
     time.sleep(1.5)
     assert marker.read_text(encoding="utf-8") == "started"
+
+
+_MEASUREMENT_COUNT_WORDS = {
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+}
+
+_EDITOR_PERF_MEASUREMENTS = (
+    "editor_startup",
+    "editor_project_open",
+    "editor_hierarchy_search_100k",
+    "editor_property_edit_undo",
+    "editor_mcp_round_trip",
+)
+
+
+def test_verify_perf_lane_registers_the_editor_measurements() -> None:
+    registered = {name for name, _ in verify_perf.MEASUREMENTS}
+    for name in _EDITOR_PERF_MEASUREMENTS:
+        assert name in registered
+        assert name in verify_perf.EDITOR_MEASUREMENT_CEILINGS_MS
+    assert set(verify_perf.EDITOR_MEASUREMENT_CEILINGS_MS) == set(_EDITOR_PERF_MEASUREMENTS)
+
+
+def test_verify_perf_lane_count_matches_the_policy_fact() -> None:
+    policy = (
+        verify_perf.REPO_ROOT / "docs/ralph-workflow-policy/verification-policy.md"
+    ).read_text(encoding="utf-8")
+    for name in _EDITOR_PERF_MEASUREMENTS:
+        assert f"`{name}`" in policy
+    match = re.search(r"The lane reports (\w+) measurements:", policy)
+    assert match is not None
+    word = match.group(1)
+    assert word in _MEASUREMENT_COUNT_WORDS, f"the policy states an unknown count: {word}"
+    assert _MEASUREMENT_COUNT_WORDS[word] == len(verify_perf.MEASUREMENTS)
 
 
 def test_samples_lane_lists_s8_visual_scenarios() -> None:

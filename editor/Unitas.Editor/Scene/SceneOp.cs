@@ -5,6 +5,9 @@ namespace Unitas.Editor.Scene
         SetProperty,
         CreateGameObject,
         DestroyGameObject,
+        Reparent,
+        SetActive,
+        DuplicateGameObject,
     }
 
     /// <summary>
@@ -78,6 +81,47 @@ namespace Unitas.Editor.Scene
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty);
+        }
+
+        /// <summary>Moves one object under a new parent; a parent file id of 0 is the scene root.</summary>
+        public static SceneOp Reparent(long fileId, long parentFileId)
+        {
+            return new SceneOp(
+                SceneOpKind.Reparent,
+                fileId,
+                parentFileId,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
+        }
+
+        public static SceneOp SetActive(long fileId, bool active)
+        {
+            return new SceneOp(
+                SceneOpKind.SetActive,
+                fileId,
+                0,
+                string.Empty,
+                active ? "1" : "0",
+                string.Empty,
+                string.Empty);
+        }
+
+        /// <summary>
+        /// Copies one object. A parent file id of -1 keeps the source object's parent,
+        /// 0 moves the copy to the scene root and a positive id names the new parent.
+        /// </summary>
+        public static SceneOp DuplicateGameObject(long fileId, string name, long parentFileId)
+        {
+            return new SceneOp(
+                SceneOpKind.DuplicateGameObject,
+                fileId,
+                parentFileId,
+                string.Empty,
+                string.Empty,
+                name ?? string.Empty,
                 string.Empty);
         }
 

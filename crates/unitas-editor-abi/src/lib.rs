@@ -1,5 +1,8 @@
+mod asset_tools;
 mod build_tools;
+mod compat_tools;
 mod descriptor;
+mod diagnostics_tools;
 mod dispatch;
 mod ffi;
 

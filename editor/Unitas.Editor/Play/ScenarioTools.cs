@@ -195,10 +195,11 @@ namespace Unitas.Editor.Mcp
         {
             JsonArray results = new JsonArray();
             Dictionary<string, string> digests = new Dictionary<string, string>(StringComparer.Ordinal);
+            Dictionary<string, string> namedDigests = new Dictionary<string, string>(StringComparer.Ordinal);
             Dictionary<string, byte[]> baselines = new Dictionary<string, byte[]>(StringComparer.Ordinal);
             foreach (EditorStep step in editorSteps)
             {
-                JsonObject result = RunEditorStep(host, sessionId, step, projectRoot, digests, baselines);
+                JsonObject result = RunEditorStep(host, sessionId, step, projectRoot, digests, namedDigests, baselines);
                 results.Add(result);
                 if (result["ok"]?.GetValue<bool>() != true)
                 {
@@ -237,6 +238,7 @@ namespace Unitas.Editor.Mcp
             EditorStep step,
             string? projectRoot,
             Dictionary<string, string> digests,
+            Dictionary<string, string> namedDigests,
             Dictionary<string, byte[]> baselines)
         {
             JsonObject result = new JsonObject
@@ -274,6 +276,16 @@ namespace Unitas.Editor.Mcp
                                 baselines[path] = File.ReadAllBytes(path);
                             }
 
+                            // A named digest is a second baseline for the same file, so a
+                            // scenario can prove that a file came back to a state it held
+                            // between two of its steps.
+                            string? digestId = OptionalStepString(step, "id");
+                            if (digestId != null)
+                            {
+                                namedDigests[digestId] = digest;
+                                result["id"] = digestId;
+                            }
+
                             result["path"] = path;
                             result["sha256"] = digest;
                             result["ok"] = true;
@@ -284,10 +296,24 @@ namespace Unitas.Editor.Mcp
                     case EditorAssertFileChangedStep:
                         {
                             string path = ResolveStepFile(step, projectRoot);
-                            if (!digests.TryGetValue(path, out string? baseline))
+                            string? digestId = OptionalStepString(step, "id");
+                            string? recorded = null;
+                            bool known;
+                            if (digestId != null)
+                            {
+                                known = namedDigests.TryGetValue(digestId, out recorded);
+                            }
+                            else
+                            {
+                                known = digests.TryGetValue(path, out recorded);
+                            }
+
+                            string baseline = recorded ?? string.Empty;
+                            if (!known)
                             {
                                 throw new McpError.InvalidRequest(
-                                    step.Kind + " has no recorded digest for " + path);
+                                    step.Kind + " has no recorded digest for "
+                                    + (digestId ?? path));
                             }
 
                             string current = FileDigest(path);
@@ -301,7 +327,8 @@ namespace Unitas.Editor.Mcp
                             {
                                 result["error"] = expectChanged
                                     ? "the file did not change: " + path
-                                    : "the file changed but was expected to be restored: " + path;
+                                    : "the file changed but was expected to be restored: " + path
+                                        + " (baseline " + baseline + ", current " + current + ")";
                             }
 
                             break;
@@ -332,6 +359,18 @@ namespace Unitas.Editor.Mcp
 
             throw new McpError.InvalidRequest(
                 "editor step " + step.Kind + " requires a '" + property + "' string");
+        }
+
+        private static string? OptionalStepString(EditorStep step, string property)
+        {
+            if (step.Body[property] is JsonValue value
+                && value.TryGetValue(out string? text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            return null;
         }
 
         private static string ResolveStepFile(EditorStep step, string? projectRoot)

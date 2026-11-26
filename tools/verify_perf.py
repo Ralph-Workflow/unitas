@@ -21,6 +21,14 @@ IMPORT_REIMPORT_CEILING_MS = 8.4
 SCRIPTING_CALL_COST = "scripting_call_cost"
 PLAYERLOOP_FRAME_ALLOCATIONS = "playerloop_frame_allocations"
 BRIDGE_TESTS = "bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests"
+EDITOR_TESTS = "editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll"
+EDITOR_MEASUREMENT_CEILINGS_MS: dict[str, float] = {
+    "editor_startup": 5000.0,
+    "editor_project_open": 500.0,
+    "editor_hierarchy_search_100k": 15000.0,
+    "editor_property_edit_undo": 500.0,
+    "editor_mcp_round_trip": 100.0,
+}
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
     ("owner", "content and simulation"),
@@ -133,12 +141,60 @@ MEASUREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "--perf",
         ),
     ),
+    (
+        "editor_startup",
+        (
+            "dotnet",
+            EDITOR_TESTS,
+            "--perf",
+            "editor_startup",
+        ),
+    ),
+    (
+        "editor_project_open",
+        (
+            "dotnet",
+            EDITOR_TESTS,
+            "--perf",
+            "editor_project_open",
+        ),
+    ),
+    (
+        "editor_hierarchy_search_100k",
+        (
+            "dotnet",
+            EDITOR_TESTS,
+            "--perf",
+            "editor_hierarchy_search_100k",
+        ),
+    ),
+    (
+        "editor_property_edit_undo",
+        (
+            "dotnet",
+            EDITOR_TESTS,
+            "--perf",
+            "editor_property_edit_undo",
+        ),
+    ),
+    (
+        "editor_mcp_round_trip",
+        (
+            "dotnet",
+            EDITOR_TESTS,
+            "--perf",
+            "editor_mcp_round_trip",
+        ),
+    ),
 )
 
 BYTES_MEASUREMENTS = frozenset({PLAYERLOOP_FRAME_ALLOCATIONS})
 MEASUREMENT_PRECISION: dict[str, int] = {SCRIPTING_CALL_COST: 6}
 
 MEASUREMENT_LINE = re.compile(r"measurement=(\S+) value_ms=([0-9.]+) ceiling_ms=([0-9.]+)")
+EDITOR_MEASUREMENT_LINE = re.compile(
+    r"^(?P<name>[a-z][a-z0-9_]*)\t(?P<value>[0-9.]+)\r?$", re.MULTILINE
+)
 MEASUREMENT_BYTES_LINE = re.compile(
     r"measurement=(\S+) value_bytes=([0-9.]+) ceiling_bytes=([0-9.]+)"
 )
@@ -156,10 +212,11 @@ def help_text() -> str:
     return "\n".join(
         [
             "usage: verify_perf.py [--help] [--metadata]",
-            "Runs the eight perf measurements (import throughput, scene load, physics",
+            "Runs the thirteen perf measurements (import throughput, scene load, physics",
             "step, particle eval, animation eval, 100k GameObject frame loop, scripting",
-            "call cost, PlayerLoop frame allocations) and fails hard when any value",
-            "breaches its ceiling.",
+            "call cost, PlayerLoop frame allocations, editor startup, editor project open,",
+            "editor hierarchy search at the scale floor, editor property edit and undo, and",
+            "editor MCP round trip) and fails hard when any value breaches its ceiling.",
             "lane metadata:",
             *metadata_lines,
         ]
@@ -170,18 +227,35 @@ def metadata_text() -> str:
     return "\n".join(f"{key}: {value}" for key, value in LANE_METADATA)
 
 
+def parse_editor_measurement(name: str, output: str) -> tuple[float, float] | None:
+    for match in EDITOR_MEASUREMENT_LINE.finditer(output):
+        if match.group("name") == name:
+            return (float(match.group("value")), EDITOR_MEASUREMENT_CEILINGS_MS[name])
+    return None
+
+
 def parse_measurement(name: str, output: str) -> tuple[float, float] | None:
+    if name in EDITOR_MEASUREMENT_CEILINGS_MS:
+        return parse_editor_measurement(name, output)
+    if name in BYTES_MEASUREMENTS:
+        return parse_bytes_measurement(output)
+    return parse_value_measurement(name, output)
+
+
+def parse_bytes_measurement(output: str) -> tuple[float, float] | None:
+    bytes_match = MEASUREMENT_BYTES_LINE.search(output)
+    if bytes_match is None:
+        return None
+    return (float(bytes_match.group(2)), float(bytes_match.group(3)))
+
+
+def parse_value_measurement(name: str, output: str) -> tuple[float, float] | None:
     if name == IMPORT_MEASUREMENT:
         duration = IMPORT_DURATION.search(output)
         if duration is None:
             return None
         value_ms = float(duration.group(1)) * DURATION_FACTOR_MS[duration.group(2)]
         return (value_ms, IMPORT_REIMPORT_CEILING_MS)
-    if name in BYTES_MEASUREMENTS:
-        bytes_match = MEASUREMENT_BYTES_LINE.search(output)
-        if bytes_match is None:
-            return None
-        return (float(bytes_match.group(2)), float(bytes_match.group(3)))
     match = MEASUREMENT_LINE.search(output)
     if match is None:
         return None

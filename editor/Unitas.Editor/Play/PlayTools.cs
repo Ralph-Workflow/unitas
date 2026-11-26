@@ -86,6 +86,33 @@ namespace Unitas.Editor.Mcp
 
             host.RegisterTool(
                 new ToolDefinition(
+                    "play.set_runtime_property",
+                    "Change one property of the open scene while a play session runs; the change is a runtime change and the editor discards it when the play session ends",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["fileId"] = new JsonObject
+                            {
+                                ["type"] = "integer",
+                            },
+                            ["path"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["value"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("fileId", "path", "value"),
+                    },
+                    Scope.ExecuteProjectCode),
+                arguments => HandleSetRuntimeProperty(host, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
                     "play.state",
                     "Query current state of a play-mode worker session",
                     PlaySessionSchema(),
@@ -174,9 +201,27 @@ namespace Unitas.Editor.Mcp
 
             host.Operations.UpdateStage(operationId, PlaySession.StatePlaying);
             JsonObject payload = session.QueryState();
+
+            // The edit-time state of the open scene is what play mode comes back to.
+            JsonObject? editState = SceneTools.TryCaptureEditState();
+            if (editState != null)
+            {
+                payload["editState"] = editState;
+            }
+
             return ToolOutput.Untrusted(PlaySessionOrigin, payload)
                 .WithAffectedIdentities(session.PlaySessionId)
                 .WithOperation(operationId);
+        }
+
+        private static ToolOutput HandleSetRuntimeProperty(McpHost host, JsonNode arguments)
+        {
+            long fileId = RequireLong(arguments, "fileId", "play.set_runtime_property");
+            string path = RequireText(arguments, "path", "play.set_runtime_property");
+            string value = RequireValue(arguments, "value", "play.set_runtime_property");
+
+            JsonObject payload = SceneTools.ApplyRuntimeProperty(fileId, path, value);
+            return ToolOutput.Untrusted(PlaySessionOrigin, payload);
         }
 
         private static ToolOutput HandlePause(
@@ -247,6 +292,15 @@ namespace Unitas.Editor.Mcp
         {
             PlaySession session = ResolveSession(host, manager, arguments);
             JsonObject payload = session.Stop();
+
+            // Leaving play mode restores the edit-time state the developer left behind,
+            // so the runtime changes of the session are gone.
+            JsonObject? editState = SceneTools.TryRestoreEditState();
+            if (editState != null)
+            {
+                payload["editState"] = editState;
+            }
+
             CompleteOperationIfPending(host, session.OperationId, PlaySessionOrigin, payload);
             return ToolOutput.Untrusted(PlaySessionOrigin, payload)
                 .WithAffectedIdentities(session.PlaySessionId)
@@ -368,6 +422,56 @@ namespace Unitas.Editor.Mcp
             }
 
             return sessionId!;
+        }
+
+        private static long RequireLong(JsonNode arguments, string propertyName, string toolName)
+        {
+            if (arguments is JsonObject obj && obj[propertyName] is JsonValue value)
+            {
+                if (value.TryGetValue(out long number))
+                {
+                    return number;
+                }
+
+                if (value.TryGetValue(out double real)
+                    && real == Math.Floor(real)
+                    && real >= long.MinValue
+                    && real <= long.MaxValue)
+                {
+                    return (long)real;
+                }
+            }
+
+            throw new McpError.InvalidParams(toolName + " requires a '" + propertyName + "' argument");
+        }
+
+        private static string RequireText(JsonNode arguments, string propertyName, string toolName)
+        {
+            string text = RequireValue(arguments, propertyName, toolName);
+            if (text.Trim().Length == 0)
+            {
+                throw new McpError.InvalidParams(toolName + " requires a non-empty '" + propertyName + "' argument");
+            }
+
+            return text;
+        }
+
+        private static string RequireValue(JsonNode arguments, string propertyName, string toolName)
+        {
+            if (arguments is JsonObject obj && obj[propertyName] is JsonValue value)
+            {
+                if (value.TryGetValue(out string? text))
+                {
+                    return text;
+                }
+
+                if (value.TryGetValue(out double number))
+                {
+                    return number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+
+            throw new McpError.InvalidParams(toolName + " requires a '" + propertyName + "' argument");
         }
 
         private static Scope RequireScopeArgument(JsonNode arguments)
