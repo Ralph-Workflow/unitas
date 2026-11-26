@@ -9,6 +9,7 @@ members = [
     "crates/unitas-core",
     "crates/unitas-dotnet",
     "crates/unitas-editor-abi",
+    "crates/unitas-jobs",
     "crates/unitas-physics",
     "crates/unitas-render",
     "crates/unitas-runtime",

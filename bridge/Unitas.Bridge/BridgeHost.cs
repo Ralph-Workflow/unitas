@@ -926,6 +926,8 @@ namespace Unitas.Bridge
                     : sceneDir;
             }
 
+            ExecutionOrderSettings.LoadProject(projectRoot);
+
             if (!TryReadNativeIdentity(RuntimeInterop.unitas_runtime_company_name, out string company))
             {
                 company = string.Empty;

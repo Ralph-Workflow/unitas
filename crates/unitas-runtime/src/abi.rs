@@ -11,6 +11,7 @@ macro_rules! ffi_export {
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -18,10 +19,12 @@ use std::sync::{Mutex, OnceLock};
 use unitas_animation::decode_controller_binary;
 use unitas_audio::{AudioClip, AudioMixerGroup};
 use unitas_core::EntityId;
+use unitas_jobs::JobHandle;
 use unitas_physics::{CollisionDetectionMode3D, ForceMode};
 use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
+use crate::jobs::job_system;
 pub use crate::runtime::CharacterMoveRequest;
 use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, RenderCameraParams, Runtime};
 
@@ -3742,5 +3745,66 @@ pub extern "C" fn unitas_runtime_resources_scan(handle: u64, address: u64, lengt
         Ok(code) => code,
         Err(code) => code,
     }
+}
+}
+
+fn job_dependencies(dependency: u64) -> Vec<JobHandle> {
+    if dependency == 0 {
+        return Vec::new();
+    }
+    vec![JobHandle::from_u64(dependency)]
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_jobs_schedule_parallel(
+    cb: extern "C" fn(*mut c_void, i64, i64),
+    ctx: *mut c_void,
+    length: i64,
+    batch: i64,
+    dependency: u64,
+) -> u64 {
+    let address = ctx as usize;
+    let deps = job_dependencies(dependency);
+    job_system()
+        .schedule_parallel_for(
+            length,
+            batch,
+            move |start, count| {
+                cb(address as *mut c_void, start, count);
+            },
+            &deps,
+        )
+        .as_u64()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_jobs_schedule(
+    cb: extern "C" fn(*mut c_void, i64, i64),
+    ctx: *mut c_void,
+    dependency: u64,
+) -> u64 {
+    let address = ctx as usize;
+    let deps = job_dependencies(dependency);
+    job_system()
+        .schedule(
+            move || {
+                cb(address as *mut c_void, 0, 1);
+            },
+            &deps,
+        )
+        .as_u64()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_jobs_complete(handle: u64) {
+    job_system().complete(JobHandle::from_u64(handle));
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_jobs_is_complete(handle: u64) -> u8 {
+    u8::from(job_system().is_complete(JobHandle::from_u64(handle)))
 }
 }

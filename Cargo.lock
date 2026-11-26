@@ -2693,6 +2693,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "unitas-jobs"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-deque",
+]
+
+[[package]]
 name = "unitas-physics"
 version = "0.1.0"
 dependencies = [
@@ -2722,6 +2729,7 @@ dependencies = [
  "unitas-asset",
  "unitas-audio",
  "unitas-core",
+ "unitas-jobs",
  "unitas-physics",
  "unitas-render",
  "winit",

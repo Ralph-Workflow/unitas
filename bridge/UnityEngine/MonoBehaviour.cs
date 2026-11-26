@@ -46,6 +46,35 @@ namespace UnityEngine
             s_executionOrderOverrides.Add((instance => scriptType.IsInstanceOfType(instance), order));
         }
 
+        internal static void SetExecutionOrderOverride(Func<MonoBehaviour, bool> matcher, int order)
+        {
+            if (matcher == null)
+            {
+                throw new ArgumentNullException(nameof(matcher));
+            }
+
+            s_executionOrderOverrides.Add((matcher, order));
+        }
+
+        internal static bool RemoveExecutionOrderOverride(Func<MonoBehaviour, bool> matcher)
+        {
+            if (matcher == null)
+            {
+                throw new ArgumentNullException(nameof(matcher));
+            }
+
+            for (int index = s_executionOrderOverrides.Count - 1; index >= 0; index--)
+            {
+                if (s_executionOrderOverrides[index].Matcher == matcher)
+                {
+                    s_executionOrderOverrides.RemoveAt(index);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public static void ClearExecutionOrderOverrides()
         {
             s_executionOrderOverrides.Clear();

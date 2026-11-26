@@ -6,6 +6,8 @@ mod animation_tests;
 mod cinemachine_tests;
 #[path = "runtime/input_tests.rs"]
 mod input_tests;
+#[path = "runtime/jobs_tests.rs"]
+mod jobs_tests;
 #[path = "runtime/navigation_tests.rs"]
 mod navigation_tests;
 #[path = "runtime/physics_tests.rs"]

@@ -5,6 +5,7 @@ pub mod cinemachine;
 pub mod dylib;
 mod error;
 pub mod input;
+pub mod jobs;
 pub mod navigation;
 pub mod particles;
 pub mod physics;
@@ -23,6 +24,7 @@ pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEn
 pub use dylib::{RuntimeDylib, RuntimeDylibError};
 pub use error::RuntimeError;
 pub use input::*;
+pub use jobs::job_system;
 pub use runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
 };

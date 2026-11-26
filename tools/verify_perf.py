@@ -106,6 +106,20 @@ MEASUREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "frame_loop_100k",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "unitas-runtime",
+            "--test",
+            "perf_frame_loop",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ),
+    ),
+    (
         SCRIPTING_CALL_COST,
         (
             BRIDGE_TESTS,
@@ -142,9 +156,10 @@ def help_text() -> str:
     return "\n".join(
         [
             "usage: verify_perf.py [--help] [--metadata]",
-            "Runs the seven perf measurements (import throughput, scene load, physics",
-            "step, animation eval, particle eval, scripting call cost, PlayerLoop frame",
-            "allocations) and fails hard when any value breaches its ceiling.",
+            "Runs the eight perf measurements (import throughput, scene load, physics",
+            "step, particle eval, animation eval, 100k GameObject frame loop, scripting",
+            "call cost, PlayerLoop frame allocations) and fails hard when any value",
+            "breaches its ceiling.",
             "lane metadata:",
             *metadata_lines,
         ]

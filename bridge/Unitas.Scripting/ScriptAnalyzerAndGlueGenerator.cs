@@ -44,11 +44,6 @@ namespace Unitas.Scripting
             @"(?:^|[;{}])\s*(?:(\[[^\]]*\]\s*)*)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|async)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|=>)",
             RegexOptions.Compiled | RegexOptions.Multiline);
 
-        private static readonly HashSet<string> InheritedVirtualLifecycleMethods = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Awake", "OnEnable", "Start", "FixedUpdate", "Update", "LateUpdate", "OnDisable", "OnDestroy"
-        };
-
         private static readonly Regex RuntimeInitializeMethodRegex = new Regex(
             @"\[\s*(?:UnityEngine\.)?RuntimeInitializeOnLoadMethod(?:Attribute)?\s*(?:\(\s*(?:(?:UnityEngine\.)?RuntimeInitializeLoadType\.)?(?<loadType>[A-Za-z_][A-Za-z0-9_]*)\s*\))?\s*\]\s*(?:(public|private|protected|internal)\s+)?static\s+void\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
             RegexOptions.Compiled | RegexOptions.Singleline);
@@ -427,7 +422,6 @@ namespace Unitas.Scripting
                     ScriptMethodSignature method = b.Methods[mIdx];
                     if (method.ParameterCount == 0
                         && !method.IsPublic
-                        && !InheritedVirtualLifecycleMethods.Contains(method.Name)
                         && accessorZeroArg.Add(method.Name))
                     {
                         sb.AppendLine("        [UnsafeAccessor(UnsafeAccessorKind.Method, Name = \"" + method.Name + "\")]");
@@ -463,7 +457,7 @@ namespace Unitas.Scripting
                     if (method.ParameterCount == 0 && emittedZeroArg.Add(method.Name))
                     {
                         sb.AppendLine("                case \"" + method.Name + "\":");
-                        if (method.IsPublic || InheritedVirtualLifecycleMethods.Contains(method.Name))
+                        if (method.IsPublic)
                         {
                             sb.AppendLine("                    _target." + method.Name + "();");
                         }

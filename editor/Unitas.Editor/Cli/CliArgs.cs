@@ -96,8 +96,7 @@ namespace Unitas.Editor.Mcp
         public bool RequestsTestExecution =>
             RunTests
             || !string.IsNullOrEmpty(TestPlatform)
-            || !string.IsNullOrEmpty(TestResults)
-            || !string.IsNullOrEmpty(ExecuteMethod);
+            || !string.IsNullOrEmpty(TestResults);
 
         public static CliArgs Parse(string[] args)
         {

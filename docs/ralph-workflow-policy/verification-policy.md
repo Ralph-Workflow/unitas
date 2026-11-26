@@ -284,10 +284,11 @@ The named non-default profiles, each with the five required fields:
   or presentation; evidence: per-measurement OK/FAIL lines with value_ms
   against ceiling_ms, and value_bytes against ceiling_bytes for the PlayerLoop
   per-frame allocation measurement; fails hard when run; last run 2026-11-25,
-  staleness horizon one milestone. The lane reports six measurements: import
-  throughput, scene load, physics step, animation eval, the managed-to-native
-  scripting call cost, and the PlayerLoop per-frame managed allocation. Each
-  area owns the measurements of its own subsystems inside the shared lane.
+  staleness horizon one milestone. The lane reports eight measurements: import
+  throughput, scene load, physics step, particle eval, animation eval, the
+  100,000-GameObject frame loop, the managed-to-native scripting call cost, and
+  the PlayerLoop per-frame managed allocation. Each area owns the measurements
+  of its own subsystems inside the shared lane.
 - `make verify-unsafe` — owner: editor and engine proof (lane runner); every
   area that registers an unsafe zone owns that zone's stages; trigger: every
   change that touches a registered unsafe zone; evidence: per-stage exit

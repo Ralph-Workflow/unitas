@@ -110,6 +110,7 @@ namespace Unitas.Bridge.Tests
             EditorMenuTests.Run();
             LifecycleMessageTests.Run();
             ExecutionOrderDispatchTests.Run();
+            ExecutionOrderSettingsTests.Run();
             FixedStepDeterminismTests.Run();
             SaveMigrationTests.Run();
 
