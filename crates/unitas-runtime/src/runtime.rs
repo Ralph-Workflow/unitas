@@ -28,7 +28,9 @@ use unitas_render::{
     Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, cube, look_at, render_scene,
 };
 
+use self::ui_components::UiComponents;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
+use crate::canvas::UiDrawItem;
 use crate::error::{RenderError, RuntimeError};
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
@@ -36,6 +38,11 @@ use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWo
 use crate::physics::PhysicsRuntimeWorld;
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
+
+/// The UI components of a loaded scene live in their own module so the scene
+/// loader and the frame loop can both reach them.
+#[path = "ui_components.rs"]
+mod ui_components;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -102,6 +109,7 @@ pub struct LoadedScene {
     animators: Vec<EntityId>,
     particles: Vec<EntityId>,
     trails: Vec<EntityId>,
+    ui: UiComponents,
     diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
@@ -186,6 +194,10 @@ pub struct ScriptInstance {
 }
 
 pub const DEFAULT_MATERIAL_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+
+/// The screen size the interface falls back to when no canvas scaler states a
+/// reference resolution.
+pub const DEFAULT_UI_REFERENCE_RESOLUTION: [f32; 2] = [800.0, 600.0];
 
 pub const DEFAULT_MAXIMUM_DELTA_TIME: f64 = 1.0 / 3.0;
 
@@ -325,6 +337,9 @@ pub struct Runtime {
     animation: AnimationWorld,
     input: InputState,
     render: RenderWorld,
+    ui_screen_size: Option<[f32; 2]>,
+    pending_ui_clicks: Vec<u64>,
+    ui_pressed_button: Option<EntityId>,
     project_identity: ProjectIdentity,
     callbacks: Option<Callbacks>,
     fixed_timestep: f64,
@@ -362,6 +377,9 @@ impl Runtime {
             animation: AnimationWorld::new(),
             input: InputState::with_default_axes(),
             render: RenderWorld::default(),
+            ui_screen_size: None,
+            pending_ui_clicks: Vec::new(),
+            ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
@@ -405,6 +423,7 @@ impl Runtime {
         let render_binding = assembled.render;
         let particle_bindings = assembled.particles;
         let trail_bindings = assembled.trails;
+        let mut ui = assembled.ui;
         let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
@@ -423,6 +442,10 @@ impl Runtime {
         let entity_base = self.next_entity_base();
         let mut graph = graph;
         graph.shift_entity_ids(entity_base);
+        // The UI binding carries the same object ids as the scene graph, so it
+        // is shifted the same way before the canvas is built from it.
+        ui.shift_entity_ids(entity_base);
+        let ui = UiComponents::new(ui);
         let scripts = scripts
             .into_iter()
             .map(|script| ScriptInstance {
@@ -520,6 +543,7 @@ impl Runtime {
             animators: Vec::new(),
             particles: particle_entities,
             trails: trail_entities,
+            ui,
             diagnostics,
             entity_base,
             entity_count,
@@ -1300,6 +1324,7 @@ impl Runtime {
         self.terrain.apply_heightfields(self.physics.world_3d_mut());
         self.sync_audio_source_positions();
         self.audio.tick(delta_seconds, self.time_scale);
+        self.route_ui_pointer();
         if let Some(callbacks) = self.callbacks {
             for handle in &handles {
                 let h = *handle;
@@ -1974,6 +1999,111 @@ impl Runtime {
 
     pub fn input_button_state(&self, name: &str) -> Option<u32> {
         self.input.button_state(name)
+    }
+
+    /// The screen size the interface is laid out and hit-tested against: the
+    /// size the host sets for the live window, else the size of the last
+    /// rendered frame, else the reference resolution of the canvas scaler.
+    pub fn ui_screen_size(&self) -> [f32; 2] {
+        if let Some(size) = self.ui_screen_size {
+            return size;
+        }
+        if let Some((width, height)) = self.render_viewport() {
+            return [width as f32, height as f32];
+        }
+        self.ui_reference_resolution()
+    }
+
+    /// Sets the size of the live screen the interface is laid out against.
+    pub fn set_ui_screen_size(&mut self, width: f32, height: f32) {
+        if width > 0.0 && height > 0.0 {
+            self.ui_screen_size = Some([width, height]);
+        }
+    }
+
+    /// The draw items of the visible canvas content of the loaded scenes.
+    pub fn ui_draw_items(&self) -> Vec<UiDrawItem> {
+        let screen_size = self.ui_screen_size();
+        let mut items = Vec::new();
+        for scene in &self.scenes {
+            items.extend(scene.ui.draw_items(screen_size));
+        }
+        items
+    }
+
+    /// Whether the pointer is over an element of the interface.
+    pub fn ui_pointer_over(&self) -> bool {
+        let screen_size = self.ui_screen_size();
+        let (x, y) = self.input.pointer_frame().position;
+        self.scenes
+            .iter()
+            .rev()
+            .any(|scene| scene.ui.pointer_over(screen_size, (x, y)))
+    }
+
+    /// Replaces the content of the `Text` component of an object.
+    pub fn set_ui_text(&mut self, object_id: u64, text: &str) -> bool {
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_text(entity, text))
+    }
+
+    /// Replaces the font size and colour of the `Text` component of an object.
+    pub fn set_ui_text_style(&mut self, object_id: u64, font_size: f32, color: [f32; 4]) -> bool {
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_style(entity, font_size, color))
+    }
+
+    /// The objects whose buttons were clicked since the last call.
+    pub fn take_ui_clicks(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.pending_ui_clicks)
+    }
+
+    fn render_viewport(&self) -> Option<(u32, u32)> {
+        self.render
+            .cameras
+            .values()
+            .find_map(|camera| camera.viewport)
+    }
+
+    fn ui_reference_resolution(&self) -> [f32; 2] {
+        for scene in &self.scenes {
+            for canvas in &scene.ui.canvas().binding().canvases {
+                if let Some(scaler) = &canvas.scaler {
+                    return scaler.reference_resolution;
+                }
+            }
+        }
+        DEFAULT_UI_REFERENCE_RESOLUTION
+    }
+
+    /// Routes the pointer to the buttons of the loaded scenes: a button that is
+    /// pressed and released under the pointer is clicked.
+    fn route_ui_pointer(&mut self) {
+        let pointer = self.input.pointer_frame();
+        let screen_size = self.ui_screen_size();
+        let hovered = self
+            .scenes
+            .iter()
+            .rev()
+            .find_map(|scene| scene.ui.hit_button(screen_size, pointer.position));
+        if pointer.primary_pressed {
+            self.ui_pressed_button = hovered;
+        }
+        if self.ui_pressed_button.is_some() && self.ui_pressed_button != hovered {
+            self.ui_pressed_button = None;
+        }
+        if pointer.primary_released {
+            if let Some(pressed) = self.ui_pressed_button
+                && hovered == Some(pressed)
+            {
+                self.pending_ui_clicks.push(pressed.as_u64());
+            }
+            self.ui_pressed_button = None;
+        }
     }
 
     fn records_from_hits(&self, hits: Vec<QueryHit>) -> Vec<QueryRecord> {

@@ -11,6 +11,7 @@ use unitas_asset::trust::{
     TrustStore,
 };
 use unitas_build::control;
+use unitas_build::package::package_desktop_targets;
 use unitas_build::player::STARTUP_FAILURE_EXIT_CODE;
 #[cfg(feature = "device")]
 use unitas_build::{
@@ -19,8 +20,7 @@ use unitas_build::{
 };
 use unitas_build::{
     launch_bundle, load_and_validate_bundle_manifest, roll_a_ball_build_configuration,
-    stage_roll_a_ball_bundle, BuildOutcomeBundle, BuildReport, WindowedLaunchOptions,
-    BUILD_REPORT_FILENAME,
+    stage_roll_a_ball_bundle, BuildReport, WindowedLaunchOptions, BUILD_REPORT_FILENAME,
 };
 use unitas_dotnet::install_code_execution_capabilities;
 
@@ -192,34 +192,30 @@ fn run_package_sample(output_dir: &Path) -> ExitCode {
             return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
         }
     };
-    let started = std::time::Instant::now();
-    let BuildOutcomeBundle { bundle, mut report } =
-        unitas_build::execute_build(&config, output_dir, 0);
-    report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let Some(staged) = bundle else {
-        let reasons = report
-            .errors
-            .iter()
-            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
-            .collect::<Vec<_>>()
-            .join("; ");
-        eprintln!("unitas-player packaging failed: {reasons}");
-        return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+    let packaged = match package_desktop_targets(&config, output_dir) {
+        Ok(packaged) => packaged,
+        Err(error) => {
+            eprintln!("unitas-player packaging failed: {error}");
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        }
     };
-    let report_path = output_dir.join(BUILD_REPORT_FILENAME);
-    if let Err(error) = report.write_to_file(&report_path) {
-        eprintln!(
-            "unitas-player packaging failed: cannot write the build report at '{}': {error}",
-            report_path.display()
+    for target in &packaged {
+        println!(
+            "packaged_app[{}]={}",
+            target.label,
+            target.app_path.display()
         );
-        return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        println!(
+            "build_report[{}]={}",
+            target.label,
+            target.build_report_path.display()
+        );
+        println!(
+            "launch_artifact[{}]={}",
+            target.label,
+            target.launch_artifact.display()
+        );
     }
-    match staged.application_bundle_path {
-        Some(app_path) => println!("packaged_app={}", app_path.display()),
-        None => println!("packaged_app=none"),
-    }
-    println!("build_report={}", report_path.display());
-    println!("launch_artifact={}", staged.launch_artifact_path.display());
     ExitCode::SUCCESS
 }
 

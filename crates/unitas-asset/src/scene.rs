@@ -26,6 +26,7 @@ pub const CANVAS_CLASS: u32 = 223;
 pub const RECT_TRANSFORM_CLASS: u32 = 224;
 pub const IMAGE_SCRIPT_GUID: &str = "fe87c0e1cc204ed48ad3b37840f39efc";
 pub const TEXT_SCRIPT_GUID: &str = "5f7201a12d95ffc409449d95f23cf332";
+pub const BUTTON_SCRIPT_GUID: &str = "4e29b1a8efbd4b44bb3f3716e73f07ff";
 pub const CANVAS_SCALER_SCRIPT_GUID: &str = "0cd44c1031e13a943bb63640046fad76";
 pub type AssetGuid = String;
 
@@ -457,10 +458,20 @@ pub struct UiTextComponent {
     pub enabled: bool,
 }
 
+/// The legacy uGUI `Button` component: the object it lives on, the graphic it
+/// drives and whether it accepts pointer input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiButtonComponent {
+    pub entity: EntityId,
+    pub target_graphic: Option<EntityId>,
+    pub interactable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiElementComponent {
     Image(UiImageComponent),
     Text(UiTextComponent),
+    Button(UiButtonComponent),
 }
 
 impl UiElementComponent {
@@ -468,6 +479,7 @@ impl UiElementComponent {
         match self {
             Self::Image(image) => image.entity,
             Self::Text(text) => text.entity,
+            Self::Button(button) => button.entity,
         }
     }
 }
@@ -477,6 +489,39 @@ pub struct UiBinding {
     pub canvases: Vec<CanvasComponent>,
     pub rect_transforms: Vec<RectTransformComponent>,
     pub elements: Vec<UiElementComponent>,
+}
+
+impl UiBinding {
+    /// Rewrites every object id in the binding by `base`, the way the runtime
+    /// shifts a loaded scene: a scene loaded after another one starts its
+    /// object ids above the ones already in use.
+    pub fn shift_entity_ids(&mut self, base: u64) {
+        for canvas in &mut self.canvases {
+            canvas.entity = EntityId::new(base + canvas.entity.as_u64());
+        }
+        for rect in &mut self.rect_transforms {
+            rect.entity = EntityId::new(base + rect.entity.as_u64());
+            rect.parent = rect
+                .parent
+                .map(|parent| EntityId::new(base + parent.as_u64()));
+        }
+        for element in &mut self.elements {
+            match element {
+                UiElementComponent::Image(image) => {
+                    image.entity = EntityId::new(base + image.entity.as_u64());
+                }
+                UiElementComponent::Text(text) => {
+                    text.entity = EntityId::new(base + text.entity.as_u64());
+                }
+                UiElementComponent::Button(button) => {
+                    button.entity = EntityId::new(base + button.entity.as_u64());
+                    button.target_graphic = button
+                        .target_graphic
+                        .map(|target| EntityId::new(base + target.as_u64()));
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2117,6 +2162,8 @@ fn collect_ui(
     instance_roots: &HashSet<i64>,
 ) -> UiBinding {
     let mut binding = UiBinding::default();
+    let mut graphics: HashMap<i64, EntityId> = HashMap::new();
+    let mut button_targets: Vec<(usize, i64)> = Vec::new();
     let mut rect_entities: HashMap<i64, EntityId> = HashMap::new();
     let mut rect_fathers: HashMap<i64, i64> = HashMap::new();
     let mut rects: Vec<(i64, RectTransformComponent)> = Vec::new();
@@ -2200,6 +2247,7 @@ fn collect_ui(
         };
         match guid {
             IMAGE_SCRIPT_GUID => {
+                graphics.insert(document.file_id, entity);
                 binding
                     .elements
                     .push(UiElementComponent::Image(UiImageComponent {
@@ -2224,6 +2272,21 @@ fn collect_ui(
                     }),
                     enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
                 })),
+            BUTTON_SCRIPT_GUID => {
+                let index = binding.elements.len();
+                binding
+                    .elements
+                    .push(UiElementComponent::Button(UiButtonComponent {
+                        entity,
+                        target_graphic: None,
+                        interactable: yaml_bool(body.get("m_Interactable"), DEFAULT_UI_ENABLED),
+                    }));
+                // The target graphic is a reference to another component, so it
+                // is resolved once every graphic of the scene is known.
+                if let Ok(Some(target)) = reference_id(body.get("m_TargetGraphic")) {
+                    button_targets.push((index, target));
+                }
+            }
             CANVAS_SCALER_SCRIPT_GUID => {
                 let scaler = CanvasScalerComponent {
                     ui_scale_mode: canvas_scale_mode(body.get("m_UiScaleMode")),
@@ -2247,6 +2310,14 @@ fn collect_ui(
                 }
             }
             _ => {}
+        }
+    }
+    for (index, target) in button_targets {
+        let Some(entity) = graphics.get(&target).copied() else {
+            continue;
+        };
+        if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(index) {
+            button.target_graphic = Some(entity);
         }
     }
     binding
@@ -2930,6 +3001,104 @@ MonoBehaviour:
   m_Color: {r: 1, g: 1, b: 1, a: 1}
 ";
 
+    const BUTTON_SCENE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: PlayButton
+  m_Layer: 5
+--- !u!224 &2
+RectTransform:
+  m_GameObject: {fileID: 1}
+  m_Father: {fileID: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 160, y: 40}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!1 &5
+GameObject:
+  m_Name: ButtonFace
+  m_Layer: 5
+--- !u!224 &6
+RectTransform:
+  m_GameObject: {fileID: 5}
+  m_Father: {fileID: 2}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7
+MonoBehaviour:
+  m_GameObject: {fileID: 5}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+--- !u!114 &8
+MonoBehaviour:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
+  m_TargetGraphic: {fileID: 7}
+  m_Interactable: 1
+";
+
+    #[test]
+    fn ui_scene_exposes_a_button_with_its_target_graphic() -> Result<(), Box<dyn Error>> {
+        let stream = unity_yaml::parse(BUTTON_SCENE)?;
+        let assembled = assemble_scene_bundle(&stream)?;
+        let button = assembled
+            .ui
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                UiElementComponent::Button(button) => Some(button),
+                _ => None,
+            })
+            .ok_or("the scene has no button")?;
+        assert_eq!(button.entity, EntityId::new(0));
+        assert_eq!(button.target_graphic, Some(EntityId::new(1)));
+        assert!(button.interactable);
+        Ok(())
+    }
+
+    #[test]
+    fn shifting_the_ui_binding_moves_every_object_id() -> Result<(), Box<dyn Error>> {
+        let mut binding = UiBinding {
+            canvases: vec![CanvasComponent {
+                entity: EntityId::new(0),
+                render_mode: CanvasRenderMode::ScreenSpaceOverlay,
+                sorting_order: 0,
+                scaler: None,
+            }],
+            rect_transforms: vec![RectTransformComponent {
+                entity: EntityId::new(1),
+                parent: Some(EntityId::new(0)),
+                anchor_min: [0.0, 0.0],
+                anchor_max: [1.0, 1.0],
+                anchored_position: [0.0, 0.0],
+                size_delta: [0.0, 0.0],
+                pivot: [0.5, 0.5],
+            }],
+            elements: vec![UiElementComponent::Button(UiButtonComponent {
+                entity: EntityId::new(1),
+                target_graphic: Some(EntityId::new(2)),
+                interactable: true,
+            })],
+        };
+        binding.shift_entity_ids(100);
+        assert_eq!(binding.canvases[0].entity, EntityId::new(100));
+        assert_eq!(binding.rect_transforms[0].entity, EntityId::new(101));
+        assert_eq!(binding.rect_transforms[0].parent, Some(EntityId::new(100)));
+        let UiElementComponent::Button(button) = &binding.elements[0] else {
+            return Err(String::from("the element is not a button").into());
+        };
+        assert_eq!(button.entity, EntityId::new(101));
+        assert_eq!(button.target_graphic, Some(EntityId::new(102)));
+        Ok(())
+    }
+
     #[test]
     fn ui_scene_exposes_canvas_rect_transform_image_and_text() -> Result<(), Box<dyn Error>> {
         let stream = unity_yaml::parse(UI_SCENE)?;
@@ -2967,6 +3136,7 @@ MonoBehaviour:
         let image = match &assembled.ui.elements[0] {
             UiElementComponent::Image(image) => image,
             UiElementComponent::Text(_) => return Err("the first element is not an image".into()),
+            UiElementComponent::Button(_) => return Err("the first element is not an image".into()),
         };
         assert_eq!(image.entity, EntityId::new(1));
         assert_eq!(image.color, [1.0, 0.5, 0.25, 0.75]);
@@ -2978,6 +3148,7 @@ MonoBehaviour:
         let text = match &assembled.ui.elements[1] {
             UiElementComponent::Text(text) => text,
             UiElementComponent::Image(_) => return Err("the second element is not a text".into()),
+            UiElementComponent::Button(_) => return Err("the second element is not a text".into()),
         };
         assert_eq!(text.entity, EntityId::new(2));
         assert_eq!(text.text, "Score 0");

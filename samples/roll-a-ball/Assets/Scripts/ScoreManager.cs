@@ -54,6 +54,7 @@ namespace Unitas.Samples.RollABall
         private int _pickupsCollected;
         private int _multiplier = 1;
         private float _lastPickupTime = float.NegativeInfinity;
+        private float _runStartTime;
         private bool _won;
         private bool _runStarted;
         private bool _countdownRunning;
@@ -71,6 +72,8 @@ namespace Unitas.Samples.RollABall
         public int Score => _score;
         public int Multiplier => _multiplier;
         public bool Won => _won;
+        // The run clock the HUD reads: the time since the countdown ended.
+        public float RunTime => _runStarted ? Time.time - _runStartTime : 0f;
         private new void Start()
         {
             _player = GetComponentInParent<PlayerController>();
@@ -99,10 +102,9 @@ namespace Unitas.Samples.RollABall
             {
                 TogglePause();
             }
-            if (Input.GetKeyDown(KeyCode.Return) && !_runStarted && !_countdownRunning)
+            if (Input.GetKeyDown(KeyCode.Return))
             {
-                _countdownRunning = true;
-                StartCoroutine(CountdownRoutine());
+                StartRun();
             }
             if (_multiplier > 1 && Time.time - _lastPickupTime > ComboWindowSeconds)
             {
@@ -115,6 +117,16 @@ namespace Unitas.Samples.RollABall
             }
             ReportSlowMotionScale();
             CollectNearbyPickups();
+        }
+        // The title screen starts the run through the same path as the Return key.
+        public void StartRun()
+        {
+            if (_runStarted || _countdownRunning)
+            {
+                return;
+            }
+            _countdownRunning = true;
+            StartCoroutine(CountdownRoutine());
         }
         public void Restart()
         {
@@ -301,6 +313,7 @@ namespace Unitas.Samples.RollABall
             Debug.Log("Countdown 1");
             _countdownRunning = false;
             _runStarted = true;
+            _runStartTime = Time.time;
             Debug.Log("Run started");
         }
         private void TogglePause()

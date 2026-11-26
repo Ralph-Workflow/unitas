@@ -15,6 +15,15 @@ const ROTATOR_GUID: &str = "2b3c4d5e6f708192a3b4c5d6e7f8091a";
 const SCORE_MANAGER_GUID: &str = "3c4d5e6f708192a3b4c5d6e7f8091a2b";
 const PICKUP_GUID: &str = "b2c3d4e5f60718293a4b5c6d7e8f90a1";
 const GOLD_PICKUP_MARKER_GUID: &str = "d5e6f70818293a4b5c6d7e8f90a1b2c3";
+const HUD_CONTROLLER_GUID: &str = "e3f4a5b6c7d8e9f0a1b2c3d4e5f60718";
+// Unity's own legacy uGUI script GUIDs. They are not project scripts, so the
+// project script index never resolves them.
+const UGUI_SCRIPT_GUIDS: [&str; 4] = [
+    unitas_asset::scene::CANVAS_SCALER_SCRIPT_GUID,
+    unitas_asset::scene::BUTTON_SCRIPT_GUID,
+    unitas_asset::scene::TEXT_SCRIPT_GUID,
+    unitas_asset::scene::IMAGE_SCRIPT_GUID,
+];
 const SCENE_GUID: &str = "9f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e";
 const SCRIPT_DIRECTORY: &str = "Assets/Scripts";
 
@@ -58,7 +67,10 @@ fn loaded_scene() -> Result<Runtime, Box<dyn Error>> {
 fn scene_loads_with_project_settings_applied() -> TestResult {
     let mut runtime = Runtime::new()?;
     let script_count = runtime.load_scene(&scene_path())?;
-    assert_eq!(script_count, 10);
+    // Every MonoBehaviour in the scene counts, including the legacy uGUI
+    // components (Text, Image, Button, CanvasScaler) that carry no project
+    // script of their own.
+    assert_eq!(script_count, 29);
     assert_eq!(runtime.scene_count(), 1);
     assert_eq!(runtime.scene_name(0), Some("RollABall"));
     assert_eq!(runtime.fixed_timestep(), 0.02);
@@ -71,6 +83,9 @@ fn scene_loads_with_project_settings_applied() -> TestResult {
         .iter()
         .map(|script| script.guid.as_str())
         .collect();
+    // The legacy uGUI components carry Unity's own script GUIDs; this test
+    // pins the project's own scripts.
+    guids.retain(|guid| !UGUI_SCRIPT_GUIDS.contains(guid));
     guids.sort_unstable();
     assert_eq!(
         guids,
@@ -85,6 +100,7 @@ fn scene_loads_with_project_settings_applied() -> TestResult {
             PICKUP_GUID,
             PICKUP_GUID,
             GOLD_PICKUP_MARKER_GUID,
+            HUD_CONTROLLER_GUID,
         ]
     );
     Ok(())
@@ -124,7 +140,24 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
             "CollectBurst",
             "LandingDust",
             "ArenaProp",
-            "CollectChime"
+            "CollectChime",
+            // The uGUI hierarchy hangs off RectTransforms, not Transforms, so
+            // the scene graph carries the canvas objects as roots of their
+            // own while the canvas binding keeps their real hierarchy.
+            "HudCanvas",
+            "ScoreLabel",
+            "ComboLabel",
+            "TimerLabel",
+            "TitlePanel",
+            "TitleText",
+            "PlayButton",
+            "QuitButton",
+            "ResultsPanel",
+            "ResultsTitle",
+            "ResultsTime",
+            "ResultsScore",
+            "RetryButton",
+            "ArenaSelectButton"
         ]
     );
 
@@ -187,12 +220,15 @@ fn sample_opens_as_a_unity_2022_project() -> TestResult {
 fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestResult {
     let runtime = loaded_scene()?;
     let index = ProjectScriptIndex::build(&sample_root())?;
-    // The sample project ships seven scripts; the index resolves project
+    // The sample project ships eight scripts; the index resolves project
     // scripts, so every script with a meta file is counted.
-    assert_eq!(index.script_count(), 7);
+    assert_eq!(index.script_count(), 8);
     let root = sample_root();
 
     for script in runtime.scripts() {
+        if UGUI_SCRIPT_GUIDS.contains(&script.guid.as_str()) {
+            continue;
+        }
         let record = match index.script_by_guid(&script.guid) {
             Some(record) => record,
             None => {

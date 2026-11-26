@@ -398,50 +398,145 @@ def packaged_player_replay(executable: Path, env: dict[str, str]) -> int:
     return 0
 
 
+PACKAGE_TARGETS: tuple[str, ...] = ("macos", "windows", "linux")
+LAUNCHED_PACKAGE_TARGET: str = "macos"
+
+
+def package_output_lines(lines: list[str], key: str, target: str) -> list[str]:
+    prefix = f"{key}[{target}]="
+    return [line for line in lines if line.startswith(prefix)]
+
+
+def check_package_report_identity(target: str, report: dict[str, object]) -> None:
+    identifier = report["build_identifier"]
+    if not isinstance(identifier, str) or not identifier:
+        message = f"the {target} build report has no build identifier"
+        raise PackagedProofError(message)
+    report_target = report["target"]
+    if not isinstance(report_target, str) or not report_target.startswith(f"{target}-"):
+        message = f"the {target} build report names target {report_target!r}"
+        raise PackagedProofError(message)
+    scenes = report["included_scenes"]
+    if not isinstance(scenes, list) or not scenes:
+        message = f"the {target} build report names no scenes"
+        raise PackagedProofError(message)
+    assets = report["assets"]
+    if not isinstance(assets, list) or not assets:
+        message = f"the {target} build report names no assets"
+        raise PackagedProofError(message)
+
+
+def check_package_report_sizes(target: str, report: dict[str, object]) -> None:
+    total = report["total_size_bytes"]
+    if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
+        message = f"the {target} build report carries no total size"
+        raise PackagedProofError(message)
+    contributors = report["major_contributors"]
+    if not isinstance(contributors, list) or not contributors:
+        message = f"the {target} build report carries no per-item sizes"
+        raise PackagedProofError(message)
+    for contributor in contributors:
+        if not isinstance(contributor, dict):
+            message = f"the {target} build report carries a malformed size entry"
+            raise PackagedProofError(message)
+        size = contributor.get("size_bytes")
+        if not isinstance(size, int) or isinstance(size, bool):
+            message = f"the {target} build report carries a malformed size entry"
+            raise PackagedProofError(message)
+
+
+def check_package_report_fields(target: str, report: dict[str, object]) -> None:
+    required = (
+        "build_identifier",
+        "target",
+        "included_scenes",
+        "assets",
+        "total_size_bytes",
+        "major_contributors",
+    )
+    missing = [field for field in required if field not in report]
+    if missing:
+        names = ", ".join(missing)
+        message = f"the {target} build report lacks fields: {names}"
+        raise PackagedProofError(message)
+    check_package_report_identity(target, report)
+    check_package_report_sizes(target, report)
+
+
+def check_package_not_launched(target: str, report: dict[str, object]) -> None:
+    startup = report.get("startup_time")
+    if not isinstance(startup, dict) or startup.get("status") != "unavailable":
+        message = f"the {target} build report claims a launch this host never performed"
+        raise PackagedProofError(message)
+    warnings = report.get("warnings")
+    if not isinstance(warnings, list):
+        message = f"the {target} build report carries no warnings list"
+        raise PackagedProofError(message)
+    codes = [warning.get("code") for warning in warnings if isinstance(warning, dict)]
+    if "package.not_launched" not in codes:
+        message = f"the {target} build report does not record that it was not launched"
+        raise PackagedProofError(message)
+
+
 def check_packaged_report(log_path: Path) -> Path:
     if not log_path.is_file():
         emit(f"packaging log missing at {log_path}")
         message = "packaging log missing"
         raise PackagedProofError(message)
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    packaged = [line for line in lines if line.startswith("packaged_app=")]
-    reports = [line for line in lines if line.startswith("build_report=")]
-    launchers = [line for line in lines if line.startswith("launch_artifact=")]
-    if len(packaged) != 1 or len(reports) != 1 or len(launchers) != 1:
-        message = "packaging output lacks packaged_app/build_report/launch_artifact lines"
-        raise PackagedProofError(message)
-    app_path = Path(packaged[0].removeprefix("packaged_app="))
-    if not app_path.is_dir():
-        emit(f"packaged artifact missing at {app_path}")
-        message = "packaged artifact missing"
-        raise PackagedProofError(message)
-    report_path = Path(reports[0].removeprefix("build_report="))
-    if not report_path.is_file():
-        emit(f"build report missing at {report_path}")
-        message = "build report missing"
-        raise PackagedProofError(message)
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except ValueError as error:
-        emit(f"build report at {report_path} does not parse: {error}")
-        message = "build report does not parse"
-        raise PackagedProofError(message) from error
-    findings = report.get("compatibility_findings")
-    if not isinstance(findings, list) or not findings:
-        emit("build report has no compatibility findings")
-        message = "empty compatibility findings"
-        raise PackagedProofError(message)
-    licensing = report.get("licensing")
-    if not isinstance(licensing, dict) or not licensing.get("governing_license"):
-        emit("build report has no license record")
-        message = "missing license record"
-        raise PackagedProofError(message)
-    emit(
-        f"packaged artifact: {app_path}; build report: {report_path} "
-        f"({len(findings)} compatibility findings, license "
-        f"{licensing['governing_license']})"
-    )
-    return Path(launchers[0].removeprefix("launch_artifact="))
+    launch_artifacts: dict[str, Path] = {}
+    for target in PACKAGE_TARGETS:
+        packaged = package_output_lines(lines, "packaged_app", target)
+        reports = package_output_lines(lines, "build_report", target)
+        launchers = package_output_lines(lines, "launch_artifact", target)
+        if len(packaged) != 1 or len(reports) != 1 or len(launchers) != 1:
+            message = (
+                "packaging output lacks one packaged_app/build_report/launch_artifact "
+                f"set for {target}"
+            )
+            raise PackagedProofError(message)
+        app_path = Path(packaged[0].removeprefix(f"packaged_app[{target}]="))
+        if not app_path.is_dir():
+            emit(f"packaged artifact missing at {app_path}")
+            message = "packaged artifact missing"
+            raise PackagedProofError(message)
+        report_path = Path(reports[0].removeprefix(f"build_report[{target}]="))
+        if not report_path.is_file():
+            emit(f"build report missing at {report_path}")
+            message = "build report missing"
+            raise PackagedProofError(message)
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            emit(f"build report at {report_path} does not parse: {error}")
+            message = "build report does not parse"
+            raise PackagedProofError(message) from error
+        check_package_report_fields(target, report)
+        findings = report.get("compatibility_findings")
+        if not isinstance(findings, list) or not findings:
+            emit("build report has no compatibility findings")
+            message = "empty compatibility findings"
+            raise PackagedProofError(message)
+        licensing = report.get("licensing")
+        if not isinstance(licensing, dict) or not licensing.get("governing_license"):
+            emit("build report has no license record")
+            message = "missing license record"
+            raise PackagedProofError(message)
+        if target == LAUNCHED_PACKAGE_TARGET:
+            emit(
+                f"packaged artifact: {app_path}; build report: {report_path} "
+                f"({len(findings)} compatibility findings, license "
+                f"{licensing['governing_license']})"
+            )
+        else:
+            check_package_not_launched(target, report)
+            emit(
+                f"packaged artifact: {app_path}; build report: {report_path} "
+                f"(built on this host, not launched here: {target} players do not run "
+                f"on this machine)"
+            )
+        launch_artifacts[target] = Path(launchers[0].removeprefix(f"launch_artifact[{target}]="))
+    return launch_artifacts[LAUNCHED_PACKAGE_TARGET]
 
 
 def packaged_player_proof(env: dict[str, str]) -> int:

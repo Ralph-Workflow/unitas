@@ -53,6 +53,9 @@ pub const KEY_MOUSE_0: u32 = 323;
 pub const KEY_MOUSE_1: u32 = 324;
 pub const KEY_MOUSE_2: u32 = 325;
 
+/// Mouse button id of the primary (left) button.
+pub const PRIMARY_MOUSE_BUTTON: u32 = 0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ButtonSource {
     Key(u32),
@@ -288,6 +291,15 @@ pub fn default_axis_configs() -> Vec<AxisConfig> {
     ]
 }
 
+/// One frame of pointer state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerFrame {
+    pub position: (f32, f32),
+    pub primary_held: bool,
+    pub primary_pressed: bool,
+    pub primary_released: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct InputState {
     keys_down: HashSet<u32>,
@@ -453,6 +465,15 @@ impl InputState {
 
     pub fn inject_pointer_move(&mut self, x: f64, y: f64) {
         self.queue_pointer_move(x, y);
+    }
+
+    /// Injects a whole pointer frame (position plus primary button state) so a
+    /// headless scenario can drive the pointer without a window.
+    pub fn inject_pointer_frame(&mut self, position: (f32, f32), primary_held: bool) {
+        self.inject_mouse_move(f64::from(position.0), f64::from(position.1));
+        if self.is_mouse_button_down(PRIMARY_MOUSE_BUTTON) != primary_held {
+            self.inject_mouse_button(PRIMARY_MOUSE_BUTTON, primary_held);
+        }
     }
 
     pub fn inject_scroll(&mut self, x: f64, y: f64) {
@@ -811,6 +832,16 @@ impl InputState {
             self.pointer_dx,
             self.pointer_dy,
         )
+    }
+
+    /// The pointer state of the current frame.
+    pub fn pointer_frame(&self) -> PointerFrame {
+        PointerFrame {
+            position: (self.pointer_x as f32, self.pointer_y as f32),
+            primary_held: self.is_mouse_button_down(PRIMARY_MOUSE_BUTTON),
+            primary_pressed: self.is_mouse_button_pressed(PRIMARY_MOUSE_BUTTON),
+            primary_released: self.is_mouse_button_released(PRIMARY_MOUSE_BUTTON),
+        }
     }
 
     pub fn scroll(&self) -> (f64, f64) {

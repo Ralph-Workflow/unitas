@@ -1,8 +1,8 @@
 use unitas_render::{Camera, Mat4, Mesh, Vec3, look_at};
 
 use crate::input::{
-    InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_MOUSE_0, KEY_RETURN,
-    KEY_RIGHT_ARROW, KEY_UP_ARROW, STATE_PRESSED,
+    InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_RETURN, KEY_RIGHT_ARROW,
+    KEY_UP_ARROW, STATE_PRESSED,
 };
 
 /// Color of the always-visible focus border drawn around the focused widget.
@@ -323,7 +323,8 @@ impl Ui {
     }
 
     pub fn handle_pointer(&mut self, input: &InputState, screen: &Rect) -> Vec<UiEvent> {
-        let (px, py, _, _) = input.pointer();
+        let pointer = input.pointer_frame();
+        let (px, py) = (f64::from(pointer.position.0), f64::from(pointer.position.1));
         let mut hovered = None;
         for (index, widget) in self.widgets.iter().enumerate().rev() {
             if let Widget::Button { rect, .. } = widget
@@ -335,13 +336,13 @@ impl Ui {
         }
         self.hovered = hovered;
         let mut events = Vec::new();
-        if input.is_mouse_button_pressed(KEY_MOUSE_0) {
+        if pointer.primary_pressed {
             self.active = hovered;
         }
         if self.active.is_some() && self.active != hovered {
             self.active = None;
         }
-        if input.is_mouse_button_released(KEY_MOUSE_0) {
+        if pointer.primary_released {
             if let (Some(active), Some(hovered)) = (self.active, hovered)
                 && active == hovered
                 && let Widget::Button { id, .. } = &self.widgets[active]
@@ -493,7 +494,7 @@ mod tests {
     use super::*;
     use crate::input::{
         AxisConfig, InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_RETURN,
-        KEY_RIGHT_ARROW, KEY_SPACE, KEY_UP_ARROW,
+        KEY_RIGHT_ARROW, KEY_SPACE, KEY_UP_ARROW, PRIMARY_MOUSE_BUTTON,
     };
 
     fn press(input: &mut InputState, button: u32, pressed: bool) {
@@ -656,9 +657,9 @@ mod tests {
         move_to(&mut input, 400.0, 300.0);
         assert!(ui.handle_pointer(&input, &screen).is_empty());
         assert_eq!(ui.hovered(), Some("play"));
-        press(&mut input, KEY_MOUSE_0, true);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, true);
         assert!(ui.handle_pointer(&input, &screen).is_empty());
-        press(&mut input, KEY_MOUSE_0, false);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, false);
         let events = ui.handle_pointer(&input, &screen);
         assert_eq!(events, vec![UiEvent::Clicked("play".to_string())]);
     }
@@ -677,10 +678,10 @@ mod tests {
         let mut input = InputState::new();
         move_to(&mut input, 400.0, 300.0);
         ui.handle_pointer(&input, &screen);
-        press(&mut input, KEY_MOUSE_0, true);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, true);
         ui.handle_pointer(&input, &screen);
         move_to(&mut input, 10.0, 10.0);
-        press(&mut input, KEY_MOUSE_0, false);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, false);
         assert!(ui.handle_pointer(&input, &screen).is_empty());
         assert_eq!(ui.hovered(), None);
     }
@@ -698,10 +699,10 @@ mod tests {
         );
         let mut input = InputState::new();
         move_to(&mut input, 10.0, 10.0);
-        press(&mut input, KEY_MOUSE_0, true);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, true);
         ui.handle_pointer(&input, &screen);
         move_to(&mut input, 400.0, 300.0);
-        press(&mut input, KEY_MOUSE_0, false);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, false);
         assert!(ui.handle_pointer(&input, &screen).is_empty());
     }
 
@@ -788,10 +789,10 @@ mod tests {
         move_to(&mut input, 400.0, 300.0);
         ui.handle_pointer(&input, &screen);
         assert_eq!(ui.draw_list(&screen)[0].color, [0.3; 3]);
-        press(&mut input, KEY_MOUSE_0, true);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, true);
         ui.handle_pointer(&input, &screen);
         assert_eq!(ui.draw_list(&screen)[0].color, [0.4; 3]);
-        press(&mut input, KEY_MOUSE_0, false);
+        press(&mut input, PRIMARY_MOUSE_BUTTON, false);
         ui.handle_pointer(&input, &screen);
         assert_eq!(ui.draw_list(&screen)[0].color, [0.3; 3]);
     }

@@ -36,7 +36,7 @@ reported with its real state, never hidden.
 | S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` passes in the lane's scripting step and in the headless editor-host step (see the lane state below) |
 | S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
-| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes; no pointer scenario exists yet |
+| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` now drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`), but its click assertion does **not** pass yet: the native runtime detects the button hit and queues the clicked object id, and the managed `UnityEngine.UI.Button` wrapper exists, but the bridge does not yet install the managed uGUI provider that pumps those clicks into `Button.onClick`. The scenario is therefore not in the `make verify-samples` scenario list yet, and the lane stays green |
 | S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore, S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
@@ -72,11 +72,23 @@ cannot show).
   attract ghost, **no** speed trail, **no** results panel and **no** gold-medal
   display: the four captures are Arena 1 at four moments of play, and the
   title-screen capture is the arena at startup, not a title screen.
-- The sample has **no on-screen text at all**: no canvas, no TextMeshPro, no
-  HUD. The score, the combo multiplier and the countdown exist only as C#
-  state and as log lines (`ScoreManager.cs:198` logs the combo multiplier,
-  `:227` the gold pickup, `:292` the countdown), so a capture cannot show the
-  score, the multiplier or the results text.
+- The sample now **carries on-screen text in the scene** but does not yet
+  show it. `Assets/Scenes/RollABall.unity` carries a legacy uGUI `Canvas`
+  (`HudCanvas`) with a `CanvasScaler` at an 800x600 reference resolution,
+  three HUD labels (`ScoreLabel`, `ComboLabel`, `TimerLabel`), a title panel
+  (`TitlePanel`, `TitleText`, `PlayButton`, `QuitButton`) and a results panel
+  (`ResultsPanel`, `ResultsTitle`, `ResultsTime`, `ResultsScore`,
+  `RetryButton`, `ArenaSelectButton`), and `Assets/Scripts/HudController.cs`
+  drives them. The engine side parses that hierarchy
+  (`UiBinding`), resolves the canvas rects and the label text, and the runtime
+  exposes `unitas_runtime_ui_text_set`, `unitas_runtime_ui_text_style` and
+  `unitas_runtime_ui_pointer_over` for the managed side. What is missing is
+  the render step: the canvas draw items are not composited into the windowed
+  frame or into the `render_capture` frame, so the score, the multiplier and
+  the results text still exist only as C# state and as log lines
+  (`ScoreManager.cs:198` logs the combo multiplier, `:227` the gold pickup,
+  `:292` the countdown), and a capture cannot show them. The four approved
+  references are therefore unchanged and still show the arena alone.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
 - **The four captures render the arena and are reproducible, and approved

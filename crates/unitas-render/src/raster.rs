@@ -79,6 +79,17 @@ impl Default for Material {
     }
 }
 
+/// The opacity a material contributes to its fragments: `1.0` for opaque
+/// materials, the clamped [`Material::alpha`] for blended ones. An instance
+/// whose opacity is below `1.0` is drawn in the translucent pass, after the
+/// opaque instances and back to front.
+pub fn effective_alpha(material: &Material) -> f32 {
+    match material.blend {
+        BlendMode::Opaque => 1.0,
+        BlendMode::Blend => material.alpha.clamp(0.0, 1.0),
+    }
+}
+
 struct ScreenVertex {
     x: f32,
     y: f32,
@@ -308,7 +319,7 @@ pub fn render_scene_materials(
 
     for instance in instances
         .iter()
-        .filter(|instance| instance.material.blend == BlendMode::Opaque)
+        .filter(|instance| effective_alpha(instance.material) >= 1.0)
     {
         draw_instance(instance, &vp, light, camera_pos, &mut target);
     }
@@ -317,7 +328,7 @@ pub fn render_scene_materials(
     // look_at is right-handed, so visible points have negative view z).
     let mut translucent: Vec<&MaterialInstance<'_>> = instances
         .iter()
-        .filter(|instance| instance.material.blend == BlendMode::Blend)
+        .filter(|instance| effective_alpha(instance.material) < 1.0)
         .collect();
     translucent.sort_by(|a, b| {
         let depth_a = view.mul_mat4(&a.model).transform_point(Vec3::ZERO).z;
@@ -345,12 +356,9 @@ fn draw_instance(
     let material = instance.material;
     let textured = material.is_textured();
     let attributes = instance.attributes;
-    let write_depth = material.blend == BlendMode::Opaque;
-    let alpha = if material.blend == BlendMode::Blend {
-        Some(material.alpha.clamp(0.0, 1.0))
-    } else {
-        None
-    };
+    let opacity = effective_alpha(material);
+    let write_depth = opacity >= 1.0;
+    let alpha = (opacity < 1.0).then_some(opacity);
     let light_dir = light.direction.normalize();
     let light_color = light.color;
     let t = light.intensity.clamp(0.0, 1.0);

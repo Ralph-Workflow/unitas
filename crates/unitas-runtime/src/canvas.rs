@@ -52,6 +52,14 @@ pub struct CanvasRect {
     pub size: [f32; 2],
 }
 
+/// The runtime state of a `Text` component: its content, font size and colour.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextOverride {
+    pub text: String,
+    pub font_size: f32,
+    pub color: [f32; 4],
+}
+
 pub fn resolve_canvas_rect(rect: &RectTransformComponent, parent: CanvasRect) -> CanvasRect {
     let anchor_size = [
         (rect.anchor_max[0] - rect.anchor_min[0]) * parent.size[0],
@@ -127,44 +135,26 @@ impl CanvasState {
     }
 
     pub fn draw_items(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
+        self.draw_items_with(screen_size, &HashMap::new())
+    }
+
+    /// The draw items of the visible canvas content, with the runtime text
+    /// state applied: `texts` overrides the content, font size and colour of
+    /// the `Text` components it names.
+    pub fn draw_items_with(
+        &self,
+        screen_size: [f32; 2],
+        texts: &HashMap<EntityId, TextOverride>,
+    ) -> Vec<UiDrawItem> {
         let mut items = Vec::new();
         if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
             return items;
         }
         for element in &self.binding.elements {
-            let chain = match self.chain_to_canvas(element.entity()) {
-                Some(chain) => chain,
+            let (rect_px, scale) = match self.element_rect(element.entity(), screen_size) {
+                Some(resolved) => resolved,
                 None => continue,
             };
-            let canvas = match self
-                .binding
-                .canvases
-                .iter()
-                .find(|canvas| canvas.entity == chain[0])
-            {
-                Some(canvas) => canvas,
-                None => continue,
-            };
-            if canvas.render_mode != CanvasRenderMode::ScreenSpaceOverlay {
-                continue;
-            }
-            let scale = canvas_scale_factor(canvas, screen_size);
-            if scale <= 0.0 {
-                continue;
-            }
-            let canvas_size = [screen_size[0] / scale, screen_size[1] / scale];
-            let mut rect = CanvasRect {
-                min: [0.0, 0.0],
-                size: canvas_size,
-            };
-            for node in chain.iter().skip(1) {
-                let transform = match self.rects.get(node) {
-                    Some(transform) => transform,
-                    None => continue,
-                };
-                rect = resolve_canvas_rect(transform, rect);
-            }
-            let rect_px = canvas_rect_to_pixels(rect, canvas_size, scale);
             match element {
                 UiElementComponent::Image(image) => {
                     if !image.enabled {
@@ -184,22 +174,63 @@ impl CanvasState {
                     if !text.enabled {
                         continue;
                     }
+                    let state = texts.get(&text.entity);
+                    let content = state.map_or(text.text.as_str(), |state| state.text.as_str());
+                    let color = state.map_or(text.color, |state| state.color);
+                    let font_size = state.map_or(text.font_size, |state| state.font_size);
                     items.push(UiDrawItem {
                         rect_px,
-                        color: text.color,
+                        color,
                         sprite: None,
                         text: Some(UiTextItem {
-                            text: text.text.clone(),
+                            text: content.to_string(),
                             x: rect_px[0],
                             y: rect_px[1],
-                            size_px: text.font_size * scale,
-                            color: text.color,
+                            size_px: font_size * scale,
+                            color,
                         }),
                     });
                 }
+                // A button draws through its target graphic, which is an
+                // element of its own.
+                UiElementComponent::Button(_) => {}
             }
         }
         items
+    }
+
+    /// The pixel rectangle of one element under its canvas and the scale of
+    /// that canvas, in screen pixels with the origin at the top left.
+    pub fn element_rect(&self, entity: EntityId, screen_size: [f32; 2]) -> Option<([f32; 4], f32)> {
+        if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
+            return None;
+        }
+        let chain = self.chain_to_canvas(entity)?;
+        let canvas = self
+            .binding
+            .canvases
+            .iter()
+            .find(|canvas| canvas.entity == chain[0])?;
+        if canvas.render_mode != CanvasRenderMode::ScreenSpaceOverlay {
+            return None;
+        }
+        let scale = canvas_scale_factor(canvas, screen_size);
+        if scale <= 0.0 {
+            return None;
+        }
+        let canvas_size = [screen_size[0] / scale, screen_size[1] / scale];
+        let mut rect = CanvasRect {
+            min: [0.0, 0.0],
+            size: canvas_size,
+        };
+        for node in chain.iter().skip(1) {
+            let transform = match self.rects.get(node) {
+                Some(transform) => transform,
+                None => continue,
+            };
+            rect = resolve_canvas_rect(transform, rect);
+        }
+        Some((canvas_rect_to_pixels(rect, canvas_size, scale), scale))
     }
 
     fn chain_to_canvas(&self, entity: EntityId) -> Option<Vec<EntityId>> {

@@ -10,7 +10,7 @@ use crate::glyphs::{
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, MeshAttributes};
-use crate::raster::{DirectionalLight, Material, MeshInstance};
+use crate::raster::{effective_alpha, DirectionalLight, Material, MeshInstance};
 
 const VERTEX_FLOATS: usize = 11;
 const VERTEX_STRIDE: u64 = 44;
@@ -73,6 +73,7 @@ struct VertexOut {
     @location(3) tangent: vec3<f32>,
     @location(4) world_pos: vec3<f32>,
     @location(5) shadow_pos: vec4<f32>,
+    @location(6) alpha: f32,
 };
 
 @vertex
@@ -93,6 +94,7 @@ fn vs_main(
     out.uv = uv;
     out.world_pos = world.xyz;
     out.shadow_pos = shadow.light_view_proj * world;
+    out.alpha = inst.color.a;
     return out;
 }
 
@@ -112,6 +114,7 @@ fn vs_shadow(
     out.uv = uv;
     out.world_pos = world.xyz;
     out.shadow_pos = out.clip_position;
+    out.alpha = 1.0;
     return out;
 }
 
@@ -140,7 +143,7 @@ fn shadow_factor(vs_out: VertexOut) -> f32 {
     return sum / 9.0;
 }
 
-fn surface_color(vs_out: VertexOut) -> vec4<f32> {
+fn surface_color(vs_out: VertexOut) -> vec3<f32> {
     let n_len = length(vs_out.normal);
     var n = select(vec3<f32>(0.0, 0.0, 0.0), vs_out.normal / n_len, n_len > 1e-8);
     let t_len = length(vs_out.tangent);
@@ -164,17 +167,17 @@ fn surface_color(vs_out: VertexOut) -> vec4<f32> {
     let shadowed = shadow_factor(vs_out);
     let shade = globals.light_color.w * albedo
         + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w * shadowed;
-    return vec4<f32>(shade + emissive, material.params.z);
+    return shade + emissive;
 }
 
 @fragment
 fn fs_lit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    return surface_color(vs_out);
+    return vec4<f32>(surface_color(vs_out), vs_out.alpha);
 }
 
 @fragment
 fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(vs_out.color, material.params.z);
+    return vec4<f32>(vs_out.color, vs_out.alpha);
 }
 
 struct CaptureOut {
@@ -185,7 +188,7 @@ struct CaptureOut {
 @fragment
 fn fs_capture_lit(vs_out: VertexOut) -> CaptureOut {
     var out: CaptureOut;
-    out.color = vec4<f32>(surface_color(vs_out).rgb, 1.0);
+    out.color = vec4<f32>(surface_color(vs_out), 1.0);
     out.id = u32(round(inst.flags.x));
     return out;
 }
@@ -325,6 +328,8 @@ where
 struct Pipelines {
     lit: wgpu::RenderPipeline,
     unlit: wgpu::RenderPipeline,
+    lit_blend: wgpu::RenderPipeline,
+    unlit_blend: wgpu::RenderPipeline,
 }
 
 struct UniformState {
@@ -429,6 +434,27 @@ fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     }
 }
 
+// Blend choice for translucent surfaces: source-over, src-alpha over
+// one-minus-src-alpha.
+fn blend_color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
 fn id_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
@@ -444,7 +470,16 @@ fn create_pipelines(
     format: wgpu::TextureFormat,
 ) -> Pipelines {
     let targets = [Some(color_target(format))];
-    build_pipelines(device, layout, shader, "fs_lit", "fs_unlit", &targets)
+    let blend_targets = [Some(blend_color_target(format))];
+    build_pipelines(
+        device,
+        layout,
+        shader,
+        "fs_lit",
+        "fs_unlit",
+        &targets,
+        &blend_targets,
+    )
 }
 
 fn create_capture_pipelines(
@@ -455,6 +490,10 @@ fn create_capture_pipelines(
     id_format: wgpu::TextureFormat,
 ) -> Pipelines {
     let targets = [Some(color_target(color_format)), Some(id_target(id_format))];
+    let blend_targets = [
+        Some(blend_color_target(color_format)),
+        Some(id_target(id_format)),
+    ];
     build_pipelines(
         device,
         layout,
@@ -462,6 +501,7 @@ fn create_capture_pipelines(
         "fs_capture_lit",
         "fs_capture_unlit",
         &targets,
+        &blend_targets,
     )
 }
 
@@ -472,10 +512,50 @@ fn build_pipelines(
     lit_entry_point: &str,
     unlit_entry_point: &str,
     targets: &[Option<wgpu::ColorTargetState>],
+    blend_targets: &[Option<wgpu::ColorTargetState>],
 ) -> Pipelines {
-    let lit = build_pipeline(device, layout, shader, lit_entry_point, targets, "lit");
-    let unlit = build_pipeline(device, layout, shader, unlit_entry_point, targets, "unlit");
-    Pipelines { lit, unlit }
+    let lit = build_pipeline(
+        device,
+        layout,
+        shader,
+        lit_entry_point,
+        targets,
+        "lit",
+        true,
+    );
+    let unlit = build_pipeline(
+        device,
+        layout,
+        shader,
+        unlit_entry_point,
+        targets,
+        "unlit",
+        true,
+    );
+    let lit_blend = build_pipeline(
+        device,
+        layout,
+        shader,
+        lit_entry_point,
+        blend_targets,
+        "lit-blend",
+        false,
+    );
+    let unlit_blend = build_pipeline(
+        device,
+        layout,
+        shader,
+        unlit_entry_point,
+        blend_targets,
+        "unlit-blend",
+        false,
+    );
+    Pipelines {
+        lit,
+        unlit,
+        lit_blend,
+        unlit_blend,
+    }
 }
 
 fn build_pipeline(
@@ -485,10 +565,11 @@ fn build_pipeline(
     entry_point: &str,
     targets: &[Option<wgpu::ColorTargetState>],
     label: &'static str,
+    depth_write: bool,
 ) -> wgpu::RenderPipeline {
     let depth_stencil = wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
-        depth_write_enabled: Some(true),
+        depth_write_enabled: Some(depth_write),
         depth_compare: Some(wgpu::CompareFunction::Less),
         stencil: wgpu::StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
@@ -1467,7 +1548,11 @@ impl Renderer {
         })
     }
 
-    fn upload_mesh(&self, mesh: &Mesh) -> Result<Option<MeshBuffers>, RenderError> {
+    fn upload_mesh(
+        &self,
+        mesh: &Mesh,
+        attributes: Option<&MeshAttributes>,
+    ) -> Result<Option<MeshBuffers>, RenderError> {
         if mesh.positions.is_empty() || mesh.indices.is_empty() {
             return Ok(None);
         }
@@ -1477,10 +1562,16 @@ impl Renderer {
             let normal = mesh.normals.get(index).copied().unwrap_or(Vec3::ZERO);
             vertex_data.extend_from_slice(&[normal.x, normal.y, normal.z]);
             // The layout declares uv and tangent after the normal; a Mesh
-            // carries neither, so they stay zero (flat albedo lookup, no
-            // normal map).
-            vertex_data.extend_from_slice(&[0.0, 0.0]);
-            vertex_data.extend_from_slice(&[0.0, 0.0, 0.0]);
+            // without attributes carries neither, so they stay zero (flat
+            // albedo lookup, no normal map).
+            let uv = attributes
+                .and_then(|attrs| attrs.uvs.get(index).copied())
+                .unwrap_or([0.0, 0.0]);
+            vertex_data.extend_from_slice(&[uv[0], uv[1]]);
+            let tangent = attributes
+                .and_then(|attrs| attrs.tangents.get(index).copied())
+                .unwrap_or(Vec3::ZERO);
+            vertex_data.extend_from_slice(&[tangent.x, tangent.y, tangent.z]);
         }
         let vertex_bytes = bytemuck::try_cast_slice::<f32, u8>(&vertex_data)
             .map_err(|_| RenderError::BufferCast("vertex"))?;
@@ -1519,7 +1610,7 @@ impl Renderer {
         let view_proj = camera.projection_matrix() * view;
         let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(items.len());
         for item in items {
-            meshes.push(self.upload_mesh(item.instance.mesh)?);
+            meshes.push(self.upload_mesh(item.instance.mesh, item.attributes)?);
         }
 
         let mut state = lock(&self.uniforms);
@@ -1547,49 +1638,29 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
-        let instance_data = if items.iter().any(|item| item.object_id != 0) {
-            let mut slotted: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
-            for (index, item) in items.iter().enumerate() {
-                let start = index * SLOT_FLOATS;
-                slotted[start..start + 16].copy_from_slice(item.instance.model.as_array());
-                slotted[start + 16..start + 20].copy_from_slice(&[
-                    item.instance.color[0],
-                    item.instance.color[1],
-                    item.instance.color[2],
-                    1.0,
-                ]);
-                slotted[start + 20] = item.object_id as f32;
-            }
-            slotted
-        } else {
-            let mut packed: Vec<f32> = Vec::with_capacity(items.len() * INSTANCE_FLOATS);
-            for item in items {
-                packed.extend_from_slice(item.instance.model.as_array());
-                packed.extend_from_slice(&[
-                    item.instance.color[0],
-                    item.instance.color[1],
-                    item.instance.color[2],
-                    1.0,
-                ]);
-                packed.extend_from_slice(&[
-                    if item.instance.lit { 1.0 } else { 0.0 },
-                    0.0,
-                    0.0,
-                    0.0,
-                ]);
-            }
-            packed
-        };
-        if !instance_data.is_empty() {
+        let mut slotted: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
+        for (index, item) in items.iter().enumerate() {
+            let start = index * SLOT_FLOATS;
+            slotted[start..start + 16].copy_from_slice(item.instance.model.as_array());
+            slotted[start + 16..start + 20].copy_from_slice(&[
+                item.instance.color[0],
+                item.instance.color[1],
+                item.instance.color[2],
+                item.alpha,
+            ]);
+            slotted[start + 20] = item.object_id as f32;
+        }
+        if !slotted.is_empty() {
             self.queue.write_buffer(
                 &state.buffer,
                 UNIFORM_SLOT,
-                bytemuck::cast_slice::<f32, u8>(&instance_data),
+                bytemuck::cast_slice::<f32, u8>(&slotted),
             );
         }
 
         pass.set_bind_group(0, &state.global_bind_group, &[]);
-        for (index, item) in items.iter().enumerate() {
+        for index in draw_order(items, view) {
+            let item = &items[index];
             let mesh = match &meshes[index] {
                 Some(mesh) => mesh,
                 None => continue,
@@ -1601,11 +1672,13 @@ impl Renderer {
             );
             pass.set_bind_group(2, &self.material_bind, &[]);
             pass.set_bind_group(3, &self.shadow_bind, &[]);
-            if item.instance.lit {
-                pass.set_pipeline(&pipelines.lit);
-            } else {
-                pass.set_pipeline(&pipelines.unlit);
-            }
+            let pipeline = match (item.instance.lit, item.alpha < 1.0) {
+                (true, true) => &pipelines.lit_blend,
+                (true, false) => &pipelines.lit,
+                (false, true) => &pipelines.unlit_blend,
+                (false, false) => &pipelines.unlit,
+            };
+            pass.set_pipeline(pipeline);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -1644,6 +1717,8 @@ struct MeshBuffers {
 
 struct DrawItem<'a> {
     instance: GpuInstance<'a>,
+    attributes: Option<&'a MeshAttributes>,
+    alpha: f32,
     object_id: u32,
 }
 
@@ -1652,6 +1727,8 @@ fn plain_draw_items<'a>(instances: &[GpuInstance<'a>]) -> Vec<DrawItem<'a>> {
         .iter()
         .map(|instance| DrawItem {
             instance: *instance,
+            attributes: None,
+            alpha: 1.0,
             object_id: 0,
         })
         .collect()
@@ -1667,6 +1744,8 @@ fn material_draw_items<'a>(instances: &[GpuMaterialInstance<'a>]) -> Vec<DrawIte
                 color: instance.color,
                 lit: true,
             },
+            attributes: instance.attributes,
+            alpha: effective_alpha(instance.material),
             object_id: 0,
         })
         .collect()
@@ -1683,9 +1762,41 @@ fn capture_draw_items<'a>(instances: &[CaptureInstance<'a>]) -> Vec<DrawItem<'a>
                 color: instance.color,
                 lit: instance.lit,
             },
+            attributes: None,
+            alpha: 1.0,
             object_id: (index + 1) as u32,
         })
         .collect()
+}
+
+/// The draw order the GPU and the CPU raster share: opaque instances first in
+/// input order, then the translucent ones back to front (smallest view-space z
+/// first; look_at is right-handed, so visible points have negative view z).
+fn draw_order(items: &[DrawItem<'_>], view: Mat4) -> Vec<usize> {
+    let mut opaque: Vec<usize> = Vec::new();
+    let mut translucent: Vec<usize> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if item.alpha < 1.0 {
+            translucent.push(index);
+        } else {
+            opaque.push(index);
+        }
+    }
+    translucent.sort_by(|&a, &b| {
+        let depth_a = view
+            .mul_mat4(&items[a].instance.model)
+            .transform_point(Vec3::ZERO)
+            .z;
+        let depth_b = view
+            .mul_mat4(&items[b].instance.model)
+            .transform_point(Vec3::ZERO)
+            .z;
+        depth_a
+            .partial_cmp(&depth_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    opaque.extend(translucent);
+    opaque
 }
 
 fn create_uniforms(

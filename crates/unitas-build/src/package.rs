@@ -5,13 +5,19 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use crate::bundle::{
     BundleManifest, BUNDLE_MANIFEST_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
     MANAGED_DIR_NAME,
 };
-use crate::licensing::{third_party_notices_text, LicensingRecord};
-use crate::targets::BuildTarget;
+use crate::config::BuildConfiguration;
+use crate::licensing::{
+    licensing_record, third_party_notices_text, workspace_root, LicensingRecord,
+};
+use crate::player::{execute_build_for_host, BuildOutcomeBundle, BUILD_REPORT_FILENAME};
+use crate::report::{BuildDiagnostic, StartupMeasurement, STARTUP_BASIS};
+use crate::targets::{BuildTarget, TargetOs};
 
 pub const APP_BUNDLE_EXTENSION: &str = "app";
 pub const CONTENTS_DIR_NAME: &str = "Contents";
@@ -25,6 +31,8 @@ pub const STAGED_ASSETS_DIR_NAME: &str = "Assets";
 /// Suffix of the per-game data directory in Windows/Linux layouts, matching
 /// the convention players expect (`<Product>_Data`).
 pub const DATA_DIR_SUFFIX: &str = "_Data";
+/// The directory a target's staged bundle lives in while it is packaged.
+pub const STAGED_DIR_NAME: &str = "staged";
 
 /// A macOS application bundle produced from a staged player bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +49,7 @@ pub enum PackageError {
     Io { path: PathBuf, message: String },
     MissingPlayerBinary { path: PathBuf },
     CodeSign { path: PathBuf, message: String },
+    BuildFailed { path: PathBuf, message: String },
 }
 
 impl fmt::Display for PackageError {
@@ -63,6 +72,13 @@ impl fmt::Display for PackageError {
                     path.display()
                 )
             }
+            PackageError::BuildFailed { path, message } => {
+                write!(
+                    formatter,
+                    "the build that packages '{}' failed: {message}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -76,6 +92,24 @@ pub struct PackagedPlayer {
     pub executable_path: PathBuf,
     pub data_dir: PathBuf,
     pub manifest_path: PathBuf,
+}
+
+/// A desktop target the packaging slice staged: the player payload, the build
+/// report that describes it and whether this host launched it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagedTarget {
+    /// The target the package was built for.
+    pub target: BuildTarget,
+    /// The directory name the package lives under (`macos`, `windows`, `linux`).
+    pub label: String,
+    /// The packaged player: an application bundle or a player directory.
+    pub app_path: PathBuf,
+    /// The executable that launches the packaged player.
+    pub launch_artifact: PathBuf,
+    /// The build report of the package.
+    pub build_report_path: PathBuf,
+    /// Whether this host launched the package it staged.
+    pub launched: bool,
 }
 
 /// The name the application bundle and its executable carry.
@@ -277,6 +311,169 @@ fn package_player_directory(
     })
 }
 
+/// The desktop targets the packaging slice stages: macOS, Windows and Linux.
+///
+/// The macOS target carries the host architecture when the host builds
+/// macOS players, so the packaged player runs on the machine that built it.
+pub fn desktop_package_targets() -> Vec<BuildTarget> {
+    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
+    let macos = if host.os() == TargetOs::MacOs {
+        host
+    } else {
+        BuildTarget::MACOS_X86_64
+    };
+    vec![
+        macos,
+        BuildTarget::WINDOWS_X86_64,
+        BuildTarget::LINUX_X86_64,
+    ]
+}
+
+/// Stages the player package of one desktop target into
+/// `<output_dir>/<target>/`: the player payload and the build report that
+/// names its scenes, assets, sizes and build identifier.
+///
+/// The target this host cannot run is staged but not launched; its report
+/// records that the package was never started here.
+pub fn package_desktop_target(
+    config: &BuildConfiguration,
+    target: BuildTarget,
+    output_dir: &Path,
+) -> Result<PackagedTarget, PackageError> {
+    let label = target.os_name().to_string();
+    let target_dir = output_dir.join(&label);
+    create_dir_all(&target_dir)?;
+    let staged_dir = target_dir.join(STAGED_DIR_NAME);
+
+    let mut target_config = config.clone();
+    target_config.target = target;
+
+    let started = Instant::now();
+    let BuildOutcomeBundle { bundle, mut report } =
+        execute_build_for_host(&target_config, &staged_dir, 0, Some(target));
+    let Some(staged) = bundle else {
+        let reasons = report
+            .errors
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(PackageError::BuildFailed {
+            path: target_dir,
+            message: reasons,
+        });
+    };
+    report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let player_binary =
+        locate_player_binary().ok_or_else(|| PackageError::MissingPlayerBinary {
+            path: PathBuf::from(PLAYER_BINARY_FILENAME),
+        })?;
+    let licensing = licensing_record(&config.application_identifier);
+    let license_text = workspace_root().map(|root| root.join("LICENSE"));
+
+    let (app_path, launch_artifact) = match target.os() {
+        TargetOs::MacOs => {
+            let app_path = target_dir.join(format!(
+                "{}.{}",
+                bundle_name(&config.product_name),
+                APP_BUNDLE_EXTENSION
+            ));
+            let app = package_macos_app(
+                &staged.manifest,
+                &staged_dir,
+                &app_path,
+                &player_binary,
+                &licensing,
+                license_text.as_deref(),
+            )?;
+            (app.app_path, app.executable_path)
+        }
+        TargetOs::Windows => {
+            let packaged = package_windows_app(
+                &staged.manifest,
+                &staged_dir,
+                &target_dir,
+                &player_binary,
+                &licensing,
+                license_text.as_deref(),
+            )?;
+            (packaged.app_dir, packaged.executable_path)
+        }
+        TargetOs::Linux => {
+            let packaged = package_linux_app(
+                &staged.manifest,
+                &staged_dir,
+                &target_dir,
+                &player_binary,
+                &licensing,
+                license_text.as_deref(),
+            )?;
+            (packaged.app_dir, packaged.executable_path)
+        }
+    };
+
+    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
+    let launched = target == host;
+    if !launched {
+        let reason = format!(
+            "the {target} package was staged on this {host} host but not launched: \
+             this host cannot run {target} players"
+        );
+        report = report.with_startup_time(StartupMeasurement::unavailable(
+            reason.clone(),
+            STARTUP_BASIS,
+        ));
+        let mut warnings = report.warnings.clone();
+        warnings.push(BuildDiagnostic::new(
+            "package.not_launched",
+            reason,
+            Some(format!("{target} package")),
+            Some(format!(
+                "launch the {target} package on a {target} host to measure its startup"
+            )),
+        ));
+        report = report.with_warnings(warnings);
+    }
+    report.output_location = Some(target_dir.clone());
+    report.launch_artifact = Some(launch_artifact.clone());
+
+    let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
+    report
+        .write_to_file(&build_report_path)
+        .map_err(|error| PackageError::Io {
+            path: build_report_path.clone(),
+            message: error.to_string(),
+        })?;
+
+    fs::remove_dir_all(&staged_dir).map_err(|error| PackageError::Io {
+        path: staged_dir.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(PackagedTarget {
+        target,
+        label,
+        app_path,
+        launch_artifact,
+        build_report_path,
+        launched,
+    })
+}
+
+/// Stages the desktop player packages of a build: one package per desktop
+/// target, each with its own build report.
+pub fn package_desktop_targets(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+) -> Result<Vec<PackagedTarget>, PackageError> {
+    let mut packaged = Vec::new();
+    for target in desktop_package_targets() {
+        packaged.push(package_desktop_target(config, target, output_dir)?);
+    }
+    Ok(packaged)
+}
+
 /// Ad-hoc code-signs the app bundle when the host can sign and no signature
 /// is present yet, so a locally packaged app stays launchable.
 #[cfg(target_os = "macos")]
@@ -465,6 +662,7 @@ mod tests {
     use crate::bundle::{stage_bundle_for_host, BUNDLE_MANIFEST_FILENAME};
     use crate::config::BuildConfiguration;
     use crate::licensing::licensing_record;
+    use crate::report::BuildReport;
     use crate::targets::BuildTarget;
 
     fn test_output_dir(label: &str) -> Result<PathBuf, Box<dyn Error>> {
@@ -702,6 +900,66 @@ mod tests {
             .data_dir
             .join(THIRD_PARTY_NOTICES_FILENAME)
             .is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_packaging_stages_three_targets_with_build_reports() -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("desktop_targets")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        );
+        let packaged = package_desktop_targets(&config, &output_dir)?;
+        let labels = packaged
+            .iter()
+            .map(|target| target.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["macos", "windows", "linux"]);
+
+        for target in &packaged {
+            assert!(target.app_path.is_dir());
+            assert!(target.launch_artifact.is_file());
+            assert!(target.build_report_path.is_file());
+            let target_dir = target
+                .app_path
+                .parent()
+                .ok_or("the packaged app has no parent directory")?;
+            assert_eq!(
+                target.build_report_path,
+                target_dir.join(BUILD_REPORT_FILENAME)
+            );
+            assert!(!target_dir.join(STAGED_DIR_NAME).exists());
+
+            let report = BuildReport::read_from_file(&target.build_report_path)?;
+            assert_eq!(report.target, target.target);
+            assert!(!report.build_identifier.is_empty());
+            assert_eq!(report.included_scenes.len(), 1);
+            assert!(!report.assets.is_empty());
+            assert!(report.total_size_bytes > 0);
+            assert!(!report.major_contributors.is_empty());
+            assert!(report
+                .major_contributors
+                .iter()
+                .all(|contributor| !contributor.path.is_empty()));
+            assert!(report.licensing.is_some());
+        }
+
+        let windows = packaged
+            .iter()
+            .find(|target| target.label == "windows")
+            .ok_or("the packaging staged no windows target")?;
+        assert!(!windows.launched);
+        let windows_report = BuildReport::read_from_file(&windows.build_report_path)?;
+        assert!(!windows_report.startup_time.is_measured());
+        assert!(windows_report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "package.not_launched"));
         Ok(())
     }
 
