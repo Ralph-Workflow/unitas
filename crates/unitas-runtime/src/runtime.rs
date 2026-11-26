@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::scene::{
-    AudioSourceComponent, CharacterControllerComponent, PhysicsBinding, RenderBinding,
-    ScriptBinding, assemble_scene_file_bundle,
+    AudioSourceComponent, CharacterControllerComponent, MeshRendererComponent, PhysicsBinding,
+    RenderBinding, ScriptBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -1437,6 +1437,9 @@ impl Runtime {
 
     pub fn set_time_scale(&mut self, time_scale: f64) {
         self.time_scale = time_scale;
+        // A frozen scaled clock is the gameplay-pause signal: the audio bus
+        // silences every mixer group but Menu until time flows again.
+        self.audio.set_gameplay_paused(time_scale == 0.0);
     }
 
     pub fn maximum_delta_time(&self) -> f64 {
@@ -1802,6 +1805,10 @@ impl Runtime {
 
     pub fn input_axis_event(&mut self, name: &str, value: f64) -> bool {
         self.input.inject_axis(name, value)
+    }
+
+    pub fn input_injected_axis(&self, name: &str) -> Option<f64> {
+        self.input.injected_axis(name)
     }
 
     pub fn input_key_state(&self, key: u32) -> u32 {
@@ -2489,19 +2496,22 @@ impl Runtime {
                     1.0,
                 ],
             );
-            let handle = self.create_render_renderer(Some(entity), None, Some(material));
+            let mesh = self.import_scene_mesh(renderer);
+            let handle = self.create_render_renderer(Some(entity), mesh, Some(material));
             self.set_render_renderer_enabled(handle, renderer.enabled);
-            if let Some(diagnostic) = &renderer.mesh_diagnostic {
-                diagnostics.push((entity, diagnostic.clone()));
-            } else if let Some(guid) = &renderer.mesh_guid {
-                diagnostics.push((
-                    entity,
-                    format!(
-                        "MeshRenderer on entity {} references mesh guid {} that could not be imported",
-                        entity.as_u64(),
-                        guid
-                    ),
-                ));
+            if mesh.is_none() {
+                if let Some(diagnostic) = &renderer.mesh_diagnostic {
+                    diagnostics.push((entity, diagnostic.clone()));
+                } else if let Some(guid) = &renderer.mesh_guid {
+                    diagnostics.push((
+                        entity,
+                        format!(
+                            "MeshRenderer on entity {} references mesh guid {} that could not be imported",
+                            entity.as_u64(),
+                            guid
+                        ),
+                    ));
+                }
             }
             if let Some(diagnostic) = &renderer.material_diagnostic {
                 diagnostics.push((entity, diagnostic.clone()));
@@ -2542,6 +2552,42 @@ impl Runtime {
             self.update_render_light(handle, direction, light.color, light.intensity);
         }
         diagnostics
+    }
+
+    // Resolve a scene-declared MeshFilter reference into a render mesh:
+    // Unity built-in primitives by (fileID, guid), otherwise an imported
+    // model file. Returns None when the mesh cannot be resolved.
+    fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
+        let mesh_data = if let (Some(file_id), Some(guid)) =
+            (renderer.mesh_file_id, renderer.mesh_guid.as_deref())
+        {
+            let primitive = unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)?;
+            let mut data = unitas_asset::primitive::primitive_mesh(primitive);
+            if primitive == unitas_asset::primitive::BuiltinPrimitive::Sphere {
+                // Unity's built-in sphere is radius 0.5; unitas generates radius 1.
+                for position in &mut data.positions {
+                    *position = [position[0] * 0.5, position[1] * 0.5, position[2] * 0.5];
+                }
+            }
+            Some(data)
+        } else if let Some(path) = &renderer.mesh_path {
+            let bytes = std::fs::read(path).ok()?;
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            unitas_asset::model::import_model(&bytes, name).ok()
+        } else {
+            None
+        }?;
+        let positions = mesh_data
+            .positions
+            .iter()
+            .map(|p| Vec3::new(p[0], p[1], p[2]))
+            .collect();
+        let normals = mesh_data
+            .normals
+            .iter()
+            .map(|n| Vec3::new(n[0], n[1], n[2]))
+            .collect();
+        Some(self.create_render_mesh(positions, normals, mesh_data.indices.clone()))
     }
 
     fn remove_scene_render_handles(&mut self, scene: &LoadedScene) {

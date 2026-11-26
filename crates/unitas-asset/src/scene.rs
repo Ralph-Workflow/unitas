@@ -355,6 +355,7 @@ pub struct CameraComponent {
 pub struct MeshRendererComponent {
     pub entity: EntityId,
     pub mesh_guid: Option<AssetGuid>,
+    pub mesh_file_id: Option<i64>,
     pub mesh_path: Option<PathBuf>,
     pub mesh_diagnostic: Option<String>,
     pub material_guid: Option<AssetGuid>,
@@ -2124,9 +2125,10 @@ fn mesh_renderer_component(
     mesh_filter: Option<&Node>,
     index: Option<&GuidIndex>,
 ) -> MeshRendererComponent {
-    let (mesh_guid, mesh_path, mesh_diagnostic) = match mesh_filter {
+    let (mesh_guid, mesh_file_id, mesh_path, mesh_diagnostic) = match mesh_filter {
         Some(filter) => resolve_mesh_reference(entity, filter, index),
         None => (
+            None,
             None,
             None,
             Some(format!(
@@ -2144,6 +2146,7 @@ fn mesh_renderer_component(
     MeshRendererComponent {
         entity,
         mesh_guid,
+        mesh_file_id,
         mesh_path,
         mesh_diagnostic,
         material_guid,
@@ -2158,11 +2161,17 @@ fn resolve_mesh_reference(
     entity: EntityId,
     filter: &Node,
     index: Option<&GuidIndex>,
-) -> (Option<AssetGuid>, Option<PathBuf>, Option<String>) {
+) -> (
+    Option<AssetGuid>,
+    Option<i64>,
+    Option<PathBuf>,
+    Option<String>,
+) {
     let mesh_node = match filter.get("m_Mesh") {
         Some(node) => node,
         None => {
             return (
+                None,
                 None,
                 None,
                 Some(format!(
@@ -2172,6 +2181,7 @@ fn resolve_mesh_reference(
             )
         }
     };
+    let file_id = mesh_node.get("fileID").and_then(Node::as_i64);
     let guid = mesh_node
         .get("guid")
         .and_then(Node::as_str)
@@ -2182,6 +2192,7 @@ fn resolve_mesh_reference(
         None => {
             return (
                 None,
+                file_id,
                 None,
                 Some(format!(
                     "MeshFilter on entity {} references m_Mesh without a guid",
@@ -2193,7 +2204,7 @@ fn resolve_mesh_reference(
     let path = index
         .and_then(|guids| guids.get(&guid))
         .map(Path::to_path_buf);
-    (Some(guid), path, None)
+    (Some(guid), file_id, path, None)
 }
 
 fn resolve_material_reference(

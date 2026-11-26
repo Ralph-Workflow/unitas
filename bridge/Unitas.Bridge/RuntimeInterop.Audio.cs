@@ -56,6 +56,18 @@ namespace Unitas.Bridge
         internal static extern int unitas_runtime_audio_set_position(ulong handle, ulong entity, float x, float y, float z);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_group(ulong handle, ulong entity, uint group);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_group(ulong handle, ulong entity);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern ulong unitas_runtime_audio_load_music(ulong handle, ulong address, ulong length);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_music(ulong handle, ulong entity, ulong stream);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_audio_state(ulong handle, ulong entity);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

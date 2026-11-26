@@ -161,6 +161,6 @@ verify-samples:
 	@echo "owner: editor and engine proof"
 	@echo "trigger: changes to bridge script compilation/play pipeline or samples/"
 	@echo "lane: make verify-samples"
-	@echo "evidence: scenario report JSON and lane exit status"
+	@echo "evidence: scenario report JSONs, packaged-player build-report assertions, and lane exit status"
 	@echo "review: when a second sample game gains real scripts"
 	@python3 tools/verify_samples.py

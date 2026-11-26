@@ -38,10 +38,11 @@ pub use report::{
     RejectedBundleReportEntry, ReportParseError, SizeCategoryEntry, SizeContributor,
 };
 pub use sample::{
-    imported_gem_mesh, roll_a_ball_scene_yaml, stage_roll_a_ball_bundle,
-    stage_roll_a_ball_bundle_for_host, synthesize_chime_clip, synthesize_chime_wav_bytes,
-    PickupSlot, RollABallController, PICKUP_COLLECT_RADIUS, PICKUP_NAMES, PICKUP_POSITIONS,
-    PLAYER_START_POSITION, ROLL_A_BALL_APPLICATION_ID, ROLL_A_BALL_COMPANY_NAME,
-    ROLL_A_BALL_PRODUCT_NAME, ROLL_A_BALL_SCENE_FILENAME, ROLL_A_BALL_VERSION, WALL_NAMES,
+    imported_gem_mesh, roll_a_ball_build_configuration, roll_a_ball_scene_yaml,
+    stage_roll_a_ball_bundle, stage_roll_a_ball_bundle_for_host, synthesize_chime_clip,
+    synthesize_chime_wav_bytes, PickupSlot, RollABallController, PICKUP_COLLECT_RADIUS,
+    PICKUP_NAMES, PICKUP_POSITIONS, PLAYER_START_POSITION, ROLL_A_BALL_APPLICATION_ID,
+    ROLL_A_BALL_COMPANY_NAME, ROLL_A_BALL_PRODUCT_NAME, ROLL_A_BALL_SCENE_FILENAME,
+    ROLL_A_BALL_VERSION, WALL_NAMES,
 };
 pub use targets::{BuildTarget, TargetArch, TargetOs, TargetStatus};

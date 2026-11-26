@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use unitas_animation::decode_controller_binary;
-use unitas_audio::AudioClip;
+use unitas_audio::{AudioClip, AudioMixerGroup};
 use unitas_core::EntityId;
 use unitas_physics::{CollisionDetectionMode3D, ForceMode};
 use unitas_render::Vec3;
@@ -1211,6 +1211,48 @@ pub extern "C" fn unitas_runtime_input_axis_raw(handle: u64, address: u64, lengt
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_input_injected_axis(handle: u64, address: u64, length: u64) -> f64 {
+    let len = match usize::try_from(length) {
+        Ok(l) => l,
+        Err(_) => return 0.0,
+    };
+    match with_runtime_state(handle, |state| {
+        if address == 0
+            || address != state.path_buffer.as_ptr() as usize as u64
+            || len > state.path_buffer.len()
+        {
+            state.set_error("buffer address mismatch");
+            return 0.0;
+        }
+        let name = match std::str::from_utf8(&state.path_buffer[..len]) {
+            Ok(s) => s.trim_end_matches('\0').to_string(),
+            Err(err) => {
+                let msg = err.to_string();
+                state.set_error(&msg);
+                return 0.0;
+            }
+        };
+        match state.runtime.input_injected_axis(&name) {
+            Some(value) => {
+                state.clear_error();
+                value
+            }
+            None => {
+                state.set_error(&format!("no injected input axis: {name}"));
+                0.0
+            }
+        }
+    }) {
+        Ok(val) => val,
+        Err(_) => {
+            INVALID_HANDLE_ERROR_TARGET.store(handle, Ordering::Relaxed);
+            0.0
+        }
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_button_state(handle: u64, address: u64, length: u64) -> i32 {
     let len = match usize::try_from(length) {
         Ok(l) => l,
@@ -1564,6 +1606,96 @@ pub extern "C" fn unitas_runtime_audio_destroy(handle: u64, entity: u64) -> i32 
         let id = EntityId::new(entity);
         state.runtime.audio_mut().stop(id);
         state.runtime.audio_mut().remove_source(id);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_group(handle: u64, entity: u64, group: u32) -> i32 {
+    if entity == 0 || group > 2 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let group = match group {
+            1 => AudioMixerGroup::Music,
+            2 => AudioMixerGroup::Menu,
+            _ => AudioMixerGroup::Sfx,
+        };
+        state.runtime.audio_mut().set_source_group(EntityId::new(entity), group);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_group(handle: u64, entity: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        match state.runtime.audio().source_group(EntityId::new(entity)) {
+            AudioMixerGroup::Sfx => 0,
+            AudioMixerGroup::Music => 1,
+            AudioMixerGroup::Menu => 2,
+        }
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_load_music(handle: u64, address: u64, length: u64) -> u64 {
+    let Ok(len) = usize::try_from(length) else {
+        return 0;
+    };
+    with_runtime_state(handle, |state| {
+        let Ok(path_str) = read_path_buffer(state, address, len) else {
+            return 0;
+        };
+        match state
+            .runtime
+            .audio_mut()
+            .load_music_file(Path::new(&path_str))
+        {
+            Ok(stream_id) => {
+                state.clear_error();
+                stream_id
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                0
+            }
+        }
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_music(handle: u64, entity: u64, stream: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let stream = if stream == 0 {
+            None
+        } else {
+            Some(stream)
+        };
+        state
+            .runtime
+            .audio_mut()
+            .set_source_music(EntityId::new(entity), stream);
         state.clear_error();
         0
     }) {

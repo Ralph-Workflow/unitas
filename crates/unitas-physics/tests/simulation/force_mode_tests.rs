@@ -58,8 +58,14 @@ fn force_mode_acceleration_applies_a_times_dt_regardless_of_mass() -> Result<(),
     let mut world = World::with_gravity(NO_GRAVITY);
     let light = EntityId::new(1);
     let heavy = EntityId::new(2);
-    world.add_body(light, body(BodyRole::Dynamic, 2.0))?;
-    world.add_body(heavy, body(BodyRole::Dynamic, 8.0))?;
+    // Spawn the boxes apart: overlapped spawns make contact resolution
+    // contaminate the force-mode measurement this test isolates.
+    let mut light_body = body(BodyRole::Dynamic, 2.0);
+    light_body.position = [-2.0, 0.0, 0.0];
+    let mut heavy_body = body(BodyRole::Dynamic, 8.0);
+    heavy_body.position = [2.0, 0.0, 0.0];
+    world.add_body(light, light_body)?;
+    world.add_body(heavy, heavy_body)?;
     world.add_force(light, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.add_force(heavy, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.step(0.5)?;

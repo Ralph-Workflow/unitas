@@ -41,6 +41,19 @@ namespace Unitas.Samples.RollABall
             float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
             float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
 
+            // Gamepad parity: injected device axes report only through the
+            // injected-axis read, so mirror them when no digital key is held.
+            // Injected values bypass button smoothing, keeping movement
+            // frame-rate independent like the digital reads above.
+            if (moveX == 0f)
+            {
+                moveX = Input.GetInjectedAxis("Horizontal");
+            }
+            if (moveZ == 0f)
+            {
+                moveZ = Input.GetInjectedAxis("Vertical");
+            }
+
             _cameraYaw += Input.mousePositionDelta.x * CameraYawPerPixel;
 
             float speed = moveSpeed * (Input.GetMouseButton(0) ? boostMultiplier : 1f);

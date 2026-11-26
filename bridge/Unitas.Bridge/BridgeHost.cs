@@ -46,7 +46,10 @@ namespace Unitas.Bridge
         private readonly RuntimeRenderProvider _renderProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
-        private int _nextSceneHandle = 1;
+        // Scene handles are process-unique, not per host: the replaced-scene purge in
+        // DeregisterReplacedSceneObjects matches objects by handle, so a later host
+        // reusing handle 1 would keep a previous run's objects visible to Find.
+        private static int _nextSceneHandle = 1;
         private ulong _nextScriptHandle = 1;
         private readonly List<ulong> _fixedUpdatePhaseHandles = new List<ulong>();
         private readonly List<ulong> _updatePhaseHandles = new List<ulong>();
@@ -2024,6 +2027,22 @@ namespace Unitas.Bridge
                 return false;
             }
             double result = RuntimeInterop.unitas_runtime_input_axis_raw(_runtimeHandle, buffer, length);
+            if (RuntimeInterop.unitas_runtime_error_message(_runtimeHandle) != IntPtr.Zero)
+            {
+                return false;
+            }
+            value = (float)result;
+            return true;
+        }
+
+        public bool TryGetInjectedAxis(string axisName, out float value)
+        {
+            value = 0f;
+            if (!TryWriteStringToPathBuffer(axisName, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+            double result = RuntimeInterop.unitas_runtime_input_injected_axis(_runtimeHandle, buffer, length);
             if (RuntimeInterop.unitas_runtime_error_message(_runtimeHandle) != IntPtr.Zero)
             {
                 return false;

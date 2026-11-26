@@ -1,0 +1,260 @@
+{
+  "name": "gamepad_drive",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": -1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 12,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": -1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": -1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 15,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "all_pickups_logged",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "All 12 pickups collected, press R to play again."
+    },
+    {
+      "id": "retry_logged",
+      "after_step": 37,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12 multiplier x1"
+    },
+    {
+      "id": "restart_resets_player",
+      "after_step": 37,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.1
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 37,
+      "kind": "frame_count",
+      "expected": 443
+    }
+  ]
+}

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use unitas_asset::project::CompatibilityFinding as ProjectCompatibilityFinding;
 use unitas_core::compat::{
     CompatibilityReport, CompatibilityState, Finding, Tier, RECOGNIZED_UNSUPPORTED_FAMILIES,
 };
@@ -177,6 +178,35 @@ impl CompatibilityFinding {
             conditions: finding.conditions.clone(),
             related_findings: finding.related_findings.clone(),
         }
+    }
+
+    /// Maps a project-level compatibility entry, produced by opening the
+    /// Unity project the built scenes belong to, into a build-report finding.
+    /// Entries whose tier or state the report schema does not recognize are
+    /// skipped.
+    pub fn from_project_entry(entry: &ProjectCompatibilityFinding) -> Option<Self> {
+        let tier = parse_tier(&entry.tier).ok()?;
+        let state = parse_state(&entry.state).ok()?;
+        Some(Self {
+            feature_id: entry.catalog_id.clone(),
+            tier,
+            state,
+            guid: None,
+            asset_path: (entry.category == "asset").then(|| entry.identity.clone()),
+            sub_asset_id: None,
+            object_name: None,
+            behavior: format!(
+                "project {} '{}' present at build time",
+                entry.category, entry.identity
+            ),
+            relied_upon_unity_differences: Vec::new(),
+            observable_consequence: format!(
+                "the build report records the {} '{}' compatibility state '{}'",
+                entry.category, entry.identity, entry.state
+            ),
+            conditions: Vec::new(),
+            related_findings: Vec::new(),
+        })
     }
 
     pub fn unity_built_content(content: &str) -> Option<Self> {
@@ -521,6 +551,11 @@ impl BuildReport {
 
     pub fn with_unsupported_behaviors(mut self, behaviors: Vec<String>) -> Self {
         self.unsupported_behaviors = behaviors;
+        self
+    }
+
+    pub fn with_compatibility_findings(mut self, findings: Vec<CompatibilityFinding>) -> Self {
+        self.compatibility_findings = findings;
         self
     }
 

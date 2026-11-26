@@ -922,6 +922,17 @@ fn runtime_time_scale_defaults_to_one_and_is_settable() -> Result<(), Box<dyn Er
 }
 
 #[test]
+fn runtime_freezing_time_scale_pauses_gameplay_audio() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    assert!(!runtime.audio().is_gameplay_paused());
+    runtime.set_time_scale(0.0);
+    assert!(runtime.audio().is_gameplay_paused());
+    runtime.set_time_scale(1.0);
+    assert!(!runtime.audio().is_gameplay_paused());
+    Ok(())
+}
+
+#[test]
 fn runtime_time_scale_halves_the_simulated_time_of_a_falling_body() -> Result<(), Box<dyn Error>> {
     let full = run_time_scale_scene(1.0, 51)?;
     let half = run_time_scale_scene(0.5, 51)?;

@@ -180,6 +180,7 @@ pub enum SilenceReason {
     UnsupportedClip = 6,
     Stopped = 7,
     Completed = 8,
+    GameplayPaused = 9,
 }
 
 impl SilenceReason {
@@ -975,6 +976,10 @@ impl AudioWorld {
         if source.volume <= 0.0 {
             return Some(SilenceReason::ZeroVolume);
         }
+        // Mirrors the mix bus: gameplay pause silences every group but Menu.
+        if self.gameplay_paused && source.group != AudioMixerGroup::Menu {
+            return Some(SilenceReason::GameplayPaused);
+        }
         if source.spatial_blend > 0.0 {
             let dist = self.distance_to_listener(source.position);
             if dist >= source.max_distance {
@@ -1753,6 +1758,15 @@ mod tests {
 
         world.set_gameplay_paused(true);
         assert!(world.is_gameplay_paused());
+        assert_eq!(
+            world.inaudible_reason(music_entity),
+            Some(SilenceReason::GameplayPaused)
+        );
+        assert_eq!(
+            world.inaudible_reason(sfx_entity),
+            Some(SilenceReason::GameplayPaused)
+        );
+        assert_eq!(world.inaudible_reason(menu_entity), None);
         let paused = world.mix(2);
         for frame in 0..2 {
             let menu_expected = [0.3f32, 0.4][frame];
@@ -1762,6 +1776,8 @@ mod tests {
 
         world.set_gameplay_paused(false);
         assert!(!world.is_gameplay_paused());
+        assert_eq!(world.inaudible_reason(music_entity), None);
+        assert_eq!(world.inaudible_reason(sfx_entity), None);
         let resumed = world.mix(2);
         for frame in 0..2 {
             let expected = 2.0 * [0.3f32, 0.4][frame];

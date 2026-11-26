@@ -311,13 +311,12 @@ pub fn stage_roll_a_ball_bundle(output_dir: &Path) -> Result<StagedBundle, Bundl
     stage_roll_a_ball_bundle_for_host(output_dir, BuildTarget::current_host())
 }
 
-/// Stages the real `samples/roll-a-ball` project — its committed scene,
-/// scripts compiled at build time, and the managed player-host payload —
-/// behind the signature the player shell already calls.
-pub fn stage_roll_a_ball_bundle_for_host(
-    output_dir: &Path,
+/// The build configuration the roll-a-ball sample stages and packages with:
+/// its committed scene, scripts compiled at build time, and the managed
+/// player-host payload behind the signature the player shell already calls.
+pub fn roll_a_ball_build_configuration(
     host: Option<BuildTarget>,
-) -> Result<StagedBundle, BundleError> {
+) -> Result<BuildConfiguration, BundleError> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
@@ -334,7 +333,7 @@ pub fn stage_roll_a_ball_bundle_for_host(
         .join(ROLL_A_BALL_SCENE_FILENAME);
 
     let target = host.unwrap_or_else(BuildTarget::host);
-    let config = BuildConfiguration::new(
+    Ok(BuildConfiguration::new(
         vec![scene_path],
         ROLL_A_BALL_COMPANY_NAME,
         ROLL_A_BALL_PRODUCT_NAME,
@@ -342,8 +341,15 @@ pub fn stage_roll_a_ball_bundle_for_host(
         ROLL_A_BALL_VERSION,
         target,
     )
-    .with_mode(BuildMode::Development);
+    .with_mode(BuildMode::Development))
+}
 
+pub fn stage_roll_a_ball_bundle_for_host(
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+) -> Result<StagedBundle, BundleError> {
+    let target = host.unwrap_or_else(BuildTarget::host);
+    let config = roll_a_ball_build_configuration(Some(target))?;
     stage_bundle_for_host(&config, output_dir, Some(target))
 }
 

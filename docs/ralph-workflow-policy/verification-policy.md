@@ -270,7 +270,9 @@ The named non-default profiles, each with the five required fields:
 - `make verify-samples` — owner: editor and engine proof (the area that owns
   `samples/` and the playtest framework); trigger: changes to script
   compilation, the play pipeline, the player, or `samples/`; evidence:
-  per-scenario report JSONs and lane exit status; fails hard when run; last run
+  per-scenario report JSONs, the packaged-player step's `build-report.json`
+  assertions and control-stdio replay, and lane exit status; fails hard when
+  run; last run
   2026-11-25, staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured

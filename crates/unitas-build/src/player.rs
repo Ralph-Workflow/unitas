@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "device")]
 use std::sync::{Arc, Mutex};
 
+use unitas_asset::project::{build_compatibility_report, unity_project_root, Project};
+use unitas_asset::trust::TrustStore;
 use unitas_audio::AudioError;
 use unitas_render::Image;
 #[cfg(feature = "device")]
@@ -22,7 +24,9 @@ use crate::bundle::{
     DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
 };
 use crate::config::BuildConfiguration;
-use crate::report::{BuildDiagnostic, BuildReport, SizeCategoryEntry, SizeContributor};
+use crate::report::{
+    BuildDiagnostic, BuildReport, CompatibilityFinding, SizeCategoryEntry, SizeContributor,
+};
 #[cfg(feature = "device")]
 use crate::sample::{stage_roll_a_ball_bundle, HudSnapshot};
 use crate::sample::{
@@ -1109,7 +1113,8 @@ pub fn build_project_for_host(
                 total_size_bytes,
                 category_sizes,
                 contributors,
-            );
+            )
+            .with_compatibility_findings(project_compatibility_findings(config));
 
             let report_path = output_dir.join(BUILD_REPORT_FILENAME);
             if let Err(io_error) = report.write_to_file(&report_path) {
@@ -1159,6 +1164,29 @@ pub fn execute_build_for_host(
             }
         }
     }
+}
+
+fn project_compatibility_findings(config: &BuildConfiguration) -> Vec<CompatibilityFinding> {
+    let Some(scene) = config.scenes.first() else {
+        return Vec::new();
+    };
+    let Some(root) = unity_project_root(scene) else {
+        return Vec::new();
+    };
+    let trust_store = TrustStore::new(
+        std::env::temp_dir().join(format!("unitas_build_trust_{}", std::process::id())),
+    );
+    let Ok((_project, open_report)) = Project::open(&root, &trust_store) else {
+        return Vec::new();
+    };
+    let assessment = build_compatibility_report(&root, &open_report);
+    assessment
+        .asset_findings
+        .iter()
+        .chain(assessment.package_findings.iter())
+        .chain(assessment.setting_findings.iter())
+        .filter_map(CompatibilityFinding::from_project_entry)
+        .collect()
 }
 
 pub fn diagnostics_from_bundle_error(error: &BundleError) -> Vec<BuildDiagnostic> {

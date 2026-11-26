@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,9 +28,20 @@ EDITOR_SCENARIOS = (
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
+PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 REPORT_DIR = REPO_ROOT / "target" / "samples-lane"
+PACKAGED_DIR = REPORT_DIR / "packaged"
 BUILD_BUDGET_SECONDS = 600.0
 RUN_BUDGET_SECONDS = 300.0
+CONTROL_STDIO_CHUNK_FRAMES = 30
+CONTROL_STDIO_MAX_FRAMES = 300
+CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
+CONTROL_STATE_FIELDS = ("score", "total", "won")
+
+
+class PackagedProofError(Exception):
+    pass
+
 
 SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("bumper_restitution", "bumper_restitution.json", ("--repeat", "2"), False),
@@ -41,6 +55,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("gold_window", "gold_window.json", ("--repeat", "2"), False),
     ("gold_collect", "gold_collect.json", ("--repeat", "2"), False),
     ("dash_cooldown", "dash_cooldown.json", ("--repeat", "2"), False),
+    ("gamepad_drive", "gamepad_drive.scenario.json", ("--repeat", "2"), False),
     (
         "frame_independence",
         "frame_independence.json",
@@ -59,7 +74,11 @@ LANE_METADATA: tuple[tuple[str, str], ...] = (
     ("owner", "editor and engine proof"),
     ("trigger", "changes to bridge script compilation/play pipeline or samples/"),
     ("lane", "make verify-samples"),
-    ("evidence", "per-scenario report JSONs under target/samples-lane/ and lane exit status"),
+    (
+        "evidence",
+        "per-scenario report JSONs, the packaged-player build report and replay "
+        "verdict, and lane exit status",
+    ),
     ("review", "when a second sample game gains real scripts"),
 )
 
@@ -225,6 +244,224 @@ def native_scripted_launch(env: dict[str, str]) -> int:
     return 0
 
 
+def pump_control_responses(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+) -> None:
+    if process.stdout is not None:
+        for line in process.stdout:
+            responses.put(line)
+    responses.put(None)
+
+
+def stop_control_process(process: subprocess.Popen[str]) -> None:
+    if process.stdin is not None:
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+    if process.poll() is None:
+        try:
+            process.wait(timeout=CONTROL_STDIO_STOP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def control_request(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+    deadline: float,
+    command: dict[str, object],
+) -> dict[str, object]:
+    if process.stdin is None:
+        message = "control-stdio stdin is closed"
+        raise PackagedProofError(message)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        message = "the packaged-player replay exceeded its time budget"
+        raise PackagedProofError(message)
+    try:
+        process.stdin.write(json.dumps(command) + "\n")
+        process.stdin.flush()
+        line = responses.get(timeout=remaining)
+    except OSError as error:
+        message = f"control-stdio write failed: {error}"
+        raise PackagedProofError(message) from error
+    except queue.Empty as error:
+        message = "control-stdio timed out without a response"
+        raise PackagedProofError(message) from error
+    if line is None:
+        message = "control-stdio closed the connection without a response"
+        raise PackagedProofError(message)
+    try:
+        payload = json.loads(line)
+    except ValueError as error:
+        message = f"control-stdio returned invalid JSON: {error}"
+        raise PackagedProofError(message) from error
+    if not isinstance(payload, dict):
+        message = "control-stdio returned a non-object response"
+        raise PackagedProofError(message)
+    if payload.get("ok") is not True:
+        detail = payload.get("error", "unknown error")
+        message = f"control-stdio command {command['cmd']} failed: {detail}"
+        raise PackagedProofError(message)
+    return payload
+
+
+def control_state_score(payload: dict[str, object]) -> int:
+    missing = [field for field in CONTROL_STATE_FIELDS if field not in payload]
+    if missing:
+        names = ", ".join(missing)
+        message = f"control-stdio state response lacks fields: {names}"
+        raise PackagedProofError(message)
+    score = payload["score"]
+    if not isinstance(score, int) or isinstance(score, bool):
+        message = "control-stdio state response score is not an integer"
+        raise PackagedProofError(message)
+    return score
+
+
+def drive_packaged_replay(
+    process: subprocess.Popen[str],
+    responses: queue.Queue[str | None],
+    deadline: float,
+) -> int:
+    control_request(process, responses, deadline, {"cmd": "play"})
+    baseline = control_state_score(control_request(process, responses, deadline, {"cmd": "state"}))
+    control_request(
+        process,
+        responses,
+        deadline,
+        {
+            "cmd": "inject_input",
+            "events": [
+                {"kind": "key", "key": ord("w"), "pressed": True},
+                {"kind": "key", "key": ord("d"), "pressed": True},
+            ],
+        },
+    )
+    frames = 0
+    score = baseline
+    while frames < CONTROL_STDIO_MAX_FRAMES and score <= baseline:
+        payload = control_request(
+            process,
+            responses,
+            deadline,
+            {"cmd": "step", "frames": CONTROL_STDIO_CHUNK_FRAMES},
+        )
+        score = control_state_score(payload)
+        frames += CONTROL_STDIO_CHUNK_FRAMES
+    if score <= baseline:
+        message = (
+            f"replayed input for {frames} frames but the packaged player score "
+            f"stayed at {score}; no pickup was collected"
+        )
+        raise PackagedProofError(message)
+    return score
+
+
+def packaged_player_replay(executable: Path, env: dict[str, str]) -> int:
+    name = "packaged-player-replay"
+    emit(f"step {name}: {executable} --control-stdio")
+    started = time.monotonic()
+    deadline = started + RUN_BUDGET_SECONDS
+    responses: queue.Queue[str | None] = queue.Queue()
+    process = subprocess.Popen(
+        [str(executable), "--control-stdio"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    threading.Thread(
+        target=pump_control_responses,
+        args=(process, responses),
+        daemon=True,
+    ).start()
+    try:
+        score = drive_packaged_replay(process, responses, deadline)
+    except RuntimeError as error:
+        emit(f"step {name}: {error}")
+        stop_control_process(process)
+        return 1
+    stop_control_process(process)
+    elapsed = time.monotonic() - started
+    emit(f"step {name}: collected a pickup (score={score}) in {elapsed:.1f}s")
+    return 0
+
+
+def check_packaged_report(log_path: Path) -> Path:
+    if not log_path.is_file():
+        emit(f"packaging log missing at {log_path}")
+        message = "packaging log missing"
+        raise PackagedProofError(message)
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    packaged = [line for line in lines if line.startswith("packaged_app=")]
+    reports = [line for line in lines if line.startswith("build_report=")]
+    launchers = [line for line in lines if line.startswith("launch_artifact=")]
+    if len(packaged) != 1 or len(reports) != 1 or len(launchers) != 1:
+        message = "packaging output lacks packaged_app/build_report/launch_artifact lines"
+        raise PackagedProofError(message)
+    app_path = Path(packaged[0].removeprefix("packaged_app="))
+    if not app_path.is_dir():
+        emit(f"packaged artifact missing at {app_path}")
+        message = "packaged artifact missing"
+        raise PackagedProofError(message)
+    report_path = Path(reports[0].removeprefix("build_report="))
+    if not report_path.is_file():
+        emit(f"build report missing at {report_path}")
+        message = "build report missing"
+        raise PackagedProofError(message)
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except ValueError as error:
+        emit(f"build report at {report_path} does not parse: {error}")
+        message = "build report does not parse"
+        raise PackagedProofError(message) from error
+    findings = report.get("compatibility_findings")
+    if not isinstance(findings, list) or not findings:
+        emit("build report has no compatibility findings")
+        message = "empty compatibility findings"
+        raise PackagedProofError(message)
+    licensing = report.get("licensing")
+    if not isinstance(licensing, dict) or not licensing.get("governing_license"):
+        emit("build report has no license record")
+        message = "missing license record"
+        raise PackagedProofError(message)
+    emit(
+        f"packaged artifact: {app_path}; build report: {report_path} "
+        f"({len(findings)} compatibility findings, license "
+        f"{licensing['governing_license']})"
+    )
+    return Path(launchers[0].removeprefix("launch_artifact="))
+
+
+def packaged_player_proof(env: dict[str, str]) -> int:
+    name = "packaged-player-proof"
+    rc = run_step(
+        (
+            "package-sample",
+            [str(PLAYER_BINARY), "--package-sample", str(PACKAGED_DIR)],
+            BUILD_BUDGET_SECONDS,
+            REPORT_DIR / "package-sample.log",
+            REPO_ROOT,
+        ),
+        env,
+    )
+    if rc != 0:
+        emit(f"step {name}: packaging failed (exit {rc})")
+        return rc
+    try:
+        executable = check_packaged_report(REPORT_DIR / "package-sample.log")
+    except PackagedProofError:
+        return 1
+    if packaged_player_replay(executable, env) != 0:
+        return 1
+    emit(f"step {name}: passed")
+    return 0
+
+
 def run_lane() -> int:
     emit(metadata_text())
     env = dict(os.environ)
@@ -272,6 +509,7 @@ def run_lane() -> int:
         results.append((name, rc))
     results.extend((step[0], run_step(step, env)) for step in editor_scenario_steps())
     results.append(("native-scripted-launch", native_scripted_launch(env)))
+    results.append(("packaged-player-proof", packaged_player_proof(env)))
 
     emit("scenario summary:")
     for name, rc in results:

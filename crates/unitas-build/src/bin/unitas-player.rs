@@ -18,12 +18,13 @@ use unitas_build::{
     DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
 };
 use unitas_build::{
-    launch_bundle, load_and_validate_bundle_manifest, stage_roll_a_ball_bundle, BuildReport,
-    WindowedLaunchOptions, BUILD_REPORT_FILENAME,
+    launch_bundle, load_and_validate_bundle_manifest, roll_a_ball_build_configuration,
+    stage_roll_a_ball_bundle, BuildOutcomeBundle, BuildReport, WindowedLaunchOptions,
+    BUILD_REPORT_FILENAME,
 };
 use unitas_dotnet::install_code_execution_capabilities;
 
-const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio]";
+const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>]";
 
 const TRUST_REQUIRED_EXIT_CODE: u8 = 3;
 
@@ -34,6 +35,7 @@ struct CliOptions {
     bundle_dir: Option<PathBuf>,
     sample: bool,
     windowed: bool,
+    package_sample: Option<PathBuf>,
     frames: Option<usize>,
     delta_seconds: f64,
     width: u32,
@@ -52,6 +54,7 @@ where
     let mut bundle_dir: Option<PathBuf> = None;
     let mut sample = false;
     let mut windowed = false;
+    let mut package_sample: Option<PathBuf> = None;
     let mut frames: Option<usize> = None;
     let mut delta_seconds: f64 = 1.0 / 60.0;
     let mut width: u32 = 1280;
@@ -117,6 +120,12 @@ where
             "--windowed" => {
                 windowed = true;
             }
+            "--package-sample" => {
+                let raw = iter
+                    .next()
+                    .ok_or_else(|| String::from("missing directory for '--package-sample'"))?;
+                package_sample = Some(PathBuf::from(raw));
+            }
             "--demo-input" => {
                 demo_input = true;
             }
@@ -154,6 +163,7 @@ where
         && capture_reference.is_none()
         && verify_device.is_none()
         && !control_stdio
+        && package_sample.is_none()
     {
         return Err(String::from(USAGE));
     }
@@ -162,6 +172,7 @@ where
         bundle_dir,
         sample,
         windowed,
+        package_sample,
         frames,
         delta_seconds,
         width,
@@ -173,6 +184,45 @@ where
     })
 }
 
+fn run_package_sample(output_dir: &Path) -> ExitCode {
+    let config = match roll_a_ball_build_configuration(None) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("unitas-player packaging failed: {error}");
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
+    let started = std::time::Instant::now();
+    let BuildOutcomeBundle { bundle, mut report } =
+        unitas_build::execute_build(&config, output_dir, 0);
+    report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let Some(staged) = bundle else {
+        let reasons = report
+            .errors
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        eprintln!("unitas-player packaging failed: {reasons}");
+        return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+    };
+    let report_path = output_dir.join(BUILD_REPORT_FILENAME);
+    if let Err(error) = report.write_to_file(&report_path) {
+        eprintln!(
+            "unitas-player packaging failed: cannot write the build report at '{}': {error}",
+            report_path.display()
+        );
+        return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+    }
+    match staged.application_bundle_path {
+        Some(app_path) => println!("packaged_app={}", app_path.display()),
+        None => println!("packaged_app=none"),
+    }
+    println!("build_report={}", report_path.display());
+    println!("launch_artifact={}", staged.launch_artifact_path.display());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args = env::args().skip(1);
     let cli = match parse_cli_args(args) {
@@ -182,6 +232,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if let Some(ref output_dir) = cli.package_sample {
+        return run_package_sample(output_dir);
+    }
 
     if cli.control_stdio {
         return run_control_stdio(&cli);

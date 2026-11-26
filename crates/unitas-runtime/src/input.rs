@@ -523,6 +523,21 @@ impl InputState {
         true
     }
 
+    /// Returns the injected device value for a configured axis with the axis'
+    /// inversion and dead-zone rules applied, or None when the axis is unknown
+    /// or has no injection. Unlike axis()/axis_raw(), button-derived values are
+    /// never reported, so callers stay frame-rate independent.
+    pub fn injected_axis(&self, name: &str) -> Option<f64> {
+        let axis = name.trim();
+        let entries = self.axes.get(axis)?;
+        let injected = self.injected_axes.get(axis).copied()?;
+        let entry = entries.first()?;
+        let sign = if entry.config.invert { -1.0 } else { 1.0 };
+        let value = injected * sign;
+        let dead = entry.config.dead.max(0.0);
+        Some(if value.abs() <= dead { 0.0 } else { value })
+    }
+
     pub fn is_key_down(&self, key: u32) -> bool {
         self.keys_down.contains(&key)
     }
@@ -1035,5 +1050,19 @@ mod tests {
         input.begin_frame(1.0 / 60.0);
         assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
         assert!(input.axis("Horizontal").unwrap_or(0.0) > 0.0);
+    }
+
+    #[test]
+    fn injected_axis_reader_reports_injections_only() {
+        let mut input = InputState::with_default_axes();
+        assert_eq!(input.injected_axis("Horizontal"), None);
+        input.inject_key(KEY_RIGHT_ARROW, true);
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(input.injected_axis("Horizontal"), None);
+        assert!(input.inject_axis("Horizontal", 0.5));
+        assert_eq!(input.injected_axis("Horizontal"), Some(0.5));
+        input.inject_axis("Horizontal", 0.0);
+        assert_eq!(input.injected_axis("Horizontal"), Some(0.0));
+        assert_eq!(input.injected_axis("Unknown"), None);
     }
 }

@@ -26,6 +26,8 @@ namespace UnityEngine
 
         bool TryGetAxisRaw(string axisName, out float value);
 
+        bool TryGetInjectedAxis(string axisName, out float value);
+
         bool TryGetButton(string buttonName, out bool value);
 
         bool TryGetButtonDown(string buttonName, out bool value);
@@ -204,6 +206,28 @@ namespace UnityEngine
             if (!provider.TryGetAxisRaw(axisName, out float value))
             {
                 Debug.LogError("Input Axis " + axisName + " is not setup.");
+                return 0f;
+            }
+            return value;
+        }
+
+        // Returns the latest injected device value (gamepad stick) for an axis,
+        // or 0f when the axis is unknown or has no injection. Unlike GetAxis,
+        // button-derived values are never reported.
+        public static float GetInjectedAxis(string axisName)
+        {
+            IInputProvider? provider = Provider;
+            if (provider == null)
+            {
+                return 0f;
+            }
+            if (string.IsNullOrEmpty(axisName))
+            {
+                Debug.LogError("Input Axis '' is not setup.");
+                return 0f;
+            }
+            if (!provider.TryGetInjectedAxis(axisName, out float value))
+            {
                 return 0f;
             }
             return value;
