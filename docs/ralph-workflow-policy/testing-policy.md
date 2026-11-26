@@ -1,4 +1,4 @@
-<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-schema: v7 -->
 <!-- ralph-policy-id: testing-policy.md -->
 # Testing Policy
 
@@ -401,7 +401,7 @@ RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the
 RALPH-FACT: io_mocking_approach: none — the gates read the working tree and never write outside it
 RALPH-FACT: suite_time_budget: 25 seconds for the default suite (`make test`), drawn from the 30-second verification_time_budget and enforced by the suite-level timed wrapper in the Makefile (`python3 tools/verify.py timed test-suite 25 ...`), which also holds each step to 30 seconds; measured at 3.18s (2.51s controllable time above the 0.67s suite cost floor) on 2026-11-25
 RALPH-FACT: per_test_timeout: none — no per-test timeout is configured; the suite budget bounds the run
-RALPH-FACT: timeout_enforcement_mechanism: none — no timeout plugin is installed, so the suite budget review catches a slow suite
+RALPH-FACT: timeout_enforcement_mechanism: RALPH-PENDING (assumed 2026-11-25); review trigger: the testing owner installs a runner-level limit in the gate runner that terminates a suite past its limit and fails the gate, proven by a stage that hangs past the limit exiting non-zero; the timed wrapper today only compares elapsed time after the command exits, so a hung suite blocks the run until an outer timeout fires; owner: testing owner; lane: make test; evidence: the killed stage's exit status and the gate report line
 RALPH-FACT: parallel_execution_mechanism: none — the suite runs serially
 RALPH-FACT: slow_test_report_command: pytest -q --durations=10
 RALPH-FACT: suite_test_count_command: pytest --collect-only -q
@@ -608,7 +608,7 @@ governed by `execution-kernel.md §Kernel rules`.
 ## Ralph markers
 
 * Policy id: `<!-- ralph-policy-id: testing-policy.md -->`
-* Schema version: `<!-- ralph-policy-schema: v6 -->`
+* Schema version: `<!-- ralph-policy-schema: v7 -->`
 
 ## Visual design evidence
 

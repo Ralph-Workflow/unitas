@@ -1,4 +1,4 @@
-<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-schema: v7 -->
 <!-- ralph-policy-id: verification-policy.md -->
 # Verification Policy
 
@@ -221,6 +221,9 @@ where they decay silently.
    A profile is legitimate only with all five declared here: its command,
    its OWNER, its TRIGGER or SCHEDULE, that it FAILS HARD when it runs, and
    the DATE IT LAST RAN with the staleness horizon past which it is decayed.
+   The last-run date names a durable source — a CI run id, a committed
+   baseline, or the gate-lane review entry — never a worktree-local or
+   append-only record.
    A profile past its horizon with no run evidence belongs in the DELETED
    lane — a check that never runs reports a safety it never verified.
    These categories are the single authoritative list; the testing policy
@@ -272,30 +275,31 @@ The named non-default profiles, each with the five required fields:
   compilation, the play pipeline, the player, or `samples/`; evidence:
   per-scenario report JSONs, the packaged-player step's `build-report.json`
   assertions and control-stdio replay, and lane exit status; fails hard when
-  run; last run
-  2026-11-25, staleness horizon one milestone.
+  run; last run 2026-11-25, recorded in the gate-lane review entry for the
+  2026-11-25 policy remediation pass; staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
   GPU/audio/input artifacts; fails hard when run; last run not recorded in this
-  tree as of 2026-11-25, so a refresh run is due before the horizon of one
-  milestone passes.
+  tree as of 2026-11-25, so a refresh run that names a durable source is due
+  before the horizon of one milestone passes.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
   or presentation; evidence: per-measurement OK/FAIL lines with value_ms
   against ceiling_ms, and value_bytes against ceiling_bytes for the PlayerLoop
   per-frame allocation measurement; fails hard when run; last run 2026-11-25,
-  staleness horizon one milestone. The lane reports eight measurements: import
-  throughput, scene load, physics step, particle eval, animation eval, the
-  100,000-GameObject frame loop, the managed-to-native scripting call cost, and
-  the PlayerLoop per-frame managed allocation. Each area owns the measurements
-  of its own subsystems inside the shared lane.
+  recorded in the gate-lane review entry for the 2026-11-25 policy remediation
+  pass; staleness horizon one milestone. The lane reports eight measurements:
+  import throughput, scene load, physics step, particle eval, animation eval,
+  the 100,000-GameObject frame loop, the managed-to-native scripting call cost,
+  and the PlayerLoop per-frame managed allocation. Each area owns the
+  measurements of its own subsystems inside the shared lane.
 - `make verify-unsafe` — owner: editor and engine proof (lane runner); every
   area that registers an unsafe zone owns that zone's stages; trigger: every
   change that touches a registered unsafe zone; evidence: per-stage exit
   statuses, with the sanitizer, Loom, fuzz, and Kani stages declared but not
   yet wired; fails hard when run; last run not recorded in this tree as of
-  2026-11-25, so a refresh run is due before the horizon of one milestone
-  passes.
+  2026-11-25, so a refresh run that names a durable source is due before the
+  horizon of one milestone passes.
 - Lane, ownership, and policy records name subsystems or areas, never
   worktrees, branches, or agents.
 RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; a warm Apple Silicon run on 2026-11-25 took 26.24s wall with the full .NET formatter (21.49s), and the measured floor for the suite group's cargo work on the same host on 2026-11-25 was 9.28s for `cargo test --workspace --lib --tests --bins` run alone. This is a measurement, not a guarantee under shared-host contention
@@ -305,11 +309,14 @@ RALPH-FACT: fast_path_time_budget: make verify enforces the same 30s wall budget
 RALPH-FACT: verification_budget_overage: none in the recorded warm runs — full gate controllable time was 22.37s (26.24s wall minus the recorded 3.87s cost floor), fast-path controllable time equaled full-gate controllable time because the fast path runs the full gate, and default suite controllable time was 4.81s (5.48s wall for make test minus the recorded 0.67s floor). Other runs on the shared host exceeded the unchanged 30s verify limit and failed as designed
 RALPH-FACT: verification_time_enforcement_mechanism: the timed gate wrapper fails the run when a gate exceeds the budget the Makefile declares
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
+RALPH-FACT: durable_evidence_rule: committed files never cite a worktree-local or append-only record (a `tmp/` or `.agent/` file, a log, or an `*.ndjson` ledger) by line, row count, or excerpt, and a profile's last run is a calendar date with a durable source (a CI run id, a committed baseline, or the gate-lane review entry); a volatile citation is replaced, never re-pointed or recounted
 
 `required_verification_profiles` is the single home for the project's named
 non-default profiles, including any declared by the testing policy. Record
 all five fields for each: command, named owner, trigger or schedule,
-fails-hard-when-run, and last-run date with staleness horizon.
+fails-hard-when-run, and last-run date with staleness horizon. The last-run
+date names its durable source — a CI run id, a committed baseline, or the
+gate-lane review entry — never a worktree-local or append-only record.
 
 ## AI execution instructions
 
@@ -378,7 +385,7 @@ An agent MUST NOT:
 Run every gate below before claiming a change complies with this policy.
 
 RALPH-COMMAND: make verify
-RALPH-REVIEW: review that every declared profile has run within its staleness horizon, that no check has been demoted out of the default gate to avoid a red result, and that the recorded gate duration still matches reality; evidence: dated gate-lane review listing each profile with its last-run date; owner: the named person or team recorded in the gate_lane_review_cadence_and_owner fact
+RALPH-REVIEW: review that every declared profile has run within its staleness horizon, that no check has been demoted out of the default gate to avoid a red result, and that the recorded gate duration still matches reality; evidence: dated gate-lane review listing each profile with its last-run date and the durable source for that date; owner: the named person or team recorded in the gate_lane_review_cadence_and_owner fact
 
 Expected result: exit 0 from the authoritative entry point within the
 recorded budget. On failure report the failing gate and the category —
@@ -477,4 +484,4 @@ governed by `execution-kernel.md §Kernel rules`.
 ## Ralph markers
 
 * Policy id: `<!-- ralph-policy-id: verification-policy.md -->`
-* Schema version: `<!-- ralph-policy-schema: v6 -->`
+* Schema version: `<!-- ralph-policy-schema: v7 -->`

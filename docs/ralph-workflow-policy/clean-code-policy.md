@@ -1,4 +1,4 @@
-<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-schema: v7 -->
 <!-- ralph-policy-id: clean-code-policy.md -->
 # Clean-Code Policy
 
@@ -333,7 +333,7 @@ this rule is deleted or reduced to current facts.
 | Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog reports zero findings over the tracked tree | the ban gate reports zero findings in the Python sources | the ban gate reports zero findings in the Python sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
-| Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree | the zone gate reports zero findings | deterministic: make zone-gate | when the linter alone enforces zone containment |
+| Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree, including each zone's enforced lint levels and its registered unsafe block count | the zone gate reports zero findings | deterministic: make zone-gate | when the linter alone enforces zone containment |
 | Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: sanitizer Loom fuzz Kani and layout-test stages are declared and not yet wired; review: at every change that touches a zone | when no unsafe zone remains |
 | Unsafe boundary layout agreement | Clean-code owner | Rust and C# agree on the size, alignment, and field offsets of every type that crosses the C ABI | the generated layout tests pass on both sides | the generated layout tests pass | advisory: the layout tests are generated in the change that registers the first zone; review: in the change that registers the first zone | when no type crosses the C ABI |
 
@@ -506,4 +506,4 @@ governed by `execution-kernel.md §Kernel rules`.
 ## Ralph markers
 
 * Policy id: `<!-- ralph-policy-id: clean-code-policy.md -->`
-* Schema version: `<!-- ralph-policy-schema: v6 -->`
+* Schema version: `<!-- ralph-policy-schema: v7 -->`

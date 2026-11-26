@@ -1,4 +1,4 @@
-<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-schema: v7 -->
 <!-- ralph-policy-id: execution-kernel.md -->
 # Execution Kernel
 
@@ -395,7 +395,7 @@ be weakened to obtain a passing result.
 ## Ralph markers
 
 * Policy id: `<!-- ralph-policy-id: execution-kernel.md -->`
-* Schema version: `<!-- ralph-policy-schema: v6 -->`
+* Schema version: `<!-- ralph-policy-schema: v7 -->`
 
 ## Research basis
 

@@ -1,4 +1,4 @@
-<!-- ralph-policy-schema: v6 -->
+<!-- ralph-policy-schema: v7 -->
 <!-- ralph-policy-id: documentation-policy.md -->
 # Documentation Policy
 
@@ -171,4 +171,4 @@ governed by `execution-kernel.md §Kernel rules`.
 ## Ralph markers
 
 * Policy id: `<!-- ralph-policy-id: documentation-policy.md -->`
-* Schema version: `<!-- ralph-policy-schema: v6 -->`
+* Schema version: `<!-- ralph-policy-schema: v7 -->`
