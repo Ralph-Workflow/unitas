@@ -2270,43 +2270,49 @@ def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
 
 
-def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes] | None) -> None:
+class TimedGateRun:
+    def __init__(self) -> None:
+        self.process: subprocess.Popen[bytes] | None = None
+        self.starting = False
+        self.terminated = False
+        self.signum = int(signal.SIGTERM)
+
+
+def install_timed_gate_termination(run: TimedGateRun) -> None:
     def handler(signum: int, _frame: object) -> None:
-        if process is not None:
-            kill_timed_gate_group(process)
+        run.terminated = True
+        run.signum = signum
+        if run.starting:
+            return
+        if run.process is not None:
+            kill_timed_gate_group(run.process)
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)
-
-
-def block_sigterm() -> set[int | signal.Signals] | None:
-    if not hasattr(signal, "pthread_sigmask"):
-        return None
-    return signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-
-
-def restore_signal_mask(previous: set[int | signal.Signals] | None) -> None:
-    if previous is None:
-        return
-    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 def run_timed_attempt(
     label: str, budget: float, command: list[str]
 ) -> tuple[bool, bool, int] | None:
     started = time.monotonic()
-    terminate_timed_gate_on_signal(None)
-    previous = block_sigterm()
+    run = TimedGateRun()
+    previous_handler = signal.getsignal(signal.SIGTERM) or signal.SIG_DFL
+    install_timed_gate_termination(run)
     try:
+        run.starting = True
         try:
             process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
         except OSError as error:
+            run.starting = False
             sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
+            if run.terminated:
+                raise SystemExit(128 + run.signum) from error
             return None
-        terminate_timed_gate_on_signal(process)
-    finally:
-        restore_signal_mask(previous)
-    try:
+        run.process = process
+        run.starting = False
+        if run.terminated:
+            terminate_timed_gate(process)
+            raise SystemExit(128 + run.signum)
         try:
             returncode = process.wait(timeout=budget)
         except subprocess.TimeoutExpired:
@@ -2334,8 +2340,10 @@ def run_timed_attempt(
             return True, False, returncode
         return False, False, returncode
     finally:
-        if process.poll() is None:
-            terminate_timed_gate(process)
+        if run.process is not None and run.process.poll() is None:
+            terminate_timed_gate(run.process)
+        run.process = None
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 def run_timed(argv: Sequence[str]) -> int:

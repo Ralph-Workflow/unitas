@@ -24,7 +24,9 @@ namespace Unitas.Editor.Tests
 
         private static CancellationToken RequestWindow(CancellationTokenSource source)
         {
-            source.CancelAfter(TimeSpan.FromSeconds(10));
+            // The window bounds a hung request, not a busy machine: the shared runner
+            // saturates the host, so a local MCP round trip can outlast a short window.
+            source.CancelAfter(TimeSpan.FromSeconds(30));
             return source.Token;
         }
 
