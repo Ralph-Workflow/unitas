@@ -205,16 +205,12 @@ namespace Unitas.Bridge.Tests
         private const string RotatorGuid = "2b3c4d5e6f708192a3b4c5d6e7f8091a";
         private const string ScoreGuid = "3c4d5e6f708192a3b4c5d6e7f8091a2b";
 
-        public static void Run()
+        public static void CollectAllPickupsScenario()
         {
-            ScriptGlueRegistry.Clear();
-            ScriptGlueRegistry.Register(PlayerGuid, () => new RollABallPlayerScript());
-            ScriptGlueRegistry.Register(RotatorGuid, () => new RollABallPickupScript());
-            ScriptGlueRegistry.Register(ScoreGuid, () => new RollABallScoreScript());
+            RegisterSampleScripts();
             try
             {
-                CollectAllPickupsScenario();
-                RestartRecoveryScenario();
+                RunCollectAllPickupsScenario();
             }
             finally
             {
@@ -223,7 +219,29 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void CollectAllPickupsScenario()
+        public static void RestartRecoveryScenario()
+        {
+            RegisterSampleScripts();
+            try
+            {
+                RunRestartRecoveryScenario();
+            }
+            finally
+            {
+                PurgeStalePlayerBalls();
+                ScriptGlueRegistry.Clear();
+            }
+        }
+
+        private static void RegisterSampleScripts()
+        {
+            ScriptGlueRegistry.Clear();
+            ScriptGlueRegistry.Register(PlayerGuid, () => new RollABallPlayerScript());
+            ScriptGlueRegistry.Register(RotatorGuid, () => new RollABallPickupScript());
+            ScriptGlueRegistry.Register(ScoreGuid, () => new RollABallScoreScript());
+        }
+
+        private static void RunCollectAllPickupsScenario()
         {
             ScenarioResult result = RunScenario("collect_all_pickups.scenario.json");
 
@@ -232,7 +250,7 @@ namespace Unitas.Bridge.Tests
             AssertAllCheckpointsPassed(result);
         }
 
-        private static void RestartRecoveryScenario()
+        private static void RunRestartRecoveryScenario()
         {
             ScenarioResult result = RunScenario("restart_recovery.scenario.json");
 

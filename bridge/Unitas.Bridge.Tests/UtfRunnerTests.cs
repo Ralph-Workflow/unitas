@@ -13,18 +13,7 @@ namespace Unitas.Bridge.Tests
         private static readonly string ProcessSuffix =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "_";
 
-        public static void Run()
-        {
-            TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml();
-            TestStory16UnexpectedErrorLogFailsAndLogAssertExpectPasses();
-            TestStory17CancelledTestRunReportsOnlyCompletedTests();
-            TestUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns();
-            TestPlayModeFreshSceneIsolationAndEditStateRestoration();
-            TestBrokenTestAssemblyReportsCompileFailure();
-            TestCliRunCommandExitCodes();
-        }
-
-        private static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
+        public static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
@@ -131,7 +120,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestStory16UnexpectedErrorLogFailsAndLogAssertExpectPasses()
+        public static void TestStory16UnexpectedErrorLogFailsAndLogAssertExpectPasses()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
@@ -189,7 +178,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestStory17CancelledTestRunReportsOnlyCompletedTests()
+        public static void TestStory17CancelledTestRunReportsOnlyCompletedTests()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
@@ -245,7 +234,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns()
+        public static void TestUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns()
         {
             string tempProject = CreateTempTestProject("shared_b");
             try
@@ -432,7 +421,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestPlayModeFreshSceneIsolationAndEditStateRestoration()
+        public static void TestPlayModeFreshSceneIsolationAndEditStateRestoration()
         {
             string tempProject = CreateTempTestProject("shared_b");
             UnityEngine.GameObject editTimeObject = new UnityEngine.GameObject("EditTimeSurvivorObject");
@@ -499,7 +488,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestBrokenTestAssemblyReportsCompileFailure()
+        public static void TestBrokenTestAssemblyReportsCompileFailure()
         {
             string tempProject = CreateTempTestProject("broken_compile");
             try
@@ -523,7 +512,7 @@ namespace Unitas.Bridge.Tests
             }
         }
 
-        private static void TestCliRunCommandExitCodes()
+        public static void TestCliRunCommandExitCodes()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
