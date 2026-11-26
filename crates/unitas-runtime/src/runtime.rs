@@ -1142,12 +1142,13 @@ impl Runtime {
             self.accumulator = self.maximum_delta_time;
         }
         let fixed_step = self.fixed_timestep;
-        let mut contacts_2d = Vec::new();
         while self.accumulator >= fixed_step - EPSILON {
             self.sync_kinematic_transforms();
             self.physics.world_3d_mut().step(fixed_step)?;
             self.write_back_dynamic_transforms();
-            contacts_2d.extend(self.physics.step_2d_contacts(fixed_step as f32));
+            let contacts_2d = self.physics.step_2d_contacts(fixed_step as f32);
+            let events = self.physics.world_3d_mut().drain_events();
+            let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
             if let Some(callbacks) = self.callbacks {
                 let handles = self.all_script_handles();
                 for handle in handles {
@@ -1155,46 +1156,47 @@ impl Runtime {
                         (callbacks.fixed_update)(handle, fixed_step);
                     });
                 }
+                // A step's physics messages are dispatched before the next step
+                // runs, so the message order does not depend on how many fixed
+                // steps a rendered frame happens to batch.
+                for event in events {
+                    let a = event.a.as_u64();
+                    let b = event.b.as_u64();
+                    let phase = phase_code(event.phase);
+                    hook(self, &mut || {
+                        (callbacks.collision)(a, b, phase);
+                    });
+                }
+                for event in trigger_events {
+                    let a = event.a.as_u64();
+                    let b = event.b.as_u64();
+                    let phase = phase_code(event.phase);
+                    hook(self, &mut || {
+                        (callbacks.trigger)(a, b, phase);
+                    });
+                }
+                for contact in contacts_2d {
+                    let a = contact.a.as_u64();
+                    let b = contact.b.as_u64();
+                    let phase = phase_code(contact.phase);
+                    if contact.trigger {
+                        hook(self, &mut || {
+                            (callbacks.trigger)(a, b, phase);
+                        });
+                    } else {
+                        hook(self, &mut || {
+                            (callbacks.collision)(a, b, phase);
+                        });
+                    }
+                }
             }
             self.accumulator -= fixed_step;
             if self.accumulator < 0.0 {
                 self.accumulator = 0.0;
             }
         }
-        let events = self.physics.world_3d_mut().drain_events();
-        let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
         let mut handles = Vec::new();
         if let Some(callbacks) = self.callbacks {
-            for event in events {
-                let a = event.a.as_u64();
-                let b = event.b.as_u64();
-                let phase = phase_code(event.phase);
-                hook(self, &mut || {
-                    (callbacks.collision)(a, b, phase);
-                });
-            }
-            for event in trigger_events {
-                let a = event.a.as_u64();
-                let b = event.b.as_u64();
-                let phase = phase_code(event.phase);
-                hook(self, &mut || {
-                    (callbacks.trigger)(a, b, phase);
-                });
-            }
-            for contact in contacts_2d {
-                let a = contact.a.as_u64();
-                let b = contact.b.as_u64();
-                let phase = phase_code(contact.phase);
-                if contact.trigger {
-                    hook(self, &mut || {
-                        (callbacks.trigger)(a, b, phase);
-                    });
-                } else {
-                    hook(self, &mut || {
-                        (callbacks.collision)(a, b, phase);
-                    });
-                }
-            }
             handles = self.all_script_handles();
             for handle in &handles {
                 let h = *handle;

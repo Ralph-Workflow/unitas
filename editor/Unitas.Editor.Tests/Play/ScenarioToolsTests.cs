@@ -88,7 +88,7 @@ namespace Unitas.Editor.Tests.Play
             Check.That("scenario-run: restart lands on start z", Math.Abs(observed[2]) < 0.001);
 
             JsonObject totalFrames = FindCheckpoint(content, "total-frames");
-            Check.Equal("scenario-run: restart total frames observed", "208", totalFrames["observed"]?.GetValue<string>() ?? string.Empty);
+            Check.Equal("scenario-run: restart total frames observed", "590", totalFrames["observed"]?.GetValue<string>() ?? string.Empty);
 
             JsonObject winLog = FindCheckpoint(content, "win-log");
             Check.Equal(

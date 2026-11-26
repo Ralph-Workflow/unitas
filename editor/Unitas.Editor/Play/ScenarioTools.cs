@@ -337,7 +337,7 @@ namespace Unitas.Editor.Mcp
                 Type? scriptType = FindScriptType(types, scriptName);
                 if (scriptType == null)
                 {
-                    if (DeclaresComponent(script.Value))
+                    if (FindTypeByName(types, scriptName) == null && DeclaresComponent(script.Value))
                     {
                         unresolved.Add(scriptName);
                     }
@@ -473,6 +473,19 @@ namespace Unitas.Editor.Mcp
                     && type.Name == scriptName
                     && !type.IsAbstract
                     && typeof(MonoBehaviour).IsAssignableFrom(type))
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        private static Type? FindTypeByName(Type?[] types, string typeName)
+        {
+            foreach (Type? type in types)
+            {
+                if (type != null && type.Name == typeName)
                 {
                     return type;
                 }
