@@ -28,6 +28,7 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, GameObject> _entityGameObjects = new Dictionary<ulong, GameObject>();
         private readonly List<ulong> _materializedSceneEntities = new List<ulong>();
+        private readonly List<UnityEngine.Object> _destroyedObjects = new List<UnityEngine.Object>();
         private readonly Dictionary<ulong, string> _sceneObjectNames = new Dictionary<ulong, string>();
         private readonly Dictionary<ulong, ulong> _sceneParentEntities = new Dictionary<ulong, ulong>();
         private readonly Dictionary<ulong, SceneRigidbodyMetadata> _sceneRigidbodies = new Dictionary<ulong, SceneRigidbodyMetadata>();
@@ -781,6 +782,7 @@ namespace Unitas.Bridge
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
             double tickDeltaSeconds = Time.captureFramerate > 0 ? Time.unscaledDeltaTime : deltaSeconds;
+            NativeDestroyInterop.unitas_runtime_bind_destroy_channel(_runtimeHandle);
             int result = RuntimeInterop.unitas_runtime_tick(_runtimeHandle, tickDeltaSeconds);
             if (result != 0)
             {
@@ -792,6 +794,7 @@ namespace Unitas.Bridge
                 throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
 
+            FlushDestroyedObjects();
             SyncSimulatedTransforms();
             SyncAudioSourceTransforms();
             SceneManager.PumpAsyncOperations();
@@ -4183,6 +4186,29 @@ namespace Unitas.Bridge
             {
                 Debug.LogException(ex);
             }
+        }
+
+        private void FlushDestroyedObjects()
+        {
+            _destroyedObjects.Clear();
+            UnityEngine.Object.FlushPendingDestroys(_destroyedObjects);
+            for (int index = 0; index < _destroyedObjects.Count; index++)
+            {
+                ulong entity = UnityEngine.Object.NativeEntityIdOf(_destroyedObjects[index]);
+                if (entity != 0)
+                {
+                    NativeDestroyInterop.unitas_runtime_mark_destroyed(_runtimeHandle, entity);
+                }
+            }
+        }
+
+        private static class NativeDestroyInterop
+        {
+            [DllImport(RuntimeInterop.LibraryName, CallingConvention = CallingConvention.Cdecl)]
+            public static extern int unitas_runtime_bind_destroy_channel(ulong runtime);
+
+            [DllImport(RuntimeInterop.LibraryName, CallingConvention = CallingConvention.Cdecl)]
+            public static extern int unitas_runtime_mark_destroyed(ulong runtime, ulong entity);
         }
     }
 }

@@ -101,6 +101,7 @@ namespace UnityEngine
     {
         private static readonly object s_registryLock = new object();
         private static readonly List<Object> s_liveObjects = new List<Object>();
+        private static readonly List<PendingDestroy> s_pendingDestroys = new List<PendingDestroy>();
         private static int s_nextInstanceId = 1;
         private int _instanceId = Interlocked.Increment(ref s_nextInstanceId);
         private string _name = string.Empty;
@@ -412,9 +413,21 @@ namespace UnityEngine
             return 0;
         }
 
+        internal static ulong NativeEntityIdOf(Object target) => NativeEntityOf(target);
+
         public static void Destroy(Object? obj, float t)
         {
-            _ = t;
+            if (obj is null || obj._destroyed || obj._unassignedReference)
+            {
+                return;
+            }
+
+            if (t > 0f && float.IsFinite(t))
+            {
+                QueueDestroy(obj, Time.time + t);
+                return;
+            }
+
             Destroy(obj);
         }
 
@@ -430,6 +443,80 @@ namespace UnityEngine
         }
 
         public static void Destroy(Object? obj)
+        {
+            if (obj is null || obj._destroyed || obj._unassignedReference)
+            {
+                return;
+            }
+
+            DestroyNow(obj);
+            QueueDestroy(obj, Time.time);
+        }
+
+        private static void QueueDestroy(Object target, float deadline)
+        {
+            lock (s_registryLock)
+            {
+                s_pendingDestroys.Add(new PendingDestroy(target, deadline));
+            }
+        }
+
+        internal static void FlushPendingDestroys(List<Object> destroyed)
+        {
+            List<PendingDestroy>? due = null;
+            lock (s_registryLock)
+            {
+                float now = Time.time;
+                for (int index = 0; index < s_pendingDestroys.Count;)
+                {
+                    PendingDestroy request = s_pendingDestroys[index];
+                    if (request.Deadline > now)
+                    {
+                        index++;
+                        continue;
+                    }
+
+                    s_pendingDestroys.RemoveAt(index);
+                    if (due is null)
+                    {
+                        due = new List<PendingDestroy>();
+                    }
+
+                    due.Add(request);
+                }
+            }
+
+            if (due is null)
+            {
+                return;
+            }
+
+            for (int index = 0; index < due.Count; index++)
+            {
+                Object target = due[index].Target;
+                if (!target._destroyed && !target._unassignedReference)
+                {
+                    DestroyNow(target);
+                }
+
+                destroyed.Add(target);
+            }
+        }
+
+        private sealed class PendingDestroy
+        {
+            internal PendingDestroy(Object target, float deadline)
+            {
+                Target = target;
+                Deadline = deadline;
+            }
+
+            internal Object Target { get; }
+
+            internal float Deadline { get; }
+        }
+
+        private static void DestroyNow(Object? obj)
         {
             if (obj is null || obj._destroyed || obj._unassignedReference)
             {

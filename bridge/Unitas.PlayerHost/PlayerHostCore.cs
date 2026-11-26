@@ -25,6 +25,8 @@ namespace Unitas.PlayerHost
     public static class PlayerHostCore
     {
         private static readonly object Gate = new object();
+        private static readonly StreamWriter ManagedLogWriter =
+            new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
         private static BridgeHost? _host;
 
         public static BridgeHost? Host
@@ -38,7 +40,11 @@ namespace Unitas.PlayerHost
             }
         }
 
-        public static int Init(ulong runtimeHandle, string? bundleRoot, string? persistRoot)
+        public static int Init(
+            ulong runtimeHandle,
+            string? bundleRoot,
+            string? persistRoot,
+            string? startupScenePath)
         {
             lock (Gate)
             {
@@ -49,7 +55,8 @@ namespace Unitas.PlayerHost
 
                 if (runtimeHandle == 0UL
                     || string.IsNullOrEmpty(bundleRoot)
-                    || string.IsNullOrEmpty(persistRoot))
+                    || string.IsNullOrEmpty(persistRoot)
+                    || string.IsNullOrEmpty(startupScenePath))
                 {
                     return (int)PlayerHostStage.InvalidArgument;
                 }
@@ -57,7 +64,21 @@ namespace Unitas.PlayerHost
                 BridgeHost? host = null;
                 try
                 {
+                    // The control protocol owns stdout; managed logging must not
+                    // corrupt the JSON the host parses. Only the player process
+                    // asks for that: the editor hosts the same managed code and
+                    // speaks its own JSON protocol on stdout.
+                    if (Environment.GetEnvironmentVariable("UNITAS_MANAGED_LOG_TO_STDERR") == "1")
+                    {
+                        Console.SetOut(ManagedLogWriter);
+                    }
                     string fullBundleRoot = Path.GetFullPath(bundleRoot);
+                    string fullScenePath = Path.GetFullPath(startupScenePath);
+                    if (!File.Exists(fullScenePath))
+                    {
+                        return (int)PlayerHostStage.BundleInvalid;
+                    }
+
                     BindRuntimeLibrary(fullBundleRoot);
                     string managedDir = Path.Combine(fullBundleRoot, "Managed");
                     if (!Directory.Exists(managedDir))
@@ -93,13 +114,7 @@ namespace Unitas.PlayerHost
                     Application.PersistentDataPathOverride = Path.GetFullPath(persistRoot);
                     host = new BridgeHost(runtimeHandle);
                     host.BuildKind = ApplicationBuildKind.ReleasePlayer;
-                    string? scenePath = FindScene(fullBundleRoot);
-                    if (scenePath == null)
-                    {
-                        return (int)PlayerHostStage.BundleInvalid;
-                    }
-
-                    host.LoadScene(scenePath);
+                    host.LoadScene(fullScenePath);
                     _host = host;
                     host = null;
                     return (int)PlayerHostStage.Ok;
@@ -116,7 +131,13 @@ namespace Unitas.PlayerHost
             }
         }
 
-        public static int Tick(double deltaSeconds)
+        public static int Tick(
+            double deltaSeconds,
+            IntPtr hudBuffer,
+            int hudCapacity,
+            IntPtr scoreOut,
+            IntPtr totalOut,
+            IntPtr wonOut)
         {
             lock (Gate)
             {
@@ -129,6 +150,7 @@ namespace Unitas.PlayerHost
                 try
                 {
                     host.Tick(deltaSeconds);
+                    PublishHud(hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
                     return (int)PlayerHostStage.Ok;
                 }
                 catch (Exception)
@@ -159,6 +181,44 @@ namespace Unitas.PlayerHost
                     return (int)PlayerHostStage.ShutdownFailed;
                 }
             }
+        }
+
+        private static void PublishHud(
+            IntPtr hudBuffer,
+            int hudCapacity,
+            IntPtr scoreOut,
+            IntPtr totalOut,
+            IntPtr wonOut)
+        {
+            PlayerHostHud.Read(out int score, out int total, out bool won, out string text);
+            if (scoreOut != IntPtr.Zero)
+            {
+                Marshal.WriteInt32(scoreOut, score);
+            }
+
+            if (totalOut != IntPtr.Zero)
+            {
+                Marshal.WriteInt32(totalOut, total);
+            }
+
+            if (wonOut != IntPtr.Zero)
+            {
+                Marshal.WriteInt32(wonOut, won ? 1 : 0);
+            }
+
+            if (hudBuffer == IntPtr.Zero || hudCapacity <= 1)
+            {
+                return;
+            }
+
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+            int length = Math.Min(bytes.Length, hudCapacity - 1);
+            if (length > 0)
+            {
+                Marshal.Copy(bytes, 0, hudBuffer, length);
+            }
+
+            Marshal.WriteByte(hudBuffer, (byte)length);
         }
 
         private static void BindRuntimeLibrary(string bundleRoot)
@@ -202,50 +262,6 @@ namespace Unitas.PlayerHost
             }
 
             return false;
-        }
-
-        private static string? FindScene(string bundleRoot)
-        {
-            var scenes = new List<string>();
-            var skippedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "Library",
-                "obj",
-                "bin",
-            };
-            CollectScenes(bundleRoot, skippedDirectories, scenes);
-            scenes.Sort(StringComparer.Ordinal);
-            string bundleName = NormalizeName(Path.GetFileName(bundleRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
-            foreach (string scene in scenes)
-            {
-                if (string.Equals(NormalizeName(Path.GetFileNameWithoutExtension(scene)), bundleName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return scene;
-                }
-            }
-
-            return scenes.Count > 0 ? scenes[0] : null;
-        }
-
-        private static string NormalizeName(string name)
-        {
-            return name.Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal);
-        }
-
-        private static void CollectScenes(string directory, HashSet<string> skippedDirectories, List<string> scenes)
-        {
-            foreach (string scene in Directory.GetFiles(directory, "*.unity"))
-            {
-                scenes.Add(Path.GetFullPath(scene));
-            }
-
-            foreach (string child in Directory.GetDirectories(directory))
-            {
-                if (!skippedDirectories.Contains(Path.GetFileName(child)))
-                {
-                    CollectScenes(child, skippedDirectories, scenes);
-                }
-            }
         }
     }
 }

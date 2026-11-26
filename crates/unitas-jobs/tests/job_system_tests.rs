@@ -134,6 +134,17 @@ fn complete_waits_for_the_job_and_is_complete_reports_the_state() {
 }
 
 #[test]
+fn a_completed_handle_remains_a_valid_dependency_within_its_window() {
+    let pool = system(2);
+    let dependency = pool.schedule(|| {}, &[]);
+    pool.complete(dependency);
+    let dependent = pool.schedule(|| {}, &[dependency]);
+    assert!(dependent.is_valid());
+    pool.complete(dependent);
+    assert!(pool.is_complete(dependent));
+}
+
+#[test]
 fn an_unknown_dependency_is_rejected() {
     let pool = system(2);
     let handle = pool.schedule(|| {}, &[JobHandle::from_u64(4_242)]);

@@ -726,34 +726,13 @@ pub fn stage_bundle_for_host(
             application.executable_path
         }
         None => {
-            let path = output_dir.join(config.target.executable_name(&config.product_name));
-            let launcher_descriptor = format!(
-                "unitas_player_launcher=v1\n\
-                 company_name={}\n\
-                 product_name={}\n\
-                 application_identifier={}\n\
-                 version={}\n\
-                 target={}\n\
-                 mode={}\n\
-                 development_diagnostics={}\n\
-                 manifest={BUNDLE_MANIFEST_FILENAME}\n\
-                 manifest_hash={}\n\
-                 startup_scene={}\n",
-                manifest.company_name,
-                manifest.product_name,
-                manifest.application_identifier,
-                manifest.version,
-                manifest.target.identifier(),
-                manifest.mode.as_str(),
-                manifest.development_diagnostics,
-                manifest.manifest_hash,
-                manifest.startup_scene_staged_path
-            );
-            fs::write(&path, launcher_descriptor).map_err(|error| BundleError::Io {
-                path: path.clone(),
-                message: error.to_string(),
-            })?;
-            path
+            let Some(player_binary) = package::locate_player_binary() else {
+                return Err(BundleError::Io {
+                    path: output_dir.to_path_buf(),
+                    message: String::from("the unitas player binary has not been built"),
+                });
+            };
+            stage_player_launcher(&manifest, output_dir, &player_binary)?
         }
     };
 
@@ -766,6 +745,25 @@ pub fn stage_bundle_for_host(
         manifest,
         diagnostics,
     })
+}
+
+/// Stages the launcher of a desktop target that ships no application bundle:
+/// the player binary itself, so the shipped player is a real executable.
+fn stage_player_launcher(
+    manifest: &BundleManifest,
+    output_dir: &Path,
+    player_binary: &Path,
+) -> Result<PathBuf, BundleError> {
+    let path = output_dir.join(manifest.target.executable_name(&manifest.product_name));
+    fs::copy(player_binary, &path).map_err(|error| BundleError::Io {
+        path: path.clone(),
+        message: error.to_string(),
+    })?;
+    package::make_executable(&path).map_err(|error| BundleError::Io {
+        path: path.clone(),
+        message: error.to_string(),
+    })?;
+    Ok(path)
 }
 
 /// Copies the project assets into the bundle so the staged scenes keep the
@@ -2403,6 +2401,64 @@ Transform:\n\
         assert!(!broken_out
             .join(host.executable_name(&broken_config.product_name))
             .exists());
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn staged_desktop_launcher_is_the_player_binary() -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = temp_dir("desktop_launcher")?;
+        let scenes_dir = workspace.join("Project").join("Assets").join("Scenes");
+        fs::create_dir_all(&scenes_dir)?;
+        let main_scene = scenes_dir.join("Main.unity");
+        fs::write(&main_scene, sample_unity_scene("MainRoot"))?;
+
+        let player_binary =
+            package::locate_player_binary().ok_or("the unitas player binary has not been built")?;
+        let player_binary_bytes = fs::read(&player_binary)?;
+
+        for (target, launcher_name) in [
+            (BuildTarget::WINDOWS_X86_64, "PackagedGame.exe"),
+            (BuildTarget::LINUX_X86_64, "PackagedGame"),
+        ] {
+            let config = BuildConfiguration::new(
+                vec![main_scene.clone()],
+                "Unitas",
+                "PackagedGame",
+                "com.unitas.packaged",
+                "1.0.0",
+                target,
+            );
+            let output_dir = workspace.join(format!("out_{}", target.identifier()));
+            let staged = stage_bundle_for_host(&config, &output_dir, Some(target))?;
+
+            assert_eq!(
+                staged
+                    .launch_artifact_path
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some(launcher_name)
+            );
+            assert_eq!(
+                fs::read(&staged.launch_artifact_path)?,
+                player_binary_bytes,
+                "the staged launcher of {target} is not the player binary"
+            );
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&staged.launch_artifact_path)?
+                    .permissions()
+                    .mode();
+                assert_eq!(
+                    mode & 0o111,
+                    0o111,
+                    "the staged launcher of {target} is not executable"
+                );
+            }
+        }
 
         fs::remove_dir_all(&workspace)?;
         Ok(())

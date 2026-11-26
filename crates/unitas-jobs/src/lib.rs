@@ -8,6 +8,8 @@ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
+const COMPLETED_WINDOW_WORDS: usize = 1_024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JobHandle(u64);
 
@@ -31,7 +33,9 @@ struct RecordState {
     completed: bool,
     enqueued: bool,
     pending: usize,
+    pending_dependents: usize,
     dependents: Vec<u64>,
+    dependencies: Vec<u64>,
     payload: Option<Job>,
     group: Option<u64>,
     group_remaining: usize,
@@ -42,6 +46,43 @@ struct Record {
     signal: Condvar,
 }
 
+struct CompletedWindow {
+    base: u64,
+    bits: Vec<u64>,
+}
+
+impl CompletedWindow {
+    fn new() -> Self {
+        Self {
+            base: 1,
+            bits: vec![0; COMPLETED_WINDOW_WORDS],
+        }
+    }
+
+    fn mark(&mut self, id: u64) {
+        let capacity = COMPLETED_WINDOW_WORDS as u64 * 64;
+        if id.saturating_sub(self.base) >= capacity {
+            self.base = id.saturating_add(1).saturating_sub(capacity);
+            self.bits.fill(0);
+        }
+        let index = id.saturating_sub(self.base) as usize;
+        if index < COMPLETED_WINDOW_WORDS * 64 {
+            self.bits[index / 64] |= 1u64 << (index % 64);
+        }
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        let Some(offset) = id.checked_sub(self.base) else {
+            return false;
+        };
+        let index = offset as usize;
+        if index >= COMPLETED_WINDOW_WORDS * 64 {
+            return false;
+        }
+        self.bits[index / 64] & (1u64 << (index % 64)) != 0
+    }
+}
+
 impl Record {
     fn leaf(payload: Job, pending: usize, group: Option<u64>) -> Self {
         Self {
@@ -49,7 +90,9 @@ impl Record {
                 completed: false,
                 enqueued: false,
                 pending,
+                pending_dependents: 0,
                 dependents: Vec::new(),
+                dependencies: Vec::new(),
                 payload: Some(payload),
                 group,
                 group_remaining: 0,
@@ -64,7 +107,9 @@ impl Record {
                 completed: false,
                 enqueued: false,
                 pending: 0,
+                pending_dependents: 0,
                 dependents: Vec::new(),
+                dependencies: Vec::new(),
                 payload: None,
                 group: None,
                 group_remaining: remaining,
@@ -78,6 +123,7 @@ struct Inner {
     injector: Injector<u64>,
     stealers: Vec<Stealer<u64>>,
     records: Mutex<HashMap<u64, Arc<Record>>>,
+    completed: Mutex<CompletedWindow>,
     next_id: AtomicU64,
     queued: AtomicUsize,
     idle_lock: Mutex<()>,
@@ -101,6 +147,7 @@ impl JobSystem {
             injector: Injector::new(),
             stealers,
             records: Mutex::new(HashMap::new()),
+            completed: Mutex::new(CompletedWindow::new()),
             next_id: AtomicU64::new(1),
             queued: AtomicUsize::new(0),
             idle_lock: Mutex::new(()),
@@ -156,6 +203,8 @@ impl JobSystem {
         insert(inner, group_id, &group);
         if batches == 0 {
             lock(&group.state).completed = true;
+            mark_completed(inner, group_id);
+            retire_unreferenced(inner, group_id, &group);
             return JobHandle(group_id);
         }
         let shared = Arc::new(job);
@@ -192,9 +241,10 @@ impl JobSystem {
     }
 
     pub fn is_complete(&self, handle: JobHandle) -> bool {
-        match lookup(&self.inner, handle.as_u64()) {
+        let id = handle.as_u64();
+        match lookup(&self.inner, id) {
             Some(record) => lock(&record.state).completed,
-            None => false,
+            None => completed_in_window(&self.inner, id),
         }
     }
 
@@ -233,15 +283,36 @@ fn insert(inner: &Inner, id: u64, record: &Arc<Record>) {
     lock(&inner.records).insert(id, Arc::clone(record));
 }
 
-fn resolve_dependencies(inner: &Inner, deps: &[JobHandle]) -> Option<Vec<Arc<Record>>> {
-    let mut resolved = Vec::with_capacity(deps.len());
+fn mark_completed(inner: &Inner, id: u64) {
+    lock(&inner.completed).mark(id);
+}
+
+fn completed_in_window(inner: &Inner, id: u64) -> bool {
+    lock(&inner.completed).contains(id)
+}
+
+fn resolve_dependencies(inner: &Inner, deps: &[JobHandle]) -> Option<Vec<(u64, Arc<Record>)>> {
+    let mut pending = Vec::with_capacity(deps.len());
     for handle in deps {
         if !handle.is_valid() {
             continue;
         }
-        resolved.push(lookup(inner, handle.as_u64())?);
+        let id = handle.as_u64();
+        match lookup(inner, id) {
+            Some(record) => {
+                let completed = lock(&record.state).completed;
+                if !completed {
+                    pending.push((id, record));
+                }
+            }
+            None => {
+                if !completed_in_window(inner, id) {
+                    return None;
+                }
+            }
+        }
     }
-    Some(resolved)
+    Some(pending)
 }
 
 fn batch_count(length: i64, batch: i64) -> usize {
@@ -255,10 +326,15 @@ fn batch_count(length: i64, batch: i64) -> usize {
     usize::try_from(batches).unwrap_or(usize::MAX)
 }
 
-fn attach(inner: &Inner, id: u64, record: &Arc<Record>, deps: &[Arc<Record>]) {
-    for dep in deps {
+fn attach(inner: &Inner, id: u64, record: &Arc<Record>, deps: &[(u64, Arc<Record>)]) {
+    {
+        let mut state = lock(&record.state);
+        state.dependencies = deps.iter().map(|(dependency, _)| *dependency).collect();
+    }
+    for (_, dep) in deps {
         let completed = {
             let mut state = lock(&dep.state);
+            state.pending_dependents += 1;
             if state.completed {
                 true
             } else {
@@ -389,27 +465,52 @@ fn run_job(inner: &Inner, id: u64) {
 }
 
 fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
-    let (dependents, group) = {
+    let (dependents, group, dependencies) = {
         let mut state = lock(&record.state);
         state.completed = true;
-        (state.dependents.drain(..).collect::<Vec<_>>(), state.group)
+        (
+            state.dependents.drain(..).collect::<Vec<_>>(),
+            state.group,
+            std::mem::take(&mut state.dependencies),
+        )
     };
-    record.signal.notify_all();
     for dependent in dependents {
         if let Some(dependent_record) = lookup(inner, dependent) {
             release(inner, dependent, &dependent_record);
         }
     }
+    for dependency in dependencies {
+        release_dependency(inner, dependency);
+    }
+    mark_completed(inner, id);
+    retire_unreferenced(inner, id, record);
     if let Some(group_id) = group {
-        retire(inner, id);
         finish_group(inner, group_id);
     }
+    record.signal.notify_all();
     inner.live.fetch_sub(1, Ordering::AcqRel);
     notify(inner);
 }
 
-fn retire(inner: &Inner, id: u64) {
-    lock(&inner.records).remove(&id);
+fn release_dependency(inner: &Inner, id: u64) {
+    let Some(record) = lookup(inner, id) else {
+        return;
+    };
+    let retirable = {
+        let mut state = lock(&record.state);
+        state.pending_dependents = state.pending_dependents.saturating_sub(1);
+        state.pending_dependents == 0 && state.completed
+    };
+    if retirable {
+        lock(&inner.records).remove(&id);
+    }
+}
+
+fn retire_unreferenced(inner: &Inner, id: u64, record: &Arc<Record>) {
+    let unreferenced = lock(&record.state).pending_dependents == 0;
+    if unreferenced {
+        lock(&inner.records).remove(&id);
+    }
 }
 
 fn finish_group(inner: &Inner, group_id: u64) {
@@ -425,12 +526,14 @@ fn finish_group(inner: &Inner, group_id: u64) {
         state.completed = true;
         state.dependents.drain(..).collect::<Vec<_>>()
     };
-    record.signal.notify_all();
     for dependent in dependents {
         if let Some(dependent_record) = lookup(inner, dependent) {
             release(inner, dependent, &dependent_record);
         }
     }
+    mark_completed(inner, group_id);
+    retire_unreferenced(inner, group_id, &record);
+    record.signal.notify_all();
     notify(inner);
 }
 
@@ -444,7 +547,7 @@ mod tests {
         let handle = pool.schedule_parallel_for(64, 8, |_, _| {}, &[]);
         pool.complete(handle);
         assert!(pool.is_complete(handle));
-        assert_eq!(lock(&pool.inner.records).len(), 1);
+        assert_eq!(lock(&pool.inner.records).len(), 0);
     }
 
     #[test]
@@ -455,5 +558,36 @@ mod tests {
         let dependent = pool.schedule(|| {}, &[dependency]);
         pool.complete(dependent);
         assert!(pool.is_complete(dependent));
+    }
+
+    #[test]
+    fn completed_leaf_records_are_retired_so_the_record_map_stays_bounded() {
+        let pool = JobSystem::new(4);
+        let scheduled = 4_096;
+        for _ in 0..scheduled {
+            let dependency = pool.schedule(|| {}, &[]);
+            let dependent = pool.schedule(|| {}, &[dependency]);
+            pool.complete(dependent);
+        }
+        let records = lock(&pool.inner.records).len();
+        assert_eq!(records, 0, "records map holds {records} entries");
+    }
+
+    #[test]
+    fn a_completed_record_is_kept_while_a_pending_dependent_references_it() {
+        let pool = JobSystem::new(2);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let dependency = pool.schedule(|| {}, &[]);
+        let dependent = pool.schedule(
+            move || {
+                let _message = receiver.recv();
+            },
+            &[dependency],
+        );
+        pool.complete(dependency);
+        assert_eq!(lock(&pool.inner.records).len(), 2);
+        let _sent = sender.send(());
+        pool.complete(dependent);
+        assert_eq!(lock(&pool.inner.records).len(), 0);
     }
 }

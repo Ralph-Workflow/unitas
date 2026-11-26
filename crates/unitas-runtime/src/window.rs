@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
+use gilrs::ff::{
+    BaseEffect, BaseEffectType, Effect, EffectBuilder, Envelope, Repeat, Replay, Ticks,
+};
 use gilrs::{Axis, Button, Error as GilrsError, EventType, GamepadId, Gilrs};
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
@@ -35,13 +37,13 @@ use crate::Runtime;
 use crate::input::{
     GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_RIGHT_X, GAMEPAD_AXIS_RIGHT_Y,
     GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT, GAMEPAD_BUTTON_DPAD_RIGHT,
-    GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_EAST, GAMEPAD_BUTTON_LEFT_SHOULDER,
-    GAMEPAD_BUTTON_LEFT_STICK, GAMEPAD_BUTTON_LEFT_TRIGGER, GAMEPAD_BUTTON_NORTH,
-    GAMEPAD_BUTTON_RIGHT_SHOULDER, GAMEPAD_BUTTON_RIGHT_STICK, GAMEPAD_BUTTON_RIGHT_TRIGGER,
-    GAMEPAD_BUTTON_SELECT, GAMEPAD_BUTTON_SOUTH, GAMEPAD_BUTTON_START, GAMEPAD_BUTTON_WEST,
-    InputState, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT,
-    KEY_LEFT_ARROW, KEY_LEFT_CONTROL, KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW,
-    KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW, RumbleHandler,
+    GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_EAST, GAMEPAD_BUTTON_LEFT_STICK,
+    GAMEPAD_BUTTON_LEFT_TRIGGER, GAMEPAD_BUTTON_NORTH, GAMEPAD_BUTTON_RIGHT_STICK,
+    GAMEPAD_BUTTON_RIGHT_TRIGGER, GAMEPAD_BUTTON_SELECT, GAMEPAD_BUTTON_SOUTH,
+    GAMEPAD_BUTTON_START, GAMEPAD_BUTTON_WEST, InputState, KEY_BACKSPACE, KEY_DELETE,
+    KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT, KEY_LEFT_ARROW, KEY_LEFT_CONTROL, KEY_LEFT_SHIFT,
+    KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW, KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE,
+    KEY_TAB, KEY_UP_ARROW, RumbleHandler,
 };
 use crate::runtime::RenderCameraParams;
 
@@ -895,7 +897,7 @@ impl GamepadBackend {
                 with_delay: duration,
                 ..Default::default()
             },
-            envelope: Default::default(),
+            envelope: Envelope::default(),
         });
         builder.add_effect(BaseEffect {
             kind: BaseEffectType::Weak {
@@ -906,7 +908,7 @@ impl GamepadBackend {
                 with_delay: duration,
                 ..Default::default()
             },
-            envelope: Default::default(),
+            envelope: Envelope::default(),
         });
         let Ok(effect) = builder
             .gamepads(&[id])

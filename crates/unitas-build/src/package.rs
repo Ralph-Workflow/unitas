@@ -433,7 +433,7 @@ fn create_dir_all(path: &Path) -> Result<(), PackageError> {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<(), PackageError> {
+pub(crate) fn make_executable(path: &Path) -> Result<(), PackageError> {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = fs::metadata(path)
         .map_err(|error| PackageError::Io {
@@ -449,7 +449,7 @@ fn make_executable(path: &Path) -> Result<(), PackageError> {
 }
 
 #[cfg(not(unix))]
-fn make_executable(path: &Path) -> Result<(), PackageError> {
+pub(crate) fn make_executable(path: &Path) -> Result<(), PackageError> {
     let _ = path;
     Ok(())
 }

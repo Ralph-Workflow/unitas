@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::scene::{
@@ -39,6 +41,54 @@ use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
 pub enum LoadSceneMode {
     Single,
     Additive,
+}
+
+type DestroyChannel = Arc<Mutex<Vec<EntityId>>>;
+
+static DESTROY_CHANNELS: OnceLock<Mutex<HashMap<u64, DestroyChannel>>> = OnceLock::new();
+
+thread_local! {
+    static BOUND_DESTROY_CHANNEL: RefCell<Option<(u64, DestroyChannel)>> = const { RefCell::new(None) };
+}
+
+fn destroy_channels() -> &'static Mutex<HashMap<u64, DestroyChannel>> {
+    DESTROY_CHANNELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[unsafe(export_name = "unitas_runtime_bind_destroy_channel")]
+pub extern "C" fn unitas_runtime_bind_destroy_channel(handle: u64) -> i32 {
+    #[used]
+    static KEEP: extern "C" fn(u64) -> i32 = unitas_runtime_bind_destroy_channel;
+    let channel = {
+        let Ok(mut channels) = destroy_channels().lock() else {
+            return -1;
+        };
+        channels
+            .entry(handle)
+            .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
+            .clone()
+    };
+    BOUND_DESTROY_CHANNEL.with(|cell| {
+        *cell.borrow_mut() = Some((handle, channel));
+    });
+    0
+}
+
+#[unsafe(export_name = "unitas_runtime_mark_destroyed")]
+pub extern "C" fn unitas_runtime_mark_destroyed(handle: u64, entity: u64) -> i32 {
+    #[used]
+    static KEEP: extern "C" fn(u64, u64) -> i32 = unitas_runtime_mark_destroyed;
+    let Ok(channels) = destroy_channels().lock() else {
+        return -1;
+    };
+    let Some(channel) = channels.get(&handle) else {
+        return -1;
+    };
+    let Ok(mut requests) = channel.lock() else {
+        return -1;
+    };
+    requests.push(EntityId::new(entity));
+    0
 }
 
 pub struct LoadedScene {
@@ -266,6 +316,8 @@ pub struct Runtime {
     accumulator: f64,
     first_tick: bool,
     is_shutdown: bool,
+    destroy_handle: Option<u64>,
+    destroy_channel: Option<DestroyChannel>,
 }
 
 impl Runtime {
@@ -301,6 +353,8 @@ impl Runtime {
             accumulator: 0.0,
             first_tick: true,
             is_shutdown: false,
+            destroy_handle: None,
+            destroy_channel: None,
         })
     }
 
@@ -1115,14 +1169,26 @@ impl Runtime {
         self.tick_with_hook(delta_seconds, |_, f| f())
     }
 
-    pub fn tick_with_hook<H>(&mut self, delta_seconds: f64, mut hook: H) -> Result<(), RuntimeError>
+    pub fn tick_with_hook<H>(&mut self, delta_seconds: f64, hook: H) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        if self.is_shutdown {
+            return Err(RuntimeError::AlreadyShutdown);
+        }
+        self.adopt_destroy_channel();
+        self.apply_destroy_requests();
+        self.sweep_destroyed_entities();
+        let result = self.tick_frame(delta_seconds, hook);
+        self.drain_scene_changes();
+        result
+    }
+
+    fn tick_frame<H>(&mut self, delta_seconds: f64, mut hook: H) -> Result<(), RuntimeError>
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
         const EPSILON: f64 = 1e-9;
-        if self.is_shutdown {
-            return Err(RuntimeError::AlreadyShutdown);
-        }
         if self.first_tick {
             self.first_tick = false;
             if let Some(callbacks) = self.callbacks {
@@ -1282,6 +1348,60 @@ impl Runtime {
         self.active_scene
             .and_then(|index| self.scenes.get_mut(index))
             .map(|scene| &mut scene.graph)
+    }
+
+    pub fn mark_destroyed(&mut self, entity: EntityId) -> Result<(), RuntimeError> {
+        for scene in &mut self.scenes {
+            if scene.graph.contains(entity) {
+                return match scene.graph.mark_destroyed(entity) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(RuntimeError::EntityNotFound(entity)),
+                };
+            }
+        }
+        Err(RuntimeError::EntityNotFound(entity))
+    }
+
+    fn adopt_destroy_channel(&mut self) {
+        BOUND_DESTROY_CHANNEL.with(|cell| {
+            let Some((handle, channel)) = cell.borrow_mut().take() else {
+                return;
+            };
+            if let Some(current) = self.destroy_handle
+                && current != handle
+            {
+                return;
+            }
+            self.destroy_handle = Some(handle);
+            self.destroy_channel = Some(channel);
+        });
+    }
+
+    fn apply_destroy_requests(&mut self) {
+        let Some(channel) = self.destroy_channel.clone() else {
+            return;
+        };
+        let requests = {
+            let Ok(mut requests) = channel.lock() else {
+                return;
+            };
+            std::mem::take(&mut *requests)
+        };
+        for entity in requests {
+            let _ = self.mark_destroyed(entity);
+        }
+    }
+
+    fn sweep_destroyed_entities(&mut self) {
+        for scene in &mut self.scenes {
+            let _swept = scene.graph.sweep_destroyed();
+        }
+    }
+
+    fn drain_scene_changes(&mut self) {
+        for scene in &mut self.scenes {
+            let _changes = scene.graph.take_changes();
+        }
     }
 
     pub fn diagnostics(&self) -> Vec<(EntityId, &str)> {

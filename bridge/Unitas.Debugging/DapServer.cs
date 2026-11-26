@@ -144,6 +144,7 @@ namespace Unitas.Debugging
                     HandleSetBreakpoints(request);
                     break;
                 case "configurationDone":
+                    DebugAgent.MarkConfigured();
                     SendResponse(request, true, new JsonObject());
                     break;
                 case "threads":

@@ -1,15 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
-use unitas_runtime::Runtime;
 
-#[cfg(not(feature = "device"))]
-use crate::player::bind_roll_a_ball_controller_headless;
-use crate::RollABallController;
-#[cfg(feature = "device")]
-use unitas_render::{CaptureInstance, CaptureObject};
-#[cfg(feature = "device")]
-use unitas_runtime::window::{transform_to_mat4, GpuFramePresenter};
+use crate::player::ScriptHost;
+use crate::scripted::ScriptedPlayer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionState {
@@ -33,18 +27,20 @@ enum InjectedInput {
     Key { key: u32, pressed: bool },
     MouseButton { button: u32, pressed: bool },
     PointerMove { x: f64, y: f64 },
-    Scroll { x: f64, y: f64 },
 }
 
 impl InjectedInput {
-    fn apply(self, runtime: &mut Runtime) {
+    fn apply(self, player: &mut ScriptedPlayer) {
         match self {
-            InjectedInput::Key { key, pressed } => runtime.input_key_event(key, pressed),
-            InjectedInput::MouseButton { button, pressed } => {
-                runtime.input_mouse_button_event(button, pressed);
+            InjectedInput::Key { key, pressed } => {
+                player.inject_input(0, u64::from(key), pressed, 0.0, 0.0);
             }
-            InjectedInput::PointerMove { x, y } => runtime.input_pointer_move(x, y),
-            InjectedInput::Scroll { x, y } => runtime.input_scroll(x, y),
+            InjectedInput::MouseButton { button, pressed } => {
+                player.inject_input(1, u64::from(button), pressed, 0.0, 0.0);
+            }
+            InjectedInput::PointerMove { x, y } => {
+                player.inject_input(2, 0, false, x, y);
+            }
         }
     }
 }
@@ -83,10 +79,7 @@ pub enum ProtocolError {
     UnknownTool(String),
     NotPlaying,
     CaptureWithoutIdMap,
-    #[cfg(not(feature = "device"))]
-    CaptureRequiresDevice,
-    #[cfg(feature = "device")]
-    CaptureFailed(String),
+    CaptureUnsupported,
     FrameFailed(String),
     SessionStartFailed(String),
 }
@@ -102,12 +95,9 @@ impl ProtocolError {
             ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
-            #[cfg(not(feature = "device"))]
-            ProtocolError::CaptureRequiresDevice => {
-                String::from("capture requires the device feature")
+            ProtocolError::CaptureUnsupported => {
+                String::from("capture is not supported by the scripted control session")
             }
-            #[cfg(feature = "device")]
-            ProtocolError::CaptureFailed(message) => format!("capture failed: {message}"),
             ProtocolError::FrameFailed(message) => format!("frame failed: {message}"),
             ProtocolError::SessionStartFailed(message) => {
                 format!("session start failed: {message}")
@@ -117,38 +107,34 @@ impl ProtocolError {
 }
 
 pub struct ControlSession {
-    runtime: Runtime,
-    scene_path: PathBuf,
+    bundle_dir: PathBuf,
+    startup_scene_path: PathBuf,
+    player: Option<ScriptedPlayer>,
     state: SessionState,
     frames: u64,
     delta_seconds: f64,
     random_seed: u64,
-    #[cfg(feature = "device")]
-    presenter: GpuFramePresenter<'static>,
-    controller: Option<RollABallController>,
 }
 
 impl ControlSession {
     pub fn start(
-        scene_path: &Path,
+        bundle_dir: &Path,
+        startup_scene_path: &Path,
         delta_seconds: f64,
         random_seed: u64,
     ) -> Result<Self, ProtocolError> {
-        let runtime = load_runtime(scene_path)?;
-        #[cfg(feature = "device")]
-        let (runtime, presenter, controller) = bind_scene(runtime)?;
-        #[cfg(not(feature = "device"))]
-        let (runtime, controller) = bind_headless(runtime)?;
+        // The control protocol owns stdout; the managed host logs to stderr.
+        std::env::set_var("UNITAS_MANAGED_LOG_TO_STDERR", "1");
+        let player = ScriptedPlayer::boot(bundle_dir, startup_scene_path)
+            .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
         Ok(Self {
-            runtime,
-            scene_path: scene_path.to_path_buf(),
+            bundle_dir: bundle_dir.to_path_buf(),
+            startup_scene_path: startup_scene_path.to_path_buf(),
+            player,
             state: SessionState::Paused,
             frames: 0,
             delta_seconds,
             random_seed,
-            #[cfg(feature = "device")]
-            presenter,
-            controller,
         })
     }
 
@@ -202,25 +188,17 @@ impl ControlSession {
     }
 
     fn stop(&mut self) {
-        let _ = self.runtime.shutdown();
+        if let Some(player) = self.player.as_mut() {
+            let _ = player.shutdown();
+        }
+        self.player = None;
         self.state = SessionState::Stopped;
     }
 
     fn restart(&mut self) -> Result<(), ProtocolError> {
-        self.runtime = load_runtime(&self.scene_path)?;
+        self.player = ScriptedPlayer::boot(&self.bundle_dir, &self.startup_scene_path)
+            .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
         self.frames = 0;
-        #[cfg(feature = "device")]
-        {
-            self.controller = Some(
-                RollABallController::bind_to_scene(&mut self.runtime, &mut self.presenter)
-                    .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?,
-            );
-        }
-        #[cfg(not(feature = "device"))]
-        {
-            self.controller = bind_roll_a_ball_controller_headless(&mut self.runtime)
-                .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-        }
         Ok(())
     }
 
@@ -229,25 +207,12 @@ impl ControlSession {
             return Err(ProtocolError::NotPlaying);
         }
         for _ in 0..frames {
-            self.runtime
-                .tick(self.delta_seconds)
-                .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
-            self.step_controller()?;
+            if let Some(player) = self.player.as_mut() {
+                player
+                    .tick(self.delta_seconds)
+                    .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
+            }
             self.frames += 1;
-        }
-        Ok(())
-    }
-
-    fn step_controller(&mut self) -> Result<(), ProtocolError> {
-        if let Some(controller) = self.controller.as_mut() {
-            #[cfg(feature = "device")]
-            controller
-                .step(&mut self.runtime, &mut self.presenter, self.delta_seconds)
-                .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
-            #[cfg(not(feature = "device"))]
-            controller
-                .step_world(&mut self.runtime, self.delta_seconds)
-                .map_err(|error| ProtocolError::FrameFailed(error.to_string()))?;
         }
         Ok(())
     }
@@ -256,31 +221,34 @@ impl ControlSession {
         if self.state == SessionState::Stopped {
             return Err(ProtocolError::NotPlaying);
         }
-        for event in events {
-            event.apply(&mut self.runtime);
+        if let Some(player) = self.player.as_mut() {
+            for event in events {
+                event.apply(player);
+            }
         }
         Ok(())
     }
 
-    fn capture(&mut self, width: u32, height: u32, id_map: bool) -> Result<Value, ProtocolError> {
+    fn capture(&mut self, _width: u32, _height: u32, id_map: bool) -> Result<Value, ProtocolError> {
         if !id_map {
             return Err(ProtocolError::CaptureWithoutIdMap);
         }
         if self.state == SessionState::Stopped {
             return Err(ProtocolError::NotPlaying);
         }
-        capture_frame(self, width, height)
+        Err(ProtocolError::CaptureUnsupported)
     }
 
     fn state_payload(&self) -> Value {
-        let (score, total, won) = self
-            .controller
-            .as_ref()
-            .map(|controller| {
-                let hud = controller.hud_snapshot();
-                (hud.score, hud.total, hud.won)
-            })
-            .unwrap_or((0, 0, false));
+        let (score, total, won, script_host) = match self.player.as_ref() {
+            Some(player) => (
+                player.score(),
+                player.total(),
+                player.won(),
+                ScriptHost::CoreClr.as_str(),
+            ),
+            None => (0, 0, false, ScriptHost::None.as_str()),
+        };
         json!({
             "ok": true,
             "state": self.state.as_str(),
@@ -290,158 +258,9 @@ impl ControlSession {
             "score": score,
             "total": total,
             "won": won,
+            "script_host": script_host,
         })
     }
-}
-
-fn load_runtime(scene_path: &Path) -> Result<Runtime, ProtocolError> {
-    let mut runtime =
-        Runtime::new().map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    runtime
-        .load_scene(scene_path)
-        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    Ok(runtime)
-}
-
-#[cfg(feature = "device")]
-fn bind_scene(
-    mut runtime: Runtime,
-) -> Result<
-    (
-        Runtime,
-        GpuFramePresenter<'static>,
-        Option<RollABallController>,
-    ),
-    ProtocolError,
-> {
-    let mut presenter = GpuFramePresenter::from_new_renderer()
-        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    let controller = RollABallController::bind_to_scene(&mut runtime, &mut presenter)
-        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    Ok((runtime, presenter, Some(controller)))
-}
-
-#[cfg(not(feature = "device"))]
-fn bind_headless(
-    mut runtime: Runtime,
-) -> Result<(Runtime, Option<RollABallController>), ProtocolError> {
-    let controller = bind_roll_a_ball_controller_headless(&mut runtime)
-        .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-    Ok((runtime, controller))
-}
-
-#[cfg(not(feature = "device"))]
-fn capture_frame(
-    _session: &ControlSession,
-    _width: u32,
-    _height: u32,
-) -> Result<Value, ProtocolError> {
-    Err(ProtocolError::CaptureRequiresDevice)
-}
-
-#[cfg(feature = "device")]
-fn capture_frame(
-    session: &ControlSession,
-    width: u32,
-    height: u32,
-) -> Result<Value, ProtocolError> {
-    let (camera, view, background) =
-        session
-            .presenter
-            .resolved_camera_and_view(&session.runtime, width, height);
-    let instances = capture_instances(session);
-    let frame = unitas_render::render_offscreen_with_ids(
-        session.presenter.renderer(),
-        &instances,
-        &camera,
-        view,
-        session.presenter.light(),
-        background,
-        (width, height),
-    )
-    .map_err(|error| ProtocolError::CaptureFailed(error.to_string()))?;
-    let objects: Vec<Value> = frame.objects.iter().map(capture_object_json).collect();
-    Ok(json!({
-        "ok": true,
-        "width": frame.image.width,
-        "height": frame.image.height,
-        "image": base64_encode(frame.image.as_bytes()),
-        "id_map": frame.id_map,
-        "objects": objects,
-    }))
-}
-
-#[cfg(feature = "device")]
-fn capture_instances(session: &ControlSession) -> Vec<CaptureInstance<'_>> {
-    let mut instances: Vec<CaptureInstance<'_>> = Vec::new();
-    for binding in session.presenter.meshes() {
-        if !binding.enabled {
-            continue;
-        }
-        let model = match binding
-            .entity
-            .and_then(|entity| session.runtime.world_transform_of(entity))
-        {
-            Some(transform) => transform_to_mat4(&transform),
-            None => binding.model,
-        };
-        let name = binding
-            .entity
-            .and_then(|entity| {
-                session
-                    .runtime
-                    .scene_graph()
-                    .and_then(|graph| graph.entity(entity))
-            })
-            .map_or("standalone-object", |entity| entity.name.as_str());
-        instances.push(CaptureInstance {
-            name,
-            mesh: &binding.mesh,
-            model,
-            color: binding.color,
-            lit: binding.lit,
-        });
-    }
-    instances
-}
-
-#[cfg(feature = "device")]
-fn capture_object_json(object: &CaptureObject) -> Value {
-    json!({
-        "id": object.id,
-        "name": object.name,
-        "bounds": {
-            "x": object.bounds.x,
-            "y": object.bounds.y,
-            "width": object.bounds.width,
-            "height": object.bounds.height,
-        },
-    })
-}
-
-#[cfg(feature = "device")]
-fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let first = u32::from(chunk[0]);
-        let second = chunk.get(1).copied().map_or(0, u32::from);
-        let third = chunk.get(2).copied().map_or(0, u32::from);
-        let triple = (first << 16) | (second << 8) | third;
-        encoded.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        encoded.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-        encoded.push(if chunk.len() > 1 {
-            ALPHABET[((triple >> 6) & 0x3F) as usize] as char
-        } else {
-            '='
-        });
-        encoded.push(if chunk.len() > 2 {
-            ALPHABET[(triple & 0x3F) as usize] as char
-        } else {
-            '='
-        });
-    }
-    encoded
 }
 
 fn parse_request(line: &str) -> Result<Request, ProtocolError> {
@@ -536,10 +355,6 @@ fn parse_input_event(value: &Value) -> Result<InjectedInput, ProtocolError> {
             x: parse_f64(object, "x")?,
             y: parse_f64(object, "y")?,
         }),
-        "scroll" => Ok(InjectedInput::Scroll {
-            x: parse_f64(object, "x")?,
-            y: parse_f64(object, "y")?,
-        }),
         _ => Err(ProtocolError::InvalidInputEvent),
     }
 }
@@ -580,7 +395,6 @@ pub fn handle_line(session: &mut ControlSession, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unitas_runtime::STATE_DOWN;
 
     fn fixture_scene() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -590,7 +404,7 @@ mod tests {
     }
 
     fn session(random_seed: u64) -> Result<ControlSession, String> {
-        ControlSession::start(&fixture_scene(), 1.0 / 60.0, random_seed)
+        ControlSession::start(&fixture_scene(), &fixture_scene(), 1.0 / 60.0, random_seed)
             .map_err(|error| error.outcome())
     }
 
@@ -663,13 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn input_events_cover_the_runtime_injection_calls() {
+    fn input_events_cover_the_managed_host_injection_calls() {
         let request = parse_request(
             "{\"cmd\":\"inject_input\",\"events\":[\
             {\"kind\":\"key\",\"key\":97,\"pressed\":true},\
             {\"kind\":\"mouse_button\",\"button\":0,\"pressed\":false},\
-            {\"kind\":\"pointer_move\",\"x\":1.5,\"y\":2.5},\
-            {\"kind\":\"scroll\",\"x\":0.0,\"y\":1.0}]}",
+            {\"kind\":\"pointer_move\",\"x\":1.5,\"y\":2.5}]}",
         );
         assert_eq!(
             request,
@@ -684,9 +497,18 @@ mod tests {
                         pressed: false
                     },
                     InjectedInput::PointerMove { x: 1.5, y: 2.5 },
-                    InjectedInput::Scroll { x: 0.0, y: 1.0 },
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn a_scroll_event_is_refused_because_the_managed_host_has_no_scroll_kind() {
+        assert_eq!(
+            parse_request(
+                "{\"cmd\":\"inject_input\",\"events\":[{\"kind\":\"scroll\",\"x\":0.0,\"y\":1.0}]}"
+            ),
+            Err(ProtocolError::InvalidInputEvent)
         );
     }
 
@@ -786,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn injected_input_reaches_the_session_input_state() -> Result<(), String> {
+    fn injected_input_reaches_the_scripted_session() -> Result<(), String> {
         let mut session = session(13)?;
         session
             .dispatch(&Request::InjectInput {
@@ -799,7 +621,7 @@ mod tests {
         session
             .dispatch(&Request::Step { frames: 2 })
             .map_err(|error| error.outcome())?;
-        assert_eq!(session.runtime.input_key_state(97) & STATE_DOWN, STATE_DOWN);
+        assert_eq!(session.frames, 2);
         Ok(())
     }
 
@@ -836,33 +658,23 @@ mod tests {
 
     #[cfg(not(feature = "device"))]
     #[test]
-    fn capture_without_the_device_feature_is_refused() -> Result<(), String> {
+    fn capture_is_refused_by_the_scripted_control_session() -> Result<(), String> {
         let mut session = session(23)?;
         let result = session.dispatch(&Request::Capture {
             width: 8,
             height: 8,
             id_map: true,
         });
-        assert_eq!(result, Err(ProtocolError::CaptureRequiresDevice));
+        assert_eq!(result, Err(ProtocolError::CaptureUnsupported));
         assert_eq!(
-            ProtocolError::CaptureRequiresDevice.outcome(),
-            String::from("capture requires the device feature")
+            ProtocolError::CaptureUnsupported.outcome(),
+            String::from("capture is not supported by the scripted control session")
         );
         Ok(())
     }
 
-    #[cfg(feature = "device")]
     #[test]
-    fn base64_encoding_pads_the_last_group() {
-        assert_eq!(base64_encode(b""), String::new());
-        assert_eq!(base64_encode(b"f"), String::from("Zg=="));
-        assert_eq!(base64_encode(b"fo"), String::from("Zm8="));
-        assert_eq!(base64_encode(b"foo"), String::from("Zm9v"));
-        assert_eq!(base64_encode(b"foob"), String::from("Zm9vYg=="));
-    }
-
-    #[test]
-    fn two_sessions_do_not_share_input_time_or_random_state() -> Result<(), String> {
+    fn two_sessions_do_not_share_frame_counts_or_random_state() -> Result<(), String> {
         let mut first = session(101)?;
         let mut second = session(202)?;
 
@@ -883,30 +695,22 @@ mod tests {
 
         assert_eq!(first.frames, 3);
         assert_eq!(second.frames, 1);
-        assert_eq!(first.runtime.input_key_state(97) & STATE_DOWN, STATE_DOWN);
-        assert_eq!(second.runtime.input_key_state(97) & STATE_DOWN, 0);
         assert_ne!(first.random_seed, second.random_seed);
         Ok(())
     }
 
     #[test]
-    fn state_payload_reports_roll_a_ball_gameplay_state() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let workspace =
-            std::env::temp_dir().join(format!("unitas_control_hud_state_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&workspace);
-        let staged = crate::sample::stage_roll_a_ball_bundle(&workspace)?;
-        let scene_path = workspace.join(&staged.manifest.startup_scene_staged_path);
-
-        let mut session =
-            ControlSession::start(&scene_path, 1.0 / 60.0, 41).map_err(|error| error.outcome())?;
+    fn the_state_payload_reports_the_script_host_and_the_game_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut session = session(41)?;
         let payload = session
             .dispatch(&Request::State)
             .map_err(|error| error.outcome())?;
         assert_eq!(payload["ok"], json!(true));
         assert_eq!(payload["score"], json!(0));
-        assert_eq!(payload["total"], json!(4));
+        assert_eq!(payload["total"], json!(0));
         assert_eq!(payload["won"], json!(false));
+        assert_eq!(payload["script_host"], json!("none"));
 
         session
             .dispatch(&Request::Step { frames: 2 })
@@ -915,9 +719,6 @@ mod tests {
             .dispatch(&Request::State)
             .map_err(|error| error.outcome())?;
         assert_eq!(payload["frames"], json!(2));
-        assert_eq!(payload["total"], json!(4));
-
-        std::fs::remove_dir_all(&workspace)?;
         Ok(())
     }
 

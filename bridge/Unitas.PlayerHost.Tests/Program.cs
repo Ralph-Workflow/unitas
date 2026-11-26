@@ -9,7 +9,7 @@ using UnityEngine;
 namespace Unitas.PlayerHost.Tests
 {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate int PlayerInitDelegate(ulong runtimeHandle, IntPtr bundleRoot, IntPtr persistRoot);
+    public delegate int PlayerInitDelegate(ulong runtimeHandle, IntPtr bundleRoot, IntPtr persistRoot, IntPtr startupScene);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int PlayerTickDelegate(double deltaSeconds);
@@ -22,6 +22,7 @@ namespace Unitas.PlayerHost.Tests
         public static int Main()
         {
             PlayerHostBootTests.Run();
+            PlayerHostScenePathTests.Run();
             PlayerHostArtifactTests.Run();
             return Check.FailureCount > 0 ? 1 : 0;
         }
@@ -96,7 +97,7 @@ namespace Unitas.PlayerHost.Tests
             PlayerTickDelegate tick = GetEntry<PlayerTickDelegate>(entry, "UnitasPlayerTick");
             PlayerShutdownDelegate shutdown = GetEntry<PlayerShutdownDelegate>(entry, "UnitasPlayerShutdown");
 
-            int invalidInit = init(0UL, IntPtr.Zero, IntPtr.Zero);
+            int invalidInit = init(0UL, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
             Check.Equal("isolated host rejects an invalid runtime handle", 1, invalidInit);
             Check.Equal("isolated host reports NotInitialized before boot", 7, tick(0.02));
@@ -150,15 +151,18 @@ namespace Unitas.PlayerHost.Tests
 
                 IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
                 IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
+                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "RollABall.unity");
+                IntPtr scenePtr = Marshal.StringToCoTaskMemUTF8(scenePath);
                 int initResult;
                 try
                 {
-                    initResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr);
+                    initResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, scenePtr);
                 }
                 finally
                 {
                     Marshal.FreeCoTaskMem(bundlePtr);
                     Marshal.FreeCoTaskMem(persistPtr);
+                    Marshal.FreeCoTaskMem(scenePtr);
                 }
 
                 Check.Equal("UnitasPlayerInit returns success", 0, initResult);
@@ -223,7 +227,7 @@ namespace Unitas.PlayerHost.Tests
             return count;
         }
 
-        private static void CompileGameAssembly(string sampleRoot, string managedDir)
+        public static void CompileGameAssembly(string sampleRoot, string managedDir)
         {
             var options = new ScriptCompilationOptions
             {
@@ -237,7 +241,7 @@ namespace Unitas.PlayerHost.Tests
             Check.That("generated glue assembly staged in Managed", result.GeneratedGlueAssemblyPath != null);
         }
 
-        private static void StageBundle(string sampleRoot, string bundleRoot)
+        public static void StageBundle(string sampleRoot, string bundleRoot)
         {
             foreach (string directory in new[] { "Assets", "ProjectSettings", "Packages" })
             {
@@ -276,7 +280,7 @@ namespace Unitas.PlayerHost.Tests
             throw new InvalidOperationException("Could not locate repository root from " + AppContext.BaseDirectory);
         }
 
-        private static void TryDelete(string path)
+        public static void TryDelete(string path)
         {
             try
             {

@@ -336,7 +336,7 @@ pub const SUPPORTED_PACKAGE_MATRIX: &[PackageMatrixEntry] = &[
         state: CompatibilityState::Unsupported,
         owning_spec: "scripting-runtime.md",
         owning_feature_id: "RUN-011",
-        state_notes: "Unsupported: no job system and no Burst compilation exist; jobs do not schedule and Burst-compiled code does not run",
+        state_notes: "Unsupported: a job system exists and jobs schedule, but no Burst compilation exists and Burst-compiled code does not run",
     },
     PackageMatrixEntry {
         package_id: "com.unity.mathematics",

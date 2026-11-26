@@ -1,23 +1,32 @@
 using System;
 using System.Runtime.InteropServices;
+using Unitas.Bridge;
 
 namespace Unitas.PlayerHost
 {
     public static class PlayerHostEntry
     {
-        // The managed entry points carry the native ABI; the unmanaged exports
-        // forward to them so a managed host reaches the same code path without
-        // reflection or function pointers.
-        public static int Init(ulong runtimeHandle, IntPtr bundleRoot, IntPtr persistRoot)
+        public static int Init(
+            ulong runtimeHandle,
+            IntPtr bundleRoot,
+            IntPtr persistRoot,
+            IntPtr startupScenePath)
         {
             string? bundle = bundleRoot == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(bundleRoot);
             string? persist = persistRoot == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(persistRoot);
-            return PlayerHostCore.Init(runtimeHandle, bundle, persist);
+            string? scene = startupScenePath == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(startupScenePath);
+            return PlayerHostCore.Init(runtimeHandle, bundle, persist, scene);
         }
 
-        public static int Tick(double deltaSeconds)
+        public static int Tick(
+            double deltaSeconds,
+            IntPtr hudBuffer = default,
+            int hudCapacity = 0,
+            IntPtr scoreOut = default,
+            IntPtr totalOut = default,
+            IntPtr wonOut = default)
         {
-            return PlayerHostCore.Tick(deltaSeconds);
+            return PlayerHostCore.Tick(deltaSeconds, hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
         }
 
         public static int Shutdown()
@@ -25,22 +34,62 @@ namespace Unitas.PlayerHost
             return PlayerHostCore.Shutdown();
         }
 
-        [UnmanagedCallersOnly]
-        public static int UnitasPlayerInit(ulong runtimeHandle, IntPtr bundleRoot, IntPtr persistRoot)
+        public static int InjectInput(ulong kind, ulong code, byte pressed, double x, double y)
         {
-            return Init(runtimeHandle, bundleRoot, persistRoot);
+            BridgeHost? host = PlayerHostCore.Host;
+            if (host == null)
+            {
+                return (int)PlayerHostStage.NotInitialized;
+            }
+
+            switch (kind)
+            {
+                case 0:
+                    host.InjectKey((uint)code, pressed != 0);
+                    return (int)PlayerHostStage.Ok;
+                case 1:
+                    host.InjectMouseButton((int)code, pressed != 0);
+                    return (int)PlayerHostStage.Ok;
+                case 2:
+                    host.InjectPointerPosition(x, y);
+                    return (int)PlayerHostStage.Ok;
+                default:
+                    return (int)PlayerHostStage.InvalidArgument;
+            }
         }
 
         [UnmanagedCallersOnly]
-        public static int UnitasPlayerTick(double deltaSeconds)
+        public static int UnitasPlayerInit(
+            ulong runtimeHandle,
+            IntPtr bundleRoot,
+            IntPtr persistRoot,
+            IntPtr startupScenePath)
         {
-            return Tick(deltaSeconds);
+            return Init(runtimeHandle, bundleRoot, persistRoot, startupScenePath);
+        }
+
+        [UnmanagedCallersOnly]
+        public static int UnitasPlayerTick(
+            double deltaSeconds,
+            IntPtr hudBuffer,
+            int hudCapacity,
+            IntPtr scoreOut,
+            IntPtr totalOut,
+            IntPtr wonOut)
+        {
+            return Tick(deltaSeconds, hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
         }
 
         [UnmanagedCallersOnly]
         public static int UnitasPlayerShutdown()
         {
             return Shutdown();
+        }
+
+        [UnmanagedCallersOnly]
+        public static int UnitasPlayerInjectInput(ulong kind, ulong code, byte pressed, double x, double y)
+        {
+            return InjectInput(kind, code, pressed, x, y);
         }
     }
 }

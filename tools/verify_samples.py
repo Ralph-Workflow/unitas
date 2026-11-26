@@ -36,7 +36,7 @@ RUN_BUDGET_SECONDS = 300.0
 CONTROL_STDIO_CHUNK_FRAMES = 30
 CONTROL_STDIO_MAX_FRAMES = 300
 CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
-CONTROL_STATE_FIELDS = ("score", "total", "won")
+CONTROL_STATE_FIELDS = ("score", "total", "won", "script_host")
 
 
 class PackagedProofError(Exception):
@@ -312,6 +312,13 @@ def control_state_score(payload: dict[str, object]) -> int:
     if missing:
         names = ", ".join(missing)
         message = f"control-stdio state response lacks fields: {names}"
+        raise PackagedProofError(message)
+    script_host = payload["script_host"]
+    if script_host != "coreclr":
+        message = (
+            f"control-stdio state response reports script_host={script_host!r}; "
+            "the packaged player did not host the game's scripts on CoreCLR"
+        )
         raise PackagedProofError(message)
     score = payload["score"]
     if not isinstance(score, int) or isinstance(score, bool):

@@ -1,19 +1,31 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Unitas.Debugging
 {
     public static class DebugAgent
     {
+        public const string DapPortEnvironmentVariable = "UNITAS_DAP_PORT";
+
+        private const int SelfStartTimeoutMilliseconds = 10000;
+
         private static readonly object Gate = new object();
         private static readonly Dictionary<(string File, int Line), string?> Breakpoints = new Dictionary<(string File, int Line), string?>();
         private static SequencePointTable _sequencePoints = new SequencePointTable();
         private static DebugSession? _session;
         private static int _callDepth;
+        private static int _selfStartState;
+        private static bool _configured;
+        private static long _selfStartDeadline;
+        private static int _selfStartedPort;
+        private static TcpListener? _selfStartedListener;
+        private static TcpClient? _selfStartedClient;
 
         public static void RegisterSequencePoints(SequencePointTable table)
         {
@@ -162,6 +174,7 @@ namespace Unitas.Debugging
 
         public static void HitLocation(string file, int line, object?[] locals)
         {
+            EnsureDebugSession();
             SequencePoint? point;
             int depth;
             lock (Gate)
@@ -193,6 +206,7 @@ namespace Unitas.Debugging
 
         public static void Hit(int sequencePointId, object?[] locals, int depth)
         {
+            EnsureDebugSession();
             SequencePoint? point;
             DebugSession? session;
             lock (Gate)
@@ -232,6 +246,185 @@ namespace Unitas.Debugging
             }
             DebugFrame frame = new DebugFrame(sequencePointId, point.Method, point.File, point.Line, point.LocalNames, locals, depth);
             session?.Stop(frame, stopReason);
+        }
+
+        public static void Hit(string file, int line, string method, IReadOnlyList<string> localNames, object?[] locals)
+        {
+            ArgumentNullException.ThrowIfNull(localNames);
+            ArgumentNullException.ThrowIfNull(locals);
+            EnsureDebugSession();
+            DebugSession? session;
+            SequencePoint? point;
+            int depth;
+            lock (Gate)
+            {
+                session = _session;
+                depth = _callDepth;
+                point = _sequencePoints.FindByLocation(file, line);
+            }
+            if (session == null)
+            {
+                return;
+            }
+            string stopReason = string.Empty;
+            bool shouldStop = false;
+            if (session.TryConsumeStepOrPause(depth, out string stepOrPauseReason))
+            {
+                shouldStop = true;
+                stopReason = stepOrPauseReason;
+            }
+            else
+            {
+                string? condition;
+                bool hasBreakpoint;
+                lock (Gate)
+                {
+                    hasBreakpoint = Breakpoints.TryGetValue((file ?? string.Empty, line), out condition);
+                }
+                if (hasBreakpoint && (string.IsNullOrEmpty(condition) || ConditionEvaluator.Evaluate(condition, localNames, locals)))
+                {
+                    shouldStop = true;
+                    stopReason = "breakpoint";
+                    session.ClearStepAndPause();
+                }
+            }
+            if (!shouldStop)
+            {
+                return;
+            }
+            DebugFrame frame = new DebugFrame(
+                point?.Id ?? 0,
+                point != null && !string.IsNullOrEmpty(point.Method) ? point.Method : method,
+                file ?? string.Empty,
+                line,
+                localNames,
+                locals,
+                depth);
+            session.Stop(frame, stopReason);
+        }
+
+        public static int? DapPort
+        {
+            get
+            {
+                int port = Volatile.Read(ref _selfStartedPort);
+                return port > 0 ? port : (int?)null;
+            }
+        }
+
+        public static void StopSelfStartedListener()
+        {
+            TcpListener? listener;
+            TcpClient? client;
+            DebugSession? session;
+            lock (Gate)
+            {
+                listener = _selfStartedListener;
+                client = _selfStartedClient;
+                session = _session;
+                _selfStartedListener = null;
+                _selfStartedClient = null;
+                Volatile.Write(ref _selfStartedPort, 0);
+                Volatile.Write(ref _selfStartDeadline, 0);
+                Volatile.Write(ref _selfStartState, 0);
+                _configured = false;
+            }
+            session?.Dispose();
+            client?.Close();
+            listener?.Stop();
+        }
+
+        internal static void MarkConfigured()
+        {
+            _configured = true;
+            Volatile.Write(ref _selfStartState, 2);
+        }
+
+        private static void EnsureDebugSession()
+        {
+            int state = Volatile.Read(ref _selfStartState);
+            if (state == 2)
+            {
+                return;
+            }
+            if (state == 0)
+            {
+                bool hasSession;
+                lock (Gate)
+                {
+                    hasSession = _session != null;
+                }
+                if (hasSession)
+                {
+                    return;
+                }
+                string? portText = Environment.GetEnvironmentVariable(DapPortEnvironmentVariable);
+                if (string.IsNullOrEmpty(portText))
+                {
+                    return;
+                }
+                lock (Gate)
+                {
+                    if (Volatile.Read(ref _selfStartState) == 0)
+                    {
+                        StartSelfStartedListener(portText);
+                    }
+                }
+                state = Volatile.Read(ref _selfStartState);
+            }
+            if (state != 1)
+            {
+                return;
+            }
+            long remaining = Volatile.Read(ref _selfStartDeadline) - Environment.TickCount64;
+            if (remaining > 0)
+            {
+                SpinWait.SpinUntil(() => _configured, (int)Math.Min(remaining, int.MaxValue));
+            }
+        }
+
+        private static void Diag(string message)
+        {
+            File.AppendAllText("/tmp/u6_diag.log", message + "\n");
+        }
+
+        private static void StartSelfStartedListener(string portText)
+        {
+            File.AppendAllText("/tmp/u6_diag.log", "start: begin\n");
+            if (!int.TryParse(portText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int port) || port < 0 || port > 65535)
+            {
+                throw new InvalidOperationException(
+                    DapPortEnvironmentVariable + " must be a TCP port number between 0 and 65535.");
+            }
+            TcpListener listener = BeginLoopbackListener(IPAddress.Loopback, port);
+            _selfStartedListener = listener;
+            Volatile.Write(ref _selfStartedPort, ((IPEndPoint)listener.LocalEndpoint).Port);
+            Volatile.Write(ref _selfStartDeadline, Environment.TickCount64 + SelfStartTimeoutMilliseconds);
+            Volatile.Write(ref _selfStartState, 1);
+            File.AppendAllText("/tmp/u6_diag.log", "start: listening on " + Volatile.Read(ref _selfStartedPort).ToString(CultureInfo.InvariantCulture) + "\n");
+            _ = Task.Run(() => AcceptSelfStartedClientAsync(listener));
+        }
+
+        private static async Task AcceptSelfStartedClientAsync(TcpListener listener)
+        {
+            try
+            {
+                Diag("accept: waiting");
+                TcpClient client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                Diag("accept: got client");
+                _selfStartedClient = client;
+                BeginSession(client.GetStream());
+                Diag("accept: session begun");
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
 
         internal static void MarkLaunched()

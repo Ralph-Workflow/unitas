@@ -4,6 +4,9 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Unitas.Scripting
 {
@@ -1572,6 +1575,296 @@ namespace Unitas.Scripting
             }
 
             return lines;
+        }
+
+        public static string GenerateInstrumentedScriptSource(
+            string sourceText,
+            string scriptPath,
+            bool debuggingEnabled,
+            HashSet<string>? defines = null)
+        {
+            if (!debuggingEnabled || string.IsNullOrEmpty(sourceText))
+            {
+                return sourceText;
+            }
+
+            CSharpParseOptions parseOptions = new CSharpParseOptions(LanguageVersion.CSharp9);
+            if (defines != null && defines.Count > 0)
+            {
+                parseOptions = parseOptions.WithPreprocessorSymbols(defines);
+            }
+
+            SyntaxNode root = CSharpSyntaxTree.ParseText(sourceText, parseOptions).GetRoot();
+            InstrumentingRewriter rewriter = new InstrumentingRewriter(scriptPath ?? string.Empty);
+            SyntaxNode rewritten = rewriter.Visit(root) ?? root;
+            return rewritten.ToFullString();
+        }
+
+        private sealed class InstrumentingRewriter : CSharpSyntaxRewriter
+        {
+            private readonly string _scriptPath;
+
+            public InstrumentingRewriter(string scriptPath)
+            {
+                _scriptPath = scriptPath;
+            }
+
+            public override SyntaxNode? VisitMethodDeclaration(MethodDeclarationSyntax node)
+            {
+                MethodDeclarationSyntax visited = (MethodDeclarationSyntax)base.VisitMethodDeclaration(node)!;
+                if (visited.Body == null || visited.ReturnType is RefTypeSyntax)
+                {
+                    return visited;
+                }
+                return visited.WithBody(WrapBody(visited.Body));
+            }
+
+            public override SyntaxNode? VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
+            {
+                ConstructorDeclarationSyntax visited = (ConstructorDeclarationSyntax)base.VisitConstructorDeclaration(node)!;
+                if (visited.Body == null)
+                {
+                    return visited;
+                }
+                return visited.WithBody(WrapBody(visited.Body));
+            }
+
+            public override SyntaxNode? VisitBlock(BlockSyntax node)
+            {
+                BlockSyntax rewritten = (BlockSyntax)base.VisitBlock(node)!;
+                MethodScope? scope = FindScope(node);
+                if (scope == null)
+                {
+                    return rewritten;
+                }
+
+                List<string> names = new List<string>(scope.Parameters);
+                names.AddRange(CollectEnclosingLocals(node));
+                List<StatementSyntax> statements = new List<StatementSyntax>();
+                for (int i = 0; i < node.Statements.Count; i++)
+                {
+                    StatementSyntax original = node.Statements[i];
+                    statements.Add(BuildProbe(original, scope.MethodName, names));
+                    statements.Add(rewritten.Statements[i]);
+                    names.AddRange(DeclaredLocals(original));
+                }
+
+                return rewritten.WithStatements(SyntaxFactory.List<StatementSyntax>(statements));
+            }
+
+            private StatementSyntax BuildProbe(StatementSyntax statement, string methodName, IReadOnlyList<string> names)
+            {
+                int line = statement.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                List<string> unique = UniqueNames(names);
+                string nameArguments = string.Join(", ", unique.ConvertAll(name => SyntaxFactory.Literal(name).ToFullString()));
+                string valueArguments = string.Join(", ", unique.ConvertAll(EscapeIdentifier));
+                string text = "Unitas.Debugging.DebugAgent.Hit("
+                    + SyntaxFactory.Literal(_scriptPath).ToFullString()
+                    + ", "
+                    + line.ToString(CultureInfo.InvariantCulture)
+                    + ", "
+                    + SyntaxFactory.Literal(methodName).ToFullString()
+                    + ", new string[] { "
+                    + nameArguments
+                    + " }, new object[] { "
+                    + valueArguments
+                    + " });";
+                StatementSyntax probe = SyntaxFactory.ParseStatement(text);
+
+                SyntaxTriviaList leading = statement.GetLeadingTrivia();
+                SyntaxTrivia indentation = default;
+                if (leading.Count > 0 && leading[leading.Count - 1].IsKind(SyntaxKind.WhitespaceTrivia))
+                {
+                    indentation = leading[leading.Count - 1];
+                    leading = leading.RemoveAt(leading.Count - 1);
+                }
+
+                return probe
+                    .WithLeadingTrivia(leading.Add(indentation))
+                    .WithTrailingTrivia(SyntaxFactory.TriviaList(SyntaxFactory.ElasticCarriageReturnLineFeed, indentation));
+            }
+
+            private static BlockSyntax WrapBody(BlockSyntax body)
+            {
+                SyntaxTrivia indentation = GetIndentation(body.Statements.Count > 0 ? body.Statements[0] : null);
+                StatementSyntax enter = SyntaxFactory.ParseStatement("Unitas.Debugging.DebugAgent.EnterFrame();")
+                    .WithLeadingTrivia(SyntaxFactory.TriviaList(indentation))
+                    .WithTrailingTrivia(SyntaxFactory.TriviaList(SyntaxFactory.ElasticCarriageReturnLineFeed));
+                BlockSyntax tryBody = body.WithStatements(body.Statements.Insert(0, enter));
+                BlockSyntax finallyBody = SyntaxFactory.Block(
+                    SyntaxFactory.ParseStatement("Unitas.Debugging.DebugAgent.LeaveFrame();"));
+                TryStatementSyntax tryStatement = SyntaxFactory.TryStatement(
+                    tryBody,
+                    SyntaxFactory.List<CatchClauseSyntax>(),
+                    SyntaxFactory.FinallyClause(finallyBody));
+                return SyntaxFactory.Block(tryStatement).WithTriviaFrom(body);
+            }
+
+            private static MethodScope? FindScope(BlockSyntax block)
+            {
+                for (SyntaxNode? current = block.Parent; current != null; current = current.Parent)
+                {
+                    if (current is MethodDeclarationSyntax method)
+                    {
+                        return new MethodScope(
+                            BuildMemberName(method, method.Identifier.Text),
+                            CollectParameters(method.ParameterList.Parameters));
+                    }
+                    if (current is ConstructorDeclarationSyntax constructor)
+                    {
+                        return new MethodScope(
+                            BuildMemberName(constructor, constructor.Identifier.Text),
+                            CollectParameters(constructor.ParameterList.Parameters));
+                    }
+                }
+
+                return null;
+            }
+
+            private static string BuildMemberName(SyntaxNode member, string memberName)
+            {
+                List<string> parts = new List<string>();
+                for (SyntaxNode? current = member.Parent; current != null; current = current.Parent)
+                {
+                    if (current is NamespaceDeclarationSyntax namespaceDeclaration)
+                    {
+                        parts.Insert(0, namespaceDeclaration.Name.ToString());
+                    }
+                    else if (current is FileScopedNamespaceDeclarationSyntax fileScoped)
+                    {
+                        parts.Insert(0, fileScoped.Name.ToString());
+                    }
+                    else if (current is TypeDeclarationSyntax type)
+                    {
+                        parts.Insert(0, type.Identifier.Text);
+                    }
+                }
+
+                parts.Add(memberName);
+                return string.Join(".", parts);
+            }
+
+            private static List<string> CollectParameters(SeparatedSyntaxList<ParameterSyntax> parameters)
+            {
+                List<string> names = new List<string>();
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    ParameterSyntax parameter = parameters[i];
+                    if (parameter.Modifiers.Any(SyntaxKind.OutKeyword))
+                    {
+                        continue;
+                    }
+                    names.Add(parameter.Identifier.Text);
+                }
+
+                return names;
+            }
+
+            private static List<string> CollectEnclosingLocals(BlockSyntax block)
+            {
+                List<string> names = new List<string>();
+                for (SyntaxNode? current = block.Parent; current != null; current = current.Parent)
+                {
+                    if (current is MethodDeclarationSyntax || current is ConstructorDeclarationSyntax)
+                    {
+                        break;
+                    }
+                    if (current is not BlockSyntax outer)
+                    {
+                        continue;
+                    }
+                    SyntaxNode pathChild = FindPathChild(outer, block);
+                    for (int i = 0; i < outer.Statements.Count; i++)
+                    {
+                        StatementSyntax statement = outer.Statements[i];
+                        if (ReferenceEquals(statement, pathChild))
+                        {
+                            break;
+                        }
+                        names.AddRange(DeclaredLocals(statement));
+                    }
+                }
+
+                return names;
+            }
+
+            private static SyntaxNode FindPathChild(BlockSyntax outer, SyntaxNode inner)
+            {
+                SyntaxNode current = inner;
+                while (current.Parent != null && !ReferenceEquals(current.Parent, outer))
+                {
+                    current = current.Parent;
+                }
+
+                return current;
+            }
+
+            private static List<string> DeclaredLocals(StatementSyntax statement)
+            {
+                List<string> names = new List<string>();
+                if (statement is LocalDeclarationStatementSyntax local)
+                {
+                    SeparatedSyntaxList<VariableDeclaratorSyntax> variables = local.Declaration.Variables;
+                    for (int i = 0; i < variables.Count; i++)
+                    {
+                        if (variables[i].Initializer != null)
+                        {
+                            names.Add(variables[i].Identifier.Text);
+                        }
+                    }
+                }
+
+                return names;
+            }
+
+            private static List<string> UniqueNames(IReadOnlyList<string> names)
+            {
+                List<string> unique = new List<string>();
+                HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = names.Count - 1; i >= 0; i--)
+                {
+                    if (seen.Add(names[i]))
+                    {
+                        unique.Add(names[i]);
+                    }
+                }
+
+                unique.Reverse();
+                return unique;
+            }
+
+            private static string EscapeIdentifier(string name)
+            {
+                return SyntaxFacts.GetKeywordKind(name) != SyntaxKind.None ? "@" + name : name;
+            }
+
+            private static SyntaxTrivia GetIndentation(SyntaxNode? node)
+            {
+                if (node == null)
+                {
+                    return default;
+                }
+                SyntaxTriviaList leading = node.GetLeadingTrivia();
+                if (leading.Count > 0 && leading[leading.Count - 1].IsKind(SyntaxKind.WhitespaceTrivia))
+                {
+                    return leading[leading.Count - 1];
+                }
+
+                return default;
+            }
+        }
+
+        private sealed class MethodScope
+        {
+            public MethodScope(string methodName, List<string> parameters)
+            {
+                MethodName = methodName;
+                Parameters = parameters;
+            }
+
+            public string MethodName { get; }
+
+            public List<string> Parameters { get; }
         }
     }
 }

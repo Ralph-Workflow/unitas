@@ -326,20 +326,22 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
     match launch_bundle_windowed(bundle_dir, options) {
         Ok(result) => {
             println!(
-                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{} won={} hud={}",
+                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{} won={} hud={} hud_text=\"{}\"",
                 result.launch.manifest.product_name,
                 result.launch.startup_scene_path.display(),
                 result.launch.loaded_scene_count,
                 result.launch.root_object_count,
                 result.launch.frames_stepped,
                 result.launch.development_diagnostics_enabled,
+                result.launch.script_host.as_str(),
                 result.frames_presented,
                 result.audio_device_status,
                 result.audio_frames_pushed,
                 result.score,
                 result.total_pickups,
                 result.won,
-                result.hud
+                result.hud,
+                result.hud_text
             );
             ExitCode::SUCCESS
         }
@@ -435,7 +437,7 @@ fn run_verify_device(_reference_path: &Path, _frames: u64) -> ExitCode {
 }
 
 fn run_control_stdio(cli: &CliOptions) -> ExitCode {
-    let (scene_path, staged_dir) = match resolve_control_scene(cli) {
+    let (bundle_dir, scene_path, staged_dir) = match resolve_control_scene(cli) {
         Ok(resolved) => resolved,
         Err(message) => {
             eprintln!("unitas-player startup failed: {message}");
@@ -443,14 +445,18 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
         }
     };
 
-    let mut session =
-        match control::ControlSession::start(&scene_path, cli.delta_seconds, control_seed()) {
-            Ok(session) => session,
-            Err(error) => {
-                eprintln!("unitas-player startup failed: {}", error.outcome());
-                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
-            }
-        };
+    let mut session = match control::ControlSession::start(
+        &bundle_dir,
+        &scene_path,
+        cli.delta_seconds,
+        control_seed(),
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("unitas-player startup failed: {}", error.outcome());
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
 
     let exit_code = serve_control_lines(&mut session);
 
@@ -460,12 +466,12 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
     exit_code
 }
 
-fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>), String> {
+fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, PathBuf, Option<PathBuf>), String> {
     match cli.bundle_dir {
         Some(ref dir) => {
             let (_manifest, startup_scene_path) =
                 load_and_validate_bundle_manifest(dir).map_err(|error| error.to_string())?;
-            Ok((startup_scene_path, None))
+            Ok((dir.clone(), startup_scene_path, None))
         }
         None => {
             let staged_dir = env::temp_dir().join(format!(
@@ -475,7 +481,7 @@ fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>),
             let staged =
                 stage_roll_a_ball_bundle(&staged_dir).map_err(|error| error.to_string())?;
             let scene_path = staged_dir.join(&staged.manifest.startup_scene_staged_path);
-            Ok((scene_path, Some(staged_dir)))
+            Ok((staged_dir.clone(), scene_path, Some(staged_dir)))
         }
     }
 }
