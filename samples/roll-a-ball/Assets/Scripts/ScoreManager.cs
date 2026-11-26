@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 
 namespace Unitas.Samples.RollABall
@@ -181,6 +182,7 @@ namespace Unitas.Samples.RollABall
             {
                 Destroy(_goldPickup);
                 _goldPickup = null;
+                Debug.Log("Gold pickup removed");
             }
             _pickupTriggers.Clear();
             _route.Clear();
@@ -190,13 +192,14 @@ namespace Unitas.Samples.RollABall
             _multiplier = 1;
             _lastPickupTime = float.NegativeInfinity;
             _won = false;
+            _runStartTime = Time.time;
             SpawnAllPickups();
             PlayerController? controller = GetComponentInParent<PlayerController>();
             if (controller != null)
             {
                 controller.ResetPlayer();
             }
-            Debug.Log("Retry complete score 0 pickups 12 multiplier x1");
+            Debug.Log($"Retry complete score {_score} pickups {_pickups.Count} multiplier x{_multiplier} timer {FormatSeconds(RunTime)}");
         }
 
         private void RecordFinishedRun()
@@ -459,6 +462,11 @@ namespace Unitas.Samples.RollABall
             pickup.AddComponent<Pickup>();
             pickup.AddComponent<Rotator>();
             return pickup;
+        }
+
+        private static string FormatSeconds(float seconds)
+        {
+            return seconds.ToString("F3", CultureInfo.InvariantCulture);
         }
     }
 }

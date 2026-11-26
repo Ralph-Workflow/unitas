@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -247,6 +248,36 @@ namespace Unitas.Editor.Tests.Play
                 {
                     ["playSessionId"] = secondPlayId,
                 });
+
+            WorkerThatNeverAnswersEndsTheSession();
+        }
+
+        // A worker that never answers must not hold the editor host open; the
+        // command gives up on the worker and reports the session as ended.
+        private static void WorkerThatNeverAnswersEndsTheSession()
+        {
+            using WorkerProcess silent = new WorkerProcess(
+                "/bin/sh",
+                new List<string> { "-c", "cat > /dev/null" },
+                null,
+                TimeSpan.FromMilliseconds(300));
+
+            McpError.InvalidRequest? error = null;
+            try
+            {
+                silent.SendCommand(new JsonObject { ["cmd"] = "play" });
+            }
+            catch (McpError.InvalidRequest failure)
+            {
+                error = failure;
+            }
+
+            Check.That(
+                "worker_timeout: a worker that never answers ends the session",
+                error != null);
+            Check.That(
+                "worker_timeout: the report names the unanswered worker",
+                error != null && error.Message.Contains("did not answer", StringComparison.Ordinal));
         }
 
         public static void PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential()

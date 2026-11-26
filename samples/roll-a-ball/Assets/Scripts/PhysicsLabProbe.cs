@@ -138,6 +138,26 @@ namespace Unitas.Samples.RollABall
                 _bumperIncomingSpeed = _lastSpeed;
             }
 
+            LogContacts(collision, otherName, other);
+        }
+
+        // A kinematic body that drives into a body with a Rigidbody starts
+        // the contact a frame before the solver applies the push, so the push
+        // impulse rides on the staying contact rather than on the first one.
+        private new void OnCollisionStay(Collision collision)
+        {
+            if (collision.impulse <= 0f)
+            {
+                return;
+            }
+
+            GameObject? other = collision.gameObject;
+            string otherName = other != null ? other.name : "unknown";
+            LogContacts(collision, otherName, other);
+        }
+
+        private void LogContacts(Collision collision, string otherName, GameObject? other)
+        {
             int contacts = collision.contactCount;
             if (contacts <= 0)
             {

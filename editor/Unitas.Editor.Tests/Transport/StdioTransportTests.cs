@@ -22,6 +22,9 @@ namespace Unitas.Editor.Tests
             StdioProductionToolSetAndCaptureEndToEnd().GetAwaiter().GetResult();
         }
 
+        // Starting the live play worker loads the whole sample bundle, so the
+        // request window has to cover a worker start on a machine that also
+        // runs the other verification gates.
         private static CancellationToken RequestWindow(CancellationTokenSource source)
         {
             // The window bounds a hung request, not a busy machine: the shared runner
@@ -37,7 +40,7 @@ namespace Unitas.Editor.Tests
 
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
@@ -219,7 +222,7 @@ namespace Unitas.Editor.Tests
 
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
@@ -318,7 +321,7 @@ namespace Unitas.Editor.Tests
             StdioTransportHost transportHost = new StdioTransportHost(host);
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),

@@ -22,11 +22,14 @@ namespace Unitas.Bridge.Tests
         internal static int Score { get; private set; }
         internal static bool Won { get; private set; }
 
+        internal static bool GoldSpawned { get; private set; }
+
         internal static void Reset()
         {
             Score = 0;
             Won = false;
             Collected.Clear();
+            GoldSpawned = false;
         }
 
         internal static void Collect(string pickupName)
@@ -38,11 +41,29 @@ namespace Unitas.Bridge.Tests
 
             Score++;
             Debug.Log($"Pickup collected score {Score}");
+            if (Score == 3 && !GoldSpawned)
+            {
+                // The real game spawns the gold pickup when the combo reaches
+                // x3, and the retry takes it away again.
+                GoldSpawned = true;
+                Debug.Log("Gold pickup spawned");
+            }
             if (Score >= TotalPickups)
             {
                 Won = true;
                 Debug.Log(WinMessage);
             }
+        }
+
+        internal static void RemoveGoldOnRetry()
+        {
+            if (!GoldSpawned)
+            {
+                return;
+            }
+
+            GoldSpawned = false;
+            Debug.Log("Gold pickup removed");
         }
     }
 
@@ -57,6 +78,8 @@ namespace Unitas.Bridge.Tests
         {
             _body = GetComponent<Rigidbody>();
             RollABallGameState.Reset();
+            // The real game announces the start of a run after its countdown.
+            Debug.Log("Run started");
         }
 
         public override void Update()
@@ -78,7 +101,11 @@ namespace Unitas.Bridge.Tests
 
         private void Restart()
         {
+            RollABallGameState.RemoveGoldOnRetry();
             RollABallGameState.Reset();
+            // The real game reports the state the retry left behind, and its
+            // timer reads zero again.
+            Debug.Log("Retry complete score 0 pickups 12 multiplier x1 timer 0.000");
             Rigidbody? body = _body;
             IPhysicsProvider? provider = Physics.Provider;
             if (body == null || provider == null)

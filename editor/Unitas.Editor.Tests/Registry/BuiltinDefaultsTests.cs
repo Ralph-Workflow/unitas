@@ -12,6 +12,7 @@ namespace Unitas.Editor.Tests
         {
             RegistersProjectStatusToolAndKnowledgeScopesResource();
             BuiltinDefaultsAreReadProjectScopedAndUntrusted();
+            ProjectStatusSkipsGeneratedFolders();
             RegisteringBuiltinDefaultsTwiceFailsWithDuplicateTool();
             StartupHostUsesPersistentAuditStoreOutsideProject();
             StartupHostAuditRecordsSurviveHostRestart();
@@ -89,6 +90,64 @@ namespace Unitas.Editor.Tests
                 "builtin: knowledge/scopes first scope is read-project",
                 "read-project",
                 scopeArray?[0]?.GetValue<string>() ?? string.Empty);
+        }
+
+        // The scene walk must not descend into generated folders: a project
+        // root that is a whole repository would otherwise report every scene
+        // in the build output.
+        private static void ProjectStatusSkipsGeneratedFolders()
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-builtin-scenes-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string scenes = Path.Combine(root, "Scenes");
+                string generated = Path.Combine(root, "target", "Build");
+                Directory.CreateDirectory(scenes);
+                Directory.CreateDirectory(generated);
+                File.WriteAllText(
+                    Path.Combine(scenes, "Level.unity"),
+                    "--- !u!1 &1\nGameObject:\n--- !u!1 &2\nGameObject:\n");
+                File.WriteAllText(Path.Combine(generated, "Copy.unity"), "--- !u!1 &1\nGameObject:\n");
+
+                using McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+                BuiltinDefaults.Register(host);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+
+                JsonNode envelope = host.CallTool(
+                    session,
+                    "project.status",
+                    new JsonObject
+                    {
+                        ["projectPath"] = root,
+                    });
+                JsonArray? reported = envelope["content"]?["scenes"] as JsonArray;
+                List<string> paths = new List<string>();
+                foreach (JsonNode? node in reported ?? new JsonArray())
+                {
+                    paths.Add(node?["path"]?.GetValue<string>() ?? string.Empty);
+                }
+
+                Check.Equal("builtin: project.status reports the project scene", 1, paths.Count);
+                Check.Equal("builtin: project.status names the project scene", "Scenes/Level.unity", paths[0]);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, true);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
         }
 
         private static void RegisteringBuiltinDefaultsTwiceFailsWithDuplicateTool()

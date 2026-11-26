@@ -27,6 +27,15 @@ EDITOR_SCENARIOS = (
     "retry_clean.json",
     "scene_edit_restore.json",
     "play_mode_edit_restore.json",
+    "gold_window.json",
+    "gold_collect.json",
+    "combo_multiplier.json",
+    "dash_cooldown.json",
+    "pause_holds_simulation.json",
+    "slowmo_finish.json",
+    "restart_recovery.scenario.json",
+    "combo_timing_sweep.json",
+    "pointer_ui.scenario.json",
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
@@ -64,6 +73,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("retry_clean", "retry_clean.json", ("--repeat", "2"), False),
     ("restart_recovery", "restart_recovery.scenario.json", ("--repeat", "2"), False),
     ("combo_multiplier", "combo_multiplier.json", ("--repeat", "2"), False),
+    ("combo_timing_sweep", "combo_timing_sweep.json", ("--repeat", "2"), False),
     ("gold_window", "gold_window.json", ("--repeat", "2"), False),
     ("gold_collect", "gold_collect.json", ("--repeat", "2"), False),
     ("dash_cooldown", "dash_cooldown.json", ("--repeat", "2"), False),

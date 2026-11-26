@@ -46,7 +46,7 @@ reported with its real state, never hidden.
 | Scenario | State | Evidence |
 |---|---|---|
 | S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` passes in the lane's scripting step and in the headless editor-host step (see the lane state below) |
-| S4 retry without leftover state | partly demonstrated | `Scenarios/restart_recovery.scenario.json` presses `R` in the middle of a run and asserts that the ball is back at its spawn point afterwards, that the pickups can be collected again and that the run reaches `All 12 pickups collected` after the retry; the run logs `Retry complete score 0 pickups 12 multiplier x1`, but no checkpoint asserts the score, the multiplier, the gold pickup's removal or the timer reset that the specification's S4 asks for |
+| S4 retry without leftover state | demonstrated | `Scenarios/restart_recovery.scenario.json` presses `R` in the middle of a run and asserts that the ball is back at its spawn point afterwards, that the pickups can be collected again and that the run reaches `All 12 pickups collected` after the retry; six further checkpoints pin the reset state the specification's S4 asks for — `retry-score-reset`, `retry-pickups-restored` (all twelve pickups exist), `retry-multiplier-reset` (x1), `retry-gold-removed` (no gold pickup exists), `retry-timer-reset` (the timer reads 0) and `gold-spawned-again` — and the sample's retry now resets the run timer and logs the **actual** reset state (`Retry complete score 0 pickups 12 multiplier x1 timer 0.000`) instead of a hardcoded line, so those pins fail when a reset regresses; the scenario passes 16 of 16 checkpoints with `--repeat 2` in the lane's scripting step and in the headless editor host. The specification's "no object from the previous attempt remains" rests on the sample destroying its own pickups and resetting the marble, not on a checkpoint over the engine's object registry: replacing a scene leaves the replaced scene's objects in the name lookup, an engine gap the lane works around by loading each scene once |
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
@@ -54,7 +54,8 @@ reported with its real state, never hidden.
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
-| S12 combo timing sweep, S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
+| S12 combo timing sweep | demonstrated | `Scenarios/combo_timing_sweep.json` drives the marble around the pickup ring with the same travel per leg and sweeps only the gap between consecutive pickups: 1.400 s (below the 1.5 s combo window) raises the multiplier to x4, the window then expires 1.5167 s later (`Combo expired`), the next gap of 1.600 s (above the window) resets the multiplier to x1 and awards a single point, and a further 1.400 s gap re-arms it to x2; 17 of 17 checkpoints pass with `--repeat 2` |
+| S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -298,25 +299,22 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 31 scenario steps: the 25
+**Current lane state (honest).** The lane runs 41 scenario steps: the 26
 scripting scenarios (including `frame_independence`, `pointer_ui`,
-`restart_recovery`, the four `s8_*` visual checkpoints and the four new
-physics scenarios `collision_edge`, `trigger_without_rigidbody`,
-`collision_payload` and `mesh_and_compound_colliders`), the 4 headless editor
+`restart_recovery`, `combo_timing_sweep`, the four `s8_*` visual checkpoints
+and the four physics scenarios `collision_edge`, `trigger_without_rigidbody`,
+`collision_payload` and `mesh_and_compound_colliders`), the 13 headless editor
 scenarios (`collect_all`, `retry_clean`, `scene_edit_restore`,
-`play_mode_edit_restore`), the native scripted launch and the packaged-player
-proof. That number counts the scenario steps only; before them the lane runs
-its three build steps — the runtime, the bridge and the player build. The four
-new physics steps are the S11 and mesh-and-compound evidence above, and the
-lane's own run of the current tree is what proves them. Every step of the last
-full-lane run was green; the steps added since (`restart_recovery` and
-`play_mode_edit_restore`) were verified on their own — the lane's scripting
-runner and the headless editor both report `restart_recovery` `passed` with 9
-of 9 checkpoints, `--repeat 2` reports it repeatable, and the headless editor
-reports `play_mode_edit_restore` `passed`. The `mesh_and_compound_colliders`
-step is newer than the last full-lane run, so the lane's own run of the merged
-tree is what proves it; a red run of that step is a red lane and this note is
-not a pass on its own.
+`play_mode_edit_restore`, `gold_window`, `gold_collect`, `combo_multiplier`,
+`dash_cooldown`, `pause_holds_simulation`, `slowmo_finish`, `restart_recovery`,
+`combo_timing_sweep`, `pointer_ui`), the native scripted launch and the
+packaged-player proof. That number counts the scenario steps only; before them
+the lane runs its three build steps — the runtime, the bridge and the player
+build. The headless editor step now runs the same gameplay scenarios the
+scripting step runs, so a scenario's outcome is the same whether a person or
+an agent drives it; the lane's own run of the current tree is what proves
+every step, and a red run of any step is a red lane and this note is not a
+pass on its own.
 
 - `editor-scenario-collect_all`, `editor-scenario-retry_clean`: these were
   red until the headless editor host learned to load the generated glue
@@ -340,8 +338,21 @@ The steps this note owns are recorded here rather than left implicit:
   (`restarted-position`), that the pickups can be collected again
   (`pickup-1-again` through `pickup-4`), and that the run reaches `All 12
   pickups collected` after the retry (`win-log`); it also pins the frame count
-  at the retry (`restarted-frames`, 45) and at the end of the run
-  (`total-frames`, 590).
+  at the retry (`restarted-frames`, 240) and at the end of the run
+  (`total-frames`, 785), and the six reset checkpoints the specification's S4
+  asks for (`retry-score-reset`, `retry-pickups-restored`,
+  `retry-multiplier-reset`, `retry-gold-removed`, `retry-timer-reset`,
+  `gold-spawned-again`). The scenario passes 16 of 16 checkpoints with
+  `--repeat 2` in the lane's scripting step and in the headless editor step.
+- `combo_timing_sweep`: the lane runs it with `--repeat 2` and the headless
+  editor step runs the same file. The sweep varies only the gap between
+  pickups, so the multiplier's behaviour at the combo window boundary is the
+  thing under test.
+- The kinematic push is reported on the staying contact: the engine's contact
+  between the kinematic `Pusher` and the dynamic `PushedMarble` starts one
+  frame before the solver applies the push impulse, so the sample's probe
+  reports the sustained push from `OnCollisionStay` as well as from
+  `OnCollisionEnter`.
 - `s8_title_checkpoint`, `s8_arena_countdown`, `s8_arena_x5_checkpoint`,
   `s8_results_gold_checkpoint`: the captures are wired into the lane and run,
   and each `render_capture` checkpoint passes its

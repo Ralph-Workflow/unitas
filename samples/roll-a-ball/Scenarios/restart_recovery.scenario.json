@@ -1,11 +1,28 @@
 {
   "name": "restart-recovery",
-  "scene": "Assets/Scenes/RollABall.unity",
   "steps": [
     {
       "load_scene": {
         "path": "Assets/Scenes/RollABall.unity",
         "mode": "single"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 160,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": false
       }
     },
     {
@@ -47,6 +64,24 @@
     {
       "inject_key": {
         "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 35,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
         "pressed": false
       }
     },
@@ -287,8 +322,15 @@
   ],
   "checkpoints": [
     {
+      "id": "run-started",
+      "after_step": 3,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Run started"
+    },
+    {
       "id": "pre-restart-pickup",
-      "after_step": 7,
+      "after_step": 10,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -300,7 +342,7 @@
     },
     {
       "id": "restarted-position",
-      "after_step": 12,
+      "after_step": 18,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -312,13 +354,48 @@
     },
     {
       "id": "restarted-frames",
-      "after_step": 12,
+      "after_step": 18,
       "kind": "frame_count",
-      "expected": 45
+      "expected": 240
+    },
+    {
+      "id": "retry-score-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0"
+    },
+    {
+      "id": "retry-pickups-restored",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12"
+    },
+    {
+      "id": "retry-multiplier-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12 multiplier x1"
+    },
+    {
+      "id": "retry-gold-removed",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Gold pickup removed"
+    },
+    {
+      "id": "retry-timer-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "timer 0.000"
     },
     {
       "id": "pickup-1-again",
-      "after_step": 17,
+      "after_step": 23,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -330,7 +407,7 @@
     },
     {
       "id": "pickup-2",
-      "after_step": 20,
+      "after_step": 26,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -341,8 +418,15 @@
       "tolerance": 0.02
     },
     {
+      "id": "gold-spawned-again",
+      "after_step": 26,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Gold pickup spawned"
+    },
+    {
       "id": "pickup-3",
-      "after_step": 23,
+      "after_step": 29,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -354,7 +438,7 @@
     },
     {
       "id": "pickup-4",
-      "after_step": 26,
+      "after_step": 32,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -366,16 +450,16 @@
     },
     {
       "id": "win-log",
-      "after_step": 47,
+      "after_step": 53,
       "kind": "log",
       "severity": "log",
       "contains": "pickups collected"
     },
     {
       "id": "total-frames",
-      "after_step": 47,
+      "after_step": 53,
       "kind": "frame_count",
-      "expected": 590
+      "expected": 785
     }
   ]
 }

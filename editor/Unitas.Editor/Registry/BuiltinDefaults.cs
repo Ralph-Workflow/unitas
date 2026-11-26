@@ -79,17 +79,9 @@ namespace Unitas.Editor.Mcp
         {
             string assets = Path.Combine(root, "Assets");
             string start = Directory.Exists(assets) ? assets : root;
-            string[] sceneFiles;
-            try
-            {
-                sceneFiles = Directory.GetFiles(start, "*.unity", SearchOption.AllDirectories);
-            }
-            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
-            {
-                yield break;
-            }
-
-            Array.Sort(sceneFiles, StringComparer.Ordinal);
+            List<string> sceneFiles = new List<string>();
+            CollectSceneFiles(start, sceneFiles);
+            sceneFiles.Sort(StringComparer.Ordinal);
             foreach (string sceneFile in sceneFiles)
             {
                 yield return new JsonObject
@@ -98,6 +90,44 @@ namespace Unitas.Editor.Mcp
                     ["name"] = Path.GetFileNameWithoutExtension(sceneFile),
                     ["objects"] = CountGameObjects(sceneFile),
                 };
+            }
+        }
+
+        // The generated folders hold build output rather than project scenes,
+        // so the walk skips them the way project.list does; without that a
+        // project root that is a whole repository walks every build artefact.
+        private static void CollectSceneFiles(string directory, List<string> sceneFiles)
+        {
+            string[] entries;
+            try
+            {
+                entries = Directory.GetFiles(directory, "*.unity");
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                return;
+            }
+
+            sceneFiles.AddRange(entries);
+
+            string[] children;
+            try
+            {
+                children = Directory.GetDirectories(directory);
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                return;
+            }
+
+            foreach (string child in children)
+            {
+                if (ProjectTools.IsGeneratedDirectory(Path.GetFileName(child)))
+                {
+                    continue;
+                }
+
+                CollectSceneFiles(child, sceneFiles);
             }
         }
 

@@ -1,6 +1,5 @@
 {
   "name": "pointer-ui",
-  "scene": "Assets/Scenes/RollABall.unity",
   "steps": [
     { "load_scene": { "path": "Assets/Scenes/RollABall.unity" } },
     { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },

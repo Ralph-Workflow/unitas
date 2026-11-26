@@ -25,6 +25,7 @@ namespace Unitas.Editor.Mcp
             ".git",
             ".vs",
             ".vscode",
+            "target",
         };
 
         public static void Register(McpHost host, ChangeSetStore store)
@@ -262,7 +263,7 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        private static bool IsGeneratedDirectory(string name)
+        internal static bool IsGeneratedDirectory(string name)
         {
             foreach (string generated in GeneratedDirectoryNames)
             {

@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Unitas.Editor.Mcp
 {
@@ -27,13 +30,23 @@ namespace Unitas.Editor.Mcp
         public const string PlayerBinaryEnvVar = "UNITAS_PLAYER_BINARY";
         public const string BundleDirectoryEnvVar = "UNITAS_PLAYER_BUNDLE_DIR";
 
+        // A worker command that does not answer in this window means the
+        // worker is wedged; the session ends with a report instead of the
+        // editor waiting on a line that never comes.
+        public static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
+
         private readonly Process process;
+        private readonly TimeSpan commandTimeout;
         private readonly object syncLock = new object();
         private bool disposed;
         private bool exitedObserved;
         private int? observedExitCode;
 
-        public WorkerProcess(string executablePath, IReadOnlyList<string> arguments, string? workingDirectory = null)
+        public WorkerProcess(
+            string executablePath,
+            IReadOnlyList<string> arguments,
+            string? workingDirectory = null,
+            TimeSpan? commandTimeout = null)
         {
             if (string.IsNullOrWhiteSpace(executablePath))
             {
@@ -41,6 +54,8 @@ namespace Unitas.Editor.Mcp
             }
 
             ArgumentNullException.ThrowIfNull(arguments);
+
+            this.commandTimeout = commandTimeout ?? DefaultCommandTimeout;
 
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
@@ -236,7 +251,7 @@ namespace Unitas.Editor.Mcp
                 {
                     process.StandardInput.WriteLine(requestLine);
                     process.StandardInput.Flush();
-                    responseLine = process.StandardOutput.ReadLine();
+                    responseLine = ReadResponseLineLocked();
                 }
                 catch (IOException)
                 {
@@ -306,6 +321,28 @@ namespace Unitas.Editor.Mcp
 
                 return responseObject;
             }
+        }
+
+        private string? ReadResponseLineLocked()
+        {
+            Task<string?> readTask = process.StandardOutput.ReadLineAsync();
+            using CancellationTokenSource timeout = new CancellationTokenSource();
+            Task delay = Task.Delay(commandTimeout, timeout.Token);
+            Task finished = Task.WhenAny(readTask, delay).GetAwaiter().GetResult();
+            timeout.Cancel();
+            if (finished != readTask)
+            {
+                // The worker is not answering; the session cannot continue on a
+                // stream that may still deliver a late line.
+                _ = readTask.ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
+                Kill();
+                throw new McpError.InvalidRequest(
+                    "play session ended: worker did not answer within "
+                    + commandTimeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)
+                    + " seconds");
+            }
+
+            return readTask.GetAwaiter().GetResult();
         }
 
         public void Kill()
