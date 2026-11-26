@@ -1,5 +1,6 @@
 mod abi;
 pub mod animation;
+pub mod canvas;
 pub mod capture;
 pub mod cinemachine;
 pub mod dylib;
@@ -21,6 +22,7 @@ pub mod window;
 
 pub use abi::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};
+pub use canvas::{CanvasRect, CanvasState, SpriteRef, UiDrawItem};
 pub use dylib::{RuntimeDylib, RuntimeDylibError};
 pub use error::RuntimeError;
 pub use input::*;

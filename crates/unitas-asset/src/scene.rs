@@ -22,6 +22,11 @@ pub const CAMERA_CLASS: u32 = 20;
 pub const MESH_RENDERER_CLASS: u32 = 23;
 pub const MESH_FILTER_CLASS: u32 = 33;
 pub const LIGHT_CLASS: u32 = 108;
+pub const CANVAS_CLASS: u32 = 223;
+pub const RECT_TRANSFORM_CLASS: u32 = 224;
+pub const IMAGE_SCRIPT_GUID: &str = "fe87c0e1cc204ed48ad3b37840f39efc";
+pub const TEXT_SCRIPT_GUID: &str = "5f7201a12d95ffc409449d95f23cf332";
+pub const CANVAS_SCALER_SCRIPT_GUID: &str = "0cd44c1031e13a943bb63640046fad76";
 pub type AssetGuid = String;
 
 const GAME_OBJECT_CLASS: u32 = 1;
@@ -69,6 +74,11 @@ const DEFAULT_LIGHT_INTENSITY: f32 = 1.0;
 const DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 const DEFAULT_LIGHT_DIRECTION: [f32; 3] = [0.0, -1.0, 0.0];
 const DIRECTIONAL_LIGHT_TYPE: i64 = 1;
+const DEFAULT_UI_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const DEFAULT_UI_FONT_SIZE: f32 = 14.0;
+const DEFAULT_UI_ENABLED: bool = true;
+const DEFAULT_REFERENCE_RESOLUTION: [f32; 2] = [800.0, 600.0];
+const DEFAULT_MATCH_WIDTH_OR_HEIGHT: f32 = 0.0;
 const CHARACTER_CONTROLLER_SCRIPT_NAME: &str = "CharacterController";
 const CHARACTER_CONTROLLER_FIELD_KEYS: [&str; 4] = [
     "m_SlopeLimit",
@@ -382,6 +392,93 @@ pub struct RenderBinding {
     pub lights: Vec<LightComponent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasRenderMode {
+    ScreenSpaceOverlay,
+    ScreenSpaceCamera,
+    WorldSpace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasScaleMode {
+    ConstantPixelSize,
+    ScaleWithScreenSize,
+    ConstantPhysicalSize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasMatchMode {
+    MatchWidthOrHeight,
+    Shrink,
+    Expand,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasScalerComponent {
+    pub ui_scale_mode: CanvasScaleMode,
+    pub reference_resolution: [f32; 2],
+    pub screen_match_mode: CanvasMatchMode,
+    pub match_width_or_height: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasComponent {
+    pub entity: EntityId,
+    pub render_mode: CanvasRenderMode,
+    pub sorting_order: i64,
+    pub scaler: Option<CanvasScalerComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RectTransformComponent {
+    pub entity: EntityId,
+    pub parent: Option<EntityId>,
+    pub anchor_min: [f32; 2],
+    pub anchor_max: [f32; 2],
+    pub anchored_position: [f32; 2],
+    pub size_delta: [f32; 2],
+    pub pivot: [f32; 2],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiImageComponent {
+    pub entity: EntityId,
+    pub color: [f32; 4],
+    pub sprite_guid: Option<AssetGuid>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiTextComponent {
+    pub entity: EntityId,
+    pub text: String,
+    pub color: [f32; 4],
+    pub font_size: f32,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UiElementComponent {
+    Image(UiImageComponent),
+    Text(UiTextComponent),
+}
+
+impl UiElementComponent {
+    pub fn entity(&self) -> EntityId {
+        match self {
+            Self::Image(image) => image.entity,
+            Self::Text(text) => text.entity,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UiBinding {
+    pub canvases: Vec<CanvasComponent>,
+    pub rect_transforms: Vec<RectTransformComponent>,
+    pub elements: Vec<UiElementComponent>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleBinding {
     pub entity: EntityId,
@@ -403,6 +500,7 @@ pub struct AssembledScene {
     pub render: RenderBinding,
     pub particles: Vec<ParticleBinding>,
     pub trails: Vec<TrailBinding>,
+    pub ui: UiBinding,
     pub diagnostics: Vec<(EntityId, String)>,
 }
 
@@ -416,6 +514,7 @@ struct DocumentSet {
     render: RenderBinding,
     particles: Vec<ParticleBinding>,
     trails: Vec<TrailBinding>,
+    ui: UiBinding,
     unsupported_classes: Vec<(EntityId, u32)>,
 }
 
@@ -535,6 +634,7 @@ fn assemble_stream(
         render: set.render,
         particles: set.particles,
         trails: set.trails,
+        ui: set.ui,
         diagnostics,
     })
 }
@@ -674,6 +774,7 @@ fn assemble_documents(
         render: RenderBinding::default(),
         particles: Vec::new(),
         trails: Vec::new(),
+        ui: UiBinding::default(),
         unsupported_classes: Vec::new(),
     };
     let mut instance_roots = prefab_instance_roots(stream);
@@ -835,6 +936,7 @@ fn assemble_documents(
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     set.render = collect_render(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
     let (particles, trails) =
         collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
     set.particles = particles;
@@ -2009,6 +2111,215 @@ fn collect_particles_and_trails(
     (particles, trails)
 }
 
+fn collect_ui(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+) -> UiBinding {
+    let mut binding = UiBinding::default();
+    let mut rect_entities: HashMap<i64, EntityId> = HashMap::new();
+    let mut rect_fathers: HashMap<i64, i64> = HashMap::new();
+    let mut rects: Vec<(i64, RectTransformComponent)> = Vec::new();
+    for document in &stream.documents {
+        if document.stripped || document.class_id != RECT_TRANSFORM_CLASS {
+            continue;
+        }
+        let body = match document.root.get("RectTransform") {
+            Some(body) => body,
+            None => continue,
+        };
+        let entity = match component_entity(body, game_objects, instance_roots) {
+            Some(entity) => entity,
+            None => continue,
+        };
+        rect_entities.insert(document.file_id, entity);
+        if let Ok(Some(father)) = reference_id(body.get("m_Father")) {
+            rect_fathers.insert(document.file_id, father);
+        }
+        rects.push((
+            document.file_id,
+            RectTransformComponent {
+                entity,
+                parent: None,
+                anchor_min: vector2_or(body.get("m_AnchorMin"), [0.0, 0.0]),
+                anchor_max: vector2_or(body.get("m_AnchorMax"), [1.0, 1.0]),
+                anchored_position: vector2_or(body.get("m_AnchoredPosition"), [0.0, 0.0]),
+                size_delta: vector2_or(body.get("m_SizeDelta"), [0.0, 0.0]),
+                pivot: vector2_or(body.get("m_Pivot"), [0.5, 0.5]),
+            },
+        ));
+    }
+    for (file_id, rect) in &mut rects {
+        rect.parent = rect_fathers
+            .get(file_id)
+            .and_then(|father| rect_entities.get(father))
+            .copied();
+    }
+    binding.rect_transforms = rects.into_iter().map(|(_, rect)| rect).collect();
+    for document in &stream.documents {
+        if document.stripped || document.class_id != CANVAS_CLASS {
+            continue;
+        }
+        let body = match document.root.get("Canvas") {
+            Some(body) => body,
+            None => continue,
+        };
+        let entity = match component_entity(body, game_objects, instance_roots) {
+            Some(entity) => entity,
+            None => continue,
+        };
+        binding.canvases.push(CanvasComponent {
+            entity,
+            render_mode: canvas_render_mode(body.get("m_RenderMode")),
+            sorting_order: body
+                .get("m_SortingOrder")
+                .and_then(Node::as_i64)
+                .unwrap_or(0),
+            scaler: None,
+        });
+    }
+    for document in &stream.documents {
+        if document.stripped || document.class_id != MONO_BEHAVIOUR_CLASS {
+            continue;
+        }
+        let body = match document.root.get("MonoBehaviour") {
+            Some(body) => body,
+            None => continue,
+        };
+        let guid = match body
+            .get("m_Script")
+            .and_then(|node| node.get("guid"))
+            .and_then(Node::as_str)
+        {
+            Some(guid) => guid.trim(),
+            None => continue,
+        };
+        let entity = match component_entity(body, game_objects, instance_roots) {
+            Some(entity) => entity,
+            None => continue,
+        };
+        match guid {
+            IMAGE_SCRIPT_GUID => {
+                binding
+                    .elements
+                    .push(UiElementComponent::Image(UiImageComponent {
+                        entity,
+                        color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
+                        sprite_guid: sprite_guid(body.get("m_Sprite")),
+                        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+                    }));
+            }
+            TEXT_SCRIPT_GUID => binding
+                .elements
+                .push(UiElementComponent::Text(UiTextComponent {
+                    entity,
+                    text: body
+                        .get("m_Text")
+                        .and_then(Node::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
+                    font_size: yaml_f32(body.get("m_FontSize"), DEFAULT_UI_FONT_SIZE, |value| {
+                        value > 0.0
+                    }),
+                    enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+                })),
+            CANVAS_SCALER_SCRIPT_GUID => {
+                let scaler = CanvasScalerComponent {
+                    ui_scale_mode: canvas_scale_mode(body.get("m_UiScaleMode")),
+                    reference_resolution: vector2_or(
+                        body.get("m_ReferenceResolution"),
+                        DEFAULT_REFERENCE_RESOLUTION,
+                    ),
+                    screen_match_mode: canvas_match_mode(body.get("m_ScreenMatchMode")),
+                    match_width_or_height: yaml_f32(
+                        body.get("m_MatchWidthOrHeight"),
+                        DEFAULT_MATCH_WIDTH_OR_HEIGHT,
+                        |value| (0.0..=1.0).contains(&value),
+                    ),
+                };
+                if let Some(canvas) = binding
+                    .canvases
+                    .iter_mut()
+                    .find(|canvas| canvas.entity == entity)
+                {
+                    canvas.scaler = Some(scaler);
+                }
+            }
+            _ => {}
+        }
+    }
+    binding
+}
+
+fn canvas_render_mode(node: Option<&Node>) -> CanvasRenderMode {
+    match node.and_then(Node::as_i64).unwrap_or(0) {
+        1 => CanvasRenderMode::ScreenSpaceCamera,
+        2 => CanvasRenderMode::WorldSpace,
+        _ => CanvasRenderMode::ScreenSpaceOverlay,
+    }
+}
+
+fn canvas_scale_mode(node: Option<&Node>) -> CanvasScaleMode {
+    match node.and_then(Node::as_i64).unwrap_or(0) {
+        1 => CanvasScaleMode::ScaleWithScreenSize,
+        2 => CanvasScaleMode::ConstantPhysicalSize,
+        _ => CanvasScaleMode::ConstantPixelSize,
+    }
+}
+
+fn canvas_match_mode(node: Option<&Node>) -> CanvasMatchMode {
+    match node.and_then(Node::as_i64).unwrap_or(0) {
+        1 => CanvasMatchMode::Shrink,
+        2 => CanvasMatchMode::Expand,
+        _ => CanvasMatchMode::MatchWidthOrHeight,
+    }
+}
+
+fn sprite_guid(node: Option<&Node>) -> Option<AssetGuid> {
+    let node = node?;
+    let guid = node
+        .get("guid")
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(guid.to_string())
+}
+
+fn color4_or(node: Option<&Node>, default: [f32; 4]) -> [f32; 4] {
+    let node = match node {
+        Some(node) => node,
+        None => return default,
+    };
+    let red = node.get("r").and_then(Node::as_f64);
+    let green = node.get("g").and_then(Node::as_f64);
+    let blue = node.get("b").and_then(Node::as_f64);
+    match (red, green, blue) {
+        (Some(red), Some(green), Some(blue)) => {
+            let alpha = node
+                .get("a")
+                .and_then(Node::as_f64)
+                .filter(|value| value.is_finite())
+                .unwrap_or(1.0);
+            [red as f32, green as f32, blue as f32, alpha as f32]
+        }
+        _ => default,
+    }
+}
+
+fn vector2_or(node: Option<&Node>, default: [f32; 2]) -> [f32; 2] {
+    let node = match node {
+        Some(node) => node,
+        None => return default,
+    };
+    let x = node.get("x").and_then(Node::as_f64);
+    let y = node.get("y").and_then(Node::as_f64);
+    match (x, y) {
+        (Some(x), Some(y)) => [x as f32, y as f32],
+        _ => default,
+    }
+}
+
 fn collect_unsupported_components(
     stream: &Stream,
     game_objects: &GameObjectRecords,
@@ -2085,6 +2396,8 @@ fn handled_component_class(class_id: u32) -> bool {
             | PARTICLE_SYSTEM_CLASS
             | TRAIL_RENDERER_CLASS
             | PREFAB_INSTANCE_CLASS
+            | CANVAS_CLASS
+            | RECT_TRANSFORM_CLASS
     )
 }
 
@@ -2536,4 +2849,141 @@ fn quaternion4(node: &Node) -> Option<[f64; 4]> {
         return None;
     }
     Some([x, y, z, w])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    const UI_SCENE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: HudCanvas
+  m_Layer: 5
+--- !u!224 &2
+RectTransform:
+  m_GameObject: {fileID: 1}
+  m_Father: {fileID: 0}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!223 &3
+Canvas:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_RenderMode: 0
+  m_SortingOrder: 7
+--- !u!114 &4
+MonoBehaviour:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
+  m_UiScaleMode: 1
+  m_ReferenceResolution: {x: 800, y: 600}
+  m_ScreenMatchMode: 0
+  m_MatchWidthOrHeight: 0.5
+--- !u!1 &5
+GameObject:
+  m_Name: HealthBar
+  m_Layer: 5
+--- !u!224 &6
+RectTransform:
+  m_GameObject: {fileID: 5}
+  m_Father: {fileID: 2}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: -120, y: 30}
+  m_SizeDelta: {x: 200, y: 40}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7
+MonoBehaviour:
+  m_GameObject: {fileID: 5}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Color: {r: 1, g: 0.5, b: 0.25, a: 0.75}
+  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}
+  m_UnknownFutureField: 12
+--- !u!1 &8
+GameObject:
+  m_Name: ScoreLabel
+  m_Layer: 5
+--- !u!224 &9
+RectTransform:
+  m_GameObject: {fileID: 8}
+  m_Father: {fileID: 2}
+  m_AnchorMin: {x: 0, y: 1}
+  m_AnchorMax: {x: 0, y: 1}
+  m_AnchoredPosition: {x: 16, y: -12}
+  m_SizeDelta: {x: 320, y: 28}
+  m_Pivot: {x: 0, y: 1}
+--- !u!114 &10
+MonoBehaviour:
+  m_GameObject: {fileID: 8}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}
+  m_Text: \"Score 0\"
+  m_FontSize: 18
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+";
+
+    #[test]
+    fn ui_scene_exposes_canvas_rect_transform_image_and_text() -> Result<(), Box<dyn Error>> {
+        let stream = unity_yaml::parse(UI_SCENE)?;
+        let assembled = assemble_scene_bundle(&stream)?;
+        let canvas = assembled
+            .ui
+            .canvases
+            .first()
+            .ok_or("the scene has no canvas")?;
+        assert_eq!(canvas.entity, EntityId::new(0));
+        assert_eq!(canvas.render_mode, CanvasRenderMode::ScreenSpaceOverlay);
+        assert_eq!(canvas.sorting_order, 7);
+        let scaler = canvas.scaler.as_ref().ok_or("the canvas has no scaler")?;
+        assert_eq!(scaler.ui_scale_mode, CanvasScaleMode::ScaleWithScreenSize);
+        assert_eq!(scaler.reference_resolution, [800.0, 600.0]);
+        assert_eq!(
+            scaler.screen_match_mode,
+            CanvasMatchMode::MatchWidthOrHeight
+        );
+        assert_eq!(scaler.match_width_or_height, 0.5);
+        assert_eq!(assembled.ui.rect_transforms.len(), 3);
+        let bar = assembled
+            .ui
+            .rect_transforms
+            .iter()
+            .find(|rect| rect.entity == EntityId::new(1))
+            .ok_or("the health bar has no rect transform")?;
+        assert_eq!(bar.parent, Some(EntityId::new(0)));
+        assert_eq!(bar.anchor_min, [0.5, 0.5]);
+        assert_eq!(bar.anchor_max, [0.5, 0.5]);
+        assert_eq!(bar.anchored_position, [-120.0, 30.0]);
+        assert_eq!(bar.size_delta, [200.0, 40.0]);
+        assert_eq!(bar.pivot, [0.5, 0.5]);
+        assert_eq!(assembled.ui.elements.len(), 2);
+        let image = match &assembled.ui.elements[0] {
+            UiElementComponent::Image(image) => image,
+            UiElementComponent::Text(_) => return Err("the first element is not an image".into()),
+        };
+        assert_eq!(image.entity, EntityId::new(1));
+        assert_eq!(image.color, [1.0, 0.5, 0.25, 0.75]);
+        assert_eq!(
+            image.sprite_guid.as_deref(),
+            Some("22222222222222222222222222222222")
+        );
+        assert!(image.enabled);
+        let text = match &assembled.ui.elements[1] {
+            UiElementComponent::Text(text) => text,
+            UiElementComponent::Image(_) => return Err("the second element is not a text".into()),
+        };
+        assert_eq!(text.entity, EntityId::new(2));
+        assert_eq!(text.text, "Score 0");
+        assert_eq!(text.font_size, 18.0);
+        assert_eq!(text.color, [1.0, 1.0, 1.0, 1.0]);
+        assert!(text.enabled);
+        Ok(())
+    }
 }

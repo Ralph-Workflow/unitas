@@ -14,6 +14,7 @@ use crate::bundle::{
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing::{licensing_record, LicensingRecord, ThirdPartyNotice};
 use crate::targets::{BuildTarget, TargetArch, TargetOs};
+use crate::toolchain::{TargetAvailability, ToolchainCause, ToolchainProbe};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildOutcome {
@@ -336,6 +337,66 @@ impl fmt::Display for ReportParseError {
 
 impl std::error::Error for ReportParseError {}
 
+pub const STARTUP_BASIS: &str =
+    "time from process launch until the player answered its first control request";
+
+/// Whether a build report carries a measured player startup time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupStatus {
+    Measured,
+    Unavailable,
+}
+
+impl StartupStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            StartupStatus::Measured => "measured",
+            StartupStatus::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "measured" => Some(StartupStatus::Measured),
+            "unavailable" => Some(StartupStatus::Unavailable),
+            _ => None,
+        }
+    }
+}
+
+/// The player startup time a build report records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupMeasurement {
+    pub status: StartupStatus,
+    pub duration_ms: Option<u64>,
+    pub basis: String,
+    pub reason: Option<String>,
+}
+
+impl StartupMeasurement {
+    pub fn measured(duration_ms: u64, basis: impl Into<String>) -> Self {
+        Self {
+            status: StartupStatus::Measured,
+            duration_ms: Some(duration_ms),
+            basis: basis.into(),
+            reason: None,
+        }
+    }
+
+    pub fn unavailable(reason: impl Into<String>, basis: impl Into<String>) -> Self {
+        Self {
+            status: StartupStatus::Unavailable,
+            duration_ms: None,
+            basis: basis.into(),
+            reason: Some(reason.into()),
+        }
+    }
+
+    pub fn is_measured(&self) -> bool {
+        self.status == StartupStatus::Measured
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildReport {
     pub target: BuildTarget,
@@ -368,6 +429,10 @@ pub struct BuildReport {
     pub unsupported_behaviors: Vec<String>,
     pub compatibility_findings: Vec<CompatibilityFinding>,
     pub licensing: Option<LicensingRecord>,
+    /// The player startup time this build measured.
+    pub startup_time: StartupMeasurement,
+    /// The packaging state of every target the packaging slice reports on.
+    pub target_availability: Vec<TargetAvailability>,
 }
 
 impl BuildReport {
@@ -416,6 +481,11 @@ impl BuildReport {
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
             licensing: Some(licensing_record(&config.application_identifier)),
+            startup_time: StartupMeasurement::unavailable(
+                "the build has not launched the player it produced",
+                STARTUP_BASIS,
+            ),
+            target_availability: Vec::new(),
         };
         if let Some(output_dir) = report.output_location.clone() {
             report.stamp_from_staged_manifest(&output_dir);
@@ -457,6 +527,11 @@ impl BuildReport {
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
             licensing: None,
+            startup_time: StartupMeasurement::unavailable(
+                "the build did not produce a player to launch",
+                STARTUP_BASIS,
+            ),
+            target_availability: Vec::new(),
         }
     }
 
@@ -502,6 +577,11 @@ impl BuildReport {
             unsupported_behaviors: Vec::new(),
             compatibility_findings: Vec::new(),
             licensing: None,
+            startup_time: StartupMeasurement::unavailable(
+                "the build was cancelled before it produced a player to launch",
+                STARTUP_BASIS,
+            ),
+            target_availability: Vec::new(),
         }
     }
 
@@ -565,6 +645,18 @@ impl BuildReport {
             .iter()
             .map(CompatibilityFinding::from_finding)
             .collect();
+        self
+    }
+
+    /// Records the player startup time the build measured.
+    pub fn with_startup_time(mut self, startup_time: StartupMeasurement) -> Self {
+        self.startup_time = startup_time;
+        self
+    }
+
+    /// Records the packaging state of every reported target.
+    pub fn with_target_availability(mut self, availability: Vec<TargetAvailability>) -> Self {
+        self.target_availability = availability;
         self
     }
 
@@ -653,6 +745,14 @@ impl BuildReport {
             true,
         );
         push_kv_contributors(&mut out, 2, "managed_payload", &self.managed_payload, true);
+        push_kv_startup_time(&mut out, 2, "startup_time", &self.startup_time, true);
+        push_kv_target_availability(
+            &mut out,
+            2,
+            "target_availability",
+            &self.target_availability,
+            true,
+        );
         push_kv_licensing(&mut out, 2, "licensing", self.licensing.as_ref(), false);
         out.push_str("}\n");
         out
@@ -708,6 +808,8 @@ impl BuildReport {
         let compatibility_findings =
             get_required_compatibility_findings(obj, "compatibility_findings")?;
         let licensing = get_optional_licensing(obj)?;
+        let startup_time = get_optional_startup_time(obj)?;
+        let target_availability = get_optional_target_availability(obj)?;
 
         Ok(Self {
             target,
@@ -734,6 +836,8 @@ impl BuildReport {
             unsupported_behaviors,
             compatibility_findings,
             licensing,
+            startup_time,
+            target_availability,
         })
     }
 
@@ -1017,6 +1121,150 @@ fn push_kv_contributors(
         push_kv_str(out, indent + 4, "category", &item.category, true);
         push_kv_u64(out, indent + 4, "size_bytes", item.size_bytes, true);
         push_kv_str(out, indent + 4, "content_hash", &item.content_hash, false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_opt_u64(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    value: Option<u64>,
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    out.push_str(": ");
+    match value {
+        Some(number) => out.push_str(&number.to_string()),
+        None => out.push_str("null"),
+    }
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_startup_time(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    value: &StartupMeasurement,
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    out.push_str(": {\n");
+    push_kv_str(out, indent + 2, "status", value.status.as_str(), true);
+    push_kv_opt_u64(out, indent + 2, "duration_ms", value.duration_ms, true);
+    push_kv_str(out, indent + 2, "basis", &value.basis, true);
+    push_kv_opt_str(out, indent + 2, "reason", value.reason.as_deref(), false);
+    push_indent(out, indent);
+    out.push('}');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_target_availability(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[TargetAvailability],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "target", &item.target.identifier(), true);
+        push_kv_str(out, indent + 4, "state", item.state(), true);
+        match &item.unavailable {
+            None => {
+                push_kv_opt_str(out, indent + 4, "cause", None, true);
+                push_kv_opt_str(out, indent + 4, "tool", None, true);
+                push_kv_opt_str(out, indent + 4, "version_found", None, true);
+                push_kv_opt_str(out, indent + 4, "required_range", None, true);
+                push_kv_opt_str(out, indent + 4, "resolving_action", None, true);
+            }
+            Some(unavailable) => {
+                push_kv_str(out, indent + 4, "cause", unavailable.cause.as_str(), true);
+                push_kv_str(out, indent + 4, "tool", &unavailable.tool, true);
+                push_kv_opt_str(
+                    out,
+                    indent + 4,
+                    "version_found",
+                    unavailable.version_found.as_deref(),
+                    true,
+                );
+                push_kv_str(
+                    out,
+                    indent + 4,
+                    "required_range",
+                    &unavailable.required_range,
+                    true,
+                );
+                push_kv_str(
+                    out,
+                    indent + 4,
+                    "resolving_action",
+                    &unavailable.resolving_action,
+                    true,
+                );
+            }
+        }
+        push_kv_tool_probes(out, indent + 4, "tools", &item.tools, false);
+        push_indent(out, indent + 2);
+        out.push('}');
+        push_trailing(out, index + 1 < items.len());
+    }
+    push_indent(out, indent);
+    out.push(']');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_kv_tool_probes(
+    out: &mut String,
+    indent: usize,
+    key: &str,
+    items: &[ToolchainProbe],
+    trailing_comma: bool,
+) {
+    push_indent(out, indent);
+    push_escaped_json_str(out, key);
+    if items.is_empty() {
+        out.push_str(": []");
+        push_trailing(out, trailing_comma);
+        return;
+    }
+    out.push_str(": [\n");
+    for (index, item) in items.iter().enumerate() {
+        push_indent(out, indent + 2);
+        out.push_str("{\n");
+        push_kv_str(out, indent + 4, "tool", &item.tool, true);
+        push_kv_str(
+            out,
+            indent + 4,
+            "required_range",
+            &item.required_range,
+            true,
+        );
+        push_kv_str(out, indent + 4, "purpose", &item.purpose, true);
+        push_kv_bool(out, indent + 4, "present", item.present, true);
+        push_kv_opt_str(
+            out,
+            indent + 4,
+            "version_found",
+            item.version_found.as_deref(),
+            false,
+        );
         push_indent(out, indent + 2);
         out.push('}');
         push_trailing(out, index + 1 < items.len());
@@ -1672,6 +1920,132 @@ fn get_optional_licensing(
             }))
         }
     }
+}
+
+fn get_optional_startup_time(
+    obj: &BTreeMap<String, JsonValue>,
+) -> Result<StartupMeasurement, ReportParseError> {
+    let Some(value) = obj.get("startup_time") else {
+        return Ok(StartupMeasurement::unavailable(
+            "the report carries no startup measurement",
+            STARTUP_BASIS,
+        ));
+    };
+    if matches!(value, JsonValue::Null) {
+        return Ok(StartupMeasurement::unavailable(
+            "the report carries no startup measurement",
+            STARTUP_BASIS,
+        ));
+    }
+    let entry = value.as_object("startup_time")?;
+    let status_name = get_required_str(entry, "status")?;
+    let status = StartupStatus::from_name(status_name).ok_or_else(|| {
+        ReportParseError::new(format!("unrecognized startup status '{status_name}'"))
+    })?;
+    let duration_ms = match entry.get("duration_ms") {
+        None | Some(JsonValue::Null) => None,
+        Some(number) => Some(number.as_u64("duration_ms")?),
+    };
+    let reason = match entry.get("reason") {
+        None | Some(JsonValue::Null) => None,
+        Some(text) => Some(text.as_str("reason")?.to_string()),
+    };
+    Ok(StartupMeasurement {
+        status,
+        duration_ms,
+        basis: get_required_str(entry, "basis")?.to_string(),
+        reason,
+    })
+}
+
+fn get_optional_target_availability(
+    obj: &BTreeMap<String, JsonValue>,
+) -> Result<Vec<TargetAvailability>, ReportParseError> {
+    let Some(value) = obj.get("target_availability") else {
+        return Ok(Vec::new());
+    };
+    if matches!(value, JsonValue::Null) {
+        return Ok(Vec::new());
+    }
+    let mut availability = Vec::new();
+    for entry in value.as_array("target_availability")? {
+        let record = entry.as_object("target_availability")?;
+        let target_name = get_required_str(record, "target")?;
+        let target = parse_build_target(target_name, TargetArch::X86_64)?;
+        let state = get_required_str(record, "state")?;
+        if state != crate::toolchain::TOOLCHAIN_AVAILABLE
+            && state != crate::toolchain::TOOLCHAIN_EXTERNALLY_UNAVAILABLE
+        {
+            return Err(ReportParseError::new(format!(
+                "unrecognized target availability state '{state}'"
+            )));
+        }
+        let cause = match record.get("cause") {
+            None | Some(JsonValue::Null) => None,
+            Some(text) => {
+                let name = text.as_str("cause")?;
+                Some(ToolchainCause::from_name(name).ok_or_else(|| {
+                    ReportParseError::new(format!("unrecognized toolchain cause '{name}'"))
+                })?)
+            }
+        };
+        let tool = match record.get("tool") {
+            None | Some(JsonValue::Null) => None,
+            Some(text) => Some(text.as_str("tool")?.to_string()),
+        };
+        let version_found = match record.get("version_found") {
+            None | Some(JsonValue::Null) => None,
+            Some(text) => Some(text.as_str("version_found")?.to_string()),
+        };
+        let required_range = match record.get("required_range") {
+            None | Some(JsonValue::Null) => None,
+            Some(text) => Some(text.as_str("required_range")?.to_string()),
+        };
+        let resolving_action = match record.get("resolving_action") {
+            None | Some(JsonValue::Null) => None,
+            Some(text) => Some(text.as_str("resolving_action")?.to_string()),
+        };
+        let mut tools = Vec::new();
+        if let Some(probes) = record.get("tools") {
+            for probe in probes.as_array("tools")? {
+                let fields = probe.as_object("tools")?;
+                let version = match fields.get("version_found") {
+                    None | Some(JsonValue::Null) => None,
+                    Some(text) => Some(text.as_str("version_found")?.to_string()),
+                };
+                tools.push(ToolchainProbe {
+                    tool: get_required_str(fields, "tool")?.to_string(),
+                    required_range: get_required_str(fields, "required_range")?.to_string(),
+                    purpose: get_required_str(fields, "purpose")?.to_string(),
+                    present: get_required_bool(fields, "present")?,
+                    version_found: version,
+                });
+            }
+        }
+        let unavailable = match (cause, tool, required_range, resolving_action) {
+            (Some(cause), Some(tool), Some(required_range), Some(resolving_action)) => {
+                Some(crate::toolchain::UnavailableToolchain {
+                    cause,
+                    tool,
+                    version_found,
+                    required_range,
+                    resolving_action,
+                })
+            }
+            (None, None, None, None) => None,
+            _ => {
+                return Err(ReportParseError::new(
+                    "a target availability record carries an incomplete unavailable state",
+                ))
+            }
+        };
+        availability.push(TargetAvailability {
+            target,
+            tools,
+            unavailable,
+        });
+    }
+    Ok(availability)
 }
 
 fn get_required_notices(

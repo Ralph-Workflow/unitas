@@ -20,7 +20,6 @@ const INSTANCE_FLOATS: usize = 24;
 const SLOT_FLOATS: usize = (UNIFORM_SLOT / 4) as usize;
 const COPY_ROW_ALIGNMENT: u64 = 256;
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SHADOW_UNIFORM_BYTES: u64 = 80;
@@ -30,8 +29,7 @@ pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 // Lit model shared with the CPU raster in raster.rs: ambient*albedo +
 // light_color * (lambert*diffuse + blinn_phong_spec) * intensity + emissive,
 // where specular is gated by metallic*smoothness and normal maps perturb the
-// shading normal in tangent space. Textures left unset sample 1x1
-// placeholders (white albedo/normal, black emissive).
+// shading normal in tangent space.
 const SHADER_SOURCE: &str = r"
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -327,8 +325,6 @@ where
 struct Pipelines {
     lit: wgpu::RenderPipeline,
     unlit: wgpu::RenderPipeline,
-    blend_lit: wgpu::RenderPipeline,
-    blend_unlit: wgpu::RenderPipeline,
 }
 
 struct UniformState {
@@ -366,19 +362,8 @@ pub struct Renderer {
     queue: wgpu::Queue,
     global_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
-    material_layout: wgpu::BindGroupLayout,
-    shadow_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
-    sampler: wgpu::Sampler,
-    shadow_sampler: wgpu::Sampler,
-    default_albedo: wgpu::TextureView,
-    default_normal: wgpu::TextureView,
-    default_emissive: wgpu::TextureView,
-    default_material_bind: wgpu::BindGroup,
-    shadow_default_bind: wgpu::BindGroup,
-    shadow_uniform: wgpu::Buffer,
-    shadow_pipeline: wgpu::RenderPipeline,
     offscreen_pipelines: Pipelines,
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
@@ -401,25 +386,6 @@ fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
         format,
         blend: Some(wgpu::BlendState::REPLACE),
-        write_mask: wgpu::ColorWrites::ALL,
-    }
-}
-
-fn blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
-    wgpu::ColorTargetState {
-        format,
-        blend: Some(wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        }),
         write_mask: wgpu::ColorWrites::ALL,
     }
 }
@@ -468,49 +434,9 @@ fn build_pipelines(
     unlit_entry_point: &str,
     targets: &[Option<wgpu::ColorTargetState>],
 ) -> Pipelines {
-    let single_target = [targets[0].clone()];
-    let lit = build_pipeline(
-        device,
-        layout,
-        shader,
-        lit_entry_point,
-        targets,
-        true,
-        "lit",
-    );
-    let unlit = build_pipeline(
-        device,
-        layout,
-        shader,
-        unlit_entry_point,
-        targets,
-        true,
-        "unlit",
-    );
-    let blend_lit = build_pipeline(
-        device,
-        layout,
-        shader,
-        lit_entry_point,
-        &single_target,
-        false,
-        "blend-lit",
-    );
-    let blend_unlit = build_pipeline(
-        device,
-        layout,
-        shader,
-        unlit_entry_point,
-        &single_target,
-        false,
-        "blend-unlit",
-    );
-    Pipelines {
-        lit,
-        unlit,
-        blend_lit,
-        blend_unlit,
-    }
+    let lit = build_pipeline(device, layout, shader, lit_entry_point, targets, "lit");
+    let unlit = build_pipeline(device, layout, shader, unlit_entry_point, targets, "unlit");
+    Pipelines { lit, unlit }
 }
 
 fn build_pipeline(
@@ -519,12 +445,11 @@ fn build_pipeline(
     shader: &wgpu::ShaderModule,
     entry_point: &str,
     targets: &[Option<wgpu::ColorTargetState>],
-    write_depth: bool,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
     let depth_stencil = wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
-        depth_write_enabled: Some(write_depth),
+        depth_write_enabled: Some(true),
         depth_compare: Some(wgpu::CompareFunction::Less),
         stencil: wgpu::StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
@@ -701,161 +626,6 @@ impl Renderer {
             OFFSCREEN_FORMAT,
             ID_FORMAT,
         );
-        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow-depth"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_shadow"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(VERTEX_LAYOUT)],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.0,
-                    clamp: 0.0,
-                },
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: None,
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("material"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-        let default_albedo = solid_texture(&device, &queue, [255, 255, 255, 255]);
-        let default_normal = solid_texture(&device, &queue, [128, 128, 255, 255]);
-        let default_emissive = solid_texture(&device, &queue, [0, 0, 0, 255]);
-        let default_params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("material-default"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &default_params,
-            0,
-            bytemuck::cast_slice::<f32, u8>(&[0.0f32, 0.0, 1.0, 0.0]),
-        );
-        let default_material_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("material-default"),
-            layout: &material_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&default_albedo),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&default_normal),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&default_emissive),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: default_params.as_entire_binding(),
-                },
-            ],
-        });
-        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("shadow"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            ..Default::default()
-        });
-        let shadow_map_default = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow-default"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let shadow_map_default_view =
-            shadow_map_default.create_view(&wgpu::TextureViewDescriptor::default());
-        {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("shadow-default-clear"),
-            });
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("shadow-default-clear"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &shadow_map_default_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-            queue.submit(Some(encoder.finish()));
-        }
-        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("shadow-uniform"),
-            size: SHADOW_UNIFORM_BYTES,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &shadow_uniform,
-            0,
-            bytemuck::cast_slice::<f32, u8>(&[0.0f32; 20]),
-        );
-        let shadow_default_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow-default"),
-            layout: &shadow_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&shadow_map_default_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: shadow_uniform.as_entire_binding(),
-                },
-            ],
-        });
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
         fonts.load_system_fonts();
@@ -872,19 +642,8 @@ impl Renderer {
             queue,
             global_layout,
             instance_layout,
-            material_layout,
-            shadow_layout,
             pipeline_layout,
             shader,
-            sampler,
-            shadow_sampler,
-            default_albedo,
-            default_normal,
-            default_emissive,
-            default_material_bind,
-            shadow_default_bind,
-            shadow_uniform,
-            shadow_pipeline,
             offscreen_pipelines,
             capture_pipelines,
             uniforms: Mutex::new(uniforms),
@@ -1756,46 +1515,6 @@ fn capture_draw_items<'a>(instances: &[CaptureInstance<'a>]) -> Vec<DrawItem<'a>
             object_id: (index + 1) as u32,
         })
         .collect()
-}
-
-/// A 1x1 texture filled with one colour: the placeholder a material slot
-/// samples when it carries no texture (white albedo, flat normal, black
-/// emissive).
-fn solid_texture(device: &wgpu::Device, queue: &wgpu::Queue, rgba: [u8; 4]) -> wgpu::TextureView {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("solid"),
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: TEXTURE_FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(4),
-            rows_per_image: Some(1),
-        },
-        wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn create_uniforms(

@@ -7,6 +7,7 @@ pub mod image;
 pub mod math;
 pub mod mesh;
 pub mod raster;
+pub mod ui_pass;
 
 #[cfg(feature = "device")]
 pub mod gpu;
@@ -18,6 +19,12 @@ pub use image::{Image, Rgba8};
 pub use math::{Mat4, Vec3, Vec4};
 pub use mesh::{cube, uv_sphere, Mesh};
 pub use raster::{render, render_scene, render_with_view, DirectionalLight, MeshInstance};
+pub use ui_pass::{
+    composite_ui, SpriteRef, UiCoverage, UiElement, UiTarget, UiText, UiTextPainter,
+};
+
+#[cfg(feature = "device")]
+pub use ui_pass::{composite_ui_onto_capture, GlyphTextPainter};
 
 #[cfg(feature = "device")]
 pub use capture::{

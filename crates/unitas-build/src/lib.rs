@@ -8,6 +8,7 @@ pub mod report;
 pub mod sample;
 pub mod scripted;
 pub mod targets;
+pub mod toolchain;
 
 pub use bundle::{
     build_addressables_content, build_addressables_content_for_host,
@@ -26,16 +27,18 @@ pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIde
 pub use player::{
     apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,
     diagnostics_from_bundle_error, execute_build, execute_build_for_host, launch_bundle,
-    load_and_validate_bundle_manifest, mean_image_channel_error, render_failure, window_failure,
-    BuildOutcomeBundle, DeviceVerifyReport, PlayerLaunchResult, PlayerSession, PlayerStartupError,
-    ScriptHost, WindowedLaunchOptions, WindowedPlayerResult, BUILD_REPORT_FILENAME,
-    DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH, STARTUP_FAILURE_EXIT_CODE,
+    load_and_validate_bundle_manifest, mean_image_channel_error, measure_packaged_startup,
+    measure_player_startup, render_failure, window_failure, BuildOutcomeBundle, DeviceVerifyReport,
+    PlayerLaunchResult, PlayerSession, PlayerStartupError, ScriptHost, WindowedLaunchOptions,
+    WindowedPlayerResult, BUILD_REPORT_FILENAME, DEFAULT_DEVICE_VERIFY_HEIGHT,
+    DEFAULT_DEVICE_VERIFY_WIDTH, STARTUP_FAILURE_EXIT_CODE,
 };
 #[cfg(feature = "device")]
 pub use player::{capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification};
 pub use report::{
     BuildDiagnostic, BuildOutcome, BuildReport, ContentBuildReport, ContentBundleReportEntry,
     RejectedBundleReportEntry, ReportParseError, SizeCategoryEntry, SizeContributor,
+    StartupMeasurement, StartupStatus, STARTUP_BASIS,
 };
 pub use sample::{
     imported_gem_mesh, roll_a_ball_build_configuration, roll_a_ball_scene_yaml,
@@ -46,3 +49,8 @@ pub use sample::{
     ROLL_A_BALL_VERSION, WALL_NAMES,
 };
 pub use targets::{BuildTarget, TargetArch, TargetOs, TargetStatus};
+pub use toolchain::{
+    evaluate_availability, packaging_targets, probe_target_availability, required_toolchain,
+    target_availability_report, TargetAvailability, TargetToolchain, ToolPresence, ToolchainCause,
+    ToolchainProbe, ToolchainRequirement, UnavailableToolchain,
+};

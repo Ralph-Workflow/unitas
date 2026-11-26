@@ -11,6 +11,13 @@ pub mod output;
 pub type AudioClipId = u64;
 pub type MusicStreamId = u64;
 
+const DEFAULT_DOPPLER_FACTOR: f32 = 1.0;
+const DEFAULT_SPEED_OF_SOUND: f32 = 343.0;
+const MAX_DOPPLER_FACTOR: f32 = 5.0;
+const MIN_SPEED_OF_SOUND: f32 = 1.0;
+const MAX_EFFECTIVE_PITCH: f32 = 4.0;
+const MIN_AXIS_DISTANCE: f32 = 1e-6;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AudioMixerGroup {
     #[default]
@@ -415,6 +422,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
 pub struct ListenerPose {
     pub position: [f32; 3],
     pub forward: [f32; 3],
+    pub velocity: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -440,6 +448,8 @@ pub struct AudioSource {
     pub sample_cursor: f64,
     pub group: AudioMixerGroup,
     pub music: Option<MusicStreamId>,
+    pub velocity: [f32; 3],
+    pub scheduled_sample: Option<u64>,
 }
 
 impl Default for AudioSource {
@@ -466,6 +476,8 @@ impl Default for AudioSource {
             sample_cursor: 0.0,
             group: AudioMixerGroup::Sfx,
             music: None,
+            velocity: [0.0; 3],
+            scheduled_sample: None,
         }
     }
 }
@@ -483,6 +495,9 @@ pub struct AudioWorld {
     gameplay_paused: bool,
     music_streams: BTreeMap<MusicStreamId, MusicStream>,
     next_music_stream_id: MusicStreamId,
+    mixer_sample: u64,
+    doppler_factor: f32,
+    speed_of_sound: f32,
 }
 
 impl Default for AudioWorld {
@@ -501,6 +516,7 @@ impl AudioWorld {
             listener: Some(ListenerPose {
                 position: [0.0, 0.0, 0.0],
                 forward: [0.0, 0.0, 1.0],
+                velocity: None,
             }),
             max_real_voices: 32,
             application_paused: false,
@@ -509,6 +525,9 @@ impl AudioWorld {
             gameplay_paused: false,
             music_streams: BTreeMap::new(),
             next_music_stream_id: 1,
+            mixer_sample: 0,
+            doppler_factor: DEFAULT_DOPPLER_FACTOR,
+            speed_of_sound: DEFAULT_SPEED_OF_SOUND,
         }
     }
 
@@ -592,7 +611,24 @@ impl AudioWorld {
     }
 
     pub fn set_listener(&mut self, position: [f32; 3], forward: [f32; 3]) {
-        self.listener = Some(ListenerPose { position, forward });
+        self.listener = Some(ListenerPose {
+            position,
+            forward,
+            velocity: None,
+        });
+    }
+
+    pub fn set_listener_with_velocity(
+        &mut self,
+        position: [f32; 3],
+        forward: [f32; 3],
+        velocity: [f32; 3],
+    ) {
+        self.listener = Some(ListenerPose {
+            position,
+            forward,
+            velocity: Some(velocity),
+        });
     }
 
     pub fn clear_listener(&mut self) {
@@ -671,6 +707,10 @@ impl AudioWorld {
         self.master_volume * self.group_volumes[group.index()]
     }
 
+    fn bus_is_muted(&self, group: AudioMixerGroup) -> bool {
+        self.master_volume <= 0.0 || self.group_volumes[group.index()] <= 0.0
+    }
+
     pub fn load_music_bytes(&mut self, bytes: &[u8]) -> Result<MusicStreamId, AudioError> {
         let stream = MusicStream::new(bytes)?;
         let id = self.next_music_stream_id;
@@ -708,7 +748,19 @@ impl AudioWorld {
         }
     }
 
+    pub fn mixer_sample(&self) -> u64 {
+        self.mixer_sample
+    }
+
     pub fn play(&mut self, entity: EntityId, one_shot: bool) {
+        self.start_playback(entity, one_shot, None);
+    }
+
+    pub fn play_scheduled(&mut self, entity: EntityId, one_shot: bool, start_sample: u64) {
+        self.start_playback(entity, one_shot, Some(start_sample));
+    }
+
+    fn start_playback(&mut self, entity: EntityId, one_shot: bool, scheduled_sample: Option<u64>) {
         self.ensure_source(entity);
         let duration = self.effective_duration(entity);
         let sample_rate = self.source_sample_rate(entity);
@@ -716,6 +768,7 @@ impl AudioWorld {
         if source.unsupported_clip {
             source.state = AudioSourceState::Failed;
             source.wants_play = false;
+            source.scheduled_sample = None;
             return;
         }
         let was_finished = source.state == AudioSourceState::Completed
@@ -736,7 +789,12 @@ impl AudioWorld {
         source.sample_cursor = source.time * f64::from(sample_rate);
         source.one_shot_active = one_shot;
         source.wants_play = true;
-        source.state = AudioSourceState::Playing;
+        source.scheduled_sample = scheduled_sample;
+        source.state = if scheduled_sample.is_some() {
+            AudioSourceState::Scheduled
+        } else {
+            AudioSourceState::Playing
+        };
         let restart_music = if was_finished { source.music } else { None };
         if let Some(stream_id) = restart_music {
             if let Some(stream) = self.music_streams.get_mut(&stream_id) {
@@ -785,6 +843,7 @@ impl AudioWorld {
         source.one_shot_active = false;
         source.time = 0.0;
         source.sample_cursor = 0.0;
+        source.scheduled_sample = None;
         source.state = AudioSourceState::Stopped;
         self.recompute_virtualization();
     }
@@ -811,6 +870,86 @@ impl AudioWorld {
 
     pub fn pitch(&self, entity: EntityId) -> f32 {
         self.sources.get(&entity).map(|s| s.pitch).unwrap_or(1.0)
+    }
+
+    pub fn set_doppler_factor(&mut self, factor: f32) {
+        if factor.is_finite() {
+            self.doppler_factor = factor.clamp(0.0, MAX_DOPPLER_FACTOR);
+        }
+    }
+
+    pub fn doppler_factor(&self) -> f32 {
+        self.doppler_factor
+    }
+
+    pub fn set_speed_of_sound(&mut self, speed: f32) {
+        if speed.is_finite() {
+            self.speed_of_sound = speed.max(MIN_SPEED_OF_SOUND);
+        }
+    }
+
+    pub fn speed_of_sound(&self) -> f32 {
+        self.speed_of_sound
+    }
+
+    pub fn set_source_velocity(&mut self, entity: EntityId, velocity: [f32; 3]) {
+        let source = self.ensure_source(entity);
+        if velocity.iter().all(|value| value.is_finite()) {
+            source.velocity = velocity;
+        }
+    }
+
+    pub fn source_velocity(&self, entity: EntityId) -> [f32; 3] {
+        self.sources
+            .get(&entity)
+            .map(|s| s.velocity)
+            .unwrap_or([0.0; 3])
+    }
+
+    pub fn doppler_multiplier(&self, entity: EntityId) -> f32 {
+        let Some(source) = self.sources.get(&entity) else {
+            return 1.0;
+        };
+        let Some(listener) = self.listener else {
+            return 1.0;
+        };
+        let listener_velocity = listener.velocity.unwrap_or([0.0; 3]);
+        if !source.velocity.iter().all(|value| value.is_finite())
+            || !listener_velocity.iter().all(|value| value.is_finite())
+        {
+            return 1.0;
+        }
+        let offset = [
+            listener.position[0] - source.position[0],
+            listener.position[1] - source.position[1],
+            listener.position[2] - source.position[2],
+        ];
+        let distance =
+            (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
+        if distance <= MIN_AXIS_DISTANCE {
+            return 1.0;
+        }
+        let axis = [
+            offset[0] / distance,
+            offset[1] / distance,
+            offset[2] / distance,
+        ];
+        let relative = [
+            source.velocity[0] - listener_velocity[0],
+            source.velocity[1] - listener_velocity[1],
+            source.velocity[2] - listener_velocity[2],
+        ];
+        let radial = relative[0] * axis[0] + relative[1] * axis[1] + relative[2] * axis[2];
+        let clamped = radial.clamp(-self.speed_of_sound, self.speed_of_sound);
+        self.doppler_factor * (1.0 + clamped / self.speed_of_sound)
+    }
+
+    pub fn effective_pitch(&self, entity: EntityId) -> f32 {
+        let Some(source) = self.sources.get(&entity) else {
+            return 1.0;
+        };
+        let base = source.pitch.max(0.0);
+        (base * self.doppler_multiplier(entity)).clamp(0.0, MAX_EFFECTIVE_PITCH)
     }
 
     pub fn set_mute(&mut self, entity: EntityId, mute: bool) {
@@ -976,9 +1115,11 @@ impl AudioWorld {
         if source.volume <= 0.0 {
             return Some(SilenceReason::ZeroVolume);
         }
-        // Mirrors the mix bus: gameplay pause silences every group but Menu.
         if self.gameplay_paused && source.group != AudioMixerGroup::Menu {
             return Some(SilenceReason::GameplayPaused);
+        }
+        if self.bus_is_muted(source.group) {
+            return Some(SilenceReason::Muted);
         }
         if source.spatial_blend > 0.0 {
             let dist = self.distance_to_listener(source.position);
@@ -1026,6 +1167,7 @@ impl AudioWorld {
         for entity in entities {
             let duration = self.effective_duration(entity);
             let sample_rate = self.source_sample_rate(entity);
+            let pitch = f64::from(self.effective_pitch(entity)).max(0.0);
             let Some(source) = self.sources.get_mut(&entity) else {
                 continue;
             };
@@ -1034,7 +1176,6 @@ impl AudioWorld {
             {
                 continue;
             }
-            let pitch = f64::from(source.pitch).max(0.0);
             let dt = if source.ignore_time_scale {
                 scaled_dt
             } else {
@@ -1070,15 +1211,28 @@ impl AudioWorld {
         let mut output = vec![0.0f32; n_frames * 2];
         let entities: Vec<EntityId> = self.sources.keys().copied().collect();
         let mut any_completed = false;
+        let start_sample = self.mixer_sample;
+        let end_sample = start_sample + n_frames as u64;
 
-        for entity in entities {
-            if self.inaudible_reason(entity).is_some() {
-                continue;
-            }
-            let Some((gain_l, gain_r)) = self.source_gains(entity) else {
+        if self.advance_scheduled_sources(start_sample, end_sample) {
+            self.recompute_virtualization();
+        }
+
+        for entity in &entities {
+            let Some(source_summary) = self.sources.get(entity) else {
                 continue;
             };
-            let Some(source_summary) = self.sources.get(&entity) else {
+            let render_offset = match source_summary.scheduled_sample {
+                Some(scheduled) if scheduled > start_sample => (scheduled - start_sample) as usize,
+                _ => 0,
+            };
+            if render_offset >= n_frames {
+                continue;
+            }
+            if self.inaudible_reason(*entity).is_some() {
+                continue;
+            }
+            let Some((gain_l, gain_r)) = self.source_gains(*entity) else {
                 continue;
             };
             let bus = self.bus_gain(source_summary.group);
@@ -1090,11 +1244,11 @@ impl AudioWorld {
                 let Some(stream) = self.music_streams.get_mut(&stream_id) else {
                     continue;
                 };
-                let Some(source) = self.sources.get_mut(&entity) else {
+                let Some(source) = self.sources.get_mut(entity) else {
                     continue;
                 };
                 let looping = source.looping && !source.one_shot_active;
-                for frame_out in 0..n_frames {
+                for frame_out in render_offset..n_frames {
                     let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
                         source.wants_play = false;
                         source.one_shot_active = false;
@@ -1119,12 +1273,12 @@ impl AudioWorld {
             if total_frames == 0 || clip.sample_rate == 0 {
                 continue;
             }
-            let Some(source) = self.sources.get_mut(&entity) else {
+            let step = f64::from(self.effective_pitch(*entity)).max(0.0);
+            let Some(source) = self.sources.get_mut(entity) else {
                 continue;
             };
-            let step = f64::from(source.pitch).max(0.0);
 
-            for frame_out in 0..n_frames {
+            for frame_out in render_offset..n_frames {
                 let mut frame_idx = source.sample_cursor.floor() as usize;
                 if frame_idx >= total_frames {
                     if source.looping && !source.one_shot_active {
@@ -1171,10 +1325,28 @@ impl AudioWorld {
             }
         }
 
+        self.mixer_sample = end_sample;
         if any_completed {
             self.recompute_virtualization();
         }
         output
+    }
+
+    fn advance_scheduled_sources(&mut self, start_sample: u64, end_sample: u64) -> bool {
+        let mut promoted = false;
+        for source in self.sources.values_mut() {
+            let Some(scheduled) = source.scheduled_sample else {
+                continue;
+            };
+            if source.state == AudioSourceState::Scheduled && scheduled < end_sample {
+                source.state = AudioSourceState::Playing;
+                promoted = true;
+            }
+            if scheduled < start_sample {
+                source.scheduled_sample = None;
+            }
+        }
+        promoted
     }
 
     fn effective_duration(&self, entity: EntityId) -> Option<f64> {
@@ -1783,5 +1955,145 @@ mod tests {
             let expected = 2.0 * [0.3f32, 0.4][frame];
             assert!((resumed[frame * 2] - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn doppler_raises_pitch_for_an_approaching_source_and_lowers_it_for_a_receding_one() {
+        let mut world = AudioWorld::new();
+        world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let entity = EntityId::new(50);
+        world.ensure_source(entity);
+        world.set_source_position(entity, [0.0, 0.0, -20.0]);
+
+        world.set_source_velocity(entity, [0.0, 0.0, 100.0]);
+        let approaching = world.doppler_multiplier(entity);
+        assert!(approaching > 1.0);
+        assert!((world.effective_pitch(entity) - approaching).abs() < 1e-6);
+        assert!((world.effective_pitch(entity) - world.pitch(entity) * approaching).abs() < 1e-6);
+
+        world.set_source_velocity(entity, [0.0, 0.0, -100.0]);
+        let receding = world.doppler_multiplier(entity);
+        assert!(receding < 1.0);
+        assert!(receding > 0.0);
+        assert!((world.effective_pitch(entity) - receding).abs() < 1e-6);
+
+        world.set_source_velocity(entity, [0.0, 0.0, 0.0]);
+        assert!((world.doppler_multiplier(entity) - 1.0).abs() < 1e-6);
+
+        world.set_listener_with_velocity([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 100.0]);
+        let listener_receding = world.doppler_multiplier(entity);
+        assert!(listener_receding < 1.0);
+        assert!((listener_receding - receding).abs() < 1e-6);
+    }
+
+    #[test]
+    fn doppler_pitch_shift_changes_the_mixed_playback_rate() {
+        let mut world = AudioWorld::new();
+        world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 100,
+            samples: vec![0.5; 1000],
+            duration: 10.0,
+        });
+        let entity = EntityId::new(51);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+        world.set_source_position(entity, [0.0, 0.0, -20.0]);
+        world.set_source_velocity(entity, [0.0, 0.0, 343.0]);
+        world.play(entity, false);
+
+        let multiplier = world.doppler_multiplier(entity);
+        assert!((multiplier - 2.0).abs() < 1e-6);
+
+        world.mix(10);
+        let expected_time = 10.0 * f64::from(multiplier) / 100.0;
+        assert!((world.source_time(entity) - expected_time).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scheduled_playback_starts_at_the_scheduled_mixer_sample() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 8,
+            samples: vec![1.0; 8],
+            duration: 1.0,
+        });
+        let entity = EntityId::new(52);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+
+        world.mix(2);
+        assert_eq!(world.mixer_sample(), 2);
+        let scheduled_at = world.mixer_sample() + 3;
+        world.play_scheduled(entity, false, scheduled_at);
+        assert_eq!(world.source_state(entity), AudioSourceState::Scheduled);
+        assert_eq!(world.inaudible_reason(entity), Some(SilenceReason::Stopped));
+
+        let mixed = world.mix(6);
+        assert_eq!(mixed.len(), 12);
+        for frame in 0..3 {
+            assert_eq!(mixed[frame * 2], 0.0);
+            assert_eq!(mixed[frame * 2 + 1], 0.0);
+        }
+        for frame in 3..6 {
+            assert_eq!(mixed[frame * 2], 1.0);
+            assert_eq!(mixed[frame * 2 + 1], 1.0);
+        }
+        assert_eq!(world.source_state(entity), AudioSourceState::Playing);
+        assert_eq!(world.mixer_sample(), 8);
+    }
+
+    #[test]
+    fn sources_scheduled_at_adjacent_samples_render_without_gap_or_overlap() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 8,
+            samples: vec![0.25; 8],
+            duration: 1.0,
+        });
+        let first = EntityId::new(53);
+        let second = EntityId::new(54);
+        for entity in [first, second] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+        }
+
+        world.play_scheduled(first, false, world.mixer_sample());
+        world.play_scheduled(second, false, world.mixer_sample() + 1);
+
+        let mixed = world.mix(4);
+        assert_eq!(mixed[0], 0.25);
+        assert!((mixed[2] - 0.5).abs() < 1e-6);
+        assert!((mixed[4] - 0.5).abs() < 1e-6);
+        assert!((mixed[6] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn muted_mixer_group_reports_the_muted_inaudible_reason() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 10,
+            samples: vec![0.5; 10],
+            duration: 1.0,
+        });
+        let entity = EntityId::new(55);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+        world.set_source_group(entity, AudioMixerGroup::Music);
+        world.play(entity, false);
+        assert_eq!(world.inaudible_reason(entity), None);
+
+        world.set_group_volume(AudioMixerGroup::Music, 0.0);
+        assert_eq!(world.inaudible_reason(entity), Some(SilenceReason::Muted));
+        assert!(world.mix(4).iter().all(|sample| *sample == 0.0));
+
+        world.set_group_volume(AudioMixerGroup::Music, 1.0);
+        assert_eq!(world.inaudible_reason(entity), None);
+        world.set_master_volume(0.0);
+        assert_eq!(world.inaudible_reason(entity), Some(SilenceReason::Muted));
     }
 }

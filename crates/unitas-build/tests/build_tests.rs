@@ -6,3 +6,5 @@ mod content_catalog;
 mod managed_payload;
 #[path = "build/report_tests.rs"]
 mod report_tests;
+#[path = "build/target_availability.rs"]
+mod target_availability;

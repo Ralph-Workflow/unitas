@@ -1,8 +1,12 @@
 use std::fmt;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 #[cfg(feature = "device")]
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use unitas_asset::project::{build_compatibility_report, unity_project_root, Project};
 use unitas_asset::trust::TrustStore;
@@ -26,6 +30,7 @@ use crate::bundle::{
 use crate::config::BuildConfiguration;
 use crate::report::{
     BuildDiagnostic, BuildReport, CompatibilityFinding, SizeCategoryEntry, SizeContributor,
+    StartupMeasurement, STARTUP_BASIS,
 };
 #[cfg(feature = "device")]
 use crate::sample::{stage_roll_a_ball_bundle, HudSnapshot};
@@ -33,11 +38,13 @@ use crate::sample::{
     synthesize_chime_wav_bytes, PickupSlot, RollABallController, PICKUP_NAMES, PICKUP_POSITIONS,
 };
 use crate::targets::BuildTarget;
+use crate::toolchain::target_availability_report;
 
 pub const BUILD_REPORT_FILENAME: &str = "build-report.json";
 pub const DEFAULT_DEVICE_VERIFY_WIDTH: u32 = 320;
 pub const DEFAULT_DEVICE_VERIFY_HEIGHT: u32 = 240;
 pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
+pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerStartupError {
@@ -1031,6 +1038,85 @@ pub fn run_device_verification(
     })
 }
 
+/// Measures the time from launching a packaged player until it answers its
+/// first control request.
+pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {
+    let mut child = match Command::new(launch_artifact)
+        .arg("--control-stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return StartupMeasurement::unavailable(
+                format!(
+                    "the player at '{}' did not start: {error}",
+                    launch_artifact.display()
+                ),
+                STARTUP_BASIS,
+            );
+        }
+    };
+    let started = Instant::now();
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"{\"cmd\":\"state\"}\n");
+        let _ = stdin.flush();
+    }
+    let stdout = child.stdout.take();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let answer = stdout.and_then(|stdout| {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            reader.read_line(&mut line).ok().map(|read| (read, line))
+        });
+        let _ = sender.send(answer);
+    });
+    let answered = receiver.recv_timeout(Duration::from_secs(STARTUP_MEASUREMENT_TIMEOUT_SECONDS));
+    let elapsed = started.elapsed();
+    let _ = child.kill();
+    let _ = child.wait();
+    match answered {
+        Ok(Some((read, line))) if read > 0 && line.trim_start().starts_with('{') => {
+            StartupMeasurement::measured(
+                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                STARTUP_BASIS,
+            )
+        }
+        Ok(Some((_, line))) => StartupMeasurement::unavailable(
+            format!("the player answered with '{line}' instead of a control response"),
+            STARTUP_BASIS,
+        ),
+        Ok(None) => StartupMeasurement::unavailable(
+            "the player exited without answering a control request",
+            STARTUP_BASIS,
+        ),
+        Err(_) => StartupMeasurement::unavailable(
+            format!(
+                "the player did not answer within {STARTUP_MEASUREMENT_TIMEOUT_SECONDS} seconds"
+            ),
+            STARTUP_BASIS,
+        ),
+    }
+}
+
+/// Measures the startup of the player a staged bundle produced, when the
+/// bundle carries a launchable player on this host.
+pub fn measure_packaged_startup(staged: &StagedBundle) -> StartupMeasurement {
+    if staged.application_bundle_path.is_none() {
+        return StartupMeasurement::unavailable(
+            format!(
+                "the {} target produced no launchable player on this host",
+                staged.manifest.target
+            ),
+            STARTUP_BASIS,
+        );
+    }
+    measure_player_startup(&staged.launch_artifact_path)
+}
+
 pub fn build_project(
     config: &BuildConfiguration,
     output_dir: &Path,
@@ -1114,7 +1200,9 @@ pub fn build_project_for_host(
                 category_sizes,
                 contributors,
             )
-            .with_compatibility_findings(project_compatibility_findings(config));
+            .with_compatibility_findings(project_compatibility_findings(config))
+            .with_startup_time(measure_packaged_startup(&staged))
+            .with_target_availability(target_availability_report());
 
             let report_path = output_dir.join(BUILD_REPORT_FILENAME);
             if let Err(io_error) = report.write_to_file(&report_path) {
