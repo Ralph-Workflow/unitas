@@ -10,6 +10,7 @@ DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 DOTNET_RESTORE_COMMAND := dotnet restore bridge/Unitas.sln
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
+EDITOR_TEST_SHARD_FANOUT := 6
 EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
 	HttpTransportTests \
 	ScenarioToolsTests \
@@ -121,9 +122,13 @@ dotnet-test-run:
 	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; exit $$rc
 
 editor-test-shards:
-	@rc=0; pids=""; \
+	@rc=0; pids=""; running=0; \
 	for shard in $(EDITOR_TEST_SHARDS); do \
 		UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) $$shard & pids="$$pids $$!"; \
+		running=$$((running+1)); \
+		if [ $$running -ge $(EDITOR_TEST_SHARD_FANOUT) ]; then \
+			for pid in $$pids; do wait $$pid || rc=1; done; pids=""; running=0; \
+		fi; \
 	done; \
 	for pid in $$pids; do wait $$pid || rc=1; done; \
 	exit $$rc
