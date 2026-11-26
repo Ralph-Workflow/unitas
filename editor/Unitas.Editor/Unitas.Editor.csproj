@@ -13,6 +13,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../bridge/Unitas.Bridge/Unitas.Bridge.csproj" />
+    <ProjectReference Include="../../bridge/Unitas.Scripting/Unitas.Scripting.csproj" />
+    <ProjectReference Include="../../bridge/Unitas.Testing/Unitas.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

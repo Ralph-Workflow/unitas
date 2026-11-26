@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Loader;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Unitas.Bridge.Playtest;
@@ -13,15 +14,13 @@ namespace Unitas.Editor.Mcp
     {
         public const string ScenarioRunOrigin = "unitas://scenario/run";
 
-        private const string PlayerGuid = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
-        private const string RotatorGuid = "2b3c4d5e6f708192a3b4c5d6e7f8091a";
-        private const string ScoreGuid = "3c4d5e6f708192a3b4c5d6e7f8091a2b";
         private const int PathSearchDepth = 8;
+        private const string ScriptAssemblyFileName = "Assembly-CSharp.dll";
+        private const string ScriptAssemblyFolderName = "UnitasScriptAssemblies";
 
         public static void Register(McpHost host)
         {
             ArgumentNullException.ThrowIfNull(host);
-            RegisterRollABallGlue();
             host.RegisterTool(
                 new ToolDefinition(
                     "scenario.run",
@@ -57,7 +56,8 @@ namespace Unitas.Editor.Mcp
             try
             {
                 ScenarioDocument document = LoadDocument(scenarioPath, projectPath);
-                PurgeStalePlayerBalls();
+                RegisterProjectGlue(document, projectPath);
+                PurgeStaleSceneObjects();
                 ScenarioResult result = new ScenarioRunner().Run(document);
                 JsonObject payload = BuildPayload(result);
                 host.CompleteOperation(operationId, ScenarioRunOrigin, payload);
@@ -241,17 +241,15 @@ namespace Unitas.Editor.Mcp
             return null;
         }
 
-        private static void PurgeStalePlayerBalls()
+        private static void PurgeStaleSceneObjects()
         {
-            for (int guard = 0; guard < 100; guard++)
+            UnityEngine.Object[] objects = UnityEngine.Object.FindObjectsOfType(typeof(GameObject), true);
+            foreach (UnityEngine.Object item in objects)
             {
-                GameObject? stale = GameObject.Find("PlayerBall");
-                if (stale == null)
+                if (item is GameObject stale)
                 {
-                    return;
+                    UnityEngine.Object.Destroy(stale);
                 }
-
-                UnityEngine.Object.Destroy(stale);
             }
         }
 
@@ -290,129 +288,210 @@ namespace Unitas.Editor.Mcp
             return null;
         }
 
-        private static void RegisterRollABallGlue()
+        private static void RegisterProjectGlue(ScenarioDocument document, string? projectPath)
         {
-            ScriptGlueRegistry.Register(PlayerGuid, () => new RollABallPlayerScript());
-            ScriptGlueRegistry.Register(RotatorGuid, () => new RollABallPickupScript());
-            ScriptGlueRegistry.Register(ScoreGuid, () => new RollABallScoreScript());
-        }
-
-        private static class RollABallGameState
-        {
-            internal const int TotalPickups = 4;
-            internal const string WinMessage = "All 4 pickups collected, press R to play again.";
-
-            internal static readonly HashSet<string> Collected =
-                new HashSet<string>(StringComparer.Ordinal);
-
-            internal static int Score { get; private set; }
-
-            internal static bool Won { get; private set; }
-
-            internal static void Reset()
+            string root = string.IsNullOrWhiteSpace(projectPath)
+                ? Directory.GetCurrentDirectory()
+                : Path.GetFullPath(projectPath);
+            string? projectRoot = ResolveProjectRoot(document, root);
+            if (projectRoot == null)
             {
-                Score = 0;
-                Won = false;
-                Collected.Clear();
+                throw new McpError.InvalidRequest(
+                    "scenario.run could not resolve the project that owns the scenario scene; pass 'projectPath'");
             }
 
-            internal static void Collect(string pickupName)
+            string assemblyPath = Path.Combine(
+                projectRoot,
+                "Library",
+                ScriptAssemblyFolderName,
+                ScriptAssemblyFileName);
+            if (!File.Exists(assemblyPath))
             {
-                if (Won || !Collected.Add(pickupName))
-                {
-                    return;
-                }
-
-                Score++;
-                if (Score >= TotalPickups)
-                {
-                    Won = true;
-                    Debug.Log(WinMessage);
-                }
-            }
-        }
-
-        private sealed class RollABallPlayerScript : MonoBehaviour
-        {
-            private const float MoveSpeed = 7.5f;
-            private static readonly Vector3 StartPosition = new Vector3(0f, 0.5f, 0f);
-
-            private Rigidbody? _body;
-
-            public override void Awake()
-            {
-                _body = GetComponent<Rigidbody>();
-                RollABallGameState.Reset();
+                throw new McpError.InvalidRequest(
+                    "project script assembly not found: " + assemblyPath + "; compile the project before running scenarios");
             }
 
-            public override void Update()
+            List<KeyValuePair<string, string>> scripts = ReadProjectScripts(projectRoot);
+            if (scripts.Count == 0)
             {
-                Rigidbody? body = _body;
-                if (body == null)
-                {
-                    return;
-                }
-
-                float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
-                float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
-                body.velocity = new Vector3(moveX * MoveSpeed, body.velocity.y, moveZ * MoveSpeed);
-                if (Input.GetKeyDown(KeyCode.R))
-                {
-                    Restart();
-                }
+                throw new McpError.InvalidRequest(
+                    "project script metadata not found under " + Path.Combine(projectRoot, "Assets"));
             }
 
-            private void Restart()
+            var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+            Type?[] types;
+            try
             {
-                RollABallGameState.Reset();
-                Rigidbody? body = _body;
-                IPhysicsProvider? provider = Physics.Provider;
-                if (body == null || provider == null)
-                {
-                    return;
-                }
-
-                if (!provider.TryGetBodyPosition(gameObject.NativeEntityId, out Vector3 current))
-                {
-                    current = transform.position;
-                }
-
-                float dt = Time.deltaTime > 0f ? Time.deltaTime : 0.02f;
-                body.velocity = (StartPosition - current) / dt;
+                types = assembly.GetTypes();
+            }
+            catch (Exception)
+            {
+                types = Type.EmptyTypes;
             }
 
-            private static float ReadAxis(KeyCode positive, KeyCode positiveAlt, KeyCode negative, KeyCode negativeAlt)
+            List<string> unresolved = new List<string>();
+            int registered = 0;
+            foreach (KeyValuePair<string, string> script in scripts)
             {
-                float value = 0f;
-                if (Input.GetKey(positive) || Input.GetKey(positiveAlt))
+                string scriptName = Path.GetFileNameWithoutExtension(script.Value);
+                Type? scriptType = FindScriptType(types, scriptName);
+                if (scriptType == null)
                 {
-                    value = Mathf.Max(value, 1f);
+                    if (DeclaresComponent(script.Value))
+                    {
+                        unresolved.Add(scriptName);
+                    }
+
+                    continue;
                 }
 
-                if (Input.GetKey(negative) || Input.GetKey(negativeAlt))
+                if (!typeof(MonoBehaviour).IsAssignableFrom(scriptType))
                 {
-                    value = Mathf.Min(value, -1f);
+                    continue;
                 }
 
-                return value;
+                Type componentType = scriptType;
+                ScriptGlueRegistry.Register(
+                    script.Key,
+                    () => (MonoBehaviour)Activator.CreateInstance(componentType)!);
+                registered++;
+            }
+
+            if (unresolved.Count > 0)
+            {
+                throw new McpError.InvalidRequest(
+                    "the project script assembly does not contain the project's script types: "
+                    + string.Join(", ", unresolved));
+            }
+
+            if (registered == 0)
+            {
+                throw new McpError.InvalidRequest(
+                    "the project script assembly contains no script components: " + assemblyPath);
             }
         }
 
-        private sealed class RollABallPickupScript : MonoBehaviour
+        private static string? ResolveProjectRoot(ScenarioDocument document, string root)
         {
-            public override void OnTriggerEnter(Collider? other)
+            foreach (string scenePath in EnumerateScenePaths(document))
             {
-                if (other == null || !string.Equals(other.gameObject.name, "PlayerBall", StringComparison.Ordinal))
+                string? resolved = ResolveExistingPath(scenePath, root);
+                if (resolved == null)
                 {
-                    return;
+                    continue;
                 }
 
-                RollABallGameState.Collect(gameObject.name);
+                DirectoryInfo? directory = new DirectoryInfo(Path.GetDirectoryName(resolved) ?? root);
+                while (directory != null)
+                {
+                    if (Directory.Exists(Path.Combine(directory.FullName, "Assets"))
+                        && Directory.Exists(Path.Combine(directory.FullName, "ProjectSettings")))
+                    {
+                        return directory.FullName;
+                    }
+
+                    directory = directory.Parent;
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> EnumerateScenePaths(ScenarioDocument document)
+        {
+            if (!string.IsNullOrWhiteSpace(document.Scene))
+            {
+                yield return document.Scene;
+            }
+
+            foreach (ScenarioStep step in document.Steps)
+            {
+                if (step is LoadSceneStep loadSceneStep && !string.IsNullOrWhiteSpace(loadSceneStep.Path))
+                {
+                    yield return loadSceneStep.Path;
+                }
             }
         }
 
-        private sealed class RollABallScoreScript : MonoBehaviour
+        private static List<KeyValuePair<string, string>> ReadProjectScripts(string projectRoot)
         {
+            List<KeyValuePair<string, string>> scripts = new List<KeyValuePair<string, string>>();
+            string assets = Path.Combine(projectRoot, "Assets");
+            if (!Directory.Exists(assets))
+            {
+                return scripts;
+            }
+
+            string[] metaPaths = Directory.GetFiles(assets, "*.cs.meta", SearchOption.AllDirectories);
+            Array.Sort(metaPaths, StringComparer.Ordinal);
+            foreach (string metaPath in metaPaths)
+            {
+                string? guid = ReadMetaGuid(metaPath);
+                if (guid == null)
+                {
+                    continue;
+                }
+
+                scripts.Add(new KeyValuePair<string, string>(
+                    guid,
+                    metaPath.Substring(0, metaPath.Length - ".meta".Length)));
+            }
+
+            return scripts;
         }
+
+        private static string? ReadMetaGuid(string metaPath)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(metaPath);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("guid:", StringComparison.Ordinal))
+                {
+                    string guid = trimmed.Substring(5).Trim();
+                    return guid.Length == 32 ? guid : null;
+                }
+            }
+
+            return null;
+        }
+
+        private static Type? FindScriptType(Type?[] types, string scriptName)
+        {
+            foreach (Type? type in types)
+            {
+                if (type != null
+                    && type.Name == scriptName
+                    && !type.IsAbstract
+                    && typeof(MonoBehaviour).IsAssignableFrom(type))
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool DeclaresComponent(string scriptPath)
+        {
+            try
+            {
+                return File.ReadAllText(scriptPath).Contains("MonoBehaviour", StringComparison.Ordinal);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
     }
 }

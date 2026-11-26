@@ -19,12 +19,22 @@ namespace Unitas.Editor.Mcp
                         ["properties"] = new JsonObject(),
                     },
                     Scope.ReadProject),
-                _ => ToolOutput.Untrusted(
-                    "unitas://project/status",
-                    new JsonObject
+                arguments =>
+                {
+                    string? projectPath = ProjectAccess.OptionalString(arguments, "projectPath");
+                    if (projectPath != null)
                     {
-                        ["state"] = "ready",
-                    }));
+                        host.OpenProject(projectPath);
+                    }
+
+                    return ToolOutput.Untrusted(
+                        "unitas://project/status",
+                        new JsonObject
+                        {
+                            ["state"] = "ready",
+                            ["projectPath"] = host.ProjectPath,
+                        });
+                });
 
             host.RegisterResource(
                 new ResourceDefinition(
@@ -59,7 +69,11 @@ namespace Unitas.Editor.Mcp
             PlayTools.Register(host, playSessions);
             CaptureTool.Register(host, playSessions);
             ScenarioTools.Register(host);
-            ChangeReviewTools.Register(host, new ChangeSetStore(host));
+            ChangeSetStore changeSets = new ChangeSetStore(host);
+            ChangeReviewTools.Register(host, changeSets);
+            ProjectTools.Register(host, changeSets);
+            ScriptTools.Register(host);
+            TestTools.Register(host);
             BuildTools.Register(host);
             OperationTools.Register(host);
             host.TryRegisterNativeLibrary();
@@ -90,6 +104,7 @@ namespace Unitas.Editor.Mcp
                 CreateStartupAuditLog(args));
             PlaySessionManager playSessions = new PlaySessionManager();
             RegisterAll(host, playSessions);
+            GrantCliTestExecution(host, args);
             return new EditorRuntime(host, playSessions);
         }
 
@@ -102,7 +117,27 @@ namespace Unitas.Editor.Mcp
             PlaySessionManager playSessions = new PlaySessionManager();
             host.OwnResource(playSessions);
             RegisterAll(host, playSessions);
+            GrantCliTestExecution(host, args);
             return host;
+        }
+
+        // The command line is a person-driven local invocation, so a test run
+        // from it holds the scope that runs project code; the grant is bound to
+        // the CLI agent of that invocation and to no other session.
+        private static void GrantCliTestExecution(McpHost host, string[]? args)
+        {
+            if (args == null || !HeadlessCli.IsCliInvocation(args))
+            {
+                return;
+            }
+
+            CliArgs parsed = CliArgs.Parse(args);
+            if (!parsed.RequestsTestExecution)
+            {
+                return;
+            }
+
+            host.GrantStanding(HeadlessCli.CliAgentName, Scope.ExecuteProjectCode, GrantAuthority.Person);
         }
 
         private static AuditLog CreateStartupAuditLog(string[]? args)

@@ -153,7 +153,31 @@
         "dependencies": {
           "ModelContextProtocol": "[2.4.0, )",
           "ModelContextProtocol.AspNetCore": "[2.4.0, )",
-          "Unitas.Bridge": "[1.0.0, )"
+          "Unitas.Bridge": "[1.0.0, )",
+          "Unitas.Scripting": "[1.0.0, )",
+          "Unitas.Testing": "[1.0.0, )"
+        }
+      },
+      "unitas.scripting": {
+        "type": "Project",
+        "dependencies": {
+          "Unitas.Bridge": "[1.0.0, )",
+          "UnityEngine": "[1.0.0, )"
+        }
+      },
+      "unitas.testing": {
+        "type": "Project",
+        "dependencies": {
+          "Unitas.Bridge": "[1.0.0, )",
+          "Unitas.Scripting": "[1.0.0, )",
+          "Unitas.Testing.NUnit": "[1.0.0, )",
+          "UnityEngine": "[1.0.0, )"
+        }
+      },
+      "unitas.testing.nunit": {
+        "type": "Project",
+        "dependencies": {
+          "UnityEngine": "[1.0.0, )"
         }
       },
       "unityengine": {

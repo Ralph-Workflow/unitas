@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
@@ -61,6 +62,30 @@ namespace Unitas.Editor.Mcp
         public IPersonCredential PersonCredential => personCredential;
 
         public string? CurrentSessionId => currentSessionId;
+
+        public string? ProjectPath { get; private set; }
+
+        public void OpenProject(string projectPath)
+        {
+            if (string.IsNullOrWhiteSpace(projectPath))
+            {
+                throw new McpError.InvalidParams("project path must not be empty");
+            }
+
+            try
+            {
+                ProjectPath = Path.GetFullPath(projectPath);
+            }
+            catch (Exception error) when (error is ArgumentException || error is NotSupportedException)
+            {
+                throw new McpError.InvalidRequest("project path is invalid: " + error.Message);
+            }
+        }
+
+        public void RequireScope(string sessionId, Scope scope)
+        {
+            authorizer.Authorize(sessionId, scope);
+        }
 
         public SessionIdentity GetSessionIdentity(string sessionId)
         {

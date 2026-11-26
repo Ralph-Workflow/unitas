@@ -46,8 +46,10 @@ checkpoint; it is never reported as an unevaluable checkpoint. Four roll-a-ball
 scenarios (`Scenarios/s8_title_checkpoint.scenario.json`,
 `s8_arena_countdown.scenario.json`, `s8_arena_x5_checkpoint.scenario.json`,
 `s8_results_gold_checkpoint.scenario.json`) drive the sample to the countdown,
-the x5 combo and the gold pickup and capture the arena at each of those
-moments, and they run in the `make verify-samples` lane.
+the x5 combo and the gold pickup, capture the arena at each of those moments,
+and run in the `make verify-samples` lane. Their log checkpoints pass; their
+`render_capture` checkpoints fail today and carry no approved reference image
+yet, because the sample has no visible arena to capture (see the gap below).
 
 **Not demonstrated — the exact gap.**
 
@@ -68,6 +70,20 @@ moments, and they run in the `make verify-samples` lane.
   score, the multiplier or the results text.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
+- **The four captures are empty, so no reference image can honestly be
+  approved.** Each 256 x 256 capture is 99.9 % flat camera background and
+  holds 6-58 non-background pixels of 65 536 (title 58, countdown 6, x5 37,
+  gold 27), while every `render_capture` checkpoint declares
+  `expected_non_background_pixels: 1000`; all four therefore fail their own
+  checkpoint today, and the four scenarios fail in the `make verify-samples`
+  lane. The cause is the sample content, not the capture: in
+  `Assets/Scenes/RollABall.unity` only `ArenaProp` carries a `MeshRenderer`,
+  `ArenaFloor` and the four walls carry only `BoxCollider`s, and the pickup
+  visual carries a `MeshRenderer` with no `MeshFilter`, so the arena has no
+  visible geometry. Two consecutive runs produce bit-identical captures (0
+  differing pixels of 65 536), so the render is deterministic; the frame is
+  empty, not noisy. A reference image may only be approved once the arena
+  renders real content and the capture clears the declared threshold.
 
 The specification text is not weakened by this note. The gap above is what
 remains before S8 can be claimed complete.

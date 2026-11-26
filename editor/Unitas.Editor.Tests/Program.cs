@@ -28,6 +28,8 @@ namespace Unitas.Editor.Tests
                 ("SessionTests", SessionTests.Run),
                 ("StdioTransportTests", StdioTransportTests.Run),
                 ("UntrustedContentTests", UntrustedContentTests.Run),
+                ("AuthoringToolsTests", AuthoringToolsTests.Run),
+                ("ScenarioGlueDiscoveryTests", ScenarioGlueDiscoveryTests.Run),
             };
 
             if (args.Length == 0)
