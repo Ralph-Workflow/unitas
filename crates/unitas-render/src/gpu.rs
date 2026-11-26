@@ -1638,23 +1638,27 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
-        let mut slotted: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
+        // Every instance occupies its own aligned slot: the draw loop below
+        // steps the dynamic offset by a slot, so packed instance data would
+        // drift out of alignment with the bound uniform and draw every mesh
+        // with another mesh's transform.
+        let mut instance_data: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
         for (index, item) in items.iter().enumerate() {
             let start = index * SLOT_FLOATS;
-            slotted[start..start + 16].copy_from_slice(item.instance.model.as_array());
-            slotted[start + 16..start + 20].copy_from_slice(&[
+            instance_data[start..start + 16].copy_from_slice(item.instance.model.as_array());
+            instance_data[start + 16..start + 20].copy_from_slice(&[
                 item.instance.color[0],
                 item.instance.color[1],
                 item.instance.color[2],
                 item.alpha,
             ]);
-            slotted[start + 20] = item.object_id as f32;
+            instance_data[start + 20] = item.object_id as f32;
         }
-        if !slotted.is_empty() {
+        if !instance_data.is_empty() {
             self.queue.write_buffer(
                 &state.buffer,
                 UNIFORM_SLOT,
-                bytemuck::cast_slice::<f32, u8>(&slotted),
+                bytemuck::cast_slice::<f32, u8>(&instance_data),
             );
         }
 

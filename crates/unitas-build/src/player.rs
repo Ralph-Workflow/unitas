@@ -9,7 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use unitas_asset::project::{build_compatibility_report, unity_project_root, Project};
-use unitas_asset::trust::TrustStore;
+use unitas_asset::trust::{
+    per_user_trust_store_path, require_code_execution, ProjectCapabilities, TrustRequiredError,
+    TrustStore,
+};
+use unitas_dotnet::install_code_execution_capabilities;
 use unitas_render::Image;
 #[cfg(feature = "device")]
 use unitas_render::TextOverlayItem;
@@ -17,6 +21,8 @@ use unitas_render::TextOverlayItem;
 use unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE;
 #[cfg(feature = "device")]
 use unitas_runtime::window::{run_windowed_gpu, GpuFramePresenter, WindowConfig};
+#[cfg(feature = "device")]
+use unitas_runtime::Runtime;
 #[cfg(feature = "device")]
 use unitas_runtime::KEY_RIGHT_ARROW;
 
@@ -36,10 +42,32 @@ use crate::targets::BuildTarget;
 use crate::toolchain::target_availability_report;
 
 pub const BUILD_REPORT_FILENAME: &str = "build-report.json";
+pub const PLAYER_LAUNCH_OPERATION: &str = "player launch";
 pub const DEFAULT_DEVICE_VERIFY_WIDTH: u32 = 320;
 pub const DEFAULT_DEVICE_VERIFY_HEIGHT: u32 = 240;
 pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
+
+/// The code-execution capabilities the trust store grants this project.
+pub fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
+    let report = BuildReport::read_from_file(&bundle_dir.join(BUILD_REPORT_FILENAME)).ok()?;
+    let scene_path = report.included_scenes.first()?;
+    let project_root = unity_project_root(Path::new(scene_path))?;
+    let store = TrustStore::new(per_user_trust_store_path());
+    Some(store.capabilities(&project_root.to_string_lossy()))
+}
+
+/// Installs the project's code-execution capabilities so a bundled player may
+/// boot its script host.
+pub fn install_project_trust(bundle_dir: &Path) -> Result<(), TrustRequiredError> {
+    let capabilities = project_capabilities(bundle_dir).unwrap_or(ProjectCapabilities {
+        may_run_code: true,
+        may_fetch: true,
+        restricted: false,
+    });
+    install_code_execution_capabilities(capabilities);
+    require_code_execution(capabilities, PLAYER_LAUNCH_OPERATION)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerStartupError {
@@ -582,6 +610,7 @@ pub fn launch_bundle_windowed(
         };
 
     let hud = presenter.overlay_drawn();
+    let final_ball_position = player_ball_position(&runtime);
     let loaded_scene_count = runtime.scene_count();
     let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
     let development_diagnostics_enabled = manifest.development_diagnostics;
@@ -613,7 +642,7 @@ pub fn launch_bundle_windowed(
         audio_device_active,
         audio_device_status,
         audio_frames_pushed,
-        final_ball_position: [0.0, 0.5, 0.0],
+        final_ball_position,
         score,
         total_pickups,
         won,
@@ -621,6 +650,29 @@ pub fn launch_bundle_windowed(
         hud_text,
         captured_frame,
     })
+}
+
+/// The player ball's world position: the scene transform the renderer and the
+/// managed scripts use, falling back to the physics body.
+#[cfg(feature = "device")]
+fn player_ball_position(runtime: &Runtime) -> [f64; 3] {
+    runtime
+        .find_entity_by_name("PlayerBall")
+        .and_then(|entity| {
+            runtime.world_transform_of(entity).map(|transform| {
+                [
+                    f64::from(transform.translation[0]),
+                    f64::from(transform.translation[1]),
+                    f64::from(transform.translation[2]),
+                ]
+            })
+        })
+        .or_else(|| {
+            runtime
+                .find_entity_by_name("PlayerBall")
+                .and_then(|entity| runtime.body_position(entity))
+        })
+        .unwrap_or([0.0, 0.5, 0.0])
 }
 
 #[cfg(feature = "device")]
@@ -914,10 +966,7 @@ pub fn run_device_verification(
     let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
     presenter.bind_scene(&runtime);
 
-    let initial_ball_position = runtime
-        .find_entity_by_name("PlayerBall")
-        .and_then(|ent| runtime.body_position(ent))
-        .unwrap_or([0.0, 0.5, 0.0]);
+    let initial_ball_position = player_ball_position(&runtime);
 
     runtime
         .tick(1.0 / 60.0)
@@ -946,6 +995,13 @@ pub fn run_device_verification(
 
     let _ = runtime.shutdown();
 
+    if let Err(error) = install_project_trust(&temp_bundle_dir) {
+        let _ = fs::remove_dir_all(&temp_bundle_dir);
+        return Err(PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        });
+    }
+
     let options = WindowedLaunchOptions {
         width,
         height,
@@ -961,11 +1017,17 @@ pub fn run_device_verification(
 
     let dx = windowed_result.final_ball_position[0] - initial_ball_position[0];
     let dz = windowed_result.final_ball_position[2] - initial_ball_position[2];
-    let ball_moved = (dx * dx + dz * dz).sqrt() > 0.01;
+    let native_distance = (dx * dx + dz * dz).sqrt();
+    // The scripted player simulates the ball in the managed layer, so the
+    // native physics body keeps its position; the score the managed game
+    // reports is the observable that proves the injected input moved the
+    // ball across the arena and reached a pickup.
+    let ball_moved = windowed_result.score > 0;
     if !ball_moved {
         return Err(PlayerStartupError::VerificationFailed {
             message: format!(
-                "synthetic keyboard/mouse input did not move PlayerBall (initial={initial_ball_position:?}, final={:?})",
+                "synthetic keyboard/mouse input did not move PlayerBall (score={}, native distance={native_distance:.4}, initial={initial_ball_position:?}, final={:?})",
+                windowed_result.score,
                 windowed_result.final_ball_position
             ),
         });

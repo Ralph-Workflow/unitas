@@ -31,7 +31,7 @@ impl JobHandle {
 
 struct RecordState {
     completed: bool,
-    published: bool,
+    settled: bool,
     enqueued: bool,
     pending: usize,
     pending_dependents: usize,
@@ -89,7 +89,7 @@ impl Record {
         Self {
             state: Mutex::new(RecordState {
                 completed: false,
-                published: false,
+                settled: false,
                 enqueued: false,
                 pending,
                 pending_dependents: 0,
@@ -107,7 +107,7 @@ impl Record {
         Self {
             state: Mutex::new(RecordState {
                 completed: false,
-                published: false,
+                settled: false,
                 enqueued: false,
                 pending: 0,
                 pending_dependents: 0,
@@ -208,7 +208,7 @@ impl JobSystem {
             lock(&group.state).completed = true;
             mark_completed(inner, group_id);
             retire_unreferenced(inner, group_id, &group);
-            lock(&group.state).published = true;
+            settle(&group);
             return JobHandle(group_id);
         }
         let shared = Arc::new(job);
@@ -236,7 +236,7 @@ impl JobSystem {
             return;
         };
         let mut state = lock(&record.state);
-        while !state.published {
+        while !state.settled {
             state = match record.signal.wait(state) {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -491,10 +491,17 @@ fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
     if let Some(group_id) = group {
         finish_group(inner, group_id);
     }
-    lock(&record.state).published = true;
-    record.signal.notify_all();
+    settle(record);
     inner.live.fetch_sub(1, Ordering::AcqRel);
     notify(inner);
+}
+
+/// Publishes a record as fully finished: the payload ran, the dependencies it
+/// held were released and its own record was retired, so waiting for the
+/// settled flag is a barrier over the whole completion bookkeeping.
+fn settle(record: &Arc<Record>) {
+    lock(&record.state).settled = true;
+    record.signal.notify_all();
 }
 
 fn release_dependency(inner: &Inner, id: u64) {
@@ -538,8 +545,7 @@ fn finish_group(inner: &Inner, group_id: u64) {
     }
     mark_completed(inner, group_id);
     retire_unreferenced(inner, group_id, &record);
-    lock(&record.state).published = true;
-    record.signal.notify_all();
+    settle(&record);
     notify(inner);
 }
 
@@ -573,6 +579,7 @@ mod tests {
         for _ in 0..scheduled {
             let dependency = pool.schedule(|| {}, &[]);
             let dependent = pool.schedule(|| {}, &[dependency]);
+            pool.complete(dependency);
             pool.complete(dependent);
         }
         let records = lock(&pool.inner.records).len();
@@ -583,10 +590,10 @@ mod tests {
     fn a_completed_record_is_kept_while_a_pending_dependent_references_it() {
         let pool = JobSystem::new(2);
         let (sender, receiver) = std::sync::mpsc::channel();
-        let (release, release_rx) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
         let dependency = pool.schedule(
             move || {
-                let _wait = release_rx.recv();
+                let _wait = released.recv();
             },
             &[],
         );

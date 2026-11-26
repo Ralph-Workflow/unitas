@@ -5,14 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use unitas_asset::project::unity_project_root;
-use unitas_asset::trust::{
-    per_user_trust_store_path, require_code_execution, ProjectCapabilities, TrustRequiredError,
-    TrustStore,
-};
 use unitas_build::control;
 use unitas_build::package::package_desktop_targets;
-use unitas_build::player::STARTUP_FAILURE_EXIT_CODE;
+use unitas_build::player::{install_project_trust, STARTUP_FAILURE_EXIT_CODE};
 #[cfg(feature = "device")]
 use unitas_build::{
     capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,
@@ -20,15 +15,12 @@ use unitas_build::{
 };
 use unitas_build::{
     launch_bundle, load_and_validate_bundle_manifest, roll_a_ball_build_configuration,
-    stage_roll_a_ball_bundle, BuildReport, WindowedLaunchOptions, BUILD_REPORT_FILENAME,
+    stage_roll_a_ball_bundle, WindowedLaunchOptions,
 };
-use unitas_dotnet::install_code_execution_capabilities;
 
 const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>]";
 
 const TRUST_REQUIRED_EXIT_CODE: u8 = 3;
-
-const PLAYER_LAUNCH_OPERATION: &str = "player launch";
 
 #[derive(Debug, Clone, PartialEq)]
 struct CliOptions {
@@ -523,22 +515,4 @@ fn control_seed() -> u64 {
         .map(|elapsed| elapsed.as_nanos() as u64)
         .unwrap_or_default();
     nanos ^ (u64::from(std::process::id()) << 32)
-}
-
-fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
-    let report = BuildReport::read_from_file(&bundle_dir.join(BUILD_REPORT_FILENAME)).ok()?;
-    let scene_path = report.included_scenes.first()?;
-    let project_root = unity_project_root(Path::new(scene_path))?;
-    let store = TrustStore::new(per_user_trust_store_path());
-    Some(store.capabilities(&project_root.to_string_lossy()))
-}
-
-fn install_project_trust(bundle_dir: &Path) -> Result<(), TrustRequiredError> {
-    let capabilities = project_capabilities(bundle_dir).unwrap_or(ProjectCapabilities {
-        may_run_code: true,
-        may_fetch: true,
-        restricted: false,
-    });
-    install_code_execution_capabilities(capabilities);
-    require_code_execution(capabilities, PLAYER_LAUNCH_OPERATION)
 }
