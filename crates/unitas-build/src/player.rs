@@ -1223,7 +1223,7 @@ mod tests {
             .join("fixtures")
             .join("scene_alpha.unity");
         let config = BuildConfiguration::for_host(vec![scene_path], "NativeLoopGame");
-        stage_bundle_for_host(&config, &workspace, None)?;
+        stage_bundle_for_host(&config, &workspace, BuildTarget::current_host())?;
 
         let result = launch_bundle(&workspace, 4, 1.0 / 60.0)?;
         assert_eq!(result.frames_stepped, 4);

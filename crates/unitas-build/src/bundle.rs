@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use unitas_asset::meta::GuidIndex;
 
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing;
@@ -638,6 +640,13 @@ pub fn stage_bundle_for_host(
         .first()
         .and_then(|scene_path| unity_project_root(scene_path))
     {
+        stage_referenced_assets(
+            &project_root,
+            &config.scenes,
+            output_dir,
+            &mut entries,
+            &mut total_content_bytes,
+        )?;
         // Only projects that actually carry scripts get a Managed/ payload;
         // scene-only fixture projects stage content alone.
         if project_has_scripts(&project_root) {
@@ -796,6 +805,133 @@ fn project_has_scripts(project_root: &Path) -> bool {
         })
     }
     dir_contains_cs(&project_root.join("Assets"), 8)
+}
+
+/// Stages the assets a scene points at, so the bundle resolves the scene's
+/// external references on its own. A prefab, material, or texture the scene
+/// names travels with the scene, together with its `.meta` file, and the
+/// staged `.meta` files form the GUID index the player resolves against.
+fn stage_referenced_assets(
+    project_root: &Path,
+    scenes: &[PathBuf],
+    output_dir: &Path,
+    entries: &mut Vec<BundleManifestEntry>,
+    total_content_bytes: &mut u64,
+) -> Result<(), BundleError> {
+    let assets_root = project_root.join("Assets");
+    if !assets_root.is_dir() {
+        return Ok(());
+    }
+    let index = GuidIndex::build(&assets_root).map_err(|error| BundleError::Io {
+        path: assets_root.clone(),
+        message: error.to_string(),
+    })?;
+
+    let mut referenced: Vec<PathBuf> = Vec::new();
+    for scene in scenes {
+        collect_referenced_assets(scene, &index, &mut referenced);
+    }
+
+    for asset in referenced {
+        let Ok(relative) = asset.strip_prefix(&assets_root) else {
+            continue;
+        };
+        let destination = output_dir.join("Assets").join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| BundleError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
+        }
+        if destination.exists() {
+            continue;
+        }
+        let bytes = fs::read(&asset).map_err(|error| BundleError::Io {
+            path: asset.clone(),
+            message: error.to_string(),
+        })?;
+        fs::write(&destination, &bytes).map_err(|error| BundleError::Io {
+            path: destination.clone(),
+            message: error.to_string(),
+        })?;
+        *total_content_bytes = total_content_bytes.saturating_add(bytes.len() as u64);
+        entries.push(BundleManifestEntry {
+            index: entries.len(),
+            source_path: asset.to_string_lossy().replace('\\', "/"),
+            staged_path: format!("Assets/{}", relative.to_string_lossy().replace('\\', "/")),
+            content_hash: content_hash_hex(&bytes),
+            size_bytes: bytes.len() as u64,
+            root_object_count: 0,
+        });
+
+        let meta_source = PathBuf::from(format!("{}.meta", asset.to_string_lossy()));
+        let meta_destination = PathBuf::from(format!("{}.meta", destination.to_string_lossy()));
+        if !meta_source.is_file() {
+            continue;
+        }
+        let meta_bytes = fs::read(&meta_source).map_err(|error| BundleError::Io {
+            path: meta_source.clone(),
+            message: error.to_string(),
+        })?;
+        fs::write(&meta_destination, &meta_bytes).map_err(|error| BundleError::Io {
+            path: meta_destination.clone(),
+            message: error.to_string(),
+        })?;
+        *total_content_bytes = total_content_bytes.saturating_add(meta_bytes.len() as u64);
+        entries.push(BundleManifestEntry {
+            index: entries.len(),
+            source_path: meta_source.to_string_lossy().replace('\\', "/"),
+            staged_path: format!(
+                "Assets/{}.meta",
+                relative.to_string_lossy().replace('\\', "/")
+            ),
+            content_hash: content_hash_hex(&meta_bytes),
+            size_bytes: meta_bytes.len() as u64,
+            root_object_count: 0,
+        });
+    }
+    Ok(())
+}
+
+/// Collects the assets a scene or prefab points at, following the chain of
+/// references until the reachable asset set is complete.
+fn collect_referenced_assets(path: &Path, index: &GuidIndex, collected: &mut Vec<PathBuf>) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for guid in referenced_guids(&text) {
+        if !seen.insert(guid.clone()) {
+            continue;
+        }
+        let Some(asset) = index.get(&guid) else {
+            continue;
+        };
+        if collected.iter().any(|existing| existing == asset) {
+            continue;
+        }
+        collected.push(asset.to_path_buf());
+        collect_referenced_assets(asset, index, collected);
+    }
+}
+
+/// The GUIDs a Unity YAML document points at, in the order they appear.
+fn referenced_guids(text: &str) -> Vec<String> {
+    let mut guids = Vec::new();
+    for line in text.lines() {
+        let Some((_, rest)) = line.split_once("guid:") else {
+            continue;
+        };
+        let token = rest
+            .trim_start()
+            .split(|character: char| character.is_whitespace() || character == ',')
+            .next()
+            .unwrap_or_default();
+        if token.len() == 32 && token.chars().all(|character| character.is_ascii_hexdigit()) {
+            guids.push(token.to_ascii_lowercase());
+        }
+    }
+    guids
 }
 
 /// Stages the runtime library the player loads in process so the managed

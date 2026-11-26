@@ -13,6 +13,8 @@ type TestResult = Result<(), Box<dyn Error>>;
 const PLAYER_CONTROLLER_GUID: &str = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
 const ROTATOR_GUID: &str = "2b3c4d5e6f708192a3b4c5d6e7f8091a";
 const SCORE_MANAGER_GUID: &str = "3c4d5e6f708192a3b4c5d6e7f8091a2b";
+const PICKUP_GUID: &str = "b2c3d4e5f60718293a4b5c6d7e8f90a1";
+const GOLD_PICKUP_MARKER_GUID: &str = "d5e6f70818293a4b5c6d7e8f90a1b2c3";
 const SCENE_GUID: &str = "9f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e";
 const SCRIPT_DIRECTORY: &str = "Assets/Scripts";
 
@@ -56,7 +58,7 @@ fn loaded_scene() -> Result<Runtime, Box<dyn Error>> {
 fn scene_loads_with_project_settings_applied() -> TestResult {
     let mut runtime = Runtime::new()?;
     let script_count = runtime.load_scene(&scene_path())?;
-    assert_eq!(script_count, 6);
+    assert_eq!(script_count, 10);
     assert_eq!(runtime.scene_count(), 1);
     assert_eq!(runtime.scene_name(0), Some("RollABall"));
     assert_eq!(runtime.fixed_timestep(), 0.02);
@@ -79,6 +81,10 @@ fn scene_loads_with_project_settings_applied() -> TestResult {
             ROTATOR_GUID,
             ROTATOR_GUID,
             SCORE_MANAGER_GUID,
+            PICKUP_GUID,
+            PICKUP_GUID,
+            PICKUP_GUID,
+            GOLD_PICKUP_MARKER_GUID,
         ]
     );
     Ok(())
@@ -114,7 +120,11 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
             "Directional Light",
             "Arena",
             "Pickups",
-            "PlayerBall"
+            "PlayerBall",
+            "CollectBurst",
+            "LandingDust",
+            "ArenaProp",
+            "CollectChime"
         ]
     );
 
@@ -133,7 +143,15 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
     let pickups = entity_named(graph, "Pickups")?;
     assert_eq!(
         child_names(graph, pickups),
-        vec!["Pickup_1", "Pickup_2", "Pickup_3", "Pickup_4"]
+        vec![
+            "Pickup_1",
+            "Pickup_2",
+            "Pickup_3",
+            "Pickup_4",
+            "PickupPrefab_1",
+            "PickupPrefab_2",
+            "PickupGold"
+        ]
     );
 
     let player = entity_named(graph, "PlayerBall")?;
@@ -169,7 +187,7 @@ fn sample_opens_as_a_unity_2022_project() -> TestResult {
 fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestResult {
     let runtime = loaded_scene()?;
     let index = ProjectScriptIndex::build(&sample_root())?;
-    assert_eq!(index.script_count(), 4);
+    assert_eq!(index.script_count(), 6);
     let root = sample_root();
 
     for script in runtime.scripts() {

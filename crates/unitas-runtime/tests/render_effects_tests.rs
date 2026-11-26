@@ -163,9 +163,7 @@ fn the_render_frame_draws_the_particle_and_trail_effects() -> Result<(), Box<dyn
         "the ticked particle and trail effects must draw pixels over the background"
     );
     assert!(
-        pixels
-            .iter()
-            .any(|pixel| pixel[0] > 100 && pixel[2] < 100),
+        pixels.iter().any(|pixel| pixel[0] > 100 && pixel[2] < 100),
         "an effect pixel must carry the particle or trail colour: {pixels:?}"
     );
     Ok(())
