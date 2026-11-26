@@ -31,6 +31,7 @@ impl JobHandle {
 
 struct RecordState {
     completed: bool,
+    published: bool,
     enqueued: bool,
     pending: usize,
     pending_dependents: usize,
@@ -88,6 +89,7 @@ impl Record {
         Self {
             state: Mutex::new(RecordState {
                 completed: false,
+                published: false,
                 enqueued: false,
                 pending,
                 pending_dependents: 0,
@@ -105,6 +107,7 @@ impl Record {
         Self {
             state: Mutex::new(RecordState {
                 completed: false,
+                published: false,
                 enqueued: false,
                 pending: 0,
                 pending_dependents: 0,
@@ -205,6 +208,7 @@ impl JobSystem {
             lock(&group.state).completed = true;
             mark_completed(inner, group_id);
             retire_unreferenced(inner, group_id, &group);
+            lock(&group.state).published = true;
             return JobHandle(group_id);
         }
         let shared = Arc::new(job);
@@ -232,7 +236,7 @@ impl JobSystem {
             return;
         };
         let mut state = lock(&record.state);
-        while !state.completed {
+        while !state.published {
             state = match record.signal.wait(state) {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -487,6 +491,7 @@ fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
     if let Some(group_id) = group {
         finish_group(inner, group_id);
     }
+    lock(&record.state).published = true;
     record.signal.notify_all();
     inner.live.fetch_sub(1, Ordering::AcqRel);
     notify(inner);
@@ -533,6 +538,7 @@ fn finish_group(inner: &Inner, group_id: u64) {
     }
     mark_completed(inner, group_id);
     retire_unreferenced(inner, group_id, &record);
+    lock(&record.state).published = true;
     record.signal.notify_all();
     notify(inner);
 }
@@ -577,17 +583,60 @@ mod tests {
     fn a_completed_record_is_kept_while_a_pending_dependent_references_it() {
         let pool = JobSystem::new(2);
         let (sender, receiver) = std::sync::mpsc::channel();
-        let dependency = pool.schedule(|| {}, &[]);
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let dependency = pool.schedule(
+            move || {
+                let _wait = release_rx.recv();
+            },
+            &[],
+        );
         let dependent = pool.schedule(
             move || {
                 let _message = receiver.recv();
             },
             &[dependency],
         );
+        let _released = release.send(());
         pool.complete(dependency);
         assert_eq!(lock(&pool.inner.records).len(), 2);
         let _sent = sender.send(());
         pool.complete(dependent);
         assert_eq!(lock(&pool.inner.records).len(), 0);
+    }
+
+    #[test]
+    fn a_completed_handle_publishes_its_bookkeeping_before_returning() {
+        let pool = JobSystem::new(4);
+        let (dependency_release, dependency_rx) = std::sync::mpsc::channel();
+        let (middle_release, middle_rx) = std::sync::mpsc::channel();
+        let dependency = pool.schedule(
+            move || {
+                let _wait = dependency_rx.recv();
+            },
+            &[],
+        );
+        let middle = pool.schedule(
+            move || {
+                let _wait = middle_rx.recv();
+            },
+            &[dependency],
+        );
+        let middle_record = lock(&pool.inner.records).get(&middle.as_u64()).cloned();
+        for _ in 0..4_096 {
+            let _dependent = pool.schedule(|| {}, &[middle]);
+        }
+        let _dependency_released = dependency_release.send(());
+        let _middle_released = middle_release.send(());
+        while middle_record
+            .as_ref()
+            .is_some_and(|record| !lock(&record.state).completed)
+        {
+            thread::yield_now();
+        }
+        pool.complete(middle);
+        assert!(
+            !lock(&pool.inner.records).contains_key(&dependency.as_u64()),
+            "the completed handle returned before its dependency record was released"
+        );
     }
 }
