@@ -650,30 +650,90 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     hash
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DependencyKind {
+    DirectSerialized,
+    Script,
+    Package,
+    Resources,
+    AssetBundle,
+    Addressables,
+    Optional,
+    EditorOnly,
+    TargetLimited,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClassifiedDependency {
+    pub target_guid: String,
+    pub kind: DependencyKind,
+    pub is_transitive: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DependencyGraph {
     direct: BTreeMap<String, Vec<String>>,
     reverse: BTreeMap<String, Vec<String>>,
+    edge_kinds: BTreeMap<(String, String), DependencyKind>,
+}
+
+struct TargetAssetMetadata {
+    path: PathBuf,
+    meta_text: String,
 }
 
 impl DependencyGraph {
     pub fn build(project: &Project) -> Result<Self, DependencyError> {
         let mut direct: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut reverse_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut edge_kinds: BTreeMap<(String, String), DependencyKind> = BTreeMap::new();
+        let mut target_meta_map: BTreeMap<String, TargetAssetMetadata> = BTreeMap::new();
 
         for entry in &project.inventory().entries {
             if entry.kind != AssetKind::Main {
                 continue;
             }
             let asset_path = project.root().join(&entry.path);
-            let mut deps = scan_asset_dependencies(&asset_path)?;
+            let mut meta_os = asset_path.as_os_str().to_os_string();
+            meta_os.push(".meta");
+            let meta_path = PathBuf::from(meta_os);
+            let meta_text = fs::read_to_string(&meta_path).unwrap_or_default();
+            target_meta_map.insert(
+                entry.guid.clone(),
+                TargetAssetMetadata {
+                    path: entry.path.clone(),
+                    meta_text,
+                },
+            );
+        }
+
+        for entry in &project.inventory().entries {
+            if entry.kind != AssetKind::Main {
+                continue;
+            }
+            let asset_path = project.root().join(&entry.path);
+            let scanned = scan_asset_dependencies(&asset_path)?;
+            let mut deps = scanned.guids;
             deps.remove(&entry.guid);
             let sorted_deps: Vec<String> = deps.into_iter().collect();
+            let source_meta = target_meta_map
+                .get(&entry.guid)
+                .map(|item| item.meta_text.as_str())
+                .unwrap_or("");
             for target_guid in &sorted_deps {
                 reverse_sets
                     .entry(target_guid.clone())
                     .or_default()
                     .insert(entry.guid.clone());
+                let is_script_ref = scanned.script_guids.contains(target_guid);
+                let kind = classify_edge(
+                    &entry.path,
+                    source_meta,
+                    &scanned.source_text,
+                    target_meta_map.get(target_guid),
+                    is_script_ref,
+                );
+                edge_kinds.insert((entry.guid.clone(), target_guid.clone()), kind);
             }
             reverse_sets.entry(entry.guid.clone()).or_default();
             direct.insert(entry.guid.clone(), sorted_deps);
@@ -684,7 +744,160 @@ impl DependencyGraph {
             .map(|(guid, sources)| (guid, sources.into_iter().collect()))
             .collect();
 
-        Ok(Self { direct, reverse })
+        Ok(Self {
+            direct,
+            reverse,
+            edge_kinds,
+        })
+    }
+
+    pub fn classify_dependency(
+        &mut self,
+        source_guid: &str,
+        target_guid: &str,
+        kind: DependencyKind,
+    ) {
+        let targets = self.direct.entry(source_guid.to_string()).or_default();
+        if !targets.iter().any(|existing| existing == target_guid) {
+            targets.push(target_guid.to_string());
+            targets.sort();
+        }
+        let sources = self.reverse.entry(target_guid.to_string()).or_default();
+        if !sources.iter().any(|existing| existing == source_guid) {
+            sources.push(source_guid.to_string());
+            sources.sort();
+        }
+        self.reverse.entry(source_guid.to_string()).or_default();
+        self.edge_kinds
+            .insert((source_guid.to_string(), target_guid.to_string()), kind);
+    }
+
+    pub fn classified_dependencies_of(
+        &self,
+        guid: &str,
+        transitive: bool,
+    ) -> Vec<ClassifiedDependency> {
+        let mut results: Vec<ClassifiedDependency> = Vec::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        seen.insert(guid.to_string());
+
+        let direct_targets = match self.direct.get(guid) {
+            Some(targets) => targets,
+            None => return results,
+        };
+
+        let mut queue: VecDeque<String> = VecDeque::new();
+        for target in direct_targets {
+            if seen.insert(target.clone()) {
+                let kind = self
+                    .edge_kinds
+                    .get(&(guid.to_string(), target.clone()))
+                    .copied()
+                    .unwrap_or(DependencyKind::DirectSerialized);
+                results.push(ClassifiedDependency {
+                    target_guid: target.clone(),
+                    kind,
+                    is_transitive: false,
+                });
+                if transitive {
+                    queue.push_back(target.clone());
+                }
+            }
+        }
+
+        if transitive {
+            while let Some(current) = queue.pop_front() {
+                if let Some(next_targets) = self.direct.get(&current) {
+                    for next in next_targets {
+                        if seen.insert(next.clone()) {
+                            let kind = self
+                                .edge_kinds
+                                .get(&(current.clone(), next.clone()))
+                                .copied()
+                                .unwrap_or(DependencyKind::DirectSerialized);
+                            results.push(ClassifiedDependency {
+                                target_guid: next.clone(),
+                                kind,
+                                is_transitive: true,
+                            });
+                            queue.push_back(next.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|left, right| {
+            left.is_transitive
+                .cmp(&right.is_transitive)
+                .then_with(|| left.target_guid.cmp(&right.target_guid))
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+        results
+    }
+
+    pub fn classified_reverse_dependencies_of(
+        &self,
+        guid: &str,
+        transitive: bool,
+    ) -> Vec<ClassifiedDependency> {
+        let mut results: Vec<ClassifiedDependency> = Vec::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        seen.insert(guid.to_string());
+
+        let direct_sources = match self.reverse.get(guid) {
+            Some(sources) => sources,
+            None => return results,
+        };
+
+        let mut queue: VecDeque<String> = VecDeque::new();
+        for source in direct_sources {
+            if seen.insert(source.clone()) {
+                let kind = self
+                    .edge_kinds
+                    .get(&(source.clone(), guid.to_string()))
+                    .copied()
+                    .unwrap_or(DependencyKind::DirectSerialized);
+                results.push(ClassifiedDependency {
+                    target_guid: source.clone(),
+                    kind,
+                    is_transitive: false,
+                });
+                if transitive {
+                    queue.push_back(source.clone());
+                }
+            }
+        }
+
+        if transitive {
+            while let Some(current) = queue.pop_front() {
+                if let Some(next_sources) = self.reverse.get(&current) {
+                    for next in next_sources {
+                        if seen.insert(next.clone()) {
+                            let kind = self
+                                .edge_kinds
+                                .get(&(next.clone(), current.clone()))
+                                .copied()
+                                .unwrap_or(DependencyKind::DirectSerialized);
+                            results.push(ClassifiedDependency {
+                                target_guid: next.clone(),
+                                kind,
+                                is_transitive: true,
+                            });
+                            queue.push_back(next.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|left, right| {
+            left.is_transitive
+                .cmp(&right.is_transitive)
+                .then_with(|| left.target_guid.cmp(&right.target_guid))
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+        results
     }
 
     pub fn dependencies_of(&self, guid: &str) -> Vec<&str> {
@@ -785,82 +998,218 @@ fn canonicalize_cycle(path: &[&str]) -> Vec<String> {
     cycle
 }
 
-fn scan_asset_dependencies(path: &Path) -> Result<BTreeSet<String>, DependencyError> {
+struct ScannedDependencies {
+    guids: BTreeSet<String>,
+    script_guids: BTreeSet<String>,
+    source_text: String,
+}
+
+fn classify_edge(
+    source_path: &Path,
+    source_meta: &str,
+    source_text: &str,
+    target: Option<&TargetAssetMetadata>,
+    is_script_ref: bool,
+) -> DependencyKind {
+    let Some(target) = target else {
+        return DependencyKind::Optional;
+    };
+    if path_starts_with_component(&target.path, "Packages") {
+        return DependencyKind::Package;
+    }
+    if path_has_component(source_path, "Editor") || path_has_component(&target.path, "Editor") {
+        return DependencyKind::EditorOnly;
+    }
+    if is_script_ref || has_script_extension(&target.path) {
+        return DependencyKind::Script;
+    }
+    if path_has_component(&target.path, "Resources") {
+        return DependencyKind::Resources;
+    }
+    if path_has_component(&target.path, "AddressableAssetsData")
+        || target.meta_text.contains("Addressables")
+        || source_meta.contains("Addressables")
+        || source_text.contains("Addressables")
+    {
+        return DependencyKind::Addressables;
+    }
+    if meta_has_non_empty_asset_bundle(&target.meta_text) {
+        return DependencyKind::AssetBundle;
+    }
+    if meta_has_overridden_platform_settings(&target.meta_text) {
+        return DependencyKind::TargetLimited;
+    }
+    DependencyKind::DirectSerialized
+}
+
+fn path_starts_with_component(path: &Path, component_name: &str) -> bool {
+    path.components()
+        .next()
+        .and_then(|comp| comp.as_os_str().to_str())
+        .is_some_and(|first| first == component_name)
+}
+
+fn path_has_component(path: &Path, component_name: &str) -> bool {
+    path.components()
+        .filter_map(|comp| comp.as_os_str().to_str())
+        .any(|part| part == component_name)
+}
+
+fn has_script_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("cs")
+                || ext.eq_ignore_ascii_case("dll")
+                || ext.eq_ignore_ascii_case("asmdef")
+        })
+}
+
+fn meta_has_non_empty_asset_bundle(meta_text: &str) -> bool {
+    meta_text.lines().any(|line| {
+        if let Some(rest) = line.trim().strip_prefix("assetBundleName:") {
+            let value = rest.trim().trim_matches(['"', '\'']);
+            !value.is_empty()
+        } else {
+            false
+        }
+    })
+}
+
+fn meta_has_overridden_platform_settings(meta_text: &str) -> bool {
+    let has_platform_settings = meta_text
+        .lines()
+        .any(|line| line.trim().starts_with("platformSettings:"));
+    let has_overridden = meta_text.lines().any(|line| {
+        line.trim()
+            .strip_prefix("overridden:")
+            .is_some_and(|rest| rest.trim() == "1" || rest.trim().eq_ignore_ascii_case("true"))
+    });
+    has_platform_settings && has_overridden
+}
+
+fn scan_asset_dependencies(path: &Path) -> Result<ScannedDependencies, DependencyError> {
     let bytes = fs::read(path).map_err(|error| DependencyError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
     })?;
 
     let mut guids = BTreeSet::new();
+    let mut script_guids = BTreeSet::new();
+    let mut source_text = String::new();
 
     if is_text_serialized(&bytes) {
         if let Ok(text) = std::str::from_utf8(&bytes) {
+            source_text = text.to_string();
             if let Ok(stream) = unity_yaml::parse(text) {
                 for document in &stream.documents {
-                    collect_guids_from_yaml_node(&document.root, &mut guids);
+                    collect_guids_from_yaml_node(
+                        &document.root,
+                        false,
+                        &mut guids,
+                        &mut script_guids,
+                    );
                 }
             }
-            collect_guids_from_text(text, &mut guids);
+            collect_guids_from_text(text, &mut guids, &mut script_guids);
         }
-        return Ok(guids);
+        return Ok(ScannedDependencies {
+            guids,
+            script_guids,
+            source_text,
+        });
     }
 
     if let Ok(serialized) = read_serialized_file(&bytes) {
-        collect_guids_from_binary_file(&serialized, &mut guids);
-        return Ok(guids);
+        collect_guids_from_binary_file(&serialized, &mut guids, &mut script_guids);
+        return Ok(ScannedDependencies {
+            guids,
+            script_guids,
+            source_text,
+        });
     }
 
     if let Ok(text) = std::str::from_utf8(&bytes) {
-        collect_guids_from_text(text, &mut guids);
+        source_text = text.to_string();
+        collect_guids_from_text(text, &mut guids, &mut script_guids);
     }
 
-    Ok(guids)
+    Ok(ScannedDependencies {
+        guids,
+        script_guids,
+        source_text,
+    })
 }
 
-fn collect_guids_from_yaml_node(node: &Node, guids: &mut BTreeSet<String>) {
+fn collect_guids_from_yaml_node(
+    node: &Node,
+    in_script: bool,
+    guids: &mut BTreeSet<String>,
+    script_guids: &mut BTreeSet<String>,
+) {
     match node {
         Node::Scalar(_) => {}
         Node::Mapping(entries) => {
             for (key, value) in entries {
+                let child_in_script = in_script || key == "m_Script" || key == "script";
                 if key == "guid" {
                     if let Some(raw) = value.as_str() {
                         if let Some(normalized) = normalize_guid(raw) {
+                            if child_in_script {
+                                script_guids.insert(normalized.clone());
+                            }
                             guids.insert(normalized);
                         }
                     }
                 }
-                collect_guids_from_yaml_node(value, guids);
+                collect_guids_from_yaml_node(value, child_in_script, guids, script_guids);
             }
         }
         Node::Sequence(items) => {
             for item in items {
-                collect_guids_from_yaml_node(item, guids);
+                collect_guids_from_yaml_node(item, in_script, guids, script_guids);
             }
         }
     }
 }
 
-fn collect_guids_from_binary_file(file: &SerializedFile, guids: &mut BTreeSet<String>) {
+fn collect_guids_from_binary_file(
+    file: &SerializedFile,
+    guids: &mut BTreeSet<String>,
+    script_guids: &mut BTreeSet<String>,
+) {
     for index in 0..file.objects.len() {
         if let Ok(payload) = file.object_bytes(index) {
-            collect_guids_from_bytes(payload, guids);
+            collect_guids_from_bytes(payload, guids, script_guids);
         }
     }
-    collect_guids_from_bytes(&file.raw, guids);
+    collect_guids_from_bytes(&file.raw, guids, script_guids);
 }
 
-fn collect_guids_from_bytes(bytes: &[u8], guids: &mut BTreeSet<String>) {
+fn collect_guids_from_bytes(
+    bytes: &[u8],
+    guids: &mut BTreeSet<String>,
+    script_guids: &mut BTreeSet<String>,
+) {
     let text = String::from_utf8_lossy(bytes);
-    collect_guids_from_text(&text, guids);
+    collect_guids_from_text(&text, guids, script_guids);
 }
 
-fn collect_guids_from_text(text: &str, guids: &mut BTreeSet<String>) {
+fn collect_guids_from_text(
+    text: &str,
+    guids: &mut BTreeSet<String>,
+    script_guids: &mut BTreeSet<String>,
+) {
     for line in text.lines() {
+        let is_script_line = line.contains("m_Script");
         let mut remainder = line;
         while let Some(pos) = find_guid_key(remainder) {
             let after_key = &remainder[pos..];
             let candidate = extract_guid_token(after_key);
             if let Some(normalized) = normalize_guid(candidate) {
+                if is_script_line {
+                    script_guids.insert(normalized.clone());
+                }
                 guids.insert(normalized);
             }
             remainder = after_key;

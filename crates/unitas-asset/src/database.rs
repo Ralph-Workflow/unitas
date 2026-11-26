@@ -8,6 +8,46 @@ use crate::project::{build_inventory, AssetEntry, AssetKind, Project};
 use crate::unity_yaml::{self, Node};
 
 const TRASH_DIRECTORY: &str = ".unitas/trash";
+const MAX_RECENT_ASSETS: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPreview {
+    pub guid: String,
+    pub path: PathBuf,
+    pub family: Option<RecognizedAssetFamily>,
+    pub class_name: String,
+    pub byte_size: u64,
+    pub state: AssetImportState,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedAssetRecord {
+    pub original_path: PathBuf,
+    pub asset_bytes: Vec<u8>,
+    pub meta_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatabaseOperation {
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    Delete {
+        record: DeletedAssetRecord,
+    },
+    Restore {
+        path: PathBuf,
+        record: DeletedAssetRecord,
+    },
+    Duplicate {
+        created_path: PathBuf,
+        source_path: PathBuf,
+        guid: String,
+        meta_bytes: Vec<u8>,
+    },
+}
 
 const TEXT_ASSET_EXTENSIONS: [&str; 9] = [
     "txt", "json", "bytes", "csv", "xml", "html", "htm", "yaml", "fnt",
@@ -282,9 +322,15 @@ pub fn identify_asset_family(
             });
         }
         "anim" => {
+            let outcome = match crate::anim_import::import_animation_clip(bytes, &asset_label) {
+                Ok(imported) => {
+                    crate::anim_import::anim_import_outcome(&asset_label, Ok(&imported))
+                }
+                Err(error) => crate::anim_import::anim_import_outcome(&asset_label, Err(&error)),
+            };
             return Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::AnimationClip,
-                outcome: ImportOutcome::ready(),
+                outcome,
             });
         }
         "controller" => {
@@ -626,6 +672,11 @@ impl Project {
         }
 
         relocate_pair(&from_asset, &from_meta, &to_asset, &to_meta)?;
+        self.undo_stack.push(DatabaseOperation::Move {
+            from: from_rel,
+            to: to_rel,
+        });
+        self.redo_stack.clear();
         self.refresh_inventory()
     }
 
@@ -638,6 +689,15 @@ impl Project {
             return Err(DatabaseError::NotFound { path: rel });
         }
 
+        let asset_bytes = fs::read(&asset_path).map_err(|error| DatabaseError::Io {
+            path: asset_path.clone(),
+            message: error.to_string(),
+        })?;
+        let meta_bytes = fs::read(&meta_path).map_err(|error| DatabaseError::Io {
+            path: meta_path.clone(),
+            message: error.to_string(),
+        })?;
+
         let trash_asset = self.trash_root().join(&rel);
         let trash_meta = meta_path_for(&trash_asset);
         if trash_asset.exists() {
@@ -648,6 +708,14 @@ impl Project {
         }
 
         relocate_pair(&asset_path, &meta_path, &trash_asset, &trash_meta)?;
+        self.undo_stack.push(DatabaseOperation::Delete {
+            record: DeletedAssetRecord {
+                original_path: rel,
+                asset_bytes,
+                meta_bytes,
+            },
+        });
+        self.redo_stack.clear();
         self.refresh_inventory()
     }
 
@@ -665,8 +733,321 @@ impl Project {
             return Err(DatabaseError::DestinationExists { path: rel });
         }
 
+        let asset_bytes = fs::read(&trash_asset).map_err(|error| DatabaseError::Io {
+            path: trash_asset.clone(),
+            message: error.to_string(),
+        })?;
+        let meta_bytes = fs::read(&trash_meta).map_err(|error| DatabaseError::Io {
+            path: trash_meta.clone(),
+            message: error.to_string(),
+        })?;
+
         relocate_pair(&trash_asset, &trash_meta, &dest_asset, &dest_meta)?;
+        self.undo_stack.push(DatabaseOperation::Restore {
+            path: rel.clone(),
+            record: DeletedAssetRecord {
+                original_path: rel,
+                asset_bytes,
+                meta_bytes,
+            },
+        });
+        self.redo_stack.clear();
         self.refresh_inventory()
+    }
+
+    pub fn preview_asset(&mut self, relative_path: &Path) -> Result<AssetPreview, DatabaseError> {
+        let rel = self.relative_path(relative_path);
+        let entry = self
+            .inventory
+            .entries
+            .iter()
+            .find(|candidate| candidate.kind == AssetKind::Main && candidate.path == rel)
+            .cloned()
+            .ok_or_else(|| DatabaseError::NotFound { path: rel.clone() })?;
+        let full_path = self.root.join(&rel);
+        let metadata = fs::metadata(&full_path).map_err(|error| DatabaseError::Io {
+            path: full_path.clone(),
+            message: error.to_string(),
+        })?;
+        let byte_size = metadata.len();
+        let bytes = fs::read(&full_path).map_err(|error| DatabaseError::Io {
+            path: full_path.clone(),
+            message: error.to_string(),
+        })?;
+        let meta_text = fs::read_to_string(meta_path_for(&full_path)).ok();
+        let identified = identify_asset_family(&rel, &bytes, meta_text.as_deref());
+        let family = identified.as_ref().map(|item| item.family);
+        let class_name = entry
+            .class
+            .clone()
+            .or_else(|| family.map(|fam| fam.class_name().to_string()))
+            .unwrap_or_else(|| "DefaultAsset".to_string());
+        let state = self.asset_import_state(&entry);
+        let summary = build_preview_summary(&rel, &bytes, family, &class_name, byte_size);
+        let guid = entry.guid.clone();
+        self.record_recent(&guid);
+        Ok(AssetPreview {
+            guid,
+            path: rel,
+            family,
+            class_name,
+            byte_size,
+            state,
+            summary,
+        })
+    }
+
+    pub fn add_favorite(&mut self, guid: &str) -> bool {
+        if self.favorites.iter().any(|item| item == guid) {
+            return false;
+        }
+        self.favorites.push(guid.to_string());
+        true
+    }
+
+    pub fn remove_favorite(&mut self, guid: &str) -> bool {
+        let initial_len = self.favorites.len();
+        self.favorites.retain(|item| item != guid);
+        self.favorites.len() != initial_len
+    }
+
+    pub fn favorites(&self) -> &[String] {
+        &self.favorites
+    }
+
+    pub fn record_recent(&mut self, guid: &str) {
+        self.recent_assets.retain(|item| item != guid);
+        self.recent_assets.insert(0, guid.to_string());
+        if self.recent_assets.len() > MAX_RECENT_ASSETS {
+            self.recent_assets.truncate(MAX_RECENT_ASSETS);
+        }
+    }
+
+    pub fn recent_assets(&self) -> &[String] {
+        &self.recent_assets
+    }
+
+    pub fn duplicate_asset(&mut self, from: &Path, to: &Path) -> Result<String, DatabaseError> {
+        let from_rel = self.relative_path(from);
+        let to_rel = self.relative_path(to);
+        let from_exists = self
+            .inventory
+            .entries
+            .iter()
+            .any(|entry| entry.kind == AssetKind::Main && entry.path == from_rel);
+        let from_asset = self.root.join(&from_rel);
+        let from_meta = meta_path_for(&from_asset);
+        if !from_exists || !from_asset.is_file() || !from_meta.is_file() {
+            return Err(DatabaseError::NotFound { path: from_rel });
+        }
+        let to_asset = self.root.join(&to_rel);
+        let to_meta = meta_path_for(&to_asset);
+        if to_asset.exists() || to_meta.exists() {
+            return Err(DatabaseError::DestinationExists { path: to_rel });
+        }
+
+        if let Some(parent) = to_asset.parent() {
+            fs::create_dir_all(parent).map_err(|error| DatabaseError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
+        }
+        fs::copy(&from_asset, &to_asset).map_err(|error| DatabaseError::Io {
+            path: to_asset.clone(),
+            message: error.to_string(),
+        })?;
+
+        let source_meta = fs::read_to_string(&from_meta).map_err(|error| DatabaseError::Io {
+            path: from_meta.clone(),
+            message: error.to_string(),
+        })?;
+        let new_guid = self.next_unique_guid(&to_rel);
+        let rewritten_meta = rewrite_meta_guid(&source_meta, &new_guid);
+        let meta_bytes = rewritten_meta.into_bytes();
+        fs::write(&to_meta, &meta_bytes).map_err(|error| DatabaseError::Io {
+            path: to_meta.clone(),
+            message: error.to_string(),
+        })?;
+
+        self.undo_stack.push(DatabaseOperation::Duplicate {
+            created_path: to_rel,
+            source_path: from_rel,
+            guid: new_guid.clone(),
+            meta_bytes,
+        });
+        self.redo_stack.clear();
+        self.refresh_inventory()?;
+        Ok(new_guid)
+    }
+
+    pub fn undo_database_operation(&mut self) -> Result<bool, DatabaseError> {
+        let Some(operation) = self.undo_stack.pop() else {
+            return Ok(false);
+        };
+        match &operation {
+            DatabaseOperation::Move { from, to } => {
+                let from_asset = self.root.join(from);
+                let from_meta = meta_path_for(&from_asset);
+                let to_asset = self.root.join(to);
+                let to_meta = meta_path_for(&to_asset);
+                relocate_pair(&to_asset, &to_meta, &from_asset, &from_meta)?;
+            }
+            DatabaseOperation::Delete { record } => {
+                let dest_asset = self.root.join(&record.original_path);
+                let dest_meta = meta_path_for(&dest_asset);
+                let trash_asset = self.trash_root().join(&record.original_path);
+                let trash_meta = meta_path_for(&trash_asset);
+                if trash_asset.is_file() && trash_meta.is_file() {
+                    relocate_pair(&trash_asset, &trash_meta, &dest_asset, &dest_meta)?;
+                } else {
+                    write_asset_pair(
+                        &dest_asset,
+                        &dest_meta,
+                        &record.asset_bytes,
+                        &record.meta_bytes,
+                    )?;
+                }
+            }
+            DatabaseOperation::Restore { path, record } => {
+                let asset_path = self.root.join(path);
+                let meta_path = meta_path_for(&asset_path);
+                let trash_asset = self.trash_root().join(path);
+                let trash_meta = meta_path_for(&trash_asset);
+                if asset_path.is_file() && meta_path.is_file() {
+                    if trash_asset.exists() {
+                        let _ = fs::remove_file(&trash_asset);
+                    }
+                    if trash_meta.exists() {
+                        let _ = fs::remove_file(&trash_meta);
+                    }
+                    relocate_pair(&asset_path, &meta_path, &trash_asset, &trash_meta)?;
+                } else {
+                    remove_pair_if_exists(&asset_path, &meta_path)?;
+                    write_asset_pair(
+                        &trash_asset,
+                        &trash_meta,
+                        &record.asset_bytes,
+                        &record.meta_bytes,
+                    )?;
+                }
+            }
+            DatabaseOperation::Duplicate { created_path, .. } => {
+                let created_asset = self.root.join(created_path);
+                let created_meta = meta_path_for(&created_asset);
+                remove_pair_if_exists(&created_asset, &created_meta)?;
+            }
+        }
+        self.redo_stack.push(operation);
+        self.refresh_inventory()?;
+        Ok(true)
+    }
+
+    pub fn redo_database_operation(&mut self) -> Result<bool, DatabaseError> {
+        let Some(operation) = self.redo_stack.pop() else {
+            return Ok(false);
+        };
+        match &operation {
+            DatabaseOperation::Move { from, to } => {
+                let from_asset = self.root.join(from);
+                let from_meta = meta_path_for(&from_asset);
+                let to_asset = self.root.join(to);
+                let to_meta = meta_path_for(&to_asset);
+                relocate_pair(&from_asset, &from_meta, &to_asset, &to_meta)?;
+            }
+            DatabaseOperation::Delete { record } => {
+                let asset_path = self.root.join(&record.original_path);
+                let meta_path = meta_path_for(&asset_path);
+                let trash_asset = self.trash_root().join(&record.original_path);
+                let trash_meta = meta_path_for(&trash_asset);
+                if trash_asset.exists() {
+                    let _ = fs::remove_file(&trash_asset);
+                }
+                if trash_meta.exists() {
+                    let _ = fs::remove_file(&trash_meta);
+                }
+                if asset_path.is_file() && meta_path.is_file() {
+                    relocate_pair(&asset_path, &meta_path, &trash_asset, &trash_meta)?;
+                } else {
+                    remove_pair_if_exists(&asset_path, &meta_path)?;
+                    write_asset_pair(
+                        &trash_asset,
+                        &trash_meta,
+                        &record.asset_bytes,
+                        &record.meta_bytes,
+                    )?;
+                }
+            }
+            DatabaseOperation::Restore { path, record } => {
+                let dest_asset = self.root.join(path);
+                let dest_meta = meta_path_for(&dest_asset);
+                let trash_asset = self.trash_root().join(path);
+                let trash_meta = meta_path_for(&trash_asset);
+                if trash_asset.is_file() && trash_meta.is_file() {
+                    relocate_pair(&trash_asset, &trash_meta, &dest_asset, &dest_meta)?;
+                } else {
+                    write_asset_pair(
+                        &dest_asset,
+                        &dest_meta,
+                        &record.asset_bytes,
+                        &record.meta_bytes,
+                    )?;
+                }
+            }
+            DatabaseOperation::Duplicate {
+                created_path,
+                source_path,
+                meta_bytes,
+                ..
+            } => {
+                let from_asset = self.root.join(source_path);
+                let to_asset = self.root.join(created_path);
+                let to_meta = meta_path_for(&to_asset);
+                if let Some(parent) = to_asset.parent() {
+                    fs::create_dir_all(parent).map_err(|error| DatabaseError::Io {
+                        path: parent.to_path_buf(),
+                        message: error.to_string(),
+                    })?;
+                }
+                fs::copy(&from_asset, &to_asset).map_err(|error| DatabaseError::Io {
+                    path: to_asset.clone(),
+                    message: error.to_string(),
+                })?;
+                fs::write(&to_meta, meta_bytes).map_err(|error| DatabaseError::Io {
+                    path: to_meta,
+                    message: error.to_string(),
+                })?;
+            }
+        }
+        self.undo_stack.push(operation);
+        self.refresh_inventory()?;
+        Ok(true)
+    }
+
+    fn next_unique_guid(&mut self, to_rel: &Path) -> String {
+        let path_text = to_rel.to_string_lossy();
+        loop {
+            self.duplicate_counter = self.duplicate_counter.wrapping_add(1);
+            let counter = self.duplicate_counter;
+            let h1 = deterministic_hash(path_text.as_bytes(), counter ^ 0x9e37_79b9_7f4a_7c15);
+            let h2 = deterministic_hash(
+                path_text.as_bytes(),
+                counter.wrapping_mul(0x517c_c1b7_2722_0a95) ^ 0xbf58_476d_1ce4_e5b9,
+            );
+            let candidate = format!("{h1:016x}{h2:016x}");
+            let collides = self
+                .inventory
+                .entries
+                .iter()
+                .any(|entry| entry.guid == candidate)
+                || self
+                    .inventory
+                    .duplicate_guids
+                    .iter()
+                    .any(|dup| dup.guid == candidate);
+            if !collides && candidate.chars().any(|ch| ch != '0') {
+                return candidate;
+            }
+        }
     }
 
     fn relative_path(&self, path: &Path) -> PathBuf {
@@ -692,6 +1073,94 @@ fn meta_path_for(asset_path: &Path) -> PathBuf {
     let mut name = asset_path.as_os_str().to_os_string();
     name.push(".meta");
     PathBuf::from(name)
+}
+
+fn build_preview_summary(
+    rel_path: &Path,
+    bytes: &[u8],
+    family: Option<RecognizedAssetFamily>,
+    class_name: &str,
+    byte_size: u64,
+) -> String {
+    if family == Some(RecognizedAssetFamily::AnimationClip) {
+        let label = rel_path.display().to_string();
+        if let Ok(clip) = crate::anim_import::import_animation_clip(bytes, &label) {
+            return format!(
+                "{class_name} '{}' ({} Hz, {byte_size} bytes)",
+                clip.name, clip.sample_rate
+            );
+        }
+    }
+    format!("{class_name} ({byte_size} bytes)")
+}
+
+fn deterministic_hash(bytes: &[u8], seed: u64) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64 ^ seed;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn rewrite_meta_guid(meta_text: &str, new_guid: &str) -> String {
+    let mut replaced = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in meta_text.lines() {
+        if !replaced && line.trim_start().starts_with("guid:") {
+            lines.push(format!("guid: {new_guid}"));
+            replaced = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !replaced {
+        lines.push(format!("guid: {new_guid}"));
+    }
+    let mut out = lines.join("\n");
+    if meta_text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn write_asset_pair(
+    asset_path: &Path,
+    meta_path: &Path,
+    asset_bytes: &[u8],
+    meta_bytes: &[u8],
+) -> Result<(), DatabaseError> {
+    if let Some(parent) = asset_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| DatabaseError::Io {
+            path: parent.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+    fs::write(asset_path, asset_bytes).map_err(|error| DatabaseError::Io {
+        path: asset_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    fs::write(meta_path, meta_bytes).map_err(|error| DatabaseError::Io {
+        path: meta_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    Ok(())
+}
+
+fn remove_pair_if_exists(asset_path: &Path, meta_path: &Path) -> Result<(), DatabaseError> {
+    if asset_path.exists() {
+        fs::remove_file(asset_path).map_err(|error| DatabaseError::Io {
+            path: asset_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+    if meta_path.exists() {
+        fs::remove_file(meta_path).map_err(|error| DatabaseError::Io {
+            path: meta_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+    Ok(())
 }
 
 fn relocate_pair(

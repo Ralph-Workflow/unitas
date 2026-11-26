@@ -1706,9 +1706,6 @@ fn owning_feature_tier(feature_id: &str, declared: Option<Tier>) -> Tier {
 pub struct OwnedCapabilityPart {
     pub behavior: &'static str,
     pub location: &'static str,
-    /// The workspace tests that demonstrate this behavior, each written as
-    /// `path::test_name`. An empty list means the behavior is not demonstrated
-    /// by any test in this repository and `missing` names the gap.
     pub evidence: &'static [&'static str],
     pub missing: Option<&'static str>,
 }
@@ -1832,8 +1829,10 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "a preview, favorites, the recent list, duplication, and undo are provided",
                 location: "crates/unitas-asset/src/database.rs",
-                evidence: &[],
-                missing: Some("no asset preview, favorites, recent list, duplication, or undo is provided"),
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::database_preview_favorites_recents_duplicate_and_undo_redo_round_trip",
+                ],
+                missing: None,
             },
         ],
     },
@@ -1904,15 +1903,19 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             },
             OwnedCapabilityPart {
                 behavior: "an animation clip is decoded and imported",
-                location: "crates/unitas-asset/src/database.rs",
-                evidence: &[],
-                missing: Some("no animation clip importer decodes an .anim file, so an AnimationClip is identified as a family but never imported"),
+                location: "crates/unitas-asset/src/anim_import.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/texture_tests.rs::imports_unity_yaml_anim_clip_curves_settings_and_events",
+                ],
+                missing: None,
             },
             OwnedCapabilityPart {
                 behavior: "a platform texture format is encoded",
                 location: "crates/unitas-asset/src/texture/import.rs",
-                evidence: &[],
-                missing: Some("no BCn, ASTC, or ETC2 texture encoder exists, so a platform format override is recorded while the imported pixels stay uncompressed"),
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/texture_tests.rs::encodes_and_decodes_bcn_etc2_and_astc_compressed_texture_blocks_for_platform_targets",
+                ],
+                missing: None,
             },
         ],
     },
@@ -1933,8 +1936,10 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "a dependency is classified by kind",
                 location: "crates/unitas-asset/src/dependencies.rs",
-                evidence: &[],
-                missing: Some("dependencies are not classified by kind, so script, package, Resources, AssetBundle, and Addressables relationships are reported as undifferentiated asset dependencies"),
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/dependencies_tests.rs::dependency_graph_classifies_direct_script_package_resources_bundle_and_editor_dependencies",
+                ],
+                missing: None,
             },
         ],
     },
@@ -1989,8 +1994,10 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "every setting family stored under ProjectSettings is represented",
                 location: "crates/unitas-asset/src/project_settings.rs",
-                evidence: &[],
-                missing: Some("only time, dynamics, input, quality, player, and layer collision settings are represented; tags and layers, graphics, color space, audio, navigation areas, editor settings, script execution order, presets, package manager settings, version control settings, and the build scene list are not"),
+                evidence: &[
+                    "crates/unitas-asset/tests/project_settings.rs::parses_all_project_settings_families_and_round_trips_edits",
+                ],
+                missing: None,
             },
         ],
     },
@@ -2169,9 +2176,16 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             },
             OwnedCapabilityPart {
                 behavior: "a 3D rigid joint constrains two bodies",
-                location: "crates/unitas-physics/src/world.rs",
-                evidence: &[],
-                missing: Some("no 3D rigid joint is created or simulated, so the 3D world constrains bodies only through contact, friction, and restitution"),
+                location: "crates/unitas-physics/src/joint.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::fixed_joint_3d_locks_relative_position_and_orientation",
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::hinge_joint_3d_enforces_axis_motor_spring_and_angle_limits",
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::spring_joint_3d_pulls_bodies_toward_distance_band_with_damping",
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::character_joint_3d_anchors_bodies_and_clamps_twist_and_swing_cone",
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::configurable_joint_3d_enforces_locked_limited_free_axes_and_position_drives",
+                    "crates/unitas-physics/tests/simulation/joint_3d_tests.rs::joint_3d_breaks_when_force_or_torque_exceeds_threshold_and_emits_event",
+                ],
+                missing: None,
             },
         ],
     },
@@ -2380,14 +2394,17 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 evidence: &[
                     "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_custom_blend_is_used_for_a_matching_camera_pair",
                     "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_highest_priority_active_camera_is_live",
+                    "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_presented_pose_blends_between_following_cameras",
                 ],
                 missing: None,
             },
             OwnedCapabilityPart {
                 behavior: "a virtual camera follows a target and aims at a look-at target",
                 location: "crates/unitas-runtime/src/cinemachine.rs",
-                evidence: &[],
-                missing: Some("a virtual camera's follow and look-at targets are stored but never applied, so a camera does not track or aim at a target"),
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_virtual_camera_follows_target_and_aims_at_look_at_target",
+                ],
+                missing: None,
             },
             OwnedCapabilityPart {
                 behavior: "a timeline drives bound animation and cameras",

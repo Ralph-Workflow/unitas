@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use unitas_core::EntityId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +51,11 @@ pub struct VirtualCamera {
     pub look_at: Option<EntityId>,
     pub active: bool,
     pub lens: LensSettings,
+    pub position: [f64; 3],
+    pub rotation: [f64; 4],
+    pub follow_offset: [f64; 3],
+    pub follow_damping: f64,
+    pub look_at_damping: f64,
 }
 
 impl VirtualCamera {
@@ -62,7 +69,46 @@ impl VirtualCamera {
             lens: LensSettings::Perspective {
                 field_of_view: 60.0,
             },
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            follow_offset: [0.0; 3],
+            follow_damping: 0.0,
+            look_at_damping: 0.0,
         }
+    }
+
+    pub fn with_follow(mut self, target: EntityId) -> Self {
+        self.follow = Some(target);
+        self
+    }
+
+    pub fn with_look_at(mut self, target: EntityId) -> Self {
+        self.look_at = Some(target);
+        self
+    }
+
+    pub fn with_follow_offset(mut self, offset: [f64; 3]) -> Self {
+        self.follow_offset = offset;
+        self
+    }
+
+    pub fn with_damping(mut self, follow_damping: f64, look_at_damping: f64) -> Self {
+        self.follow_damping = follow_damping;
+        self.look_at_damping = look_at_damping;
+        self
+    }
+
+    pub fn with_position(mut self, position: [f64; 3]) -> Self {
+        self.position = position;
+        self
+    }
+
+    pub fn set_follow(&mut self, target: Option<EntityId>) {
+        self.follow = target;
+    }
+
+    pub fn set_look_at(&mut self, target: Option<EntityId>) {
+        self.look_at = target;
     }
 }
 
@@ -81,6 +127,17 @@ impl CameraBlendState {
             return 1.0;
         }
         (self.elapsed / self.duration).clamp(0.0, 1.0)
+    }
+
+    pub fn weight(&self) -> f64 {
+        let progress = self.progress();
+        match self.style {
+            BlendStyle::Cut => 1.0,
+            BlendStyle::Linear => progress,
+            BlendStyle::EaseIn => progress * progress,
+            BlendStyle::EaseOut => 1.0 - (1.0 - progress) * (1.0 - progress),
+            BlendStyle::EaseInOut => progress * progress * (3.0 - 2.0 * progress),
+        }
     }
 
     pub fn is_complete(&self) -> bool {
@@ -114,6 +171,7 @@ pub struct CinemachineWorld {
     default_blend: CameraBlend,
     custom_blends: Vec<(String, String, CameraBlend)>,
     update_method: BrainUpdateMethod,
+    targets: HashMap<EntityId, [f64; 3]>,
 }
 
 impl Default for CinemachineWorld {
@@ -134,6 +192,7 @@ impl CinemachineWorld {
             default_blend: CameraBlend::ease_in_out(2.0),
             custom_blends: Vec::new(),
             update_method: BrainUpdateMethod::Smart,
+            targets: HashMap::new(),
         }
     }
 
@@ -220,6 +279,37 @@ impl CinemachineWorld {
         self.update_method
     }
 
+    pub fn set_target_position(&mut self, entity: EntityId, position: [f64; 3]) {
+        self.targets.insert(entity, position);
+    }
+
+    pub fn target_position(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.targets.get(&entity).copied()
+    }
+
+    pub fn update_with_targets(&mut self, delta: f64, targets: &[(EntityId, [f64; 3])]) {
+        for (entity, position) in targets {
+            self.set_target_position(*entity, *position);
+        }
+        self.update(delta);
+    }
+
+    pub fn presented_pose(&self) -> Option<([f64; 3], [f64; 4])> {
+        if let Some(blend) = &self.blend {
+            let from = self.camera_by_name(&blend.from);
+            let to = self.camera_by_name(&blend.to);
+            if let (Some(from), Some(to)) = (from, to) {
+                let weight = blend.weight();
+                return Some((
+                    lerp_vector(from.position, to.position, weight),
+                    slerp_rotation(from.rotation, to.rotation, weight),
+                ));
+            }
+        }
+        let camera = self.live_camera()?;
+        Some((camera.position, camera.rotation))
+    }
+
     pub fn live_index(&self) -> Option<usize> {
         self.live
     }
@@ -280,6 +370,61 @@ impl CinemachineWorld {
     pub fn update(&mut self, delta: f64) {
         self.refresh_live();
         self.advance_blend(delta);
+        self.update_cameras(delta);
+    }
+
+    fn update_cameras(&mut self, delta: f64) {
+        let mut indices: Vec<usize> = Vec::new();
+        if let Some(live) = self.live {
+            indices.push(live);
+        }
+        if let Some(blend) = &self.blend {
+            if let Some(index) = self.camera_index(&blend.from)
+                && !indices.contains(&index)
+            {
+                indices.push(index);
+            }
+            if let Some(index) = self.camera_index(&blend.to)
+                && !indices.contains(&index)
+            {
+                indices.push(index);
+            }
+        }
+        for index in indices {
+            self.update_camera(index, delta);
+        }
+    }
+
+    fn update_camera(&mut self, index: usize, delta: f64) {
+        let (follow_position, look_position) = {
+            let Some(camera) = self.cameras.get(index) else {
+                return;
+            };
+            (
+                camera
+                    .follow
+                    .and_then(|entity| self.targets.get(&entity).copied()),
+                camera
+                    .look_at
+                    .and_then(|entity| self.targets.get(&entity).copied()),
+            )
+        };
+        let Some(camera) = self.cameras.get_mut(index) else {
+            return;
+        };
+        if let Some(target) = follow_position {
+            let desired = [
+                target[0] + camera.follow_offset[0],
+                target[1] + camera.follow_offset[1],
+                target[2] + camera.follow_offset[2],
+            ];
+            camera.position = damp_vector(camera.position, desired, camera.follow_damping, delta);
+        }
+        if let Some(target) = look_position {
+            let desired = look_rotation(camera.position, target);
+            camera.rotation =
+                damp_rotation(camera.rotation, desired, camera.look_at_damping, delta);
+        }
     }
 
     fn refresh_live(&mut self) {
@@ -357,4 +502,155 @@ impl CinemachineWorld {
             self.blend = Some(blend);
         }
     }
+}
+
+fn damp_vector(current: [f64; 3], desired: [f64; 3], damping: f64, delta: f64) -> [f64; 3] {
+    if delta > 0.0 && damping > 0.0 {
+        let alpha = 1.0 - (-damping * delta).exp();
+        lerp_vector(current, desired, alpha)
+    } else {
+        desired
+    }
+}
+
+fn damp_rotation(current: [f64; 4], desired: [f64; 4], damping: f64, delta: f64) -> [f64; 4] {
+    if delta > 0.0 && damping > 0.0 {
+        let alpha = 1.0 - (-damping * delta).exp();
+        slerp_rotation(current, desired, alpha)
+    } else {
+        normalize_rotation(desired)
+    }
+}
+
+fn lerp_vector(first: [f64; 3], second: [f64; 3], alpha: f64) -> [f64; 3] {
+    [
+        first[0] + (second[0] - first[0]) * alpha,
+        first[1] + (second[1] - first[1]) * alpha,
+        first[2] + (second[2] - first[2]) * alpha,
+    ]
+}
+
+fn slerp_rotation(first: [f64; 4], second: [f64; 4], alpha: f64) -> [f64; 4] {
+    let start = normalize_rotation(first);
+    let end = normalize_rotation(second);
+    let dot = start[0] * end[0] + start[1] * end[1] + start[2] * end[2] + start[3] * end[3];
+    let (start, end, cosine) = if dot < 0.0 {
+        (start, [-end[0], -end[1], -end[2], -end[3]], -dot)
+    } else {
+        (start, end, dot)
+    };
+    if cosine >= 0.9995 {
+        return normalize_rotation([
+            start[0] + (end[0] - start[0]) * alpha,
+            start[1] + (end[1] - start[1]) * alpha,
+            start[2] + (end[2] - start[2]) * alpha,
+            start[3] + (end[3] - start[3]) * alpha,
+        ]);
+    }
+    let angle = cosine.clamp(-1.0, 1.0).acos();
+    let sine = angle.sin();
+    if sine.abs() <= 1e-9 {
+        return start;
+    }
+    let start_weight = ((1.0 - alpha) * angle).sin() / sine;
+    let end_weight = (alpha * angle).sin() / sine;
+    normalize_rotation([
+        start[0] * start_weight + end[0] * end_weight,
+        start[1] * start_weight + end[1] * end_weight,
+        start[2] * start_weight + end[2] * end_weight,
+        start[3] * start_weight + end[3] * end_weight,
+    ])
+}
+
+fn normalize_rotation(rotation: [f64; 4]) -> [f64; 4] {
+    let length = (rotation[0] * rotation[0]
+        + rotation[1] * rotation[1]
+        + rotation[2] * rotation[2]
+        + rotation[3] * rotation[3])
+        .sqrt();
+    if !length.is_finite() || length <= 1e-9 {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    [
+        rotation[0] / length,
+        rotation[1] / length,
+        rotation[2] / length,
+        rotation[3] / length,
+    ]
+}
+
+fn look_rotation(from: [f64; 3], to: [f64; 3]) -> [f64; 4] {
+    let delta = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let Some(forward) = normalize_vector(delta) else {
+        return [0.0, 0.0, 0.0, 1.0];
+    };
+    let right = normalize_vector(cross_product([0.0, 1.0, 0.0], forward))
+        .or_else(|| normalize_vector(cross_product([0.0, 0.0, 1.0], forward)));
+    let Some(right) = right else {
+        return [0.0, 0.0, 0.0, 1.0];
+    };
+    let up = cross_product(forward, right);
+    rotation_from_basis(right, up, forward)
+}
+
+fn rotation_from_basis(right: [f64; 3], up: [f64; 3], forward: [f64; 3]) -> [f64; 4] {
+    let m00 = right[0];
+    let m01 = up[0];
+    let m02 = forward[0];
+    let m10 = right[1];
+    let m11 = up[1];
+    let m12 = forward[1];
+    let m20 = right[2];
+    let m21 = up[2];
+    let m22 = forward[2];
+    let trace = m00 + m11 + m22;
+    if trace > 0.0 {
+        let scale = 2.0 * (trace + 1.0).sqrt();
+        [
+            (m21 - m12) / scale,
+            (m02 - m20) / scale,
+            (m10 - m01) / scale,
+            0.25 * scale,
+        ]
+    } else if m00 > m11 && m00 > m22 {
+        let scale = 2.0 * (1.0 + m00 - m11 - m22).sqrt();
+        [
+            0.25 * scale,
+            (m01 + m10) / scale,
+            (m02 + m20) / scale,
+            (m21 - m12) / scale,
+        ]
+    } else if m11 > m22 {
+        let scale = 2.0 * (1.0 + m11 - m00 - m22).sqrt();
+        [
+            (m01 + m10) / scale,
+            0.25 * scale,
+            (m12 + m21) / scale,
+            (m02 - m20) / scale,
+        ]
+    } else {
+        let scale = 2.0 * (1.0 + m22 - m00 - m11).sqrt();
+        [
+            (m02 + m20) / scale,
+            (m12 + m21) / scale,
+            0.25 * scale,
+            (m10 - m01) / scale,
+        ]
+    }
+}
+
+fn cross_product(first: [f64; 3], second: [f64; 3]) -> [f64; 3] {
+    [
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    ]
+}
+
+fn normalize_vector(vector: [f64; 3]) -> Option<[f64; 3]> {
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if !length.is_finite() || length <= 1e-9 {
+        return None;
+    }
+    Some([vector[0] / length, vector[1] / length, vector[2] / length])
 }

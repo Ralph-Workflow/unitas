@@ -11,6 +11,7 @@ namespace Unitas.Samples.RollABall
         private const float DashCoastSeconds = 0.25f;
         private const float CameraYawPerPixel = 0.005f;
         private const float MinimumCameraDistance = 1f;
+        private const float TrailEmissionSpeed = 10f;
         private static readonly Vector3 StartPosition = new Vector3(0f, 0.5f, 0f);
         private static readonly Vector3 CameraOffset = new Vector3(0f, 9.5f, -11.5f);
 
@@ -22,6 +23,7 @@ namespace Unitas.Samples.RollABall
 
         private Rigidbody? _body;
         private Camera? _camera;
+        private TrailRenderer? _trail;
         private float _cameraYaw;
         private float _lastDashTime = float.NegativeInfinity;
         private int _dashCount;
@@ -29,6 +31,7 @@ namespace Unitas.Samples.RollABall
         private new void Awake()
         {
             _body = GetComponent<Rigidbody>();
+            _trail = GetComponent<TrailRenderer>();
             GameObject? cameraObject = GameObject.Find("Main Camera");
             if (cameraObject != null)
             {
@@ -41,10 +44,6 @@ namespace Unitas.Samples.RollABall
             float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
             float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
 
-            // Gamepad parity: injected device axes report only through the
-            // injected-axis read, so mirror them when no digital key is held.
-            // Injected values bypass button smoothing, keeping movement
-            // frame-rate independent like the digital reads above.
             if (moveX == 0f)
             {
                 moveX = Input.GetInjectedAxis("Horizontal");
@@ -67,12 +66,17 @@ namespace Unitas.Samples.RollABall
                 return;
             }
 
-            // While a dash coasts, keep the impulse velocity instead of overriding it.
             if (Time.time - _lastDashTime >= DashCoastSeconds)
             {
                 body.velocity = new Vector3(directionX * speed, body.velocity.y, directionZ * speed);
             }
             TryDash(body, directionX, directionZ);
+
+            TrailRenderer? trail = _trail;
+            if (trail != null)
+            {
+                trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed;
+            }
         }
 
         private void TryDash(Rigidbody body, float directionX, float directionZ)
@@ -91,8 +95,6 @@ namespace Unitas.Samples.RollABall
             Vector3 dashDirection = new Vector3(directionX, 0f, directionZ);
             if (dashDirection.sqrMagnitude < Vector3.kEpsilon)
             {
-                // No stick input: dash along the direction of travel, or camera
-                // forward when the marble is standing still.
                 Vector3 velocity = body.velocity;
                 dashDirection = new Vector3(velocity.x, 0f, velocity.z);
                 if (dashDirection.sqrMagnitude < Vector3.kEpsilon)
@@ -137,11 +139,13 @@ namespace Unitas.Samples.RollABall
             {
                 body.velocity = Vector3.zero;
             }
+            TrailRenderer? trail = _trail;
+            if (trail != null)
+            {
+                trail.emitting = false;
+            }
         }
 
-        // Digital key reads only: smoothed GetAxis values keep decaying after a
-        // key release, which drifts the marble after a retry reset and makes
-        // per-frame movement non-deterministic across frame rates.
         private static float ReadAxis(
             KeyCode positiveKey,
             KeyCode positiveAlternate,

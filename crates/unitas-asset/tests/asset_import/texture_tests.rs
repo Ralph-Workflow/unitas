@@ -1,11 +1,14 @@
+use unitas_asset::anim_import::{anim_import_outcome, import_animation_clip, AnimImportError};
 use unitas_asset::dependencies::{
     AssetImportState, ImportCandidate, ImportDiagnostic, ImportOutcome, ImportSession,
 };
+use unitas_asset::texture::artifact::texture_artifact_for_target;
 use unitas_asset::texture::import::{
-    apply_max_size, decode_texture, generate_mip_chain, import_texture, import_texture_for_target,
-    srgb_to_linear, texture_import_outcome, DecodedTexture, FilterMode, SpriteMode,
-    TextureCompressionQuality, TextureFormat, TextureImportError, TextureImportSettings,
-    TextureImporterType, TexturePlatformFormat, TexturePlatformSettings, WrapMode,
+    apply_max_size, decode_texture, decode_texture_blocks, encode_texture_blocks,
+    generate_mip_chain, import_texture, import_texture_for_target, srgb_to_linear,
+    texture_import_outcome, DecodedTexture, FilterMode, SpriteMode, TextureCompressionQuality,
+    TextureFormat, TextureImportError, TextureImportSettings, TextureImporterType,
+    TexturePlatformFormat, TexturePlatformSettings, WrapMode,
 };
 use unitas_asset::texture::jpeg::decode_jpeg;
 use unitas_asset::texture::png::decode_png;
@@ -1491,5 +1494,409 @@ fn prj004_outcome5_every_asset_that_is_not_fully_usable_has_a_state_and_a_conseq
     ] {
         assert!(!state.label().is_empty());
     }
+    Ok(())
+}
+
+#[test]
+fn encodes_and_decodes_bcn_etc2_and_astc_compressed_texture_blocks_for_platform_targets(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rows = Vec::with_capacity(8);
+    for y in 0..8u8 {
+        let mut row = Vec::with_capacity(8 * 4);
+        for x in 0..8u8 {
+            let step = x + y;
+            let r = 30u8.saturating_add(step.saturating_mul(12));
+            let g = 50u8.saturating_add(step.saturating_mul(12));
+            let b = 70u8.saturating_add(step.saturating_mul(12));
+            let a = 110u8.saturating_add(step.saturating_mul(8));
+            row.extend_from_slice(&[r, g, b, a]);
+        }
+        rows.push(row);
+    }
+    let rgba_source = rows.concat();
+    let png = build_png(&PngOptions {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        color_type: 6,
+        scanlines: filtered_scanlines(&rows, &[0; 8], 4),
+        ..PngOptions::default()
+    });
+
+    let cases = [
+        (TexturePlatformFormat::Dxt1, 32usize, false, 18u8),
+        (TexturePlatformFormat::Dxt5, 64usize, true, 18u8),
+        (TexturePlatformFormat::Bc7, 64usize, true, 8u8),
+        (TexturePlatformFormat::Etc2Rgb4, 32usize, false, 18u8),
+        (TexturePlatformFormat::Etc2Rgba8, 64usize, true, 18u8),
+        (TexturePlatformFormat::Astc4x4, 64usize, true, 24u8),
+        (TexturePlatformFormat::Astc6x6, 64usize, true, 32u8),
+        (TexturePlatformFormat::Astc8x8, 16usize, true, 36u8),
+    ];
+
+    for (format, expected_mip0_bytes, checks_alpha, max_tol) in cases {
+        let encoded = encode_texture_blocks(&rgba_source, 8, 8, format)
+            .ok_or("expected compressed block payload")?;
+        assert_eq!(encoded.len(), expected_mip0_bytes, "format {format:?}");
+        let decoded = decode_texture_blocks(&encoded, 8, 8, format)
+            .ok_or("expected block decode to succeed")?;
+        assert_eq!(decoded.len(), rgba_source.len());
+        for px in 0..(8 * 8) {
+            let base = px * 4;
+            for c in 0..3 {
+                let diff = decoded[base + c].abs_diff(rgba_source[base + c]);
+                assert!(
+                    diff <= max_tol,
+                    "format {format:?} pixel {px} channel {c}: {} vs {} (diff {diff} > {max_tol})",
+                    decoded[base + c],
+                    rgba_source[base + c]
+                );
+            }
+            if checks_alpha {
+                let diff_a = decoded[base + 3].abs_diff(rgba_source[base + 3]);
+                assert!(
+                    diff_a <= max_tol,
+                    "format {format:?} pixel {px} alpha: {} vs {} (diff {diff_a} > {max_tol})",
+                    decoded[base + 3],
+                    rgba_source[base + 3]
+                );
+            } else {
+                assert_eq!(decoded[base + 3], 255);
+            }
+        }
+
+        let mut settings = TextureImportSettings {
+            max_size: 8,
+            mipmaps: true,
+            ..TextureImportSettings::default()
+        };
+        settings.set_platform_override(TexturePlatformSettings {
+            build_target: "TestTarget".to_string(),
+            overridden: true,
+            max_texture_size: 8,
+            texture_compression: TextureCompressionQuality::HighQuality,
+            format,
+            compression_quality: 100,
+            crunched_compression: false,
+        });
+        let imported = import_texture_for_target(&png, "hero.png", &settings, Some("TestTarget"))?;
+        assert_eq!(imported.encoded_format, format);
+        assert_eq!(
+            imported.compressed_data.as_ref().map(Vec::len),
+            Some(expected_mip0_bytes)
+        );
+        assert_eq!(imported.compressed_mip_data.len(), imported.mips.len());
+
+        let artifact =
+            texture_artifact_for_target(&png, "hero.png", &settings, Some("TestTarget"))?;
+        assert_eq!(artifact.encoded_format, format);
+        assert_eq!(artifact.compressed_data, imported.compressed_data);
+        assert_eq!(artifact.compressed_mip_data, imported.compressed_mip_data);
+    }
+
+    let mut auto_settings = TextureImportSettings::default();
+    auto_settings.set_platform_override(TexturePlatformSettings {
+        build_target: "Standalone".to_string(),
+        overridden: true,
+        max_texture_size: 8,
+        texture_compression: TextureCompressionQuality::HighQuality,
+        format: TexturePlatformFormat::Automatic,
+        compression_quality: 80,
+        crunched_compression: false,
+    });
+    auto_settings.set_platform_override(TexturePlatformSettings {
+        build_target: "Android".to_string(),
+        overridden: true,
+        max_texture_size: 8,
+        texture_compression: TextureCompressionQuality::Normal,
+        format: TexturePlatformFormat::Automatic,
+        compression_quality: 50,
+        crunched_compression: false,
+    });
+    auto_settings.set_platform_override(TexturePlatformSettings {
+        build_target: "iPhone".to_string(),
+        overridden: true,
+        max_texture_size: 8,
+        texture_compression: TextureCompressionQuality::LowQuality,
+        format: TexturePlatformFormat::Automatic,
+        compression_quality: 50,
+        crunched_compression: false,
+    });
+
+    let standalone_import =
+        import_texture_for_target(&png, "hero.png", &auto_settings, Some("Standalone"))?;
+    assert_eq!(standalone_import.encoded_format, TexturePlatformFormat::Bc7);
+    assert!(standalone_import.compressed_data.is_some());
+
+    let android_import =
+        import_texture_for_target(&png, "hero.png", &auto_settings, Some("Android"))?;
+    assert_eq!(
+        android_import.encoded_format,
+        TexturePlatformFormat::Astc6x6
+    );
+    assert!(android_import.compressed_data.is_some());
+
+    let ios_import = import_texture_for_target(&png, "hero.png", &auto_settings, Some("iPhone"))?;
+    assert_eq!(ios_import.encoded_format, TexturePlatformFormat::Astc8x8);
+    assert!(ios_import.compressed_data.is_some());
+
+    let default_import = import_texture(&png, "hero.png", &auto_settings)?;
+    assert_eq!(
+        default_import.encoded_format,
+        TexturePlatformFormat::Automatic
+    );
+    assert!(default_import.compressed_data.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn imports_unity_yaml_anim_clip_curves_settings_and_events(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let anim_yaml = r"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!74 &7400000
+AnimationClip:
+  m_ObjectHideFlags: 0
+  m_Name: HeroRun
+  m_Legacy: 0
+  m_Compressed: 0
+  m_UseHighQualityCurve: 1
+  m_RotationCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 0, y: 0, z: 0, w: 1}
+        inSlope: {x: 0, y: 0, z: 0, w: 0}
+        outSlope: {x: 0, y: 1, z: 0, w: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334,
+          w: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334, w: 0.33333334}
+      - serializedVersion: 3
+        time: 1
+        value: {x: 0, y: 0.70710677, z: 0, w: 0.70710677}
+        inSlope: {x: 0, y: 0, z: 0, w: 0}
+        outSlope: {x: 0, y: 0, z: 0, w: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334, w: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334, w: 0.33333334}
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    path: Rig/Spine
+  m_CompressedRotationCurves: []
+  m_EulerCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 0, y: 0, z: 0}
+        inSlope: {x: 0, y: 90, z: 0}
+        outSlope: {x: 0, y: 90, z: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+      - serializedVersion: 3
+        time: 1
+        value: {x: 0, y: 90, z: 0}
+        inSlope: {x: 0, y: 90, z: 0}
+        outSlope: {x: 0, y: 90, z: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    path: Rig/Head
+  m_PositionCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 0, y: 1, z: 0}
+        inSlope: {x: 2, y: 0, z: 0}
+        outSlope: {x: 2, y: 0, z: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+      - serializedVersion: 3
+        time: 1
+        value: {x: 2, y: 1, z: 0}
+        inSlope: {x: 2, y: 0, z: 0}
+        outSlope: {x: 2, y: 0, z: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    path: Rig/Root
+  m_ScaleCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 1, y: 1, z: 1}
+        inSlope: {x: 0, y: 0, z: 0}
+        outSlope: {x: 0, y: 0, z: 0}
+        weightedMode: 0
+        inWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+        outWeight: {x: 0.33333334, y: 0.33333334, z: 0.33333334}
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    path: Rig/Root
+  m_FloatCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 10
+        outSlope: 10
+        weightedMode: 0
+        inWeight: 0.33333334
+        outWeight: 0.33333334
+      - serializedVersion: 3
+        time: 1
+        value: 10
+        inSlope: 10
+        outSlope: 10
+        weightedMode: 0
+        inWeight: 0.33333334
+        outWeight: 0.33333334
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    attribute: m_Intensity
+    path: Rig/Torch
+    classID: 108
+    script: {fileID: 0}
+  m_PPtrCurves:
+  - curve:
+      - time: 0
+        value: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
+      - time: 0.5
+        value: {fileID: 21300002, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}
+    attribute: m_Sprite
+    path: Rig/Sprite
+    classID: 212
+    script: {fileID: 0}
+  m_SampleRate: 60
+  m_WrapMode: 2
+  m_AnimationClipSettings:
+    serializedVersion: 2
+    m_StartTime: 0
+    m_StopTime: 1
+    m_OrientationOffsetY: 0
+    m_Level: 0
+    m_CycleOffset: 0
+    m_HasAdditiveReferencePose: 0
+    m_LoopTime: 1
+    m_LoopBlend: 1
+    m_LoopBlendOrientation: 0
+    m_LoopBlendPositionY: 1
+    m_LoopBlendPositionXZ: 0
+    m_KeepOriginalOrientation: 1
+    m_KeepOriginalPositionY: 1
+    m_KeepOriginalPositionXZ: 0
+    m_HeightFromFeet: 0
+    m_Mirror: 0
+  m_Events:
+  - time: 0.5
+    functionName: OnFootstep
+    data: LeftFoot
+    objectReferenceParameter: {fileID: 0}
+    floatParameter: 0.75
+    intParameter: 3
+messageOptions: 0
+";
+
+    let clip = import_animation_clip(anim_yaml.as_bytes(), "Assets/Animations/HeroRun.anim")?;
+    assert_eq!(clip.name, "HeroRun");
+    assert!(!clip.legacy);
+    assert!(!clip.compressed);
+    assert!(clip.use_high_quality_curve);
+    assert!((clip.sample_rate - 60.0).abs() < 1e-9);
+    assert_eq!(clip.wrap_mode, 2);
+
+    assert_eq!(clip.position_curves.len(), 1);
+    assert_eq!(clip.position_curves[0].path, "Rig/Root");
+    let mid_pos = clip.position_curves[0].sample(0.5);
+    assert!((mid_pos[0] - 1.0).abs() < 1e-6);
+    assert!((mid_pos[1] - 1.0).abs() < 1e-6);
+    assert!(mid_pos[2].abs() < 1e-6);
+
+    assert_eq!(clip.rotation_curves.len(), 1);
+    assert_eq!(clip.rotation_curves[0].path, "Rig/Spine");
+    let mid_rot = clip.rotation_curves[0].sample(0.5);
+    let quat_norm = (mid_rot[0] * mid_rot[0]
+        + mid_rot[1] * mid_rot[1]
+        + mid_rot[2] * mid_rot[2]
+        + mid_rot[3] * mid_rot[3])
+        .sqrt();
+    assert!((quat_norm - 1.0).abs() < 1e-6);
+
+    assert_eq!(clip.euler_curves.len(), 1);
+    assert_eq!(clip.euler_curves[0].path, "Rig/Head");
+    let mid_euler = clip.euler_curves[0].sample(0.5);
+    assert!((mid_euler[1] - 45.0).abs() < 1e-6);
+
+    assert_eq!(clip.scale_curves.len(), 1);
+    assert_eq!(clip.scale_curves[0].sample(0.5), [1.0, 1.0, 1.0]);
+
+    assert_eq!(clip.float_curves.len(), 1);
+    assert_eq!(clip.float_curves[0].path, "Rig/Torch");
+    assert_eq!(clip.float_curves[0].attribute, "m_Intensity");
+    assert_eq!(clip.float_curves[0].class_id, 108);
+    assert!((clip.float_curves[0].sample(0.5) - 5.0).abs() < 1e-6);
+
+    assert_eq!(clip.pptr_curves.len(), 1);
+    assert_eq!(clip.pptr_curves[0].attribute, "m_Sprite");
+    assert_eq!(clip.pptr_curves[0].class_id, 212);
+    assert_eq!(clip.pptr_curves[0].keyframes.len(), 2);
+    assert_eq!(
+        clip.pptr_curves[0].keyframes[0].guid.as_deref(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(clip.pptr_curves[0].keyframes[1].file_id, 21300002);
+
+    assert!(clip.settings.loop_time);
+    assert!(clip.settings.loop_blend);
+    assert!((clip.settings.stop_time - 1.0).abs() < 1e-9);
+
+    assert_eq!(clip.events.len(), 1);
+    assert_eq!(clip.events[0].function_name, "OnFootstep");
+    assert_eq!(clip.events[0].data, "LeftFoot");
+    assert!((clip.events[0].float_parameter - 0.75).abs() < 1e-9);
+    assert_eq!(clip.events[0].int_parameter, 3);
+
+    let outcome = anim_import_outcome("Assets/Animations/HeroRun.anim", Ok(&clip));
+    assert_eq!(outcome.state, AssetImportState::Ready);
+
+    let non_anim = "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n";
+    let err = match import_animation_clip(non_anim.as_bytes(), "TestMat.anim") {
+        Ok(_) => AnimImportError::InvalidUtf8,
+        Err(error) => error,
+    };
+    assert_eq!(err, AnimImportError::MissingAnimationClipDocument);
+    let failed_outcome = anim_import_outcome("TestMat.anim", Err(&err));
+    assert_eq!(failed_outcome.state, AssetImportState::Failed);
+
+    let bad_rate =
+        "%YAML 1.1\n--- !u!74 &7400000\nAnimationClip:\n  m_Name: Bad\n  m_SampleRate: 0\n";
+    let rate_err = match import_animation_clip(bad_rate.as_bytes(), "Bad.anim") {
+        Ok(_) => AnimImportError::InvalidUtf8,
+        Err(error) => error,
+    };
+    assert!(matches!(rate_err, AnimImportError::InvalidSampleRate(_)));
+
     Ok(())
 }

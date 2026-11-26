@@ -8,6 +8,7 @@ use unitas_asset::audio_import::{
     AudioImportError, AudioImportSettings, AudioImportState, AudioLoadType,
 };
 use unitas_asset::project::{AssetEntry, GuidLookup, OpenReport, Project};
+use unitas_asset::project_settings::load_project_settings;
 use unitas_asset::texture::import::{import_texture, TextureImportSettings, TextureImporterType};
 use unitas_asset::trust::TrustStore;
 use unitas_asset::unity_yaml::{self, Node};
@@ -42,6 +43,16 @@ fn sample_meta(relative: &str) -> TestResult<String> {
         );
     }
     Ok(fs::read_to_string(&path)?)
+}
+
+fn sample_asset_guid(relative: &str) -> TestResult<String> {
+    let meta = sample_meta(relative)?;
+    for line in meta.lines() {
+        if let Some(guid) = line.trim().strip_prefix("guid:") {
+            return Ok(guid.trim().to_string());
+        }
+    }
+    Err(format!("the sample must declare a guid for {relative}").into())
 }
 
 fn temp_dir(name: &str) -> std::io::Result<PathBuf> {
@@ -381,5 +392,99 @@ fn reopening_the_sample_project_keeps_the_new_assets_guid_and_file_id_identity()
         normal_map_meta,
         "opening the project must not rewrite the normal map meta"
     );
+    Ok(())
+}
+
+#[test]
+fn the_sample_project_settings_expose_tags_layers_and_the_build_scene_list() -> TestResult {
+    let settings_dir = sample_root().join("ProjectSettings");
+    if !settings_dir.is_dir() {
+        return Ok(());
+    }
+
+    let settings = load_project_settings(&settings_dir)?;
+
+    assert!(
+        settings.graphics.is_none(),
+        "the sample ships no GraphicsSettings asset"
+    );
+    assert!(
+        settings.audio.is_none(),
+        "the sample ships no AudioManager asset"
+    );
+    assert!(
+        settings.nav_mesh_areas.is_none(),
+        "the sample ships no NavMeshAreas asset"
+    );
+    assert!(
+        settings.editor.is_none(),
+        "the sample ships no EditorSettings asset"
+    );
+    assert!(
+        settings.mono_manager.is_none(),
+        "the sample ships no MonoManager asset"
+    );
+    assert!(
+        settings.preset_manager.is_none(),
+        "the sample ships no PresetManager asset"
+    );
+    assert!(
+        settings.package_manager.is_none(),
+        "the sample ships no PackageManagerSettings asset"
+    );
+    assert!(
+        settings.version_control.is_none(),
+        "the sample ships no VersionControlSettings asset"
+    );
+    assert_eq!(settings.fixed_timestep(), 0.02);
+    assert_eq!(settings.time_scale, 1.0);
+    assert_eq!(settings.gravity, [0.0, -9.81, 0.0]);
+    assert_eq!(settings.identity.product_name.as_deref(), Some("RollABall"));
+    assert_eq!(settings.quality.levels.len(), 3);
+
+    let tag_manager = settings
+        .tag_manager
+        .ok_or("the sample must ship a TagManager asset")?;
+    assert_eq!(
+        tag_manager.tags(),
+        vec!["MainCamera".to_string(), "Player".to_string()],
+        "the sample tags must be read from the TagManager asset"
+    );
+    let layers = tag_manager.layers();
+    assert_eq!(layers.len(), 32, "Unity declares 32 layers");
+    assert_eq!(layers[0], "Default");
+    assert_eq!(layers[1], "TransparentFX");
+    assert_eq!(layers[2], "Ignore Raycast");
+    assert_eq!(layers[4], "Water");
+    assert_eq!(layers[5], "UI");
+    assert_eq!(layers[8], "User Layer 8");
+    assert_eq!(layers[31], "User Layer 31");
+    let sorting_layers = tag_manager.sorting_layers();
+    assert_eq!(
+        sorting_layers.len(),
+        1,
+        "the sample declares one sorting layer"
+    );
+    assert_eq!(sorting_layers[0].name, "Default");
+    assert_eq!(sorting_layers[0].unique_id, 0);
+    assert!(!sorting_layers[0].locked);
+
+    let build = settings
+        .editor_build
+        .ok_or("the sample must ship an EditorBuildSettings asset")?;
+    let scenes = build.scenes();
+    assert_eq!(scenes.len(), 2, "the sample builds its two scenes");
+    assert_eq!(scenes[0].path, "Assets/Scenes/RollABall.unity");
+    assert_eq!(
+        scenes[0].guid,
+        sample_asset_guid("Assets/Scenes/RollABall.unity")?
+    );
+    assert!(scenes[0].enabled, "the main scene must be enabled");
+    assert_eq!(scenes[1].path, "Assets/Scenes/PhysicsLab.unity");
+    assert_eq!(
+        scenes[1].guid,
+        sample_asset_guid("Assets/Scenes/PhysicsLab.unity")?
+    );
+    assert!(scenes[1].enabled, "the physics lab scene must be enabled");
     Ok(())
 }

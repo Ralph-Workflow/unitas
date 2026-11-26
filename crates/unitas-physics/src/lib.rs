@@ -5,6 +5,7 @@ mod character;
 pub mod cloth;
 mod error;
 mod event;
+pub mod joint;
 pub mod matrix;
 pub mod navigation;
 pub mod particles;
@@ -20,5 +21,10 @@ pub use body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
 pub use character::{CharacterController, CollisionFlags, MoveResult};
 pub use error::PhysicsError;
 pub use event::{CollisionEvent, Phase, TriggerEvent};
+pub use joint::{
+    BrokenJointEvent3D, CharacterJoint3D, ConfigurableJoint3D, ConfigurableJointMotion,
+    FixedJoint3D, HingeJoint3D, Joint3D, JointDrive3D, JointId3D, JointLimits3D, JointMotor3D,
+    JointSpring3D, SpringJoint3D,
+};
 pub use query::QueryHit;
 pub use world::{ForceMode, World};

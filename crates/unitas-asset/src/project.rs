@@ -138,6 +138,11 @@ pub struct OpenReport {
 pub struct Project {
     pub(crate) root: PathBuf,
     pub(crate) inventory: AssetInventory,
+    pub(crate) favorites: Vec<String>,
+    pub(crate) recent_assets: Vec<String>,
+    pub(crate) undo_stack: Vec<crate::database::DatabaseOperation>,
+    pub(crate) redo_stack: Vec<crate::database::DatabaseOperation>,
+    pub(crate) duplicate_counter: u64,
     capabilities: ProjectCapabilities,
     trust_gate: TrustGateReport,
 }
@@ -204,6 +209,11 @@ impl Project {
             Project {
                 root: root.to_path_buf(),
                 inventory,
+                favorites: Vec::new(),
+                recent_assets: Vec::new(),
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
+                duplicate_counter: 0,
                 capabilities,
                 trust_gate,
             },

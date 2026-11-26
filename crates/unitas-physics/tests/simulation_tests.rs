@@ -19,6 +19,8 @@ mod articulation_tests;
 mod cloth_tests;
 #[path = "simulation/force_mode_tests.rs"]
 mod force_mode_tests;
+#[path = "simulation/joint_3d_tests.rs"]
+mod joint_3d_tests;
 #[path = "simulation/particles_2d_tests.rs"]
 mod particles_2d_tests;
 #[path = "simulation/sim_control_tests.rs"]

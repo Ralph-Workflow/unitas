@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_asset::binary_ser::{Endianness, SUPPORTED_VERSION};
-use unitas_asset::dependencies::{DependencyGraph, ImportCandidate, ImportOutcome, ImportSession};
+use unitas_asset::dependencies::{
+    ClassifiedDependency, DependencyGraph, DependencyKind, ImportCandidate, ImportOutcome,
+    ImportSession,
+};
 use unitas_asset::project::{Project, BASELINE_UNITY_VERSION};
 use unitas_asset::scene_save;
 use unitas_asset::trust::TrustStore;
@@ -784,6 +787,229 @@ fn prj004_outcome6_reimport_touches_only_dependency_affected_assets() -> TestRes
         .record(Path::new("Assets/Textures/Albedo.png"))
         .ok_or("expected a record for the metadata-changed texture")?;
     assert_eq!(meta_record.reason, "metadata changed");
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn dependency_graph_classifies_direct_script_package_resources_bundle_and_editor_dependencies(
+) -> TestResult {
+    let root = temp_dir("dependencies-classification")?;
+    let project_root = root.join("project");
+
+    write_file(
+        &project_root.join("ProjectSettings/ProjectVersion.txt"),
+        &format!("m_EditorVersion: {BASELINE_UNITY_VERSION}.16f1\n"),
+    )?;
+
+    let direct_tex_guid = "10000000000000000000000000000001";
+    let script_guid = "10000000000000000000000000000002";
+    let package_guid = "10000000000000000000000000000003";
+    let resources_guid = "10000000000000000000000000000004";
+    let bundle_guid = "10000000000000000000000000000005";
+    let addressables_guid = "10000000000000000000000000000006";
+    let editor_target_guid = "10000000000000000000000000000007";
+    let target_limited_guid = "10000000000000000000000000000008";
+    let optional_missing_guid = "10000000000000000000000000000009";
+    let hub_prefab_guid = "20000000000000000000000000000001";
+    let root_scene_guid = "30000000000000000000000000000001";
+
+    write_file(&project_root.join("Assets/Textures/Base.png"), "png-bytes")?;
+    write_file(
+        &project_root.join("Assets/Textures/Base.png.meta"),
+        &meta(direct_tex_guid, "TextureImporter:"),
+    )?;
+
+    write_file(
+        &project_root.join("Assets/Scripts/Controller.cs"),
+        "public class Controller {}",
+    )?;
+    write_file(
+        &project_root.join("Assets/Scripts/Controller.cs.meta"),
+        &meta(script_guid, "MonoImporter:"),
+    )?;
+
+    write_file(
+        &project_root.join("Packages/com.unity.ugui/Runtime/UiShader.shader"),
+        "Shader \"UI/Default\" {}",
+    )?;
+    write_file(
+        &project_root.join("Packages/com.unity.ugui/Runtime/UiShader.shader.meta"),
+        &meta(package_guid, "ShaderImporter:"),
+    )?;
+
+    write_file(
+        &project_root.join("Assets/Resources/FallbackConfig.txt"),
+        "fallback=true",
+    )?;
+    write_file(
+        &project_root.join("Assets/Resources/FallbackConfig.txt.meta"),
+        &meta(resources_guid, "TextScriptImporter:"),
+    )?;
+
+    write_file(&project_root.join("Assets/Art/Bundled.png"), "bundled-png")?;
+    write_file(
+        &project_root.join("Assets/Art/Bundled.png.meta"),
+        &format!(
+            "fileFormatVersion: 2\nguid: {bundle_guid}\nTextureImporter:\n  assetBundleName: level_art\n"
+        ),
+    )?;
+
+    write_file(
+        &project_root.join("Assets/AddressableAssetsData/Group.asset"),
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Group\n",
+    )?;
+    write_file(
+        &project_root.join("Assets/AddressableAssetsData/Group.asset.meta"),
+        &meta(addressables_guid, "NativeFormatImporter:"),
+    )?;
+
+    write_file(
+        &project_root.join("Assets/Editor/GizmoIcon.png"),
+        "editor-icon",
+    )?;
+    write_file(
+        &project_root.join("Assets/Editor/GizmoIcon.png.meta"),
+        &meta(editor_target_guid, "TextureImporter:"),
+    )?;
+
+    write_file(
+        &project_root.join("Assets/Textures/MobileOnly.png"),
+        "mobile-png",
+    )?;
+    write_file(
+        &project_root.join("Assets/Textures/MobileOnly.png.meta"),
+        &format!(
+            "fileFormatVersion: 2\nguid: {target_limited_guid}\nTextureImporter:\n  platformSettings:\n  - buildTarget: iPhone\n    overridden: 1\n"
+        ),
+    )?;
+
+    let hub_prefab_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Script: {{fileID: 11500000, guid: {script_guid}, type: 3}}\n  baseTex: {{fileID: 2800000, guid: {direct_tex_guid}, type: 3}}\n  pkgShader: {{fileID: 4800000, guid: {package_guid}, type: 3}}\n  resText: {{fileID: 4900000, guid: {resources_guid}, type: 3}}\n  bundleTex: {{fileID: 2800000, guid: {bundle_guid}, type: 3}}\n  addrGroup: {{fileID: 11400000, guid: {addressables_guid}, type: 2}}\n  editorIcon: {{fileID: 2800000, guid: {editor_target_guid}, type: 3}}\n  mobileTex: {{fileID: 2800000, guid: {target_limited_guid}, type: 3}}\n  optionalRef: {{fileID: 2800000, guid: {optional_missing_guid}, type: 3}}\n"
+    );
+    write_file(
+        &project_root.join("Assets/Prefabs/Hub.prefab"),
+        &hub_prefab_yaml,
+    )?;
+    write_file(
+        &project_root.join("Assets/Prefabs/Hub.prefab.meta"),
+        &meta(hub_prefab_guid, "NativeFormatImporter:"),
+    )?;
+
+    let scene_yaml = format!(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1001 &100100000\nPrefabInstance:\n  m_SourcePrefab: {{fileID: 100100000, guid: {hub_prefab_guid}, type: 3}}\n"
+    );
+    write_file(&project_root.join("Assets/Scenes/Root.unity"), &scene_yaml)?;
+    write_file(
+        &project_root.join("Assets/Scenes/Root.unity.meta"),
+        &meta(root_scene_guid, "NativeFormatImporter:"),
+    )?;
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (project, _) = Project::open(&project_root, &store)?;
+    let mut graph = DependencyGraph::build(&project)?;
+
+    let direct_classified = graph.classified_dependencies_of(hub_prefab_guid, false);
+    assert_eq!(
+        direct_classified,
+        vec![
+            ClassifiedDependency {
+                target_guid: direct_tex_guid.to_string(),
+                kind: DependencyKind::DirectSerialized,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: script_guid.to_string(),
+                kind: DependencyKind::Script,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: package_guid.to_string(),
+                kind: DependencyKind::Package,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: resources_guid.to_string(),
+                kind: DependencyKind::Resources,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: bundle_guid.to_string(),
+                kind: DependencyKind::AssetBundle,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: addressables_guid.to_string(),
+                kind: DependencyKind::Addressables,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: editor_target_guid.to_string(),
+                kind: DependencyKind::EditorOnly,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: target_limited_guid.to_string(),
+                kind: DependencyKind::TargetLimited,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: optional_missing_guid.to_string(),
+                kind: DependencyKind::Optional,
+                is_transitive: false,
+            },
+        ]
+    );
+
+    let scene_transitive = graph.classified_dependencies_of(root_scene_guid, true);
+    assert_eq!(
+        scene_transitive[0],
+        ClassifiedDependency {
+            target_guid: hub_prefab_guid.to_string(),
+            kind: DependencyKind::DirectSerialized,
+            is_transitive: false,
+        }
+    );
+    assert!(scene_transitive.contains(&ClassifiedDependency {
+        target_guid: script_guid.to_string(),
+        kind: DependencyKind::Script,
+        is_transitive: true,
+    }));
+    assert!(scene_transitive.contains(&ClassifiedDependency {
+        target_guid: package_guid.to_string(),
+        kind: DependencyKind::Package,
+        is_transitive: true,
+    }));
+
+    let reverse_script_transitive = graph.classified_reverse_dependencies_of(script_guid, true);
+    assert_eq!(
+        reverse_script_transitive,
+        vec![
+            ClassifiedDependency {
+                target_guid: hub_prefab_guid.to_string(),
+                kind: DependencyKind::Script,
+                is_transitive: false,
+            },
+            ClassifiedDependency {
+                target_guid: root_scene_guid.to_string(),
+                kind: DependencyKind::DirectSerialized,
+                is_transitive: true,
+            },
+        ]
+    );
+
+    graph.classify_dependency(
+        hub_prefab_guid,
+        direct_tex_guid,
+        DependencyKind::TargetLimited,
+    );
+    let updated = graph.classified_dependencies_of(hub_prefab_guid, false);
+    assert!(updated.contains(&ClassifiedDependency {
+        target_guid: direct_tex_guid.to_string(),
+        kind: DependencyKind::TargetLimited,
+        is_transitive: false,
+    }));
 
     fs::remove_dir_all(&root)?;
     Ok(())

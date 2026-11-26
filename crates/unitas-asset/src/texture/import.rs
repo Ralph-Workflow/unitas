@@ -325,6 +325,7 @@ impl TextureCompressionQuality {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TexturePlatformFormat {
     Automatic,
+    Uncompressed,
     Rgba32,
     Rgb24,
     Dxt1,
@@ -341,6 +342,7 @@ impl TexturePlatformFormat {
     pub fn code(self) -> i32 {
         match self {
             TexturePlatformFormat::Automatic => -1,
+            TexturePlatformFormat::Uncompressed => 0,
             TexturePlatformFormat::Rgb24 => 3,
             TexturePlatformFormat::Rgba32 => 4,
             TexturePlatformFormat::Dxt1 => 10,
@@ -357,6 +359,7 @@ impl TexturePlatformFormat {
     pub fn from_code(code: i32) -> Option<TexturePlatformFormat> {
         match code {
             -1 => Some(TexturePlatformFormat::Automatic),
+            0 => Some(TexturePlatformFormat::Uncompressed),
             3 => Some(TexturePlatformFormat::Rgb24),
             4 => Some(TexturePlatformFormat::Rgba32),
             10 => Some(TexturePlatformFormat::Dxt1),
@@ -369,6 +372,20 @@ impl TexturePlatformFormat {
             51 => Some(TexturePlatformFormat::Astc8x8),
             _ => None,
         }
+    }
+
+    pub fn is_compressed(self) -> bool {
+        matches!(
+            self,
+            TexturePlatformFormat::Dxt1
+                | TexturePlatformFormat::Dxt5
+                | TexturePlatformFormat::Bc7
+                | TexturePlatformFormat::Etc2Rgb4
+                | TexturePlatformFormat::Etc2Rgba8
+                | TexturePlatformFormat::Astc4x4
+                | TexturePlatformFormat::Astc6x6
+                | TexturePlatformFormat::Astc8x8
+        )
     }
 }
 
@@ -485,6 +502,9 @@ pub struct TextureImportResult {
     pub applied_target: Option<String>,
     pub applied_format: Option<TexturePlatformFormat>,
     pub applied_compression: Option<TextureCompressionQuality>,
+    pub encoded_format: TexturePlatformFormat,
+    pub compressed_data: Option<Vec<u8>>,
+    pub compressed_mip_data: Vec<Vec<u8>>,
     pub sprites: Vec<SpriteSlice>,
     pub notes: Vec<String>,
 }
@@ -1191,6 +1211,24 @@ pub fn import_texture_for_target(
         SpriteMode::Multiple => settings.sprite_slices.clone(),
         _ => Vec::new(),
     };
+    let has_alpha = texture_has_alpha(&texture, settings);
+    let encoded_format =
+        resolve_encoded_format(applied_format, applied_compression, build_target, has_alpha);
+    let compressed_mip_data = if encoded_format.is_compressed() {
+        let mut encoded_mips = Vec::with_capacity(mips.len());
+        for mip in &mips {
+            let rgba = texture_to_rgba8(mip);
+            if let Some(encoded) =
+                encode_texture_blocks(&rgba, mip.width, mip.height, encoded_format)
+            {
+                encoded_mips.push(encoded);
+            }
+        }
+        encoded_mips
+    } else {
+        Vec::new()
+    };
+    let compressed_data = compressed_mip_data.first().cloned();
     Ok(TextureImportResult {
         source: decoded,
         texture,
@@ -1201,6 +1239,9 @@ pub fn import_texture_for_target(
         applied_target,
         applied_format,
         applied_compression,
+        encoded_format,
+        compressed_data,
+        compressed_mip_data,
         sprites,
         notes,
     })
@@ -1535,4 +1576,1103 @@ fn reset_lzw_table(table: &mut Vec<Vec<u8>>, min_code_size: u8) {
     }
     table.push(Vec::new());
     table.push(Vec::new());
+}
+
+fn texture_has_alpha(texture: &DecodedTexture, settings: &TextureImportSettings) -> bool {
+    if !settings.alpha_is_transparency {
+        return false;
+    }
+    match texture.format {
+        TextureFormat::Rgba8 => texture
+            .pixels
+            .chunks_exact(4)
+            .any(|px| px.get(3).copied().unwrap_or(255) < 255),
+        TextureFormat::Rgba32F => true,
+        _ => false,
+    }
+}
+
+fn resolve_encoded_format(
+    applied_format: Option<TexturePlatformFormat>,
+    applied_compression: Option<TextureCompressionQuality>,
+    build_target: Option<&str>,
+    has_alpha: bool,
+) -> TexturePlatformFormat {
+    match applied_format {
+        Some(TexturePlatformFormat::Automatic) => {
+            let quality = applied_compression.unwrap_or(TextureCompressionQuality::Normal);
+            if quality == TextureCompressionQuality::Uncompressed {
+                return TexturePlatformFormat::Uncompressed;
+            }
+            resolve_automatic_platform_format(build_target, quality, has_alpha)
+        }
+        Some(format) => format,
+        None => TexturePlatformFormat::Automatic,
+    }
+}
+
+fn resolve_automatic_platform_format(
+    build_target: Option<&str>,
+    quality: TextureCompressionQuality,
+    has_alpha: bool,
+) -> TexturePlatformFormat {
+    let Some(target) = build_target else {
+        return TexturePlatformFormat::Automatic;
+    };
+    match target {
+        "Standalone"
+        | "StandaloneOSX"
+        | "StandaloneWindows"
+        | "StandaloneWindows64"
+        | "StandaloneLinux64"
+        | "WebGL" => match quality {
+            TextureCompressionQuality::Uncompressed => TexturePlatformFormat::Uncompressed,
+            TextureCompressionQuality::HighQuality => TexturePlatformFormat::Bc7,
+            TextureCompressionQuality::Normal | TextureCompressionQuality::LowQuality => {
+                if has_alpha {
+                    TexturePlatformFormat::Dxt5
+                } else {
+                    TexturePlatformFormat::Dxt1
+                }
+            }
+        },
+        "iPhone" | "iOS" | "Android" | "tvOS" => match quality {
+            TextureCompressionQuality::Uncompressed => TexturePlatformFormat::Uncompressed,
+            TextureCompressionQuality::HighQuality => TexturePlatformFormat::Astc4x4,
+            TextureCompressionQuality::Normal => TexturePlatformFormat::Astc6x6,
+            TextureCompressionQuality::LowQuality => TexturePlatformFormat::Astc8x8,
+        },
+        _ => TexturePlatformFormat::Automatic,
+    }
+}
+
+pub fn texture_to_rgba8(texture: &DecodedTexture) -> Vec<u8> {
+    let width = texture.width as usize;
+    let height = texture.height as usize;
+    let total = width * height;
+    let mut out = vec![0u8; total * 4];
+    match texture.format {
+        TextureFormat::Rgba8 => {
+            let copy_len = out.len().min(texture.pixels.len());
+            out[..copy_len].copy_from_slice(&texture.pixels[..copy_len]);
+        }
+        TextureFormat::Rgb8 => {
+            for idx in 0..total {
+                let src = idx * 3;
+                let dst = idx * 4;
+                out[dst] = texture.pixels.get(src).copied().unwrap_or(0);
+                out[dst + 1] = texture.pixels.get(src + 1).copied().unwrap_or(0);
+                out[dst + 2] = texture.pixels.get(src + 2).copied().unwrap_or(0);
+                out[dst + 3] = 255;
+            }
+        }
+        TextureFormat::Rg8 => {
+            for idx in 0..total {
+                let src = idx * 2;
+                let dst = idx * 4;
+                out[dst] = texture.pixels.get(src).copied().unwrap_or(0);
+                out[dst + 1] = texture.pixels.get(src + 1).copied().unwrap_or(0);
+                out[dst + 2] = 0;
+                out[dst + 3] = 255;
+            }
+        }
+        TextureFormat::R8 => {
+            for idx in 0..total {
+                let v = texture.pixels.get(idx).copied().unwrap_or(0);
+                let dst = idx * 4;
+                out[dst] = v;
+                out[dst + 1] = v;
+                out[dst + 2] = v;
+                out[dst + 3] = 255;
+            }
+        }
+        TextureFormat::Rgba32F => {
+            for y in 0..texture.height {
+                for x in 0..texture.width {
+                    let f = texture.pixel_f32(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    let dst = ((y as usize) * width + (x as usize)) * 4;
+                    out[dst] = (f[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                    out[dst + 1] = (f[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                    out[dst + 2] = (f[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                    out[dst + 3] = (f[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn encode_texture_blocks(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    format: TexturePlatformFormat,
+) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    if rgba.len() < expected_len {
+        return None;
+    }
+    match format {
+        TexturePlatformFormat::Dxt1 => {
+            Some(encode_blocks_4x4(rgba, width, height, 8, |block, out| {
+                let encoded = encode_bc1_block(block);
+                out.copy_from_slice(&encoded);
+            }))
+        }
+        TexturePlatformFormat::Dxt5 => {
+            Some(encode_blocks_4x4(rgba, width, height, 16, |block, out| {
+                let alpha = encode_bc3_alpha_block(block);
+                let color = encode_bc1_block(block);
+                out[0..8].copy_from_slice(&alpha);
+                out[8..16].copy_from_slice(&color);
+            }))
+        }
+        TexturePlatformFormat::Bc7 => {
+            Some(encode_blocks_4x4(rgba, width, height, 16, |block, out| {
+                let encoded = encode_bc7_mode6_block(block);
+                out.copy_from_slice(&encoded);
+            }))
+        }
+        TexturePlatformFormat::Etc2Rgb4 => {
+            Some(encode_blocks_4x4(rgba, width, height, 8, |block, out| {
+                let encoded = encode_etc2_rgb_block(block);
+                out.copy_from_slice(&encoded);
+            }))
+        }
+        TexturePlatformFormat::Etc2Rgba8 => {
+            Some(encode_blocks_4x4(rgba, width, height, 16, |block, out| {
+                let alpha = encode_eac_alpha_block(block);
+                let color = encode_etc2_rgb_block(block);
+                out[0..8].copy_from_slice(&alpha);
+                out[8..16].copy_from_slice(&color);
+            }))
+        }
+        TexturePlatformFormat::Astc4x4 => Some(encode_astc_image(rgba, width, height, 4, 4)),
+        TexturePlatformFormat::Astc6x6 => Some(encode_astc_image(rgba, width, height, 6, 6)),
+        TexturePlatformFormat::Astc8x8 => Some(encode_astc_image(rgba, width, height, 8, 8)),
+        TexturePlatformFormat::Automatic
+        | TexturePlatformFormat::Uncompressed
+        | TexturePlatformFormat::Rgba32
+        | TexturePlatformFormat::Rgb24 => None,
+    }
+}
+
+pub fn decode_texture_blocks(
+    encoded: &[u8],
+    width: u32,
+    height: u32,
+    format: TexturePlatformFormat,
+) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    match format {
+        TexturePlatformFormat::Dxt1 => decode_blocks_4x4(encoded, width, height, 8, |slice| {
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(slice);
+            decode_bc1_block(&raw)
+        }),
+        TexturePlatformFormat::Dxt5 => decode_blocks_4x4(encoded, width, height, 16, |slice| {
+            let mut alpha_raw = [0u8; 8];
+            let mut color_raw = [0u8; 8];
+            alpha_raw.copy_from_slice(&slice[0..8]);
+            color_raw.copy_from_slice(&slice[8..16]);
+            let alphas = decode_bc3_alpha_block(&alpha_raw);
+            let mut colors = decode_bc1_block(&color_raw);
+            for i in 0..16 {
+                colors[i][3] = alphas[i];
+            }
+            colors
+        }),
+        TexturePlatformFormat::Bc7 => decode_blocks_4x4(encoded, width, height, 16, |slice| {
+            let mut raw = [0u8; 16];
+            raw.copy_from_slice(slice);
+            decode_bc7_mode6_block(&raw)
+        }),
+        TexturePlatformFormat::Etc2Rgb4 => decode_blocks_4x4(encoded, width, height, 8, |slice| {
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(slice);
+            decode_etc2_rgb_block(&raw)
+        }),
+        TexturePlatformFormat::Etc2Rgba8 => {
+            decode_blocks_4x4(encoded, width, height, 16, |slice| {
+                let mut alpha_raw = [0u8; 8];
+                let mut color_raw = [0u8; 8];
+                alpha_raw.copy_from_slice(&slice[0..8]);
+                color_raw.copy_from_slice(&slice[8..16]);
+                let alphas = decode_eac_alpha_block(&alpha_raw);
+                let mut colors = decode_etc2_rgb_block(&color_raw);
+                for i in 0..16 {
+                    colors[i][3] = alphas[i];
+                }
+                colors
+            })
+        }
+        TexturePlatformFormat::Astc4x4 => decode_astc_image(encoded, width, height, 4, 4),
+        TexturePlatformFormat::Astc6x6 => decode_astc_image(encoded, width, height, 6, 6),
+        TexturePlatformFormat::Astc8x8 => decode_astc_image(encoded, width, height, 8, 8),
+        TexturePlatformFormat::Automatic
+        | TexturePlatformFormat::Uncompressed
+        | TexturePlatformFormat::Rgba32
+        | TexturePlatformFormat::Rgb24 => None,
+    }
+}
+
+fn gather_block_4x4(rgba: &[u8], width: u32, height: u32, bx: u32, by: u32) -> [[u8; 4]; 16] {
+    let mut block = [[0u8; 4]; 16];
+    let w = width as usize;
+    let h = height as usize;
+    for py in 0..4usize {
+        let sy = ((by as usize) * 4 + py).min(h - 1);
+        for px in 0..4usize {
+            let sx = ((bx as usize) * 4 + px).min(w - 1);
+            let offset = (sy * w + sx) * 4;
+            block[py * 4 + px] = [
+                rgba[offset],
+                rgba[offset + 1],
+                rgba[offset + 2],
+                rgba[offset + 3],
+            ];
+        }
+    }
+    block
+}
+
+fn encode_blocks_4x4<F>(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    block_bytes: usize,
+    mut encode_fn: F,
+) -> Vec<u8>
+where
+    F: FnMut(&[[u8; 4]; 16], &mut [u8]),
+{
+    let blocks_x = width.div_ceil(4);
+    let blocks_y = height.div_ceil(4);
+    let total_blocks = (blocks_x as usize) * (blocks_y as usize);
+    let mut out = vec![0u8; total_blocks * block_bytes];
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let block = gather_block_4x4(rgba, width, height, bx, by);
+            let block_index = ((by * blocks_x + bx) as usize) * block_bytes;
+            encode_fn(&block, &mut out[block_index..block_index + block_bytes]);
+        }
+    }
+    out
+}
+
+fn decode_blocks_4x4<F>(
+    encoded: &[u8],
+    width: u32,
+    height: u32,
+    block_bytes: usize,
+    mut decode_fn: F,
+) -> Option<Vec<u8>>
+where
+    F: FnMut(&[u8]) -> [[u8; 4]; 16],
+{
+    let blocks_x = width.div_ceil(4);
+    let blocks_y = height.div_ceil(4);
+    let total_blocks = (blocks_x as usize).checked_mul(blocks_y as usize)?;
+    let expected_bytes = total_blocks.checked_mul(block_bytes)?;
+    if encoded.len() != expected_bytes {
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let mut rgba = vec![0u8; w * h * 4];
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let block_index = ((by * blocks_x + bx) as usize) * block_bytes;
+            let decoded = decode_fn(&encoded[block_index..block_index + block_bytes]);
+            for py in 0..4usize {
+                let dy = (by as usize) * 4 + py;
+                if dy >= h {
+                    continue;
+                }
+                for px in 0..4usize {
+                    let dx = (bx as usize) * 4 + px;
+                    if dx >= w {
+                        continue;
+                    }
+                    let dst = (dy * w + dx) * 4;
+                    rgba[dst..dst + 4].copy_from_slice(&decoded[py * 4 + px]);
+                }
+            }
+        }
+    }
+    Some(rgba)
+}
+
+fn pack_rgb565(r: u8, g: u8, b: u8) -> u16 {
+    let r5 = (u16::from(r) * 31 + 127) / 255;
+    let g6 = (u16::from(g) * 63 + 127) / 255;
+    let b5 = (u16::from(b) * 31 + 127) / 255;
+    (r5 << 11) | (g6 << 5) | b5
+}
+
+fn unpack_rgb565(color: u16) -> [u8; 3] {
+    let r5 = ((color >> 11) & 0x1F) as u8;
+    let g6 = ((color >> 5) & 0x3F) as u8;
+    let b5 = (color & 0x1F) as u8;
+    [
+        (r5 << 3) | (r5 >> 2),
+        (g6 << 2) | (g6 >> 4),
+        (b5 << 3) | (b5 >> 2),
+    ]
+}
+
+fn bc1_palette(c0: u16, c1: u16) -> [[u8; 4]; 4] {
+    let rgb0 = unpack_rgb565(c0);
+    let rgb1 = unpack_rgb565(c1);
+    if c0 > c1 {
+        let rgb2 = [
+            ((2 * u16::from(rgb0[0]) + u16::from(rgb1[0]) + 1) / 3) as u8,
+            ((2 * u16::from(rgb0[1]) + u16::from(rgb1[1]) + 1) / 3) as u8,
+            ((2 * u16::from(rgb0[2]) + u16::from(rgb1[2]) + 1) / 3) as u8,
+        ];
+        let rgb3 = [
+            ((u16::from(rgb0[0]) + 2 * u16::from(rgb1[0]) + 1) / 3) as u8,
+            ((u16::from(rgb0[1]) + 2 * u16::from(rgb1[1]) + 1) / 3) as u8,
+            ((u16::from(rgb0[2]) + 2 * u16::from(rgb1[2]) + 1) / 3) as u8,
+        ];
+        [
+            [rgb0[0], rgb0[1], rgb0[2], 255],
+            [rgb1[0], rgb1[1], rgb1[2], 255],
+            [rgb2[0], rgb2[1], rgb2[2], 255],
+            [rgb3[0], rgb3[1], rgb3[2], 255],
+        ]
+    } else {
+        let rgb2 = [
+            ((u16::from(rgb0[0]) + u16::from(rgb1[0])) / 2) as u8,
+            ((u16::from(rgb0[1]) + u16::from(rgb1[1])) / 2) as u8,
+            ((u16::from(rgb0[2]) + u16::from(rgb1[2])) / 2) as u8,
+        ];
+        [
+            [rgb0[0], rgb0[1], rgb0[2], 255],
+            [rgb1[0], rgb1[1], rgb1[2], 255],
+            [rgb2[0], rgb2[1], rgb2[2], 255],
+            [0, 0, 0, 255],
+        ]
+    }
+}
+
+fn encode_bc1_block(block: &[[u8; 4]; 16]) -> [u8; 8] {
+    let mut min_rgb = [255u8; 3];
+    let mut max_rgb = [0u8; 3];
+    for px in block {
+        for c in 0..3 {
+            min_rgb[c] = min_rgb[c].min(px[c]);
+            max_rgb[c] = max_rgb[c].max(px[c]);
+        }
+    }
+    let mut c0 = pack_rgb565(max_rgb[0], max_rgb[1], max_rgb[2]);
+    let mut c1 = pack_rgb565(min_rgb[0], min_rgb[1], min_rgb[2]);
+    if c0 < c1 {
+        std::mem::swap(&mut c0, &mut c1);
+    }
+    let palette = bc1_palette(c0, c1);
+    let max_idx = if c0 == c1 { 1 } else { 4 };
+    let mut indices = 0u32;
+    for (i, px) in block.iter().enumerate() {
+        let mut best_idx = 0u32;
+        let mut best_dist = u32::MAX;
+        for (p_idx, pal) in palette.iter().enumerate().take(max_idx) {
+            let dr = i32::from(px[0]) - i32::from(pal[0]);
+            let dg = i32::from(px[1]) - i32::from(pal[1]);
+            let db = i32::from(px[2]) - i32::from(pal[2]);
+            let dist = (dr * dr + dg * dg + db * db) as u32;
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = p_idx as u32;
+            }
+        }
+        indices |= (best_idx & 0x03) << (i * 2);
+    }
+    let mut out = [0u8; 8];
+    out[0..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..8].copy_from_slice(&indices.to_le_bytes());
+    out
+}
+
+fn decode_bc1_block(raw: &[u8; 8]) -> [[u8; 4]; 16] {
+    let c0 = u16::from_le_bytes([raw[0], raw[1]]);
+    let c1 = u16::from_le_bytes([raw[2], raw[3]]);
+    let indices = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
+    let palette = bc1_palette(c0, c1);
+    let mut out = [[0u8; 4]; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let idx = ((indices >> (i * 2)) & 0x03) as usize;
+        *slot = palette[idx];
+    }
+    out
+}
+
+fn bc3_alpha_palette(a0: u8, a1: u8) -> [u8; 8] {
+    let mut pal = [0u8; 8];
+    pal[0] = a0;
+    pal[1] = a1;
+    if a0 > a1 {
+        for i in 1..7u16 {
+            pal[(i + 1) as usize] = (((7 - i) * u16::from(a0) + i * u16::from(a1) + 3) / 7) as u8;
+        }
+    } else {
+        for i in 1..5u16 {
+            pal[(i + 1) as usize] = (((5 - i) * u16::from(a0) + i * u16::from(a1) + 2) / 5) as u8;
+        }
+        pal[6] = 0;
+        pal[7] = 255;
+    }
+    pal
+}
+
+fn encode_bc3_alpha_block(block: &[[u8; 4]; 16]) -> [u8; 8] {
+    let mut min_a = 255u8;
+    let mut max_a = 0u8;
+    for px in block {
+        min_a = min_a.min(px[3]);
+        max_a = max_a.max(px[3]);
+    }
+    let a0 = max_a;
+    let a1 = min_a;
+    let palette = bc3_alpha_palette(a0, a1);
+    let max_idx = if a0 == a1 { 1 } else { 8 };
+    let mut bits = 0u64;
+    for (i, px) in block.iter().enumerate() {
+        let mut best_idx = 0u64;
+        let mut best_dist = u8::MAX;
+        for (p_idx, &pal_a) in palette.iter().enumerate().take(max_idx) {
+            let dist = px[3].abs_diff(pal_a);
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = p_idx as u64;
+            }
+        }
+        bits |= (best_idx & 0x07) << (i * 3);
+    }
+    let mut out = [0u8; 8];
+    out[0] = a0;
+    out[1] = a1;
+    let bit_bytes = bits.to_le_bytes();
+    out[2..8].copy_from_slice(&bit_bytes[0..6]);
+    out
+}
+
+fn decode_bc3_alpha_block(raw: &[u8; 8]) -> [u8; 16] {
+    let a0 = raw[0];
+    let a1 = raw[1];
+    let palette = bc3_alpha_palette(a0, a1);
+    let mut bit_bytes = [0u8; 8];
+    bit_bytes[0..6].copy_from_slice(&raw[2..8]);
+    let bits = u64::from_le_bytes(bit_bytes);
+    let mut out = [0u8; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let idx = ((bits >> (i * 3)) & 0x07) as usize;
+        *slot = palette[idx];
+    }
+    out
+}
+
+const BC7_WEIGHTS_4: [u16; 16] = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64];
+
+fn write_bits_u128(word: &mut u128, bit_pos: &mut u32, value: u32, num_bits: u32) {
+    let mask = if num_bits == 32 {
+        u128::from(u32::MAX)
+    } else {
+        (1u128 << num_bits) - 1
+    };
+    *word |= (u128::from(value) & mask) << *bit_pos;
+    *bit_pos += num_bits;
+}
+
+fn read_bits_u128(word: u128, bit_pos: &mut u32, num_bits: u32) -> u32 {
+    let mask = if num_bits == 32 {
+        u128::from(u32::MAX)
+    } else {
+        (1u128 << num_bits) - 1
+    };
+    let val = ((word >> *bit_pos) & mask) as u32;
+    *bit_pos += num_bits;
+    val
+}
+
+fn bc7_interpolate(e0: u8, e1: u8, weight_idx: usize) -> u8 {
+    let w = BC7_WEIGHTS_4[weight_idx & 0x0F];
+    (((64 - w) * u16::from(e0) + w * u16::from(e1) + 32) >> 6) as u8
+}
+
+fn encode_bc7_mode6_block(block: &[[u8; 4]; 16]) -> [u8; 16] {
+    let mut min_c = [255u8; 4];
+    let mut max_c = [0u8; 4];
+    for px in block {
+        for c in 0..4 {
+            min_c[c] = min_c[c].min(px[c]);
+            max_c[c] = max_c[c].max(px[c]);
+        }
+    }
+    let mut e0 = min_c;
+    let mut e1 = max_c;
+    let mut weights = [0u8; 16];
+    for (i, px) in block.iter().enumerate() {
+        let mut best_w = 0u8;
+        let mut best_err = u32::MAX;
+        for w_idx in 0..16 {
+            let mut err = 0u32;
+            for c in 0..4 {
+                let interp = bc7_interpolate(e0[c], e1[c], w_idx);
+                let diff = i32::from(px[c]) - i32::from(interp);
+                err += (diff * diff) as u32;
+            }
+            if err < best_err {
+                best_err = err;
+                best_w = w_idx as u8;
+            }
+        }
+        weights[i] = best_w;
+    }
+    if (weights[0] & 0x08) != 0 {
+        std::mem::swap(&mut e0, &mut e1);
+        for w in &mut weights {
+            *w = 15 - *w;
+        }
+    }
+    let p0 = e0[0] & 1;
+    let p1 = e1[0] & 1;
+    let mut word = 0u128;
+    let mut bit_pos = 0u32;
+    write_bits_u128(&mut word, &mut bit_pos, 0b0100_0000, 7);
+    for c in 0..4 {
+        write_bits_u128(&mut word, &mut bit_pos, u32::from(e0[c] >> 1), 7);
+        write_bits_u128(&mut word, &mut bit_pos, u32::from(e1[c] >> 1), 7);
+    }
+    write_bits_u128(&mut word, &mut bit_pos, u32::from(p0), 1);
+    write_bits_u128(&mut word, &mut bit_pos, u32::from(p1), 1);
+    write_bits_u128(&mut word, &mut bit_pos, u32::from(weights[0] & 0x07), 3);
+    for &w in weights.iter().skip(1) {
+        write_bits_u128(&mut word, &mut bit_pos, u32::from(w & 0x0F), 4);
+    }
+    word.to_le_bytes()
+}
+
+fn decode_bc7_mode6_block(raw: &[u8; 16]) -> [[u8; 4]; 16] {
+    let word = u128::from_le_bytes(*raw);
+    let mut bit_pos = 7u32;
+    let mut e0_7 = [0u8; 4];
+    let mut e1_7 = [0u8; 4];
+    for c in 0..4 {
+        e0_7[c] = read_bits_u128(word, &mut bit_pos, 7) as u8;
+        e1_7[c] = read_bits_u128(word, &mut bit_pos, 7) as u8;
+    }
+    let p0 = read_bits_u128(word, &mut bit_pos, 1) as u8;
+    let p1 = read_bits_u128(word, &mut bit_pos, 1) as u8;
+    let mut e0 = [0u8; 4];
+    let mut e1 = [0u8; 4];
+    for c in 0..4 {
+        e0[c] = (e0_7[c] << 1) | p0;
+        e1[c] = (e1_7[c] << 1) | p1;
+    }
+    let mut weights = [0usize; 16];
+    weights[0] = read_bits_u128(word, &mut bit_pos, 3) as usize;
+    for slot in weights.iter_mut().skip(1) {
+        *slot = read_bits_u128(word, &mut bit_pos, 4) as usize;
+    }
+    let mut out = [[0u8; 4]; 16];
+    for i in 0..16 {
+        for c in 0..4 {
+            out[i][c] = bc7_interpolate(e0[c], e1[c], weights[i]);
+        }
+    }
+    out
+}
+
+const ETC2_MODIFIER_TABLES: [[i16; 4]; 8] = [
+    [2, 8, -2, -8],
+    [5, 17, -5, -17],
+    [9, 29, -9, -29],
+    [13, 42, -13, -42],
+    [18, 60, -18, -60],
+    [24, 80, -24, -80],
+    [33, 106, -33, -106],
+    [47, 183, -47, -183],
+];
+
+fn expand_4to8(v4: u8) -> u8 {
+    let nib = v4 & 0x0F;
+    (nib << 4) | nib
+}
+
+fn quantize_8to4(v8: u8) -> u8 {
+    ((u16::from(v8) * 15 + 135) >> 8) as u8
+}
+
+fn encode_etc2_subblock(pixels: &[[u8; 4]; 8]) -> ([u8; 3], u8, [u8; 8]) {
+    let mut sum = [0u32; 3];
+    for px in pixels {
+        sum[0] += u32::from(px[0]);
+        sum[1] += u32::from(px[1]);
+        sum[2] += u32::from(px[2]);
+    }
+    let base4 = [
+        quantize_8to4(((sum[0] + 4) / 8) as u8),
+        quantize_8to4(((sum[1] + 4) / 8) as u8),
+        quantize_8to4(((sum[2] + 4) / 8) as u8),
+    ];
+    let base8 = [
+        expand_4to8(base4[0]),
+        expand_4to8(base4[1]),
+        expand_4to8(base4[2]),
+    ];
+    let mut best_table = 0u8;
+    let mut best_codes = [0u8; 8];
+    let mut best_total_err = u32::MAX;
+    for (t_idx, table) in ETC2_MODIFIER_TABLES.iter().enumerate() {
+        let mut codes = [0u8; 8];
+        let mut total_err = 0u32;
+        for (p_idx, px) in pixels.iter().enumerate() {
+            let mut best_code = 0u8;
+            let mut best_px_err = u32::MAX;
+            for (code, &delta) in table.iter().enumerate() {
+                let r = (i16::from(base8[0]) + delta).clamp(0, 255) as i32;
+                let g = (i16::from(base8[1]) + delta).clamp(0, 255) as i32;
+                let b = (i16::from(base8[2]) + delta).clamp(0, 255) as i32;
+                let dr = i32::from(px[0]) - r;
+                let dg = i32::from(px[1]) - g;
+                let db = i32::from(px[2]) - b;
+                let err = (dr * dr + dg * dg + db * db) as u32;
+                if err < best_px_err {
+                    best_px_err = err;
+                    best_code = code as u8;
+                }
+            }
+            codes[p_idx] = best_code;
+            total_err += best_px_err;
+        }
+        if total_err < best_total_err {
+            best_total_err = total_err;
+            best_table = t_idx as u8;
+            best_codes = codes;
+        }
+    }
+    (base4, best_table, best_codes)
+}
+
+fn encode_etc2_rgb_block(block: &[[u8; 4]; 16]) -> [u8; 8] {
+    let mut sub0 = [[0u8; 4]; 8];
+    let mut sub1 = [[0u8; 4]; 8];
+    for x in 0..2usize {
+        for y in 0..4usize {
+            sub0[x * 4 + y] = block[y * 4 + x];
+            sub1[x * 4 + y] = block[y * 4 + (x + 2)];
+        }
+    }
+    let (base0, table0, codes0) = encode_etc2_subblock(&sub0);
+    let (base1, table1, codes1) = encode_etc2_subblock(&sub1);
+    let mut msb = 0u16;
+    let mut lsb = 0u16;
+    for x in 0..4usize {
+        for y in 0..4usize {
+            let bit_idx = x * 4 + y;
+            let code = if x < 2 {
+                codes0[x * 4 + y]
+            } else {
+                codes1[(x - 2) * 4 + y]
+            };
+            msb |= u16::from((code >> 1) & 1) << bit_idx;
+            lsb |= u16::from(code & 1) << bit_idx;
+        }
+    }
+    let mut out = [0u8; 8];
+    out[0] = (base0[0] << 4) | (base1[0] & 0x0F);
+    out[1] = (base0[1] << 4) | (base1[1] & 0x0F);
+    out[2] = (base0[2] << 4) | (base1[2] & 0x0F);
+    out[3] = ((table0 & 0x07) << 5) | ((table1 & 0x07) << 2);
+    out[4..6].copy_from_slice(&msb.to_be_bytes());
+    out[6..8].copy_from_slice(&lsb.to_be_bytes());
+    out
+}
+
+fn decode_etc2_rgb_block(raw: &[u8; 8]) -> [[u8; 4]; 16] {
+    let diff = (raw[3] & 0x02) != 0;
+    let flip = (raw[3] & 0x01) != 0;
+    let table0 = ((raw[3] >> 5) & 0x07) as usize;
+    let table1 = ((raw[3] >> 2) & 0x07) as usize;
+    let (base0, base1) = if !diff {
+        (
+            [
+                expand_4to8(raw[0] >> 4),
+                expand_4to8(raw[1] >> 4),
+                expand_4to8(raw[2] >> 4),
+            ],
+            [
+                expand_4to8(raw[0] & 0x0F),
+                expand_4to8(raw[1] & 0x0F),
+                expand_4to8(raw[2] & 0x0F),
+            ],
+        )
+    } else {
+        let mut b0 = [0u8; 3];
+        let mut b1 = [0u8; 3];
+        for c in 0..3 {
+            let v5 = i16::from((raw[c] >> 3) & 0x1F);
+            let d_raw = i16::from(raw[c] & 0x07);
+            let d3 = if d_raw >= 4 { d_raw - 8 } else { d_raw };
+            let v5_1 = (v5 + d3).clamp(0, 31) as u8;
+            let v5_0 = v5 as u8;
+            b0[c] = (v5_0 << 3) | (v5_0 >> 2);
+            b1[c] = (v5_1 << 3) | (v5_1 >> 2);
+        }
+        (b0, b1)
+    };
+    let msb = u16::from_be_bytes([raw[4], raw[5]]);
+    let lsb = u16::from_be_bytes([raw[6], raw[7]]);
+    let mut out = [[0u8; 4]; 16];
+    for x in 0..4usize {
+        for y in 0..4usize {
+            let bit_idx = x * 4 + y;
+            let code = (((msb >> bit_idx) & 1) << 1) | ((lsb >> bit_idx) & 1);
+            let second_sub = if flip { y >= 2 } else { x >= 2 };
+            let (base, table_idx) = if second_sub {
+                (base1, table1)
+            } else {
+                (base0, table0)
+            };
+            let delta = ETC2_MODIFIER_TABLES[table_idx][code as usize];
+            out[y * 4 + x] = [
+                (i16::from(base[0]) + delta).clamp(0, 255) as u8,
+                (i16::from(base[1]) + delta).clamp(0, 255) as u8,
+                (i16::from(base[2]) + delta).clamp(0, 255) as u8,
+                255,
+            ];
+        }
+    }
+    out
+}
+
+const EAC_ALPHA_TABLES: [[i16; 8]; 16] = [
+    [-3, -6, -9, -15, 2, 5, 8, 14],
+    [-3, -7, -10, -13, 2, 6, 9, 12],
+    [-2, -5, -8, -13, 1, 4, 7, 12],
+    [-2, -4, -6, -13, 1, 3, 5, 12],
+    [-3, -6, -8, -12, 2, 5, 7, 11],
+    [-3, -7, -9, -11, 2, 6, 8, 10],
+    [-4, -7, -8, -11, 3, 6, 7, 10],
+    [-3, -5, -8, -11, 2, 4, 7, 10],
+    [-2, -6, -8, -10, 1, 5, 7, 9],
+    [-2, -5, -8, -10, 1, 4, 7, 9],
+    [-2, -4, -8, -10, 1, 3, 7, 9],
+    [-2, -5, -7, -10, 1, 4, 6, 9],
+    [-3, -4, -7, -10, 2, 3, 6, 9],
+    [-1, -2, -3, -10, 0, 1, 2, 9],
+    [-4, -6, -8, -9, 3, 5, 7, 8],
+    [-3, -5, -7, -9, 2, 4, 6, 8],
+];
+
+fn encode_eac_alpha_block(block: &[[u8; 4]; 16]) -> [u8; 8] {
+    let mut min_a = 255u8;
+    let mut max_a = 0u8;
+    let mut sum_a = 0u32;
+    for px in block {
+        min_a = min_a.min(px[3]);
+        max_a = max_a.max(px[3]);
+        sum_a += u32::from(px[3]);
+    }
+    let base_codeword = ((sum_a + 8) / 16) as u8;
+    let span = i16::from(max_a) - i16::from(min_a);
+    let approx_mul = ((span + 15) / 18).clamp(1, 15) as u8;
+    let mut best_mul = approx_mul;
+    let mut best_table = 0u8;
+    let mut best_indices = [0u8; 16];
+    let mut best_err = u32::MAX;
+    for mul_candidate in [1u8, approx_mul, (approx_mul + 1).min(15)] {
+        for (t_idx, table) in EAC_ALPHA_TABLES.iter().enumerate() {
+            let mut indices = [0u8; 16];
+            let mut total_err = 0u32;
+            for x in 0..4usize {
+                for y in 0..4usize {
+                    let target = block[y * 4 + x][3];
+                    let mut best_idx = 0u8;
+                    let mut best_px_err = u8::MAX;
+                    for (idx, &m) in table.iter().enumerate() {
+                        let val = (i16::from(base_codeword) + m * i16::from(mul_candidate))
+                            .clamp(0, 255) as u8;
+                        let err = target.abs_diff(val);
+                        if err < best_px_err {
+                            best_px_err = err;
+                            best_idx = idx as u8;
+                        }
+                    }
+                    indices[x * 4 + y] = best_idx;
+                    total_err += u32::from(best_px_err) * u32::from(best_px_err);
+                }
+            }
+            if total_err < best_err {
+                best_err = total_err;
+                best_mul = mul_candidate;
+                best_table = t_idx as u8;
+                best_indices = indices;
+            }
+        }
+    }
+    let mut index_bits = 0u64;
+    for &idx in &best_indices {
+        index_bits = (index_bits << 3) | u64::from(idx & 0x07);
+    }
+    let mut out = [0u8; 8];
+    out[0] = base_codeword;
+    out[1] = ((best_mul & 0x0F) << 4) | (best_table & 0x0F);
+    let be_bytes = index_bits.to_be_bytes();
+    out[2..8].copy_from_slice(&be_bytes[2..8]);
+    out
+}
+
+fn decode_eac_alpha_block(raw: &[u8; 8]) -> [u8; 16] {
+    let base_codeword = i16::from(raw[0]);
+    let multiplier = i16::from((raw[1] >> 4) & 0x0F);
+    let table_idx = (raw[1] & 0x0F) as usize;
+    let table = &EAC_ALPHA_TABLES[table_idx];
+    let mut be_bytes = [0u8; 8];
+    be_bytes[2..8].copy_from_slice(&raw[2..8]);
+    let index_bits = u64::from_be_bytes(be_bytes);
+    let mut out = [0u8; 16];
+    for x in 0..4usize {
+        for y in 0..4usize {
+            let order = x * 4 + y;
+            let shift = (15 - order) * 3;
+            let idx = ((index_bits >> shift) & 0x07) as usize;
+            let delta = if multiplier == 0 {
+                table[idx]
+            } else {
+                table[idx] * multiplier
+            };
+            out[y * 4 + x] = (base_codeword + delta).clamp(0, 255) as u8;
+        }
+    }
+    out
+}
+
+const ASTC_BLOCK_MODE_VOID_EXTENT: u16 = 0x1FC;
+const ASTC_BLOCK_MODE_LDR_RGBA_3X3_3BIT: u16 = 0x15A;
+const ASTC_WEIGHTS_3BIT: [u16; 8] = [0, 9, 18, 27, 37, 46, 55, 64];
+
+fn astc_interpolate(e0: u8, e1: u8, weight: u16) -> u8 {
+    (((64 - weight) * u16::from(e0) + weight * u16::from(e1) + 32) >> 6) as u8
+}
+
+fn astc_grid_weight_3x3(grid: &[u16; 9], px: usize, py: usize, bx: usize, by: usize) -> u16 {
+    let gx_fp = if bx > 1 { (px * 32) / (bx - 1) } else { 0 };
+    let gy_fp = if by > 1 { (py * 32) / (by - 1) } else { 0 };
+    let ix = (gx_fp / 16).min(1);
+    let iy = (gy_fp / 16).min(1);
+    let fx = (gx_fp - ix * 16) as u16;
+    let fy = (gy_fp - iy * 16) as u16;
+    let w00 = grid[iy * 3 + ix];
+    let w10 = grid[iy * 3 + ix + 1];
+    let w01 = grid[(iy + 1) * 3 + ix];
+    let w11 = grid[(iy + 1) * 3 + ix + 1];
+    let top = (16 - fx) * w00 + fx * w10;
+    let bot = (16 - fx) * w01 + fx * w11;
+    ((16 - fy) * top + fy * bot + 128) >> 8
+}
+
+fn encode_astc_block(texels: &[[u8; 4]], bx: usize, by: usize) -> [u8; 16] {
+    let first = texels.first().copied().unwrap_or([0, 0, 0, 255]);
+    let is_uniform = texels.iter().all(|&px| px == first);
+    if is_uniform {
+        let mut word = 0u128;
+        let mut pos = 0u32;
+        write_bits_u128(
+            &mut word,
+            &mut pos,
+            u32::from(ASTC_BLOCK_MODE_VOID_EXTENT),
+            12,
+        );
+        write_bits_u128(&mut word, &mut pos, 0xFFFF_FFFF, 32);
+        write_bits_u128(&mut word, &mut pos, 0x000F_FFFF, 20);
+        for &c in &first {
+            let c16 = (u32::from(c) << 8) | u32::from(c);
+            write_bits_u128(&mut word, &mut pos, c16, 16);
+        }
+        return word.to_le_bytes();
+    }
+
+    let mut min_c = [255u8; 4];
+    let mut max_c = [0u8; 4];
+    for px in texels {
+        for c in 0..4 {
+            min_c[c] = min_c[c].min(px[c]);
+            max_c[c] = max_c[c].max(px[c]);
+        }
+    }
+    let mut weight_indices = [0u8; 9];
+    for gy in 0..3usize {
+        let py = if by > 1 { (gy * (by - 1)) / 2 } else { 0 };
+        for gx in 0..3usize {
+            let px = if bx > 1 { (gx * (bx - 1)) / 2 } else { 0 };
+            let sample = texels[py * bx + px];
+            let mut best_idx = 0u8;
+            let mut best_err = u32::MAX;
+            for (idx, &w) in ASTC_WEIGHTS_3BIT.iter().enumerate() {
+                let mut err = 0u32;
+                for c in 0..4 {
+                    let interp = astc_interpolate(min_c[c], max_c[c], w);
+                    let diff = i32::from(sample[c]) - i32::from(interp);
+                    err += (diff * diff) as u32;
+                }
+                if err < best_err {
+                    best_err = err;
+                    best_idx = idx as u8;
+                }
+            }
+            weight_indices[gy * 3 + gx] = best_idx;
+        }
+    }
+
+    let mut word = 0u128;
+    let mut pos = 0u32;
+    write_bits_u128(
+        &mut word,
+        &mut pos,
+        u32::from(ASTC_BLOCK_MODE_LDR_RGBA_3X3_3BIT),
+        11,
+    );
+    write_bits_u128(&mut word, &mut pos, 0, 2);
+    write_bits_u128(&mut word, &mut pos, 12, 4);
+    for c in 0..4 {
+        write_bits_u128(&mut word, &mut pos, u32::from(min_c[c]), 8);
+        write_bits_u128(&mut word, &mut pos, u32::from(max_c[c]), 8);
+    }
+    let mut weight_pos = 128u32;
+    for &w_idx in &weight_indices {
+        let val = u128::from(w_idx & 0x07);
+        for bit in 0..3u32 {
+            weight_pos -= 1;
+            let b = (val >> bit) & 1;
+            word |= b << weight_pos;
+        }
+    }
+    word.to_le_bytes()
+}
+
+fn decode_astc_block(raw: &[u8; 16], bx: usize, by: usize) -> Vec<[u8; 4]> {
+    let word = u128::from_le_bytes(*raw);
+    let mode_12 = (word & 0xFFF) as u16;
+    let total = bx * by;
+    if (mode_12 & 0x1FC) == ASTC_BLOCK_MODE_VOID_EXTENT {
+        let mut pos = 64u32;
+        let r16 = read_bits_u128(word, &mut pos, 16);
+        let g16 = read_bits_u128(word, &mut pos, 16);
+        let b16 = read_bits_u128(word, &mut pos, 16);
+        let a16 = read_bits_u128(word, &mut pos, 16);
+        let rgba = [
+            (r16 >> 8) as u8,
+            (g16 >> 8) as u8,
+            (b16 >> 8) as u8,
+            (a16 >> 8) as u8,
+        ];
+        return vec![rgba; total];
+    }
+    let mut pos = 17u32;
+    let mut e0 = [0u8; 4];
+    let mut e1 = [0u8; 4];
+    for c in 0..4 {
+        e0[c] = read_bits_u128(word, &mut pos, 8) as u8;
+        e1[c] = read_bits_u128(word, &mut pos, 8) as u8;
+    }
+    let mut weight_pos = 128u32;
+    let mut grid = [0u16; 9];
+    for slot in &mut grid {
+        let mut idx = 0u32;
+        for bit in 0..3u32 {
+            weight_pos -= 1;
+            let b = ((word >> weight_pos) & 1) as u32;
+            idx |= b << bit;
+        }
+        *slot = ASTC_WEIGHTS_3BIT[(idx & 0x07) as usize];
+    }
+    let mut out = vec![[0u8; 4]; total];
+    for py in 0..by {
+        for px in 0..bx {
+            let w = astc_grid_weight_3x3(&grid, px, py, bx, by);
+            out[py * bx + px] = [
+                astc_interpolate(e0[0], e1[0], w),
+                astc_interpolate(e0[1], e1[1], w),
+                astc_interpolate(e0[2], e1[2], w),
+                astc_interpolate(e0[3], e1[3], w),
+            ];
+        }
+    }
+    out
+}
+
+fn encode_astc_image(rgba: &[u8], width: u32, height: u32, bx: usize, by: usize) -> Vec<u8> {
+    let w = width as usize;
+    let h = height as usize;
+    let blocks_x = w.div_ceil(bx);
+    let blocks_y = h.div_ceil(by);
+    let mut out = vec![0u8; blocks_x * blocks_y * 16];
+    let mut texels = vec![[0u8; 4]; bx * by];
+    for block_y in 0..blocks_y {
+        for block_x in 0..blocks_x {
+            for py in 0..by {
+                let sy = (block_y * by + py).min(h - 1);
+                for px in 0..bx {
+                    let sx = (block_x * bx + px).min(w - 1);
+                    let src = (sy * w + sx) * 4;
+                    texels[py * bx + px] = [rgba[src], rgba[src + 1], rgba[src + 2], rgba[src + 3]];
+                }
+            }
+            let encoded = encode_astc_block(&texels, bx, by);
+            let dst = (block_y * blocks_x + block_x) * 16;
+            out[dst..dst + 16].copy_from_slice(&encoded);
+        }
+    }
+    out
+}
+
+fn decode_astc_image(
+    encoded: &[u8],
+    width: u32,
+    height: u32,
+    bx: usize,
+    by: usize,
+) -> Option<Vec<u8>> {
+    let w = width as usize;
+    let h = height as usize;
+    let blocks_x = w.div_ceil(bx);
+    let blocks_y = h.div_ceil(by);
+    let expected_bytes = blocks_x.checked_mul(blocks_y)?.checked_mul(16)?;
+    if encoded.len() != expected_bytes {
+        return None;
+    }
+    let mut rgba = vec![0u8; w * h * 4];
+    for block_y in 0..blocks_y {
+        for block_x in 0..blocks_x {
+            let src = (block_y * blocks_x + block_x) * 16;
+            let mut raw = [0u8; 16];
+            raw.copy_from_slice(&encoded[src..src + 16]);
+            let decoded = decode_astc_block(&raw, bx, by);
+            for py in 0..by {
+                let dy = block_y * by + py;
+                if dy >= h {
+                    continue;
+                }
+                for px in 0..bx {
+                    let dx = block_x * bx + px;
+                    if dx >= w {
+                        continue;
+                    }
+                    let dst = (dy * w + dx) * 4;
+                    rgba[dst..dst + 4].copy_from_slice(&decoded[py * bx + px]);
+                }
+            }
+        }
+    }
+    Some(rgba)
 }

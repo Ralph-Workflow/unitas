@@ -2342,21 +2342,14 @@ fn cmp_002_project_findings_take_the_probe_state_and_name_the_gap_and_its_locati
         assert_eq!(texture.feature_id, "PRJ-004");
         assert_eq!(
             texture.state,
-            CompatibilityState::PartiallySupported,
-            "CMP-002: the texture import is partially supported because no compressed texture encoder exists"
+            CompatibilityState::Supported,
+            "CMP-002: the texture import is supported because the animation clip importer and the platform texture encoders are implemented"
         );
         assert!(
             texture
                 .observable_consequence
-                .contains("no BCn, ASTC, or ETC2 texture encoder"),
-            "CMP-002: the texture finding must name the precise gap: {}",
-            texture.observable_consequence
-        );
-        assert!(
-            texture
-                .observable_consequence
-                .contains("crates/unitas-asset/src/texture/import.rs"),
-            "CMP-002: the texture finding must name where the gap is: {}",
+                .contains("content is editable and playable"),
+            "CMP-002: the texture finding must report that the imported content is usable: {}",
             texture.observable_consequence
         );
     }
@@ -2373,19 +2366,14 @@ fn cmp_002_project_findings_take_the_probe_state_and_name_the_gap_and_its_locati
         assert_eq!(quality.feature_id, "PRJ-007");
         assert_eq!(
             quality.state,
-            CompatibilityState::PartiallySupported,
-            "CMP-002: a project setting is partially supported because only some settings are represented"
-        );
-        assert!(
-            quality.observable_consequence.contains("tags and layers"),
-            "CMP-002: the setting finding must name the precise gap: {}",
-            quality.observable_consequence
+            CompatibilityState::Supported,
+            "CMP-002: a project setting is supported because every ProjectSettings family is represented"
         );
         assert!(
             quality
                 .observable_consequence
-                .contains("crates/unitas-asset/src/project_settings.rs"),
-            "CMP-002: the setting finding must name where the gap is: {}",
+                .contains("project setting is represented and honored"),
+            "CMP-002: the setting finding must report that the setting is represented and honored: {}",
             quality.observable_consequence
         );
     }
@@ -2420,6 +2408,34 @@ fn cmp_002_project_findings_take_the_probe_state_and_name_the_gap_and_its_locati
             "CMP-002: the package finding must name where the gap is: {}",
             collab.observable_consequence
         );
+    }
+
+    for (feature_id, gap_location) in [
+        ("EDT-007", "crates/unitas-asset/src/merge.rs"),
+        ("BLD-005", "crates/unitas-build/src/bundle.rs"),
+        ("ENV-001", "crates/unitas-physics/src/terrain/mod.rs"),
+        ("REN-004", "crates/unitas-physics/src/particles.rs"),
+    ] {
+        let probed = assessment
+            .owned_feature_states
+            .iter()
+            .find(|state| state.feature_id == feature_id);
+        assert!(
+            probed.is_some(),
+            "CMP-002: '{feature_id}' must report a probed state"
+        );
+        if let Some(probed) = probed {
+            assert_eq!(
+                probed.state,
+                CompatibilityState::PartiallySupported,
+                "CMP-002: '{feature_id}' keeps a gap and stays partially supported"
+            );
+            let gap = probed.gap.as_deref().unwrap_or_default();
+            assert!(
+                gap.contains(gap_location),
+                "CMP-002: the gap for '{feature_id}' must name where the capability is missing: {gap}"
+            );
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod anim_import;
 pub mod audio_import;
 pub mod binary_ser;
 pub mod database;

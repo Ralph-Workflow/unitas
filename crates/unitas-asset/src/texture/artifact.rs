@@ -1,6 +1,6 @@
 use crate::texture::import::{
     import_texture, import_texture_for_target, TextureFormat, TextureImportError,
-    TextureImportResult, TextureImportSettings,
+    TextureImportResult, TextureImportSettings, TexturePlatformFormat,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +13,9 @@ pub struct TextureArtifact {
     pub normal_map: bool,
     pub generate_mips: bool,
     pub settings: TextureImportSettings,
+    pub encoded_format: TexturePlatformFormat,
+    pub compressed_data: Option<Vec<u8>>,
+    pub compressed_mip_data: Vec<Vec<u8>>,
 }
 
 impl TextureArtifact {
@@ -26,6 +29,9 @@ impl TextureArtifact {
             normal_map: result.settings.is_normal_map(),
             generate_mips: result.settings.mipmaps,
             settings: result.settings.clone(),
+            encoded_format: result.encoded_format,
+            compressed_data: result.compressed_data.clone(),
+            compressed_mip_data: result.compressed_mip_data.clone(),
         }
     }
 }

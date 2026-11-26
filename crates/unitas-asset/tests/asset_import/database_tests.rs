@@ -680,3 +680,187 @@ fn prj002_prj004_outcome17_json_and_bytes_import_as_text_asset_and_avatar_mask_a
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+#[test]
+fn database_preview_favorites_recents_duplicate_and_undo_redo_round_trip() -> TestResult {
+    let root = temp_dir("preview-fav-recent-dup-undo")?;
+    let project_root = root.join("project");
+    build_fixture(&project_root)?;
+
+    let valid_anim = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!74 &7400000\nAnimationClip:\n  m_Name: SpinClip\n  m_SampleRate: 30\n";
+    let anim_guid = "91919191919191919191919191919191";
+    write_file(
+        &project_root.join("Assets/Animations/Spin.anim"),
+        valid_anim,
+    )?;
+    write_file(
+        &project_root.join("Assets/Animations/Spin.anim.meta"),
+        &meta_with_labels(anim_guid, "NativeFormatImporter:", &["anim"]),
+    )?;
+
+    let valid_anim_family = identify_asset_family(
+        Path::new("Assets/Animations/Spin.anim"),
+        valid_anim.as_bytes(),
+        None,
+    )
+    .ok_or("expected family for valid Spin.anim")?;
+    assert_eq!(
+        valid_anim_family.family,
+        RecognizedAssetFamily::AnimationClip
+    );
+    assert_eq!(valid_anim_family.outcome.state, AssetImportState::Ready);
+
+    let invalid_anim_family = identify_asset_family(
+        Path::new("Assets/Animations/Broken.anim"),
+        b"not valid animation clip yaml",
+        None,
+    )
+    .ok_or("expected family for Broken.anim")?;
+    assert_eq!(
+        invalid_anim_family.family,
+        RecognizedAssetFamily::AnimationClip
+    );
+    assert_eq!(invalid_anim_family.outcome.state, AssetImportState::Failed);
+
+    let store = TrustStore::new(root.join("trust.json"));
+    let (mut project, _) = Project::open(&project_root, &store)?;
+
+    let brick_preview = project.preview_asset(Path::new("Assets/Materials/Brick.mat"))?;
+    assert_eq!(brick_preview.guid, MATERIAL_GUID);
+    assert_eq!(
+        brick_preview.path,
+        PathBuf::from("Assets/Materials/Brick.mat")
+    );
+    assert_eq!(brick_preview.family, Some(RecognizedAssetFamily::Material));
+    assert_eq!(brick_preview.class_name, "Material");
+    assert_eq!(brick_preview.byte_size, MATERIAL.len() as u64);
+    assert_eq!(brick_preview.state, AssetImportState::Ready);
+    assert!(brick_preview.summary.contains("Material"));
+
+    let anim_preview = project.preview_asset(Path::new("Assets/Animations/Spin.anim"))?;
+    assert_eq!(anim_preview.guid, anim_guid);
+    assert_eq!(
+        anim_preview.family,
+        Some(RecognizedAssetFamily::AnimationClip)
+    );
+    assert_eq!(anim_preview.class_name, "AnimationClip");
+    assert_eq!(anim_preview.state, AssetImportState::Ready);
+    assert!(anim_preview.summary.contains("SpinClip"));
+    assert!(anim_preview.summary.contains("30 Hz"));
+
+    assert_eq!(
+        project.recent_assets(),
+        &[anim_guid.to_string(), MATERIAL_GUID.to_string()]
+    );
+    project.record_recent(MATERIAL_GUID);
+    assert_eq!(
+        project.recent_assets(),
+        &[MATERIAL_GUID.to_string(), anim_guid.to_string()]
+    );
+
+    assert!(project.favorites().is_empty());
+    assert!(project.add_favorite(MATERIAL_GUID));
+    assert!(!project.add_favorite(MATERIAL_GUID));
+    assert!(project.add_favorite(TEXTURE_GUID));
+    assert_eq!(
+        project.favorites(),
+        &[MATERIAL_GUID.to_string(), TEXTURE_GUID.to_string()]
+    );
+    assert!(project.remove_favorite(MATERIAL_GUID));
+    assert!(!project.remove_favorite(MATERIAL_GUID));
+    assert_eq!(project.favorites(), &[TEXTURE_GUID.to_string()]);
+
+    let duplicated_guid = project.duplicate_asset(
+        Path::new("Assets/Materials/Brick.mat"),
+        Path::new("Assets/Materials/BrickCopy.mat"),
+    )?;
+    assert_eq!(duplicated_guid.len(), 32);
+    assert_ne!(duplicated_guid, MATERIAL_GUID);
+    assert!(project_root
+        .join("Assets/Materials/BrickCopy.mat")
+        .is_file());
+    let copy_meta = fs::read_to_string(project_root.join("Assets/Materials/BrickCopy.mat.meta"))?;
+    assert!(copy_meta.contains(&format!("guid: {duplicated_guid}")));
+    assert!(copy_meta.contains("architecture"));
+    assert!(copy_meta.contains("masonry"));
+    match project.inventory().lookup(&duplicated_guid) {
+        GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Materials/BrickCopy.mat"));
+            assert_eq!(entry.labels, vec!["architecture", "masonry"]);
+        }
+        other => {
+            return Err(format!("expected duplicated asset in inventory, got {other:?}").into())
+        }
+    }
+
+    assert!(project.undo_database_operation()?);
+    assert!(!project_root.join("Assets/Materials/BrickCopy.mat").exists());
+    assert_eq!(
+        project.inventory().lookup(&duplicated_guid),
+        GuidLookup::Missing
+    );
+
+    assert!(project.redo_database_operation()?);
+    assert!(project_root
+        .join("Assets/Materials/BrickCopy.mat")
+        .is_file());
+    match project.inventory().lookup(&duplicated_guid) {
+        GuidLookup::Asset(entry) => {
+            assert_eq!(entry.path, PathBuf::from("Assets/Materials/BrickCopy.mat"));
+        }
+        other => {
+            return Err(format!("expected redone duplicate in inventory, got {other:?}").into())
+        }
+    }
+
+    project.rename_asset(
+        Path::new("Assets/Materials/BrickCopy.mat"),
+        "BrickCopyRenamed.mat",
+    )?;
+    assert!(!project_root.join("Assets/Materials/BrickCopy.mat").exists());
+    assert!(project_root
+        .join("Assets/Materials/BrickCopyRenamed.mat")
+        .is_file());
+
+    assert!(project.undo_database_operation()?);
+    assert!(project_root
+        .join("Assets/Materials/BrickCopy.mat")
+        .is_file());
+    assert!(!project_root
+        .join("Assets/Materials/BrickCopyRenamed.mat")
+        .exists());
+
+    assert!(project.redo_database_operation()?);
+    assert!(project_root
+        .join("Assets/Materials/BrickCopyRenamed.mat")
+        .is_file());
+
+    project.delete_asset(Path::new("Assets/Materials/BrickCopyRenamed.mat"))?;
+    assert_eq!(
+        project.inventory().lookup(&duplicated_guid),
+        GuidLookup::Missing
+    );
+
+    assert!(project.undo_database_operation()?);
+    assert!(project_root
+        .join("Assets/Materials/BrickCopyRenamed.mat")
+        .is_file());
+    match project.inventory().lookup(&duplicated_guid) {
+        GuidLookup::Asset(entry) => {
+            assert_eq!(
+                entry.path,
+                PathBuf::from("Assets/Materials/BrickCopyRenamed.mat")
+            );
+        }
+        other => return Err(format!("expected undone delete in inventory, got {other:?}").into()),
+    }
+
+    assert!(project.redo_database_operation()?);
+    assert_eq!(
+        project.inventory().lookup(&duplicated_guid),
+        GuidLookup::Missing
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}

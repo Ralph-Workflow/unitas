@@ -1,7 +1,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::unity_yaml::{self, Node, Stream, YamlError};
+use crate::scene_save;
+use crate::unity_yaml::{self, Document, Header, Node, Stream, YamlError};
 
 pub const DEFAULT_FIXED_TIMESTEP: f64 = 0.02;
 pub const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
@@ -64,11 +65,1134 @@ pub struct ProjectIdentity {
     pub company_name: Option<String>,
     pub product_name: Option<String>,
     pub bundle_version: Option<String>,
+    pub active_color_space: ColorSpaceSetting,
+}
+
+pub type PlayerSettings = ProjectIdentity;
+
+impl ProjectIdentity {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_player_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_player_settings(path)
+    }
+
+    pub fn active_color_space(&self) -> ColorSpaceSetting {
+        self.active_color_space
+    }
+
+    pub fn set_active_color_space(&mut self, color_space: ColorSpaceSetting) {
+        self.active_color_space = color_space;
+    }
+
+    pub fn apply_to_stream(&self, stream: &mut Stream) -> Result<(), ProjectSettingsError> {
+        let entries = root_mapping_mut(stream, "PlayerSettings")?;
+        if let Some(company) = &self.company_name {
+            set_mapping_scalar(entries, "companyName", company);
+        }
+        if let Some(product) = &self.product_name {
+            set_mapping_scalar(entries, "productName", product);
+        }
+        if let Some(version) = &self.bundle_version {
+            set_mapping_scalar(entries, "bundleVersion", version);
+        }
+        set_mapping_scalar(
+            entries,
+            "m_ActiveColorSpace",
+            &self.active_color_space.code().to_string(),
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SortingLayerEntry {
+    pub name: String,
+    pub unique_id: i64,
+    pub locked: bool,
+}
+
+pub type SortingLayer = SortingLayerEntry;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagManagerSettings {
+    pub tags: Vec<String>,
+    pub layers: Vec<String>,
+    pub sorting_layers: Vec<SortingLayerEntry>,
+    stream: Option<Stream>,
+}
+
+impl Default for TagManagerSettings {
+    fn default() -> Self {
+        TagManagerSettings {
+            tags: Vec::new(),
+            layers: vec![String::new(); 32],
+            sorting_layers: Vec::new(),
+            stream: None,
+        }
+    }
+}
+
+impl TagManagerSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_tag_manager_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_tag_manager(path)
+    }
+
+    pub fn tags(&self) -> Vec<String> {
+        self.tags.clone()
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.iter().any(|existing| existing == tag) {
+            self.tags.push(tag.to_string());
+        }
+        if let Some(stream) = &mut self.stream {
+            if let Ok(entries) = root_mapping_mut(stream, "TagManager") {
+                let tag_nodes = self
+                    .tags
+                    .iter()
+                    .map(|value| Node::Scalar(value.clone()))
+                    .collect();
+                set_mapping_node(entries, "tags", Node::Sequence(tag_nodes));
+            }
+        }
+    }
+
+    pub fn layers(&self) -> Vec<String> {
+        self.layers.clone()
+    }
+
+    pub fn set_layer(&mut self, index: usize, name: &str) -> Result<(), ProjectSettingsError> {
+        if index >= 32 {
+            return Err(ProjectSettingsError::InvalidValue("TagManager"));
+        }
+        if self.layers.len() <= index {
+            self.layers.resize(index + 1, String::new());
+        }
+        self.layers[index] = name.to_string();
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "TagManager")?;
+            let layer_nodes = self
+                .layers
+                .iter()
+                .map(|value| Node::Scalar(value.clone()))
+                .collect();
+            set_mapping_node(entries, "layers", Node::Sequence(layer_nodes));
+        }
+        Ok(())
+    }
+
+    pub fn sorting_layers(&self) -> Vec<SortingLayerEntry> {
+        self.sorting_layers.clone()
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        let tag_nodes = self
+            .tags
+            .iter()
+            .map(|value| Node::Scalar(value.clone()))
+            .collect();
+        let layer_nodes = self
+            .layers
+            .iter()
+            .map(|value| Node::Scalar(value.clone()))
+            .collect();
+        let sorting_nodes = self
+            .sorting_layers
+            .iter()
+            .map(|entry| {
+                Node::Mapping(vec![
+                    (String::from("name"), Node::Scalar(entry.name.clone())),
+                    (
+                        String::from("uniqueID"),
+                        Node::Scalar(entry.unique_id.to_string()),
+                    ),
+                    (
+                        String::from("locked"),
+                        Node::Scalar(if entry.locked { "1" } else { "0" }.to_string()),
+                    ),
+                ])
+            })
+            .collect();
+        default_single_doc_stream(
+            78,
+            "TagManager",
+            vec![
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (String::from("tags"), Node::Sequence(tag_nodes)),
+                (String::from("layers"), Node::Sequence(layer_nodes)),
+                (
+                    String::from("m_SortingLayers"),
+                    Node::Sequence(sorting_nodes),
+                ),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphicsSettings {
+    pub custom_render_pipeline_guid: Option<String>,
+    pub transparency_sort_mode: i64,
+    pub always_included_shader_count: usize,
+    pub tier_settings_count: usize,
+    stream: Option<Stream>,
+}
+
+impl GraphicsSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_graphics_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_graphics_settings(path)
+    }
+
+    pub fn custom_render_pipeline_guid(&self) -> Option<String> {
+        self.custom_render_pipeline_guid.clone()
+    }
+
+    pub fn transparency_sort_mode(&self) -> i64 {
+        self.transparency_sort_mode
+    }
+
+    pub fn set_transparency_sort_mode(&mut self, mode: i64) -> Result<(), ProjectSettingsError> {
+        if mode < 0 {
+            return Err(ProjectSettingsError::InvalidValue("GraphicsSettings"));
+        }
+        self.transparency_sort_mode = mode;
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "GraphicsSettings")?;
+            set_mapping_scalar(entries, "m_TransparencySortMode", &mode.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn always_included_shader_count(&self) -> usize {
+        self.always_included_shader_count
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        let pipeline = match &self.custom_render_pipeline_guid {
+            Some(guid) => Node::Mapping(vec![
+                (
+                    String::from("fileID"),
+                    Node::Scalar(String::from("11400000")),
+                ),
+                (String::from("guid"), Node::Scalar(guid.clone())),
+                (String::from("type"), Node::Scalar(String::from("2"))),
+            ]),
+            None => Node::Mapping(vec![(
+                String::from("fileID"),
+                Node::Scalar(String::from("0")),
+            )]),
+        };
+        default_single_doc_stream(
+            30,
+            "GraphicsSettings",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("15")),
+                ),
+                (String::from("m_CustomRenderPipeline"), pipeline),
+                (
+                    String::from("m_TransparencySortMode"),
+                    Node::Scalar(self.transparency_sort_mode.to_string()),
+                ),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ColorSpaceSetting {
+    #[default]
+    Gamma,
+    Linear,
+}
+
+impl ColorSpaceSetting {
+    pub fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(ColorSpaceSetting::Gamma),
+            1 => Some(ColorSpaceSetting::Linear),
+            _ => None,
+        }
+    }
+
+    pub fn code(self) -> i64 {
+        match self {
+            ColorSpaceSetting::Gamma => 0,
+            ColorSpaceSetting::Linear => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioManagerSettings {
+    pub volume: f64,
+    pub rolloff_scale: f64,
+    pub doppler_factor: f64,
+    pub default_speaker_mode: i64,
+    pub dsp_buffer_size: i64,
+    pub virtual_voice_count: i64,
+    pub real_voice_count: i64,
+    pub disable_audio: bool,
+    stream: Option<Stream>,
+}
+
+impl Default for AudioManagerSettings {
+    fn default() -> Self {
+        AudioManagerSettings {
+            volume: 1.0,
+            rolloff_scale: 1.0,
+            doppler_factor: 1.0,
+            default_speaker_mode: 2,
+            dsp_buffer_size: 1024,
+            virtual_voice_count: 512,
+            real_voice_count: 32,
+            disable_audio: false,
+            stream: None,
+        }
+    }
+}
+
+impl AudioManagerSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_audio_manager_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_audio_manager(path)
+    }
+
+    pub fn volume(&self) -> f64 {
+        self.volume
+    }
+
+    pub fn set_volume(&mut self, volume: f64) -> Result<(), ProjectSettingsError> {
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return Err(ProjectSettingsError::InvalidValue("AudioManager"));
+        }
+        self.volume = volume;
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "AudioManager")?;
+            set_mapping_scalar(entries, "m_Volume", &format_float_scalar(volume));
+        }
+        Ok(())
+    }
+
+    pub fn rolloff_scale(&self) -> f64 {
+        self.rolloff_scale
+    }
+
+    pub fn doppler_factor(&self) -> f64 {
+        self.doppler_factor
+    }
+
+    pub fn default_speaker_mode(&self) -> i64 {
+        self.default_speaker_mode
+    }
+
+    pub fn dsp_buffer_size(&self) -> i64 {
+        self.dsp_buffer_size
+    }
+
+    pub fn virtual_voice_count(&self) -> i64 {
+        self.virtual_voice_count
+    }
+
+    pub fn real_voice_count(&self) -> i64 {
+        self.real_voice_count
+    }
+
+    pub fn disable_audio(&self) -> bool {
+        self.disable_audio
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        default_single_doc_stream(
+            89,
+            "AudioManager",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (
+                    String::from("m_Volume"),
+                    Node::Scalar(format_float_scalar(self.volume)),
+                ),
+                (
+                    String::from("Rolloff Scale"),
+                    Node::Scalar(format_float_scalar(self.rolloff_scale)),
+                ),
+                (
+                    String::from("Doppler Factor"),
+                    Node::Scalar(format_float_scalar(self.doppler_factor)),
+                ),
+                (
+                    String::from("Default Speaker Mode"),
+                    Node::Scalar(self.default_speaker_mode.to_string()),
+                ),
+                (
+                    String::from("m_DSPBufferSize"),
+                    Node::Scalar(self.dsp_buffer_size.to_string()),
+                ),
+                (
+                    String::from("m_VirtualVoiceCount"),
+                    Node::Scalar(self.virtual_voice_count.to_string()),
+                ),
+                (
+                    String::from("m_RealVoiceCount"),
+                    Node::Scalar(self.real_voice_count.to_string()),
+                ),
+                (
+                    String::from("m_DisableAudio"),
+                    Node::Scalar(if self.disable_audio { "1" } else { "0" }.to_string()),
+                ),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NavMeshAreaEntry {
+    pub name: String,
+    pub cost: f64,
+}
+
+pub type NavMeshArea = NavMeshAreaEntry;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NavMeshAreaSettings {
+    pub areas: Vec<NavMeshAreaEntry>,
+    stream: Option<Stream>,
+}
+
+impl NavMeshAreaSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_nav_mesh_areas_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_nav_mesh_areas(path)
+    }
+
+    pub fn areas(&self) -> Vec<NavMeshAreaEntry> {
+        self.areas.clone()
+    }
+
+    pub fn set_area_cost(&mut self, index: usize, cost: f64) -> Result<(), ProjectSettingsError> {
+        if !cost.is_finite() || cost < 0.0 || index >= self.areas.len() {
+            return Err(ProjectSettingsError::InvalidValue("NavMeshAreas"));
+        }
+        self.areas[index].cost = cost;
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "NavMeshAreas")?;
+            let seq_key = if entries.iter().any(|(k, _)| k == "areas") {
+                "areas"
+            } else {
+                "m_Settings"
+            };
+            if let Some((_, Node::Sequence(items))) = entries.iter_mut().find(|(k, _)| k == seq_key)
+            {
+                if let Some(Node::Mapping(item_entries)) = items.get_mut(index) {
+                    set_mapping_scalar(item_entries, "cost", &format_float_scalar(cost));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        let area_nodes = self
+            .areas
+            .iter()
+            .map(|area| {
+                Node::Mapping(vec![
+                    (String::from("name"), Node::Scalar(area.name.clone())),
+                    (
+                        String::from("cost"),
+                        Node::Scalar(format_float_scalar(area.cost)),
+                    ),
+                ])
+            })
+            .collect();
+        default_single_doc_stream(
+            126,
+            "NavMeshAreas",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (String::from("areas"), Node::Sequence(area_nodes)),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorSettings {
+    pub serialization_mode: i64,
+    pub default_behavior_mode: i64,
+    pub line_endings_for_new_scripts: i64,
+    stream: Option<Stream>,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        EditorSettings {
+            serialization_mode: 2,
+            default_behavior_mode: 0,
+            line_endings_for_new_scripts: 0,
+            stream: None,
+        }
+    }
+}
+
+impl EditorSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_editor_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_editor_settings(path)
+    }
+
+    pub fn serialization_mode(&self) -> i64 {
+        self.serialization_mode
+    }
+
+    pub fn set_serialization_mode(&mut self, mode: i64) -> Result<(), ProjectSettingsError> {
+        if !(0..=2).contains(&mode) {
+            return Err(ProjectSettingsError::InvalidValue("EditorSettings"));
+        }
+        self.serialization_mode = mode;
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "EditorSettings")?;
+            set_mapping_scalar(entries, "m_SerializationMode", &mode.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn default_behavior_mode(&self) -> i64 {
+        self.default_behavior_mode
+    }
+
+    pub fn line_endings_for_new_scripts(&self) -> i64 {
+        self.line_endings_for_new_scripts
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        default_single_doc_stream(
+            159,
+            "EditorSettings",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("9")),
+                ),
+                (
+                    String::from("m_SerializationMode"),
+                    Node::Scalar(self.serialization_mode.to_string()),
+                ),
+                (
+                    String::from("m_DefaultBehaviorMode"),
+                    Node::Scalar(self.default_behavior_mode.to_string()),
+                ),
+                (
+                    String::from("m_LineEndingsForNewScripts"),
+                    Node::Scalar(self.line_endings_for_new_scripts.to_string()),
+                ),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MonoManagerSettings {
+    pub execution_orders: Vec<(String, i64)>,
+    stream: Option<Stream>,
+}
+
+impl MonoManagerSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_mono_manager_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_mono_manager(path)
+    }
+
+    pub fn execution_orders(&self) -> Vec<(String, i64)> {
+        self.execution_orders.clone()
+    }
+
+    pub fn set_execution_order(&mut self, script_guid: &str, order: i64) {
+        if let Some(existing) = self
+            .execution_orders
+            .iter_mut()
+            .find(|(key, _)| key == script_guid)
+        {
+            existing.1 = order;
+        } else {
+            self.execution_orders.push((script_guid.to_string(), order));
+        }
+
+        if let Some(stream) = &mut self.stream {
+            if let Ok(entries) = root_mapping_mut(stream, "MonoManager") {
+                if let Some((_, Node::Mapping(map_entries))) =
+                    entries.iter_mut().find(|(k, _)| k == "m_ExecutionOrder")
+                {
+                    set_mapping_scalar(map_entries, script_guid, &order.to_string());
+                    return;
+                }
+                let seq_key = if entries.iter().any(|(k, _)| k == "m_ExecutionOrder") {
+                    "m_ExecutionOrder"
+                } else if entries.iter().any(|(k, _)| k == "m_ScriptExecutionOrders") {
+                    "m_ScriptExecutionOrders"
+                } else {
+                    set_mapping_node(
+                        entries,
+                        "m_ExecutionOrder",
+                        Node::Mapping(
+                            self.execution_orders
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Node::Scalar(v.to_string())))
+                                .collect(),
+                        ),
+                    );
+                    return;
+                };
+                if let Some((_, Node::Sequence(items))) =
+                    entries.iter_mut().find(|(k, _)| k == seq_key)
+                {
+                    for item in items.iter_mut() {
+                        if let Some((key, _)) = parse_script_execution_order(item) {
+                            if key == script_guid {
+                                if let Node::Mapping(item_entries) = item {
+                                    if item_entries.iter().any(|(k, _)| k == "order") {
+                                        set_mapping_scalar(
+                                            item_entries,
+                                            "order",
+                                            &order.to_string(),
+                                        );
+                                    } else {
+                                        set_mapping_scalar(
+                                            item_entries,
+                                            "second",
+                                            &order.to_string(),
+                                        );
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    items.push(Node::Mapping(vec![
+                        (String::from("guid"), Node::Scalar(script_guid.to_string())),
+                        (String::from("order"), Node::Scalar(order.to_string())),
+                    ]));
+                }
+            }
+        }
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        let map_entries = self
+            .execution_orders
+            .iter()
+            .map(|(k, v)| (k.clone(), Node::Scalar(v.to_string())))
+            .collect();
+        default_single_doc_stream(
+            116,
+            "MonoManager",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (String::from("m_ExecutionOrder"), Node::Mapping(map_entries)),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PresetManagerSettings {
+    pub default_preset_type_count: usize,
+    stream: Option<Stream>,
+}
+
+impl PresetManagerSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_preset_manager_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_preset_manager(path)
+    }
+
+    pub fn default_preset_type_count(&self) -> usize {
+        self.default_preset_type_count
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        default_single_doc_stream(
+            1386491679,
+            "PresetManager",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (String::from("m_DefaultPresets"), Node::Sequence(Vec::new())),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageManagerSettings {
+    pub enable_pre_release_packages: bool,
+    pub scoped_registries_count: usize,
+    stream: Option<Stream>,
+}
+
+impl PackageManagerSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_package_manager_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_package_manager_settings(path)
+    }
+
+    pub fn enable_pre_release_packages(&self) -> bool {
+        self.enable_pre_release_packages
+    }
+
+    pub fn set_enable_pre_release_packages(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), ProjectSettingsError> {
+        self.enable_pre_release_packages = enabled;
+        if let Some(stream) = &mut self.stream {
+            let entries = package_manager_mapping_mut(stream)?;
+            let key = if entries.iter().any(|(k, _)| k == "enablePreReleasePackages") {
+                "enablePreReleasePackages"
+            } else {
+                "m_EnablePreReleasePackages"
+            };
+            set_mapping_scalar(entries, key, if enabled { "1" } else { "0" });
+        }
+        Ok(())
+    }
+
+    pub fn scoped_registries_count(&self) -> usize {
+        self.scoped_registries_count
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        default_single_doc_stream(
+            114,
+            "PackageManagerSettings",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("m_EnablePreReleasePackages"),
+                    Node::Scalar(
+                        if self.enable_pre_release_packages {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                        .to_string(),
+                    ),
+                ),
+                (
+                    String::from("m_ScopedRegistries"),
+                    Node::Sequence(Vec::new()),
+                ),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionControlSettings {
+    pub mode: String,
+    stream: Option<Stream>,
+}
+
+impl Default for VersionControlSettings {
+    fn default() -> Self {
+        VersionControlSettings {
+            mode: String::from("Visible Meta Files"),
+            stream: None,
+        }
+    }
+}
+
+impl VersionControlSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_version_control_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_version_control_settings(path)
+    }
+
+    pub fn mode(&self) -> Result<&str, ProjectSettingsError> {
+        if self.mode.is_empty() {
+            return Err(ProjectSettingsError::MissingDocument(
+                "VersionControlSettings",
+            ));
+        }
+        Ok(self.mode.as_str())
+    }
+
+    pub fn set_mode(&mut self, mode: &str) -> Result<(), ProjectSettingsError> {
+        let trimmed = mode.trim();
+        if trimmed.is_empty() {
+            return Err(ProjectSettingsError::InvalidValue("VersionControlSettings"));
+        }
+        self.mode = trimmed.to_string();
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "VersionControlSettings")?;
+            let key = if entries.iter().any(|(k, _)| k == "mode") {
+                "mode"
+            } else {
+                "m_Mode"
+            };
+            set_mapping_scalar(entries, key, trimmed);
+        }
+        Ok(())
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        default_single_doc_stream(
+            890905787,
+            "VersionControlSettings",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (String::from("m_Mode"), Node::Scalar(self.mode.clone())),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuildSceneEntry {
+    pub enabled: bool,
+    pub path: String,
+    pub guid: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EditorBuildSettings {
+    pub scenes: Vec<BuildSceneEntry>,
+    stream: Option<Stream>,
+}
+
+impl EditorBuildSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_editor_build_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_editor_build_settings(path)
+    }
+
+    pub fn scenes(&self) -> Vec<BuildSceneEntry> {
+        self.scenes.clone()
+    }
+
+    pub fn set_scene_enabled(
+        &mut self,
+        path: &str,
+        enabled: bool,
+    ) -> Result<(), ProjectSettingsError> {
+        let scene = self
+            .scenes
+            .iter_mut()
+            .find(|entry| entry.path == path)
+            .ok_or(ProjectSettingsError::InvalidValue("EditorBuildSettings"))?;
+        scene.enabled = enabled;
+        if let Some(stream) = &mut self.stream {
+            let entries = root_mapping_mut(stream, "EditorBuildSettings")?;
+            if let Some((_, Node::Sequence(items))) =
+                entries.iter_mut().find(|(k, _)| k == "m_Scenes")
+            {
+                for item in items.iter_mut() {
+                    let matches_path = item
+                        .get("path")
+                        .and_then(Node::as_str)
+                        .is_some_and(|candidate| candidate == path);
+                    if matches_path {
+                        if let Node::Mapping(item_entries) = item {
+                            set_mapping_scalar(
+                                item_entries,
+                                "enabled",
+                                if enabled { "1" } else { "0" },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_stream(&self) -> Stream {
+        if let Some(stream) = &self.stream {
+            return stream.clone();
+        }
+        let scene_nodes = self
+            .scenes
+            .iter()
+            .map(|scene| {
+                Node::Mapping(vec![
+                    (
+                        String::from("enabled"),
+                        Node::Scalar(if scene.enabled { "1" } else { "0" }.to_string()),
+                    ),
+                    (String::from("path"), Node::Scalar(scene.path.clone())),
+                    (String::from("guid"), Node::Scalar(scene.guid.clone())),
+                ])
+            })
+            .collect();
+        default_single_doc_stream(
+            1045,
+            "EditorBuildSettings",
+            vec![
+                (
+                    String::from("m_ObjectHideFlags"),
+                    Node::Scalar(String::from("0")),
+                ),
+                (
+                    String::from("serializedVersion"),
+                    Node::Scalar(String::from("2")),
+                ),
+                (String::from("m_Scenes"), Node::Sequence(scene_nodes)),
+            ],
+        )
+    }
+
+    pub fn emit(&self) -> String {
+        scene_save::emit_stream(&self.to_stream())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectSettingsError> {
+        let stream = self.to_stream();
+        scene_save::save_stream(path, &stream).map_err(|error| ProjectSettingsError::Yaml {
+            error: YamlError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectSettingsError {
     MissingDocument(&'static str),
+    InvalidValue(&'static str),
     Yaml {
         error: YamlError,
     },
@@ -84,6 +1208,9 @@ impl fmt::Display for ProjectSettingsError {
             ProjectSettingsError::MissingDocument(document) => {
                 write!(formatter, "stream contains no {document} document")
             }
+            ProjectSettingsError::InvalidValue(document) => {
+                write!(formatter, "invalid setting value in {document}")
+            }
             ProjectSettingsError::Yaml { error } => write!(formatter, "{error}"),
             ProjectSettingsError::MalformedFile { path, error } => {
                 write!(formatter, "{}: {}", path.display(), error)
@@ -96,7 +1223,9 @@ impl std::error::Error for ProjectSettingsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ProjectSettingsError::Yaml { error } => Some(error),
-            ProjectSettingsError::MissingDocument(_) => None,
+            ProjectSettingsError::MissingDocument(_) | ProjectSettingsError::InvalidValue(_) => {
+                None
+            }
             ProjectSettingsError::MalformedFile { error, .. } => Some(error.as_ref()),
         }
     }
@@ -105,6 +1234,102 @@ impl std::error::Error for ProjectSettingsError {
 impl From<YamlError> for ProjectSettingsError {
     fn from(error: YamlError) -> Self {
         ProjectSettingsError::Yaml { error }
+    }
+}
+
+fn default_single_doc_stream(
+    class_id: u32,
+    root_key: &str,
+    entries: Vec<(String, Node)>,
+) -> Stream {
+    Stream {
+        header: Some(Header {
+            yaml_version: String::from("1.1"),
+            tag_handle: Some(String::from("!u!")),
+            tag_prefix: Some(String::from("tag:unity3d.com,2011:")),
+        }),
+        documents: vec![Document {
+            class_id,
+            file_id: 1,
+            stripped: false,
+            root: Node::Mapping(vec![(root_key.to_string(), Node::Mapping(entries))]),
+        }],
+    }
+}
+
+fn root_mapping_mut<'a>(
+    stream: &'a mut Stream,
+    root_key: &'static str,
+) -> Result<&'a mut Vec<(String, Node)>, ProjectSettingsError> {
+    let doc = stream
+        .documents
+        .iter_mut()
+        .filter(|document| !document.stripped)
+        .find(|document| document.root.get(root_key).is_some())
+        .ok_or(ProjectSettingsError::MissingDocument(root_key))?;
+    if let Node::Mapping(root_entries) = &mut doc.root {
+        if let Some((_, Node::Mapping(entries))) =
+            root_entries.iter_mut().find(|(k, _)| k == root_key)
+        {
+            return Ok(entries);
+        }
+    }
+    Err(ProjectSettingsError::MissingDocument(root_key))
+}
+
+fn package_manager_mapping_mut(
+    stream: &mut Stream,
+) -> Result<&mut Vec<(String, Node)>, ProjectSettingsError> {
+    let doc = stream
+        .documents
+        .iter_mut()
+        .filter(|document| !document.stripped)
+        .find(|document| {
+            document.root.get("PackageManagerSettings").is_some()
+                || document.root.get("m_EnablePreReleasePackages").is_some()
+                || document.root.get("enablePreReleasePackages").is_some()
+                || document.root.get("m_ScopedRegistries").is_some()
+                || document.root.get("scopedRegistries").is_some()
+        })
+        .ok_or(ProjectSettingsError::MissingDocument(
+            "PackageManagerSettings",
+        ))?;
+    if let Node::Mapping(root_entries) = &mut doc.root {
+        let pos = root_entries
+            .iter()
+            .position(|(k, v)| k == "PackageManagerSettings" && matches!(v, Node::Mapping(_)));
+        return match pos {
+            Some(index) => match &mut root_entries[index].1 {
+                Node::Mapping(entries) => Ok(entries),
+                _ => Err(ProjectSettingsError::MissingDocument(
+                    "PackageManagerSettings",
+                )),
+            },
+            None => Ok(root_entries),
+        };
+    }
+    Err(ProjectSettingsError::MissingDocument(
+        "PackageManagerSettings",
+    ))
+}
+
+fn set_mapping_scalar(entries: &mut Vec<(String, Node)>, key: &str, value: &str) {
+    set_mapping_node(entries, key, Node::Scalar(value.to_string()));
+}
+
+fn set_mapping_node(entries: &mut Vec<(String, Node)>, key: &str, value: Node) {
+    if let Some((_, existing)) = entries.iter_mut().find(|(entry_key, _)| entry_key == key) {
+        *existing = value;
+    } else {
+        entries.push((key.to_string(), value));
+    }
+}
+
+fn format_float_scalar(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
     }
 }
 
@@ -255,10 +1480,13 @@ pub fn parse_player_settings_stream(
         .find_map(|document| document.root.get("PlayerSettings"))
         .ok_or(ProjectSettingsError::MissingDocument("PlayerSettings"))?;
 
+    let active_color_space = parse_color_space_stream(stream)?;
+
     Ok(ProjectIdentity {
         company_name: parse_optional_non_empty_string(body, "companyName"),
         product_name: parse_optional_non_empty_string(body, "productName"),
         bundle_version: parse_optional_non_empty_string(body, "bundleVersion"),
+        active_color_space,
     })
 }
 
@@ -332,6 +1560,439 @@ pub fn parse_quality_settings_stream(
     })
 }
 
+pub fn parse_tag_manager(path: &Path) -> Result<Option<TagManagerSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_tag_manager_stream(&stream).map(Some)
+}
+
+pub fn parse_tag_manager_stream(
+    stream: &Stream,
+) -> Result<TagManagerSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("TagManager"))
+        .ok_or(ProjectSettingsError::MissingDocument("TagManager"))?;
+
+    let mut sorting_layers = Vec::new();
+    if let Some(child) = body.get("m_SortingLayers") {
+        let entries = child
+            .as_sequence()
+            .ok_or(ProjectSettingsError::MissingDocument("TagManager"))?;
+        for entry in entries {
+            sorting_layers.push(SortingLayerEntry {
+                name: parse_optional_string(entry, "name"),
+                unique_id: parse_optional_i64(entry, "uniqueID", 0, "TagManager")?,
+                locked: parse_optional_bool(entry, "locked", false, "TagManager")?,
+            });
+        }
+    }
+
+    Ok(TagManagerSettings {
+        tags: parse_string_sequence(body, "tags", "TagManager")?,
+        layers: parse_string_sequence(body, "layers", "TagManager")?,
+        sorting_layers,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_graphics_settings(
+    path: &Path,
+) -> Result<Option<GraphicsSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_graphics_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_graphics_settings_stream(
+    stream: &Stream,
+) -> Result<GraphicsSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("GraphicsSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("GraphicsSettings"))?;
+
+    let custom_render_pipeline_guid = body
+        .get("m_CustomRenderPipeline")
+        .and_then(|node| node.get("guid"))
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|guid| !guid.is_empty())
+        .map(str::to_string);
+
+    let always_included_shader_count = body
+        .get("m_AlwaysIncludedShaders")
+        .and_then(Node::as_sequence)
+        .map_or(0, |entries| entries.len());
+
+    let tier_settings_count = body
+        .get("m_TierSettings")
+        .and_then(Node::as_sequence)
+        .map_or(0, |entries| entries.len());
+
+    Ok(GraphicsSettings {
+        custom_render_pipeline_guid,
+        transparency_sort_mode: parse_optional_i64(
+            body,
+            "m_TransparencySortMode",
+            0,
+            "GraphicsSettings",
+        )?,
+        always_included_shader_count,
+        tier_settings_count,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_color_space(path: &Path) -> Result<Option<ColorSpaceSetting>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_color_space_stream(&stream).map(Some)
+}
+
+pub fn parse_color_space_stream(
+    stream: &Stream,
+) -> Result<ColorSpaceSetting, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("PlayerSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("PlayerSettings"))?;
+
+    let code = parse_optional_i64(body, "m_ActiveColorSpace", 0, "PlayerSettings")?;
+    ColorSpaceSetting::from_code(code)
+        .ok_or(ProjectSettingsError::MissingDocument("PlayerSettings"))
+}
+
+pub fn parse_audio_manager(
+    path: &Path,
+) -> Result<Option<AudioManagerSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_audio_manager_stream(&stream).map(Some)
+}
+
+pub fn parse_audio_manager_stream(
+    stream: &Stream,
+) -> Result<AudioManagerSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("AudioManager"))
+        .ok_or(ProjectSettingsError::MissingDocument("AudioManager"))?;
+
+    Ok(AudioManagerSettings {
+        volume: parse_optional_f64(body, "m_Volume", 1.0, "AudioManager")?,
+        rolloff_scale: parse_optional_f64(body, "Rolloff Scale", 1.0, "AudioManager")?,
+        doppler_factor: parse_optional_f64(body, "Doppler Factor", 1.0, "AudioManager")?,
+        default_speaker_mode: parse_optional_i64(body, "Default Speaker Mode", 2, "AudioManager")?,
+        dsp_buffer_size: parse_optional_i64(body, "m_DSPBufferSize", 1024, "AudioManager")?,
+        virtual_voice_count: parse_optional_i64(body, "m_VirtualVoiceCount", 512, "AudioManager")?,
+        real_voice_count: parse_optional_i64(body, "m_RealVoiceCount", 32, "AudioManager")?,
+        disable_audio: parse_optional_bool(body, "m_DisableAudio", false, "AudioManager")?,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_nav_mesh_areas(
+    path: &Path,
+) -> Result<Option<NavMeshAreaSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_nav_mesh_areas_stream(&stream).map(Some)
+}
+
+pub fn parse_nav_mesh_areas_stream(
+    stream: &Stream,
+) -> Result<NavMeshAreaSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("NavMeshAreas"))
+        .ok_or(ProjectSettingsError::MissingDocument("NavMeshAreas"))?;
+
+    let mut areas = Vec::new();
+    if let Some(child) = body.get("areas").or_else(|| body.get("m_Settings")) {
+        let entries = child
+            .as_sequence()
+            .ok_or(ProjectSettingsError::MissingDocument("NavMeshAreas"))?;
+        for entry in entries {
+            areas.push(NavMeshAreaEntry {
+                name: parse_optional_string(entry, "name"),
+                cost: parse_optional_f64(entry, "cost", 1.0, "NavMeshAreas")?,
+            });
+        }
+    }
+
+    Ok(NavMeshAreaSettings {
+        areas,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_editor_settings(path: &Path) -> Result<Option<EditorSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_editor_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_editor_settings_stream(
+    stream: &Stream,
+) -> Result<EditorSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("EditorSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("EditorSettings"))?;
+
+    Ok(EditorSettings {
+        serialization_mode: parse_optional_i64(body, "m_SerializationMode", 2, "EditorSettings")?,
+        default_behavior_mode: parse_optional_i64(
+            body,
+            "m_DefaultBehaviorMode",
+            0,
+            "EditorSettings",
+        )?,
+        line_endings_for_new_scripts: parse_optional_i64(
+            body,
+            "m_LineEndingsForNewScripts",
+            0,
+            "EditorSettings",
+        )?,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_mono_manager(
+    path: &Path,
+) -> Result<Option<MonoManagerSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_mono_manager_stream(&stream).map(Some)
+}
+
+pub fn parse_mono_manager_stream(
+    stream: &Stream,
+) -> Result<MonoManagerSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("MonoManager"))
+        .ok_or(ProjectSettingsError::MissingDocument("MonoManager"))?;
+
+    let mut execution_orders = Vec::new();
+    if let Some(child) = body
+        .get("m_ExecutionOrder")
+        .or_else(|| body.get("m_ScriptExecutionOrders"))
+    {
+        if let Some(entries) = child.as_mapping() {
+            for (key, val) in entries {
+                let order = val
+                    .as_i64()
+                    .ok_or(ProjectSettingsError::MissingDocument("MonoManager"))?;
+                execution_orders.push((key.clone(), order));
+            }
+        } else if let Some(entries) = child.as_sequence() {
+            for entry in entries {
+                if let Some(order) = parse_script_execution_order(entry) {
+                    execution_orders.push(order);
+                }
+            }
+        } else if child.as_str().is_none_or(|s| !s.is_empty()) {
+            return Err(ProjectSettingsError::MissingDocument("MonoManager"));
+        }
+    }
+
+    Ok(MonoManagerSettings {
+        execution_orders,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_preset_manager(
+    path: &Path,
+) -> Result<Option<PresetManagerSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_preset_manager_stream(&stream).map(Some)
+}
+
+pub fn parse_preset_manager_stream(
+    stream: &Stream,
+) -> Result<PresetManagerSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("PresetManager"))
+        .ok_or(ProjectSettingsError::MissingDocument("PresetManager"))?;
+
+    let default_preset_type_count = match body.get("m_DefaultPresets") {
+        Some(Node::Sequence(entries)) => entries.len(),
+        Some(Node::Mapping(entries)) => entries.len(),
+        _ => 0,
+    };
+
+    Ok(PresetManagerSettings {
+        default_preset_type_count,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_package_manager_settings(
+    path: &Path,
+) -> Result<Option<PackageManagerSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_package_manager_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_package_manager_settings_stream(
+    stream: &Stream,
+) -> Result<PackageManagerSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| {
+            if let Some(body) = document.root.get("PackageManagerSettings") {
+                return Some(body);
+            }
+            let root = &document.root;
+            if root.get("m_EnablePreReleasePackages").is_some()
+                || root.get("enablePreReleasePackages").is_some()
+                || root.get("m_ScopedRegistries").is_some()
+                || root.get("scopedRegistries").is_some()
+            {
+                Some(root)
+            } else {
+                None
+            }
+        })
+        .ok_or(ProjectSettingsError::MissingDocument(
+            "PackageManagerSettings",
+        ))?;
+
+    Ok(PackageManagerSettings {
+        enable_pre_release_packages: parse_optional_bool_alias(
+            body,
+            "m_EnablePreReleasePackages",
+            "enablePreReleasePackages",
+            false,
+            "PackageManagerSettings",
+        )?,
+        scoped_registries_count: body
+            .get("m_ScopedRegistries")
+            .or_else(|| body.get("scopedRegistries"))
+            .and_then(Node::as_sequence)
+            .map_or(0, |entries| entries.len()),
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_version_control_settings(
+    path: &Path,
+) -> Result<Option<VersionControlSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_version_control_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_version_control_settings_stream(
+    stream: &Stream,
+) -> Result<VersionControlSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("VersionControlSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument(
+            "VersionControlSettings",
+        ))?;
+
+    let mode = body
+        .get("m_Mode")
+        .or_else(|| body.get("mode"))
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map_or_else(|| VersionControlSettings::default().mode, str::to_string);
+
+    Ok(VersionControlSettings {
+        mode,
+        stream: Some(stream.clone()),
+    })
+}
+
+pub fn parse_editor_build_settings(
+    path: &Path,
+) -> Result<Option<EditorBuildSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_editor_build_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_editor_build_settings_stream(
+    stream: &Stream,
+) -> Result<EditorBuildSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("EditorBuildSettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("EditorBuildSettings"))?;
+
+    let mut scenes = Vec::new();
+    if let Some(child) = body.get("m_Scenes") {
+        let entries = child
+            .as_sequence()
+            .ok_or(ProjectSettingsError::MissingDocument("EditorBuildSettings"))?;
+        for entry in entries {
+            scenes.push(BuildSceneEntry {
+                enabled: parse_optional_bool(entry, "enabled", false, "EditorBuildSettings")?,
+                path: parse_optional_string(entry, "path"),
+                guid: parse_optional_string(entry, "guid"),
+            });
+        }
+    }
+
+    Ok(EditorBuildSettings {
+        scenes,
+        stream: Some(stream.clone()),
+    })
+}
+
 fn quality_level_index(
     node: Option<&Node>,
     level_count: usize,
@@ -367,6 +2028,20 @@ fn parse_optional_f64(
         Some(child) => child
             .as_f64()
             .filter(|value| value.is_finite())
+            .ok_or(ProjectSettingsError::MissingDocument(document)),
+        None => Ok(default),
+    }
+}
+
+fn parse_optional_i64(
+    node: &Node,
+    key: &str,
+    default: i64,
+    document: &'static str,
+) -> Result<i64, ProjectSettingsError> {
+    match node.get(key) {
+        Some(child) => child
+            .as_i64()
             .ok_or(ProjectSettingsError::MissingDocument(document)),
         None => Ok(default),
     }
@@ -410,21 +2085,84 @@ fn parse_optional_bool(
     document: &'static str,
 ) -> Result<bool, ProjectSettingsError> {
     match node.get(key) {
-        Some(child) => {
-            if let Some(value) = child.as_i64() {
-                Ok(value != 0)
-            } else if let Some(text) = child.as_str() {
-                match text.trim() {
-                    "true" | "True" | "TRUE" => Ok(true),
-                    "false" | "False" | "FALSE" => Ok(false),
-                    _ => Err(ProjectSettingsError::MissingDocument(document)),
-                }
-            } else {
-                Err(ProjectSettingsError::MissingDocument(document))
-            }
-        }
+        Some(child) => parse_bool_node(child, document),
         None => Ok(default),
     }
+}
+
+fn parse_optional_bool_alias(
+    node: &Node,
+    primary_key: &str,
+    fallback_key: &str,
+    default: bool,
+    document: &'static str,
+) -> Result<bool, ProjectSettingsError> {
+    match node.get(primary_key).or_else(|| node.get(fallback_key)) {
+        Some(child) => parse_bool_node(child, document),
+        None => Ok(default),
+    }
+}
+
+fn parse_bool_node(node: &Node, document: &'static str) -> Result<bool, ProjectSettingsError> {
+    if let Some(value) = node.as_i64() {
+        Ok(value != 0)
+    } else if let Some(text) = node.as_str() {
+        match text.trim() {
+            "true" | "True" | "TRUE" => Ok(true),
+            "false" | "False" | "FALSE" => Ok(false),
+            _ => Err(ProjectSettingsError::MissingDocument(document)),
+        }
+    } else {
+        Err(ProjectSettingsError::MissingDocument(document))
+    }
+}
+
+fn parse_string_sequence(
+    node: &Node,
+    key: &str,
+    document: &'static str,
+) -> Result<Vec<String>, ProjectSettingsError> {
+    match node.get(key) {
+        None => Ok(Vec::new()),
+        Some(child) => {
+            if child.as_str() == Some("") {
+                return Ok(Vec::new());
+            }
+            let entries = child
+                .as_sequence()
+                .ok_or(ProjectSettingsError::MissingDocument(document))?;
+            Ok(entries
+                .iter()
+                .filter_map(|entry| entry.as_str().map(str::to_string))
+                .collect())
+        }
+    }
+}
+
+fn parse_script_execution_order(entry: &Node) -> Option<(String, i64)> {
+    let order = entry
+        .get("second")
+        .or_else(|| entry.get("order"))
+        .and_then(Node::as_i64)?;
+    if let Some(guid) = entry.get("guid").and_then(Node::as_str) {
+        return Some((guid.to_string(), order));
+    }
+    let script = entry
+        .get("first")
+        .or_else(|| entry.get("script"))
+        .or_else(|| entry.get("m_Name"))
+        .or_else(|| entry.get("name"))?;
+    let name = match script {
+        Node::Scalar(text) => text.clone(),
+        _ => script
+            .get("guid")
+            .or_else(|| script.get("m_Name"))
+            .or_else(|| script.get("name"))
+            .and_then(Node::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
+    Some((name, order))
 }
 
 fn parse_finite_f64(node: &Node, key: &str) -> Option<f64> {
@@ -470,6 +2208,17 @@ pub struct LoadedProjectSettings {
     pub quality: QualitySettings,
     pub default_scripting_defines: String,
     pub target_scripting_defines: Vec<(String, String)>,
+    pub color_space: ColorSpaceSetting,
+    pub tag_manager: Option<TagManagerSettings>,
+    pub graphics: Option<GraphicsSettings>,
+    pub audio: Option<AudioManagerSettings>,
+    pub nav_mesh_areas: Option<NavMeshAreaSettings>,
+    pub editor: Option<EditorSettings>,
+    pub mono_manager: Option<MonoManagerSettings>,
+    pub preset_manager: Option<PresetManagerSettings>,
+    pub package_manager: Option<PackageManagerSettings>,
+    pub version_control: Option<VersionControlSettings>,
+    pub editor_build: Option<EditorBuildSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -690,9 +2439,32 @@ fn malformed_file(path: &Path, error: impl Into<ProjectSettingsError>) -> Projec
     }
 }
 
+fn load_optional_settings_family<T>(
+    path: &Path,
+    parse: impl Fn(&Stream) -> Result<T, ProjectSettingsError>,
+) -> Result<Option<T>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path).map_err(|error| malformed_file(path, error))?;
+    parse(&stream)
+        .map(Some)
+        .map_err(|error| malformed_file(path, error))
+}
+
+fn resolve_settings_dir(project_or_settings_dir: &Path) -> PathBuf {
+    let candidate = project_or_settings_dir.join("ProjectSettings");
+    if candidate.is_dir() {
+        candidate
+    } else {
+        project_or_settings_dir.to_path_buf()
+    }
+}
+
 pub fn load_project_settings(
-    settings_dir: &Path,
+    project_or_settings_dir: &Path,
 ) -> Result<LoadedProjectSettings, ProjectSettingsError> {
+    let settings_dir = resolve_settings_dir(project_or_settings_dir);
     let time_path = settings_dir.join("TimeManager.asset");
     let mut fixed_timestep = DEFAULT_FIXED_TIMESTEP;
     let mut maximum_allowed_timestep = 0.33333334;
@@ -789,11 +2561,13 @@ pub fn load_project_settings(
     let mut identity = ProjectIdentity::default();
     let mut default_scripting_defines = String::new();
     let mut target_scripting_defines = Vec::new();
+    let mut color_space = ColorSpaceSetting::default();
     if player_path.exists() {
         let stream = unity_yaml::parse_file(&player_path)
             .map_err(|error| malformed_file(&player_path, error))?;
         identity = parse_player_settings_stream(&stream)
             .map_err(|error| malformed_file(&player_path, error))?;
+        color_space = identity.active_color_space;
         if let Some(body) = stream
             .documents
             .iter()
@@ -814,6 +2588,47 @@ pub fn load_project_settings(
         }
     }
 
+    let tag_manager = load_optional_settings_family(
+        &settings_dir.join("TagManager.asset"),
+        parse_tag_manager_stream,
+    )?;
+    let graphics = load_optional_settings_family(
+        &settings_dir.join("GraphicsSettings.asset"),
+        parse_graphics_settings_stream,
+    )?;
+    let audio = load_optional_settings_family(
+        &settings_dir.join("AudioManager.asset"),
+        parse_audio_manager_stream,
+    )?;
+    let nav_mesh_areas = load_optional_settings_family(
+        &settings_dir.join("NavMeshAreas.asset"),
+        parse_nav_mesh_areas_stream,
+    )?;
+    let editor = load_optional_settings_family(
+        &settings_dir.join("EditorSettings.asset"),
+        parse_editor_settings_stream,
+    )?;
+    let mono_manager = load_optional_settings_family(
+        &settings_dir.join("MonoManager.asset"),
+        parse_mono_manager_stream,
+    )?;
+    let preset_manager = load_optional_settings_family(
+        &settings_dir.join("PresetManager.asset"),
+        parse_preset_manager_stream,
+    )?;
+    let package_manager = load_optional_settings_family(
+        &settings_dir.join("PackageManagerSettings.asset"),
+        parse_package_manager_settings_stream,
+    )?;
+    let version_control = load_optional_settings_family(
+        &settings_dir.join("VersionControlSettings.asset"),
+        parse_version_control_settings_stream,
+    )?;
+    let editor_build = load_optional_settings_family(
+        &settings_dir.join("EditorBuildSettings.asset"),
+        parse_editor_build_settings_stream,
+    )?;
+
     Ok(LoadedProjectSettings {
         fixed_timestep,
         maximum_allowed_timestep,
@@ -826,5 +2641,16 @@ pub fn load_project_settings(
         quality,
         default_scripting_defines,
         target_scripting_defines,
+        color_space,
+        tag_manager,
+        graphics,
+        audio,
+        nav_mesh_areas,
+        editor,
+        mono_manager,
+        preset_manager,
+        package_manager,
+        version_control,
+        editor_build,
     })
 }
