@@ -7,7 +7,7 @@ use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
     Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, RenderError, RenderScene, Renderer,
-    ShadowSettings, TextOverlayItem, Vec3, look_at,
+    Rgba8, ShadowSettings, TextOverlayItem, Vec3, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -159,7 +159,7 @@ pub type FrameUpdateCallback<'a> =
     Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
 
 /// Presents a composed frame on the window surface.
-pub type SurfaceBlit = Box<dyn FnMut(&Renderer, &Image) -> Result<(), RenderError>>;
+pub type SurfaceBlit = Box<dyn FnMut(&Renderer, &Rgba8) -> Result<(), RenderError>>;
 
 pub fn resolve_camera_and_view(
     binding: &GpuCameraBinding,
@@ -519,12 +519,12 @@ impl<'a> GpuFramePresenter<'a> {
             Ok(surface) => {
                 let mut configured_size: Option<(u32, u32)> = None;
                 self.surface_blit = Some(Box::new(
-                    move |renderer: &Renderer, image: &Image| -> Result<(), RenderError> {
+                    move |renderer: &Renderer, image: &Rgba8| -> Result<(), RenderError> {
                         if configured_size != Some((image.width, image.height)) {
                             renderer.configure_surface(&surface, image.width, image.height)?;
                             configured_size = Some((image.width, image.height));
                         }
-                        renderer.present_image_to_surface(&surface, image)
+                        renderer.present_rgba_to_surface(&surface, image)
                     },
                 ));
             }
@@ -565,7 +565,7 @@ impl<'a> GpuFramePresenter<'a> {
         width: u32,
         height: u32,
         overlay: &[TextOverlayItem],
-    ) -> Result<Image, WindowError> {
+    ) -> Result<Rgba8, WindowError> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
         let instances = self.collect_gpu_instances(runtime);
         let scene = RenderScene {
@@ -574,13 +574,13 @@ impl<'a> GpuFramePresenter<'a> {
             light: &self.light,
             background,
         };
-        let image = self.renderer.render_offscreen_with_overlay(
+        let image = self.renderer.render_offscreen_rgba_with_overlay(
             &instances,
             scene,
             (width, height),
             overlay,
         )?;
-        Ok(runtime.composite_canvas_image(image, width, height))
+        Ok(runtime.composite_canvas_rgba(image, width, height))
     }
 
     /// Presents the frame of the windowed player on the window surface.
@@ -765,7 +765,7 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use unitas_asset::project_settings::{QualityLevel, QualitySettings};
-    use unitas_render::{Image, RenderScene, Renderer, ShadowSettings};
+    use unitas_render::{RenderScene, Renderer, Rgba8, ShadowSettings};
 
     use super::{
         DESKTOP_QUALITY_TARGET_GROUP, FrameInfo, GpuFramePresenter, WEB_QUALITY_TARGET_GROUP,
@@ -815,9 +815,9 @@ mod tests {
         let renderer = Arc::new(renderer);
         let mut presenter = GpuFramePresenter::new(Arc::clone(&renderer));
         presenter.bind_scene(&runtime);
-        let captured: Arc<Mutex<Option<Image>>> = Arc::new(Mutex::new(None));
+        let captured: Arc<Mutex<Option<Rgba8>>> = Arc::new(Mutex::new(None));
         let sink = Arc::clone(&captured);
-        presenter.surface_blit = Some(Box::new(move |_renderer: &Renderer, image: &Image| {
+        presenter.surface_blit = Some(Box::new(move |_renderer: &Renderer, image: &Rgba8| {
             let mut guard = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             *guard = Some(image.clone());
             Ok(())
@@ -851,21 +851,24 @@ mod tests {
         else {
             return;
         };
+        let scene_rgba = scene_frame.to_rgba8();
         let canvas_pixels = presented
             .pixels
-            .iter()
-            .zip(scene_frame.pixels.iter())
-            .filter(|pair| pair.0 != pair.1)
+            .chunks_exact(4)
+            .zip(scene_rgba.pixels.chunks_exact(4))
+            .filter(|pair| pair.0[..3] != pair.1[..3])
             .count();
         assert!(
             canvas_pixels > 0,
             "the presented frame has no canvas pixels"
         );
-        let capture_frame = runtime.composite_canvas_image(scene_frame, width, height);
+        let capture_frame = runtime
+            .composite_canvas_image(scene_frame, width, height)
+            .to_rgba8();
         let different = presented
             .pixels
-            .iter()
-            .zip(capture_frame.pixels.iter())
+            .chunks_exact(4)
+            .zip(capture_frame.pixels.chunks_exact(4))
             .filter(|pair| pair.0 != pair.1)
             .count();
         assert_eq!(

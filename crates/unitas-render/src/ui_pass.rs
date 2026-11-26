@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::image::Rgba8;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,11 +97,19 @@ fn pixel_bounds(rect: [f32; 4], width: u32, height: u32) -> Option<(u32, u32, u3
 
 fn fill_rect(target: &mut UiTarget<'_>, bounds: (u32, u32, u32, u32), color: [f32; 4]) {
     let (x0, y0, x1, y1) = bounds;
+    let alpha = color[3].clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        return;
+    }
+    let source = [color[0] * alpha, color[1] * alpha, color[2] * alpha];
+    let keep = 1.0 - alpha;
     let width = target.image.width as usize;
+    let row_bytes = (x1 - x0) as usize * 4;
     for y in y0..y1 {
-        for x in x0..x1 {
-            let offset = (y as usize * width + x as usize) * 4;
-            blend_pixel(&mut target.image.pixels, offset, color);
+        let row_start = (y as usize * width + x0 as usize) * 4;
+        let row = &mut target.image.pixels[row_start..row_start + row_bytes];
+        for pixel in row.chunks_exact_mut(4) {
+            blend_pixel(pixel, source, alpha, keep);
         }
     }
 }
@@ -121,27 +131,39 @@ fn write_ids(target: &mut UiTarget<'_>, bounds: (u32, u32, u32, u32), id: u32) {
     }
 }
 
-fn blend_pixel(pixels: &mut [u8], offset: usize, color: [f32; 4]) {
-    let alpha = color[3].clamp(0.0, 1.0);
-    if alpha <= 0.0 {
-        return;
-    }
+/// Blends a colour onto one pixel. The colour is already scaled by its alpha
+/// and the share of the destination that survives is already known, so every
+/// pixel of the rectangle is blended with the same arithmetic.
+fn blend_pixel(pixel: &mut [u8], source: [f32; 3], alpha: f32, keep: f32) {
     for channel in 0..3 {
-        let source = color[channel] * alpha;
-        let destination = f32::from(pixels[offset + channel]) / 255.0;
-        let blended = (source + destination * (1.0 - alpha)).clamp(0.0, 1.0);
-        pixels[offset + channel] = (blended * 255.0).round() as u8;
+        let destination = f32::from(pixel[channel]) / 255.0;
+        let blended = (source[channel] + destination * keep).clamp(0.0, 1.0);
+        pixel[channel] = (blended * 255.0).round() as u8;
     }
-    let destination_alpha = f32::from(pixels[offset + 3]) / 255.0;
-    let alpha = (alpha + destination_alpha * (1.0 - alpha)).clamp(0.0, 1.0);
-    pixels[offset + 3] = (alpha * 255.0).round() as u8;
+    let destination_alpha = f32::from(pixel[3]) / 255.0;
+    let blended_alpha = (alpha + destination_alpha * keep).clamp(0.0, 1.0);
+    pixel[3] = (blended_alpha * 255.0).round() as u8;
 }
 
 pub struct GlyphTextPainter {
     pub fonts: crate::glyphs::FontLibrary,
     pub cache: crate::glyphs::SwashCache,
     pub atlas: crate::glyphs::GlyphAtlas,
+    shaped: HashMap<ShapedText, Vec<crate::glyphs::TexturedQuad>>,
 }
+
+/// The shaped glyphs of one text, kept so that a frame which draws the same
+/// text again does not shape it a second time.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ShapedText {
+    text: String,
+    size_bits: u32,
+    color_bits: [u32; 4],
+}
+
+/// How many texts are shaped before the shaped texts are dropped, so a text
+/// that changes every frame cannot fill the map for ever.
+const SHAPED_TEXT_LIMIT: usize = 256;
 
 impl GlyphTextPainter {
     pub fn new() -> Self {
@@ -151,6 +173,7 @@ impl GlyphTextPainter {
             fonts,
             cache: crate::glyphs::SwashCache::new(),
             atlas: crate::glyphs::GlyphAtlas::new(1024, 1024),
+            shaped: HashMap::new(),
         }
     }
 }
@@ -174,14 +197,31 @@ impl UiTextPainter for GlyphTextPainter {
         if text.is_empty() || size_px <= 0.0 {
             return;
         }
-        let style = crate::glyphs::TextStyle::new(size_px, size_px, color);
-        let layout = crate::glyphs::layout_text(&mut self.fonts, text, None, &style);
-        let mut quads = crate::glyphs::shape_glyph_quads(
-            &mut self.fonts,
-            &mut self.cache,
-            &mut self.atlas,
-            &layout,
-        );
+        let key = ShapedText {
+            text: text.to_string(),
+            size_bits: size_px.to_bits(),
+            color_bits: [
+                color[0].to_bits(),
+                color[1].to_bits(),
+                color[2].to_bits(),
+                color[3].to_bits(),
+            ],
+        };
+        if !self.shaped.contains_key(&key) {
+            if self.shaped.len() >= SHAPED_TEXT_LIMIT {
+                self.shaped.clear();
+            }
+            let style = crate::glyphs::TextStyle::new(size_px, size_px, color);
+            let layout = crate::glyphs::layout_text(&mut self.fonts, text, None, &style);
+            let quads = crate::glyphs::shape_glyph_quads(
+                &mut self.fonts,
+                &mut self.cache,
+                &mut self.atlas,
+                &layout,
+            );
+            self.shaped.insert(key.clone(), quads);
+        }
+        let mut quads = self.shaped.get(&key).cloned().unwrap_or_default();
         for quad in &mut quads {
             quad.x += x;
             quad.y += y;

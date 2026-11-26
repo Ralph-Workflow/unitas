@@ -1130,6 +1130,19 @@ impl Renderer {
         size: (u32, u32),
         overlay: &[TextOverlayItem],
     ) -> Result<Image, RenderError> {
+        let rgba = self.render_offscreen_rgba_with_overlay(instances, scene, size, overlay)?;
+        Ok(Image::from_rgba8(rgba))
+    }
+
+    /// The frame of the same render pass in RGBA, so a caller that composes
+    /// the interface onto it does not pay a colour format round trip.
+    pub fn render_offscreen_rgba_with_overlay(
+        &self,
+        instances: &[GpuInstance<'_>],
+        scene: RenderScene<'_>,
+        size: (u32, u32),
+        overlay: &[TextOverlayItem],
+    ) -> Result<Rgba8, RenderError> {
         self.render_offscreen_items(plain_draw_items(instances), scene, size, overlay)
     }
 
@@ -1148,7 +1161,8 @@ impl Renderer {
             light,
             background,
         };
-        self.render_offscreen_items(material_draw_items(instances), scene, size, &[])
+        let rgba = self.render_offscreen_items(material_draw_items(instances), scene, size, &[])?;
+        Ok(Image::from_rgba8(rgba))
     }
 
     fn render_offscreen_items(
@@ -1157,10 +1171,10 @@ impl Renderer {
         scene: RenderScene<'_>,
         size: (u32, u32),
         overlay: &[TextOverlayItem],
-    ) -> Result<Image, RenderError> {
+    ) -> Result<Rgba8, RenderError> {
         let (width, height) = size;
         if width == 0 || height == 0 {
-            return Ok(Image::new(width, height));
+            return Ok(Rgba8::new(width, height));
         }
         let RenderScene {
             camera,
@@ -1312,7 +1326,7 @@ impl Renderer {
         );
         self.queue.submit(Some(encoder.finish()));
         let data = self.read_buffer(&readback)?;
-        Ok(image_from_rgba(&data, width, height, bytes_per_row))
+        Ok(rgba_from_readback(&data, width, height, bytes_per_row))
     }
 
     pub fn render_offscreen_with_ids(
@@ -1763,17 +1777,16 @@ impl Renderer {
     }
 
     /// Draws a composed frame over a render target of the given size.
-    pub fn draw_image_to_view(
+    pub fn draw_rgba_to_view(
         &self,
         view: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         size: (u32, u32),
-        image: &Image,
+        image: &Rgba8,
     ) -> Result<(), RenderError> {
         if size.0 == 0 || size.1 == 0 || image.width == 0 || image.height == 0 {
             return Ok(());
         }
-        let rgba = image.to_rgba8();
         let mut text = lock(&self.text);
         let target = text
             .image_targets
@@ -1787,11 +1800,11 @@ impl Renderer {
             target.resources = Some(
                 target
                     .pipeline
-                    .upload_image(&self.device, &self.queue, &rgba),
+                    .upload_image(&self.device, &self.queue, image),
             );
             target.size = (image.width, image.height);
         } else if let Some(resources) = &target.resources {
-            TextPipeline::write_image(&self.queue, resources, &rgba);
+            TextPipeline::write_image(&self.queue, resources, image);
         }
         let Some(resources) = &target.resources else {
             return Ok(());
@@ -1833,10 +1846,10 @@ impl Renderer {
     }
 
     /// Presents a composed frame on a window surface.
-    pub fn present_image_to_surface(
+    pub fn present_rgba_to_surface(
         &self,
         surface: &wgpu::Surface<'_>,
-        image: &Image,
+        image: &Rgba8,
     ) -> Result<(), RenderError> {
         let surface_texture = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -1858,7 +1871,7 @@ impl Renderer {
             let view = surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.draw_image_to_view(&view, format, size, image)?;
+            self.draw_rgba_to_view(&view, format, size, image)?;
         }
         self.queue.present(surface_texture);
         Ok(())
@@ -2391,19 +2404,26 @@ fn background_color(background: [f32; 3]) -> wgpu::Color {
     }
 }
 
-fn image_from_rgba(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> Image {
-    let mut image = Image::new(width, height);
+fn rgba_from_readback(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> Rgba8 {
+    let mut image = Rgba8::new(width, height);
     let width = width as usize;
     let height = height as usize;
     let bytes_per_row = bytes_per_row as usize;
+    let row_bytes = width * 4;
+    let pixels = &mut image.pixels;
     for y in 0..height {
         let row_start = y * bytes_per_row;
-        for x in 0..width {
-            let offset = row_start + x * 4;
-            if offset + 3 >= data.len() {
-                continue;
-            }
-            image.pixels[y * width + x] = [data[offset], data[offset + 1], data[offset + 2]];
+        if row_start >= data.len() {
+            break;
+        }
+        let available = ((data.len() - row_start).min(row_bytes)) / 4 * 4;
+        let source = &data[row_start..row_start + available];
+        let target = &mut pixels[y * row_bytes..y * row_bytes + available];
+        for (pixel, texel) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            pixel[0] = texel[0];
+            pixel[1] = texel[1];
+            pixel[2] = texel[2];
+            pixel[3] = 255;
         }
     }
     image
@@ -2675,11 +2695,12 @@ mod tests {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        renderer.draw_image_to_view(
+        let rgba = image.to_rgba8();
+        renderer.draw_rgba_to_view(
             &view,
             wgpu::TextureFormat::Rgba8Unorm,
             (width, height),
-            &image,
+            &rgba,
         )?;
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
         let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor {

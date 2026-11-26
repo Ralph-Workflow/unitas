@@ -3567,6 +3567,18 @@ impl Runtime {
         Image::from_rgba8(rgba)
     }
 
+    /// The same composition as `composite_canvas_image` for a frame that is
+    /// already in RGBA, so the windowed path does not convert the frame
+    /// between colour formats.
+    pub(crate) fn composite_canvas_rgba(&self, mut rgba: Rgba8, width: u32, height: u32) -> Rgba8 {
+        let items = self.ui_draw_items_for([width as f32, height as f32]);
+        if items.is_empty() {
+            return rgba;
+        }
+        self.composite_canvas_into(&mut rgba, &items);
+        rgba
+    }
+
     /// The one canvas composition both the capture path and the windowed path
     /// draw the interface with.
     pub(crate) fn composite_canvas_into(&self, rgba: &mut Rgba8, items: &[UiDrawItem]) {
