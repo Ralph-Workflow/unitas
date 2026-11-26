@@ -6,7 +6,6 @@ namespace Unitas.Samples.RollABall
     // variant overrides that the scene loader applied to the instance.
     public class Pickup : MonoBehaviour
     {
-        private const string BallName = "PlayerBall";
         private const string BurstObjectName = "CollectBurst";
         private const string GoldVariantName = "PickupGold";
         // The added child is the gold variant's structural override; the
@@ -16,7 +15,6 @@ namespace Unitas.Samples.RollABall
         // The bridge names the scene objects it parses. A prefab instance has
         // no scene document, so its managed name falls back to this default.
         private const string AnonymousName = "GameObject";
-        private const float CollectRadius = 0.9f;
         private const int BaseScoreValue = 1;
 
         [SerializeField]
@@ -27,7 +25,6 @@ namespace Unitas.Samples.RollABall
 
         private static int _instanceCount;
 
-        private bool _collected;
         private bool _variantChecked;
         private int _ordinal;
 
@@ -39,30 +36,12 @@ namespace Unitas.Samples.RollABall
             ReportVariantOverrides();
         }
 
-        public override void Update()
+        // ScoreManager owns collection so the burst report fires exactly once
+        // per pickup in a deterministic order at every frame rate.
+        public void ReportCollectBurst()
         {
-            if (_collected)
-            {
-                return;
-            }
-            GameObject? ball = GameObject.Find(BallName);
-            if (ball == null)
-            {
-                return;
-            }
-            if (Vector3.Distance(ball.transform.position, transform.position) > CollectRadius)
-            {
-                return;
-            }
-            Collect();
-        }
-
-        private void Collect()
-        {
-            _collected = true;
             TriggerBurst();
             Debug.Log($"[roll-a-ball] collect burst triggered pickup={PickupName()}");
-            Destroy(gameObject);
         }
 
         // The burst is a scene particle system that emits when it becomes

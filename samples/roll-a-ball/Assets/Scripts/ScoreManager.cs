@@ -278,6 +278,13 @@ namespace Unitas.Samples.RollABall
         }
         private void DestroyPickup(GameObject pickup)
         {
+            // The pickup reports its own collect burst so the log fires once,
+            // in collection order, at every frame rate.
+            Pickup? component = pickup.GetComponent<Pickup>();
+            if (component != null)
+            {
+                component.ReportCollectBurst();
+            }
             Destroy(pickup);
             // Unity's fake null: a destroyed object compares equal to null.
             bool destroyedReadsNull = pickup == null;

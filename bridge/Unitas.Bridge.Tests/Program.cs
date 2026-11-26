@@ -50,6 +50,7 @@ namespace Unitas.Bridge.Tests
             TestEndToEndRustTriggerOrder();
             CollisionCounterpartTests.Run();
             SceneTransformSeedTests.Run();
+            PrefabInstanceSceneTests.Run();
             TestSceneReloadDropsPreviousSceneScripts();
             TestLayerMaskConversions();
             TestEndToEndRustPhysicsQuery();

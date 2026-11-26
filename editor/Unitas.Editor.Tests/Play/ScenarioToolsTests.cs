@@ -8,8 +8,11 @@ namespace Unitas.Editor.Tests.Play
 {
     public static class ScenarioToolsTests
     {
-        private const string CollectScenario = "samples/roll-a-ball/Scenarios/collect_all_pickups.scenario.json";
-        private const string RestartScenario = "samples/roll-a-ball/Scenarios/restart_recovery.scenario.json";
+        // The sample's acceptance scenarios for the current twelve-pickup
+        // arena; the older collect_all_pickups/restart_recovery documents
+        // still describe the pre-marble-rush four-pickup route.
+        private const string CollectScenario = "samples/roll-a-ball/Scenarios/collect_all.json";
+        private const string RestartScenario = "samples/roll-a-ball/Scenarios/retry_clean.json";
         private const string ScenePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
 
         public static void Run()
@@ -24,10 +27,10 @@ namespace Unitas.Editor.Tests.Play
         private static void CliArgsParsesRunScenarioOption()
         {
             CliArgs parsed = CliArgs.Parse(
-                new[] { "-batchmode", "-runScenario", "samples/roll-a-ball/Scenarios/collect_all_pickups.scenario.json" });
+                new[] { "-batchmode", "-runScenario", "samples/roll-a-ball/Scenarios/collect_all.json" });
             Check.Equal(
                 "cli-args: runScenario parsed",
-                "samples/roll-a-ball/Scenarios/collect_all_pickups.scenario.json",
+                "samples/roll-a-ball/Scenarios/collect_all.json",
                 parsed.RunScenario ?? string.Empty);
             Check.Equal("cli-args: zero unrecognized arguments with -runScenario", 0, parsed.UnrecognizedArguments.Count);
             Check.Equal("cli-args: zero missing values with -runScenario", 0, parsed.MissingValueArguments.Count);
@@ -49,7 +52,7 @@ namespace Unitas.Editor.Tests.Play
             Check.Equal("scenario-run: collect setup ok", true, content["setup"]?["ok"]?.GetValue<bool>() ?? false);
 
             JsonArray checkpoints = (JsonArray)content["checkpoints"]!;
-            Check.Equal("scenario-run: collect reports 9 checkpoints", 9, checkpoints.Count);
+            Check.Equal("scenario-run: collect reports 4 checkpoints", 4, checkpoints.Count);
             int passed = 0;
             foreach (JsonNode? node in checkpoints)
             {
@@ -63,7 +66,12 @@ namespace Unitas.Editor.Tests.Play
                 }
             }
 
-            Check.Equal("scenario-run: collect all 9 checkpoints passed", 9, passed);
+            Check.Equal("scenario-run: collect all 4 checkpoints passed", 4, passed);
+            JsonObject totalFrames = FindCheckpoint(content, "frame_count_sanity");
+            Check.Equal(
+                "scenario-run: collect total frames observed",
+                "443",
+                totalFrames["observed"]?.GetValue<string>() ?? string.Empty);
             Check.That("scenario-run: collect result carries an operation handle", envelope["operationId"] != null);
             string operationId = envelope["operationId"]!.GetValue<string>();
             Check.Equal(
@@ -81,20 +89,19 @@ namespace Unitas.Editor.Tests.Play
             Check.Equal("scenario-run: restart ok is true", true, content["ok"]?.GetValue<bool>() ?? false);
             Check.Equal("scenario-run: restart status is passed", "passed", content["status"]?.GetValue<string>() ?? string.Empty);
 
-            JsonObject restarted = FindCheckpoint(content, "restarted-position");
+            JsonObject restarted = FindCheckpoint(content, "player_back_at_start");
             double[] observed = ParseVector(restarted["observed"]?.GetValue<string>() ?? string.Empty);
             Check.That("scenario-run: restart lands on start x", Math.Abs(observed[0]) < 0.001);
             Check.That("scenario-run: restart lands on start y", Math.Abs(observed[1] - 0.5) < 0.001);
             Check.That("scenario-run: restart lands on start z", Math.Abs(observed[2]) < 0.001);
 
-            JsonObject totalFrames = FindCheckpoint(content, "total-frames");
-            Check.Equal("scenario-run: restart total frames observed", "590", totalFrames["observed"]?.GetValue<string>() ?? string.Empty);
+            Check.Equal("scenario-run: restart total frames observed", 170, TotalFrames(content));
 
-            JsonObject winLog = FindCheckpoint(content, "win-log");
+            JsonObject retryLog = FindCheckpoint(content, "retry_contract_log");
             Check.Equal(
-                "scenario-run: restart win log checkpoint passed",
+                "scenario-run: restart retry log checkpoint passed",
                 "passed",
-                winLog["status"]?.GetValue<string>() ?? string.Empty);
+                retryLog["status"]?.GetValue<string>() ?? string.Empty);
         }
 
         private static void RegisteredToolReportsMissingScenarioFileAsMcpError()
@@ -218,6 +225,13 @@ namespace Unitas.Editor.Tests.Play
             }
 
             throw new InvalidOperationException("checkpoint not found: " + id);
+        }
+
+        private static int TotalFrames(JsonObject content)
+        {
+            JsonArray steps = (JsonArray)content["steps"]!;
+            JsonObject last = (JsonObject)steps[steps.Count - 1]!;
+            return last["frame_end"]?.GetValue<int>() ?? 0;
         }
 
         private static string WriteFailingScenario(string directory)

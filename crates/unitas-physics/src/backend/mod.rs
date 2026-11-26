@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rapier3d::dynamics::{
     CCDSolver, CoefficientCombineRule, ImpulseJointSet, IntegrationParameters, IslandManager,
-    MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet, SoftBodySet,
+    MultibodyJointSet, RigidBody, RigidBodyBuilder, RigidBodyHandle, RigidBodySet, SoftBodySet,
 };
 use rapier3d::geometry::{
     ActiveCollisionTypes, BroadPhaseBvh, ColliderBuilder, ColliderHandle, ColliderSet, NarrowPhase,
@@ -120,6 +120,12 @@ fn vector_of(vector: Vector) -> [f64; 3] {
     ]
 }
 
+// Dynamic bodies start rotation-locked so resting and carried bodies stay put;
+// the first angular actuation unlocks the body's angular degrees of freedom.
+fn unlock_rotations(body: &mut RigidBody) {
+    body.lock_rotations(false, false);
+}
+
 fn vector3(value: [f64; 3]) -> Vector {
     Vector::new(value[0] as Real, value[1] as Real, value[2] as Real)
 }
@@ -160,7 +166,7 @@ impl Backend {
             .can_sleep(false)
             .ccd_enabled(desc.collision_detection_mode == CollisionDetectionMode3D::Continuous);
         if role == BodyRole::Dynamic {
-            builder = builder.linvel(vector3(desc.velocity));
+            builder = builder.linvel(vector3(desc.velocity)).lock_rotations();
         }
         let body = self.bodies.insert(builder.build());
         let mut collider = ColliderBuilder::new(collider_shape(&desc.shape))
@@ -300,6 +306,9 @@ impl Backend {
         angular_velocity: [f64; 3],
         wake: bool,
     ) {
+        if angular_velocity != [0.0; 3] {
+            unlock_rotations(&mut self.bodies[handles.body]);
+        }
         self.bodies[handles.body].set_angvel(vector3(angular_velocity), wake);
     }
 
@@ -372,13 +381,16 @@ impl Backend {
         let body = &mut self.bodies[handles.body];
         body.reset_torques(false);
         if torque != [0.0; 3] {
+            unlock_rotations(body);
             body.add_torque(vector3(torque), false);
         }
     }
 
     pub(crate) fn apply_torque_impulse(&mut self, handles: BackendHandles, impulse: [f64; 3]) {
         if impulse != [0.0; 3] {
-            self.bodies[handles.body].apply_torque_impulse(vector3(impulse), false);
+            let body = &mut self.bodies[handles.body];
+            unlock_rotations(body);
+            body.apply_torque_impulse(vector3(impulse), false);
         }
     }
 
@@ -392,6 +404,7 @@ impl Backend {
             return;
         }
         let body = &mut self.bodies[handles.body];
+        unlock_rotations(body);
         let angular_velocity = body.angvel() + vector3(acceleration) * delta_seconds as Real;
         body.set_angvel(angular_velocity, false);
     }

@@ -20,8 +20,8 @@ EDITOR_CLI = (
     REPO_ROOT / "editor" / "Unitas.Editor" / "bin" / "Release" / "net8.0" / "Unitas.Editor.dll"
 )
 EDITOR_SCENARIOS = (
-    "collect_all_pickups.scenario.json",
-    "restart_recovery.scenario.json",
+    "collect_all.json",
+    "retry_clean.json",
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"

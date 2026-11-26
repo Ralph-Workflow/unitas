@@ -88,6 +88,7 @@ namespace Unitas.Bridge.Playtest
 
             camera.pixelWidth = checkpoint.Width;
             camera.pixelHeight = checkpoint.Height;
+            SceneCapture.EnsureSceneRenderables();
             try
             {
                 string? directory = Path.GetDirectoryName(capturePath);
