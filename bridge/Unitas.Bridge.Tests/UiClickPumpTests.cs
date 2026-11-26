@@ -141,7 +141,6 @@ namespace Unitas.Bridge.Tests
                 host.InjectMouseButton(0, true);
                 host.Tick(FrameSeconds);
                 host.InjectMouseButton(0, false);
-                host.Tick(FrameSeconds);
                 Check.Equal("The click waits for the frame that pumps it", 0, clicks);
 
                 host.Tick(FrameSeconds);

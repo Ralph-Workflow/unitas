@@ -430,6 +430,11 @@ namespace Unitas.Bridge.Scripting
             assembly.CreateInstance("UnitasGeneratedGlue");
         }
 
+        static ScriptGlueRegistry()
+        {
+            RegisterBuiltInUiComponents();
+        }
+
         public static void Clear()
         {
             Entries.Clear();
@@ -438,6 +443,7 @@ namespace Unitas.Bridge.Scripting
             TypeResolvers.Clear();
             TypeGuids.Clear();
             _nextDynamicTypeGuidLo = 1;
+            RegisterBuiltInUiComponents();
         }
 
         public static (ulong guidHi, ulong guidLo) ParseGuid(string guidHex)
