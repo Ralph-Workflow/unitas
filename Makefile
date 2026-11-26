@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -9,7 +9,7 @@ VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
-EDITOR_TEST_SHARD_FANOUT := 6
+EDITOR_TEST_SHARD_FANOUT := 8
 BRIDGE_TEST_SHARD_COUNT := 4
 BRIDGE_TEST_SHARDS := 1,2,3,4
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
@@ -40,12 +40,17 @@ verify-scan-gates:
 	@$(MAKE) --no-print-directory secret-scan
 
 verify-suite-gates:
+	@rc=0; \
+	$(MAKE) --no-print-directory suite-static-gates & ps=$$!; \
+	$(MAKE) --no-print-directory test & pt=$$!; \
+	wait $$ps || rc=1; wait $$pt || rc=1; exit $$rc
+
+suite-static-gates:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
 	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
 	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
 	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings
 	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
-	@$(MAKE) --no-print-directory test
 
 verify-dotnet-gates:
 	@rc=0; \
@@ -131,8 +136,11 @@ bridge-test-shards:
 	exit $$rc
 
 editor-test-shards:
-	@rc=0; pids=""; running=0; \
+	@rc=0; \
+	UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) StdioTransportTests || rc=1; \
+	pids=""; running=0; \
 	for shard in $(EDITOR_TEST_SHARDS); do \
+		[ "$$shard" = "StdioTransportTests" ] && continue; \
 		UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) $$shard & pids="$$pids $$!"; \
 		running=$$((running+1)); \
 		if [ $$running -ge $(EDITOR_TEST_SHARD_FANOUT) ]; then \

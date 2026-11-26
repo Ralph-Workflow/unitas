@@ -367,6 +367,8 @@ pub struct Renderer {
     offscreen_pipelines: Pipelines,
     capture_pipelines: Pipelines,
     uniforms: Mutex<UniformState>,
+    material_bind: wgpu::BindGroup,
+    shadow_bind: wgpu::BindGroup,
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
 }
@@ -380,6 +382,43 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn align_up(value: u64, alignment: u64) -> u64 {
     value.div_ceil(alignment) * alignment
+}
+
+fn solid_texture(device: &wgpu::Device, queue: &wgpu::Queue, rgba: [u8; 4]) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("solid"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
@@ -626,6 +665,133 @@ impl Renderer {
             OFFSCREEN_FORMAT,
             ID_FORMAT,
         );
+        let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let default_albedo = solid_texture(&device, &queue, [255, 255, 255, 255]);
+        let default_normal = solid_texture(&device, &queue, [128, 128, 255, 255]);
+        let default_emissive = solid_texture(&device, &queue, [0, 0, 0, 255]);
+        let default_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material-default"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &default_params,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&[0.0f32, 0.0, 1.0, 0.0]),
+        );
+        let material_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material-default"),
+            layout: &material_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&default_albedo),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&default_normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&default_emissive),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&material_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: default_params.as_entire_binding(),
+                },
+            ],
+        });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow_map = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow-default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_map.create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("shadow-default-clear"),
+            });
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow-default-clear"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            drop(pass);
+            queue.submit(Some(encoder.finish()));
+        }
+        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow-uniform"),
+            size: SHADOW_UNIFORM_BYTES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &shadow_uniform,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&[0.0f32; 20]),
+        );
+        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow-default"),
+            layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: shadow_uniform.as_entire_binding(),
+                },
+            ],
+        });
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
         fonts.load_system_fonts();
@@ -647,6 +813,8 @@ impl Renderer {
             offscreen_pipelines,
             capture_pipelines,
             uniforms: Mutex::new(uniforms),
+            material_bind,
+            shadow_bind,
             surface: Mutex::new(None),
             text: Mutex::new(text),
         })
@@ -1430,6 +1598,8 @@ impl Renderer {
                 &state.instance_bind_group,
                 &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
             );
+            pass.set_bind_group(2, &self.material_bind, &[]);
+            pass.set_bind_group(3, &self.shadow_bind, &[]);
             if item.instance.lit {
                 pass.set_pipeline(&pipelines.lit);
             } else {
