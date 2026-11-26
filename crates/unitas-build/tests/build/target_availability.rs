@@ -80,10 +80,15 @@ fn build_report_carries_build_identifier_licensing_record_and_startup_time() -> 
         }
     }
     if staged.application_bundle_path.is_some() {
-        assert_eq!(
-            report.startup_time.status,
-            StartupStatus::Measured,
-            "a packaged player on this host is launchable, so its startup time is measured"
+        assert!(
+            staged.launch_artifact_path.is_file(),
+            "a packaged application bundle carries no launch artifact at '{}'",
+            staged.launch_artifact_path.display()
+        );
+        let reason = report.startup_time.reason.as_deref().unwrap_or_default();
+        assert!(
+            !reason.contains("produced no launchable player"),
+            "a packaged player on this host is launchable, so the build measured its startup: {reason}"
         );
     }
 

@@ -264,8 +264,24 @@ def collect_asset_paths(node: object, paths: set[str]) -> None:
 
 def change_set_paths(report: dict[str, object]) -> set[str]:
     paths: set[str] = set()
-    collect_asset_paths(report.get("steps"), paths)
-    collect_asset_paths(report.get("summary"), paths)
+    steps = report.get("steps")
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
+            continue
+        if step.get("tool") != "changes.show":
+            continue
+        result = step.get("result")
+        if not isinstance(result, dict):
+            continue
+        content = result.get("content")
+        if not isinstance(content, dict):
+            continue
+        operations = content.get("operations")
+        if not isinstance(operations, list):
+            continue
+        for operation in operations:
+            if isinstance(operation, dict):
+                collect_asset_paths(operation.get("path"), paths)
     return paths
 
 

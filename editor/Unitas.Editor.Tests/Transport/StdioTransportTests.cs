@@ -22,6 +22,12 @@ namespace Unitas.Editor.Tests
             StdioProductionToolSetAndCaptureEndToEnd().GetAwaiter().GetResult();
         }
 
+        private static CancellationToken RequestWindow(CancellationTokenSource source)
+        {
+            source.CancelAfter(TimeSpan.FromSeconds(10));
+            return source.Token;
+        }
+
         private static async Task StdioInitializeToolsAndResourcesRoundTrip()
         {
             using McpHost host = BuildTestHost();
@@ -34,7 +40,7 @@ namespace Unitas.Editor.Tests
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                cts.Token);
+                RequestWindow(cts));
 
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
@@ -52,7 +58,7 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                cts.Token).ConfigureAwait(false);
+                RequestWindow(cts)).ConfigureAwait(false);
             try
             {
                 Check.Equal(
@@ -62,7 +68,7 @@ namespace Unitas.Editor.Tests
 
                 IList<McpClientTool> tools = await client.ListToolsAsync(
                     (RequestOptions?)null,
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 Check.That(
                     "stdio: session is created and active",
                     !string.IsNullOrEmpty(transportHost.ActiveSessionId));
@@ -73,7 +79,7 @@ namespace Unitas.Editor.Tests
 
                 CallToolResult statusResult = await client.CallToolAsync(
                     new CallToolRequestParams { Name = "project.status" },
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? statusStructured = ParseStructuredContent(statusResult);
                 Check.That(
                     "stdio: project.status call returns untrusted envelope",
@@ -81,7 +87,7 @@ namespace Unitas.Editor.Tests
 
                 CallToolResult inspectResult = await client.CallToolAsync(
                     new CallToolRequestParams { Name = "scene.inspect" },
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? inspectStructured = ParseStructuredContent(inspectResult);
                 Check.That(
                     "stdio: scene.inspect call returns untrusted envelope",
@@ -101,7 +107,7 @@ namespace Unitas.Editor.Tests
                                 ["name"] = JsonDocument.Parse("\"Ball\"").RootElement.Clone(),
                             },
                         },
-                        cts.Token).AsTask()).ConfigureAwait(false);
+                        RequestWindow(cts)).AsTask()).ConfigureAwait(false);
                 Check.That("stdio: scene.edit before grant throws McpProtocolException", missingScopeError != null);
                 Check.Equal(
                     "stdio: missing scope error code is -32001",
@@ -113,7 +119,7 @@ namespace Unitas.Editor.Tests
 
                 IList<McpClientResource> resources = await client.ListResourcesAsync(
                     (RequestOptions?)null,
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 Check.Equal("stdio: resources/list includes builtin and registered resources", 2, resources.Count);
                 Check.Equal(
                     "stdio: resources/list resource 0 is unitas://knowledge/scopes",
@@ -127,7 +133,7 @@ namespace Unitas.Editor.Tests
                 ReadResourceResult scopesRead = await client.ReadResourceAsync(
                     new Uri("unitas://knowledge/scopes"),
                     (RequestOptions?)null,
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? scopesEnvelope = ParseResourceEnvelope(scopesRead);
                 Check.That(
                     "stdio: reading unitas://knowledge/scopes returns untrusted envelope",
@@ -136,7 +142,7 @@ namespace Unitas.Editor.Tests
                 ReadResourceResult manifestRead = await client.ReadResourceAsync(
                     new Uri("unitas://project/manifest"),
                     (RequestOptions?)null,
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? manifestEnvelope = ParseResourceEnvelope(manifestRead);
                 Check.That(
                     "stdio: reading unitas://project/manifest returns untrusted envelope",
@@ -152,7 +158,7 @@ namespace Unitas.Editor.Tests
                                 ["scope"] = JsonDocument.Parse("\"edit-content\"").RootElement.Clone(),
                             },
                         },
-                        cts.Token).AsTask()).ConfigureAwait(false);
+                        RequestWindow(cts)).AsTask()).ConfigureAwait(false);
                 Check.That("stdio: self-widening tool call throws McpProtocolException", selfWideningError != null);
                 Check.Equal(
                     "stdio: self-widening error code is -32002",
@@ -171,7 +177,7 @@ namespace Unitas.Editor.Tests
                             ["name"] = JsonDocument.Parse("\"Ball\"").RootElement.Clone(),
                         },
                     },
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? editStructured = ParseStructuredContent(editResult);
                 Check.That(
                     "stdio: scene.edit after person grant returns untrusted envelope",
@@ -216,7 +222,7 @@ namespace Unitas.Editor.Tests
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                cts.Token);
+                RequestWindow(cts));
 
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
@@ -234,13 +240,13 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                cts.Token).ConfigureAwait(false);
+                RequestWindow(cts)).ConfigureAwait(false);
             try
             {
                 McpProtocolException? unknownTool = await CatchProtocolAsync(() =>
                     client.CallToolAsync(
                         new CallToolRequestParams { Name = "no.such.tool" },
-                        cts.Token).AsTask()).ConfigureAwait(false);
+                        RequestWindow(cts)).AsTask()).ConfigureAwait(false);
                 Check.That("stdio: unknown tool maps to McpProtocolException", unknownTool != null);
                 Check.Equal(
                     "stdio: unknown tool maps to -32000",
@@ -251,7 +257,7 @@ namespace Unitas.Editor.Tests
                     client.ReadResourceAsync(
                         new Uri("unitas://unknown/resource"),
                         (RequestOptions?)null,
-                        cts.Token).AsTask()).ConfigureAwait(false);
+                        RequestWindow(cts)).AsTask()).ConfigureAwait(false);
                 Check.That("stdio: unknown resource maps to McpProtocolException", unknownResource != null);
                 Check.Equal(
                     "stdio: unknown resource maps to -32000",
@@ -314,7 +320,7 @@ namespace Unitas.Editor.Tests
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                cts.Token);
+                RequestWindow(cts));
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
                 serverToClient.Reader.AsStream(),
@@ -330,13 +336,13 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                cts.Token).ConfigureAwait(false);
+                RequestWindow(cts)).ConfigureAwait(false);
             string playSessionId = string.Empty;
             try
             {
                 IList<McpClientTool> tools = await client.ListToolsAsync(
                     (RequestOptions?)null,
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 Check.That(
                     "stdio_production: tools/list exposes play.enter",
                     HasTool(tools, "play.enter"));
@@ -365,7 +371,7 @@ namespace Unitas.Editor.Tests
                         Name = "play.enter",
                         Arguments = new Dictionary<string, JsonElement>(),
                     },
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? enterStructured = ParseStructuredContent(enterResult);
                 Check.That(
                     "stdio_production: play.enter returns an untrusted envelope",
@@ -385,7 +391,7 @@ namespace Unitas.Editor.Tests
                             ["frames"] = JsonArg("4"),
                         },
                     },
-                    cts.Token).ConfigureAwait(false);
+                    RequestWindow(cts)).ConfigureAwait(false);
                 JsonNode? stepStructured = ParseStructuredContent(stepResult);
                 Check.That(
                     "stdio_production: play.step returns an untrusted envelope",
@@ -410,7 +416,7 @@ namespace Unitas.Editor.Tests
                                 ["id_map"] = JsonArg("true"),
                             },
                         },
-                        cts.Token).ConfigureAwait(false);
+                        RequestWindow(cts)).ConfigureAwait(false);
                 }
                 catch (McpProtocolException refusal)
                 {
@@ -465,7 +471,7 @@ namespace Unitas.Editor.Tests
                                     ["playSessionId"] = JsonArg(JsonSerializer.Serialize(playSessionId)),
                                 },
                             },
-                            cts.Token).ConfigureAwait(false);
+                            RequestWindow(cts)).ConfigureAwait(false);
                     }
                     catch (Exception)
                     {
