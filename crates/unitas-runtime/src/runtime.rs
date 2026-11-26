@@ -1798,6 +1798,10 @@ impl Runtime {
         self.input.queue_scroll(x, y);
     }
 
+    pub fn input_axis_event(&mut self, name: &str, value: f64) -> bool {
+        self.input.inject_axis(name, value)
+    }
+
     pub fn input_key_state(&self, key: u32) -> u32 {
         self.input.key_state(key)
     }

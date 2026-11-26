@@ -1006,6 +1006,51 @@ pub extern "C" fn unitas_runtime_input_scroll(handle: u64, x: f64, y: f64) -> i3
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_input_axis_event(
+    handle: u64,
+    address: u64,
+    length: u64,
+    value: f64,
+) -> i32 {
+    let len = match usize::try_from(length) {
+        Ok(l) => l,
+        Err(_) => return -2,
+    };
+    match with_runtime_state(handle, |state| {
+        if !value.is_finite() {
+            state.set_error("non-finite axis value");
+            return -2;
+        }
+        if address == 0
+            || address != state.path_buffer.as_ptr() as usize as u64
+            || len > state.path_buffer.len()
+        {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        let name = match std::str::from_utf8(&state.path_buffer[..len]) {
+            Ok(s) => s.trim_end_matches('\0').to_string(),
+            Err(err) => {
+                let msg = err.to_string();
+                state.set_error(&msg);
+                return -3;
+            }
+        };
+        if state.runtime.input_axis_event(&name, value) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error(&format!("unknown input axis: {name}"));
+            -5
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_input_key_state(handle: u64, key: u32) -> u32 {
     match with_runtime_state(handle, |state| {
         state.clear_error();

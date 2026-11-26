@@ -307,6 +307,7 @@ pub struct InputState {
     scroll_x: f64,
     scroll_y: f64,
     axes: HashMap<String, Vec<AxisEntry>>,
+    injected_axes: HashMap<String, f64>,
     prev_buttons_down: HashMap<String, bool>,
     buttons_pressed: HashSet<String>,
     buttons_released: HashSet<String>,
@@ -345,6 +346,7 @@ impl InputState {
             scroll_x: 0.0,
             scroll_y: 0.0,
             axes: HashMap::new(),
+            injected_axes: HashMap::new(),
             prev_buttons_down: HashMap::new(),
             buttons_pressed: HashSet::new(),
             buttons_released: HashSet::new(),
@@ -402,6 +404,7 @@ impl InputState {
                 entry.reset();
             }
         }
+        self.injected_axes.clear();
         for down in self.prev_buttons_down.values_mut() {
             *down = false;
         }
@@ -504,6 +507,20 @@ impl InputState {
         self.gamepad_buttons_pressed.clear();
         self.gamepad_buttons_released.clear();
         self.queued_gamepad_buttons.clear();
+    }
+
+    /// Injects a device-style axis value (gamepad stick) for a configured axis.
+    /// The injected value replaces the button-derived evaluation until the next
+    /// injection, so the reported value does not depend on the frame rate.
+    /// Returns false when the axis is not configured or the value is not finite.
+    pub fn inject_axis(&mut self, name: &str, value: f64) -> bool {
+        let axis = name.trim();
+        if axis.is_empty() || !value.is_finite() || !self.axes.contains_key(axis) {
+            return false;
+        }
+        self.injected_axes
+            .insert(axis.to_string(), value.clamp(-1.0, 1.0));
+        true
     }
 
     pub fn is_key_down(&self, key: u32) -> bool {
@@ -611,6 +628,7 @@ impl InputState {
             let mut any_button_source_down = false;
             let mut any_button_source_pressed = false;
             let mut any_button_source_released = false;
+            let injected = self.injected_axes.get(name).copied();
 
             let gamepad_button = gamepad_button_for_name(name);
             if gamepad_button.is_some_and(|button| gamepad_down.contains(&button)) {
@@ -639,6 +657,17 @@ impl InputState {
                     if is_source_in(src, keys_released, mouse_released, gamepad_released) {
                         any_button_source_released = true;
                     }
+                }
+
+                if let Some(injected_value) = injected {
+                    // An injected device axis replaces the button-derived value and
+                    // stays frame-rate independent.
+                    let sign = if entry.config.invert { -1.0 } else { 1.0 };
+                    let value = injected_value * sign;
+                    entry.raw = value;
+                    let dead = entry.config.dead.max(0.0);
+                    entry.smoothed = if value.abs() <= dead { 0.0 } else { value };
+                    continue;
                 }
 
                 match entry.config.axis_type {
@@ -959,5 +988,52 @@ mod tests {
             Some(ButtonSource::GamepadButton(3))
         );
         assert_eq!(parse_button_token("joystick button"), None);
+    }
+
+    #[test]
+    fn injected_axis_replaces_the_button_derived_value() {
+        let mut input = InputState::with_default_axes();
+        assert!(input.inject_axis("Horizontal", 1.0));
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(input.axis("Horizontal"), Some(1.0));
+        assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
+
+        assert!(input.inject_axis("Horizontal", -0.5));
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(input.axis("Horizontal"), Some(-0.5));
+        assert_eq!(input.axis_raw("Horizontal"), Some(-0.5));
+    }
+
+    #[test]
+    fn injected_axis_value_is_frame_rate_independent() {
+        let mut input = InputState::with_default_axes();
+        input.inject_axis("Horizontal", 1.0);
+        input.begin_frame(1.0 / 30.0);
+        assert_eq!(input.axis("Horizontal"), Some(1.0));
+        for _ in 0..10 {
+            input.begin_frame(1.0 / 144.0);
+        }
+        assert_eq!(input.axis("Horizontal"), Some(1.0));
+        assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
+    }
+
+    #[test]
+    fn injected_axis_needs_a_configured_axis_and_is_cleared_by_reset() {
+        let mut input = InputState::with_default_axes();
+        assert!(!input.inject_axis("Gamepad Axis 1", 1.0));
+        assert_eq!(input.axis("Gamepad Axis 1"), None);
+        input.inject_axis("Horizontal", 1.0);
+        input.reset();
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(input.axis("Horizontal"), Some(0.0));
+    }
+
+    #[test]
+    fn button_derived_axis_is_unchanged_without_an_injection() {
+        let mut input = InputState::with_default_axes();
+        input.inject_key(KEY_RIGHT_ARROW, true);
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
+        assert!(input.axis("Horizontal").unwrap_or(0.0) > 0.0);
     }
 }

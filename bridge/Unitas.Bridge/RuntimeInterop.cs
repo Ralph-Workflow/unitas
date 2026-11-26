@@ -385,6 +385,9 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_input_scroll(ulong runtime, double x, double y);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_input_axis_event(ulong runtime, IntPtr address, ulong length, double value);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern uint unitas_runtime_input_key_state(ulong runtime, uint key);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

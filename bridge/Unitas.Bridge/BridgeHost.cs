@@ -1910,6 +1910,20 @@ namespace Unitas.Bridge
             }
         }
 
+        public void InjectAxis(string axisName, double value)
+        {
+            if (!TryWriteStringToPathBuffer(axisName, out IntPtr buffer, out ulong length))
+            {
+                throw new ArgumentException("axis name must be a non-empty string", nameof(axisName));
+            }
+
+            int result = RuntimeInterop.unitas_runtime_input_axis_event(_runtimeHandle, buffer, length, value);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject axis value", result);
+            }
+        }
+
         public bool GetKey(KeyCode key)
         {
             return (RuntimeInterop.unitas_runtime_input_key_state(_runtimeHandle, (uint)key) & InputStateDown) != 0;

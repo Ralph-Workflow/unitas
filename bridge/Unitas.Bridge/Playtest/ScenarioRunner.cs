@@ -158,6 +158,12 @@ namespace Unitas.Bridge.Playtest
                 return null;
             }
 
+            if (step is InjectGamepadAxisStep gamepadAxisStep)
+            {
+                host.InjectAxis(gamepadAxisStep.Axis, gamepadAxisStep.Value);
+                return null;
+            }
+
             throw new InvalidOperationException("unsupported scenario step: " + step.Kind);
         }
 
@@ -285,6 +291,8 @@ namespace Unitas.Bridge.Playtest
                     return "inject_scroll";
                 case ScenarioStepKind.SetTimeScale:
                     return "set_time_scale";
+                case ScenarioStepKind.InjectGamepadAxis:
+                    return "inject_gamepad_axis";
                 default:
                     return kind.ToString();
             }

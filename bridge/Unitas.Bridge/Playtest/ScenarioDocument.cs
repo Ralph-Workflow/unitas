@@ -25,6 +25,7 @@ namespace Unitas.Bridge.Playtest
             "inject_pointer",
             "inject_scroll",
             "set_time_scale",
+            "inject_gamepad_axis",
         };
 
         public ScenarioDocument(
@@ -172,6 +173,8 @@ namespace Unitas.Bridge.Playtest
                     return ParseInjectScrollStep(body, kindPath);
                 case "set_time_scale":
                     return ParseSetTimeScaleStep(body, kindPath);
+                case "inject_gamepad_axis":
+                    return ParseInjectGamepadAxisStep(body, kindPath);
                 default:
                     throw Fail(kindPath, "unknown step kind '" + kind + "'");
             }
@@ -277,6 +280,19 @@ namespace Unitas.Bridge.Playtest
             }
 
             return new SetTimeScaleStep(value);
+        }
+
+        private static InjectGamepadAxisStep ParseInjectGamepadAxisStep(JsonElement body, string path)
+        {
+            RejectUnknownProperties(body, path, "axis", "value");
+            string axis = ReadRequiredString(body, "axis", path + ".axis");
+            double value = ReadRequiredNumber(body, "value", path + ".value");
+            if (value < -1.0 || value > 1.0)
+            {
+                throw Fail(path + ".value", "'value' must be within [-1, 1]");
+            }
+
+            return new InjectGamepadAxisStep(axis, value);
         }
 
         private static ScenarioCheckpoint ParseCheckpoint(JsonElement element, string path, HashSet<string> ids, string referenceBase)
