@@ -22,6 +22,7 @@ pub enum RuntimeError {
     SceneNotFound(String),
     InvalidSceneIndex(usize),
     EntityNotFound(EntityId),
+    DuplicateEntityId(EntityId),
 }
 
 impl fmt::Display for RuntimeError {
@@ -43,6 +44,9 @@ impl fmt::Display for RuntimeError {
                 write!(formatter, "invalid scene index: {index}")
             }
             RuntimeError::EntityNotFound(entity) => write!(formatter, "entity not found: {entity}"),
+            RuntimeError::DuplicateEntityId(entity) => {
+                write!(formatter, "duplicate entity id: {entity}")
+            }
         }
     }
 }

@@ -297,8 +297,8 @@ namespace Unitas.Bridge.Tests
                 string repoRoot = Path.GetFullPath(".");
                 Check.That("Default StorageFilePath is rooted", Path.IsPathRooted(filePath));
                 Check.Equal(
-                    "Default StorageFilePath lives under Application.persistentDataPath",
-                    Path.Combine(persistentPath, "PlayerPrefs.ini"),
+                    "Default StorageFilePath lives under the preferences folder of Application.persistentDataPath",
+                    Path.Combine(persistentPath, "prefs", "PlayerPrefs.ini"),
                     filePath);
                 Check.That(
                     "Default StorageFilePath is not under Application.dataPath",

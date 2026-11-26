@@ -126,11 +126,6 @@ namespace UnityEngine
         private static int _quitRequestCount;
         private static int _ignoredPlayModeQuitCount;
 
-        static Application()
-        {
-            PlayerPrefs.PersistentDataPathResolver = () => persistentDataPath;
-        }
-
         public static IApplicationHost? Host { get; set; }
 
         public static string? PersistentDataPathOverride
@@ -413,6 +408,40 @@ namespace UnityEngine
 
                 default:
                     return CombineUnixPath(home, "unitas", companyToken + "-" + productToken);
+            }
+        }
+
+        public static string ResolvePlayerPrefsPathForTarget(
+            RuntimePlatform targetPlatform,
+            string? targetCompanyName,
+            string? targetProductName,
+            string? userHomeDirectory = null)
+        {
+            string companyToken = SanitizeFolderToken(targetCompanyName ?? string.Empty, DefaultCompanyName);
+            string productToken = SanitizeFolderToken(targetProductName ?? string.Empty, DefaultProductName);
+            string home = string.IsNullOrEmpty(userHomeDirectory)
+                ? ResolveCurrentUserHomeDirectory()
+                : userHomeDirectory!.TrimEnd('/', '\\');
+
+            switch (targetPlatform)
+            {
+                case RuntimePlatform.OSXEditor:
+                case RuntimePlatform.OSXPlayer:
+                case RuntimePlatform.OSXServer:
+                    return CombineUnixPath(home, "Library", "Preferences", "unity." + companyToken + "." + productToken);
+
+                case RuntimePlatform.WindowsEditor:
+                case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsServer:
+                    return CombineWindowsPath(home, "AppData", "LocalLow", companyToken, productToken, "prefs");
+
+                case RuntimePlatform.LinuxEditor:
+                case RuntimePlatform.LinuxPlayer:
+                case RuntimePlatform.LinuxServer:
+                    return CombineUnixPath(home, ".config", "unity3d", companyToken, productToken, "prefs");
+
+                default:
+                    return string.Empty;
             }
         }
 

@@ -279,6 +279,21 @@ namespace UnityEngine
                 throw new ArgumentNullException(nameof(content));
             }
 
+            WriteSaveFileAtomically(targetPath, new UTF8Encoding(false).GetBytes(content));
+        }
+
+        public static void WriteSaveFileAtomically(string targetPath, byte[] content)
+        {
+            if (string.IsNullOrEmpty(targetPath))
+            {
+                throw new ArgumentException("Save file path must not be null or empty.", nameof(targetPath));
+            }
+
+            if (content == null)
+            {
+                throw new ArgumentNullException(nameof(content));
+            }
+
             string fullTargetPath = Path.GetFullPath(targetPath);
             string directory = Path.GetDirectoryName(fullTargetPath) ?? Application.persistentDataPath;
             string tempPath = Path.Combine(directory, Path.GetFileName(fullTargetPath) + ".tmp." + Guid.NewGuid().ToString("N"));
@@ -287,30 +302,29 @@ namespace UnityEngine
             try
             {
                 Directory.CreateDirectory(directory);
-                byte[] utf8Bytes = new UTF8Encoding(false).GetBytes(content);
 
-                if (_simulatedQuotaBytes >= 0 && utf8Bytes.LongLength > _simulatedQuotaBytes)
+                if (_simulatedQuotaBytes >= 0 && content.LongLength > _simulatedQuotaBytes)
                 {
                     _lastWriteFailureReason = StorageFailureReason.QuotaExceeded;
                     string quotaMessage = string.Concat(
                         "SAV-001 storage quota exceeded writing '",
                         fullTargetPath,
                         "': required ",
-                        utf8Bytes.LongLength.ToString(CultureInfo.InvariantCulture),
+                        content.LongLength.ToString(CultureInfo.InvariantCulture),
                         " bytes exceeds quota of ",
                         _simulatedQuotaBytes.ToString(CultureInfo.InvariantCulture),
                         " bytes.");
                     _lastWriteError = quotaMessage;
                     Debug.LogError(quotaMessage);
-                    throw new SaveStorageQuotaException(fullTargetPath, utf8Bytes.LongLength, _simulatedQuotaBytes, quotaMessage);
+                    throw new SaveStorageQuotaException(fullTargetPath, content.LongLength, _simulatedQuotaBytes, quotaMessage);
                 }
 
-                if (_simulatedInterruptionAfterBytes >= 0 && _simulatedInterruptionAfterBytes < utf8Bytes.Length)
+                if (_simulatedInterruptionAfterBytes >= 0 && _simulatedInterruptionAfterBytes < content.Length)
                 {
                     preserveInterruptedTemp = true;
                     _lastWriteFailureReason = StorageFailureReason.IoError;
                     byte[] partialBytes = new byte[_simulatedInterruptionAfterBytes];
-                    Buffer.BlockCopy(utf8Bytes, 0, partialBytes, 0, _simulatedInterruptionAfterBytes);
+                    Buffer.BlockCopy(content, 0, partialBytes, 0, _simulatedInterruptionAfterBytes);
                     File.WriteAllBytes(tempPath, partialBytes);
                     string interruptedMessage = string.Concat(
                         "SAV-001 simulated termination/interruption during write to '",
@@ -318,7 +332,7 @@ namespace UnityEngine
                         "': wrote ",
                         _simulatedInterruptionAfterBytes.ToString(CultureInfo.InvariantCulture),
                         " of ",
-                        utf8Bytes.Length.ToString(CultureInfo.InvariantCulture),
+                        content.Length.ToString(CultureInfo.InvariantCulture),
                         " bytes to temporary staging file '",
                         tempPath,
                         "' before atomic replacement.");
@@ -328,11 +342,11 @@ namespace UnityEngine
                         fullTargetPath,
                         tempPath,
                         _simulatedInterruptionAfterBytes,
-                        utf8Bytes.Length,
+                        content.Length,
                         interruptedMessage);
                 }
 
-                File.WriteAllBytes(tempPath, utf8Bytes);
+                File.WriteAllBytes(tempPath, content);
                 if (File.Exists(fullTargetPath))
                 {
                     File.Delete(fullTargetPath);
@@ -706,7 +720,7 @@ namespace UnityEngine
                         targetPlatform,
                         "Desktop",
                         "SAV-001",
-                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and POSIX rename into ~/Library/Application Support/<company>/<product>/PlayerPrefs.ini.",
+                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and POSIX rename into ~/Library/Preferences/unity.<company>.<product>/PlayerPrefs.ini.",
                         "Durable when the save file write under Application.persistentDataPath flushes and closes (or when SaveMigration.WriteSaveFileAtomically completes temp-file write and atomic replace).",
                         false,
                         "Synchronous OS filesystem flush on save completion (no secondary browser IDBFS sync required).",
@@ -716,7 +730,7 @@ namespace UnityEngine
                         true,
                         true,
                         true,
-                        "~/Library/Application Support/<company>/<product>");
+                        "~/Library/Preferences/unity.<company>.<product>");
 
                 case RuntimePlatform.WindowsEditor:
                 case RuntimePlatform.WindowsPlayer:
@@ -725,7 +739,7 @@ namespace UnityEngine
                         targetPlatform,
                         "Desktop",
                         "SAV-001",
-                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and replacement in %USERPROFILE%/AppData/LocalLow/<company>/<product>/PlayerPrefs.ini.",
+                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and replacement in %USERPROFILE%/AppData/LocalLow/<company>/<product>/prefs/PlayerPrefs.ini.",
                         "Durable when the save file write under Application.persistentDataPath flushes and closes (or when SaveMigration.WriteSaveFileAtomically completes temp-file write and atomic replace).",
                         false,
                         "Synchronous OS filesystem flush on save completion (no secondary browser IDBFS sync required).",
@@ -735,7 +749,7 @@ namespace UnityEngine
                         true,
                         true,
                         true,
-                        "%USERPROFILE%/AppData/LocalLow/<company>/<product>");
+                        "%USERPROFILE%/AppData/LocalLow/<company>/<product>/prefs");
 
                 case RuntimePlatform.LinuxEditor:
                 case RuntimePlatform.LinuxPlayer:
@@ -744,7 +758,7 @@ namespace UnityEngine
                         targetPlatform,
                         "Desktop",
                         "SAV-001",
-                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and POSIX rename into ~/.config/unity3d/<company>/<product>/PlayerPrefs.ini.",
+                        "Durable immediately upon PlayerPrefs.Save() returning after atomic temp-file write and POSIX rename into ~/.config/unity3d/<company>/<product>/prefs/PlayerPrefs.ini.",
                         "Durable when the save file write under Application.persistentDataPath flushes and closes (or when SaveMigration.WriteSaveFileAtomically completes temp-file write and atomic replace).",
                         false,
                         "Synchronous OS filesystem flush on save completion (no secondary browser IDBFS sync required).",
@@ -754,7 +768,7 @@ namespace UnityEngine
                         true,
                         true,
                         true,
-                        "~/.config/unity3d/<company>/<product>");
+                        "~/.config/unity3d/<company>/<product>/prefs");
 
                 case RuntimePlatform.WebGLPlayer:
                     return new PersistenceDurabilityContract(

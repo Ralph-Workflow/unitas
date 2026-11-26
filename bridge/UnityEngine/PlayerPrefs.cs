@@ -48,7 +48,6 @@ namespace UnityEngine
         private static bool _isLoaded;
         private static string? _loadedFilePath;
         private static string? _storageDirectoryOverride;
-        private static Func<string>? _persistentDataPathResolver;
         private static PlayerPrefsLoadState _lastLoadState = PlayerPrefsLoadState.Absent;
         private static string? _lastLoadError;
         private static StorageFailureReason _lastSaveFailureReason = StorageFailureReason.None;
@@ -124,16 +123,6 @@ namespace UnityEngine
                     _storageDirectoryOverride = value;
                     _isLoaded = false;
                 }
-            }
-        }
-
-        internal static Func<string>? PersistentDataPathResolver
-        {
-            get => _persistentDataPathResolver;
-            set
-            {
-                _persistentDataPathResolver = value;
-                _isLoaded = false;
             }
         }
 
@@ -373,20 +362,19 @@ namespace UnityEngine
                 return Path.GetFullPath(_storageDirectoryOverride);
             }
 
-            Func<string>? resolver = _persistentDataPathResolver;
-            if (resolver != null)
+            string? armedRoot = Application.PersistentDataPathOverride;
+            if (!string.IsNullOrEmpty(armedRoot))
             {
-                string resolved = resolver();
-                if (!string.IsNullOrEmpty(resolved))
-                {
-                    return Path.GetFullPath(resolved);
-                }
+                return Path.Combine(Path.GetFullPath(armedRoot), "prefs");
             }
 
-            string persistentPath = Application.persistentDataPath;
-            if (!string.IsNullOrEmpty(persistentPath))
+            string preferencesRoot = Application.ResolvePlayerPrefsPathForTarget(
+                Application.platform,
+                Application.companyName,
+                Application.productName);
+            if (!string.IsNullOrEmpty(preferencesRoot))
             {
-                return Path.GetFullPath(persistentPath);
+                return Path.GetFullPath(preferencesRoot);
             }
 
             string baseFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

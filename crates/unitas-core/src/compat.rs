@@ -2737,6 +2737,105 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
         ],
     },
     OwnedFeatureCapability {
+        feature_id: "SAV-001",
+        owning_spec: "accessibility-localization-persistence.md",
+        capability: "Player settings, save data, corruption, and migration",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "PlayerPrefs resolves to Unity's per-target preferences location, lands in a directory disjoint from save data, and stays inside the armed data root when persistence is armed",
+                location: "bridge/UnityEngine/PlayerPrefs.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/PlayerPrefsPersistenceTests.cs::TestPlayerPrefsResolvesPerTargetPreferencesLocation",
+                    "bridge/Unitas.Bridge.Tests/PlayerPrefsPersistenceTests.cs::TestPreferencesLandUnderArmedOverrideAndStayDisjointFromSaveData",
+                    "bridge/Unitas.Bridge.Tests/PlayerPrefsPersistenceTests.cs::TestDeleteAllAndPersistentDataPathSaveFilesRemainMutuallyIsolated",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a save write is write-then-replace: an interrupted write and a quota refusal each leave the prior valid save byte-identical and raise distinct exceptions to the caller",
+                location: "bridge/UnityEngine/SaveMigration.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory7InterruptedSaveFileWriteKeepsThePriorValidSaveByteIdentical",
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory7QuotaExhaustedSaveFileWriteKeepsThePriorValidSaveAndLeavesNoStagingFile",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "loading reports distinct outcomes (Absent, Corrupt, IncompatibleNewerVersion, MigrationFailed) and a migration reports its input version, resulting version, and applied steps",
+                location: "bridge/UnityEngine/SaveMigration.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory8SaveMigrationReportsInputVersionResultingVersionAndDistinctOutcomes",
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory8AbsentSaveFileReportsTheAbsentOutcome",
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory8MalformedSaveFileReportsTheCorruptOutcome",
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory8MigratedSaveFileReportsInputVersionResultingVersionAndAppliedSteps",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a binary payload round-trips through the same write-then-replace save path",
+                location: "bridge/UnityEngine/SaveMigration.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory7BinarySaveFilePayloadRoundTripsByteIdentical",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the roll-a-ball sample restores its records, medals, and unlocked-arena set from PlayerPrefs on the next launch and writes and restores a best-run ghost file under Application.persistentDataPath",
+                location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
+                evidence: &[
+                    "samples/roll-a-ball/Assets/Scripts/SavedState.cs::RestoreAndSave",
+                    "samples/roll-a-ball/Scenarios/persist_state_read.json::persist_state_read",
+                    "samples/roll-a-ball/Scenarios/persist_state_write.json::persist_state_write",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the engine states each target's PlayerPrefs durability point, persistent-data write durability point, crash loss window, and write-then-replace guarantees",
+                location: "bridge/UnityEngine/SaveMigration.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory11ProductKnowledgeStatesPerTargetDurabilityAndCrashLossWindow",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a playtest scenario that terminates the player during a save file write under Application.persistentDataPath, and one that exhausts storage quota, finds the prior valid save intact on every target including the browser, and the failed write is reported to the calling code",
+                location: "bridge/UnityEngine/SaveMigration.cs",
+                evidence: &[],
+                missing: Some("the interrupted write and the quota refusal are simulated in-process through SaveMigration.SimulatedInterruptionAfterBytes and SaveMigration.SimulatedQuotaBytes instead of by a playtest scenario that terminates the player, and the write-then-replace guarantee is not proven on the browser target"),
+            },
+            OwnedCapabilityPart {
+                behavior: "save data round-trips through JsonUtility, Newtonsoft Json, XmlSerializer, and BinaryFormatter on each scripting backend and every target including the browser, and a type removed by managed code stripping produces a diagnostic naming the type",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("the native scripting backend provides no JsonUtility, Newtonsoft Json, XmlSerializer, or BinaryFormatter, the C# bridge demonstrates JsonUtility, Newtonsoft Json, and XmlSerializer on the desktop mono backend only, BinaryFormatter round-trips on no backend, the browser target round-trip is not demonstrated, and a type removed by managed code stripping produces no diagnostic naming the type"),
+            },
+            OwnedCapabilityPart {
+                behavior: "product knowledge available through automation states the per-target durability guarantees and each target's storage quota",
+                location: "crates/unitas-editor-abi/src/compat_tools.rs",
+                evidence: &[],
+                missing: Some("the per-target durability contract is not available through automation, no editor command exposes SaveMigration.GetTargetDurabilityContract, the contract states no storage quota for a target, the browser target's asynchronous flush is not proven, and crash survival is asserted as product knowledge and simulated in-process rather than demonstrated per target"),
+            },
+            OwnedCapabilityPart {
+                behavior: "on the browser target PlayerPrefs stores more than 1 MB up to the browser's quota, and a save file closed under Application.persistentDataPath is present after the page reloads",
+                location: "bridge/UnityEngine/PlayerPrefs.cs",
+                evidence: &[],
+                missing: Some("the browser target has no IndexedDB-backed storage: the C# bridge's WebGL preferences fall back to the host's local application data folder and a closed persistent-data file is never copied into the browser's persistent storage, so neither the 1 MB limit nor survival across a page reload is demonstrated"),
+            },
+            OwnedCapabilityPart {
+                behavior: "PlayerPrefs on the Windows target is stored in the registry-backed per-user store Unity uses for that target, company name, and product name",
+                location: "bridge/UnityEngine/Application.cs",
+                evidence: &[],
+                missing: Some("the Windows target's preferences are a file under %USERPROFILE%\\AppData\\LocalLow\\<company>\\<product>\\prefs instead of Unity's registry-backed per-user store"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the roll-a-ball sample's settings all persist through PlayerPrefs and take effect immediately",
+                location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
+                evidence: &[],
+                missing: Some("the sample persists only the quality setting: its master, music, and effects volumes, fullscreen mode, resolution, vertical sync, ghost, camera shake, and reduced motion do not persist through PlayerPrefs"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
         feature_id: "BLD-005",
         owning_spec: "build-platforms-xr-networking.md",
         capability: "Content builds and post-release content updates",
@@ -2881,10 +2980,30 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
+                behavior: "Application.persistentDataPath resolves per target to Unity's location for the project's company and product names",
+                location: "bridge/UnityEngine/Application.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/SaveMigrationTests.cs::TestStory26PersistentDataPathResolvesPerTargetToUnityCompanyProductLocation",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
                 behavior: "UnityWebRequest HTTP transport, CertificateHandler validation, and target-specific socket and browser ClientWebSocket diagnostics are provided by the runtime",
                 location: "crates/unitas-runtime/src/runtime.rs",
                 evidence: &[],
                 missing: Some("UnityWebRequest network transport, CertificateHandler validation, and target-specific raw socket or browser ClientWebSocket runtime diagnostics are not implemented"),
+            },
+            OwnedCapabilityPart {
+                behavior: "in editor and headless sessions the file locations resolve to the locations Unity uses on that host, so data the project wrote while running under Unity is found",
+                location: "bridge/UnityEngine/Application.cs",
+                evidence: &[],
+                missing: Some("the editor and headless file locations are not shown to match the locations Unity uses on that host, so data written while running under Unity is not demonstrated to be found"),
+            },
+            OwnedCapabilityPart {
+                behavior: "a file location that is not writable or not directly accessible on a target is reported with the target and the path",
+                location: "bridge/UnityEngine/Application.cs",
+                evidence: &[],
+                missing: Some("a file location that is not writable or not directly accessible on a target is not reported with the target and the path"),
             },
         ],
     },

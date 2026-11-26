@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEngine;
 
 namespace Unitas.Bridge.Tests
@@ -13,6 +14,12 @@ namespace Unitas.Bridge.Tests
         public static void Run()
         {
             TestStory8SaveMigrationReportsInputVersionResultingVersionAndDistinctOutcomes();
+            TestStory8AbsentSaveFileReportsTheAbsentOutcome();
+            TestStory8MalformedSaveFileReportsTheCorruptOutcome();
+            TestStory8MigratedSaveFileReportsInputVersionResultingVersionAndAppliedSteps();
+            TestStory7InterruptedSaveFileWriteKeepsThePriorValidSaveByteIdentical();
+            TestStory7QuotaExhaustedSaveFileWriteKeepsThePriorValidSaveAndLeavesNoStagingFile();
+            TestStory7BinarySaveFilePayloadRoundTripsByteIdentical();
             TestStory11ProductKnowledgeStatesPerTargetDurabilityAndCrashLossWindow();
             TestStory26PersistentDataPathResolvesPerTargetToUnityCompanyProductLocation();
             TestStory35ApplicationReportsProject2022_3VersionAndIgnoresQuitDuringPlay();
@@ -92,6 +99,180 @@ namespace Unitas.Bridge.Tests
                     && (int)SaveMigrationOutcome.Corrupt != (int)SaveMigrationOutcome.IncompatibleNewerVersion
                     && (int)SaveMigrationOutcome.Corrupt != (int)SaveMigrationOutcome.MigrationFailed
                     && (int)SaveMigrationOutcome.IncompatibleNewerVersion != (int)SaveMigrationOutcome.MigrationFailed);
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory8AbsentSaveFileReportsTheAbsentOutcome()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "missing.json");
+
+                SaveMigrationResult absent = SaveMigration.MigrateFile(savePath, 3, CreateSteps());
+
+                Check.Equal("Story 8 an absent save file reports the Absent outcome", (int)SaveMigrationOutcome.Absent, (int)absent.Outcome);
+                Check.Equal("Story 8 an absent save file reports the path it looked at", Path.GetFullPath(savePath), absent.FilePath);
+                Check.That("Story 8 an absent save file reports a diagnostic naming the save file", absent.DiagnosticMessage.Contains("missing.json", StringComparison.Ordinal));
+                Check.That("Story 8 an absent save file leaves no file behind", !File.Exists(savePath));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory8MalformedSaveFileReportsTheCorruptOutcome()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                const string malformed = "chapter 5 with no version field";
+                File.WriteAllText(savePath, malformed);
+                byte[] priorBytes = File.ReadAllBytes(savePath);
+
+                SaveMigrationResult corrupt = SaveMigration.MigrateFile(savePath, 3, CreateSteps());
+
+                Check.Equal("Story 8 a malformed save file reports the Corrupt outcome", (int)SaveMigrationOutcome.Corrupt, (int)corrupt.Outcome);
+                Check.Equal("Story 8 a malformed save file reports input version 0", 0, corrupt.InputVersion);
+                Check.Equal("Story 8 a malformed save file reports no applied step", 0, corrupt.AppliedSteps.Count);
+                Check.That("Story 8 a malformed save file reports the prior file as preserved", corrupt.PriorFilePreserved);
+                Check.That("Story 8 a malformed save file leaves the prior file byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory8MigratedSaveFileReportsInputVersionResultingVersionAndAppliedSteps()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                File.WriteAllText(savePath, "{\"version\":1,\"chapter\":5}");
+
+                SaveMigrationResult migrated = SaveMigration.MigrateFile(savePath, 2, CreateSteps());
+
+                Check.Equal("Story 8 a migrated save file reports the Migrated outcome", (int)SaveMigrationOutcome.Migrated, (int)migrated.Outcome);
+                Check.Equal("Story 8 a migrated save file reports its input version", 1, migrated.InputVersion);
+                Check.Equal("Story 8 a migrated save file reports its resulting version", 2, migrated.ResultingVersion);
+                Check.That("Story 8 a migrated save file reports the applied steps", migrated.AppliedSteps.Count > 0);
+                Check.Equal("Story 8 a migrated save file applies one step per version", 1, migrated.AppliedSteps.Count);
+                Check.Equal("Story 8 a migrated save file reports the version its applied step produced", 2, migrated.AppliedSteps[0]);
+                Check.Equal("Story 8 a migrated save file is rewritten at the resulting version", "{\"version\":2,\"chapter\":6}", File.ReadAllText(savePath));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory7InterruptedSaveFileWriteKeepsThePriorValidSaveByteIdentical()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":1,\"chapter\":5}");
+                byte[] priorBytes = File.ReadAllBytes(savePath);
+
+                SaveMigration.SimulatedInterruptionAfterBytes = 4;
+                Exception? failure = null;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":2,\"chapter\":9}");
+                }
+                catch (IOException ex)
+                {
+                    failure = ex;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 an interrupted save file write reports the interruption to the caller", failure is SaveWriteInterruptionException);
+                Check.That("Story 7 an interrupted save file write reports no quota failure", !(failure is SaveStorageQuotaException));
+                Check.That("Story 7 an interrupted save file write leaves the prior valid save byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory7QuotaExhaustedSaveFileWriteKeepsThePriorValidSaveAndLeavesNoStagingFile()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.json");
+                SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":1,\"chapter\":5}");
+                byte[] priorBytes = File.ReadAllBytes(savePath);
+
+                SaveMigration.SimulatedQuotaBytes = 8;
+                Exception? failure = null;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(savePath, "{\"version\":2,\"chapter\":9}");
+                }
+                catch (IOException ex)
+                {
+                    failure = ex;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a quota exhausted save file write reports the quota refusal to the caller", failure is SaveStorageQuotaException);
+                Check.That("Story 7 a quota exhausted save file write reports no interruption", !(failure is SaveWriteInterruptionException));
+                Check.That("Story 7 a quota exhausted save file write leaves the prior valid save byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
+                Check.Equal("Story 7 a quota exhausted save file write leaves the target file as the only file in its directory", 1, Directory.GetFiles(tempDir).Length);
+                Check.Equal("Story 7 a quota exhausted save file write leaves no staging file behind", 0, Directory.GetFiles(tempDir, "*.tmp*").Length);
+            }
+            finally
+            {
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestStory7BinarySaveFilePayloadRoundTripsByteIdentical()
+        {
+            string tempDir = CreateTempRoot();
+            try
+            {
+                string savePath = Path.Combine(tempDir, "campaign.bin");
+                byte[] payload = { 0x00, 0x01, 0x7F, 0x80, 0xFF, 0x00, 0x0A, 0x0D, 0x1A };
+                SaveMigration.WriteSaveFileAtomically(savePath, payload);
+
+                Check.That("Story 7 a binary save file payload round-trips byte-identical", payload.SequenceEqual(File.ReadAllBytes(savePath)));
+
+                byte[] priorBytes = File.ReadAllBytes(savePath);
+                SaveMigration.SimulatedInterruptionAfterBytes = 3;
+                Exception? failure = null;
+                try
+                {
+                    SaveMigration.WriteSaveFileAtomically(savePath, new byte[] { 0xFF, 0x00, 0xFF, 0x00, 0x01 });
+                }
+                catch (IOException ex)
+                {
+                    failure = ex;
+                }
+                finally
+                {
+                    SaveMigration.ResetSimulationControls();
+                }
+
+                Check.That("Story 7 a failed binary save file write reports the interruption to the caller", failure is SaveWriteInterruptionException);
+                Check.That("Story 7 a failed binary save file write leaves the prior save byte-identical", priorBytes.SequenceEqual(File.ReadAllBytes(savePath)));
             }
             finally
             {

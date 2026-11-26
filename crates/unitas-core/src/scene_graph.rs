@@ -84,33 +84,25 @@ impl SceneGraph {
     pub fn add_entity(&mut self, name: impl Into<String>) -> EntityId {
         let id = EntityId::new(self.next_id);
         self.next_id += 1;
-        let node = Node {
-            entity: Entity {
-                id,
-                name: name.into(),
-            },
-            transform: Transform::default(),
-            version: 0,
-            state: NodeState::Live,
-        };
-        let index = match self.vacant.pop() {
-            Some(slot) => {
-                self.nodes[slot] = node;
-                slot
-            }
-            None => {
-                self.nodes.push(node);
-                self.nodes.len() - 1
-            }
-        };
-        self.index.insert(id, index);
-        self.changes.push(SceneChange {
-            entity: id,
-            kind: ChangeKind::Created,
-            version: 0,
-            parent: None,
-        });
+        self.insert_entity(id, name.into());
         id
+    }
+
+    pub fn add_entity_with_id(
+        &mut self,
+        id: EntityId,
+        name: impl Into<String>,
+    ) -> Option<EntityId> {
+        if self.index.contains_key(&id) {
+            return None;
+        }
+        self.next_id = self.next_id.max(id.as_u64().saturating_add(1));
+        self.insert_entity(id, name.into());
+        Some(id)
+    }
+
+    pub fn reserve_entity_id(&mut self, id: u64) {
+        self.next_id = self.next_id.max(id.saturating_add(1));
     }
 
     pub fn shift_entity_ids(&mut self, base: u64) {
@@ -366,6 +358,32 @@ impl SceneGraph {
                 visitor(id, entity, transform);
             }
         }
+    }
+
+    fn insert_entity(&mut self, id: EntityId, name: String) {
+        let node = Node {
+            entity: Entity { id, name },
+            transform: Transform::default(),
+            version: 0,
+            state: NodeState::Live,
+        };
+        let index = match self.vacant.pop() {
+            Some(slot) => {
+                self.nodes[slot] = node;
+                slot
+            }
+            None => {
+                self.nodes.push(node);
+                self.nodes.len() - 1
+            }
+        };
+        self.index.insert(id, index);
+        self.changes.push(SceneChange {
+            entity: id,
+            kind: ChangeKind::Created,
+            version: 0,
+            parent: None,
+        });
     }
 
     fn detach_from_parent(&mut self, child: EntityId) {

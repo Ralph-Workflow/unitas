@@ -334,6 +334,7 @@ pub struct Runtime {
     pub(crate) character_states: HashMap<EntityId, CharacterController>,
     pub(crate) default_character_state: CharacterController,
     pub(crate) script_view: Vec<ScriptInstance>,
+    pub(crate) pending_scripts: bool,
     pub(crate) physics: PhysicsRuntimeWorld,
     pub(crate) particles: ParticleRuntimeWorld,
     pub(crate) particles_2d: ParticleRuntimeWorld2D,
@@ -379,6 +380,7 @@ impl Runtime {
             character_states: HashMap::new(),
             default_character_state: CharacterController::default(),
             script_view: Vec::new(),
+            pending_scripts: false,
             physics: PhysicsRuntimeWorld::new(),
             particles: ParticleRuntimeWorld::new(),
             particles_2d: ParticleRuntimeWorld2D::new(),
@@ -1163,22 +1165,18 @@ impl Runtime {
         let persistent = self.persistent.clone();
         self.script_view = scene_scripts;
         self.script_view.extend(persistent);
+        self.pending_scripts = self.scripts_need_init();
     }
 
-    fn has_pending_scripts(&self) -> bool {
-        for scene in &self.scenes {
-            for script in &scene.scripts {
-                if !script.awake_called {
-                    return true;
-                }
-            }
+    fn scripts_need_init(&self) -> bool {
+        if self
+            .scenes
+            .iter()
+            .any(|scene| scene.scripts.iter().any(|script| !script.awake_called))
+        {
+            return true;
         }
-        for script in &self.persistent {
-            if !script.awake_called {
-                return true;
-            }
-        }
-        false
+        self.persistent.iter().any(|script| !script.awake_called)
     }
 
     fn all_script_handles(&self) -> Vec<u64> {
@@ -1373,7 +1371,7 @@ impl Runtime {
             self.refresh_script_view();
             return Ok(());
         }
-        if self.has_pending_scripts() {
+        if self.pending_scripts {
             if let Some(callbacks) = self.callbacks {
                 self.init_pending_scripts(callbacks, &mut hook);
             }
@@ -1449,7 +1447,7 @@ impl Runtime {
                 self.accumulator = 0.0;
             }
         }
-        if self.has_pending_scripts() {
+        if self.pending_scripts {
             if let Some(callbacks) = self.callbacks {
                 self.init_pending_scripts(callbacks, &mut hook);
             }
@@ -1486,7 +1484,7 @@ impl Runtime {
                 });
             }
         }
-        if self.has_pending_scripts() {
+        if self.pending_scripts {
             if let Some(callbacks) = self.callbacks {
                 self.init_pending_scripts(callbacks, &mut hook);
             }

@@ -32,24 +32,37 @@ impl Runtime {
             });
             self.active_scene = Some(0);
         }
+        let id_value = self.next_entity_base();
+        let id = EntityId::new(id_value);
+        self.create_runtime_object_with_id(id, name)
+    }
+
+    pub fn create_runtime_object_with_id(
+        &mut self,
+        id: EntityId,
+        name: &str,
+    ) -> Result<EntityId, RuntimeError> {
         let Some(active) = self.active_scene else {
             return Err(RuntimeError::InvalidSceneIndex(0));
         };
-        let next_base = self.next_entity_base();
+        let id_value = id.as_u64();
+        for scene in &mut self.scenes {
+            if scene.graph.contains(id) {
+                return Err(RuntimeError::DuplicateEntityId(id));
+            }
+            scene.graph.reserve_entity_id(id_value);
+        }
         let Some(scene) = self.scenes.get_mut(active) else {
             return Err(RuntimeError::InvalidSceneIndex(active));
         };
-        let mut id = scene.graph.add_entity(name);
-        if id.as_u64() == 0 {
-            let _ = scene.graph.mark_destroyed(id);
-            let _ = scene.graph.sweep_destroyed();
-            id = scene.graph.add_entity(name);
+        if scene.graph.add_entity_with_id(id, name).is_none() {
+            return Err(RuntimeError::DuplicateEntityId(id));
         }
-        let end = id.as_u64().saturating_add(1);
+        let end = id_value.saturating_add(1);
         if end > scene.entity_base + scene.entity_count {
             scene.entity_count = end.saturating_sub(scene.entity_base);
         }
-        self.dynamic_entity_floor = self.dynamic_entity_floor.max(next_base).max(end);
+        self.dynamic_entity_floor = self.dynamic_entity_floor.max(end);
         Ok(id)
     }
 

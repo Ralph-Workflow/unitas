@@ -2078,12 +2078,12 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
     }
 }
 
-const OWNED_FEATURE_IDS: [&str; 36] = [
+const OWNED_FEATURE_IDS: [&str; 37] = [
     "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
     "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
     "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-003", "REN-004",
     "EDT-007", "CMP-002", "CMP-004", "BLD-005", "RUN-001", "RUN-003", "RUN-004", "RUN-005",
-    "RUN-009", "DIA-001", "PRF-001", "ACC-001",
+    "RUN-009", "DIA-001", "PRF-001", "ACC-001", "SAV-001",
 ];
 
 fn workspace_file(relative: &str) -> std::path::PathBuf {
@@ -2247,8 +2247,15 @@ fn cmp_002_owned_capability_sources_exist_in_the_workspace_and_drive_the_state()
                         file,
                         capability.feature_id
                     );
+                    let declaration = if file.ends_with(".cs") {
+                        format!("void {test_name}(")
+                    } else if file.ends_with(".json") {
+                        format!("\"{test_name}\"")
+                    } else {
+                        format!("fn {test_name}(")
+                    };
                     assert!(
-                        source.contains(&format!("fn {test_name}(")),
+                        source.contains(&declaration),
                         "CMP-002: the evidence '{}' of '{}' must name a test that exists in the workspace",
                         evidence,
                         capability.feature_id
@@ -2583,6 +2590,84 @@ fn cmp_002_the_owned_feature_ids_are_exactly_the_owned_set() {
             OWNED_FEATURE_IDS.contains(&id),
             "CMP-002: '{id}' is not one of the owned feature ids"
         );
+    }
+}
+
+#[test]
+fn cmp_002_sav_001_records_the_demonstrated_parts_and_names_every_remaining_gap() {
+    use unitas_core::compat::{
+        lookup_owned_feature_capability, probe_owned_feature, CompatibilityState,
+    };
+
+    let capability = lookup_owned_feature_capability("SAV-001");
+    assert!(
+        capability.is_some(),
+        "CMP-002: SAV-001 must own a capability entry"
+    );
+    if let Some(capability) = capability {
+        assert_eq!(
+            capability.owning_spec, "accessibility-localization-persistence.md",
+            "CMP-002: SAV-001 must name the specification that owns it"
+        );
+
+        let demonstrated = capability
+            .parts
+            .iter()
+            .filter(|part| !part.evidence.is_empty())
+            .count();
+        let gaps = capability
+            .parts
+            .iter()
+            .filter(|part| part.evidence.is_empty())
+            .count();
+        assert!(
+            demonstrated >= 6,
+            "CMP-002: SAV-001 must record the acceptance items it demonstrates: {demonstrated}"
+        );
+        assert!(
+            gaps >= 5,
+            "CMP-002: SAV-001 must name the acceptance items it does not demonstrate: {gaps}"
+        );
+        for part in capability
+            .parts
+            .iter()
+            .filter(|part| part.evidence.is_empty())
+        {
+            assert!(
+                !part.missing.unwrap_or_default().trim().is_empty(),
+                "CMP-002: the SAV-001 gap '{}' must name the missing behaviour",
+                part.behavior
+            );
+        }
+    }
+
+    let state = probe_owned_feature("SAV-001");
+    assert!(
+        state.is_some(),
+        "CMP-002: SAV-001 must report a probed owned feature state"
+    );
+    if let Some(state) = state {
+        assert_eq!(
+            state.state,
+            CompatibilityState::PartiallySupported,
+            "CMP-002: SAV-001 demonstrates some of its behaviour and names the rest as gaps, so it stays Partially supported"
+        );
+
+        let gap = state.gap.unwrap_or_default();
+        for named in [
+            "IndexedDB",
+            "JsonUtility",
+            "XmlSerializer",
+            "BinaryFormatter",
+            "registry",
+            "storage quota",
+            "browser target",
+        ] {
+            assert!(
+                gap.contains(named),
+                "CMP-002: the SAV-001 gap must name '{named}': {gap}"
+            );
+        }
     }
 }
 

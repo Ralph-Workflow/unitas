@@ -10,6 +10,8 @@ namespace Unitas.Bridge.Tests
         public static void Run()
         {
             TestPersistenceAcrossSimulatedHostRestartAtPerTargetLocation();
+            TestPlayerPrefsResolvesPerTargetPreferencesLocation();
+            TestPreferencesLandUnderArmedOverrideAndStayDisjointFromSaveData();
             TestAtomicWriteThenReplaceLeavesNoTmpAndPreservesLastCompleteSaveAfterCrash();
             TestStory7QuotaExhaustionAndInterruptedSaveFileWriteKeepThePriorValidSavePerTarget();
             TestCorruptPlayerPrefsFileLogsDiagnosticNamingFilePathAndReasonAndFallsBackToDefaults();
@@ -28,9 +30,9 @@ namespace Unitas.Bridge.Tests
             PlayerPrefs.Reload();
             try
             {
-                string expectedIniPath = Path.Combine(Path.GetFullPath(tempDir), "PlayerPrefs.ini");
+                string expectedIniPath = Path.Combine(Path.GetFullPath(tempDir), "prefs", "PlayerPrefs.ini");
                 Check.Equal(
-                    "PlayerPrefs per-target storage file resolves to PlayerPrefs.ini under persistentDataPath",
+                    "PlayerPrefs per-target storage file resolves to PlayerPrefs.ini under the armed preferences folder",
                     expectedIniPath,
                     Path.GetFullPath(PlayerPrefs.StorageFilePath));
                 Check.Equal("Initial load state before first save is Absent", (int)PlayerPrefsLoadState.Absent, (int)PlayerPrefs.LastLoadState);
@@ -54,6 +56,124 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("Uncommitted key before simulated host restart is not persisted", false, PlayerPrefs.HasKey("uncommitted_flag"));
                 Check.Equal("Load state after simulated host restart is Loaded", (int)PlayerPrefsLoadState.Loaded, (int)PlayerPrefs.LastLoadState);
                 Check.Equal("IsCorrupt after clean reload is false", false, PlayerPrefs.IsCorrupt);
+            }
+            finally
+            {
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedRoot;
+                PlayerPrefs.Reload();
+                CleanupTempRoot(tempDir);
+            }
+        }
+
+        private static void TestPlayerPrefsResolvesPerTargetPreferencesLocation()
+        {
+            string unixHome = "/home/builder";
+            string windowsHome = "C:\\Users\\Builder";
+
+            Check.Equal(
+                "PlayerPrefs resolves the macOS player preferences location to Library/Preferences/unity.<company>.<product>",
+                "/home/builder/Library/Preferences/unity.Unitas Studios.Unitas Game",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.OSXPlayer, "Unitas Studios", "Unitas Game", unixHome));
+            Check.Equal(
+                "PlayerPrefs resolves the macOS editor preferences location to the same macOS location",
+                "/home/builder/Library/Preferences/unity.Unitas Studios.Unitas Game",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.OSXEditor, "Unitas Studios", "Unitas Game", unixHome));
+            Check.Equal(
+                "PlayerPrefs resolves the Windows player preferences location to AppData/LocalLow/<company>/<product>/prefs",
+                "C:\\Users\\Builder\\AppData\\LocalLow\\Unitas Studios\\Unitas Game\\prefs",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.WindowsPlayer, "Unitas Studios", "Unitas Game", windowsHome));
+            Check.Equal(
+                "PlayerPrefs resolves the Windows editor preferences location to the same Windows location",
+                "C:\\Users\\Builder\\AppData\\LocalLow\\Unitas Studios\\Unitas Game\\prefs",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.WindowsEditor, "Unitas Studios", "Unitas Game", windowsHome));
+            Check.Equal(
+                "PlayerPrefs resolves the Linux player preferences location to .config/unity3d/<company>/<product>/prefs",
+                "/home/builder/.config/unity3d/Unitas Studios/Unitas Game/prefs",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.LinuxPlayer, "Unitas Studios", "Unitas Game", unixHome));
+            Check.Equal(
+                "PlayerPrefs resolves the Linux editor preferences location to the same Linux location",
+                "/home/builder/.config/unity3d/Unitas Studios/Unitas Game/prefs",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.LinuxEditor, "Unitas Studios", "Unitas Game", unixHome));
+            Check.Equal(
+                "PlayerPrefs falls back to the default company and product tokens",
+                "/home/builder/Library/Preferences/unity.DefaultCompany.UnitasProduct",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.OSXPlayer, null, null, unixHome));
+            Check.That(
+                "PlayerPrefs resolves against the current user home when no home folder is supplied",
+                Application.ResolvePlayerPrefsPathForTarget(RuntimePlatform.OSXPlayer, "Unitas Studios", "Unitas Game")
+                    .EndsWith("/Library/Preferences/unity.Unitas Studios.Unitas Game", StringComparison.Ordinal));
+
+            RuntimePlatform? savedPlatform = Application.PlatformOverride;
+            string? savedStorageRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            Application.PlatformOverride = RuntimePlatform.WebGLPlayer;
+            Application.PersistentDataPathOverride = null;
+            PlayerPrefs.StorageDirectoryOverride = null;
+            PlayerPrefs.Reload();
+            try
+            {
+                string fallbackPath = Path.GetFullPath(PlayerPrefs.StorageFilePath);
+                Check.That(
+                    "A target without a file-backed preferences location falls back to the local application data folder",
+                    fallbackPath.EndsWith(Path.Combine("unitas", "DefaultCompany-UnitasProduct", "PlayerPrefs.ini"), StringComparison.Ordinal));
+            }
+            finally
+            {
+                Application.PlatformOverride = savedPlatform;
+                Application.PersistentDataPathOverride = savedAppOverride;
+                PlayerPrefs.StorageDirectoryOverride = savedStorageRoot;
+                PlayerPrefs.Reload();
+            }
+        }
+
+        private static void TestPreferencesLandUnderArmedOverrideAndStayDisjointFromSaveData()
+        {
+            string tempDir = CreateTempRoot();
+            string? savedRoot = PlayerPrefs.StorageDirectoryOverride;
+            string? savedAppOverride = Application.PersistentDataPathOverride;
+            PlayerPrefs.StorageDirectoryOverride = null;
+            Application.PersistentDataPathOverride = tempDir;
+            PlayerPrefs.Reload();
+            try
+            {
+                string saveRoot = Path.GetFullPath(Application.persistentDataPath);
+                string preferencesDirectory = Path.Combine(saveRoot, "prefs");
+                string preferencesFile = Path.Combine(preferencesDirectory, "PlayerPrefs.ini");
+
+                Check.Equal(
+                    "Preferences land under <armed root>/prefs when persistence is armed",
+                    preferencesFile,
+                    Path.GetFullPath(PlayerPrefs.StorageFilePath));
+                Check.That(
+                    "The preferences directory differs from the save-data directory",
+                    !string.Equals(preferencesDirectory, saveRoot, StringComparison.Ordinal));
+                Check.That(
+                    "The preferences file is not the save-data directory's PlayerPrefs.ini",
+                    !string.Equals(preferencesFile, Path.Combine(saveRoot, "PlayerPrefs.ini"), StringComparison.Ordinal));
+
+                string savePath = Path.Combine(saveRoot, "campaign_slot_01.json");
+                File.WriteAllText(savePath, "{\"slot\":1,\"level\":7}");
+
+                PlayerPrefs.SetInt("master_volume", 42);
+                PlayerPrefs.SetString("locale", "en-US");
+                PlayerPrefs.Save();
+
+                Check.That("PlayerPrefs.ini is written under <armed root>/prefs", File.Exists(preferencesFile));
+                Check.That("No preferences file is written next to the save data", !File.Exists(Path.Combine(saveRoot, "PlayerPrefs.ini")));
+
+                PlayerPrefs.Reload();
+                Check.Equal("A saved int survives a fresh load", 42, PlayerPrefs.GetInt("master_volume"));
+                Check.Equal("A saved string survives a fresh load", "en-US", PlayerPrefs.GetString("locale"));
+
+                PlayerPrefs.DeleteAll();
+                PlayerPrefs.Save();
+                PlayerPrefs.Reload();
+
+                Check.Equal("Preferences are cleared after DeleteAll", false, PlayerPrefs.HasKey("master_volume"));
+                Check.That("Save data survives PlayerPrefs.DeleteAll", File.Exists(savePath));
+                Check.Equal("Save data is unchanged after PlayerPrefs.DeleteAll", "{\"slot\":1,\"level\":7}", File.ReadAllText(savePath));
+                Check.That("The preferences file stays under <armed root>/prefs after DeleteAll", File.Exists(preferencesFile));
             }
             finally
             {

@@ -4,15 +4,16 @@ use std::path::Path;
 
 use unitas_core::EntityId;
 use unitas_runtime::{
-    Callbacks, Runtime, test_write_path_buffer, unitas_runtime_bind_destroy_channel,
-    unitas_runtime_body_position, unitas_runtime_destroy, unitas_runtime_error_message,
-    unitas_runtime_load_scene, unitas_runtime_mark_destroyed, unitas_runtime_new,
-    unitas_runtime_object_attach_script, unitas_runtime_object_create,
+    Callbacks, LoadSceneMode, Runtime, RuntimeError, test_write_path_buffer,
+    unitas_runtime_bind_destroy_channel, unitas_runtime_body_position, unitas_runtime_destroy,
+    unitas_runtime_error_message, unitas_runtime_load_scene, unitas_runtime_mark_destroyed,
+    unitas_runtime_new, unitas_runtime_object_attach_script, unitas_runtime_object_create,
     unitas_runtime_object_create_body, unitas_runtime_object_set_transform,
     unitas_runtime_path_buffer, unitas_runtime_set_callbacks, unitas_runtime_tick,
 };
 
 const TRIGGER_FIXTURE: &str = "tests/fixtures/scene_physics_collision_no_script.unity";
+const TRIGGER_SCENE_FIXTURE: &str = "tests/fixtures/scene_physics_trigger.unity";
 const SCRIPT_FIXTURE: &str = "tests/fixtures/scene_with_script.unity";
 
 thread_local! {
@@ -445,5 +446,113 @@ fn runtime_object_supports_box_and_capsule_shapes_and_transform_sync() -> Result
     assert!(events.contains(&format!("start:{h2}")));
     assert!(events.contains(&format!("update:{h1}")));
     assert!(events.contains(&format!("update:{h2}")));
+    Ok(())
+}
+
+#[test]
+fn runtime_object_ids_stay_unique_across_loaded_scenes() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(SCRIPT_FIXTURE))?;
+    let scripted = runtime
+        .find_entity_by_name("ScriptedObject")
+        .ok_or("missing ScriptedObject")?;
+    let first = runtime.create_runtime_object("FirstRuntimeObject")?;
+
+    runtime.load_scene_with_mode(Path::new(TRIGGER_SCENE_FIXTURE), LoadSceneMode::Additive)?;
+    runtime.set_active_scene(1)?;
+    let ball = runtime.find_entity_by_name("Ball").ok_or("missing Ball")?;
+    let ball_position = runtime.body_position(ball).ok_or("missing Ball body")?;
+    assert!(
+        (ball_position[1] - 0.2).abs() < 1e-6,
+        "expected the Ball body to start at y=0.2, got {ball_position:?}"
+    );
+
+    runtime.set_active_scene(1)?;
+    let in_trigger_scene = runtime.create_runtime_object("TriggerSceneRuntimeObject")?;
+    runtime.set_active_scene(0)?;
+    let in_script_scene = runtime.create_runtime_object("ScriptSceneRuntimeObject")?;
+
+    let bodies: Vec<EntityId> = (0..runtime.scene_count())
+        .filter_map(|index| runtime.scene(index))
+        .flat_map(|scene| scene.bodies().iter().copied())
+        .collect();
+    for object in [first, in_trigger_scene, in_script_scene] {
+        assert!(
+            !bodies.contains(&object),
+            "runtime object {} aliases a physics body {bodies:?}",
+            object.as_u64()
+        );
+    }
+    assert_ne!(first.as_u64(), in_trigger_scene.as_u64());
+    assert_ne!(first.as_u64(), in_script_scene.as_u64());
+    assert_ne!(in_trigger_scene.as_u64(), in_script_scene.as_u64());
+
+    runtime.set_runtime_object_transform(
+        in_script_scene,
+        [99.0, 99.0, 99.0],
+        [0.0, 0.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+    )?;
+    assert_eq!(
+        runtime.body_position(ball),
+        Some(ball_position),
+        "writing a runtime object transform moved another scene's body"
+    );
+    assert_eq!(
+        runtime
+            .world_transform_of(in_trigger_scene)
+            .map(|transform| transform.translation),
+        Some([0.0, 0.0, 0.0]),
+        "writing a runtime object transform moved another scene's runtime object"
+    );
+
+    assert_eq!(
+        runtime.find_entity_by_name("ScriptedObject"),
+        Some(scripted)
+    );
+    runtime.set_active_scene(1)?;
+    assert_eq!(runtime.find_entity_by_name("Ball"), Some(ball));
+    Ok(())
+}
+
+#[test]
+fn runtime_object_script_in_inactive_scene_is_initialized_after_first_frame()
+-> Result<(), Box<dyn Error>> {
+    clear_obj_events();
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(SCRIPT_FIXTURE))?;
+    let in_first_scene = runtime.create_runtime_object("InactiveSceneObject")?;
+    runtime.load_scene_with_mode(Path::new(TRIGGER_SCENE_FIXTURE), LoadSceneMode::Additive)?;
+    runtime.set_callbacks(obj_callbacks());
+
+    runtime.tick(0.02)?;
+    clear_obj_events();
+
+    runtime.set_active_scene(1)?;
+    runtime.attach_runtime_script(in_first_scene, 0x55aa, 0x66bb)?;
+    runtime.tick(0.02)?;
+
+    let handle = in_first_scene.as_u64() + 1000;
+    let events = take_obj_events();
+    assert!(events.contains(&format!("awake:{handle}")), "{events:?}");
+    assert!(
+        events.contains(&format!("on_enable:{handle}")),
+        "{events:?}"
+    );
+    assert!(events.contains(&format!("start:{handle}")), "{events:?}");
+    assert!(events.contains(&format!("update:{handle}")), "{events:?}");
+    Ok(())
+}
+
+#[test]
+fn runtime_object_explicit_id_clash_returns_duplicate_entity_id_error() -> Result<(), Box<dyn Error>>
+{
+    let mut runtime = Runtime::new()?;
+    let first = runtime.create_runtime_object("FirstRuntimeObject")?;
+    let clash = runtime.create_runtime_object_with_id(first, "ClashingRuntimeObject");
+    assert!(
+        matches!(clash, Err(RuntimeError::DuplicateEntityId(id)) if id == first),
+        "expected DuplicateEntityId({first:?}), got {clash:?}"
+    );
     Ok(())
 }
