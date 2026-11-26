@@ -43,6 +43,19 @@ and 3314/65536 pixels (5.06 %) for `s8_results_gold_checkpoint`; the approved
 files are the new render-graph captures, taken from the scenario runs on this
 host.
 
+The four references were re-approved again on 2026-11-26 because the engine now
+renders a real-time directional shadow map from the project's quality level
+(`ProjectSettings/QualitySettings.asset`, `Standalone` level `High`:
+`shadows: 2`, `shadowResolution: 2`, `shadowDistance: 50`). Against the prior
+unshadowed `wgpu` render-graph references, the four directional-shadow captures
+differed by 5970/65536 pixels (9.11 %) for `s8_title_checkpoint` and
+`s8_arena_countdown`, 6236/65536 pixels (9.52 %) for `s8_arena_x5_checkpoint`,
+and 5974/65536 pixels (9.12 %) for `s8_results_gold_checkpoint`. Visual
+inspection of all four regenerated captures confirms that the arena casters'
+shadows (cast by the arena walls, the pickups, and the player ball under the
+scene's directional light) visibly darken the arena floor compared to the lit
+floor pixels.
+
 The re-approval keeps the declared tolerance of 0.005 unchanged. It widens
 nothing: the approved files are the exact captures the lane produces today, and
 the lane still fails when a capture differs from them by more than 0.5 % of its
@@ -80,3 +93,15 @@ capture on the `wgpu` render graph with the uGUI canvas composited into the
 rendered frame, against the same requirements: the four files are the captures
 the lane produces now on the `wgpu` render graph, with the HUD and the title
 panel in the picture. The tolerance is unchanged.
+
+Re-approved on 2026-11-26 by the development session that wired real-time
+directional shadow-map rendering from the project's quality level
+(`ProjectSettings/QualitySettings.asset`, `Standalone` level `High`:
+`shadows: 2`, `shadowResolution: 2`, `shadowDistance: 50`), against the same
+requirements: the four files are the directional-shadow captures the lane
+produces now on the `wgpu` render graph, visually inspected to confirm the
+arena casters' shadows darken the arena floor in all four captures (`5970/65536`
+(`9.11 %`) for `s8_title_checkpoint` and `s8_arena_countdown`, `6236/65536`
+(`9.52 %`) for `s8_arena_x5_checkpoint`, and `5974/65536` (`9.12 %`) for
+`s8_results_gold_checkpoint` against the prior unshadowed references). The
+tolerance `0.005` is unchanged.

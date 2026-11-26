@@ -169,7 +169,7 @@ fn ui_capture_frame_reports_ui_pixels_and_object_ids() -> Result<(), Box<dyn std
         (WIDTH, HEIGHT),
     )?;
     assert_eq!(
-        RenderGraph::capture().pass_order(),
+        RenderGraph::capture(false).pass_order(),
         vec![
             RenderPassKind::Opaque,
             RenderPassKind::Transparent,
@@ -177,7 +177,7 @@ fn ui_capture_frame_reports_ui_pixels_and_object_ids() -> Result<(), Box<dyn std
         ]
     );
     assert_eq!(
-        RenderGraph::offscreen(true).pass_order(),
+        RenderGraph::offscreen(true, false).pass_order(),
         vec![
             RenderPassKind::Opaque,
             RenderPassKind::Transparent,

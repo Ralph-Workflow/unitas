@@ -222,7 +222,7 @@ fn nearer_opaque_occludes_farther_translucent_and_alpha_boundaries_hold(
     assert!(effective_alpha(&invisible).abs() < 1e-6);
     assert!((effective_alpha(&full_blend) - 1.0).abs() < 1e-6);
     assert_eq!(
-        RenderGraph::offscreen(false).pass_order(),
+        RenderGraph::offscreen(false, false).pass_order(),
         vec![RenderPassKind::Opaque, RenderPassKind::Transparent]
     );
 

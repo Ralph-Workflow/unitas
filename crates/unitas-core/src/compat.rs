@@ -2537,6 +2537,29 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
         ],
     },
     OwnedFeatureCapability {
+        feature_id: "REN-003",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Lighting, shadows, sky, reflection and light probes, post-processing, and quality behavior",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a real-time directional shadow map is rendered from the project's quality level (enablement and hard or 3x3 PCF soft filtering from shadows, map size from Unity 2022.3's Built-in-RP shadowResolution multiplier rule NextPowerOfTwo(pixel_size * multiplier * 3.8), and camera-centered orthographic extent from shadowDistance, with per-platform default quality selection from m_PerPlatformDefaultQuality falling back to m_CurrentQuality)",
+                location: "crates/unitas-render/src/gpu.rs",
+                evidence: &[
+                    "crates/unitas-render/src/gpu.rs::directional_shadow_darkens_occluded_surface_and_tracks_map_size",
+                    "crates/unitas-render/src/shadow.rs::shadow_map_size_matches_unity_multiplier_table",
+                    "crates/unitas-runtime/src/presenter.rs::quality_shadow_settings_mapping_covers_shadows_resolutions_and_distances",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "cascade-split directional shadows, per-renderer ShadowCastingMode, URP 14 shadow-atlas resolution source and tent filter ladder, and skybox, ambient, and light probes are rendered",
+                location: "crates/unitas-render/src/gpu.rs",
+                evidence: &[],
+                missing: Some("cascade splitting for shadowCascades 2/4, per-renderer ShadowCastingMode, URP 14's UniversalRenderPipelineAsset shadow-atlas resolution source and cascade model, URP's 5x5 and 7x7 tent filter ladder, and skybox, ambient, and light probes are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
         feature_id: "REN-004",
         owning_spec: "rendering-and-animation.md",
         capability: "Particles, trails, and visual effects",

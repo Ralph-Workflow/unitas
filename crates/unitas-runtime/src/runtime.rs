@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
-use unitas_asset::project_settings::PhysicsProjectSettings;
-use unitas_asset::project_settings::parse_physics_manager;
+use unitas_asset::project_settings::{
+    PhysicsProjectSettings, QualityLevel, QualitySettings, parse_physics_manager,
+    parse_quality_settings,
+};
 use unitas_asset::scene::{
     AudioSourceComponent, CharacterControllerComponent, MeshRendererComponent, PhysicsBinding,
     RenderBinding, RigidbodyComponent, ScriptBinding, assemble_scene_file_bundle,
@@ -349,6 +351,7 @@ pub struct Runtime {
     pub(crate) ui_pressed_button: Option<EntityId>,
     pub(crate) project_identity: ProjectIdentity,
     pub(crate) physics_settings: Option<PhysicsProjectSettings>,
+    pub(crate) quality_settings: QualitySettings,
     pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
     pub(crate) callbacks: Option<Callbacks>,
     pub(crate) fixed_timestep: f64,
@@ -393,6 +396,7 @@ impl Runtime {
             ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
             physics_settings: None,
+            quality_settings: QualitySettings::default(),
             collision_payloads: HashMap::new(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
@@ -775,6 +779,7 @@ impl Runtime {
         self.input.reset();
         self.project_identity = settings.identity.clone();
         self.physics_settings = settings.physics;
+        self.quality_settings = settings.quality.clone();
         if let Some(physics) = settings.physics.as_ref() {
             let matrix = layer_matrix_of(physics);
             self.physics.set_layer_collision_matrix_3d(&matrix);
@@ -785,6 +790,22 @@ impl Runtime {
 
     pub fn physics_project_settings(&self) -> Option<&PhysicsProjectSettings> {
         self.physics_settings.as_ref()
+    }
+
+    pub fn quality_settings(&self) -> &QualitySettings {
+        &self.quality_settings
+    }
+
+    pub fn quality_level_for_target(&self, target_group_id: &str) -> Option<&QualityLevel> {
+        let index = self
+            .quality_settings
+            .per_platform_default_quality
+            .iter()
+            .find_map(|(platform, level_index)| {
+                (platform == target_group_id).then_some(*level_index)
+            })
+            .unwrap_or(self.quality_settings.current_quality);
+        self.quality_settings.levels.get(index)
     }
 
     pub fn project_identity(&self) -> &ProjectIdentity {
@@ -2308,6 +2329,7 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
             axes: default_axis_configs(),
             identity: ProjectIdentity::default(),
             physics: None,
+            quality: QualitySettings::default(),
         };
     };
     let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
@@ -2330,12 +2352,17 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
         Ok(Some(settings)) => Some(settings),
         Ok(None) | Err(_) => None,
     };
+    let quality = match parse_quality_settings(&settings_dir.join("QualitySettings.asset")) {
+        Ok(Some(settings)) => settings,
+        Ok(None) | Err(_) => QualitySettings::default(),
+    };
     DiscoveredProject {
         fixed_timestep,
         gravity,
         axes,
         identity,
         physics,
+        quality,
     }
 }
 
@@ -2345,6 +2372,7 @@ struct DiscoveredProject {
     axes: Vec<AxisConfig>,
     identity: ProjectIdentity,
     physics: Option<PhysicsProjectSettings>,
+    quality: QualitySettings,
 }
 
 fn map_input_axes(axes: Vec<InputAxis>) -> Vec<AxisConfig> {
@@ -3206,6 +3234,7 @@ impl Runtime {
             background: state.params.background_color,
         });
         presenter.set_light(self.directional_light());
+        presenter.set_shadow_settings(crate::presenter::shadow_settings_for_runtime(self));
         let image = presenter
             .render_offscreen(self, width, height)
             .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
@@ -3249,6 +3278,7 @@ impl Runtime {
             background: state.params.background_color,
         });
         presenter.set_light(self.directional_light());
+        presenter.set_shadow_settings(crate::presenter::shadow_settings_for_runtime(self));
         let frame = crate::capture::capture_offscreen(&mut presenter, self, width, height)
             .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
         let mut bytes = Vec::with_capacity(frame.id_map.len() * 4);

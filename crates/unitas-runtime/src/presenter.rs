@@ -1,12 +1,13 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use unitas_asset::project_settings::QualityLevel;
 #[cfg(feature = "device")]
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
     Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, RenderError, RenderScene, Renderer,
-    TextOverlayItem, Vec3, look_at,
+    ShadowSettings, TextOverlayItem, Vec3, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -18,6 +19,24 @@ use crate::runtime::RenderCameraParams;
 
 #[cfg(feature = "device")]
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 44_100;
+
+pub const DESKTOP_QUALITY_TARGET_GROUP: &str = "Standalone";
+pub const WEB_QUALITY_TARGET_GROUP: &str = "WebGL";
+
+pub fn shadow_settings_for_quality(level: &QualityLevel) -> ShadowSettings {
+    ShadowSettings {
+        enabled: level.shadows != 0,
+        soft: level.shadows == 2,
+        resolution_index: level.shadow_resolution,
+        distance: level.shadow_distance as f32,
+    }
+}
+
+pub fn shadow_settings_for_runtime(runtime: &Runtime) -> ShadowSettings {
+    runtime
+        .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
+        .map_or_else(ShadowSettings::disabled, shadow_settings_for_quality)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameInfo {
@@ -268,6 +287,7 @@ pub struct GpuFramePresenter<'a> {
     meshes: Vec<GpuMeshBinding>,
     camera_binding: GpuCameraBinding,
     light: DirectionalLight,
+    shadow_settings: ShadowSettings,
     #[cfg(feature = "device")]
     audio_output: Option<DeviceOutput>,
     update_callback: Option<FrameUpdateCallback<'a>>,
@@ -296,6 +316,7 @@ impl<'a> GpuFramePresenter<'a> {
                 color: [1.0, 1.0, 1.0],
                 intensity: 0.85,
             },
+            shadow_settings: ShadowSettings::disabled(),
             #[cfg(feature = "device")]
             audio_output: None,
             update_callback: None,
@@ -339,6 +360,7 @@ impl<'a> GpuFramePresenter<'a> {
             });
         }
         self.set_light(runtime.directional_light());
+        self.set_shadow_settings(shadow_settings_for_runtime(runtime));
     }
 
     pub fn add_mesh(&mut self, binding: GpuMeshBinding) -> usize {
@@ -373,6 +395,15 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn light(&self) -> &DirectionalLight {
         &self.light
+    }
+
+    pub fn set_shadow_settings(&mut self, settings: ShadowSettings) {
+        self.shadow_settings = settings;
+        self.renderer.set_shadow_settings(settings);
+    }
+
+    pub fn shadow_settings(&self) -> ShadowSettings {
+        self.shadow_settings
     }
 
     #[cfg(feature = "device")]
@@ -589,12 +620,11 @@ impl<'a> GpuFramePresenter<'a> {
             &self.light,
             background,
             &overlay_items,
-        ) {
-            if !is_transient_surface_error(&error) {
-                self.overlay_drawn = false;
-                self.last_error = Some(WindowError::Render(error.to_string()));
-                return;
-            }
+        ) && !is_transient_surface_error(&error)
+        {
+            self.overlay_drawn = false;
+            self.last_error = Some(WindowError::Render(error.to_string()));
+            return;
         }
         self.overlay_drawn = !overlay_items.is_empty() && self.renderer.has_overlay_fonts();
         if self.capture_every_frame {
@@ -729,5 +759,145 @@ impl Runtime {
     ) -> Result<Vec<u8>, WindowError> {
         self.render_frame(camera, width, height)
             .map_err(|error| WindowError::Render(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use unitas_asset::project_settings::{QualityLevel, QualitySettings};
+    use unitas_render::ShadowSettings;
+
+    use super::{
+        DESKTOP_QUALITY_TARGET_GROUP, WEB_QUALITY_TARGET_GROUP, shadow_settings_for_quality,
+        shadow_settings_for_runtime,
+    };
+    use crate::Runtime;
+
+    fn sample_quality_level(
+        name: &str,
+        shadows: u32,
+        shadow_resolution: u32,
+        shadow_distance: f64,
+    ) -> QualityLevel {
+        QualityLevel {
+            name: name.to_string(),
+            pixel_light_count: 2,
+            shadows,
+            shadow_resolution,
+            shadow_distance,
+            texture_quality: 0,
+            anisotropic_textures: 0,
+            anti_aliasing: 0,
+            v_sync_count: 1,
+            lod_bias: 1.0,
+        }
+    }
+
+    #[test]
+    fn quality_shadow_settings_mapping_covers_shadows_resolutions_and_distances() {
+        for &(shadows, expected_enabled, expected_soft) in &[
+            (0_u32, false, false),
+            (1_u32, true, false),
+            (2_u32, true, true),
+        ] {
+            for resolution_index in 0..=3 {
+                for &distance in &[40.0_f64, 50.0_f64, 70.0_f64] {
+                    let level = sample_quality_level("Test", shadows, resolution_index, distance);
+                    let mapped = shadow_settings_for_quality(&level);
+                    assert_eq!(mapped.enabled, expected_enabled);
+                    assert_eq!(mapped.soft, expected_soft);
+                    assert_eq!(mapped.resolution_index, resolution_index);
+                    assert!((mapped.distance - distance as f32).abs() < 1e-5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quality_level_for_target_prefers_per_platform_and_falls_back_to_current_quality() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        assert_eq!(runtime.quality_settings(), &QualitySettings::default());
+        assert!(
+            runtime
+                .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
+                .is_none()
+        );
+        assert_eq!(
+            shadow_settings_for_runtime(&runtime),
+            ShadowSettings::disabled()
+        );
+
+        runtime.quality_settings = QualitySettings {
+            current_quality: 0,
+            levels: vec![
+                sample_quality_level("Low", 0, 0, 40.0),
+                sample_quality_level("Medium", 1, 1, 70.0),
+                sample_quality_level("High", 2, 2, 50.0),
+            ],
+            per_platform_default_quality: vec![
+                (WEB_QUALITY_TARGET_GROUP.to_string(), 1),
+                (DESKTOP_QUALITY_TARGET_GROUP.to_string(), 2),
+            ],
+        };
+
+        let standalone = runtime.quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP);
+        assert_eq!(standalone.map(|level| level.name.as_str()), Some("High"));
+
+        let web = runtime.quality_level_for_target(WEB_QUALITY_TARGET_GROUP);
+        assert_eq!(web.map(|level| level.name.as_str()), Some("Medium"));
+
+        let fallback = runtime.quality_level_for_target("UnknownPlatform");
+        assert_eq!(fallback.map(|level| level.name.as_str()), Some("Low"));
+    }
+
+    #[test]
+    fn quality_settings_loaded_from_roll_a_ball_scene() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        let load_result = runtime.load_scene(scene_path);
+        assert!(load_result.is_ok());
+        assert_eq!(runtime.quality_settings().levels.len(), 3);
+        assert_eq!(runtime.quality_settings().current_quality, 2);
+
+        let standalone = runtime.quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP);
+        assert!(standalone.is_some());
+        if let Some(level) = standalone {
+            assert_eq!(level.name, "High");
+            assert_eq!(level.shadows, 2);
+            assert_eq!(level.shadow_resolution, 2);
+            assert!((level.shadow_distance - 50.0).abs() < 1e-6);
+            assert_eq!(
+                shadow_settings_for_quality(level),
+                ShadowSettings {
+                    enabled: true,
+                    soft: true,
+                    resolution_index: 2,
+                    distance: 50.0,
+                }
+            );
+        }
+
+        let web = runtime.quality_level_for_target(WEB_QUALITY_TARGET_GROUP);
+        assert!(web.is_some());
+        if let Some(level) = web {
+            assert_eq!(level.name, "Medium");
+            assert_eq!(level.shadows, 1);
+            assert_eq!(level.shadow_resolution, 1);
+            assert!((level.shadow_distance - 70.0).abs() < 1e-6);
+            assert_eq!(
+                shadow_settings_for_quality(level),
+                ShadowSettings {
+                    enabled: true,
+                    soft: false,
+                    resolution_index: 1,
+                    distance: 70.0,
+                }
+            );
+        }
     }
 }

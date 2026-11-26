@@ -41,7 +41,6 @@ PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 TIMEOUT_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Default requirements"
 DEVICE_PACKAGES: tuple[str, ...] = (
-    "unitas-render",
     "unitas-audio",
     "unitas-runtime",
     "unitas-build",

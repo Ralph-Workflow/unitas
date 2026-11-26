@@ -302,13 +302,14 @@ The named non-default profiles, each with the five required fields:
   compilation, the play pipeline, the player, or `samples/`; evidence:
   per-scenario report JSONs, the packaged-player step's `build-report.json`
   assertions and control-stdio replay, and lane exit status; fails hard when
-  run; last run 2026-11-26, recorded in this tree by the re-approved S8
-  reference baselines under `samples/roll-a-ball/References/` and the lane exit
-  status of that run; staleness horizon one milestone.
+  run; last run 2026-11-26, recorded in this tree by the re-approved
+  directional-shadow S8 reference baselines under
+  `samples/roll-a-ball/References/` and the lane exit status of that run;
+  staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
   GPU/audio/input artifacts; fails hard when run; last run 2026-11-26, recorded
-  in this tree by the re-approved render-graph baseline
+  in this tree by the re-approved directional-shadow render-graph baseline
   `tools/approved_gpu_reference.bmp` and the gate-lane review entry below;
   staleness horizon one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
@@ -341,8 +342,8 @@ The named non-default profiles, each with the five required fields:
 
 | Profile | Last run | Durable source |
 |---|---|---|
-| `make verify-samples` | 2026-11-26 | the re-approved S8 reference baselines under `samples/roll-a-ball/References/` |
-| `make verify-device` | 2026-11-26 | the re-approved render-graph baseline `tools/approved_gpu_reference.bmp` and this gate-lane review entry |
+| `make verify-samples` | 2026-11-26 | the re-approved directional-shadow S8 reference baselines under `samples/roll-a-ball/References/` |
+| `make verify-device` | 2026-11-26 | the re-approved directional-shadow render-graph baseline `tools/approved_gpu_reference.bmp` and this gate-lane review entry |
 | `make verify-perf` | 2026-11-26 | this gate-lane review entry |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |
 RALPH-FACT: verification_time_budget: 26.24 seconds wall for `make verify` on an Apple Silicon host on 2026-11-25, of which 22.37 seconds is controllable time above the recorded 3.87-second full-gate cost floor; the full .NET formatter took 21.49s of that run. This is the measurement each re-measurement is compared against, not a limit the gate fails on
