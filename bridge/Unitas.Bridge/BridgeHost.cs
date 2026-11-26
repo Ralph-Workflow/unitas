@@ -337,8 +337,10 @@ namespace Unitas.Bridge
                 Time.SetFixedDeltaTime((float)fixedTimestep);
             }
 
+            Console.Error.WriteLine("DIAG LoadScene(1) path=" + path + " afterNativeLoad scripts=" + _scripts.Count);
             DropReplacedScripts();
             DestroyReplacedSceneObjects();
+            Console.Error.WriteLine("DIAG LoadScene(1) afterTeardown scripts=" + _scripts.Count);
             ParseLoadedSceneRigidbodies(path, LoadSceneMode.Single);
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
@@ -346,6 +348,7 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(path);
             DeregisterReplacedSceneObjects(loaded, LoadSceneMode.Single);
             SceneManager.RaiseSceneLoaded(loaded, LoadSceneMode.Single);
+            Console.Error.WriteLine("DIAG LoadScene(1) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
                 _pendingAfterSceneLoadRuntimeInit = true;
@@ -378,6 +381,7 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
+            Console.Error.WriteLine("DIAG LoadScene(1) afterTick scripts=" + _scripts.Count + " gameObjects=" + _entityGameObjects.Count);
             FlushDestroyedObjects();
         }
 
@@ -401,12 +405,14 @@ namespace Unitas.Bridge
                 throw new SceneManagementException("Failed to load scene '" + scenePath + "': " + ex.Message, ex);
             }
 
+            Console.Error.WriteLine("DIAG LoadScene(2) path=" + scenePath + " mode=" + mode + " afterNativeLoad scripts=" + _scripts.Count);
             if (mode == LoadSceneMode.Single)
             {
                 DropReplacedScripts();
                 DestroyReplacedSceneObjects();
             }
 
+            Console.Error.WriteLine("DIAG LoadScene(2) afterTeardown scripts=" + _scripts.Count);
             ParseLoadedSceneRigidbodies(scenePath, mode);
             _defaultSceneProvider.SetSceneRoot(scenePath);
             UpdateProjectMetadata(scenePath);
@@ -414,6 +420,7 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(scenePath);
             DeregisterReplacedSceneObjects(loaded, mode);
             SceneManager.RaiseSceneLoaded(loaded, mode);
+            Console.Error.WriteLine("DIAG LoadScene(2) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
                 _pendingAfterSceneLoadRuntimeInit = true;
@@ -446,6 +453,7 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
+            Console.Error.WriteLine("DIAG LoadScene(2) afterTick scripts=" + _scripts.Count + " gameObjects=" + _entityGameObjects.Count);
             FlushDestroyedObjects();
             return loaded;
         }
@@ -2720,9 +2728,11 @@ namespace Unitas.Bridge
 
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
+            Console.Error.WriteLine("DIAG OnCreateScript entity=" + entity + " hi=" + guidHi + " lo=" + guidLo);
             AlignSceneEntityBase(entity, guidHi, guidLo);
             if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
             {
+                Console.Error.WriteLine("DIAG OnCreateScript FAILED to create for entity=" + entity);
                 return 0;
             }
             _lastCreatedScript = script;
@@ -2753,6 +2763,7 @@ namespace Unitas.Bridge
                 owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
             }
             _entityGameObjects[entity] = owner;
+            Console.Error.WriteLine("DIAG OnCreateScript entity=" + entity + " ownerName=" + owner.name + " ownerIsDestroyed=" + owner.IsDestroyed + " scriptName=" + script.name);
             owner.AssignNativeEntityId(entity);
             if (IsSceneEntity(entity) && !_materializedSceneEntities.Contains(entity))
             {
@@ -3795,6 +3806,20 @@ namespace Unitas.Bridge
             }
 
             _nextSceneEntityBase += localEntityIndex;
+            ulong minKey = ulong.MaxValue;
+            ulong maxKey = 0;
+            foreach (KeyValuePair<ulong, string> entry in _sceneObjectNames)
+            {
+                if (entry.Key < minKey) { minKey = entry.Key; }
+                if (entry.Key > maxKey) { maxKey = entry.Key; }
+            }
+            Console.Error.WriteLine("DIAG ParseLoadedSceneRigidbodies base=" + _nextSceneEntityBase + " names=" + _sceneObjectNames.Count + " min=" + minKey + " max=" + maxKey);
+            List<ulong> bridgeKeys = new List<ulong>(_sceneObjectNames.Keys);
+            bridgeKeys.Sort();
+            foreach (ulong key in bridgeKeys)
+            {
+                Console.Error.WriteLine("DIAG bridge key=" + key + " name=" + _sceneObjectNames[key]);
+            }
         }
 
         private void SeedPrefabInstanceTransforms(

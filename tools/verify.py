@@ -172,6 +172,7 @@ TIMED_COMMAND_MIN_ARGS = 4
 TIMED_TERMINATION_GRACE_SECONDS = 5.0
 TIMED_RE_RUN_ATTEMPT = 2
 TIMED_POLL_SECONDS = 0.05
+TIMED_GROUP_KILL_POLL_SECONDS = 0.01
 TIMED_BUDGET_GUIDANCE = (
     "a gate that overruns its budget is a defect to diagnose, never a budget to raise: the "
     "verification time budget and its enforcement mechanism are recorded in "
@@ -2258,11 +2259,21 @@ GATES: dict[str, Callable[[], list[str]]] = {
 
 
 def kill_timed_gate_group(process: subprocess.Popen[bytes]) -> None:
-    if hasattr(os, "killpg"):
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGKILL)
-    with contextlib.suppress(ProcessLookupError):
-        process.kill()
+    deadline = time.monotonic() + TIMED_TERMINATION_GRACE_SECONDS
+    while True:
+        group_killed = False
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+                group_killed = True
+            except (ProcessLookupError, PermissionError):
+                pass
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        process.poll()
+        if not group_killed or time.monotonic() >= deadline:
+            break
+        time.sleep(TIMED_GROUP_KILL_POLL_SECONDS)
 
 
 def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:

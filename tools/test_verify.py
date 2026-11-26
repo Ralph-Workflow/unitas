@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import signal
 import subprocess
@@ -1314,6 +1315,67 @@ def test_timed_gate_terminates_a_command_past_its_budget(tmp_path: Path) -> None
     exit_code = verify.run_timed(["timed", "probe", "0.3", sys.executable, "-c", script])
     assert exit_code == 1
     time.sleep(grandchild_record_delay_seconds + 1.0)
+    assert not marker.exists()
+
+
+def test_timed_gate_reaps_a_descendant_that_forks_during_the_kill_sweep(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "descendant.txt"
+    forked = tmp_path / "forked.txt"
+    release = tmp_path / "release.txt"
+    descendant = tmp_path / "descendant.py"
+    descendant.write_text(
+        "import pathlib\n"
+        "import sys\n"
+        "import time\n"
+        "time.sleep(0.3)\n"
+        "pathlib.Path(sys.argv[1]).write_text('alive', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    leader = tmp_path / "leader.py"
+    leader.write_text(
+        "import pathlib\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        "release = pathlib.Path(sys.argv[1])\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.005)\n"
+        "subprocess.Popen([sys.executable, sys.argv[2], sys.argv[3]])\n"
+        "pathlib.Path(sys.argv[4]).write_text('forked', encoding='utf-8')\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    real_killpg = os.killpg
+    sweeps: list[int] = []
+
+    def killpg(pgid: int, sig: int) -> None:
+        sweeps.append(pgid)
+        if len(sweeps) == 1:
+            release.write_text("release", encoding="utf-8")
+            deadline = time.monotonic() + 10
+            while not forked.exists() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            return
+        real_killpg(pgid, sig)
+
+    with mock.patch.object(os, "killpg", killpg):
+        status = verify.run_timed(
+            [
+                "timed",
+                "forking-gate",
+                "0.3",
+                sys.executable,
+                str(leader),
+                str(release),
+                str(descendant),
+                str(marker),
+                str(forked),
+            ]
+        )
+    assert status == 1
+    time.sleep(0.6)
     assert not marker.exists()
 
 

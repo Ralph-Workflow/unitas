@@ -473,6 +473,22 @@ impl Runtime {
             }
         }
         let entity_base = self.next_entity_base();
+        eprintln!(
+            "DIAG rust entity_base={} graph_len={}",
+            entity_base,
+            graph.len()
+        );
+        {
+            let mut ids = graph.breadth_first_order();
+            ids.sort();
+            for id in &ids {
+                eprintln!(
+                    "DIAG rust   entity={} name={:?}",
+                    id.as_u64(),
+                    graph.entity(*id).map(|e| e.name.clone())
+                );
+            }
+        }
         let mut graph = graph;
         graph.shift_entity_ids(entity_base);
         // The UI binding carries the same object ids as the scene graph, so it
