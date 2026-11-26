@@ -612,6 +612,11 @@ fn move_position_on_a_kinematic_body_pushes_a_dynamic_body() -> TestResult {
     let before = runtime
         .body_position(pushed)
         .ok_or_else(|| String::from("the pushed body has no position"))?;
+    // The mover reaches the sphere before it drives into it, so the contact
+    // exists when the second move starts and the kinematic velocity reaches
+    // the pushed body.
+    runtime.move_body_position(mover, [1.4, 0.0, 0.0])?;
+    tick(&mut runtime, 2)?;
     runtime.move_body_position(mover, [2.0, 0.0, 0.0])?;
     tick(&mut runtime, 4)?;
     let after = runtime

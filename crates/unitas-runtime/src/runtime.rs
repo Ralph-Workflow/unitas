@@ -1457,8 +1457,8 @@ impl Runtime {
                     });
                 }
                 for event in trigger_events {
-                    let has_rigidbody = self.entity_has_rigidbody(event.a)
-                        || self.entity_has_rigidbody(event.b);
+                    let has_rigidbody = self.entity_belongs_to_rigid_body(event.a)
+                        || self.entity_belongs_to_rigid_body(event.b);
                     if !has_rigidbody {
                         continue;
                     }
@@ -1823,6 +1823,22 @@ impl Runtime {
         self.scenes
             .iter()
             .any(|scene| scene.rigid_bodies.contains(&entity))
+    }
+
+    fn entity_belongs_to_rigid_body(&self, entity: EntityId) -> bool {
+        if self.entity_has_rigidbody(entity) {
+            return true;
+        }
+        self.scenes.iter().any(|scene| {
+            let mut current = scene.graph.parent(entity);
+            while let Some(parent) = current {
+                if scene.rigid_bodies.contains(&parent) {
+                    return true;
+                }
+                current = scene.graph.parent(parent);
+            }
+            false
+        })
     }
 
     pub fn time_scale(&self) -> f64 {
@@ -2498,10 +2514,13 @@ struct BodySpec {
     material: Option<PhysicsMaterial3D>,
 }
 
+type BodySpecs = Vec<(EntityId, BodySpec)>;
+type ColliderDiagnostics = Vec<(EntityId, String)>;
+
 fn body_descs(
     graph: &SceneGraph,
     bindings: &[PhysicsBinding],
-) -> (Vec<(EntityId, BodySpec)>, Vec<(EntityId, String)>) {
+) -> (BodySpecs, ColliderDiagnostics) {
     let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
         .iter()
         .filter(|binding| binding.rigidbody.is_some())
