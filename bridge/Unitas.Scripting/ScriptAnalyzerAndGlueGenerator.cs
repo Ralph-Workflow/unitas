@@ -26,6 +26,22 @@ namespace Unitas.Scripting
         public int Line { get; }
     }
 
+    public sealed class EditorCallableMethodBinding
+    {
+        public EditorCallableMethodBinding(string fullTypeName, string methodName, bool returnsVoid)
+        {
+            FullTypeName = fullTypeName ?? string.Empty;
+            MethodName = methodName ?? string.Empty;
+            ReturnsVoid = returnsVoid;
+        }
+
+        public string FullTypeName { get; }
+
+        public string MethodName { get; }
+
+        public bool ReturnsVoid { get; }
+    }
+
     public static class ScriptAnalyzerAndGlueGenerator
     {
         private static readonly Regex NamespaceRegex = new Regex(
@@ -46,6 +62,10 @@ namespace Unitas.Scripting
 
         private static readonly Regex RuntimeInitializeMethodRegex = new Regex(
             @"\[\s*(?:UnityEngine\.)?RuntimeInitializeOnLoadMethod(?:Attribute)?\s*(?:\(\s*(?:(?:UnityEngine\.)?RuntimeInitializeLoadType\.)?(?<loadType>[A-Za-z_][A-Za-z0-9_]*)\s*\))?\s*\]\s*(?:(public|private|protected|internal)\s+)?static\s+void\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        private static readonly Regex EditorCallableMethodRegex = new Regex(
+            @"\[\s*(?:UnityEngine\.)?EditorCallableMethod(?:Attribute)?\s*\]\s*(?:(public|private|protected|internal)\s+)?static\s+(?<returnType>void|[A-Za-z_][A-Za-z0-9_]*(?:\s*<[^<>]*>)?(?:\s*\[\s*\])?)\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
             RegexOptions.Compiled | RegexOptions.Singleline);
 
         private static readonly Regex FieldDeclRegex = new Regex(
@@ -279,6 +299,70 @@ namespace Unitas.Scripting
             HashSet<string> activeDefines)
         {
             List<RuntimeInitializeMethodBinding> results = new List<RuntimeInitializeMethodBinding>();
+            List<(string FullTypeName, Match MethodMatch)> matches = DiscoverAttributedMethods(
+                sourceFiles,
+                activeDefines,
+                RuntimeInitializeMethodRegex);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                (string fullTypeName, Match mm) = matches[i];
+                string methodVisibility = mm.Groups[1].Success ? mm.Groups[1].Value : "private";
+                bool isPublic = string.Equals(methodVisibility, "public", StringComparison.Ordinal);
+                if (!isPublic)
+                {
+                    continue;
+                }
+
+                string methodName = mm.Groups["method"].Value.Trim();
+                string loadTypeToken = mm.Groups["loadType"].Success
+                    ? mm.Groups["loadType"].Value.Trim()
+                    : "AfterSceneLoad";
+                if (!IsValidRuntimeInitializeLoadTypeToken(loadTypeToken))
+                {
+                    loadTypeToken = "AfterSceneLoad";
+                }
+
+                results.Add(new RuntimeInitializeMethodBinding(fullTypeName, methodName, loadTypeToken));
+            }
+
+            return results;
+        }
+
+        public static List<EditorCallableMethodBinding> DiscoverEditorCallableMethodsForAssembly(
+            IReadOnlyList<string> sourceFiles,
+            HashSet<string> activeDefines)
+        {
+            List<EditorCallableMethodBinding> results = new List<EditorCallableMethodBinding>();
+            List<(string FullTypeName, Match MethodMatch)> matches = DiscoverAttributedMethods(
+                sourceFiles,
+                activeDefines,
+                EditorCallableMethodRegex);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                (string fullTypeName, Match mm) = matches[i];
+                string methodVisibility = mm.Groups[1].Success ? mm.Groups[1].Value : "private";
+                bool isPublic = string.Equals(methodVisibility, "public", StringComparison.Ordinal);
+                if (!isPublic)
+                {
+                    continue;
+                }
+
+                string methodName = mm.Groups["method"].Value.Trim();
+                string returnType = mm.Groups["returnType"].Value.Trim();
+                bool returnsVoid = string.Equals(returnType, "void", StringComparison.Ordinal);
+                results.Add(new EditorCallableMethodBinding(fullTypeName, methodName, returnsVoid));
+            }
+
+            return results;
+        }
+
+        private static List<(string FullTypeName, Match MethodMatch)> DiscoverAttributedMethods(
+            IReadOnlyList<string> sourceFiles,
+            HashSet<string> activeDefines,
+            Regex methodRegex)
+        {
+            List<(string FullTypeName, Match MethodMatch)> results =
+                new List<(string FullTypeName, Match MethodMatch)>();
             for (int i = 0; i < sourceFiles.Count; i++)
             {
                 string filePath = Path.GetFullPath(sourceFiles[i]);
@@ -312,27 +396,10 @@ namespace Unitas.Scripting
                     string typeName = tm.Groups[5].Value;
                     string fullTypeName = string.IsNullOrEmpty(ns) ? typeName : string.Concat(ns, ".", typeName);
                     string body = ExtractClassBody(activeText, tm.Index + tm.Length);
-                    MatchCollection methodMatches = RuntimeInitializeMethodRegex.Matches(body);
+                    MatchCollection methodMatches = methodRegex.Matches(body);
                     for (int mIdx = 0; mIdx < methodMatches.Count; mIdx++)
                     {
-                        Match mm = methodMatches[mIdx];
-                        string methodVisibility = mm.Groups[1].Success ? mm.Groups[1].Value : "private";
-                        bool isPublic = string.Equals(methodVisibility, "public", StringComparison.Ordinal);
-                        if (!isPublic)
-                        {
-                            continue;
-                        }
-
-                        string methodName = mm.Groups["method"].Value.Trim();
-                        string loadTypeToken = mm.Groups["loadType"].Success
-                            ? mm.Groups["loadType"].Value.Trim()
-                            : "AfterSceneLoad";
-                        if (!IsValidRuntimeInitializeLoadTypeToken(loadTypeToken))
-                        {
-                            loadTypeToken = "AfterSceneLoad";
-                        }
-
-                        results.Add(new RuntimeInitializeMethodBinding(fullTypeName, methodName, loadTypeToken));
+                        results.Add((fullTypeName, methodMatches[mIdx]));
                     }
                 }
             }
@@ -360,7 +427,18 @@ namespace Unitas.Scripting
         public static string GenerateGlueSource(
             IReadOnlyList<ScriptGuidBinding> bindings,
             IReadOnlyList<SerializableTypeBinding> serializableTypes,
-            IReadOnlyList<RuntimeInitializeMethodBinding> runtimeInitializeMethods)
+            IReadOnlyList<RuntimeInitializeMethodBinding> runtimeInitializeMethods) =>
+            GenerateGlueSource(
+                bindings,
+                serializableTypes,
+                runtimeInitializeMethods,
+                Array.Empty<EditorCallableMethodBinding>());
+
+        public static string GenerateGlueSource(
+            IReadOnlyList<ScriptGuidBinding> bindings,
+            IReadOnlyList<SerializableTypeBinding> serializableTypes,
+            IReadOnlyList<RuntimeInitializeMethodBinding> runtimeInitializeMethods,
+            IReadOnlyList<EditorCallableMethodBinding> editorCallableMethods)
         {
             List<SerializableTypeBinding> allJsonTypes = new List<SerializableTypeBinding>();
             HashSet<string> seenJsonTypes = new HashSet<string>(StringComparer.Ordinal);
@@ -645,6 +723,29 @@ namespace Unitas.Scripting
                     sb.AppendLine("            RuntimeInitializeOnLoadMethodAttribute.Register(");
                     sb.AppendLine("                RuntimeInitializeLoadType." + rm.LoadTypeName + ",");
                     sb.AppendLine("                " + fullType + "." + rm.MethodName + ");");
+                }
+            }
+
+            if (editorCallableMethods != null)
+            {
+                for (int i = 0; i < editorCallableMethods.Count; i++)
+                {
+                    EditorCallableMethodBinding em = editorCallableMethods[i];
+                    string fullType = "global::" + em.FullTypeName;
+                    sb.AppendLine("            EditorMethodRegistry.Register(");
+                    sb.AppendLine("                \"" + em.FullTypeName + "." + em.MethodName + "\",");
+                    if (em.ReturnsVoid)
+                    {
+                        sb.AppendLine("                () =>");
+                        sb.AppendLine("                {");
+                        sb.AppendLine("                    " + fullType + "." + em.MethodName + "();");
+                        sb.AppendLine("                    return null;");
+                        sb.AppendLine("                });");
+                    }
+                    else
+                    {
+                        sb.AppendLine("                () => " + fullType + "." + em.MethodName + "());");
+                    }
                 }
             }
 

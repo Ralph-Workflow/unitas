@@ -1,9 +1,9 @@
 using System;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json.Nodes;
+using Unitas.Bridge.Scripting;
 using Unitas.Scripting;
 
 namespace Unitas.Editor.Mcp
@@ -23,7 +23,7 @@ namespace Unitas.Editor.Mcp
             host.RegisterTool(
                 new ToolDefinition(
                     "editor.execute_method",
-                    "Invoke a parameterless static method in the open project's compiled script assembly and return its result",
+                    "Invoke a parameterless static method marked [EditorCallableMethod] in the open project's compiled script assembly and return its result; name the method by its fully qualified name, such as 'Namespace.Type.MethodName'",
                     new JsonObject
                     {
                         ["type"] = "object",
@@ -51,24 +51,25 @@ namespace Unitas.Editor.Mcp
                 ?? throw new McpError.InvalidParams(
                     "editor.execute_method requires a non-empty 'method' argument naming Type.Method");
 
-            MethodInfo method = ResolveMethod(root, methodReference);
+            EnsureScriptAssemblyLoaded(root);
 
+            bool found;
             object? result;
             try
             {
-                result = method.Invoke(null, null);
+                found = EditorMethodRegistry.TryInvoke(methodReference, out result);
             }
-            catch (TargetInvocationException error)
-            {
-                throw new McpError.InvalidRequest(
-                    "editor.execute_method: method threw: "
-                    + (error.InnerException?.Message ?? error.Message));
-            }
-            catch (Exception error) when (error is ArgumentException
-                || error is MethodAccessException
-                || error is InvalidOperationException)
+            catch (Exception error)
             {
                 throw new McpError.InvalidRequest("editor.execute_method failed: " + error.Message);
+            }
+
+            if (!found)
+            {
+                throw new McpError.InvalidRequest(
+                    "editor.execute_method refuses '" + methodReference
+                    + "': no editor-callable method is registered under that name; "
+                    + "mark the method with [EditorCallableMethod] and recompile the project");
             }
 
             string? resultText = result == null
@@ -78,25 +79,16 @@ namespace Unitas.Editor.Mcp
             {
                 ["ok"] = true,
                 ["method"] = methodReference,
-                ["declaringType"] = method.DeclaringType?.FullName,
+                ["declaringType"] = DeclaringTypeOf(methodReference),
                 ["result"] = resultText == null ? null : JsonValue.Create(resultText),
             };
             return ToolOutput.Untrusted(ExecuteMethodOrigin, payload);
         }
 
-        private static MethodInfo ResolveMethod(string root, string methodReference)
+        // The project must be compiled before a method can run; loading the
+        // script assembly keeps the refusal honest about the current build.
+        private static void EnsureScriptAssemblyLoaded(string root)
         {
-            int split = methodReference.LastIndexOf('.');
-            if (split <= 0 || split == methodReference.Length - 1)
-            {
-                throw new McpError.InvalidRequest(
-                    "editor.execute_method: 'method' must name a type and method like 'TypeName.MethodName': "
-                    + methodReference);
-            }
-
-            string typeName = methodReference.Substring(0, split);
-            string methodName = methodReference.Substring(split + 1);
-
             string assemblyPath = Path.Combine(
                 root,
                 "Library",
@@ -109,71 +101,13 @@ namespace Unitas.Editor.Mcp
                     + "; compile the project before executing methods");
             }
 
-            var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
-            Type?[] types;
-            try
-            {
-                types = assembly.GetTypes();
-            }
-            catch (Exception)
-            {
-                types = Type.EmptyTypes;
-            }
+            AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+        }
 
-            Type? type = null;
-            foreach (Type? candidate in types)
-            {
-                if (candidate != null
-                    && (string.Equals(candidate.FullName, typeName, StringComparison.Ordinal)
-                        || string.Equals(candidate.Name, typeName, StringComparison.Ordinal)))
-                {
-                    type = candidate;
-                    break;
-                }
-            }
-
-            if (type == null)
-            {
-                throw new McpError.InvalidRequest(
-                    "unknown method: no type named '" + typeName
-                    + "' was found in the project script assembly");
-            }
-
-            MethodInfo? match = null;
-            bool sawInstance = false;
-            foreach (MethodInfo candidate in type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
-            {
-                if (!string.Equals(candidate.Name, methodName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!candidate.IsStatic)
-                {
-                    sawInstance = true;
-                    continue;
-                }
-
-                match = candidate;
-                break;
-            }
-
-            if (match == null)
-            {
-                throw new McpError.InvalidRequest(
-                    sawInstance
-                        ? "editor.execute_method refuses '" + methodReference + "': the method is not static"
-                        : "unknown method: no static method '" + methodName + "' was found on type '" + type.FullName + "'");
-            }
-
-            if (match.GetParameters().Length != 0)
-            {
-                throw new McpError.InvalidRequest(
-                    "editor.execute_method refuses '" + methodReference
-                    + "': expected a parameterless static method");
-            }
-
-            return match;
+        private static string DeclaringTypeOf(string methodReference)
+        {
+            int split = methodReference.LastIndexOf('.');
+            return split <= 0 ? string.Empty : methodReference.Substring(0, split);
         }
     }
 }

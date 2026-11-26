@@ -551,6 +551,7 @@ namespace Unitas.Scripting
 
                 List<ScriptGuidBinding> allBindings = new List<ScriptGuidBinding>();
                 List<RuntimeInitializeMethodBinding> allRuntimeInitMethods = new List<RuntimeInitializeMethodBinding>();
+                List<EditorCallableMethodBinding> allEditorCallableMethods = new List<EditorCallableMethodBinding>();
                 for (int i = 0; i < topoOrder.Count; i++)
                 {
                     string asmName = topoOrder[i];
@@ -575,12 +576,18 @@ namespace Unitas.Scripting
                         sources,
                         assemblyDefinesMap[asmName]);
                     allRuntimeInitMethods.AddRange(asmInitMethods);
+
+                    List<EditorCallableMethodBinding> asmEditorCallableMethods = ScriptAnalyzerAndGlueGenerator.DiscoverEditorCallableMethodsForAssembly(
+                        sources,
+                        assemblyDefinesMap[asmName]);
+                    allEditorCallableMethods.AddRange(asmEditorCallableMethods);
                 }
 
                 string? generatedGlueDllPath = null;
                 string? generatedGlueSourcePath = null;
 
-                if (effectiveOptions.EmitGeneratedGlue && (allBindings.Count > 0 || allRuntimeInitMethods.Count > 0))
+                if (effectiveOptions.EmitGeneratedGlue
+                    && (allBindings.Count > 0 || allRuntimeInitMethods.Count > 0 || allEditorCallableMethods.Count > 0))
                 {
                     string finalGlueDll = Path.Combine(outputDirectory, GeneratedGlueAssemblyName + ".dll");
                     string glueObjDir = Path.Combine(outputDirectory, "obj");
@@ -590,7 +597,8 @@ namespace Unitas.Scripting
                     string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(
                         allBindings,
                         Array.Empty<SerializableTypeBinding>(),
-                        allRuntimeInitMethods);
+                        allRuntimeInitMethods,
+                        allEditorCallableMethods);
                     string stagedGlueSource = Path.Combine(stagingDir, "Unitas.Generated.g.cs");
                     File.WriteAllText(stagedGlueSource, glueSource, Encoding.UTF8);
 
@@ -658,6 +666,10 @@ namespace Unitas.Scripting
                     && !string.IsNullOrEmpty(generatedGlueDllPath)
                     && File.Exists(generatedGlueDllPath))
                 {
+                    // The new glue assembly runs in its own load context, so the
+                    // editor-callable delegates of the previous one are dropped
+                    // before the replacement registers itself.
+                    EditorMethodRegistry.Clear();
                     ScriptGlueRegistry.LoadGlueAssembly(generatedGlueDllPath);
                 }
 

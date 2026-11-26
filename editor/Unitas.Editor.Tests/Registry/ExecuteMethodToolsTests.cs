@@ -1,37 +1,36 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json.Nodes;
+using Unitas.Bridge.Scripting;
 using Unitas.Editor.Mcp;
+using Unitas.Scripting;
+using UnityEngine;
 
 namespace Unitas.Editor.Tests
 {
-    // Probe methods resolved inside the copied test assembly that stands in as
-    // the temp project's compiled script assembly.
+    // Probe method the editor resolves through the compile-time registry, the
+    // way the generated glue registers an [EditorCallableMethod] script method.
     public static class ExecuteMethodProbe
     {
+        [EditorCallableMethod]
         public static string Ping() => "pong";
-    }
-
-    public sealed class ExecuteMethodProbeInstance
-    {
-        public int NotStatic() => 42;
-
-        public static int StaticWithArgument(int value) => value;
     }
 
     public static class ExecuteMethodToolsTests
     {
+        private const string ProbeMethodName = "Unitas.Editor.Tests.ExecuteMethodProbe.Ping";
+
         public static void Run()
         {
             ToolIsRegisteredWithExecuteProjectCodeScopeAndMethodSchema();
-            InvokesProbeStaticMethodAndReturnsUntrustedEnvelope();
-            ResolvesMethodByFullyQualifiedTypeName();
-            RefusesUnknownMethod();
-            RefusesNonStaticMethod();
-            RefusesWrongSignature();
+            InvokesRegisteredProbeMethodAndReturnsUntrustedEnvelope();
+            RefusesMethodThatIsNotRegistered();
             RefusesWhenScriptAssemblyIsMissing();
             RefusesCallerWithoutExecuteProjectCodeScope();
             RecordsAnAuditEntryForTheInvocation();
+            RegistryDroppedMethodsAreNotInvoked();
+            DiscoversEditorCallableMethodsAndEmitsGlueRegistration();
         }
 
         private static void ToolIsRegisteredWithExecuteProjectCodeScopeAndMethodSchema()
@@ -60,15 +59,18 @@ namespace Unitas.Editor.Tests
             Check.That(
                 "execute-method: schema declares projectPath as string",
                 schema["properties"]?["projectPath"]?["type"]?.GetValue<string>() == "string");
+            Check.That(
+                "execute-method: description names the EditorCallableMethod annotation",
+                definition.Description.Contains("EditorCallableMethod", StringComparison.Ordinal));
         }
 
-        private static void InvokesProbeStaticMethodAndReturnsUntrustedEnvelope()
+        private static void InvokesRegisteredProbeMethodAndReturnsUntrustedEnvelope()
         {
             string project = CreateProjectWithProbeAssembly("invoke");
             try
             {
                 using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                JsonObject envelope = CallExecuteMethod(host, sessionId, project, "ExecuteMethodProbe.Ping");
+                JsonObject envelope = CallExecuteMethod(host, sessionId, project, ProbeMethodName);
 
                 Check.That("execute-method: result is an untrusted envelope", UntrustedContent.IsEnvelope(envelope));
                 JsonObject content = (JsonObject)envelope["content"]!;
@@ -79,7 +81,7 @@ namespace Unitas.Editor.Tests
                     content["result"]?.GetValue<string>() ?? string.Empty);
                 Check.Equal(
                     "execute-method: declaring type is reported",
-                    typeof(ExecuteMethodProbe).FullName!,
+                    "Unitas.Editor.Tests.ExecuteMethodProbe",
                     content["declaringType"]?.GetValue<string>() ?? string.Empty);
             }
             finally
@@ -88,76 +90,21 @@ namespace Unitas.Editor.Tests
             }
         }
 
-        private static void ResolvesMethodByFullyQualifiedTypeName()
+        private static void RefusesMethodThatIsNotRegistered()
         {
-            string project = CreateProjectWithProbeAssembly("full-name");
+            string project = CreateProjectWithProbeAssembly("unregistered");
             try
             {
                 using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                JsonObject envelope = CallExecuteMethod(
-                    host,
-                    sessionId,
-                    project,
-                    typeof(ExecuteMethodProbe).FullName + ".Ping");
-
-                JsonObject content = (JsonObject)envelope["content"]!;
-                Check.Equal("execute-method: fully-qualified name resolves", true, content["ok"]?.GetValue<bool>() ?? false);
-            }
-            finally
-            {
-                Directory.Delete(project, recursive: true);
-            }
-        }
-
-        private static void RefusesUnknownMethod()
-        {
-            string project = CreateProjectWithProbeAssembly("unknown");
-            try
-            {
-                using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                string? failure = CaptureFailure(host, sessionId, project, "ExecuteMethodProbe.Nope");
+                string? failure = CaptureFailure(host, sessionId, project, "Unitas.Editor.Tests.ExecuteMethodProbe.Nope");
                 Check.That(
-                    "execute-method: unknown method is a structured refusal",
-                    failure != null && failure.Contains("unknown method", StringComparison.Ordinal));
+                    "execute-method: unregistered method is a structured refusal",
+                    failure != null && failure.Contains("EditorCallableMethod", StringComparison.Ordinal));
 
                 failure = CaptureFailure(host, sessionId, project, "NoSuchType.Ping");
                 Check.That(
-                    "execute-method: unknown type is a structured refusal",
-                    failure != null && failure.Contains("unknown method", StringComparison.Ordinal));
-            }
-            finally
-            {
-                Directory.Delete(project, recursive: true);
-            }
-        }
-
-        private static void RefusesNonStaticMethod()
-        {
-            string project = CreateProjectWithProbeAssembly("non-static");
-            try
-            {
-                using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                string? failure = CaptureFailure(host, sessionId, project, "ExecuteMethodProbeInstance.NotStatic");
-                Check.That(
-                    "execute-method: non-static method is a structured refusal",
-                    failure != null && failure.Contains("not static", StringComparison.Ordinal));
-            }
-            finally
-            {
-                Directory.Delete(project, recursive: true);
-            }
-        }
-
-        private static void RefusesWrongSignature()
-        {
-            string project = CreateProjectWithProbeAssembly("wrong-signature");
-            try
-            {
-                using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                string? failure = CaptureFailure(host, sessionId, project, "ExecuteMethodProbeInstance.StaticWithArgument");
-                Check.That(
-                    "execute-method: parameterized method is a structured refusal",
-                    failure != null && failure.Contains("parameterless", StringComparison.Ordinal));
+                    "execute-method: unregistered type is a structured refusal",
+                    failure != null && failure.Contains("EditorCallableMethod", StringComparison.Ordinal));
             }
             finally
             {
@@ -174,7 +121,7 @@ namespace Unitas.Editor.Tests
             try
             {
                 using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                string? failure = CaptureFailure(host, sessionId, project, "ExecuteMethodProbe.Ping");
+                string? failure = CaptureFailure(host, sessionId, project, ProbeMethodName);
                 Check.That(
                     "execute-method: missing script assembly is a structured refusal",
                     failure != null && failure.Contains("project script assembly not found", StringComparison.Ordinal));
@@ -191,7 +138,7 @@ namespace Unitas.Editor.Tests
             try
             {
                 using McpHost host = CreateHost(grantExecuteProjectCode: false, out string sessionId);
-                string? failure = CaptureFailure(host, sessionId, project, "ExecuteMethodProbe.Ping");
+                string? failure = CaptureFailure(host, sessionId, project, ProbeMethodName);
                 Check.That(
                     "execute-method: caller without ExecuteProjectCode is refused",
                     failure != null && failure.Contains("scope", StringComparison.OrdinalIgnoreCase));
@@ -208,7 +155,7 @@ namespace Unitas.Editor.Tests
             try
             {
                 using McpHost host = CreateHost(grantExecuteProjectCode: true, out string sessionId);
-                CallExecuteMethod(host, sessionId, project, "ExecuteMethodProbe.Ping");
+                CallExecuteMethod(host, sessionId, project, ProbeMethodName);
 
                 AuditRecord? record = null;
                 foreach (AuditRecord candidate in host.Audit.Records)
@@ -232,6 +179,70 @@ namespace Unitas.Editor.Tests
             }
         }
 
+        private static void RegistryDroppedMethodsAreNotInvoked()
+        {
+            EditorMethodRegistry.Clear();
+            Check.That(
+                "execute-method: a cleared registry holds no method",
+                !EditorMethodRegistry.TryInvoke(ProbeMethodName, out object? _));
+        }
+
+        private static void DiscoversEditorCallableMethodsAndEmitsGlueRegistration()
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-execute-method-discovery-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                string sourcePath = Path.Combine(directory, "EditorScript.cs");
+                File.WriteAllText(
+                    sourcePath,
+                    "namespace Sample.Editor\n"
+                    + "{\n"
+                    + "    public static class BuildScript\n"
+                    + "    {\n"
+                    + "        [EditorCallableMethod]\n"
+                    + "        public static void PerformBuild() { }\n"
+                    + "\n"
+                    + "        [EditorCallableMethod]\n"
+                    + "        public static string Describe() { return \"build\"; }\n"
+                    + "    }\n"
+                    + "}\n");
+
+                List<EditorCallableMethodBinding> discovered =
+                    ScriptAnalyzerAndGlueGenerator.DiscoverEditorCallableMethodsForAssembly(
+                        new[] { sourcePath },
+                        new HashSet<string>(StringComparer.Ordinal));
+                Check.Equal("execute-method: two marked methods are discovered", 2, discovered.Count);
+                Check.Equal(
+                    "execute-method: the void method is discovered",
+                    "Sample.Editor.BuildScript.PerformBuild",
+                    discovered[0].FullTypeName + "." + discovered[0].MethodName);
+                Check.That(
+                    "execute-method: the void method is marked as void",
+                    discovered[0].ReturnsVoid);
+                Check.That(
+                    "execute-method: the value method is marked as returning a value",
+                    !discovered[1].ReturnsVoid);
+
+                string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(
+                    Array.Empty<ScriptGuidBinding>(),
+                    Array.Empty<SerializableTypeBinding>(),
+                    Array.Empty<RuntimeInitializeMethodBinding>(),
+                    discovered);
+                Check.That(
+                    "execute-method: the glue registers the marked method",
+                    glueSource.Contains(
+                        "EditorMethodRegistry.Register(\n                \"Sample.Editor.BuildScript.PerformBuild\"",
+                        StringComparison.Ordinal));
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
         private static McpHost CreateHost(bool grantExecuteProjectCode, out string sessionId)
         {
             McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
@@ -242,6 +253,8 @@ namespace Unitas.Editor.Tests
                 host.GrantScope(created, Scope.ExecuteProjectCode, GrantAuthority.Person);
             }
 
+            EditorMethodRegistry.Clear();
+            EditorMethodRegistry.Register(ProbeMethodName, () => ExecuteMethodProbe.Ping());
             sessionId = created;
             return host;
         }

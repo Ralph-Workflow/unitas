@@ -70,20 +70,22 @@ yet, because the sample has no visible arena to capture (see the gap below).
   score, the multiplier or the results text.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
-- **The four captures are empty, so no reference image can honestly be
-  approved.** Each 256 x 256 capture is 99.9 % flat camera background and
-  holds 6-58 non-background pixels of 65 536 (title 58, countdown 6, x5 37,
-  gold 27), while every `render_capture` checkpoint declares
-  `expected_non_background_pixels: 1000`; all four therefore fail their own
-  checkpoint today, and the four scenarios fail in the `make verify-samples`
-  lane. The cause is the sample content, not the capture: in
-  `Assets/Scenes/RollABall.unity` only `ArenaProp` carries a `MeshRenderer`,
-  `ArenaFloor` and the four walls carry only `BoxCollider`s, and the pickup
-  visual carries a `MeshRenderer` with no `MeshFilter`, so the arena has no
-  visible geometry. Two consecutive runs produce bit-identical captures (0
-  differing pixels of 65 536), so the render is deterministic; the frame is
-  empty, not noisy. A reference image may only be approved once the arena
-  renders real content and the capture clears the declared threshold.
+- **The four captures render the arena, but they are not reproducible, so no
+  reference image can honestly be approved yet.** Each 256 x 256 capture shows
+  the arena floor, its four walls, the four bumper boxes, the gold pickups and
+  the player ball: 33 408 non-background pixels of 65 536 against the declared
+  `expected_non_background_pixels: 1000`, so all four `render_capture`
+  checkpoints pass. The capture is however **not deterministic**: consecutive
+  runs of the same scenario draw different images, because the arena floor and
+  the bumper boxes swap their materials between runs. Measured over four runs
+  of `s8_title_checkpoint`, the floor/bumper pixel split was 20 275/5 048,
+  3 868/21 455, 784/24 539 and 0/25 323 grey/teal pixels, and the four images
+  differ in 3.1 %-31.9 % of their pixels; `s8_arena_countdown` measured the
+  same spread (3.1 %, 7.4 % and 31.9 % differing pixels). A reference compared
+  at any tolerance that admits that swap would not detect a real visual
+  regression, so no reference is approved yet. The next step is to find where
+  the arena floor and the bumper boxes get each other's material and to make
+  the capture reproducible; only then can a reference be recorded.
 
 The specification text is not weakened by this note. The gap above is what
 remains before S8 can be claimed complete.
@@ -99,15 +101,21 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** 16 of the 21 lane steps pass. Five are red
-and their real state is recorded here rather than hidden:
+**Current lane state (honest).** The lane runs 23 steps and all of them pass
+at the current tree: the 19 scripting scenarios (including `frame_independence`
+and the four `s8_*` visual checkpoints), the 2 headless editor scenarios, the
+native scripted launch and the packaged-player proof. The steps this note owns
+are recorded here rather than left implicit:
 
 - `frame_independence`: every frame rate sweeps green
-  (`sweep rate 30/60/144/240: pass`), but the sweep verdict fails with
-  `sweep: log order differs between rate 30 and rate 60` — the log order of
-  the gameplay messages is not yet frame-rate independent.
+  (`sweep rate 30/60/144/240: pass`) and the sweep verdict passes
+  (`sweep: pass`), so the gameplay message order is frame-rate independent.
+  The earlier `sweep: log order differs between rate 30 and rate 60` verdict
+  was fixed upstream in commit `ad3ae72` and this paragraph was stale until
+  now.
 - `s8_title_checkpoint`, `s8_arena_countdown`, `s8_arena_x5_checkpoint`,
   `s8_results_gold_checkpoint`: the captures are wired into the lane and run,
-  but they do not pass. `s8_title_checkpoint` expects 1000 non-background
-  pixels from the 256x256 `Main Camera` capture and observes 58, so the
-  capture path does not yet show what the checkpoint expects.
+  and each `render_capture` checkpoint passes its
+  `expected_non_background_pixels: 1000` check with 33 408 observed
+  non-background pixels of 65 536. They do **not** yet compare against an
+  approved reference image; the reason is recorded above.
