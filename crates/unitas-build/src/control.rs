@@ -96,7 +96,7 @@ impl ProtocolError {
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
             ProtocolError::CaptureUnsupported => {
-                String::from("capture is not supported by the scripted control session")
+                String::from("capture requires the device feature; the scripted control session does not support capture")
             }
             ProtocolError::FrameFailed(message) => format!("frame failed: {message}"),
             ProtocolError::SessionStartFailed(message) => {
@@ -668,7 +668,7 @@ mod tests {
         assert_eq!(result, Err(ProtocolError::CaptureUnsupported));
         assert_eq!(
             ProtocolError::CaptureUnsupported.outcome(),
-            String::from("capture is not supported by the scripted control session")
+            String::from("capture requires the device feature; the scripted control session does not support capture")
         );
         Ok(())
     }

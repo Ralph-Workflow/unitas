@@ -445,6 +445,11 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
         }
     };
 
+    if let Err(error) = install_project_trust(&bundle_dir) {
+        eprintln!("unitas-player refused to run project code: {error}");
+        return ExitCode::from(TRUST_REQUIRED_EXIT_CODE);
+    }
+
     let mut session = match control::ControlSession::start(
         &bundle_dir,
         &scene_path,

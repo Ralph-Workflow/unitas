@@ -44,8 +44,6 @@ namespace Unitas.PlayerHost.Tests
                 }
                 finally
                 {
-                    Marshal.FreeCoTaskMem(bundlePtr);
-                    Marshal.FreeCoTaskMem(persistPtr);
                     Marshal.FreeCoTaskMem(missingPtr);
                 }
 

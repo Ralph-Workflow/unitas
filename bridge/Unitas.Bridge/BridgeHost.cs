@@ -2297,6 +2297,9 @@ namespace Unitas.Bridge
                 }
             }
             _materializedSceneCameras.Clear();
+            // Resolve the queued destroys now, while the scene that owns those entity ids is
+            // still loaded; the next scene reuses the same ids and would sweep its own objects.
+            FlushDestroyedObjects();
         }
 
         private void ApplySceneCameraComponent(ulong entity, GameObject owner)
