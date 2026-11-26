@@ -2821,8 +2821,9 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 evidence: &[
                     "samples/roll-a-ball/Assets/Scripts/ScoreManager.cs::FixedUpdate",
                     "samples/roll-a-ball/Assets/Scripts/SavedState.cs::FinishRun",
-                    "samples/roll-a-ball/Scenarios/persist_write.json::persist_write",
-                    "samples/roll-a-ball/Scenarios/persist_read.json::persist_read",
+                    "samples/roll-a-ball/Scenarios/persist_state_write.json::persist_state_write",
+                    "samples/roll-a-ball/Scenarios/persist_state_read.json::persist_state_read",
+                    "samples/roll-a-ball/Scenarios/ghost_replay.scenario.json::ghost_replay",
                 ],
                 missing: None,
             },

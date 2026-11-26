@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -1350,6 +1351,43 @@ def test_timed_gate_terminates_its_child_when_the_runner_is_signalled(tmp_path: 
     release.write_text("release", encoding="utf-8")
     time.sleep(1.5)
     assert marker.read_text(encoding="utf-8") == "started"
+
+
+def test_timed_gate_runner_is_killable_when_its_parent_blocks_sigterm(tmp_path: Path) -> None:
+    marker = tmp_path / "child.txt"
+    release = tmp_path / "release.txt"
+    script = (
+        "import pathlib, time\n"
+        f"pathlib.Path({str(marker)!r}).write_text('started')\n"
+        f"release = pathlib.Path({str(release)!r})\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.05)\n"
+        f"pathlib.Path({str(marker)!r}).write_text('finished')\n"
+    )
+    blocked_in_parent = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    try:
+        runner = subprocess.Popen(
+            [
+                sys.executable,
+                "tools/verify.py",
+                "timed",
+                "probe",
+                "30",
+                sys.executable,
+                "-c",
+                script,
+            ],
+            cwd=verify.REPO_ROOT,
+        )
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked_in_parent)
+    deadline = time.monotonic() + 20
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), "the timed gate never started its child"
+    runner.terminate()
+    assert runner.wait(timeout=10) == SIGNALLED_EXIT_CODE
+    release.write_text("release", encoding="utf-8")
 
 
 _MEASUREMENT_COUNT_WORDS = {

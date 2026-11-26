@@ -8,6 +8,24 @@
     },
     {
       "inject_key": {
+        "key": "Return",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
         "key": "W",
         "pressed": true
       }
@@ -231,42 +249,42 @@
   "checkpoints": [
     {
       "id": "ghost_replay_within_1cm",
-      "after_step": 1,
+      "after_step": 36,
       "kind": "log",
       "severity": "log",
       "contains": "Ghost replay within 0.01 m"
     },
     {
       "id": "ghost_route_compared",
-      "after_step": 1,
+      "after_step": 36,
       "kind": "log",
       "severity": "log",
       "contains": "Ghost replay max deviation"
     },
     {
       "id": "ghost_file_written",
-      "after_step": 1,
+      "after_step": 36,
       "kind": "log",
       "severity": "log",
-      "contains": "arena1.ghost steps 120 bytes 720"
+      "contains": "Ghost written version 2 steps 245 bytes 1996 first -3.150 0.500 3.300 last 2.250 0.500 3.300"
     },
     {
       "id": "arena1_finished",
-      "after_step": 33,
+      "after_step": 36,
       "kind": "log",
       "severity": "log",
       "contains": "All 12 pickups collected, press R to play again."
     },
     {
       "id": "next_attempt_reset",
-      "after_step": 37,
+      "after_step": 40,
       "kind": "log",
       "severity": "log",
       "contains": "Retry complete score 0 pickups 12 multiplier x1"
     },
     {
       "id": "next_attempt_origin",
-      "after_step": 37,
+      "after_step": 40,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -278,7 +296,7 @@
     },
     {
       "id": "next_attempt_scene_reloaded",
-      "after_step": 38,
+      "after_step": 41,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -290,9 +308,9 @@
     },
     {
       "id": "frames_under_30s",
-      "after_step": 38,
+      "after_step": 41,
       "kind": "frame_count",
-      "expected": 444
+      "expected": 446
     }
   ],
   "absent_logs": [

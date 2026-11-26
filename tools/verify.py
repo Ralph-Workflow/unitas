@@ -2271,6 +2271,18 @@ def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
 
 
+def unblock_sigterm() -> set[int | signal.Signals] | None:
+    if not hasattr(signal, "pthread_sigmask"):
+        return None
+    return signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+
+
+def restore_signal_mask(previous: set[int | signal.Signals] | None) -> None:
+    if previous is None:
+        return
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 def wait_for_timed_gate(
     process: subprocess.Popen[bytes], deadline: float, pending: list[int]
 ) -> int | None:
@@ -2302,7 +2314,9 @@ def run_timed_attempt(
 
     signal.signal(signal.SIGTERM, handler)
     process: subprocess.Popen[bytes] | None = None
+    previous_mask: set[int | signal.Signals] | None = None
     try:
+        previous_mask = unblock_sigterm()
         try:
             process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
         except OSError as error:
@@ -2338,6 +2352,7 @@ def run_timed_attempt(
         active = False
         if process is not None and process.poll() is None:
             terminate_timed_gate(process)
+        restore_signal_mask(previous_mask)
 
 
 def run_timed(argv: Sequence[str]) -> int:
