@@ -18,6 +18,7 @@ pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub sub_meshes: Vec<SubMesh>,
 }
@@ -135,11 +136,19 @@ impl Builder {
     }
 
     fn finish(self, name: &str) -> MeshData {
+        let tangents = resolve_tangents(
+            &self.positions,
+            &self.normals,
+            &self.uvs,
+            &self.indices,
+            None,
+        );
         MeshData {
             name: name.to_string(),
             positions: self.positions,
             normals: self.normals,
             uvs: self.uvs,
+            tangents,
             indices: self.indices,
             sub_meshes: Vec::new(),
         }
@@ -148,6 +157,149 @@ impl Builder {
 
 fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+pub fn resolve_tangents(
+    positions: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    indices: &[u32],
+    source: Option<&[[f32; 4]]>,
+) -> Vec<[f32; 4]> {
+    let computed = compute_tangents(positions, normals, uvs, indices);
+    let Some(source) = source else {
+        return computed;
+    };
+    if source.len() != positions.len() {
+        return computed;
+    }
+    source
+        .iter()
+        .enumerate()
+        .map(|(index, tangent)| {
+            let normal = normals.get(index).copied().unwrap_or([0.0; 3]);
+            let fallback = computed[index];
+            let direction = orthogonalize([tangent[0], tangent[1], tangent[2]], normal)
+                .unwrap_or([fallback[0], fallback[1], fallback[2]]);
+            let handedness = if tangent[3] < 0.0 { -1.0 } else { 1.0 };
+            [direction[0], direction[1], direction[2], handedness]
+        })
+        .collect()
+}
+
+fn compute_tangents(
+    positions: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    indices: &[u32],
+) -> Vec<[f32; 4]> {
+    let mut accumulated = vec![[0.0f32; 3]; positions.len()];
+    let mut accumulated_bitangents = vec![[0.0f32; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let first = triangle[0] as usize;
+        let second = triangle[1] as usize;
+        let third = triangle[2] as usize;
+        let (Some(origin), Some(left), Some(right)) = (
+            positions.get(first),
+            positions.get(second),
+            positions.get(third),
+        ) else {
+            continue;
+        };
+        let (Some(origin_uv), Some(left_uv), Some(right_uv)) =
+            (uvs.get(first), uvs.get(second), uvs.get(third))
+        else {
+            continue;
+        };
+        let edge_left = subtract(*left, *origin);
+        let edge_right = subtract(*right, *origin);
+        let delta_left = subtract2(*left_uv, *origin_uv);
+        let delta_right = subtract2(*right_uv, *origin_uv);
+        let determinant = delta_left[0] * delta_right[1] - delta_right[0] * delta_left[1];
+        if determinant.abs() <= f32::EPSILON {
+            continue;
+        }
+        let tangent = scale(
+            subtract(
+                scale(edge_left, delta_right[1]),
+                scale(edge_right, delta_left[1]),
+            ),
+            determinant,
+        );
+        let bitangent = scale(
+            subtract(
+                scale(edge_right, delta_left[0]),
+                scale(edge_left, delta_right[0]),
+            ),
+            determinant,
+        );
+        for index in [first, second, third] {
+            accumulated[index] = add(accumulated[index], tangent);
+            accumulated_bitangents[index] = add(accumulated_bitangents[index], bitangent);
+        }
+    }
+    (0..positions.len())
+        .map(|index| {
+            let normal = normals.get(index).copied().unwrap_or([0.0; 3]);
+            let direction = orthogonalize(accumulated[index], normal)
+                .unwrap_or_else(|| fallback_tangent(normal));
+            let bitangent = cross(normal, direction);
+            let handedness = if dot(accumulated_bitangents[index], bitangent) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            [direction[0], direction[1], direction[2], handedness]
+        })
+        .collect()
+}
+
+fn subtract(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn subtract2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn scale(a: [f32; 3], factor: f32) -> [f32; 3] {
+    [a[0] * factor, a[1] * factor, a[2] * factor]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalize(a: [f32; 3]) -> Option<[f32; 3]> {
+    let length = dot(a, a).sqrt();
+    if length <= f32::EPSILON {
+        None
+    } else {
+        Some(scale(a, 1.0 / length))
+    }
+}
+
+fn orthogonalize(direction: [f32; 3], normal: [f32; 3]) -> Option<[f32; 3]> {
+    normalize(subtract(direction, scale(normal, dot(normal, direction))))
+}
+
+fn fallback_tangent(normal: [f32; 3]) -> [f32; 3] {
+    let axis = if normal[0].abs() <= normal[1].abs() && normal[0].abs() <= normal[2].abs() {
+        [1.0, 0.0, 0.0]
+    } else if normal[1].abs() <= normal[2].abs() {
+        [0.0, 1.0, 0.0]
+    } else {
+        [0.0, 0.0, 1.0]
+    };
+    normalize(cross(axis, normal)).unwrap_or([1.0, 0.0, 0.0])
 }
 
 fn build_ring(

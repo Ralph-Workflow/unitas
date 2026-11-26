@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::primitive::{MeshData, SubMesh};
+use crate::primitive::{resolve_tangents, MeshData, SubMesh};
 
 use super::ModelImportError;
 
@@ -69,14 +69,16 @@ impl ObjParser {
             }
         }
         self.close_group();
-        let positions = self.vertices.iter().map(|vertex| vertex.position).collect();
-        let normals = self.vertices.iter().map(|vertex| vertex.normal).collect();
-        let uvs = self.vertices.iter().map(|vertex| vertex.uv).collect();
+        let positions: Vec<[f32; 3]> = self.vertices.iter().map(|vertex| vertex.position).collect();
+        let normals: Vec<[f32; 3]> = self.vertices.iter().map(|vertex| vertex.normal).collect();
+        let uvs: Vec<[f32; 2]> = self.vertices.iter().map(|vertex| vertex.uv).collect();
+        let tangents = resolve_tangents(&positions, &normals, &uvs, &self.indices, None);
         Ok(MeshData {
             name: "obj".to_string(),
             positions,
             normals,
             uvs,
+            tangents,
             indices: self.indices,
             sub_meshes: self.sub_meshes,
         })

@@ -135,6 +135,45 @@ pub(crate) fn to_local(rotation: [f64; 4], center: [f64; 3], point: [f64; 3]) ->
     rotate_vector(inverse_rotation(rotation), subtract(point, center))
 }
 
+pub(crate) fn lerp_vector(first: [f64; 3], second: [f64; 3], alpha: f64) -> [f64; 3] {
+    [
+        first[0] + (second[0] - first[0]) * alpha,
+        first[1] + (second[1] - first[1]) * alpha,
+        first[2] + (second[2] - first[2]) * alpha,
+    ]
+}
+
+pub(crate) fn slerp_rotation(first: [f64; 4], second: [f64; 4], alpha: f64) -> [f64; 4] {
+    let start = normalize_rotation(first);
+    let mut end = normalize_rotation(second);
+    let mut cosine = start[0] * end[0]
+        + start[1] * end[1]
+        + start[2] * end[2]
+        + start[3] * end[3];
+    if cosine < 0.0 {
+        cosine = -cosine;
+        end = [-end[0], -end[1], -end[2], -end[3]];
+    }
+    if cosine > 0.9995 {
+        return normalize_rotation([
+            start[0] + (end[0] - start[0]) * alpha,
+            start[1] + (end[1] - start[1]) * alpha,
+            start[2] + (end[2] - start[2]) * alpha,
+            start[3] + (end[3] - start[3]) * alpha,
+        ]);
+    }
+    let angle = cosine.clamp(-1.0, 1.0).acos();
+    let sine = angle.sin();
+    let start_weight = ((1.0 - alpha) * angle).sin() / sine;
+    let end_weight = (alpha * angle).sin() / sine;
+    normalize_rotation([
+        start[0] * start_weight + end[0] * end_weight,
+        start[1] * start_weight + end[1] * end_weight,
+        start[2] * start_weight + end[2] * end_weight,
+        start[3] * start_weight + end[3] * end_weight,
+    ])
+}
+
 pub(crate) fn add(first: [f64; 3], second: [f64; 3]) -> [f64; 3] {
     [
         first[0] + second[0],

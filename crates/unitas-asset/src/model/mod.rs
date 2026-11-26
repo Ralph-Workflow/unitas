@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::primitive::{MeshData, SubMesh};
+use crate::primitive::{resolve_tangents, MeshData, SubMesh};
 
 pub mod fbx;
 pub mod gltf;
@@ -196,6 +196,7 @@ fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut tangents: Vec<[f32; 4]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut sub_meshes: Vec<SubMesh> = Vec::new();
     let mut mesh_name = String::new();
@@ -209,6 +210,17 @@ fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
         let vertex_base = positions.len() as u32;
         let index_base = indices.len() as u32;
         let vertex_count = mesh.positions.len();
+        let mesh_tangents = if mesh.tangents.len() == vertex_count {
+            mesh.tangents
+        } else {
+            resolve_tangents(
+                &mesh.positions,
+                &mesh.normals,
+                &mesh.uvs,
+                &mesh.indices,
+                None,
+            )
+        };
         positions.extend(mesh.positions);
         if any_normals {
             if mesh.normals.is_empty() {
@@ -224,6 +236,7 @@ fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
                 uvs.extend(mesh.uvs);
             }
         }
+        tangents.extend(mesh_tangents);
         for index in mesh.indices {
             indices.push(index + vertex_base);
         }
@@ -260,6 +273,7 @@ fn combine_meshes(mut meshes: Vec<MeshData>, file_name: &str) -> MeshData {
         positions,
         normals,
         uvs,
+        tangents,
         indices,
         sub_meshes,
     }

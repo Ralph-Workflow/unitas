@@ -5,6 +5,8 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::json::{parse, write as write_json, JsonValue};
 
+pub const TRUST_STORE_ENVIRONMENT_VARIABLE: &str = "UNITAS_TRUST_STORE";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustOrigin {
     Person,
@@ -50,6 +52,22 @@ pub fn require_code_execution(
             operation: operation.to_string(),
         })
     }
+}
+
+pub fn per_user_trust_store_path() -> PathBuf {
+    if let Some(path) =
+        std::env::var_os(TRUST_STORE_ENVIRONMENT_VARIABLE).filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(path);
+    }
+    for home_variable in ["HOME", "USERPROFILE"] {
+        if let Some(home) = std::env::var_os(home_variable).filter(|value| !value.is_empty()) {
+            return PathBuf::from(home)
+                .join(".unitas")
+                .join("trust.json");
+        }
+    }
+    std::env::temp_dir().join("unitas-trust.json")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

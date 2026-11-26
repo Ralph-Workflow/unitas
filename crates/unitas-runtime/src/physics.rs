@@ -53,6 +53,7 @@ pub struct ContactEvent2D {
 pub struct PhysicsRuntimeWorld {
     world_3d: World,
     world_2d: World2D,
+    interpolation_alpha_3d: f64,
 }
 
 impl PhysicsRuntimeWorld {
@@ -60,6 +61,7 @@ impl PhysicsRuntimeWorld {
         Self {
             world_3d: World::new(),
             world_2d: World2D::new(),
+            interpolation_alpha_3d: 0.0,
         }
     }
 
@@ -117,6 +119,19 @@ impl PhysicsRuntimeWorld {
             self.world_3d.drain_events(),
             self.world_3d.drain_trigger_events(),
         ))
+    }
+
+    pub fn interpolation_alpha_3d(&self) -> f64 {
+        self.interpolation_alpha_3d
+    }
+
+    pub fn set_interpolation_alpha_3d(&mut self, alpha: f64) {
+        self.interpolation_alpha_3d = alpha.clamp(0.0, 1.0);
+    }
+
+    pub fn presented_pose_3d(&self, entity: EntityId) -> Option<([f64; 3], [f64; 4])> {
+        self.world_3d
+            .interpolated_pose(entity, self.interpolation_alpha_3d)
     }
 
     pub fn set_layer_collision_3d(&mut self, layer_a: usize, layer_b: usize, enabled: bool) {

@@ -1,5 +1,5 @@
 use crate::json::{self, JsonValue};
-use crate::primitive::{MeshData, SubMesh};
+use crate::primitive::{resolve_tangents, MeshData, SubMesh};
 
 use super::ModelImportError;
 
@@ -93,6 +93,7 @@ fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut tangents: Vec<[f32; 4]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut sub_meshes: Vec<SubMesh> = Vec::new();
     let mut mesh_name = String::new();
@@ -125,6 +126,10 @@ fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, 
                 .and_then(|attributes| attributes.get("TEXCOORD_0"))
                 .and_then(|value| value.as_i64())
                 .map(|index| index as usize);
+            let tangent_accessor = attributes
+                .and_then(|attributes| attributes.get("TANGENT"))
+                .and_then(|value| value.as_i64())
+                .map(|index| index as usize);
 
             let local_positions =
                 read_vec3(&buffers, &buffer_views, &accessors, position_accessor)?;
@@ -134,6 +139,16 @@ fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, 
             };
             let local_uvs = match uv_accessor {
                 Some(index) => Some(read_vec2(&buffers, &buffer_views, &accessors, index)?),
+                None => None,
+            };
+            let local_tangents = match tangent_accessor {
+                Some(index) => read_authored_tangents(
+                    &buffers,
+                    &buffer_views,
+                    &accessors,
+                    index,
+                    local_positions.len(),
+                ),
                 None => None,
             };
             if let Some(local_normals) = &local_normals {
@@ -180,9 +195,19 @@ fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, 
             let vertex_base = positions.len() as u32;
             let index_base = indices.len() as u32;
             let vertex_count = local_positions.len();
+            let resolved_normals = local_normals.unwrap_or_else(|| vec![[0.0; 3]; vertex_count]);
+            let resolved_uvs = local_uvs.unwrap_or_else(|| vec![[0.0; 2]; vertex_count]);
+            let resolved_tangents = resolve_tangents(
+                &local_positions,
+                &resolved_normals,
+                &resolved_uvs,
+                &local_indices,
+                local_tangents.as_deref(),
+            );
             positions.extend(local_positions);
-            normals.extend(local_normals.unwrap_or_else(|| vec![[0.0; 3]; vertex_count]));
-            uvs.extend(local_uvs.unwrap_or_else(|| vec![[0.0; 2]; vertex_count]));
+            normals.extend(resolved_normals);
+            uvs.extend(resolved_uvs);
+            tangents.extend(resolved_tangents);
             for index in local_indices {
                 indices.push(index + vertex_base);
             }
@@ -201,6 +226,7 @@ fn build_mesh(document: &JsonValue, glb_bin: Option<&[u8]>) -> Result<MeshData, 
         positions,
         normals,
         uvs,
+        tangents,
         indices,
         sub_meshes,
     })
@@ -468,6 +494,56 @@ fn read_vec2(
     for index in 0..accessor.count {
         let offset = base + index * stride;
         values.push([read_f32(buffer, offset)?, read_f32(buffer, offset + 4)?]);
+    }
+    Ok(values)
+}
+
+fn read_authored_tangents(
+    buffers: &[Vec<u8>],
+    views: &[BufferView],
+    accessors: &[Accessor],
+    accessor_index: usize,
+    vertex_count: usize,
+) -> Option<Vec<[f32; 4]>> {
+    let accessor = accessors.get(accessor_index)?;
+    if accessor.component_type != COMPONENT_FLOAT || accessor.kind != AccessorKind::Vec4 {
+        return None;
+    }
+    let tangents = read_vec4(buffers, views, accessors, accessor_index).ok()?;
+    if tangents.len() != vertex_count {
+        return None;
+    }
+    Some(tangents)
+}
+
+fn read_vec4(
+    buffers: &[Vec<u8>],
+    views: &[BufferView],
+    accessors: &[Accessor],
+    accessor_index: usize,
+) -> Result<Vec<[f32; 4]>, ModelImportError> {
+    let accessor = accessors
+        .get(accessor_index)
+        .ok_or(ModelImportError::MissingAccessor {
+            accessor: accessor_index,
+        })?;
+    if accessor.component_type != COMPONENT_FLOAT || accessor.kind != AccessorKind::Vec4 {
+        return Err(ModelImportError::UnsupportedAccessorType {
+            accessor: accessor_index,
+            component_type: accessor.component_type,
+            expected: "FLOAT VEC4".to_string(),
+        });
+    }
+    let (buffer, base, stride) = accessor_location(buffers, views, accessor, accessor_index)?;
+    let mut values = Vec::with_capacity(accessor.count);
+    for index in 0..accessor.count {
+        let offset = base + index * stride;
+        values.push([
+            read_f32(buffer, offset)?,
+            read_f32(buffer, offset + 4)?,
+            read_f32(buffer, offset + 8)?,
+            read_f32(buffer, offset + 12)?,
+        ]);
     }
     Ok(values)
 }

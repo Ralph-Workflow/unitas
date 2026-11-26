@@ -19,6 +19,21 @@ use crate::unity_yaml::{self, Node};
 
 pub const BASELINE_UNITY_VERSION: &str = "2022.3";
 
+pub fn unity_project_root(scene_path: &Path) -> Option<PathBuf> {
+    let absolute = if scene_path.is_absolute() {
+        scene_path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(scene_path)
+    };
+    let mut directory = absolute.parent()?;
+    loop {
+        if directory.join("Assets").is_dir() {
+            return Some(directory.to_path_buf());
+        }
+        directory = directory.parent()?;
+    }
+}
+
 pub const ASSESSED_ON_EDIT: &str = "assessed on edit";
 
 const MIGRATABLE_VERSIONS: [&str; 2] = ["2020.3", "2021.3"];

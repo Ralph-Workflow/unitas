@@ -160,7 +160,7 @@ impl Backend {
             .can_sleep(false)
             .ccd_enabled(desc.collision_detection_mode == CollisionDetectionMode3D::Continuous);
         if role == BodyRole::Dynamic {
-            builder = builder.linvel(vector3(desc.velocity)).lock_rotations();
+            builder = builder.linvel(vector3(desc.velocity));
         }
         let body = self.bodies.insert(builder.build());
         let mut collider = ColliderBuilder::new(collider_shape(&desc.shape))
@@ -281,6 +281,28 @@ impl Backend {
         vector_of(self.bodies[handles.body].linvel())
     }
 
+    pub(crate) fn angular_velocity(&self, handles: BackendHandles) -> [f64; 3] {
+        vector_of(self.bodies[handles.body].angvel())
+    }
+
+    pub(crate) fn angular_inertia(&self, handles: BackendHandles) -> [f64; 3] {
+        vector_of(
+            self.bodies[handles.body]
+                .mass_properties()
+                .local_mprops
+                .principal_inertia(),
+        )
+    }
+
+    pub(crate) fn set_angular_velocity(
+        &mut self,
+        handles: BackendHandles,
+        angular_velocity: [f64; 3],
+        wake: bool,
+    ) {
+        self.bodies[handles.body].set_angvel(vector3(angular_velocity), wake);
+    }
+
     pub(crate) fn set_translation(
         &mut self,
         handles: BackendHandles,
@@ -338,13 +360,41 @@ impl Backend {
     ) {
         let body = &mut self.bodies[handles.body];
         body.reset_forces(false);
-        body.reset_torques(false);
         if force != [0.0; 3] {
             body.add_force(vector3(force), false);
         }
         if impulse != [0.0; 3] {
             body.apply_impulse(vector3(impulse), false);
         }
+    }
+
+    pub(crate) fn apply_torque(&mut self, handles: BackendHandles, torque: [f64; 3]) {
+        let body = &mut self.bodies[handles.body];
+        body.reset_torques(false);
+        if torque != [0.0; 3] {
+            body.add_torque(vector3(torque), false);
+        }
+    }
+
+    pub(crate) fn apply_torque_impulse(&mut self, handles: BackendHandles, impulse: [f64; 3]) {
+        if impulse != [0.0; 3] {
+            self.bodies[handles.body]
+                .apply_torque_impulse(vector3(impulse), false);
+        }
+    }
+
+    pub(crate) fn apply_angular_acceleration(
+        &mut self,
+        handles: BackendHandles,
+        acceleration: [f64; 3],
+        delta_seconds: f64,
+    ) {
+        if acceleration == [0.0; 3] {
+            return;
+        }
+        let body = &mut self.bodies[handles.body];
+        let angular_velocity = body.angvel() + vector3(acceleration) * delta_seconds as Real;
+        body.set_angvel(angular_velocity, false);
     }
 
     pub(crate) fn sleep(&mut self, handles: BackendHandles) {

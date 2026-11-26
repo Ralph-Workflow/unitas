@@ -1,3 +1,5 @@
+use unitas_core::EntityId;
+
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, TriggerEvent};
 use crate::world::World;
@@ -35,6 +37,7 @@ pub struct Simulation {
     world: World,
     mode: SimulationMode,
     fixed_timestep: f64,
+    accumulator: f64,
 }
 
 impl Simulation {
@@ -43,6 +46,7 @@ impl Simulation {
             world,
             mode: SimulationMode::FixedUpdate,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
+            accumulator: 0.0,
         }
     }
 
@@ -103,6 +107,40 @@ impl Simulation {
             SimulationMode::Update => frame_delta_seconds,
         };
         Ok(Some(self.step(delta_seconds)?))
+    }
+
+    pub fn advance_fixed(
+        &mut self,
+        frame_delta_seconds: f64,
+    ) -> Result<usize, SimulationError> {
+        if !frame_delta_seconds.is_finite() || frame_delta_seconds < 0.0 {
+            return Err(SimulationError::World(PhysicsError::InvalidDeltaTime(
+                frame_delta_seconds,
+            )));
+        }
+        if self.mode == SimulationMode::Script {
+            return Ok(0);
+        }
+        self.accumulator += frame_delta_seconds;
+        let mut steps = 0usize;
+        while self.accumulator >= self.fixed_timestep {
+            self.world.step(self.fixed_timestep)?;
+            self.accumulator -= self.fixed_timestep;
+            steps += 1;
+        }
+        Ok(steps)
+    }
+
+    pub fn interpolation_alpha(&self) -> f64 {
+        if self.fixed_timestep > 0.0 {
+            (self.accumulator / self.fixed_timestep).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn interpolated_pose(&self, entity: EntityId) -> Option<([f64; 3], [f64; 4])> {
+        self.world.interpolated_pose(entity, self.interpolation_alpha())
     }
 
     pub fn simulate(&mut self, delta_seconds: f64) -> Result<StepResult, SimulationError> {

@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use crate::inflate::{inflate_zlib, InflateError};
-use crate::primitive::{MeshData, SubMesh};
+use crate::primitive::{resolve_tangents, MeshData, SubMesh};
 
 const FBX_MAGIC_PREFIX: &[u8] = b"Kaydara FBX Binary  \x00";
 const FBX_VERSION_64: u32 = 7500;
@@ -905,6 +905,20 @@ fn build_geometry_mesh(node: &FbxNode) -> Result<MeshData, FbxImportError> {
         Some(layer) => extract_uvs(layer)?,
         None => Vec::new(),
     };
+    let tangents = match node
+        .children
+        .iter()
+        .find(|child| child.name == "LayerElementTangent")
+    {
+        Some(layer) => extract_tangents(layer).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let source_tangents = if tangents.is_empty() {
+        None
+    } else {
+        Some(tangents.as_slice())
+    };
+    let resolved_tangents = resolve_tangents(&positions, &normals, &uvs, &indices, source_tangents);
     let sub_meshes = vec![SubMesh {
         name: name.clone(),
         index_offset: 0,
@@ -916,6 +930,7 @@ fn build_geometry_mesh(node: &FbxNode) -> Result<MeshData, FbxImportError> {
         positions,
         normals,
         uvs,
+        tangents: resolved_tangents,
         indices,
         sub_meshes,
     })
@@ -1019,7 +1034,7 @@ fn triangulate_polygons(
 }
 
 fn extract_normals(layer: &FbxNode) -> Result<Vec<[f32; 3]>, FbxImportError> {
-    let (floats, index_array) = extract_layer_arrays(layer)?;
+    let (floats, index_array) = extract_layer_arrays(layer, &["Normals"], &["NormalsIndex"])?;
     if !floats.len().is_multiple_of(3) {
         return Err(FbxImportError::MalformedGeometry {
             reason: "normals array length is not a multiple of 3".to_string(),
@@ -1047,7 +1062,7 @@ fn extract_normals(layer: &FbxNode) -> Result<Vec<[f32; 3]>, FbxImportError> {
 }
 
 fn extract_uvs(layer: &FbxNode) -> Result<Vec<[f32; 2]>, FbxImportError> {
-    let (floats, index_array) = extract_layer_arrays(layer)?;
+    let (floats, index_array) = extract_layer_arrays(layer, &["UV"], &["UVIndex"])?;
     if !floats.len().is_multiple_of(2) {
         return Err(FbxImportError::MalformedGeometry {
             reason: "UV array length is not a multiple of 2".to_string(),
@@ -1074,7 +1089,39 @@ fn extract_uvs(layer: &FbxNode) -> Result<Vec<[f32; 2]>, FbxImportError> {
     }
 }
 
-fn extract_layer_arrays(layer: &FbxNode) -> Result<(Vec<f32>, Option<Vec<i32>>), FbxImportError> {
+fn extract_tangents(layer: &FbxNode) -> Result<Vec<[f32; 4]>, FbxImportError> {
+    let (floats, index_array) = extract_layer_arrays(layer, &["Tangents"], &["TangentsIndex"])?;
+    if !floats.len().is_multiple_of(3) {
+        return Err(FbxImportError::MalformedGeometry {
+            reason: "tangents array length is not a multiple of 3".to_string(),
+        });
+    }
+    let mut direct = Vec::with_capacity(floats.len() / 3);
+    for chunk in floats.chunks_exact(3) {
+        direct.push([chunk[0], chunk[1], chunk[2], 1.0]);
+    }
+    match index_array {
+        Some(indices) => {
+            let mut mapped = Vec::with_capacity(indices.len());
+            for idx in indices {
+                let Some(tangent) = direct.get(idx as usize) else {
+                    return Err(FbxImportError::MalformedGeometry {
+                        reason: format!("tangent index {idx} out of bounds"),
+                    });
+                };
+                mapped.push(*tangent);
+            }
+            Ok(mapped)
+        }
+        None => Ok(direct),
+    }
+}
+
+fn extract_layer_arrays(
+    layer: &FbxNode,
+    data_children: &[&str],
+    index_children: &[&str],
+) -> Result<(Vec<f32>, Option<Vec<i32>>), FbxImportError> {
     let mut floats: Option<Vec<f32>> = None;
     let mut ints: Option<Vec<i32>> = None;
     for prop in &layer.properties {
@@ -1095,9 +1142,9 @@ fn extract_layer_arrays(layer: &FbxNode) -> Result<(Vec<f32>, Option<Vec<i32>>),
         }
     }
     for child in &layer.children {
-        if child.name == "Normals" || child.name == "UV" {
+        if data_children.contains(&child.name.as_str()) {
             floats = Some(extract_floats(child)?);
-        } else if child.name == "NormalsIndex" || child.name == "UVIndex" {
+        } else if index_children.contains(&child.name.as_str()) {
             ints = Some(extract_ints(child)?);
         }
     }

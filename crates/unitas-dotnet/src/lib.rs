@@ -1,13 +1,32 @@
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use libloading::Library;
+use unitas_asset::trust::{ProjectCapabilities, require_code_execution};
 
 const GET_FUNCTION_POINTER: c_int = 6;
 const HOSTFXR_LIBRARY_NAMES: [&str; 3] = ["libhostfxr.dylib", "libhostfxr.so", "hostfxr.dll"];
 const HOSTFXR_SUCCESS: c_int = 0;
 const HOSTFXR_SUCCESS_ALREADY_INITIALIZED: c_int = 1;
+const CODE_EXECUTION_OPERATION: &str = "player host boot";
+
+static CODE_EXECUTION_CAPABILITIES: Mutex<Option<ProjectCapabilities>> = Mutex::new(None);
+
+pub fn install_code_execution_capabilities(capabilities: ProjectCapabilities) {
+    let mut slot = CODE_EXECUTION_CAPABILITIES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(capabilities);
+}
+
+fn code_execution_capabilities() -> ProjectCapabilities {
+    let slot = CODE_EXECUTION_CAPABILITIES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    slot.as_ref().copied().unwrap_or_default()
+}
 
 type CStr = c_char;
 type VSlot = *mut *mut c_void;
@@ -28,6 +47,7 @@ pub enum DotnetHostError {
     RuntimeConfigInvalid { path: PathBuf, detail: String },
     InitFailed { code: i32 },
     LoadAssemblyFailed { assembly: PathBuf, detail: String },
+    CodeExecutionRefused { operation: String },
 }
 
 impl fmt::Display for DotnetHostError {
@@ -42,6 +62,9 @@ impl fmt::Display for DotnetHostError {
             Self::InitFailed { code } => write!(f, "hostfxr init failed with code {code}"),
             Self::LoadAssemblyFailed { assembly, detail } => {
                 write!(f, "load from {} failed: {detail}", assembly.display())
+            }
+            Self::CodeExecutionRefused { operation } => {
+                write!(f, "code execution refused for operation '{operation}'")
             }
         }
     }
@@ -64,6 +87,11 @@ impl DotnetHost {
         runtime_config: &Path,
         roots: &[PathBuf],
     ) -> Result<DotnetHost, DotnetHostError> {
+        require_code_execution(code_execution_capabilities(), CODE_EXECUTION_OPERATION).map_err(
+            |error| DotnetHostError::CodeExecutionRefused {
+                operation: error.operation,
+            },
+        )?;
         let library_path = find_hostfxr(roots)?;
         let _config_path = validate_runtime_config(runtime_config)?;
         let library = load_library(&library_path)?;

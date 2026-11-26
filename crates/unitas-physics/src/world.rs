@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use unitas_core::EntityId;
 
 use crate::backend::{Backend, BackendHandles};
-use crate::body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
+use crate::body::{
+    lerp_vector, slerp_rotation, BodyDesc, BodyRole, CollisionDetectionMode3D, Shape,
+};
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::matrix::CollisionMatrix;
@@ -118,6 +120,13 @@ fn speed_of(body: &Body) -> f64 {
     sum.sqrt()
 }
 
+fn angular_speed_of(body: &Body) -> f64 {
+    let sum = body.angular_velocity[0] * body.angular_velocity[0]
+        + body.angular_velocity[1] * body.angular_velocity[1]
+        + body.angular_velocity[2] * body.angular_velocity[2];
+    sum.sqrt()
+}
+
 fn pair_exchanges_messages(first: &Body, second: &Body) -> bool {
     if first.is_trigger || second.is_trigger {
         return first.role != BodyRole::Static || second.role != BodyRole::Static;
@@ -144,6 +153,7 @@ struct Body {
     query_position: [f64; 3],
     query_rotation: [f64; 4],
     velocity: [f64; 3],
+    angular_velocity: [f64; 3],
     layer: u32,
     friction: f64,
     restitution: f64,
@@ -154,6 +164,8 @@ struct Body {
     pending_force: [f64; 3],
     pending_impulse: [f64; 3],
     pending_acceleration: [f64; 3],
+    pending_torque: [f64; 3],
+    pending_angular_acceleration: [f64; 3],
     pending_move_position: Option<[f64; 3]>,
     pending_move_rotation: Option<[f64; 4]>,
     sleeping: bool,
@@ -506,6 +518,7 @@ impl World {
             query_position: desc.position,
             query_rotation: desc.rotation,
             velocity: desc.velocity,
+            angular_velocity: [0.0; 3],
             layer: desc.layer,
             friction: desc.friction,
             restitution: desc.restitution,
@@ -516,6 +529,8 @@ impl World {
             pending_force: [0.0; 3],
             pending_impulse: [0.0; 3],
             pending_acceleration: [0.0; 3],
+            pending_torque: [0.0; 3],
+            pending_angular_acceleration: [0.0; 3],
             pending_move_position: None,
             pending_move_rotation: None,
             sleeping: false,
@@ -565,7 +580,12 @@ impl World {
                 }
                 continue;
             }
-            if body.role != BodyRole::Dynamic || body.sleeping {
+            if body.role != BodyRole::Dynamic {
+                continue;
+            }
+            body.previous_position = body.position;
+            body.previous_rotation = body.rotation;
+            if body.sleeping {
                 continue;
             }
             let inv_mass = body.inverse_mass();
@@ -576,10 +596,20 @@ impl World {
                 body.pending_force[2] + body.pending_acceleration[2] * mass,
             ];
             let impulse = body.pending_impulse;
+            let torque = body.pending_torque;
+            let angular_acceleration = body.pending_angular_acceleration;
             body.pending_force = [0.0; 3];
             body.pending_impulse = [0.0; 3];
             body.pending_acceleration = [0.0; 3];
+            body.pending_torque = [0.0; 3];
+            body.pending_angular_acceleration = [0.0; 3];
             self.backend.apply_forces(body.handles, force, impulse);
+            self.backend.apply_torque(body.handles, torque);
+            self.backend.apply_angular_acceleration(
+                body.handles,
+                angular_acceleration,
+                delta_seconds,
+            );
         }
         if delta_seconds > 0.0 {
             self.backend
@@ -599,6 +629,7 @@ impl World {
                     }
                     if !body.sleeping {
                         body.velocity = self.backend.velocity(body.handles);
+                        body.angular_velocity = self.backend.angular_velocity(body.handles);
                     }
                 }
                 BodyRole::Kinematic => {
@@ -616,7 +647,7 @@ impl World {
             self.emit_events(&self.overlapping.clone());
             self.emit_trigger_events(&self.overlapping_triggers.clone());
         }
-        self.commit_positions();
+        self.commit_kinematic_poses();
         self.sync_transforms();
         Ok(())
     }
@@ -695,6 +726,29 @@ impl World {
         self.indices
             .get(&entity)
             .map(|index| self.bodies[*index].velocity)
+    }
+
+    pub fn angular_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].angular_velocity)
+    }
+
+    pub fn angular_inertia(&self, entity: EntityId) -> Option<[f64; 3]> {
+        self.indices.get(&entity).map(|index| {
+            self.backend
+                .angular_inertia(self.bodies[*index].handles)
+        })
+    }
+
+    pub fn interpolated_pose(&self, entity: EntityId, alpha: f64) -> Option<([f64; 3], [f64; 4])> {
+        let index = self.indices.get(&entity).copied()?;
+        let body = &self.bodies[index];
+        let alpha = alpha.clamp(0.0, 1.0);
+        Some((
+            lerp_vector(body.previous_position, body.position, alpha),
+            slerp_rotation(body.previous_rotation, body.rotation, alpha),
+        ))
     }
 
     pub fn effective_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
@@ -872,6 +926,57 @@ impl World {
         Ok(())
     }
 
+    pub fn add_torque(
+        &mut self,
+        body: EntityId,
+        torque: [f64; 3],
+        mode: ForceMode,
+    ) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !torque.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let slot = &mut self.bodies[index];
+        if slot.role != BodyRole::Dynamic {
+            return Ok(());
+        }
+        match mode {
+            ForceMode::Force => {
+                slot.pending_torque[0] += torque[0];
+                slot.pending_torque[1] += torque[1];
+                slot.pending_torque[2] += torque[2];
+            }
+            ForceMode::Acceleration => {
+                slot.pending_angular_acceleration[0] += torque[0];
+                slot.pending_angular_acceleration[1] += torque[1];
+                slot.pending_angular_acceleration[2] += torque[2];
+            }
+            ForceMode::Impulse => {
+                let handles = slot.handles;
+                self.backend.apply_torque_impulse(handles, torque);
+                slot.angular_velocity = self.backend.angular_velocity(handles);
+            }
+            ForceMode::VelocityChange => {
+                slot.angular_velocity[0] += torque[0];
+                slot.angular_velocity[1] += torque[1];
+                slot.angular_velocity[2] += torque[2];
+                let handles = slot.handles;
+                let angular_velocity = slot.angular_velocity;
+                self.backend
+                    .set_angular_velocity(handles, angular_velocity, false);
+            }
+        }
+        if torque != [0.0; 3] {
+            slot.sleeping = false;
+            slot.sleep_timer = 0.0;
+            let handles = slot.handles;
+            self.backend.wake_up(handles);
+        }
+        Ok(())
+    }
+
     pub fn body_role(&self, entity: EntityId) -> Option<BodyRole> {
         self.indices
             .get(&entity)
@@ -889,6 +994,27 @@ impl World {
         let handles = self.bodies[index].handles;
         if self.bodies[index].role == BodyRole::Dynamic {
             self.backend.set_velocity(handles, v, true);
+        }
+        self.wake_up(body);
+        Ok(())
+    }
+
+    pub fn set_angular_velocity(
+        &mut self,
+        body: EntityId,
+        v: [f64; 3],
+    ) -> Result<(), PhysicsError> {
+        let Some(index) = self.indices.get(&body).copied() else {
+            return Err(PhysicsError::InvalidBody(body));
+        };
+        if !v.iter().all(|value| value.is_finite()) {
+            return Err(PhysicsError::InvalidBody(body));
+        }
+        let slot = &mut self.bodies[index];
+        slot.angular_velocity = v;
+        let handles = slot.handles;
+        if slot.role == BodyRole::Dynamic {
+            self.backend.set_angular_velocity(handles, v, true);
         }
         self.wake_up(body);
         Ok(())
@@ -914,9 +1040,12 @@ impl World {
         self.bodies[index].sleeping = true;
         self.bodies[index].sleep_timer = 0.0;
         self.bodies[index].velocity = [0.0; 3];
+        self.bodies[index].angular_velocity = [0.0; 3];
         self.bodies[index].pending_force = [0.0; 3];
         self.bodies[index].pending_impulse = [0.0; 3];
         self.bodies[index].pending_acceleration = [0.0; 3];
+        self.bodies[index].pending_torque = [0.0; 3];
+        self.bodies[index].pending_angular_acceleration = [0.0; 3];
         let handles = self.bodies[index].handles;
         self.backend.sleep(handles);
         Ok(())
@@ -1310,8 +1439,11 @@ impl World {
         }
     }
 
-    fn commit_positions(&mut self) {
+    fn commit_kinematic_poses(&mut self) {
         for body in &mut self.bodies {
+            if body.role == BodyRole::Dynamic {
+                continue;
+            }
             body.previous_position = body.position;
             body.previous_rotation = body.rotation;
         }
@@ -1324,11 +1456,12 @@ impl World {
             if !body.simulated || body.role != BodyRole::Dynamic || body.sleeping {
                 continue;
             }
-            if speed_of(body) <= threshold {
+            if speed_of(body) <= threshold && angular_speed_of(body) <= threshold {
                 body.sleep_timer += delta_seconds;
                 if body.sleep_timer >= time_to_sleep {
                     body.sleeping = true;
                     body.velocity = [0.0; 3];
+                    body.angular_velocity = [0.0; 3];
                     let handles = body.handles;
                     self.backend.sleep(handles);
                 }
