@@ -559,15 +559,18 @@ namespace Unitas.Bridge.Tests
                 Check.That("Generated glue DLL path exists", !string.IsNullOrEmpty(result.GeneratedGlueAssemblyPath) && File.Exists(result.GeneratedGlueAssemblyPath));
                 Check.That("Generated glue source exists in obj dir", !string.IsNullOrEmpty(result.GeneratedGlueSourcePath) && File.Exists(result.GeneratedGlueSourcePath));
 
-                string permanentGluePath = Path.Combine(
+                string permanentDir = Path.Combine(
                     Path.GetTempPath(),
+                    "unitas-shared-glue-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(permanentDir);
+                string permanentGluePath = Path.Combine(
+                    permanentDir,
                     "unitas_shared_glue_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".dll");
                 File.Copy(result.GeneratedGlueAssemblyPath!, permanentGluePath, true);
                 string? glueOutDir = Path.GetDirectoryName(result.GeneratedGlueAssemblyPath!);
                 if (!string.IsNullOrEmpty(glueOutDir))
                 {
                     string[] siblingDlls = Directory.GetFiles(glueOutDir, "*.dll");
-                    string permanentDir = Path.GetDirectoryName(permanentGluePath) ?? Path.GetTempPath();
                     for (int i = 0; i < siblingDlls.Length; i++)
                     {
                         string fileName = Path.GetFileName(siblingDlls[i]);

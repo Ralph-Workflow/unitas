@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 
 use crate::binary_ser::{is_text_serialized, read_serialized_file, SerializedFile};
 use crate::import_cache::{ImportCache, ImportCacheError};
@@ -516,44 +516,72 @@ fn import_in_pool(
     workers: usize,
 ) -> BTreeMap<PathBuf, ImportOutcome> {
     let mut outcomes = BTreeMap::new();
-    for wave in &plan.waves {
-        for (index, outcome) in run_wave(candidates, wave, importer, workers) {
-            outcomes.insert(candidates[index].path.clone(), outcome);
+    let total = plan.waves.iter().map(Vec::len).sum::<usize>();
+    let worker_count = workers.min(total);
+    if worker_count <= 1 || !plan.waves.iter().any(|wave| wave.len() > 1) {
+        for wave in &plan.waves {
+            for index in wave {
+                let candidate = &candidates[*index];
+                let asset = candidate.path.display().to_string();
+                let outcome = state_with_consequence(importer(candidate), &asset);
+                outcomes.insert(candidate.path.clone(), outcome);
+            }
         }
+        return outcomes;
+    }
+    for (index, outcome) in run_pool(candidates, plan, importer, worker_count) {
+        outcomes.insert(candidates[index].path.clone(), outcome);
     }
     outcomes
 }
 
-fn run_wave(
+struct PoolState {
+    waves: VecDeque<Vec<usize>>,
+    current: VecDeque<usize>,
+    in_flight: usize,
+}
+
+struct InFlight<'a> {
+    state: &'a Mutex<PoolState>,
+    signal: &'a Condvar,
+}
+
+impl<'a> InFlight<'a> {
+    fn new(state: &'a Mutex<PoolState>, signal: &'a Condvar) -> Self {
+        InFlight { state, signal }
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        let mut guard = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        guard.in_flight -= 1;
+        if guard.current.is_empty() && guard.in_flight == 0 {
+            self.signal.notify_all();
+        }
+    }
+}
+
+fn run_pool(
     candidates: &[ImportCandidate],
-    wave: &[usize],
+    plan: &ImportPlan,
     importer: &(dyn Fn(&ImportCandidate) -> ImportOutcome + Send + Sync),
     workers: usize,
 ) -> Vec<(usize, ImportOutcome)> {
-    if wave.len() <= 1 || workers <= 1 {
-        return wave
-            .iter()
-            .map(|index| {
-                let candidate = &candidates[*index];
-                let asset = candidate.path.display().to_string();
-                (*index, state_with_consequence(importer(candidate), &asset))
-            })
-            .collect();
-    }
-
-    let queue = Mutex::new(VecDeque::from(wave.to_vec()));
+    let state = Mutex::new(PoolState {
+        waves: plan.waves.iter().cloned().collect(),
+        current: VecDeque::new(),
+        in_flight: 0,
+    });
+    let signal = Condvar::new();
     let results = Mutex::new(Vec::new());
-    let worker_count = workers.min(wave.len());
     std::thread::scope(|scope| {
-        for _ in 0..worker_count {
+        for _ in 0..workers {
             scope.spawn(|| loop {
-                let next = {
-                    let mut queue = queue.lock().unwrap_or_else(|error| error.into_inner());
-                    queue.pop_front()
-                };
-                let Some(index) = next else {
+                let Some(index) = next_item(&state, &signal) else {
                     break;
                 };
+                let in_flight = InFlight::new(&state, &signal);
                 let candidate = &candidates[index];
                 let asset = candidate.path.display().to_string();
                 let outcome = state_with_consequence(importer(candidate), &asset);
@@ -561,12 +589,31 @@ fn run_wave(
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .push((index, outcome));
+                drop(in_flight);
             });
         }
     });
     results
         .into_inner()
         .unwrap_or_else(|error| error.into_inner())
+}
+
+fn next_item(state: &Mutex<PoolState>, signal: &Condvar) -> Option<usize> {
+    let mut guard = state.lock().unwrap_or_else(|error| error.into_inner());
+    loop {
+        if let Some(index) = guard.current.pop_front() {
+            guard.in_flight += 1;
+            return Some(index);
+        }
+        if guard.in_flight == 0 {
+            let wave = guard.waves.pop_front()?;
+            guard.current = wave.into_iter().collect();
+            continue;
+        }
+        guard = signal
+            .wait(guard)
+            .unwrap_or_else(|error| error.into_inner());
+    }
 }
 
 fn state_with_consequence(outcome: ImportOutcome, asset: &str) -> ImportOutcome {

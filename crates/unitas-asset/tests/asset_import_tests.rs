@@ -10,6 +10,8 @@ mod dependencies_tests;
 mod fbx_tests;
 #[path = "asset_import/import_cache_tests.rs"]
 mod import_cache_tests;
+#[path = "asset_import/import_pool_tests.rs"]
+mod import_pool_tests;
 #[path = "asset_import/inflate_tests.rs"]
 mod inflate_tests;
 #[path = "asset_import/json_tests.rs"]

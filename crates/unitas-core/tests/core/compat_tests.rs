@@ -2506,3 +2506,261 @@ fn cmp_002_a_project_using_a_recognized_unsupported_family_reports_unsupported_w
         "CMP-002: the project state must reflect the unsupported content"
     );
 }
+
+fn is_feature_id(cell: &str) -> bool {
+    let mut parts = cell.split('-');
+    let prefix = parts.next().unwrap_or_default();
+    let number = parts.next().unwrap_or_default();
+    parts.next().is_none()
+        && prefix.len() == 3
+        && prefix
+            .chars()
+            .all(|character| character.is_ascii_uppercase())
+        && !number.is_empty()
+        && number.chars().all(|character| character.is_ascii_digit())
+}
+
+fn feature_catalog_rows() -> Vec<(String, String, String)> {
+    let source = std::fs::read_to_string(workspace_file(
+        "docs/product-specification/feature-catalog.md",
+    ))
+    .unwrap_or_default();
+    let mut rows = Vec::new();
+    for line in source.lines() {
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cells.len() < 6 || !is_feature_id(cells[1]) {
+            continue;
+        }
+        let spec_cell = cells[4];
+        let spec = spec_cell
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map_or_else(|| spec_cell.to_string(), |(path, _)| path.to_string());
+        rows.push((cells[1].to_string(), cells[3].to_string(), spec));
+    }
+    rows
+}
+
+#[test]
+fn cmp_002_the_owned_feature_ids_are_exactly_the_owned_set() {
+    use unitas_core::compat::OWNED_FEATURE_CAPABILITIES;
+
+    let owned: Vec<&str> = OWNED_FEATURE_CAPABILITIES
+        .iter()
+        .map(|capability| capability.feature_id)
+        .collect();
+
+    assert_eq!(
+        owned.len(),
+        OWNED_FEATURE_IDS.len(),
+        "CMP-002: the owned capability table must hold one entry per owned feature id"
+    );
+    for id in OWNED_FEATURE_IDS {
+        assert!(
+            owned.contains(&id),
+            "CMP-002: '{id}' must own a capability entry"
+        );
+    }
+    for id in owned {
+        assert!(
+            OWNED_FEATURE_IDS.contains(&id),
+            "CMP-002: '{id}' is not one of the owned feature ids"
+        );
+    }
+}
+
+#[test]
+fn cmp_002_the_owned_feature_tiers_and_specs_match_the_authoritative_feature_catalog() {
+    use unitas_core::compat::{lookup_catalog_feature, Tier, OWNED_FEATURE_CAPABILITIES};
+
+    let rows = feature_catalog_rows();
+    assert!(
+        !rows.is_empty(),
+        "CMP-002: the authoritative feature catalog must be readable"
+    );
+
+    for capability in OWNED_FEATURE_CAPABILITIES {
+        let row = rows
+            .iter()
+            .find(|(id, _, _)| id == capability.feature_id)
+            .cloned();
+        assert!(
+            row.is_some(),
+            "CMP-002: '{}' must be listed in the authoritative feature catalog",
+            capability.feature_id
+        );
+        let (_, tier, spec) = row.unwrap_or_default();
+        assert_eq!(
+            spec, capability.owning_spec,
+            "CMP-002: '{}' must name the specification that owns it",
+            capability.feature_id
+        );
+        let catalog = lookup_catalog_feature(capability.feature_id);
+        assert!(
+            catalog.is_some(),
+            "CMP-002: '{}' must be a catalog feature",
+            capability.feature_id
+        );
+        if let Some(catalog) = catalog {
+            assert_eq!(
+                catalog.owning_spec, spec,
+                "CMP-002: '{}' must name the specification that owns it",
+                capability.feature_id
+            );
+            let expected_tier = match tier.as_str() {
+                "Exact" => Some(Tier::Exact),
+                "Semantic" => Some(Tier::Semantic),
+                "Familiar" => Some(Tier::Familiar),
+                "Native" => Some(Tier::Native),
+                _ => None,
+            };
+            assert!(
+                expected_tier.is_some(),
+                "CMP-002: the catalog tier '{}' of '{}' must be a compatibility tier",
+                tier,
+                capability.feature_id
+            );
+            if let Some(expected_tier) = expected_tier {
+                assert_eq!(
+                    catalog.tier, expected_tier,
+                    "CMP-002: '{}' must keep the tier the authoritative catalog gives it",
+                    capability.feature_id
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cmp_002_every_owning_spec_named_by_the_compatibility_data_resolves_to_a_specification() {
+    use unitas_core::compat::{
+        FEATURE_CATALOG, OWNED_FEATURE_CAPABILITIES, RECOGNIZED_UNSUPPORTED_FAMILIES,
+        SUPPORTED_PACKAGE_MATRIX,
+    };
+
+    let mut specs: Vec<&str> = FEATURE_CATALOG
+        .iter()
+        .map(|entry| entry.owning_spec)
+        .collect();
+    specs.extend(
+        SUPPORTED_PACKAGE_MATRIX
+            .iter()
+            .map(|entry| entry.owning_spec),
+    );
+    specs.extend(
+        RECOGNIZED_UNSUPPORTED_FAMILIES
+            .iter()
+            .map(|entry| entry.owning_spec),
+    );
+    specs.extend(
+        OWNED_FEATURE_CAPABILITIES
+            .iter()
+            .map(|entry| entry.owning_spec),
+    );
+
+    for spec in specs {
+        let path = workspace_file(&format!("docs/product-specification/{spec}"));
+        assert!(
+            path.is_file(),
+            "CMP-002: the owning specification '{spec}' must exist in the workspace"
+        );
+    }
+}
+
+#[test]
+fn cmp_002_a_setting_owned_by_a_feature_unitas_does_not_own_is_never_reported_supported() {
+    use unitas_core::compat::{
+        assess_project, CompatibilityState, ProjectContent, ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/TagManager.asset".to_string(),
+            family: "Tags and layers".to_string(),
+            owning_feature_id: Some("EDT-001".to_string()),
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        ..empty_project()
+    };
+
+    let assessment = assess_project(&content);
+
+    let finding = assessment.report.findings.iter().find(|finding| {
+        finding.content.asset_path.as_deref() == Some("ProjectSettings/TagManager.asset")
+    });
+    assert!(
+        finding.is_some(),
+        "CMP-002: the setting must produce a finding"
+    );
+    if let Some(finding) = finding {
+        assert_eq!(finding.feature_id, "EDT-001");
+        assert_eq!(
+            finding.state,
+            CompatibilityState::Unknown,
+            "CMP-002: a setting owned by a feature unitas does not own must never be reported Supported"
+        );
+        assert!(
+            finding.observable_consequence.contains("classification"),
+            "CMP-002: the finding must say the setting could not be classified: {}",
+            finding.observable_consequence
+        );
+    }
+    assert!(
+        assessment.unknown_features.contains(&"EDT-001".to_string()),
+        "CMP-002: the unclassified setting must stay in the unknown features"
+    );
+    assert!(
+        !assessment
+            .present_supported_features
+            .contains(&"EDT-001".to_string()),
+        "CMP-002: the unclassified setting must never read Supported"
+    );
+}
+
+#[test]
+fn cmp_002_the_texture_import_capability_cites_tests_that_decode_psd_and_hdr() {
+    use unitas_core::compat::lookup_owned_feature_capability;
+
+    let capability = lookup_owned_feature_capability("PRJ-004");
+    assert!(
+        capability.is_some(),
+        "CMP-002: PRJ-004 must own a capability entry"
+    );
+    let evidence: Vec<&str> = capability
+        .map(|capability| {
+            capability
+                .parts
+                .iter()
+                .flat_map(|part| part.evidence.iter().copied())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let dispatch =
+        "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_psd_and_hdr_dispatch_through_the_shared_texture_decoder";
+    assert!(
+        evidence.contains(&dispatch),
+        "CMP-002: the texture import capability must cite the test that decodes PSD and HDR through the shared decoder"
+    );
+
+    let (file, test_name) = dispatch.split_once("::").unwrap_or_default();
+    let source = std::fs::read_to_string(workspace_file(file)).unwrap_or_default();
+    let start = source.find(&format!("fn {test_name}(")).unwrap_or_default();
+    assert!(
+        start > 0,
+        "CMP-002: the cited test '{test_name}' must exist in '{file}'"
+    );
+    let body = &source[start..];
+    let end = body.find("\n}").unwrap_or(body.len());
+    let body = &body[..end];
+    assert!(
+        body.contains("decode_texture"),
+        "CMP-002: the cited test must decode through the shared texture decoder"
+    );
+    assert!(
+        body.contains(".PSD") && body.contains(".HDR"),
+        "CMP-002: the cited test must decode a PSD file name and an HDR file name"
+    );
+}

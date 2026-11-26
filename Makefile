@@ -10,13 +10,14 @@ DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 DOTNET_RESTORE_COMMAND := dotnet restore bridge/Unitas.sln
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
-EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
+EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
 	HttpTransportTests \
 	ScenarioToolsTests \
 	StdioTransportTests \
 	PlaySessionLifecycleTests \
 	PlayWorkerCrashTests \
-	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests
+	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests \
+	AuthoringToolsTests,ScenarioGlueDiscoveryTests
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \

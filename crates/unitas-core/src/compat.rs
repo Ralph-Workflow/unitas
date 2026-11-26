@@ -1030,18 +1030,22 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
         let capability = lookup_owned_feature_capability(&feature_id);
         let state = setting.state.unwrap_or_else(|| {
             unsupported_entry.map_or_else(
-                || {
-                    capability.map_or(CompatibilityState::Supported, |capability| {
-                        capability.state()
-                    })
-                },
+                || capability.map_or(CompatibilityState::Unknown, |capability| capability.state()),
                 |entry| entry.state,
             )
         });
         let tier = owning_feature_tier(&feature_id, setting.tier);
         let consequence = setting.observable_consequence.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
-                || "project setting is represented and honored".to_string(),
+                || match state {
+                    CompatibilityState::Unknown
+                    | CompatibilityState::PlatformLimited
+                    | CompatibilityState::ExternallyUnavailable => {
+                        "project setting compatibility requires target or behavioral classification"
+                            .to_string()
+                    }
+                    _ => "project setting is represented and honored".to_string(),
+                },
                 |entry| entry.observable_consequence.to_string(),
             )
         });
@@ -1616,12 +1620,12 @@ pub const FEATURE_CATALOG: &[CatalogFeatureEntry] = &[
     CatalogFeatureEntry {
         feature_id: "SMP-001",
         tier: Tier::Native,
-        owning_spec: "sample-games.md",
+        owning_spec: "sample-games/INDEX.md",
     },
     CatalogFeatureEntry {
         feature_id: "CMP-001",
         tier: Tier::Native,
-        owning_spec: "sample-games.md",
+        owning_spec: "sample-games/INDEX.md",
     },
     CatalogFeatureEntry {
         feature_id: "CMP-002",
@@ -1875,6 +1879,8 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 location: "crates/unitas-asset/src/texture/import.rs",
                 evidence: &[
                     "crates/unitas-asset/tests/asset_import/texture_tests.rs::dispatches_decoding_by_file_name",
+                    "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_psd_and_hdr_dispatch_through_the_shared_texture_decoder",
+                    "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_psd_and_hdr_are_recognized_as_texture_assets",
                     "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_psd_rle_composite_decodes_to_the_known_pixels",
                     "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_hdr_rle_scanlines_decode_to_the_known_float_pixels",
                 ],

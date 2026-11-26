@@ -19,7 +19,9 @@ namespace Unitas.Bridge.Tests
 
         public static void Run()
         {
-            string directory = Path.Combine(Path.GetTempPath(), "unitas-visual-reference");
+            string directory = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-visual-reference-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             Directory.CreateDirectory(directory);
             try
             {
