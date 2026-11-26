@@ -35,9 +35,28 @@ namespace UnityEngine
 
                 if (component is MonoBehaviour behaviour)
                 {
+                    Type scriptType = behaviour.AttachedRuntimeType ?? typeof(MonoBehaviour);
+                    IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                    if (target.NativeEntityId != 0 && runtimeProvider != null)
+                    {
+                        RuntimeObjectProvider.RegisterScriptFactory(
+                            scriptType,
+                            () =>
+                            {
+                                MonoBehaviour cloned = (MonoBehaviour)behaviour.ShallowClone();
+                                cloned.AssignNewInstanceId();
+                                return cloned;
+                            });
+                        Component? runtimeAttached = runtimeProvider.CreateRuntimeScript(target.NativeEntityId, scriptType);
+                        if (runtimeAttached != null)
+                        {
+                            continue;
+                        }
+                    }
+
                     MonoBehaviour copy = (MonoBehaviour)behaviour.ShallowClone();
                     copy.AssignNewInstanceId();
-                    target.AttachComponent(copy, behaviour.AttachedRuntimeType ?? typeof(MonoBehaviour));
+                    target.AttachComponent(copy, scriptType);
                     continue;
                 }
 
@@ -48,6 +67,7 @@ namespace UnityEngine
                     copy.center = box.center;
                     copy.size = box.size;
                     target.AttachComponent(copy, typeof(BoxCollider));
+                    target.NotifyRuntimeColliderAttached(copy);
                     continue;
                 }
 
@@ -58,6 +78,20 @@ namespace UnityEngine
                     copy.center = sphere.center;
                     copy.radius = sphere.radius;
                     target.AttachComponent(copy, typeof(SphereCollider));
+                    target.NotifyRuntimeColliderAttached(copy);
+                    continue;
+                }
+
+                if (component is CapsuleCollider capsule)
+                {
+                    CapsuleCollider copy = new CapsuleCollider();
+                    copy.isTrigger = capsule.isTrigger;
+                    copy.center = capsule.center;
+                    copy.radius = capsule.radius;
+                    copy.height = capsule.height;
+                    copy.direction = capsule.direction;
+                    target.AttachComponent(copy, typeof(CapsuleCollider));
+                    target.NotifyRuntimeColliderAttached(copy);
                 }
             }
         }

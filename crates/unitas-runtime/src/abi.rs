@@ -424,6 +424,211 @@ pub extern "C" fn unitas_runtime_dont_destroy_on_load(handle: u64, entity: u64) 
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_object_create(
+    handle: u64,
+    name_address: u64,
+    name_length: u64,
+) -> u64 {
+    let Ok(len) = usize::try_from(name_length) else {
+        return 0;
+    };
+    with_runtime_state(handle, |state| {
+        let name = if len == 0 {
+            String::from("GameObject")
+        } else {
+            let Ok(text) = read_path_buffer(state, name_address, len) else {
+                return 0;
+            };
+            text
+        };
+        match state.runtime.create_runtime_object(&name) {
+            Ok(entity) => {
+                state.clear_error();
+                entity.as_u64()
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                0
+            }
+        }
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_object_attach_script(
+    handle: u64,
+    entity: u64,
+    guid_hi: u64,
+    guid_lo: u64,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    if with_active_state(handle, |_| ()).is_some() {
+        let mut active_callbacks = None;
+        let _ = with_active_state(handle, |state| {
+            let scene_index = state
+                .runtime
+                .scenes
+                .iter()
+                .position(|scene| scene.graph.contains(EntityId::new(entity)));
+            let is_persistent = state
+                .runtime
+                .persistent_entities
+                .contains(&EntityId::new(entity));
+            if scene_index.is_some() || is_persistent {
+                active_callbacks = Some((state.runtime.callbacks, scene_index));
+            } else {
+                state.set_error(&RuntimeError::EntityNotFound(EntityId::new(entity)).to_string());
+            }
+        });
+        let Some((callbacks, scene_index)) = active_callbacks else {
+            return -4;
+        };
+        let script_handle = match callbacks {
+            Some(cb) => (cb.create_script)(entity, guid_hi, guid_lo),
+            None => 0,
+        };
+        let instance = crate::runtime::ScriptInstance {
+            entity: EntityId::new(entity),
+            guid: format!("{guid_hi:016x}{guid_lo:016x}"),
+            guid_hi,
+            guid_lo,
+            script_handle,
+            awake_called: false,
+            on_enable_called: false,
+            start_called: false,
+        };
+        let mut attached = false;
+        let _ = with_active_state(handle, |state| {
+            if let Some(index) = scene_index {
+                if let Some(scene) = state.runtime.scenes.get_mut(index) {
+                    scene.scripts.push(instance);
+                    attached = true;
+                }
+            } else {
+                state.runtime.persistent.push(instance);
+                attached = true;
+            }
+            if attached {
+                state.runtime.refresh_script_view();
+                state.clear_error();
+            }
+        });
+        return if attached { 0 } else { -4 };
+    }
+    let mut state = match take_from_registry(handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let result = run_reentrant_operation(handle, &mut state, |runtime, hook| {
+        runtime.attach_runtime_script_with_hook(EntityId::new(entity), guid_hi, guid_lo, hook)
+    });
+    let code = match result {
+        Ok(()) => {
+            state.clear_error();
+            0
+        }
+        Err(err) => {
+            state.set_error(&err.to_string());
+            -4
+        }
+    };
+    if !restore_to_registry(handle, state) {
+        return -1;
+    }
+    code
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_object_set_transform(
+    handle: u64,
+    entity: u64,
+    position_x: f64,
+    position_y: f64,
+    position_z: f64,
+    rotation_x: f64,
+    rotation_y: f64,
+    rotation_z: f64,
+    rotation_w: f64,
+    scale_x: f64,
+    scale_y: f64,
+    scale_z: f64,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        match state.runtime.set_runtime_object_transform(
+            EntityId::new(entity),
+            [position_x, position_y, position_z],
+            [rotation_x, rotation_y, rotation_z, rotation_w],
+            [scale_x, scale_y, scale_z],
+        ) {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_object_create_body(
+    handle: u64,
+    entity: u64,
+    shape: u32,
+    radius: f64,
+    half_x: f64,
+    half_y: f64,
+    half_z: f64,
+    height: f64,
+    is_trigger: u32,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if shape > 2 {
+            state.set_error("invalid runtime body shape");
+            return -2;
+        }
+        match state.runtime.create_runtime_body(
+            EntityId::new(entity),
+            shape,
+            radius,
+            [half_x, half_y, half_z],
+            height,
+            is_trigger != 0,
+        ) {
+            Ok(()) => {
+                state.clear_error();
+                0
+            }
+            Err(err) => {
+                state.set_error(&err.to_string());
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_set_callbacks(
     handle: u64,
     create: extern "C" fn(u64, u64, u64) -> u64,
@@ -3913,9 +4118,8 @@ pub extern "C" fn unitas_runtime_ui_poll_clicks(
 }
 }
 
-/// The float layout a trail's settings travel in: time, width start, width
-/// end, minimum vertex distance, the start colour and the end colour.
 pub const TRAIL_SETTINGS_FLOATS: usize = 12;
+const TRAIL_SETTINGS_BYTES: usize = TRAIL_SETTINGS_FLOATS * 4;
 
 fn trail_settings_blob(settings: &TrailSettings) -> [f32; TRAIL_SETTINGS_FLOATS] {
     [
@@ -3951,12 +4155,17 @@ pub extern "C" fn unitas_runtime_trail_get_settings(handle: u64, entity: u64, bl
         return -2;
     }
     match with_runtime_state(handle, |state| {
+        let Some(offset) = path_buffer_offset(state, blob as usize, TRAIL_SETTINGS_BYTES) else {
+            return -2;
+        };
         let Some(trail) = state.runtime.trails().trail(EntityId::new(entity)) else {
             return -3;
         };
         let values = trail_settings_blob(trail.settings());
-        // SAFETY: the caller passes a buffer of TRAIL_SETTINGS_FLOATS floats.
-        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), blob, values.len()) };
+        for (index, value) in values.iter().enumerate() {
+            let start = offset + index * 4;
+            state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        }
         state.clear_error();
         0
     }) {
@@ -3971,9 +4180,14 @@ pub extern "C" fn unitas_runtime_trail_configure(handle: u64, entity: u64, blob:
     if entity == 0 || blob.is_null() {
         return -2;
     }
-    // SAFETY: the caller passes a buffer of TRAIL_SETTINGS_FLOATS floats.
-    let values: [f32; TRAIL_SETTINGS_FLOATS] = unsafe { *blob.cast::<[f32; TRAIL_SETTINGS_FLOATS]>() };
     match with_runtime_state(handle, |state| {
+        let Some(offset) = path_buffer_offset(state, blob as usize, TRAIL_SETTINGS_BYTES) else {
+            return -2;
+        };
+        let mut values = [0.0f32; TRAIL_SETTINGS_FLOATS];
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = read_f32_le(&state.path_buffer, offset + index * 4);
+        }
         let Some(trail) = state
             .runtime
             .trails_mut()

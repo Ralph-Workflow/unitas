@@ -14,6 +14,8 @@ mod navigation_tests;
 mod physics_tests;
 #[path = "runtime/render_tests.rs"]
 mod render_tests;
+#[path = "runtime/runtime_object_tests.rs"]
+mod runtime_object_tests;
 #[path = "runtime/runtime_tests.rs"]
 mod runtime_tests;
 #[path = "runtime/subsystem_entry_tests.rs"]

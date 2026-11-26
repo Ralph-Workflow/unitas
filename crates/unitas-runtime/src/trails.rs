@@ -92,11 +92,10 @@ impl TrailRuntimeWorld {
         self.emission.entry(entity).or_default().emitting = emitting;
     }
 
-    /// Whether a trail records new ribbon points.
     pub fn emitting(&self, entity: EntityId) -> bool {
         self.emission
             .get(&entity)
-            .map_or(true, |state| state.emitting)
+            .is_none_or(|state| state.emitting)
     }
 
     /// Sets the speed at which a trail's ribbon reaches its authored width.
@@ -138,7 +137,7 @@ impl TrailRuntimeWorld {
             let Some(position) = positions.get(entity) else {
                 continue;
             };
-            if !emission.get(entity).map_or(true, |state| state.emitting) {
+            if !emission.get(entity).is_none_or(|state| state.emitting) {
                 continue;
             }
             trail.update(delta_time, *position);

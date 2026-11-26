@@ -51,6 +51,12 @@ namespace Unitas.Bridge.Scripting
         private static readonly List<Func<MonoBehaviour, IUnitasMessageHandler?>> TypeResolvers =
             new List<Func<MonoBehaviour, IUnitasMessageHandler?>>();
 
+        private static readonly Dictionary<Type, (ulong Hi, ulong Lo)> TypeGuids =
+            new Dictionary<Type, (ulong Hi, ulong Lo)>();
+
+        private const ulong DynamicTypeGuidHi = 0xD000000000000000UL;
+        private static ulong _nextDynamicTypeGuidLo = 1;
+
         public static void Register(
             ulong guidHi,
             ulong guidLo,
@@ -87,6 +93,69 @@ namespace Unitas.Bridge.Scripting
             }
 
             Entries[(guidHi, guidLo)] = new GlueEntry(() => factory(), wrappedHandler, typeof(T));
+            TypeGuids[typeof(T)] = (guidHi, guidLo);
+        }
+
+        public static void RegisterTypeFactory(Type scriptType, Func<MonoBehaviour> factory)
+        {
+            ArgumentNullException.ThrowIfNull(scriptType);
+            ArgumentNullException.ThrowIfNull(factory);
+            if (TypeGuids.TryGetValue(scriptType, out (ulong Hi, ulong Lo) existing)
+                && Entries.ContainsKey(existing))
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<(ulong, ulong), GlueEntry> entry in Entries)
+            {
+                if (entry.Value.ScriptType == scriptType)
+                {
+                    TypeGuids[scriptType] = entry.Key;
+                    return;
+                }
+            }
+
+            (ulong hi, ulong lo) = (DynamicTypeGuidHi, _nextDynamicTypeGuidLo++);
+            Entries[(hi, lo)] = new GlueEntry(factory, null, scriptType);
+            TypeGuids[scriptType] = (hi, lo);
+        }
+
+        public static bool TryGetOrRegisterGuidForType(Type scriptType, out ulong guidHi, out ulong guidLo)
+        {
+            guidHi = 0;
+            guidLo = 0;
+            if (scriptType == null || !typeof(MonoBehaviour).IsAssignableFrom(scriptType) || scriptType.IsAbstract)
+            {
+                return false;
+            }
+
+            if (TypeGuids.TryGetValue(scriptType, out (ulong Hi, ulong Lo) found) && Entries.ContainsKey(found))
+            {
+                guidHi = found.Hi;
+                guidLo = found.Lo;
+                return true;
+            }
+
+            foreach (KeyValuePair<(ulong, ulong), GlueEntry> entry in Entries)
+            {
+                if (entry.Value.ScriptType == scriptType)
+                {
+                    TypeGuids[scriptType] = entry.Key;
+                    guidHi = entry.Key.Item1;
+                    guidLo = entry.Key.Item2;
+                    return true;
+                }
+            }
+
+            (ulong hi, ulong lo) = (DynamicTypeGuidHi, _nextDynamicTypeGuidLo++);
+            Entries[(hi, lo)] = new GlueEntry(
+                () => (MonoBehaviour)Activator.CreateInstance(scriptType)!,
+                null,
+                scriptType);
+            TypeGuids[scriptType] = (hi, lo);
+            guidHi = hi;
+            guidLo = lo;
+            return true;
         }
 
         public static void Register<T>(
@@ -291,6 +360,8 @@ namespace Unitas.Bridge.Scripting
             Handlers.Clear();
             InstanceGuids.Clear();
             TypeResolvers.Clear();
+            TypeGuids.Clear();
+            _nextDynamicTypeGuidLo = 1;
         }
 
         public static (ulong guidHi, ulong guidLo) ParseGuid(string guidHex)

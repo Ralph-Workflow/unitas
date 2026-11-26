@@ -2078,11 +2078,11 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
     }
 }
 
-const OWNED_FEATURE_IDS: [&str; 26] = [
+const OWNED_FEATURE_IDS: [&str; 31] = [
     "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
     "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
     "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-004", "EDT-007",
-    "CMP-002", "BLD-005",
+    "CMP-002", "BLD-005", "RUN-001", "RUN-003", "RUN-004", "RUN-005", "RUN-009",
 ];
 
 fn workspace_file(relative: &str) -> std::path::PathBuf {
@@ -2763,4 +2763,53 @@ fn cmp_002_the_texture_import_capability_cites_tests_that_decode_psd_and_hdr() {
         body.contains(".PSD") && body.contains(".HDR"),
         "CMP-002: the cited test must decode a PSD file name and an HDR file name"
     );
+}
+
+#[test]
+fn cmp_003_runtime_scripting_owned_features_report_honest_partially_supported_state_and_gaps() {
+    use unitas_core::compat::{
+        lookup_owned_feature_capability, probe_owned_feature, CompatibilityState, Tier,
+    };
+
+    for feature_id in ["RUN-001", "RUN-003", "RUN-004", "RUN-005", "RUN-009"] {
+        let probed = probe_owned_feature(feature_id);
+        assert!(
+            probed.is_some(),
+            "CMP-003: '{feature_id}' must return a probed owned feature state"
+        );
+        if let Some(probed) = probed {
+            assert_eq!(probed.feature_id, feature_id);
+            assert_eq!(probed.tier, Tier::Semantic);
+            assert_eq!(
+                probed.state,
+                CompatibilityState::PartiallySupported,
+                "CMP-003: '{feature_id}' has undemonstrated behavior and must report PartiallySupported, never Supported"
+            );
+            let gap = probed.gap.unwrap_or_default();
+            assert!(
+                gap.contains("missing:"),
+                "CMP-003: '{feature_id}' must name its undemonstrated gap: {gap}"
+            );
+        }
+
+        let capability = lookup_owned_feature_capability(feature_id);
+        assert!(capability.is_some());
+        if let Some(capability) = capability {
+            assert_eq!(capability.owning_spec, "scripting-runtime.md");
+            assert!(
+                capability
+                    .parts
+                    .iter()
+                    .any(|part| !part.evidence.is_empty()),
+                "CMP-003: '{feature_id}' must record at least one demonstrated part"
+            );
+            assert!(
+                capability
+                    .parts
+                    .iter()
+                    .any(|part| part.evidence.is_empty() && part.missing.is_some()),
+                "CMP-003: '{feature_id}' must record at least one undemonstrated gap part"
+            );
+        }
+    }
 }

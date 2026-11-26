@@ -13,6 +13,7 @@ pub mod particles;
 pub mod physics;
 pub mod resources;
 mod runtime;
+mod runtime_objects;
 mod scene_query;
 pub mod scripting;
 pub mod terrain;
@@ -30,5 +31,6 @@ pub use input::*;
 pub use jobs::job_system;
 pub use runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
+    unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,
 };
 pub use unitas_physics::BodyRole;

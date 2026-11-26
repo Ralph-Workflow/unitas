@@ -41,10 +41,8 @@ use crate::physics::PhysicsRuntimeWorld;
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
 
-/// The UI components of a loaded scene live in their own module so the scene
-/// loader and the frame loop can both reach them.
 #[path = "ui_components.rs"]
-mod ui_components;
+pub(crate) mod ui_components;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -101,20 +99,20 @@ pub extern "C" fn unitas_runtime_mark_destroyed(handle: u64, entity: u64) -> i32
 }
 
 pub struct LoadedScene {
-    name: String,
-    graph: SceneGraph,
-    scripts: Vec<ScriptInstance>,
-    bodies: Vec<EntityId>,
-    body_offsets: Vec<(EntityId, [f32; 3])>,
-    character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
-    audio_sources: Vec<(EntityId, AudioSourceComponent)>,
-    animators: Vec<EntityId>,
-    particles: Vec<EntityId>,
-    trails: Vec<EntityId>,
-    ui: UiComponents,
-    diagnostics: Vec<(EntityId, String)>,
-    entity_base: u64,
-    entity_count: u64,
+    pub(crate) name: String,
+    pub(crate) graph: SceneGraph,
+    pub(crate) scripts: Vec<ScriptInstance>,
+    pub(crate) bodies: Vec<EntityId>,
+    pub(crate) body_offsets: Vec<(EntityId, [f32; 3])>,
+    pub(crate) character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
+    pub(crate) audio_sources: Vec<(EntityId, AudioSourceComponent)>,
+    pub(crate) animators: Vec<EntityId>,
+    pub(crate) particles: Vec<EntityId>,
+    pub(crate) trails: Vec<EntityId>,
+    pub(crate) ui: UiComponents,
+    pub(crate) diagnostics: Vec<(EntityId, String)>,
+    pub(crate) entity_base: u64,
+    pub(crate) entity_count: u64,
 }
 
 impl LoadedScene {
@@ -317,42 +315,42 @@ impl RenderWorld {
 }
 
 pub struct Runtime {
-    scenes: Vec<LoadedScene>,
-    active_scene: Option<usize>,
-    persistent: Vec<ScriptInstance>,
-    persistent_entities: Vec<EntityId>,
-    persistent_character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
-    persistent_audio_sources: Vec<(EntityId, AudioSourceComponent)>,
-    persistent_animators: Vec<EntityId>,
-    pending_play_on_awake: Vec<EntityId>,
-    dynamic_entity_floor: u64,
-    character_states: HashMap<EntityId, CharacterController>,
-    default_character_state: CharacterController,
-    script_view: Vec<ScriptInstance>,
-    physics: PhysicsRuntimeWorld,
-    particles: ParticleRuntimeWorld,
-    particles_2d: ParticleRuntimeWorld2D,
-    trails: TrailRuntimeWorld,
-    navigation: NavigationRuntimeWorld,
-    terrain: TerrainWorld,
-    audio: AudioWorld,
-    animation: AnimationWorld,
-    input: InputState,
-    render: RenderWorld,
-    ui_screen_size: Option<[f32; 2]>,
-    ui_painter: Option<GlyphTextPainter>,
-    pending_ui_clicks: Vec<u64>,
-    ui_pressed_button: Option<EntityId>,
-    project_identity: ProjectIdentity,
-    callbacks: Option<Callbacks>,
-    fixed_timestep: f64,
-    maximum_delta_time: f64,
-    time_scale: f64,
-    accumulator: f64,
-    first_tick: bool,
-    is_shutdown: bool,
-    destroy_handle: Option<u64>,
-    destroy_channel: Option<DestroyChannel>,
+    pub(crate) scenes: Vec<LoadedScene>,
+    pub(crate) active_scene: Option<usize>,
+    pub(crate) persistent: Vec<ScriptInstance>,
+    pub(crate) persistent_entities: Vec<EntityId>,
+    pub(crate) persistent_character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
+    pub(crate) persistent_audio_sources: Vec<(EntityId, AudioSourceComponent)>,
+    pub(crate) persistent_animators: Vec<EntityId>,
+    pub(crate) pending_play_on_awake: Vec<EntityId>,
+    pub(crate) dynamic_entity_floor: u64,
+    pub(crate) character_states: HashMap<EntityId, CharacterController>,
+    pub(crate) default_character_state: CharacterController,
+    pub(crate) script_view: Vec<ScriptInstance>,
+    pub(crate) physics: PhysicsRuntimeWorld,
+    pub(crate) particles: ParticleRuntimeWorld,
+    pub(crate) particles_2d: ParticleRuntimeWorld2D,
+    pub(crate) trails: TrailRuntimeWorld,
+    pub(crate) navigation: NavigationRuntimeWorld,
+    pub(crate) terrain: TerrainWorld,
+    pub(crate) audio: AudioWorld,
+    pub(crate) animation: AnimationWorld,
+    pub(crate) input: InputState,
+    pub(crate) render: RenderWorld,
+    pub(crate) ui_screen_size: Option<[f32; 2]>,
+    pub(crate) ui_painter: Option<GlyphTextPainter>,
+    pub(crate) pending_ui_clicks: Vec<u64>,
+    pub(crate) ui_pressed_button: Option<EntityId>,
+    pub(crate) project_identity: ProjectIdentity,
+    pub(crate) callbacks: Option<Callbacks>,
+    pub(crate) fixed_timestep: f64,
+    pub(crate) maximum_delta_time: f64,
+    pub(crate) time_scale: f64,
+    pub(crate) accumulator: f64,
+    pub(crate) first_tick: bool,
+    pub(crate) is_shutdown: bool,
+    pub(crate) destroy_handle: Option<u64>,
+    pub(crate) destroy_channel: Option<DestroyChannel>,
 }
 
 impl Runtime {
@@ -839,7 +837,7 @@ impl Runtime {
         }
     }
 
-    fn next_entity_base(&self) -> u64 {
+    pub(crate) fn next_entity_base(&self) -> u64 {
         let mut highest = self.dynamic_entity_floor.max(1);
         for scene in &self.scenes {
             highest = highest.max(scene.entity_base + scene.entity_count);
@@ -1096,7 +1094,7 @@ impl Runtime {
         }
     }
 
-    fn refresh_script_view(&mut self) {
+    pub(crate) fn refresh_script_view(&mut self) {
         let scene_scripts = match self.active_scene.and_then(|index| self.scenes.get(index)) {
             Some(scene) => scene.scripts.clone(),
             None => Vec::new(),
@@ -1104,6 +1102,22 @@ impl Runtime {
         let persistent = self.persistent.clone();
         self.script_view = scene_scripts;
         self.script_view.extend(persistent);
+    }
+
+    fn has_pending_scripts(&self) -> bool {
+        for scene in &self.scenes {
+            for script in &scene.scripts {
+                if !script.awake_called {
+                    return true;
+                }
+            }
+        }
+        for script in &self.persistent {
+            if !script.awake_called {
+                return true;
+            }
+        }
+        false
     }
 
     fn all_script_handles(&self) -> Vec<u64> {
@@ -1119,7 +1133,19 @@ impl Runtime {
         handles
     }
 
-    fn find_script(&self, entity: EntityId) -> Option<&ScriptInstance> {
+    fn find_script_at(&self, entity: EntityId, ordinal: usize) -> Option<&ScriptInstance> {
+        for scene in &self.scenes {
+            if let Some(script) = scene.scripts.get(ordinal)
+                && script.entity == entity
+            {
+                return Some(script);
+            }
+        }
+        if let Some(script) = self.persistent.get(ordinal)
+            && script.entity == entity
+        {
+            return Some(script);
+        }
         for scene in &self.scenes {
             if let Some(script) = scene.scripts.iter().find(|script| script.entity == entity) {
                 return Some(script);
@@ -1130,7 +1156,26 @@ impl Runtime {
             .find(|script| script.entity == entity)
     }
 
-    fn find_script_mut(&mut self, entity: EntityId) -> Option<&mut ScriptInstance> {
+    fn find_script_at_mut(
+        &mut self,
+        entity: EntityId,
+        ordinal: usize,
+    ) -> Option<&mut ScriptInstance> {
+        if let Some(scene_idx) = self.scenes.iter().position(|scene| {
+            scene
+                .scripts
+                .get(ordinal)
+                .is_some_and(|script| script.entity == entity)
+        }) {
+            return self.scenes[scene_idx].scripts.get_mut(ordinal);
+        }
+        if self
+            .persistent
+            .get(ordinal)
+            .is_some_and(|script| script.entity == entity)
+        {
+            return self.persistent.get_mut(ordinal);
+        }
         for scene in &mut self.scenes {
             if let Some(script) = scene
                 .scripts
@@ -1149,58 +1194,82 @@ impl Runtime {
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
-        let mut pending: Vec<(EntityId, u64, u64)> = Vec::new();
+        let mut pending: Vec<(EntityId, usize, u64, u64, u64)> = Vec::new();
         for scene in &self.scenes {
-            for script in &scene.scripts {
+            for (ordinal, script) in scene.scripts.iter().enumerate() {
                 if !script.awake_called {
-                    pending.push((script.entity, script.guid_hi, script.guid_lo));
+                    pending.push((
+                        script.entity,
+                        ordinal,
+                        script.guid_hi,
+                        script.guid_lo,
+                        script.script_handle,
+                    ));
                 }
             }
         }
-        for script in &self.persistent {
+        for (ordinal, script) in self.persistent.iter().enumerate() {
             if !script.awake_called {
-                pending.push((script.entity, script.guid_hi, script.guid_lo));
+                pending.push((
+                    script.entity,
+                    ordinal,
+                    script.guid_hi,
+                    script.guid_lo,
+                    script.script_handle,
+                ));
             }
         }
-        for (entity, guid_hi, guid_lo) in pending.iter().copied() {
+        for (entity, ordinal, guid_hi, guid_lo, existing_handle) in pending.iter().copied() {
+            if existing_handle != 0 {
+                continue;
+            }
             let mut created = 0;
             hook(self, &mut || {
                 created = (callbacks.create_script)(entity.as_u64(), guid_hi, guid_lo);
             });
-            if let Some(script) = self.find_script_mut(entity) {
+            if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.script_handle = created;
             }
         }
-        for (entity, _, _) in pending.iter().copied() {
-            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+        for (entity, ordinal, _, _, _) in pending.iter().copied() {
+            let Some(handle) = self
+                .find_script_at(entity, ordinal)
+                .map(|script| script.script_handle)
+            else {
                 continue;
             };
             hook(self, &mut || {
                 (callbacks.awake)(handle);
             });
-            if let Some(script) = self.find_script_mut(entity) {
+            if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.awake_called = true;
             }
         }
-        for (entity, _, _) in pending.iter().copied() {
-            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+        for (entity, ordinal, _, _, _) in pending.iter().copied() {
+            let Some(handle) = self
+                .find_script_at(entity, ordinal)
+                .map(|script| script.script_handle)
+            else {
                 continue;
             };
             hook(self, &mut || {
                 (callbacks.on_enable)(handle);
             });
-            if let Some(script) = self.find_script_mut(entity) {
+            if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.on_enable_called = true;
             }
         }
-        for (entity, _, _) in pending.iter().copied() {
-            let Some(handle) = self.find_script(entity).map(|script| script.script_handle) else {
+        for (entity, ordinal, _, _, _) in pending.iter().copied() {
+            let Some(handle) = self
+                .find_script_at(entity, ordinal)
+                .map(|script| script.script_handle)
+            else {
                 continue;
             };
             hook(self, &mut || {
                 (callbacks.start)(handle);
             });
-            if let Some(script) = self.find_script_mut(entity) {
+            if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.start_called = true;
             }
         }
@@ -1242,6 +1311,12 @@ impl Runtime {
             self.drain_pending_play_on_awake();
             self.refresh_script_view();
             return Ok(());
+        }
+        if self.has_pending_scripts() {
+            if let Some(callbacks) = self.callbacks {
+                self.init_pending_scripts(callbacks, &mut hook);
+            }
+            self.refresh_script_view();
         }
         if !self.pending_play_on_awake.is_empty() {
             self.drain_pending_play_on_awake();
@@ -1306,9 +1381,14 @@ impl Runtime {
                 self.accumulator = 0.0;
             }
         }
-        let mut handles = Vec::new();
+        if self.has_pending_scripts() {
+            if let Some(callbacks) = self.callbacks {
+                self.init_pending_scripts(callbacks, &mut hook);
+            }
+            self.refresh_script_view();
+        }
+        let handles = self.all_script_handles();
         if let Some(callbacks) = self.callbacks {
-            handles = self.all_script_handles();
             for handle in &handles {
                 let h = *handle;
                 hook(self, &mut || {
@@ -1330,12 +1410,19 @@ impl Runtime {
         self.audio.tick(delta_seconds, self.time_scale);
         self.route_ui_pointer();
         if let Some(callbacks) = self.callbacks {
-            for handle in &handles {
+            let late_handles = self.all_script_handles();
+            for handle in &late_handles {
                 let h = *handle;
                 hook(self, &mut || {
                     (callbacks.late_update)(h, scaled_delta);
                 });
             }
+        }
+        if self.has_pending_scripts() {
+            if let Some(callbacks) = self.callbacks {
+                self.init_pending_scripts(callbacks, &mut hook);
+            }
+            self.refresh_script_view();
         }
         Ok(())
     }
@@ -1439,8 +1526,23 @@ impl Runtime {
     }
 
     fn sweep_destroyed_entities(&mut self) {
+        let mut swept_all = Vec::new();
         for scene in &mut self.scenes {
-            let _swept = scene.graph.sweep_destroyed();
+            let swept = scene.graph.sweep_destroyed();
+            if !swept.is_empty() {
+                scene.scripts.retain(|s| !swept.contains(&s.entity));
+                scene.bodies.retain(|b| !swept.contains(b));
+                scene.body_offsets.retain(|(id, _)| !swept.contains(id));
+                swept_all.extend(swept);
+            }
+        }
+        if !swept_all.is_empty() {
+            self.persistent.retain(|s| !swept_all.contains(&s.entity));
+            self.persistent_entities.retain(|e| !swept_all.contains(e));
+            for entity in swept_all {
+                self.physics.world_3d_mut().remove_body(entity);
+            }
+            self.refresh_script_view();
         }
     }
 
@@ -2462,7 +2564,7 @@ fn body_desc(
     ))
 }
 
-fn world_to_local_translation(
+pub(crate) fn world_to_local_translation(
     parent_world: &unitas_core::Transform,
     world_translation: [f32; 3],
 ) -> [f32; 3] {

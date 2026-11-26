@@ -39,6 +39,7 @@ namespace UnityEngine
             {
                 _localPosition = value;
                 MarkChanged();
+                PushPositionToNative();
                 NotifyCharacterControllerTeleported();
             }
         }
@@ -130,6 +131,7 @@ namespace UnityEngine
             {
                 _localScale = value;
                 MarkChanged();
+                PushRuntimeTransformToNative();
             }
         }
 
@@ -708,6 +710,27 @@ namespace UnityEngine
             }
         }
 
+        internal void SeedPositionFromNative(Vector3 simulatedPosition)
+        {
+            if (_parent != null)
+            {
+                _localPosition = _parent.InverseTransformPoint(simulatedPosition);
+            }
+            else
+            {
+                _localPosition = simulatedPosition;
+            }
+            MarkChanged();
+        }
+
+        internal void SeedLocalTransformFromScene(Vector3 localPosition, Quaternion localRotation, Vector3 localScale)
+        {
+            _localPosition = localPosition;
+            _localRotation = Quaternion.Normalize(localRotation);
+            _localScale = localScale;
+            MarkChanged();
+        }
+
         private void PushPositionToNative()
         {
             GameObject? owner = gameObject;
@@ -715,7 +738,14 @@ namespace UnityEngine
             {
                 return;
             }
-            // Unity teleports the rigidbody on any transform.position write, not only kinematic ones.
+            if (owner.IsRuntimeObject)
+            {
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (runtimeProvider != null)
+                {
+                    runtimeProvider.SetRuntimeTransform(owner.NativeEntityId, position, rotation, lossyScale);
+                }
+            }
             Rigidbody? body = owner.GetComponent<Rigidbody>();
             if (body == null)
             {
@@ -735,6 +765,14 @@ namespace UnityEngine
             {
                 return;
             }
+            if (owner.IsRuntimeObject)
+            {
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (runtimeProvider != null)
+                {
+                    runtimeProvider.SetRuntimeTransform(owner.NativeEntityId, position, rotation, lossyScale);
+                }
+            }
             Rigidbody? body = owner.GetComponent<Rigidbody>();
             if (body == null)
             {
@@ -744,6 +782,20 @@ namespace UnityEngine
             if (provider != null)
             {
                 provider.TrySetBodyRotation(owner.NativeEntityId, rotation);
+            }
+        }
+
+        private void PushRuntimeTransformToNative()
+        {
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed || owner.NativeEntityId == 0 || !owner.IsRuntimeObject)
+            {
+                return;
+            }
+            IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+            if (runtimeProvider != null)
+            {
+                runtimeProvider.SetRuntimeTransform(owner.NativeEntityId, position, rotation, lossyScale);
             }
         }
 

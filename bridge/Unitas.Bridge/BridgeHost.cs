@@ -10,7 +10,7 @@ using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider, ICharacterControllerProvider, IInputProvider, ISceneHost, IApplicationHost, IAudioProvider
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, ICharacterControllerProvider, IInputProvider, ISceneHost, IApplicationHost, IAudioProvider, IRuntimeObjectProvider
     {
         private const uint CollisionPhaseEnter = 0;
         private const int GAME_OBJECT_CLASS = 1;
@@ -26,7 +26,11 @@ namespace Unitas.Bridge
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
         private readonly Dictionary<ulong, ulong> _entityScripts = new Dictionary<ulong, ulong>();
+        private readonly Dictionary<ulong, List<ulong>> _entityScriptHandles = new Dictionary<ulong, List<ulong>>();
         private readonly Dictionary<ulong, GameObject> _entityGameObjects = new Dictionary<ulong, GameObject>();
+        private readonly Dictionary<ulong, RuntimeBodySnapshot> _runtimeBodySnapshots = new Dictionary<ulong, RuntimeBodySnapshot>();
+        private readonly HashSet<ulong> _runtimeCreatedEntities = new HashSet<ulong>();
+        private MonoBehaviour? _lastCreatedScript;
         private readonly List<ulong> _materializedSceneEntities = new List<ulong>();
         private readonly List<UnityEngine.Object> _destroyedObjects = new List<UnityEngine.Object>();
         private readonly Dictionary<ulong, string> _sceneObjectNames = new Dictionary<ulong, string>();
@@ -48,9 +52,6 @@ namespace Unitas.Bridge
         private readonly RuntimeUiProvider _uiProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
-        // Scene handles are process-unique, not per host: the replaced-scene purge in
-        // DeregisterReplacedSceneObjects matches objects by handle, so a later host
-        // reusing handle 1 would keep a previous run's objects visible to Find.
         private static int _nextSceneHandle = 1;
         private ulong _nextScriptHandle = 1;
         private readonly List<ulong> _fixedUpdatePhaseHandles = new List<ulong>();
@@ -147,13 +148,15 @@ namespace Unitas.Bridge
             Input.Provider = this;
             SceneManager.Host = this;
             Application.Host = this;
-            // Lets headless scenario runs share PlayerPrefs state across processes (SAV-001).
             string? persistentDataPathOverride = Environment.GetEnvironmentVariable("UNITAS_PERSISTENT_DATA_PATH");
             if (!string.IsNullOrEmpty(persistentDataPathOverride))
             {
                 Application.PersistentDataPathOverride = persistentDataPathOverride;
             }
             AudioSource.Provider = this;
+            RuntimeObjectProvider.Current = this;
+            RuntimeObjectProvider.ScriptFactoryRegistrar = ScriptGlueRegistry.RegisterTypeFactory;
+            RuntimeObjectProvider.RuntimeObjectRegistrationHandler = RegisterRuntimeGameObject;
             Animator.Provider = _animationProvider;
             Camera.Provider = _renderProvider;
             Mesh.Provider = _renderProvider;
@@ -364,6 +367,7 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
+            FlushDestroyedObjects();
         }
 
         public Scene LoadScene(string scenePath, LoadSceneMode mode)
@@ -429,6 +433,7 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
+            FlushDestroyedObjects();
             return loaded;
         }
 
@@ -672,14 +677,35 @@ namespace Unitas.Bridge
                 _scripts.Remove(handle);
                 if (entity != 0)
                 {
+                    if (_entityScriptHandles.TryGetValue(entity, out List<ulong>? list))
+                    {
+                        list.Remove(handle);
+                        if (list.Count == 0)
+                        {
+                            _entityScriptHandles.Remove(entity);
+                        }
+                    }
                     _entityScripts.Remove(entity);
                     _entityGameObjects.Remove(entity);
                 }
             }
+            _runtimeBodySnapshots.Clear();
+            _runtimeCreatedEntities.Clear();
         }
 
         private ulong EntityForScript(ulong scriptHandle)
         {
+            foreach (KeyValuePair<ulong, List<ulong>> entry in _entityScriptHandles)
+            {
+                for (int i = 0; i < entry.Value.Count; i++)
+                {
+                    if (entry.Value[i] == scriptHandle)
+                    {
+                        return entry.Key;
+                    }
+                }
+            }
+
             foreach (KeyValuePair<ulong, ulong> entry in _entityScripts)
             {
                 if (entry.Value == scriptHandle)
@@ -782,6 +808,7 @@ namespace Unitas.Bridge
             _fixedUpdatePhaseHandles.Clear();
             _updatePhaseHandles.Clear();
             _lateUpdatePhaseHandles.Clear();
+            SyncRuntimeObjectsBeforeTick();
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
             double tickDeltaSeconds = Time.captureFramerate > 0 ? Time.unscaledDeltaTime : deltaSeconds;
@@ -795,6 +822,24 @@ namespace Unitas.Bridge
                     throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + ").");
                 }
                 throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
+            }
+
+            if (_fixedUpdatePhaseHandles.Count > 0)
+            {
+                DispatchPhaseInExecutionOrder(_fixedUpdatePhaseHandles, script => script.FixedUpdate());
+                _fixedUpdatePhaseHandles.Clear();
+                PumpFixedSafely();
+            }
+            if (_updatePhaseHandles.Count > 0)
+            {
+                DispatchPhaseInExecutionOrder(_updatePhaseHandles, script => script.Update());
+                _updatePhaseHandles.Clear();
+            }
+            if (_lateUpdatePhaseHandles.Count > 0)
+            {
+                DispatchPhaseInExecutionOrder(_lateUpdatePhaseHandles, script => script.LateUpdate());
+                _lateUpdatePhaseHandles.Clear();
+                PumpFrameSafely();
             }
 
             FlushDestroyedObjects();
@@ -840,7 +885,11 @@ namespace Unitas.Bridge
                 _lateUpdatePhaseHandles.Clear();
                 _scripts.Clear();
                 _entityScripts.Clear();
+                _entityScriptHandles.Clear();
                 _entityGameObjects.Clear();
+                _runtimeBodySnapshots.Clear();
+                _runtimeCreatedEntities.Clear();
+                _lastCreatedScript = null;
                 _materializedSceneEntities.Clear();
                 DropMaterializedSceneCameras();
                 _sceneObjectNames.Clear();
@@ -874,6 +923,11 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(AudioSource.Provider, this))
                 {
                     AudioSource.Provider = null;
+                }
+                if (ReferenceEquals(RuntimeObjectProvider.Current, this))
+                {
+                    RuntimeObjectProvider.Current = null;
+                    RuntimeObjectProvider.RuntimeObjectRegistrationHandler = null;
                 }
                 if (ReferenceEquals(Animator.Provider, _animationProvider))
                 {
@@ -1283,7 +1337,6 @@ namespace Unitas.Bridge
 
         public bool TrySetBodyPosition(ulong entity, Vector3 position)
         {
-            // Dynamic bodies reject set_body_position; a transform write teleports them instead.
             return TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_set_body_position, position)
                 || TryWriteBodyVector(entity, RuntimeInterop.unitas_runtime_teleport_body_position, position);
         }
@@ -2192,15 +2245,17 @@ namespace Unitas.Bridge
             string name = _sceneObjectNames.TryGetValue(entity, out string? parsedName) && !string.IsNullOrEmpty(parsedName)
                 ? parsedName
                 : "GameObject";
-            GameObject created = new GameObject(name);
+            GameObject created;
+            using (GameObject.SuppressRuntimeCreation())
+            {
+                created = new GameObject(name);
+            }
             created.AssignNativeEntityId(entity);
             ApplySceneTransform(entity, created);
             _entityGameObjects[entity] = created;
             return created;
         }
 
-        // Unity serializes a scene transform as a local transform, so the seeded values stay
-        // local and compose with the parent hierarchy the way the serialized scene does.
         private void ApplySceneTransform(ulong entity, GameObject owner)
         {
             if (!_sceneTransforms.TryGetValue(entity, out SceneTransformMetadata metadata))
@@ -2208,18 +2263,17 @@ namespace Unitas.Bridge
                 return;
             }
 
-            owner.transform.localPosition = metadata.Position;
-            owner.transform.localRotation = metadata.Rotation;
-            owner.transform.localScale = metadata.Scale;
+            owner.transform.SeedLocalTransformFromScene(metadata.Position, metadata.Rotation, metadata.Scale);
         }
 
-        // Unity hands the counterpart GameObject of a collision to the script whether or not the
-        // counterpart carries a MonoBehaviour, so the counterpart is resolved by entity and a
-        // scene object without a script is materialized on demand.
         private GameObject? ResolveGameObjectByEntity(ulong entity)
         {
             if (_entityGameObjects.TryGetValue(entity, out GameObject? existing) && existing != null && !existing.IsDestroyed)
             {
+                if (IsSceneEntity(entity))
+                {
+                    ApplyScenePhysicsComponents(entity, existing);
+                }
                 return existing;
             }
 
@@ -2291,8 +2345,6 @@ namespace Unitas.Bridge
             _materializedSceneEntities.Clear();
         }
 
-        // A scene camera is materialized when the scene loads, so the object a later scene load
-        // replaces has to be destroyed or GameObject.Find keeps returning the stale one.
         private void DropMaterializedSceneCameras()
         {
             for (int index = 0; index < _materializedSceneCameras.Count; index++)
@@ -2304,8 +2356,6 @@ namespace Unitas.Bridge
                 }
             }
             _materializedSceneCameras.Clear();
-            // Resolve the queued destroys now, while the scene that owns those entity ids is
-            // still loaded; the next scene reuses the same ids and would sweep its own objects.
             FlushDestroyedObjects();
         }
 
@@ -2331,9 +2381,16 @@ namespace Unitas.Bridge
             {
                 return 0;
             }
+            _lastCreatedScript = script;
             ulong handle = _nextScriptHandle++;
             _scripts[handle] = script;
             _entityScripts[entity] = handle;
+            if (!_entityScriptHandles.TryGetValue(entity, out List<ulong>? handleList))
+            {
+                handleList = new List<ulong>();
+                _entityScriptHandles[entity] = handleList;
+            }
+            handleList.Add(handle);
             GameObject? owner = script.gameObject;
             if (owner == null || owner.IsDestroyed)
             {
@@ -2344,7 +2401,10 @@ namespace Unitas.Bridge
                             ? parsedName
                             : "GameObject")
                         : script.name;
-                    owner = new GameObject(objectName);
+                    using (GameObject.SuppressRuntimeCreation())
+                    {
+                        owner = new GameObject(objectName);
+                    }
                 }
                 owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
             }
@@ -2461,10 +2521,6 @@ namespace Unitas.Bridge
             }
         }
 
-        // Native dispatch (crates/unitas-runtime/src/runtime.rs tick_with_hook) calls
-        // these callbacks once per handle in scene insertion order; managed execution
-        // order is applied here by buffering one phase and flushing it sorted by
-        // GetEffectiveExecutionOrder, stable on arrival index.
         private void DispatchPhaseInExecutionOrder(List<ulong> phaseHandles, Action<MonoBehaviour> callback)
         {
             List<(MonoBehaviour Script, int Order, int Index)> pending =
@@ -2484,8 +2540,6 @@ namespace Unitas.Bridge
             for (int i = 0; i < pending.Count; i++)
             {
                 MonoBehaviour script = pending[i].Script;
-                // Re-check at invoke time: an earlier callback in this flush may have
-                // destroyed a later script.
                 if (!IsEligible(script))
                 {
                     continue;
@@ -2496,8 +2550,6 @@ namespace Unitas.Bridge
 
         private void WarnOnLeftoverPhaseHandles()
         {
-            // A non-empty buffer at tick start means phase completion was miscounted
-            // (the script set changed mid-phase); the leftovers are dropped, not run.
             if (_fixedUpdatePhaseHandles.Count + _updatePhaseHandles.Count + _lateUpdatePhaseHandles.Count > 0)
             {
                 Debug.LogWarning("BridgeHost: dropping incomplete script phase from the previous tick");
@@ -2519,6 +2571,16 @@ namespace Unitas.Bridge
                 return;
             }
 
+            ulong entity = EntityForScript(scriptHandle);
+            if (entity != 0 && _entityScriptHandles.TryGetValue(entity, out List<ulong>? list))
+            {
+                list.Remove(scriptHandle);
+                if (list.Count == 0)
+                {
+                    _entityScriptHandles.Remove(entity);
+                }
+            }
+
             if (script == null)
             {
                 OwnerDestroyedSafely(script!);
@@ -2534,34 +2596,100 @@ namespace Unitas.Bridge
         private void OnCollision(ulong entityA, ulong entityB, uint phase)
         {
             SyncSimulatedTransforms();
-            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
-            MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+            GameObject? otherB = ResolveGameObjectByEntity(entityB);
+            GameObject? otherA = ResolveGameObjectByEntity(entityA);
 
-            if (IsEligible(scriptA))
+            if (_entityScriptHandles.TryGetValue(entityA, out List<ulong>? handlesA))
             {
-                DispatchCollision(scriptA!, new Collision(ResolveGameObjectByEntity(entityB)), phase);
+                List<ulong> snapshotA = new List<ulong>(handlesA);
+                for (int i = 0; i < snapshotA.Count; i++)
+                {
+                    if (_scripts.TryGetValue(snapshotA[i], out MonoBehaviour? scriptA) && IsEligible(scriptA))
+                    {
+                        DispatchCollision(scriptA!, new Collision(otherB), phase);
+                    }
+                }
+            }
+            else
+            {
+                MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+                if (IsEligible(scriptA))
+                {
+                    DispatchCollision(scriptA!, new Collision(otherB), phase);
+                }
             }
 
-            if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
+            if (entityB != entityA)
             {
-                DispatchCollision(scriptB!, new Collision(ResolveGameObjectByEntity(entityA)), phase);
+                if (_entityScriptHandles.TryGetValue(entityB, out List<ulong>? handlesB))
+                {
+                    List<ulong> snapshotB = new List<ulong>(handlesB);
+                    for (int i = 0; i < snapshotB.Count; i++)
+                    {
+                        if (_scripts.TryGetValue(snapshotB[i], out MonoBehaviour? scriptB) && IsEligible(scriptB))
+                        {
+                            DispatchCollision(scriptB!, new Collision(otherA), phase);
+                        }
+                    }
+                }
+                else
+                {
+                    MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+                    if (IsEligible(scriptB))
+                    {
+                        DispatchCollision(scriptB!, new Collision(otherA), phase);
+                    }
+                }
             }
         }
 
         private void OnTrigger(ulong entityA, ulong entityB, uint phase)
         {
             SyncSimulatedTransforms();
-            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
-            MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+            Collider? colliderB = ResolveColliderByEntity(entityB);
+            Collider? colliderA = ResolveColliderByEntity(entityA);
 
-            if (IsEligible(scriptA))
+            if (_entityScriptHandles.TryGetValue(entityA, out List<ulong>? handlesA))
             {
-                DispatchTrigger(scriptA!, ResolveColliderByEntity(entityB), phase);
+                List<ulong> snapshotA = new List<ulong>(handlesA);
+                for (int i = 0; i < snapshotA.Count; i++)
+                {
+                    if (_scripts.TryGetValue(snapshotA[i], out MonoBehaviour? scriptA) && IsEligible(scriptA))
+                    {
+                        DispatchTrigger(scriptA!, colliderB, phase);
+                    }
+                }
+            }
+            else
+            {
+                MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+                if (IsEligible(scriptA))
+                {
+                    DispatchTrigger(scriptA!, colliderB, phase);
+                }
             }
 
-            if (IsEligible(scriptB) && !ReferenceEquals(scriptA, scriptB))
+            if (entityB != entityA)
             {
-                DispatchTrigger(scriptB!, ResolveColliderByEntity(entityA), phase);
+                if (_entityScriptHandles.TryGetValue(entityB, out List<ulong>? handlesB))
+                {
+                    List<ulong> snapshotB = new List<ulong>(handlesB);
+                    for (int i = 0; i < snapshotB.Count; i++)
+                    {
+                        if (_scripts.TryGetValue(snapshotB[i], out MonoBehaviour? scriptB) && IsEligible(scriptB))
+                        {
+                            DispatchTrigger(scriptB!, colliderA, phase);
+                        }
+                    }
+                }
+                else
+                {
+                    MonoBehaviour? scriptB = FindScriptByEntity(entityB);
+                    if (IsEligible(scriptB))
+                    {
+                        DispatchTrigger(scriptB!, colliderA, phase);
+                    }
+                }
             }
         }
 
@@ -2597,7 +2725,7 @@ namespace Unitas.Bridge
             }
             if (TryGetBodyPosition(owner.NativeEntityId, out Vector3 simulatedPosition))
             {
-                owner.transform.position = simulatedPosition;
+                owner.transform.SeedPositionFromNative(simulatedPosition);
             }
         }
 
@@ -3051,10 +3179,6 @@ namespace Unitas.Bridge
             _nextSceneEntityBase += localEntityIndex;
         }
 
-        // A prefab instance has no scene document, so the managed mirror resolves its root
-        // transform from the source prefab and the instance overrides. The native runtime
-        // expands the same instance after the scene objects, so the instance roots follow the
-        // scene objects in the entity numbering.
         private void SeedPrefabInstanceTransforms(
             string scenePath,
             List<PrefabInstanceInfo> instances,
@@ -3809,8 +3933,6 @@ namespace Unitas.Bridge
 
             public Vector3 RootLocalScale { get; set; } = Vector3.one;
 
-            // The native runtime creates one entity per prefab object that is neither an
-            // instance root nor an added object, so the managed mirror counts the same set.
             public int OwnEntityCount
             {
                 get
@@ -3878,8 +4000,6 @@ namespace Unitas.Bridge
             public string RootTransformFileId { get; }
         }
 
-        // Resolves a prefab asset guid to its file path, the same way the native asset
-        // importer resolves the source prefab of a scene instance.
         private sealed class PrefabGuidIndex
         {
             private readonly Dictionary<string, string> _assetPaths = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -4205,15 +4325,71 @@ namespace Unitas.Bridge
             for (int index = 0; index < _destroyedObjects.Count; index++)
             {
                 UnityEngine.Object destroyed = _destroyedObjects[index];
+                if (destroyed is MonoBehaviour destroyedScript)
+                {
+                    RemoveDestroyedScriptInstance(destroyedScript);
+                }
+                else if (destroyed is GameObject destroyedGo)
+                {
+                    IReadOnlyList<Component> comps = destroyedGo.Components;
+                    for (int c = 0; c < comps.Count; c++)
+                    {
+                        if (comps[c] is MonoBehaviour goScript)
+                        {
+                            RemoveDestroyedScriptInstance(goScript);
+                        }
+                    }
+                }
                 ulong entity = UnityEngine.Object.NativeEntityIdOf(destroyed);
                 if (entity != 0 && OwnsDestroyedEntity(entity, destroyed))
                 {
                     NativeDestroyInterop.unitas_runtime_mark_destroyed(_runtimeHandle, entity);
+                    if (destroyed is GameObject)
+                    {
+                        _entityGameObjects.Remove(entity);
+                        _entityScripts.Remove(entity);
+                        _entityScriptHandles.Remove(entity);
+                        _runtimeBodySnapshots.Remove(entity);
+                        _runtimeCreatedEntities.Remove(entity);
+                    }
                 }
             }
         }
 
-        // Scene entities are renumbered on every load, so a deferred destroy can already name a live entity.
+        private void RemoveDestroyedScriptInstance(MonoBehaviour destroyedScript)
+        {
+            ulong matchedHandle = 0;
+            foreach (KeyValuePair<ulong, MonoBehaviour> entry in _scripts)
+            {
+                if (ReferenceEquals(entry.Value, destroyedScript))
+                {
+                    matchedHandle = entry.Key;
+                    break;
+                }
+            }
+            if (matchedHandle == 0)
+            {
+                return;
+            }
+            ulong entity = EntityForScript(matchedHandle);
+            _scripts.Remove(matchedHandle);
+            if (entity != 0)
+            {
+                if (_entityScriptHandles.TryGetValue(entity, out List<ulong>? list))
+                {
+                    list.Remove(matchedHandle);
+                    if (list.Count == 0)
+                    {
+                        _entityScriptHandles.Remove(entity);
+                    }
+                }
+                if (_entityScripts.TryGetValue(entity, out ulong primary) && primary == matchedHandle)
+                {
+                    _entityScripts.Remove(entity);
+                }
+            }
+        }
+
         private bool OwnsDestroyedEntity(ulong entity, UnityEngine.Object destroyed)
         {
             if (!_entityGameObjects.TryGetValue(entity, out GameObject? current) || current == null)
@@ -4227,6 +4403,242 @@ namespace Unitas.Bridge
             }
 
             return destroyed is Component component && ReferenceEquals(component.OwnerOrNull, current);
+        }
+
+        private void RegisterRuntimeGameObject(ulong entity, GameObject gameObject)
+        {
+            if (entity == 0 || gameObject == null)
+            {
+                return;
+            }
+
+            _entityGameObjects[entity] = gameObject;
+            _runtimeCreatedEntities.Add(entity);
+        }
+
+        public ulong CreateRuntimeObject(string name)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || !ReferenceEquals(_sceneBackend, _defaultSceneBackend))
+            {
+                return 0;
+            }
+
+            string effectiveName = string.IsNullOrEmpty(name) ? "GameObject" : name;
+            if (!TryWriteStringToPathBuffer(effectiveName, out IntPtr buffer, out ulong length))
+            {
+                return 0;
+            }
+
+            return RuntimeInterop.unitas_runtime_object_create(_runtimeHandle, (ulong)buffer.ToInt64(), length);
+        }
+
+        public Component? CreateRuntimeScript(ulong entity, Type scriptType)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entity == 0 || scriptType == null)
+            {
+                return null;
+            }
+
+            if (!ScriptGlueRegistry.TryGetOrRegisterGuidForType(scriptType, out ulong guidHi, out ulong guidLo))
+            {
+                return null;
+            }
+
+            _lastCreatedScript = null;
+            int status = RuntimeInterop.unitas_runtime_object_attach_script(_runtimeHandle, entity, guidHi, guidLo);
+            if (status != 0)
+            {
+                return null;
+            }
+
+            MonoBehaviour? created = _lastCreatedScript;
+            _lastCreatedScript = null;
+            return created;
+        }
+
+        public bool SetRuntimeTransform(ulong entity, Vector3 position, Quaternion rotation, Vector3 scale)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entity == 0)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_object_set_transform(
+                _runtimeHandle,
+                entity,
+                position.x,
+                position.y,
+                position.z,
+                rotation.x,
+                rotation.y,
+                rotation.z,
+                rotation.w,
+                scale.x,
+                scale.y,
+                scale.z) == 0;
+        }
+
+        public bool CreateRuntimeBody(
+            ulong entity,
+            RuntimeColliderShape shape,
+            float radius,
+            Vector3 halfExtents,
+            float height,
+            bool isTrigger)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entity == 0)
+            {
+                return false;
+            }
+
+            RuntimeBodySnapshot snapshot = new RuntimeBodySnapshot(
+                shape,
+                radius,
+                halfExtents,
+                height,
+                isTrigger);
+            bool ok = RuntimeInterop.unitas_runtime_object_create_body(
+                _runtimeHandle,
+                entity,
+                (uint)shape,
+                radius,
+                halfExtents.x,
+                halfExtents.y,
+                halfExtents.z,
+                height,
+                isTrigger ? 1U : 0U) == 0;
+            if (ok)
+            {
+                _runtimeBodySnapshots[entity] = snapshot;
+            }
+
+            return ok;
+        }
+
+        public bool DestroyRuntimeObject(ulong entity)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entity == 0)
+            {
+                return false;
+            }
+
+            NativeDestroyInterop.unitas_runtime_bind_destroy_channel(_runtimeHandle);
+            return NativeDestroyInterop.unitas_runtime_mark_destroyed(_runtimeHandle, entity) == 0;
+        }
+
+        private void SyncRuntimeObjectsBeforeTick()
+        {
+            if (_isDisposed || _runtimeHandle == 0 || _runtimeCreatedEntities.Count == 0)
+            {
+                return;
+            }
+
+            List<ulong> entities = new List<ulong>(_runtimeCreatedEntities);
+            for (int i = 0; i < entities.Count; i++)
+            {
+                ulong entity = entities[i];
+                if (!_entityGameObjects.TryGetValue(entity, out GameObject? go) || go == null || go.IsDestroyed)
+                {
+                    continue;
+                }
+
+                Transform t = go.transform;
+                SetRuntimeTransform(entity, t.position, t.rotation, t.lossyScale);
+
+                SphereCollider? sphere = go.GetComponent<SphereCollider>();
+                if (sphere != null)
+                {
+                    SyncRuntimeColliderSnapshot(
+                        entity,
+                        new RuntimeBodySnapshot(
+                            RuntimeColliderShape.Sphere,
+                            sphere.radius,
+                            Vector3.zero,
+                            0f,
+                            sphere.isTrigger));
+                    continue;
+                }
+
+                BoxCollider? box = go.GetComponent<BoxCollider>();
+                if (box != null)
+                {
+                    SyncRuntimeColliderSnapshot(
+                        entity,
+                        new RuntimeBodySnapshot(
+                            RuntimeColliderShape.Box,
+                            0f,
+                            box.size * 0.5f,
+                            0f,
+                            box.isTrigger));
+                    continue;
+                }
+
+                CapsuleCollider? capsule = go.GetComponent<CapsuleCollider>();
+                if (capsule != null)
+                {
+                    SyncRuntimeColliderSnapshot(
+                        entity,
+                        new RuntimeBodySnapshot(
+                            RuntimeColliderShape.Capsule,
+                            capsule.radius,
+                            Vector3.zero,
+                            capsule.height,
+                            capsule.isTrigger));
+                }
+            }
+        }
+
+        private void SyncRuntimeColliderSnapshot(ulong entity, RuntimeBodySnapshot desired)
+        {
+            if (_runtimeBodySnapshots.TryGetValue(entity, out RuntimeBodySnapshot existing)
+                && existing.Matches(desired))
+            {
+                return;
+            }
+
+            CreateRuntimeBody(
+                entity,
+                desired.Shape,
+                desired.Radius,
+                desired.HalfExtents,
+                desired.Height,
+                desired.IsTrigger);
+        }
+
+        private readonly struct RuntimeBodySnapshot
+        {
+            public RuntimeBodySnapshot(
+                RuntimeColliderShape shape,
+                float radius,
+                Vector3 halfExtents,
+                float height,
+                bool isTrigger)
+            {
+                Shape = shape;
+                Radius = radius;
+                HalfExtents = halfExtents;
+                Height = height;
+                IsTrigger = isTrigger;
+            }
+
+            public RuntimeColliderShape Shape { get; }
+
+            public float Radius { get; }
+
+            public Vector3 HalfExtents { get; }
+
+            public float Height { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool Matches(RuntimeBodySnapshot other)
+            {
+                return Shape == other.Shape
+                    && Radius == other.Radius
+                    && HalfExtents == other.HalfExtents
+                    && Height == other.Height
+                    && IsTrigger == other.IsTrigger;
+            }
         }
 
         private static class NativeDestroyInterop

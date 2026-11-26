@@ -11,6 +11,27 @@ namespace UnityEngine
         private string _tag = "Untagged";
         private ulong _nativeEntityId;
         private bool _isScriptedPlaceholder;
+        private bool _isRuntimeObject;
+        private static int s_suppressRuntimeCreationDepth;
+
+        internal bool IsRuntimeObject => _isRuntimeObject;
+
+        public readonly struct RuntimeCreationSuppressionScope : IDisposable
+        {
+            public void Dispose()
+            {
+                if (s_suppressRuntimeCreationDepth > 0)
+                {
+                    s_suppressRuntimeCreationDepth--;
+                }
+            }
+        }
+
+        public static RuntimeCreationSuppressionScope SuppressRuntimeCreation()
+        {
+            s_suppressRuntimeCreationDepth++;
+            return default;
+        }
 
         static GameObject()
         {
@@ -77,10 +98,13 @@ namespace UnityEngine
 
         public static GameObject CreateUnassignedReference(string fieldName, string ownerName = "MonoBehaviour")
         {
-            GameObject placeholder = new GameObject("UnassignedReferencePlaceholder");
-            DeregisterObjectAndComponents(placeholder);
-            placeholder.MarkAsUnassignedReference(fieldName, ownerName);
-            return placeholder;
+            using (SuppressRuntimeCreation())
+            {
+                GameObject placeholder = new GameObject("UnassignedReferencePlaceholder");
+                DeregisterObjectAndComponents(placeholder);
+                placeholder.MarkAsUnassignedReference(fieldName, ownerName);
+                return placeholder;
+            }
         }
 
         public Transform transform { get; }
@@ -138,6 +162,20 @@ namespace UnityEngine
             Transform t = new Transform();
             AttachComponent(t, typeof(Transform));
             transform = t;
+            if (!_isScriptedPlaceholder && s_suppressRuntimeCreationDepth == 0)
+            {
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (runtimeProvider != null)
+                {
+                    ulong entity = runtimeProvider.CreateRuntimeObject(name ?? string.Empty);
+                    if (entity != 0)
+                    {
+                        _nativeEntityId = entity;
+                        _isRuntimeObject = true;
+                        RuntimeObjectProvider.NotifyRuntimeObjectCreated(entity, this);
+                    }
+                }
+            }
         }
 
         public GameObject(string name, params Type[] components) : this(name)
@@ -358,6 +396,27 @@ namespace UnityEngine
         public T AddComponent<T>() where T : Component, new()
         {
             ThrowIfDestroyed();
+            if (typeof(MonoBehaviour).IsAssignableFrom(typeof(T)))
+            {
+                RuntimeObjectProvider.RegisterScriptFactory(typeof(T), () => (MonoBehaviour)(Component)new T());
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (_nativeEntityId != 0 && runtimeProvider != null)
+                {
+                    T probe = new T();
+                    DeregisterLiveObject(probe);
+                    if (!TryValidateAndAddRequirements(probe, typeof(T), out string? _))
+                    {
+                        return null!;
+                    }
+
+                    Component? created = runtimeProvider.CreateRuntimeScript(_nativeEntityId, typeof(T));
+                    if (created is T typedCreated)
+                    {
+                        return typedCreated;
+                    }
+                }
+            }
+
             T component = new T();
             component.AttachedRuntimeType = typeof(T);
             if (!TryAttachWithRules(component, typeof(T), out string? _))
@@ -366,6 +425,7 @@ namespace UnityEngine
                 return null!;
             }
 
+            NotifyRuntimeColliderAttached(component);
             return component;
         }
 
@@ -382,21 +442,27 @@ namespace UnityEngine
                 throw new ArgumentException("Type must be a concrete UnityEngine.Component.", nameof(componentType));
             }
 
-            object? created;
-            try
+            if (typeof(MonoBehaviour).IsAssignableFrom(componentType))
             {
-                created = Activator.CreateInstance(componentType);
-            }
-            catch (MissingMethodException ex)
-            {
-                throw new ArgumentException("Component type must have a parameterless constructor: " + componentType.FullName, nameof(componentType), ex);
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (_nativeEntityId != 0 && runtimeProvider != null)
+                {
+                    Component probe = InstantiateComponent(componentType);
+                    DeregisterLiveObject(probe);
+                    if (!TryValidateAndAddRequirements(probe, componentType, out string? _))
+                    {
+                        return null!;
+                    }
+
+                    Component? runtimeCreated = runtimeProvider.CreateRuntimeScript(_nativeEntityId, componentType);
+                    if (runtimeCreated != null)
+                    {
+                        return runtimeCreated;
+                    }
+                }
             }
 
-            if (!(created is Component component))
-            {
-                throw new ArgumentException("Failed to instantiate UnityEngine.Component.", nameof(componentType));
-            }
-
+            Component component = InstantiateComponent(componentType);
             component.AttachedRuntimeType = componentType;
             if (!TryAttachWithRules(component, componentType, out string? _))
             {
@@ -404,12 +470,34 @@ namespace UnityEngine
                 return null!;
             }
 
+            NotifyRuntimeColliderAttached(component);
             return component;
         }
 
         public ComponentOperationResult TryAddComponentForAgent<T>() where T : Component, new()
         {
             ThrowIfDestroyed();
+            if (typeof(MonoBehaviour).IsAssignableFrom(typeof(T)))
+            {
+                RuntimeObjectProvider.RegisterScriptFactory(typeof(T), () => (MonoBehaviour)(Component)new T());
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (_nativeEntityId != 0 && runtimeProvider != null)
+                {
+                    T probe = new T();
+                    DeregisterLiveObject(probe);
+                    if (!TryValidateAndAddRequirements(probe, typeof(T), out string? refusal))
+                    {
+                        return new ComponentOperationResult(false, null, refusal);
+                    }
+
+                    Component? created = runtimeProvider.CreateRuntimeScript(_nativeEntityId, typeof(T));
+                    if (created is T typedCreated)
+                    {
+                        return new ComponentOperationResult(true, typedCreated, null);
+                    }
+                }
+            }
+
             T component = new T();
             component.AttachedRuntimeType = typeof(T);
             if (!TryAttachWithRules(component, typeof(T), out string? refusalReason))
@@ -418,6 +506,7 @@ namespace UnityEngine
                 return new ComponentOperationResult(false, null, refusalReason);
             }
 
+            NotifyRuntimeColliderAttached(component);
             return new ComponentOperationResult(true, component, null);
         }
 
@@ -434,6 +523,40 @@ namespace UnityEngine
                 throw new ArgumentException("Type must be a concrete UnityEngine.Component.", nameof(componentType));
             }
 
+            if (typeof(MonoBehaviour).IsAssignableFrom(componentType))
+            {
+                IRuntimeObjectProvider? runtimeProvider = RuntimeObjectProvider.Current;
+                if (_nativeEntityId != 0 && runtimeProvider != null)
+                {
+                    Component probe = InstantiateComponent(componentType);
+                    DeregisterLiveObject(probe);
+                    if (!TryValidateAndAddRequirements(probe, componentType, out string? refusal))
+                    {
+                        return new ComponentOperationResult(false, null, refusal);
+                    }
+
+                    Component? runtimeCreated = runtimeProvider.CreateRuntimeScript(_nativeEntityId, componentType);
+                    if (runtimeCreated != null)
+                    {
+                        return new ComponentOperationResult(true, runtimeCreated, null);
+                    }
+                }
+            }
+
+            Component component = InstantiateComponent(componentType);
+            component.AttachedRuntimeType = componentType;
+            if (!TryAttachWithRules(component, componentType, out string? refusalReason))
+            {
+                DeregisterLiveObject(component);
+                return new ComponentOperationResult(false, null, refusalReason);
+            }
+
+            NotifyRuntimeColliderAttached(component);
+            return new ComponentOperationResult(true, component, null);
+        }
+
+        private static Component InstantiateComponent(Type componentType)
+        {
             object? created;
             try
             {
@@ -449,14 +572,52 @@ namespace UnityEngine
                 throw new ArgumentException("Failed to instantiate UnityEngine.Component.", nameof(componentType));
             }
 
-            component.AttachedRuntimeType = componentType;
-            if (!TryAttachWithRules(component, componentType, out string? refusalReason))
+            return component;
+        }
+
+        internal void NotifyRuntimeColliderAttached(Component component)
+        {
+            if (_nativeEntityId == 0 || !_isRuntimeObject)
             {
-                DeregisterLiveObject(component);
-                return new ComponentOperationResult(false, null, refusalReason);
+                return;
             }
 
-            return new ComponentOperationResult(true, component, null);
+            IRuntimeObjectProvider? provider = RuntimeObjectProvider.Current;
+            if (provider == null)
+            {
+                return;
+            }
+
+            if (component is SphereCollider sphere)
+            {
+                provider.CreateRuntimeBody(
+                    _nativeEntityId,
+                    RuntimeColliderShape.Sphere,
+                    sphere.radius,
+                    Vector3.zero,
+                    0f,
+                    sphere.isTrigger);
+            }
+            else if (component is BoxCollider box)
+            {
+                provider.CreateRuntimeBody(
+                    _nativeEntityId,
+                    RuntimeColliderShape.Box,
+                    0f,
+                    box.size * 0.5f,
+                    0f,
+                    box.isTrigger);
+            }
+            else if (component is CapsuleCollider capsule)
+            {
+                provider.CreateRuntimeBody(
+                    _nativeEntityId,
+                    RuntimeColliderShape.Capsule,
+                    capsule.radius,
+                    Vector3.zero,
+                    capsule.height,
+                    capsule.isTrigger);
+            }
         }
 
         public ComponentOperationResult TryRemoveComponentForAgent(Component component)
@@ -502,7 +663,7 @@ namespace UnityEngine
             return TryRemoveComponentForAgent(target);
         }
 
-        private bool TryAttachWithRules(Component component, Type componentType, out string? refusalReason)
+        private bool TryValidateAndAddRequirements(Component component, Type componentType, out string? refusalReason)
         {
             refusalReason = null;
             if (component.ResolveDisallowMultiple(componentType) && GetComponent(componentType) != null)
@@ -530,6 +691,16 @@ namespace UnityEngine
                 {
                     AddComponent(reqType);
                 }
+            }
+
+            return true;
+        }
+
+        private bool TryAttachWithRules(Component component, Type componentType, out string? refusalReason)
+        {
+            if (!TryValidateAndAddRequirements(component, componentType, out refusalReason))
+            {
+                return false;
             }
 
             AttachComponentCore(component);
@@ -584,10 +755,6 @@ namespace UnityEngine
 
         internal void AttachComponent(Component component, Type componentType)
         {
-            // Serialized (editor-authored scene or prefab) attach: the same rules and the same
-            // refusal reason as the programmatic add path, so a person and an agent see one behaviour.
-            // The caller supplies the runtime type the serialized data carries; the bridge never
-            // discovers it by reflection.
             if (componentType == null)
             {
                 throw new ArgumentNullException(nameof(componentType));

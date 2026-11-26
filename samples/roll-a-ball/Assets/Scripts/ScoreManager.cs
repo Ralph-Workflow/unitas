@@ -1,13 +1,12 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+
 namespace Unitas.Samples.RollABall
 {
     public class ScoreManager : MonoBehaviour
     {
         private const float PickupRadius = 0.45f;
-        private const float PickupSensorRadius = 1.15f;
-        private const float CollectRadius = PickupRadius + PickupSensorRadius;
         private const int TotalPickups = 12;
         private const float ComboWindowSeconds = 1.5f;
         private const int MaxMultiplier = 5;
@@ -18,16 +17,14 @@ namespace Unitas.Samples.RollABall
         private const float MenuTimerSeconds = 0.5f;
         private const float SlowMotionScale = 0.25f;
         private const float SlowMotionRealtimeSeconds = 0.5f;
-        // 1 / SlowMotionScale: the scaled-to-realtime delta ratio while the
-        // slow-motion finish is on.
         private const float SlowMotionRatio = 4f;
         private const float SlowMotionRatioTolerance = 0.05f;
-        // Frames a pause must last before the marble counts as frozen.
         private const int FrozenProofFrames = 5;
         private const float FrozenToleranceSqr = 1e-8f;
+        private const string GoldPickupName = "Pickup_Gold";
+
         private static readonly Vector3 GoldSpawnPosition = new Vector3(5f, 0.75f, 5f);
-        // Laid out along the sample route (up the middle, counterclockwise
-        // around the ring) so a single lap chains the full combo.
+
         private static readonly Vector3[] PickupPositions =
         {
             new Vector3(0f, 0.75f, 2.25f),
@@ -43,10 +40,10 @@ namespace Unitas.Samples.RollABall
             new Vector3(4.5f, 0.75f, 4.5f),
             new Vector3(1.5f, 0.75f, 4.5f),
         };
+
         private readonly List<GameObject> _pickups = new List<GameObject>();
-        // Trigger count per pickup name: a pickup that fires twice is a bug,
-        // and the counter is what proves it did not.
         private readonly Dictionary<string, int> _pickupTriggers = new Dictionary<string, int>();
+
         private PlayerController? _player;
         private GameObject? _goldPickup;
         private Coroutine? _goldExpiry;
@@ -65,19 +62,20 @@ namespace Unitas.Samples.RollABall
         private bool _movedWhilePausedLogged;
         private int _pausedFrames;
         private Vector3 _pausedPosition;
-        // The scale to restore when the game is unpaused.
         private float _resumeScale = 1f;
-        // The scale to restore when the slow-motion finish ends.
         private float _scaleBeforeSlowMotion = 1f;
+
         public int Score => _score;
+
         public int Multiplier => _multiplier;
+
         public bool Won => _won;
-        // The run clock the HUD reads: the time since the countdown ended.
+
         public float RunTime => _runStarted ? Time.time - _runStartTime : 0f;
+
         private new void Start()
         {
             _player = GetComponentInParent<PlayerController>();
-            // Pickups live in code from here on; drop the scene-authored copies.
             for (int i = 1; i <= 4; i++)
             {
                 GameObject? scenePickup = GameObject.Find($"Pickup_{i}");
@@ -88,9 +86,7 @@ namespace Unitas.Samples.RollABall
             }
             SpawnAllPickups();
         }
-        // Collection is a managed distance check: runtime-spawned colliders
-        // never reach the native physics world, so OnTriggerEnter cannot fire
-        // for code-spawned pickups. Same overlap semantics, fully deterministic.
+
         private new void Update()
         {
             if (Input.GetKeyDown(KeyCode.R))
@@ -116,9 +112,33 @@ namespace Unitas.Samples.RollABall
                 CheckFrozenWhilePaused();
             }
             ReportSlowMotionScale();
-            CollectNearbyPickups();
         }
-        // The title screen starts the run through the same path as the Return key.
+
+        private new void OnTriggerEnter(Collider? other)
+        {
+            if (_won || other == null)
+            {
+                return;
+            }
+            GameObject pickup = other.gameObject;
+            if (pickup == null)
+            {
+                return;
+            }
+            if (_goldPickup != null && ReferenceEquals(pickup, _goldPickup))
+            {
+                CollectGold(pickup);
+                return;
+            }
+            if (!_pickups.Contains(pickup))
+            {
+                return;
+            }
+            CountTrigger(pickup);
+            DestroyPickup(pickup);
+            AwardPickup();
+        }
+
         public void StartRun()
         {
             if (_runStarted || _countdownRunning)
@@ -128,6 +148,7 @@ namespace Unitas.Samples.RollABall
             _countdownRunning = true;
             StartCoroutine(CountdownRoutine());
         }
+
         public void Restart()
         {
             StopGoldExpiry();
@@ -155,41 +176,7 @@ namespace Unitas.Samples.RollABall
             }
             Debug.Log("Retry complete score 0 pickups 12 multiplier x1");
         }
-        private void CollectNearbyPickups()
-        {
-            PlayerController? player = _player;
-            if (_won || player == null)
-            {
-                return;
-            }
-            Vector3 playerPosition = player.transform.position;
-            for (int i = _pickups.Count - 1; i >= 0; i--)
-            {
-                GameObject pickup = _pickups[i];
-                // A destroyed pickup compares equal to null, so the guard below is
-                // what keeps it from being collected or triggered a second time.
-                if (pickup == null)
-                {
-                    continue;
-                }
-                if (Vector3.Distance(pickup.transform.position, playerPosition) > CollectRadius)
-                {
-                    continue;
-                }
-                CountTrigger(pickup);
-                DestroyPickup(pickup);
-                AwardPickup();
-                if (_won)
-                {
-                    return;
-                }
-            }
-            if (_goldPickup != null
-                && Vector3.Distance(_goldPickup.transform.position, playerPosition) <= CollectRadius)
-            {
-                CollectGold(_goldPickup);
-            }
-        }
+
         private void AwardPickup()
         {
             if (Time.time - _lastPickupTime <= ComboWindowSeconds)
@@ -227,6 +214,7 @@ namespace Unitas.Samples.RollABall
                 }
             }
         }
+
         private void CollectGold(GameObject goldObject)
         {
             StopGoldExpiry();
@@ -239,15 +227,15 @@ namespace Unitas.Samples.RollABall
             Debug.Log("Gold pickup collected");
             Debug.Log($"Score +{award} total {_score}");
         }
+
         private void SpawnGoldPickup()
         {
-            GameObject gold = CreatePickup("Pickup_Gold", GoldSpawnPosition);
+            GameObject gold = CreatePickup(GoldPickupName, GoldSpawnPosition);
             _goldPickup = gold;
             Debug.Log("Gold pickup spawned");
-            // The window is 4 seconds of scaled time, so the coroutine waits on
-            // scaled time (WaitForSeconds) and freezes with the game.
             _goldExpiry = StartCoroutine(GoldExpiryRoutine(gold));
         }
+
         private IEnumerator GoldExpiryRoutine(GameObject gold)
         {
             yield return new WaitForSeconds(GoldLifetimeSeconds);
@@ -259,6 +247,7 @@ namespace Unitas.Samples.RollABall
             Destroy(gold);
             Debug.Log("Gold pickup expired");
         }
+
         private void StopGoldExpiry()
         {
             if (_goldExpiry != null)
@@ -267,6 +256,7 @@ namespace Unitas.Samples.RollABall
                 _goldExpiry = null;
             }
         }
+
         private void CountTrigger(GameObject pickup)
         {
             string pickupName = pickup.name;
@@ -277,6 +267,7 @@ namespace Unitas.Samples.RollABall
                 Debug.Log($"{pickupName} triggered twice");
             }
         }
+
         private bool AllPickupsTriggeredOnce()
         {
             foreach (KeyValuePair<string, int> entry in _pickupTriggers)
@@ -288,21 +279,19 @@ namespace Unitas.Samples.RollABall
             }
             return true;
         }
+
         private void DestroyPickup(GameObject pickup)
         {
-            // The pickup reports its own collect burst so the log fires once,
-            // in collection order, at every frame rate.
             Pickup? component = pickup.GetComponent<Pickup>();
             if (component != null)
             {
                 component.ReportCollectBurst();
             }
             Destroy(pickup);
-            // Unity's fake null: a destroyed object compares equal to null.
             bool destroyedReadsNull = pickup == null;
             Debug.Log($"Pickup destroyed null {destroyedReadsNull}");
         }
-        // The countdown runs on scaled time, so it freezes with the game.
+
         private IEnumerator CountdownRoutine()
         {
             yield return new WaitForSeconds(CountdownStepSeconds);
@@ -316,6 +305,7 @@ namespace Unitas.Samples.RollABall
             _runStartTime = Time.time;
             Debug.Log("Run started");
         }
+
         private void TogglePause()
         {
             if (_paused)
@@ -334,12 +324,9 @@ namespace Unitas.Samples.RollABall
             _pausedPosition = player != null ? player.transform.position : Vector3.zero;
             Time.timeScale = 0f;
             Debug.Log("Game paused");
-            // The menu timer runs on real time: it elapses while the scaled
-            // clock is frozen.
             StartCoroutine(MenuTimerRoutine());
         }
-        // While the game is paused the physics does not step, so the marble
-        // must not move: the position is compared against the paused one.
+
         private void CheckFrozenWhilePaused()
         {
             _pausedFrames++;
@@ -365,11 +352,13 @@ namespace Unitas.Samples.RollABall
             _frozenLogged = true;
             Debug.Log("Marble frozen while paused");
         }
+
         private IEnumerator MenuTimerRoutine()
         {
             yield return new WaitForSecondsRealtime(MenuTimerSeconds);
             Debug.Log("Menu timer elapsed");
         }
+
         private void EngageSlowMotion()
         {
             if (_paused)
@@ -383,6 +372,7 @@ namespace Unitas.Samples.RollABall
             Debug.Log("Slow motion engaged");
             StartCoroutine(SlowMotionRoutine());
         }
+
         private IEnumerator SlowMotionRoutine()
         {
             yield return new WaitForSecondsRealtime(SlowMotionRealtimeSeconds);
@@ -397,6 +387,7 @@ namespace Unitas.Samples.RollABall
             }
             Debug.Log("Time restored");
         }
+
         private void ReportSlowMotionScale()
         {
             if (!_slowMotionActive || _slowMotionScaledLogged)
@@ -416,6 +407,7 @@ namespace Unitas.Samples.RollABall
             _slowMotionScaledLogged = true;
             Debug.Log("Slow motion scaled");
         }
+
         private void SpawnAllPickups()
         {
             for (int i = 0; i < PickupPositions.Length; i++)
@@ -423,6 +415,7 @@ namespace Unitas.Samples.RollABall
                 _pickups.Add(CreatePickup($"Pickup_{i + 1}", PickupPositions[i]));
             }
         }
+
         private static GameObject CreatePickup(string name, Vector3 position)
         {
             GameObject pickup = new GameObject(name);
@@ -430,6 +423,7 @@ namespace Unitas.Samples.RollABall
             SphereCollider trigger = pickup.AddComponent<SphereCollider>();
             trigger.isTrigger = true;
             trigger.radius = PickupRadius;
+            pickup.AddComponent<Pickup>();
             pickup.AddComponent<Rotator>();
             return pickup;
         }

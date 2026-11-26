@@ -117,6 +117,7 @@ namespace Unitas.Bridge.Tests
                 () => JobSystemTests.Run(),
                 () => FixedStepDeterminismTests.Run(),
                 () => SaveMigrationTests.Run(),
+                () => RuntimeObjectTests.Run(),
             };
 
             int shard = 1;
@@ -161,11 +162,6 @@ namespace Unitas.Bridge.Tests
             return ExitHost(0);
         }
 
-        /// <summary>
-        /// Leaves the test host as soon as the verdict is reported: native runtime
-        /// handles and socket servers opened by the suite outlive it and would
-        /// otherwise hold the publication gate open past its budget.
-        /// </summary>
         private static int ExitHost(int code)
         {
             Environment.Exit(code);

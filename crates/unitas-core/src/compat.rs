@@ -2512,6 +2512,129 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             },
         ],
     },
+    OwnedFeatureCapability {
+        feature_id: "RUN-001",
+        owning_spec: "scripting-runtime.md",
+        capability: "GameObject, Component, Transform, identity, and lifetime",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "native scene-graph entities keep distinct live identities, parent-child transform composition, and deferred frame-boundary destruction without reissuing destroyed ids",
+                location: "crates/unitas-core/src/scene_graph.rs",
+                evidence: &[
+                    "crates/unitas-core/tests/core/scene_graph.rs::attach_and_detach_updates_the_hierarchy",
+                    "crates/unitas-core/tests/core/scene_graph.rs::world_transform_composes_through_the_whole_chain",
+                    "crates/unitas-core/tests/destruction_tests.rs::marking_destroyed_destroys_the_children_with_their_parent",
+                    "crates/unitas-core/tests/destruction_tests.rs::a_destroyed_identity_is_never_reissued",
+                    "crates/unitas-runtime/tests/destroy_lifecycle_tests.rs::a_marked_entity_leaves_the_scene_graph",
+                    "crates/unitas-runtime/tests/runtime/runtime_object_tests.rs::runtime_object_creates_entity_in_active_scene_graph",
+                    "crates/unitas-runtime/tests/runtime/runtime_object_tests.rs::runtime_object_destroy_removes_entity_from_graph_scripts_and_physics_world",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the managed Transform hierarchy mirror converges onto the native transform hierarchy and Object.Instantiate copies native child hierarchies and serialized field values into clones",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("the managed Transform keeps a separate hierarchy mirror rather than converging wholesale onto the native transform hierarchy, and Object.Instantiate does not copy native child hierarchies and serialized field values into native clones"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-003",
+        owning_spec: "scripting-runtime.md",
+        capability: "MonoBehaviour lifecycle, messages, attributes, and activation behavior",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "MonoBehaviour scripts receive Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate, OnDisable, and OnDestroy callbacks and physics collision and trigger messages in frame order",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_lifecycle_order_over_two_ticks_and_shutdown",
+                    "crates/unitas-runtime/tests/runtime/physics_tests.rs::runtime_dispatches_ball_crate_trigger_phases",
+                    "crates/unitas-runtime/tests/physics_event_order_tests.rs::the_physics_message_order_is_the_same_at_every_frame_rate",
+                    "crates/unitas-runtime/tests/runtime/roll_a_ball_tests.rs::roll_a_ball_scenario_collects_each_pickup_exactly_once_at_every_frame_rate",
+                    "crates/unitas-runtime/tests/runtime/runtime_object_tests.rs::runtime_object_attaches_script_and_runs_lifecycle_in_order",
+                    "crates/unitas-runtime/tests/runtime/runtime_object_tests.rs::runtime_object_creates_trigger_body_and_fires_trigger_event_with_new_entity_id",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Script Execution Order settings and [DefaultExecutionOrder], [RequireComponent], [DisallowMultipleComponent], and [ExecuteAlways] attributes are enforced by the native runtime",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("the native runtime does not sort script dispatch by a ProjectSettings script execution order table or [DefaultExecutionOrder] and does not enforce [RequireComponent], [DisallowMultipleComponent], or [ExecuteAlways] edit-mode execution"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-004",
+        owning_spec: "scripting-runtime.md",
+        capability: "Coroutines, asynchronous operations, threading, and time",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Time scale, fixed timestep accumulator, maximumDeltaTime catch-up clamping, and scaled versus unscaled frame advancement run deterministically",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_fixed_step_accumulator_accumulates_and_dispatches",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_time_scale_halves_the_simulated_time_of_a_falling_body",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_zero_time_scale_freezes_the_world_while_update_still_runs",
+                    "crates/unitas-runtime/tests/frame_loop_tests.rs::frame_loop_fixed_step_catch_up_is_clamped_by_maximum_delta_time",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "custom PlayerLoopSystem injection via PlayerLoop.SetPlayerLoop, Time.captureFramerate, main-thread API guards, and cross-origin isolated browser threading are enforced by the native runtime",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("custom PlayerLoopSystem injection into the native frame loop, Time.captureFramerate fixed advancement, main-thread API thread guards, and cross-origin isolated browser worker threading are not implemented in the native runtime"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-005",
+        owning_spec: "scripting-runtime.md",
+        capability: "Runtime scene management and persistent objects",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Single and Additive runtime scene loading, active scene selection, scene unloading with script and body teardown, and DontDestroyOnLoad persistence across single loads are executed",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_single_load_replaces_the_loaded_scene_set",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_additive_load_keeps_both_scenes_alive",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_unload_scene_disables_then_destroys_its_scripts",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_dont_destroy_on_load_survives_a_single_load_replacement",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "LoadSceneAsync with allowSceneActivation holding at 0.9 progress, build-list scene index resolution, and MoveGameObjectToScene are provided",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("asynchronous scene loading with allowSceneActivation holding at 0.9 progress, build scene list index resolution, and MoveGameObjectToScene are not implemented in the native runtime"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-009",
+        owning_spec: "scripting-runtime.md",
+        capability: "Web requests, file locations, JSON utilities, and randomness",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "project companyName, productName, and version are parsed from ProjectSettings and exposed through the runtime ABI for target file-location resolution",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/abi_scene_tests.rs::abi_project_identity_externs_write_loaded_identity_into_path_buffer",
+                    "crates/unitas-runtime/tests/runtime/abi_scene_tests.rs::abi_project_identity_externs_return_negative_when_settings_missing_or_handle_invalid",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "UnityWebRequest HTTP transport, CertificateHandler validation, and target-specific socket and browser ClientWebSocket diagnostics are provided by the runtime",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[],
+                missing: Some("UnityWebRequest network transport, CertificateHandler validation, and target-specific raw socket or browser ClientWebSocket runtime diagnostics are not implemented"),
+            },
+        ],
+    },
 ];
 pub fn lookup_owned_feature_capability(
     feature_id: &str,
