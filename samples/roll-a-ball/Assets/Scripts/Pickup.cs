@@ -30,7 +30,7 @@ namespace Unitas.Samples.RollABall
 
         public int ScoreValue => scoreValue;
 
-        public override void Start()
+        private new void Start()
         {
             _ordinal = ++_instanceCount;
             ReportVariantOverrides();

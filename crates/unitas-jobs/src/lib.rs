@@ -385,10 +385,10 @@ fn run_job(inner: &Inner, id: u64) {
         let outcome = catch_unwind(AssertUnwindSafe(job));
         let _failed = outcome.is_err();
     }
-    finish(inner, &record);
+    finish(inner, id, &record);
 }
 
-fn finish(inner: &Inner, record: &Arc<Record>) {
+fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
     let (dependents, group) = {
         let mut state = lock(&record.state);
         state.completed = true;
@@ -401,10 +401,15 @@ fn finish(inner: &Inner, record: &Arc<Record>) {
         }
     }
     if let Some(group_id) = group {
+        retire(inner, id);
         finish_group(inner, group_id);
     }
     inner.live.fetch_sub(1, Ordering::AcqRel);
     notify(inner);
+}
+
+fn retire(inner: &Inner, id: u64) {
+    lock(&inner.records).remove(&id);
 }
 
 fn finish_group(inner: &Inner, group_id: u64) {
@@ -427,4 +432,28 @@ fn finish_group(inner: &Inner, group_id: u64) {
         }
     }
     notify(inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_parallel_for_batches_leave_no_record_behind() {
+        let pool = JobSystem::new(2);
+        let handle = pool.schedule_parallel_for(64, 8, |_, _| {}, &[]);
+        pool.complete(handle);
+        assert!(pool.is_complete(handle));
+        assert_eq!(lock(&pool.inner.records).len(), 1);
+    }
+
+    #[test]
+    fn a_scheduled_job_stays_resolvable_as_a_dependency() {
+        let pool = JobSystem::new(2);
+        let dependency = pool.schedule(|| {}, &[]);
+        pool.complete(dependency);
+        let dependent = pool.schedule(|| {}, &[dependency]);
+        pool.complete(dependent);
+        assert!(pool.is_complete(dependent));
+    }
 }

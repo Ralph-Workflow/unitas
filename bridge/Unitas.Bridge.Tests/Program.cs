@@ -111,6 +111,8 @@ namespace Unitas.Bridge.Tests
             LifecycleMessageTests.Run();
             ExecutionOrderDispatchTests.Run();
             ExecutionOrderSettingsTests.Run();
+            UnityStyleMessagingTests.Run();
+            JobSystemTests.Run();
             FixedStepDeterminismTests.Run();
             SaveMigrationTests.Run();
 

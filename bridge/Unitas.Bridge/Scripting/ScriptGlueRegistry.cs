@@ -230,6 +230,12 @@ namespace Unitas.Bridge.Scripting
             return false;
         }
 
+        public static bool IsRegistered(string guidHex)
+        {
+            (ulong hi, ulong lo) = ParseGuid(guidHex);
+            return Entries.ContainsKey((hi, lo));
+        }
+
         public static void LoadGlueAssembly(string assemblyPath)
         {
             if (string.IsNullOrEmpty(assemblyPath))

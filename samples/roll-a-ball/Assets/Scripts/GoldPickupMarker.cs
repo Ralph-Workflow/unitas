@@ -12,7 +12,7 @@ namespace Unitas.Samples.RollABall
         public const string AddedChildName = "GoldAura";
         public const string OverriddenValue = "PickupVisualGold";
 
-        public override void Start()
+        private new void Start()
         {
             Debug.Log($"[roll-a-ball] gold variant applied added={AddedChildName} value={OverriddenValue}");
         }

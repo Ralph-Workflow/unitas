@@ -26,7 +26,7 @@ namespace Unitas.Samples.RollABall
         private float _lastDashTime = float.NegativeInfinity;
         private int _dashCount;
 
-        public override void Awake()
+        private new void Awake()
         {
             _body = GetComponent<Rigidbody>();
             GameObject? cameraObject = GameObject.Find("Main Camera");
@@ -36,7 +36,7 @@ namespace Unitas.Samples.RollABall
             }
         }
 
-        public override void Update()
+        private new void Update()
         {
             float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
             float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
@@ -107,7 +107,7 @@ namespace Unitas.Samples.RollABall
             Debug.Log($"Dash fired {_dashCount}");
         }
 
-        public override void LateUpdate()
+        private new void LateUpdate()
         {
             Camera? camera = _camera;
             if (camera == null)

@@ -19,12 +19,12 @@ namespace Unitas.Samples.RollABall
 
         private Vector3 _origin;
 
-        public override void Start()
+        private new void Start()
         {
             _origin = transform.position;
         }
 
-        public override void Update()
+        private new void Update()
         {
             transform.Rotate(Vector3.up * (rotateSpeed * Time.deltaTime), Space.World);
             transform.position = _origin + (Vector3.up * (Mathf.Sin(Time.time * bobSpeed) * bobHeight));

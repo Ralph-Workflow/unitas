@@ -31,7 +31,7 @@ namespace Unitas.Samples.RollABall
         private bool _carryReported;
         private bool _bumperHit;
 
-        public override void Awake()
+        private new void Awake()
         {
             _body = GetComponent<Rigidbody>();
             // The play pipeline does not apply scene field overrides yet, so each
@@ -51,7 +51,7 @@ namespace Unitas.Samples.RollABall
             }
         }
 
-        public override void Start()
+        private new void Start()
         {
             _startPosition = transform.position;
             Rigidbody? body = _body;
@@ -62,12 +62,12 @@ namespace Unitas.Samples.RollABall
             }
         }
 
-        public override void Update()
+        private new void Update()
         {
             _stepLabel = Time.deltaTime >= CoarseStepThreshold ? "coarse" : "fine";
         }
 
-        public override void FixedUpdate()
+        private new void FixedUpdate()
         {
             _elapsed += Time.fixedDeltaTime;
             Rigidbody? body = _body;
@@ -101,7 +101,7 @@ namespace Unitas.Samples.RollABall
             _lastSpeed = body.velocity.magnitude;
         }
 
-        public override void OnCollisionEnter(Collision collision)
+        private new void OnCollisionEnter(Collision collision)
         {
             GameObject? other = collision.gameObject;
             if (other != null && other.name == bumperName)

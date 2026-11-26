@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Unitas.Bridge.Playtest;
 using Unitas.Bridge.Scripting;
+using Unitas.Scripting;
 using UnityEngine;
 
 namespace Unitas.Editor.Mcp
@@ -319,6 +320,7 @@ namespace Unitas.Editor.Mcp
             }
 
             var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+            LoadGeneratedGlue(projectRoot);
             Type?[] types;
             try
             {
@@ -351,6 +353,12 @@ namespace Unitas.Editor.Mcp
                 }
 
                 Type componentType = scriptType;
+                if (ScriptGlueRegistry.IsRegistered(script.Key))
+                {
+                    registered++;
+                    continue;
+                }
+
                 ScriptGlueRegistry.Register(
                     script.Key,
                     () => (MonoBehaviour)Activator.CreateInstance(componentType)!);
@@ -369,6 +377,21 @@ namespace Unitas.Editor.Mcp
                 throw new McpError.InvalidRequest(
                     "the project script assembly contains no script components: " + assemblyPath);
             }
+        }
+
+        private static void LoadGeneratedGlue(string projectRoot)
+        {
+            string gluePath = Path.Combine(
+                projectRoot,
+                "Library",
+                ScriptAssemblyFolderName,
+                ScriptCompilation.GeneratedGlueAssemblyName + ".dll");
+            if (!File.Exists(gluePath))
+            {
+                return;
+            }
+
+            ScriptGlueRegistry.LoadGlueAssembly(gluePath);
         }
 
         private static string? ResolveProjectRoot(ScenarioDocument document, string root)

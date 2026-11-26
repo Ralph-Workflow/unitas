@@ -1461,6 +1461,11 @@ namespace Unitas.Scripting
                 Match m = matches[i];
                 string visibility = m.Groups[2].Success ? m.Groups[2].Value : "private";
                 bool isPublic = string.Equals(visibility, "public", StringComparison.Ordinal);
+                if (string.Equals(m.Groups[3].Value, "override", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 string methodName = m.Groups[5].Value.Trim();
                 if (ReservedMethodNames.Contains(methodName))
                 {

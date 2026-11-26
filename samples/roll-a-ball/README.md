@@ -18,20 +18,28 @@ reported with its real state, never hidden.
   physics scenarios; it is not an arena and carries no game scripts.
 - Seven scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
   `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`.
-  `RecordsStore.cs` is the one script file without a `.meta` file, so its GUID
-  hygiene is still open.
+  Every script file has its `.meta` file, `RecordsStore.cs.meta` included
+  (GUID `6f708192a3b4c5d6e7f8091a2b3c4d5e`), so the GUID hygiene gap is
+  closed.
+- The gameplay scripts use the Unity-canonical message style: the magic methods
+  are `private` and non-virtual (`private new void Awake()`, `private new void
+  Update()`, `private new void OnTriggerEnter(Collider other)`) and the engine
+  reaches them through the generated glue handler. The `new` keyword is
+  required because the engine's `MonoBehaviour` declares the same methods as
+  `public virtual`; without it the compiler reports CS0114.
 - Project settings for the Built-in render pipeline, Unity 2022.3.62f1.
 
 ## Acceptance scenarios of the specification, and their real state
 
 | Scenario | State | Evidence |
 |---|---|---|
-| S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` in the samples lane |
-| S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` |
+| S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` passes in the lane's scripting step and in the headless editor-host step (see the lane state below) |
+| S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
-| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps; no gamepad-axis or pointer scenario exists yet |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json` |
-| S9 edit and restore, S10 package, S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
+| S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes; no pointer scenario exists yet |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json` — all four pass, their `render_capture` checkpoints included |
+| S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
+| S9 edit and restore, S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -47,9 +55,11 @@ scenarios (`Scenarios/s8_title_checkpoint.scenario.json`,
 `s8_arena_countdown.scenario.json`, `s8_arena_x5_checkpoint.scenario.json`,
 `s8_results_gold_checkpoint.scenario.json`) drive the sample to the countdown,
 the x5 combo and the gold pickup, capture the arena at each of those moments,
-and run in the `make verify-samples` lane. Their log checkpoints pass; their
-`render_capture` checkpoints fail today and carry no approved reference image
-yet, because the sample has no visible arena to capture (see the gap below).
+and run in the `make verify-samples` lane. Their log checkpoints and their
+`render_capture` checkpoints pass today: each 256 x 256 capture holds 33 408
+non-background pixels of 65 536 against the declared
+`expected_non_background_pixels: 1000`. They carry no approved reference image
+yet, because the captures are not reproducible (see the gap below).
 
 **Not demonstrated — the exact gap.**
 
@@ -101,11 +111,20 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 23 steps and all of them pass
-at the current tree: the 19 scripting scenarios (including `frame_independence`
-and the four `s8_*` visual checkpoints), the 2 headless editor scenarios, the
-native scripted launch and the packaged-player proof. The steps this note owns
-are recorded here rather than left implicit:
+**Current lane state (honest).** The lane runs 23 steps and all 23 pass at
+the current tree: the 19 scripting scenarios (including `frame_independence`
+and the four `s8_*` visual checkpoints), the 2 headless editor scenarios,
+the native scripted launch and the packaged-player proof.
+
+- `editor-scenario-collect_all`, `editor-scenario-retry_clean`: these were
+  red until the headless editor host learned to load the generated glue
+  assembly when it registers project scripts (`LoadGeneratedGlue` in
+  `editor/Unitas.Editor/Play/ScenarioTools.cs`). Before that fix the editor
+  host produced no log message at all because the sample's private,
+  Unity-canonical magic methods were never dispatched; with the glue loaded
+  the log checkpoints pass and both steps are green.
+
+The steps this note owns are recorded here rather than left implicit:
 
 - `frame_independence`: every frame rate sweeps green
   (`sweep rate 30/60/144/240: pass`) and the sweep verdict passes

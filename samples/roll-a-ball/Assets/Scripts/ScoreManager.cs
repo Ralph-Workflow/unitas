@@ -71,7 +71,7 @@ namespace Unitas.Samples.RollABall
         public int Score => _score;
         public int Multiplier => _multiplier;
         public bool Won => _won;
-        public override void Start()
+        private new void Start()
         {
             _player = GetComponentInParent<PlayerController>();
             // Pickups live in code from here on; drop the scene-authored copies.
@@ -88,7 +88,7 @@ namespace Unitas.Samples.RollABall
         // Collection is a managed distance check: runtime-spawned colliders
         // never reach the native physics world, so OnTriggerEnter cannot fire
         // for code-spawned pickups. Same overlap semantics, fully deterministic.
-        public override void Update()
+        private new void Update()
         {
             if (Input.GetKeyDown(KeyCode.R))
             {

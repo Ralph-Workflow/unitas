@@ -263,72 +263,151 @@ namespace UnityEngine
             CoroutineScheduler.RegisterMethod(this, methodName, factory);
         }
 
+        // A Unity-canonical script declares the magic methods private and
+        // non-virtual, so only the generated glue handler reaches them. The base
+        // virtual forwards the message to that handler. The glue emits no
+        // handler for an override, so even an override that calls the base
+        // virtual runs its body exactly once.
+        private string? _dispatchingMessage;
+
+        private IUnitasMessageHandler? ResolveScriptMessageHandler()
+        {
+            return MessageHandler ?? GameObject.ResolveMessageHandler(this);
+        }
+
+        private bool DispatchScriptMessage(string message)
+        {
+            if (_dispatchingMessage == message)
+            {
+                return false;
+            }
+
+            IUnitasMessageHandler? handler = ResolveScriptMessageHandler();
+            if (handler == null)
+            {
+                return false;
+            }
+
+            string? previous = _dispatchingMessage;
+            _dispatchingMessage = message;
+            try
+            {
+                return handler.Dispatch(message);
+            }
+            finally
+            {
+                _dispatchingMessage = previous;
+            }
+        }
+
+        private bool DispatchScriptMessage<T>(string message, T argument)
+        {
+            if (_dispatchingMessage == message)
+            {
+                return false;
+            }
+
+            IUnitasMessageHandler? handler = ResolveScriptMessageHandler();
+            if (handler == null)
+            {
+                return false;
+            }
+
+            string? previous = _dispatchingMessage;
+            _dispatchingMessage = message;
+            try
+            {
+                return handler.Dispatch(message, argument);
+            }
+            finally
+            {
+                _dispatchingMessage = previous;
+            }
+        }
+
         public virtual void Awake()
         {
+            DispatchScriptMessage("Awake");
         }
 
         public virtual void OnEnable()
         {
+            DispatchScriptMessage("OnEnable");
         }
 
         public virtual void Start()
         {
+            DispatchScriptMessage("Start");
         }
 
         public virtual void FixedUpdate()
         {
+            DispatchScriptMessage("FixedUpdate");
         }
 
         public virtual void Update()
         {
+            DispatchScriptMessage("Update");
         }
 
         public virtual void LateUpdate()
         {
+            DispatchScriptMessage("LateUpdate");
         }
 
         public virtual void OnDisable()
         {
+            DispatchScriptMessage("OnDisable");
         }
 
         public virtual void OnDestroy()
         {
+            DispatchScriptMessage("OnDestroy");
         }
 
         public virtual void OnCollisionEnter(Collision collision)
         {
+            DispatchScriptMessage("OnCollisionEnter", collision);
         }
 
         public virtual void OnCollisionStay(Collision collision)
         {
+            DispatchScriptMessage("OnCollisionStay", collision);
         }
 
         public virtual void OnCollisionExit(Collision collision)
         {
+            DispatchScriptMessage("OnCollisionExit", collision);
         }
 
         public virtual void OnTriggerEnter(Collider? other)
         {
+            DispatchScriptMessage("OnTriggerEnter", other);
         }
 
         public virtual void OnTriggerStay(Collider? other)
         {
+            DispatchScriptMessage("OnTriggerStay", other);
         }
 
         public virtual void OnTriggerExit(Collider? other)
         {
+            DispatchScriptMessage("OnTriggerExit", other);
         }
 
         public virtual void OnApplicationFocus(bool hasFocus)
         {
+            DispatchScriptMessage("OnApplicationFocus", hasFocus);
         }
 
         public virtual void OnApplicationPause(bool pauseStatus)
         {
+            DispatchScriptMessage("OnApplicationPause", pauseStatus);
         }
 
         public virtual void OnApplicationQuit()
         {
+            DispatchScriptMessage("OnApplicationQuit");
         }
 
         public virtual void OnBecameVisible()
