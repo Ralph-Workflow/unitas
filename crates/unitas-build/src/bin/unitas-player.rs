@@ -390,7 +390,7 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
     match run_device_verification(reference_path, frames) {
         Ok(report) => {
             println!(
-                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}/{} won={} hud={}",
+                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}/{} won={} hud={} canvas={} shadow={}",
                 report.reference_path.display(),
                 report.width,
                 report.height,
@@ -407,7 +407,9 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
                 report.score,
                 report.total,
                 report.won,
-                report.hud
+                report.hud,
+                report.canvas,
+                report.shadow
             );
             ExitCode::SUCCESS
         }

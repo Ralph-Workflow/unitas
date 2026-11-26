@@ -171,6 +171,7 @@ MAKE_COMMAND_MIN_PARTS = 2
 TIMED_COMMAND_MIN_ARGS = 4
 TIMED_TERMINATION_GRACE_SECONDS = 5.0
 TIMED_RE_RUN_ATTEMPT = 2
+TIMED_POLL_SECONDS = 0.05
 TIMED_BUDGET_GUIDANCE = (
     "a gate that overruns its budget is a defect to diagnose, never a budget to raise: the "
     "verification time budget and its enforcement mechanism are recorded in "
@@ -2270,52 +2271,49 @@ def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
 
 
-class TimedGateRun:
-    def __init__(self) -> None:
-        self.process: subprocess.Popen[bytes] | None = None
-        self.starting = False
-        self.terminated = False
-        self.signum = int(signal.SIGTERM)
-
-
-def install_timed_gate_termination(run: TimedGateRun) -> None:
-    def handler(signum: int, _frame: object) -> None:
-        run.terminated = True
-        run.signum = signum
-        if run.starting:
-            return
-        if run.process is not None:
-            kill_timed_gate_group(run.process)
-        raise SystemExit(128 + signum)
-
-    signal.signal(signal.SIGTERM, handler)
+def wait_for_timed_gate(
+    process: subprocess.Popen[bytes], deadline: float, pending: list[int]
+) -> int | None:
+    while True:
+        if pending:
+            terminate_timed_gate(process)
+            raise SystemExit(128 + pending[0])
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            return process.wait(timeout=min(remaining, TIMED_POLL_SECONDS))
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def run_timed_attempt(
     label: str, budget: float, command: list[str]
 ) -> tuple[bool, bool, int] | None:
     started = time.monotonic()
-    run = TimedGateRun()
-    previous_handler = signal.getsignal(signal.SIGTERM) or signal.SIG_DFL
-    install_timed_gate_termination(run)
+    pending: list[int] = []
+    active = True
+
+    def handler(signum: int, _frame: object) -> None:
+        nonlocal active
+        pending.append(signum)
+        if not active:
+            raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+    process: subprocess.Popen[bytes] | None = None
     try:
-        run.starting = True
         try:
             process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
         except OSError as error:
-            run.starting = False
             sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
-            if run.terminated:
-                raise SystemExit(128 + run.signum) from error
             return None
-        run.process = process
-        run.starting = False
-        if run.terminated:
-            terminate_timed_gate(process)
-            raise SystemExit(128 + run.signum)
         try:
-            returncode = process.wait(timeout=budget)
-        except subprocess.TimeoutExpired:
+            returncode = wait_for_timed_gate(process, started + budget, pending)
+        except KeyboardInterrupt:
+            terminate_timed_gate(process)
+            raise
+        if returncode is None:
             finished = process.poll()
             if finished is None:
                 terminate_timed_gate(process)
@@ -2324,9 +2322,6 @@ def run_timed_attempt(
                 )
                 return True, True, 1
             returncode = finished
-        except KeyboardInterrupt:
-            terminate_timed_gate(process)
-            raise
         elapsed = time.monotonic() - started
         sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
         if returncode != 0:
@@ -2340,10 +2335,9 @@ def run_timed_attempt(
             return True, False, returncode
         return False, False, returncode
     finally:
-        if run.process is not None and run.process.poll() is None:
-            terminate_timed_gate(run.process)
-        run.process = None
-        signal.signal(signal.SIGTERM, previous_handler)
+        active = False
+        if process is not None and process.poll() is None:
+            terminate_timed_gate(process)
 
 
 def run_timed(argv: Sequence[str]) -> int:

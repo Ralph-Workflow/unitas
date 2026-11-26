@@ -54,6 +54,7 @@ reported with its real state, never hidden.
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
+| S5 focus loss and recovery | engine half demonstrated | the windowed player clears every held key, mouse button and axis on `WindowEvent::Focused(false)` and freezes the simulation (`time_scale` 0), and restores the time scale and clean input on focus return (`FocusPause` in `crates/unitas-runtime/src/input.rs`, wired in `crates/unitas-runtime/src/window.rs`); the four focus tests live in `crates/unitas-runtime/src/input.rs` and `crates/unitas-runtime/src/window.rs`. The person-facing half — a pause overlay and an explicit Resume — does not exist yet, so "play resumes only after Resume" is not demonstrated |
 | S12 combo timing sweep | demonstrated | `Scenarios/combo_timing_sweep.json` drives the marble around the pickup ring with the same travel per leg and sweeps only the gap between consecutive pickups: 1.400 s (below the 1.5 s combo window) raises the multiplier to x4, the window then expires 1.5167 s later (`Combo expired`), the next gap of 1.600 s (above the window) resets the multiplier to x1 and awards a single point, and a further 1.400 s gap re-arms it to x2; 17 of 17 checkpoints pass with `--repeat 2` |
 | S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
 
@@ -115,9 +116,16 @@ cannot show).
   frame, so a managed `Text.text` write reaches the canvas and a native click
   reaches `Button.onClick`. The HUD therefore shows the text `HudController`
   writes, and the pointer scenario's click assertion passes.
-- The windowed player does not show the canvas either: the windowed path
-  draws the scene and a text overlay, and the canvas draw items reach neither
-  of them yet.
+- The windowed player **now shows the canvas**: the windowed path builds the
+  frame with the scene and the text overlay, composites the canvas with the
+  same `Runtime::composite_canvas_image` the capture path uses (now one
+  `composite_canvas_into` implementation behind both), and presents that
+  composed image on the window surface
+  (`GpuFramePresenter::render_window_frame` and `present_window_frame` in
+  `crates/unitas-runtime/src/presenter.rs`, with
+  `Renderer::present_image_to_surface` in `crates/unitas-render/src/gpu.rs`).
+  There is still no second canvas renderer: the capture and the window share
+  one composition.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
 - **The four captures render the arena and are reproducible, and approved
@@ -287,6 +295,32 @@ proves that two runs of the same scenario give the same result:
 The specification text is not weakened by this note. The gap above is what
 remains before the sample's arena carries a mesh collider or a compound
 collider of its own.
+
+## Gameplay audio — what is demonstrated and what is not
+
+- **The collect chime plays on a pickup, through the real path.**
+  `Assets/Audio/PickupChime.wav` is an original clip generated for this
+  sample, and `Assets/Scripts/ScoreManager.cs` plays it on the `CollectChime`
+  `AudioSource` of `Assets/Scenes/RollABall.unity` in the frame the pickup is
+  collected. `Scenarios/collect_chime.json` asserts both: the pickup log
+  (`Pickup collected score 1`) and the chime log
+  (`[roll-a-ball] collect chime played pickup_frame=8 chime_frame=8
+  state=Playing silent=None`) — the same frame, with the source playing and
+  not silenced. The step runs in the `make verify-samples` lane.
+- The path is the product path: the managed `AudioSource` → the bridge →
+  the `AudioWorld` mixer → the cpal device, pumped every frame by
+  `mix_and_push_audio` in `crates/unitas-runtime/src/presenter.rs`.
+- **Mixer-group volume and pause-silences-gameplay are covered by tests.**
+  `crates/unitas-audio/src/lib.rs` proves that a source on the `Sfx` bus is
+  scaled by its group volume, that a muted group silences its sources, and
+  that `set_gameplay_paused(true)` silences the gameplay source while a menu
+  source keeps playing.
+- What is **not** demonstrated: the device lane still pushes only its
+  synthetic tone, so the gameplay chime has not been proven audible through
+  the device in a windowed run on this machine; and the scene's own
+  `m_audioClip` reference is not bound to the managed `AudioSource`, so the
+  managed side loads the clip by path instead of through the scene reference.
+  Streaming music and 3D spatialization are out of scope for this phase.
 
 ## Non-default lane
 

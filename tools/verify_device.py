@@ -65,6 +65,8 @@ DEVICE_REPORT_FIELDS: tuple[tuple[str, str], ...] = (
     ("score", r"score=(\d+/\d+)"),
     ("won", r"won=(true|false)"),
     ("hud", r"hud=(true|false)"),
+    ("canvas", r"canvas=(true|false)"),
+    ("shadow", r"shadow=(true|false)"),
 )
 
 SUSTAINED_FPS_PATTERN = re.compile(r"^sustained_fps=([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
@@ -256,7 +258,7 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
         names = ", ".join(missing)
         return (
             f"the device verification line lacks fields: {names}; "
-            "contract C3 requires score=<n>/<total>, won, and hud"
+            "contract C3 requires score=<n>/<total>, won, hud, canvas, and shadow"
         )
     frames = int(report["frames_presented"])
     tolerance = float(report["tolerance"])
@@ -289,6 +291,16 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
             report["hud"] != "true",
             "the HUD overlay did not render on screen (hud=false); "
             "the score HUD must be visible per contract C3",
+        ),
+        (
+            report["canvas"] != "true",
+            "the uGUI canvas did not render on the windowed surface (canvas=false); "
+            "the canvas content must be part of the presented frame, not only of the capture",
+        ),
+        (
+            report["shadow"] != "true",
+            "the windowed frame was presented with shadows disabled (shadow=false); "
+            "the bundled player must resolve the project quality settings for its target group",
         ),
     )
     for failed, reason in checks:
@@ -556,10 +568,14 @@ def run_device_lane(
         return 1
     score_summary = ""
     if report is not None:
-        score_summary = f" Score: {report['score']}, won={report['won']}, hud on screen."
+        score_summary = (
+            f" Score: {report['score']}, won={report['won']}, hud on screen, "
+            f"canvas on screen={report['canvas']}, shadows on screen={report['shadow']}."
+        )
     sys.stdout.write(
         "OK verify-device device-verify: the window presented frames, the GPU frame matched "
         "the approved reference within tolerance, the default audio device played the tone, "
+        "the uGUI canvas and the project shadows were part of the presented frame, "
         "and the synthetic input events moved the sample scene. Sustained frame rate: "
         f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f}){score_summary}\n"
         "OK verify-device control-stdio: scripted input drove the ball into a pickup "

@@ -32,7 +32,7 @@ use unitas_physics::{
     CollisionPayload, ForceMode, MoveResult, Phase, PhysicsMaterial3D, QueryHit, Shape, SolverType,
     World,
 };
-use unitas_render::image::Image;
+use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_render::{Camera, DirectionalLight, Mat4, Mesh, Renderer, Vec3, cube, look_at};
 
@@ -3563,8 +3563,15 @@ impl Runtime {
             return image;
         }
         let mut rgba = image.to_rgba8();
+        self.composite_canvas_into(&mut rgba, &items);
+        Image::from_rgba8(rgba)
+    }
+
+    /// The one canvas composition both the capture path and the windowed path
+    /// draw the interface with.
+    pub(crate) fn composite_canvas_into(&self, rgba: &mut Rgba8, items: &[UiDrawItem]) {
         let mut target = UiTarget {
-            image: &mut rgba,
+            image: rgba,
             ids: None,
         };
         if items.iter().any(|item| item.text.is_some()) {
@@ -3573,11 +3580,10 @@ impl Runtime {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let painter = painter.get_or_insert_with(GlyphTextPainter::new);
-            composite_ui(&mut target, &items, 1, Some(painter));
+            composite_ui(&mut target, items, 1, Some(painter));
         } else {
-            composite_ui(&mut target, &items, 1, None);
+            composite_ui(&mut target, items, 1, None);
         }
-        Image::from_rgba8(rgba)
     }
 
     /// The renderer every frame of this runtime is rendered by.

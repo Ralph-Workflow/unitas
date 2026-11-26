@@ -158,20 +158,8 @@ impl Default for GpuCameraBinding {
 pub type FrameUpdateCallback<'a> =
     Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
 
-#[cfg(feature = "device")]
-pub type SurfaceBlit = Box<
-    dyn for<'a> FnMut(
-        &Renderer,
-        u32,
-        u32,
-        &[GpuInstance<'a>],
-        &Camera,
-        Mat4,
-        &DirectionalLight,
-        [f32; 3],
-        &[TextOverlayItem],
-    ) -> Result<(), RenderError>,
->;
+/// Presents a composed frame on the window surface.
+pub type SurfaceBlit = Box<dyn FnMut(&Renderer, &Image) -> Result<(), RenderError>>;
 
 pub fn resolve_camera_and_view(
     binding: &GpuCameraBinding,
@@ -295,7 +283,6 @@ pub struct GpuFramePresenter<'a> {
     last_mixed_samples: Vec<f32>,
     total_audio_frames_pushed: u64,
     frames_presented: u64,
-    #[cfg(feature = "device")]
     surface_blit: Option<SurfaceBlit>,
     overlay: Vec<TextOverlayItem>,
     overlay_source: Option<Arc<Mutex<Vec<TextOverlayItem>>>>,
@@ -323,7 +310,6 @@ impl<'a> GpuFramePresenter<'a> {
             last_mixed_samples: Vec::new(),
             total_audio_frames_pushed: 0,
             frames_presented: 0,
-            #[cfg(feature = "device")]
             surface_blit: None,
             overlay: Vec::new(),
             overlay_source: None,
@@ -533,27 +519,12 @@ impl<'a> GpuFramePresenter<'a> {
             Ok(surface) => {
                 let mut configured_size: Option<(u32, u32)> = None;
                 self.surface_blit = Some(Box::new(
-                    move |renderer: &Renderer,
-                          width: u32,
-                          height: u32,
-                          instances: &[GpuInstance],
-                          camera: &Camera,
-                          view: Mat4,
-                          light: &DirectionalLight,
-                          background: [f32; 3],
-                          overlay: &[TextOverlayItem]|
-                          -> Result<(), RenderError> {
-                        if configured_size != Some((width, height)) {
-                            renderer.configure_surface(&surface, width, height)?;
-                            configured_size = Some((width, height));
+                    move |renderer: &Renderer, image: &Image| -> Result<(), RenderError> {
+                        if configured_size != Some((image.width, image.height)) {
+                            renderer.configure_surface(&surface, image.width, image.height)?;
+                            configured_size = Some((image.width, image.height));
                         }
-                        let scene = RenderScene {
-                            camera,
-                            view,
-                            light,
-                            background,
-                        };
-                        renderer.render_to_surface_with_overlay(&surface, instances, scene, overlay)
+                        renderer.present_image_to_surface(&surface, image)
                     },
                 ));
             }
@@ -586,34 +557,58 @@ impl<'a> GpuFramePresenter<'a> {
         Ok(())
     }
 
-    #[cfg(feature = "device")]
-    pub(crate) fn present_window_frame(&mut self, runtime: &Runtime, frame: &FrameInfo) {
+    /// The frame the windowed player presents: the scene with the interface
+    /// drawn on it by the composition the capture path uses as well.
+    pub fn render_window_frame(
+        &self,
+        runtime: &Runtime,
+        width: u32,
+        height: u32,
+        overlay: &[TextOverlayItem],
+    ) -> Result<Image, WindowError> {
+        let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
+        let instances = self.collect_gpu_instances(runtime);
+        let scene = RenderScene {
+            camera: &camera,
+            view,
+            light: &self.light,
+            background,
+        };
+        let image = self.renderer.render_offscreen_with_overlay(
+            &instances,
+            scene,
+            (width, height),
+            overlay,
+        )?;
+        Ok(runtime.composite_canvas_image(image, width, height))
+    }
+
+    /// Presents the frame of the windowed player on the window surface.
+    pub fn present_window_frame(&mut self, runtime: &Runtime, frame: &FrameInfo) {
         let width = frame.width.max(1);
         let height = frame.height.max(1);
-        let (camera, view, background) =
-            resolve_camera_and_view(&self.camera_binding, runtime, width, height);
-        let instances = collect_gpu_instances_from(&self.meshes, runtime);
+        if self.surface_blit.is_none() {
+            self.last_error = Some(WindowError::Render(String::from(
+                "window surface is not attached",
+            )));
+            return;
+        }
+        let overlay_items = self.current_overlay();
+        let image = match self.render_window_frame(runtime, width, height, &overlay_items) {
+            Ok(image) => image,
+            Err(error) => {
+                self.last_error = Some(error);
+                return;
+            }
+        };
         let Some(blit) = self.surface_blit.as_mut() else {
             self.last_error = Some(WindowError::Render(String::from(
                 "window surface is not attached",
             )));
             return;
         };
-        let overlay_items = match &self.overlay_source {
-            Some(source) => source.lock().map(|items| items.clone()).unwrap_or_default(),
-            None => self.overlay.clone(),
-        };
-        if let Err(error) = blit(
-            &self.renderer,
-            width,
-            height,
-            &instances,
-            &camera,
-            view,
-            &self.light,
-            background,
-            &overlay_items,
-        ) && !is_transient_surface_error(&error)
+        if let Err(error) = blit(&self.renderer, &image)
+            && !is_transient_surface_error(&error)
         {
             self.overlay_drawn = false;
             self.last_error = Some(WindowError::Render(error.to_string()));
@@ -621,6 +616,9 @@ impl<'a> GpuFramePresenter<'a> {
         }
         self.overlay_drawn = !overlay_items.is_empty() && self.renderer.has_overlay_fonts();
         if self.capture_every_frame {
+            let (camera, view, background) =
+                resolve_camera_and_view(&self.camera_binding, runtime, width, height);
+            let instances = collect_gpu_instances_from(&self.meshes, runtime);
             match self.renderer.render_offscreen_with(
                 &instances,
                 &camera,
@@ -640,6 +638,13 @@ impl<'a> GpuFramePresenter<'a> {
             }
         }
         self.frames_presented = frame.frame_index;
+    }
+
+    fn current_overlay(&self) -> Vec<TextOverlayItem> {
+        match &self.overlay_source {
+            Some(source) => source.lock().map(|items| items.clone()).unwrap_or_default(),
+            None => self.overlay.clone(),
+        }
     }
 }
 
@@ -758,12 +763,13 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
     use unitas_asset::project_settings::{QualityLevel, QualitySettings};
-    use unitas_render::ShadowSettings;
+    use unitas_render::{Image, RenderScene, Renderer, ShadowSettings};
 
     use super::{
-        DESKTOP_QUALITY_TARGET_GROUP, WEB_QUALITY_TARGET_GROUP, shadow_settings_for_quality,
-        shadow_settings_for_runtime,
+        DESKTOP_QUALITY_TARGET_GROUP, FrameInfo, GpuFramePresenter, WEB_QUALITY_TARGET_GROUP,
+        shadow_settings_for_quality, shadow_settings_for_runtime,
     };
     use crate::Runtime;
 
@@ -785,6 +791,87 @@ mod tests {
             v_sync_count: 1,
             lod_bias: 1.0,
         }
+    }
+
+    #[test]
+    fn windowed_present_shows_the_canvas_the_capture_path_composes() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        let Ok(_) = runtime.load_scene(scene_path) else {
+            return;
+        };
+        let width = 800u32;
+        let height = 600u32;
+        let items = runtime.ui_draw_items_for([width as f32, height as f32]);
+        assert!(
+            !items.is_empty(),
+            "the scene has no canvas content to present"
+        );
+        let Ok(renderer) = Renderer::new() else {
+            return;
+        };
+        let renderer = Arc::new(renderer);
+        let mut presenter = GpuFramePresenter::new(Arc::clone(&renderer));
+        presenter.bind_scene(&runtime);
+        let captured: Arc<Mutex<Option<Image>>> = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&captured);
+        presenter.surface_blit = Some(Box::new(move |_renderer: &Renderer, image: &Image| {
+            let mut guard = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some(image.clone());
+            Ok(())
+        }));
+        presenter.present_window_frame(
+            &runtime,
+            &FrameInfo {
+                frame_index: 1,
+                width,
+                height,
+                delta_seconds: 1.0 / 60.0,
+            },
+        );
+        let presented = match captured.lock().ok().and_then(|guard| guard.clone()) {
+            Some(image) => image,
+            None => return,
+        };
+        assert_eq!(presented.width, width);
+        assert_eq!(presented.height, height);
+        let (camera, view, background) =
+            presenter.resolved_camera_and_view(&runtime, width, height);
+        let instances = presenter.collect_gpu_instances(&runtime);
+        let scene = RenderScene {
+            camera: &camera,
+            view,
+            light: presenter.light(),
+            background,
+        };
+        let Ok(scene_frame) =
+            renderer.render_offscreen_with_overlay(&instances, scene, (width, height), &[])
+        else {
+            return;
+        };
+        let canvas_pixels = presented
+            .pixels
+            .iter()
+            .zip(scene_frame.pixels.iter())
+            .filter(|pair| pair.0 != pair.1)
+            .count();
+        assert!(
+            canvas_pixels > 0,
+            "the presented frame has no canvas pixels"
+        );
+        let capture_frame = runtime.composite_canvas_image(scene_frame, width, height);
+        let different = presented
+            .pixels
+            .iter()
+            .zip(capture_frame.pixels.iter())
+            .filter(|pair| pair.0 != pair.1)
+            .count();
+        assert_eq!(
+            different, 0,
+            "the presented frame differs from the capture composition"
+        );
     }
 
     #[test]

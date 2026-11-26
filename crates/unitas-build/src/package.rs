@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::bundle::{
     BundleManifest, BUNDLE_MANIFEST_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
-    MANAGED_DIR_NAME,
+    MANAGED_DIR_NAME, PROJECT_SETTINGS_DIR_NAME,
 };
 use crate::config::BuildConfiguration;
 use crate::licensing::{
@@ -570,6 +570,13 @@ fn copy_staged_bundle(staged_dir: &Path, resources_dir: &Path) -> Result<(), Pac
     let assets = staged_dir.join(STAGED_ASSETS_DIR_NAME);
     if assets.is_dir() {
         copy_directory(&assets, &resources_dir.join(STAGED_ASSETS_DIR_NAME))?;
+    }
+    let project_settings = staged_dir.join(PROJECT_SETTINGS_DIR_NAME);
+    if project_settings.is_dir() {
+        copy_directory(
+            &project_settings,
+            &resources_dir.join(PROJECT_SETTINGS_DIR_NAME),
+        )?;
     }
     let managed = staged_dir.join(MANAGED_DIR_NAME);
     if managed.is_dir() {

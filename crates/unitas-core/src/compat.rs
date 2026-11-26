@@ -2568,10 +2568,14 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: Some("cascade splitting for shadowCascades 2/4, per-renderer ShadowCastingMode, URP 14's UniversalRenderPipelineAsset shadow-atlas resolution source and cascade model, URP's 5x5 and 7x7 tent filter ladder, and skybox, ambient, and light probes are not implemented"),
             },
             OwnedCapabilityPart {
-                behavior: "a staged or packaged unitas player carries no ProjectSettings/QualitySettings.asset because the bundler stages only the project's Assets directory, so the runtime finds no ProjectSettings directory, no quality level resolves, and the documented shadows-off fallback renders the player without the directional shadow; only the Standalone target group is wired end to end today, and the WebGL group is unreachable because no web player crate exists",
-                location: "crates/unitas-runtime/src/presenter.rs",
-                evidence: &[],
-                missing: Some("a packaged unitas player renders without the directional shadow until bundle staging copies ProjectSettings/QualitySettings.asset into the bundle, and the WebGL target group stays unreachable until a web player crate exists; the bundle-staging gap is recorded as the named follow-on 'stage ProjectSettings into the player bundle' with owner: presentation and player, trigger: a change to bundle staging or packaged-player presentation, lane: make verify-device and make verify-samples, evidence: device capture plus sample scenario reports, and review condition: re-approving tools/approved_gpu_reference.bmp"),
+                behavior: "a staged or packaged unitas player carries the project's ProjectSettings directory next to the staged Assets directory, so the runtime resolves the Standalone quality level and renders the directional shadow; a project with no quality settings keeps the documented shadows-off fallback, only the Standalone target group is wired end to end today, and the WebGL group is unreachable because no web player crate exists",
+                location: "crates/unitas-build/src/bundle.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/project_settings_bundle.rs::bundled_player_carries_project_quality_settings",
+                    "crates/unitas-build/tests/build/project_settings_bundle.rs::packaged_player_carries_project_quality_settings",
+                    "crates/unitas-build/tests/build/project_settings_bundle.rs::bundle_without_project_settings_keeps_the_shadow_fallback",
+                ],
+                missing: Some("the WebGL target group stays unreachable until a web player crate exists"),
             },
             OwnedCapabilityPart {
                 behavior: "the shadow map's texel count follows a quality level's max_texels cap down to a 64-texel floor, and the orthographic light volume is fitted as a cube of half-extent shadowDistance around the camera position",

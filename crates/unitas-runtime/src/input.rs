@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
+use crate::Runtime;
+
 pub const GAMEPAD_AXIS_LEFT_X: u32 = 0;
 pub const GAMEPAD_AXIS_LEFT_Y: u32 = 1;
 pub const GAMEPAD_AXIS_RIGHT_X: u32 = 2;
@@ -394,14 +396,7 @@ impl InputState {
     }
 
     pub fn reset(&mut self) {
-        self.keys_down.clear();
-        self.keys_pressed.clear();
-        self.keys_released.clear();
-        self.mouse_down.clear();
-        self.mouse_pressed.clear();
-        self.mouse_released.clear();
-        self.queued_keys.clear();
-        self.queued_mouse_buttons.clear();
+        self.clear_held_input();
         self.queued_pointer_move = None;
         self.queued_scroll = (0.0, 0.0);
         self.pointer_x = 0.0;
@@ -410,6 +405,17 @@ impl InputState {
         self.pointer_dy = 0.0;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
+    }
+
+    pub fn clear_held_input(&mut self) {
+        self.keys_down.clear();
+        self.keys_pressed.clear();
+        self.keys_released.clear();
+        self.mouse_down.clear();
+        self.mouse_pressed.clear();
+        self.mouse_released.clear();
+        self.queued_keys.clear();
+        self.queued_mouse_buttons.clear();
         self.clear_gamepad_state();
         for entries in self.axes.values_mut() {
             for entry in entries {
@@ -888,6 +894,28 @@ impl InputState {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct FocusPause {
+    restore_time_scale: Option<f64>,
+}
+
+impl FocusPause {
+    pub fn apply_focus(&mut self, runtime: &mut Runtime, focused: bool) {
+        if focused {
+            runtime.input_mut().clear_held_input();
+            if let Some(time_scale) = self.restore_time_scale.take() {
+                runtime.set_time_scale(time_scale);
+            }
+            return;
+        }
+        runtime.input_mut().reset();
+        if self.restore_time_scale.is_none() {
+            self.restore_time_scale = Some(runtime.time_scale());
+            runtime.set_time_scale(0.0);
+        }
+    }
+}
+
 fn is_source_in(
     src: &ButtonSource,
     keys: &HashSet<u32>,
@@ -1081,6 +1109,88 @@ mod tests {
         input.begin_frame(1.0 / 60.0);
         assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
         assert!(input.axis("Horizontal").unwrap_or(0.0) > 0.0);
+    }
+
+    #[test]
+    fn focus_loss_clears_held_keys_buttons_and_axes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        runtime.input_mut().inject_key(KEY_RIGHT_ARROW, true);
+        runtime.input_mut().inject_mouse_button(0, true);
+        runtime.input_mut().inject_axis("Horizontal", 1.0);
+        runtime.input_mut().begin_frame(1.0 / 60.0);
+        assert!(runtime.input().is_key_down(KEY_RIGHT_ARROW));
+        assert!(runtime.input().is_mouse_button_down(0));
+        assert_eq!(runtime.input().axis_raw("Horizontal"), Some(1.0));
+
+        let mut focus = FocusPause::default();
+        focus.apply_focus(&mut runtime, false);
+
+        assert!(!runtime.input().is_key_down(KEY_RIGHT_ARROW));
+        assert!(!runtime.input().is_mouse_button_down(0));
+        assert_eq!(runtime.input().injected_axis("Horizontal"), None);
+        runtime.input_mut().begin_frame(1.0 / 60.0);
+        assert_eq!(runtime.input().axis("Horizontal"), Some(0.0));
+        assert_eq!(runtime.input().axis_raw("Horizontal"), Some(0.0));
+        Ok(())
+    }
+
+    #[test]
+    fn focus_loss_pauses_the_simulation() -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        runtime.tick(0.5)?;
+        runtime.input_mut().inject_key(KEY_RIGHT_ARROW, true);
+        runtime.tick(0.5)?;
+        assert_eq!(runtime.input().axis("Horizontal"), Some(1.0));
+
+        let mut focus = FocusPause::default();
+        focus.apply_focus(&mut runtime, false);
+        assert_eq!(runtime.time_scale(), 0.0);
+
+        runtime.input_mut().inject_key(KEY_RIGHT_ARROW, true);
+        runtime.tick(0.5)?;
+        assert_eq!(runtime.input().axis("Horizontal"), Some(0.0));
+        Ok(())
+    }
+
+    #[test]
+    fn focus_gain_restores_the_clock_and_drops_input_that_arrived_while_unfocused()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        let mut focus = FocusPause::default();
+        focus.apply_focus(&mut runtime, false);
+        assert_eq!(runtime.time_scale(), 0.0);
+
+        runtime.input_mut().inject_key(KEY_RIGHT_ARROW, true);
+        runtime.input_mut().begin_frame(1.0 / 60.0);
+        assert!(runtime.input().is_key_down(KEY_RIGHT_ARROW));
+
+        focus.apply_focus(&mut runtime, true);
+        assert_eq!(runtime.time_scale(), 1.0);
+        assert!(!runtime.input().is_key_down(KEY_RIGHT_ARROW));
+        assert_eq!(
+            runtime.input().key_state(KEY_RIGHT_ARROW) & STATE_RELEASED,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn focus_gain_restores_the_clock_that_was_in_effect() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut runtime = Runtime::new()?;
+        let mut focus = FocusPause::default();
+
+        runtime.set_time_scale(0.5);
+        focus.apply_focus(&mut runtime, false);
+        assert_eq!(runtime.time_scale(), 0.0);
+        focus.apply_focus(&mut runtime, true);
+        assert_eq!(runtime.time_scale(), 0.5);
+
+        runtime.set_time_scale(0.0);
+        focus.apply_focus(&mut runtime, false);
+        focus.apply_focus(&mut runtime, true);
+        assert_eq!(runtime.time_scale(), 0.0);
+        Ok(())
     }
 
     #[test]

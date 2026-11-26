@@ -5,7 +5,7 @@ use crate::camera::Camera;
 use crate::capture::{CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds};
 use crate::glyphs::{
     layout_text, shape_glyph_quads, FontLibrary, GlyphAtlas, GlyphResources, Rect, SwashCache,
-    TextFrame, TextPipeline, TextStyle,
+    TextFrame, TextPipeline, TextStyle, TexturedQuad,
 };
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
@@ -368,6 +368,14 @@ struct TextState {
     cache: SwashCache,
     atlas: GlyphAtlas,
     targets: HashMap<wgpu::TextureFormat, TextTarget>,
+    image_targets: HashMap<wgpu::TextureFormat, ImageTarget>,
+}
+
+/// The textured quad that draws a composed frame over a render target.
+struct ImageTarget {
+    pipeline: TextPipeline,
+    resources: Option<GlyphResources>,
+    size: (u32, u32),
 }
 
 struct ShadowState {
@@ -977,6 +985,7 @@ impl Renderer {
             cache: SwashCache::new(),
             atlas: GlyphAtlas::new(1024, 1024),
             targets: HashMap::new(),
+            image_targets: HashMap::new(),
         };
         Ok(Renderer {
             instance,
@@ -1753,6 +1762,108 @@ impl Renderer {
         Ok(())
     }
 
+    /// Draws a composed frame over a render target of the given size.
+    pub fn draw_image_to_view(
+        &self,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        image: &Image,
+    ) -> Result<(), RenderError> {
+        if size.0 == 0 || size.1 == 0 || image.width == 0 || image.height == 0 {
+            return Ok(());
+        }
+        let rgba = image.to_rgba8();
+        let mut text = lock(&self.text);
+        let target = text
+            .image_targets
+            .entry(format)
+            .or_insert_with(|| ImageTarget {
+                pipeline: TextPipeline::new(&self.device, format),
+                resources: None,
+                size: (0, 0),
+            });
+        if target.size != (image.width, image.height) {
+            target.resources = Some(
+                target
+                    .pipeline
+                    .upload_image(&self.device, &self.queue, &rgba),
+            );
+            target.size = (image.width, image.height);
+        } else if let Some(resources) = &target.resources {
+            TextPipeline::write_image(&self.queue, resources, &rgba);
+        }
+        let Some(resources) = &target.resources else {
+            return Ok(());
+        };
+        let quads = [TexturedQuad {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+        }];
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("image"),
+            });
+        let mut target_frame = TextFrame {
+            encoder: &mut encoder,
+            view,
+            frame,
+            clip: frame,
+        };
+        target.pipeline.draw(
+            &self.device,
+            &self.queue,
+            resources,
+            &mut target_frame,
+            &quads,
+        );
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Presents a composed frame on a window surface.
+    pub fn present_image_to_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        image: &Image,
+    ) -> Result<(), RenderError> {
+        let surface_texture = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            other => return Err(RenderError::SurfaceUnavailable(format!("{other:?}"))),
+        };
+        let size = (
+            surface_texture.texture.width(),
+            surface_texture.texture.height(),
+        );
+        let format = {
+            let state = lock(&self.surface);
+            match state.as_ref() {
+                Some(surface_state) => surface_state.format,
+                None => return Err(RenderError::SurfaceNotConfigured),
+            }
+        };
+        {
+            let view = surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.draw_image_to_view(&view, format, size, image)?;
+        }
+        self.queue.present(surface_texture);
+        Ok(())
+    }
+
     fn draw_text_overlay(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1771,6 +1882,7 @@ impl Renderer {
             cache,
             atlas,
             targets,
+            ..
         } = &mut *text;
         let mut quads = Vec::new();
         for item in overlay {
@@ -2532,6 +2644,90 @@ mod tests {
     fn ink_coverage(ink: &OverlayInk) -> f32 {
         let area = ((ink.max_x - ink.min_x + 1) * (ink.max_y - ink.min_y + 1)) as f32;
         ink.changed as f32 / area
+    }
+
+    #[test]
+    fn image_blit_draws_the_image_over_the_target() -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let width = 4u32;
+        let height = 4u32;
+        let mut image = Image::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                image.set_pixel(x, y, [x as u8 * 60, y as u8 * 60, 11]);
+            }
+        }
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("image-target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        renderer.draw_image_to_view(
+            &view,
+            wgpu::TextureFormat::Rgba8Unorm,
+            (width, height),
+            &image,
+        )?;
+        let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
+        let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("image-readback"),
+            size: bytes_per_row * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("image-readback"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        renderer.queue.submit(Some(encoder.finish()));
+        let data = renderer.read_buffer(&readback)?;
+        for y in 0..height {
+            for x in 0..width {
+                let offset = y as usize * bytes_per_row as usize + x as usize * 4;
+                let pixel = [data[offset], data[offset + 1], data[offset + 2]];
+                assert_eq!(
+                    pixel,
+                    image.get_pixel(x, y),
+                    "the blit changed the pixel at {x},{y}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -23,6 +23,8 @@ namespace Unitas.Samples.RollABall
         private const int FrozenProofFrames = 5;
         private const float FrozenToleranceSqr = 1e-8f;
         private const string GoldPickupName = "Pickup_Gold";
+        private const string CollectChimeObjectName = "CollectChime";
+        private const string CollectChimeAssetPath = "Audio/PickupChime.wav";
 
         private static readonly Vector3 GoldSpawnPosition = new Vector3(5f, 0.75f, 5f);
 
@@ -323,9 +325,60 @@ namespace Unitas.Samples.RollABall
             {
                 component.ReportCollectBurst();
             }
+            PlayCollectChime();
             Destroy(pickup);
             bool destroyedReadsNull = pickup == null;
             Debug.Log($"Pickup destroyed null {destroyedReadsNull}");
+        }
+
+        private static AudioSource? _collectChimeSource;
+        private static AudioClip? _collectChimeClip;
+
+        private void PlayCollectChime()
+        {
+            AudioSource? chime = ResolveCollectChime();
+            AudioClip? clip = _collectChimeClip;
+            if (chime == null || clip == null)
+            {
+                Debug.Log("[roll-a-ball] collect chime missing source");
+                return;
+            }
+            int pickupFrame = Time.frameCount;
+            chime.PlayOneShot(clip);
+            Debug.Log($"[roll-a-ball] collect chime played pickup_frame={pickupFrame} chime_frame={Time.frameCount} state={chime.state} silent={chime.silenceReason}");
+        }
+
+        private static AudioSource? ResolveCollectChime()
+        {
+            if (_collectChimeSource != null && _collectChimeClip != null)
+            {
+                return _collectChimeSource;
+            }
+
+            GameObject? holder = GameObject.Find(CollectChimeObjectName);
+            AudioSource? source = holder != null ? holder.GetComponent<AudioSource>() : null;
+            if (source != null && source.clip != null)
+            {
+                _collectChimeSource = source;
+                _collectChimeClip = source.clip;
+                return source;
+            }
+
+            AudioClip? clip = AudioClip.LoadFromFile(Application.dataPath + "/" + CollectChimeAssetPath);
+            if (clip == null)
+            {
+                return null;
+            }
+
+            if (holder == null)
+            {
+                holder = new GameObject(CollectChimeObjectName);
+            }
+            source = source ?? holder.AddComponent<AudioSource>();
+            source.clip = clip;
+            _collectChimeSource = source;
+            _collectChimeClip = clip;
+            return source;
         }
 
         private IEnumerator CountdownRoutine()

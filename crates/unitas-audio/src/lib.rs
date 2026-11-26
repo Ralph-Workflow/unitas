@@ -2096,4 +2096,78 @@ mod tests {
         world.set_master_volume(0.0);
         assert_eq!(world.inaudible_reason(entity), Some(SilenceReason::Muted));
     }
+
+    fn chime_bus_world() -> (AudioWorld, EntityId, EntityId) {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 8,
+            samples: vec![0.5, 0.25, 0.125, 0.0625],
+            duration: 0.5,
+        });
+        let sfx = EntityId::new(60);
+        let menu = EntityId::new(61);
+        for entity in [sfx, menu] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+            world.play(entity, true);
+        }
+        world.set_source_group(sfx, AudioMixerGroup::Sfx);
+        world.set_source_group(menu, AudioMixerGroup::Menu);
+        (world, sfx, menu)
+    }
+
+    #[test]
+    fn chime_mixes_through_the_sfx_bus_with_group_volume_and_gameplay_pause() {
+        let (mut world, _sfx, _menu) = chime_bus_world();
+        let mixed = world.mix(4);
+        assert!((mixed[0] - 1.0).abs() < 1e-6);
+        assert!((mixed[2] - 0.5).abs() < 1e-6);
+
+        let (mut world, _sfx, _menu) = chime_bus_world();
+        world.set_group_volume(AudioMixerGroup::Sfx, 0.25);
+        let mixed = world.mix(4);
+        assert!((mixed[0] - 0.625).abs() < 1e-6);
+        assert!((mixed[2] - 0.3125).abs() < 1e-6);
+
+        let (mut world, sfx, _menu) = chime_bus_world();
+        world.set_group_volume(AudioMixerGroup::Sfx, 0.0);
+        assert_eq!(world.inaudible_reason(sfx), Some(SilenceReason::Muted));
+        let mixed = world.mix(4);
+        assert!((mixed[0] - 0.5).abs() < 1e-6);
+        assert!((mixed[2] - 0.25).abs() < 1e-6);
+
+        let (mut world, sfx, menu) = chime_bus_world();
+        world.set_gameplay_paused(true);
+        assert_eq!(
+            world.inaudible_reason(sfx),
+            Some(SilenceReason::GameplayPaused)
+        );
+        assert_eq!(world.inaudible_reason(menu), None);
+        let mixed = world.mix(4);
+        assert!((mixed[0] - 0.5).abs() < 1e-6);
+        assert!((mixed[2] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shipped_collect_chime_asset_decodes_and_mixes_audible_samples() -> Result<(), AudioError> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/roll-a-ball/Assets/Audio/PickupChime.wav");
+        let bytes = std::fs::read(&path).map_err(|err| AudioError::Io(err.to_string()))?;
+        let clip = parse_wav(&bytes)?;
+        assert!(clip.frame_count() > 0);
+        assert!(clip.samples.iter().any(|sample| sample.abs() > 0.1));
+
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(clip);
+        let entity = EntityId::new(70);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+        world.play(entity, true);
+        assert_eq!(world.inaudible_reason(entity), None);
+
+        let mixed = world.mix(1024);
+        assert!(mixed.iter().any(|sample| sample.abs() > 0.01));
+        Ok(())
+    }
 }

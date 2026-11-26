@@ -286,6 +286,8 @@ pub struct WindowedPlayerResult {
     pub won: bool,
     pub hud: bool,
     pub hud_text: String,
+    pub canvas: bool,
+    pub shadow: bool,
     pub captured_frame: Option<Image>,
 }
 
@@ -306,6 +308,8 @@ pub struct DeviceVerifyReport {
     pub total: u32,
     pub won: bool,
     pub hud: bool,
+    pub canvas: bool,
+    pub shadow: bool,
     pub reference_path: PathBuf,
 }
 
@@ -610,6 +614,8 @@ pub fn launch_bundle_windowed(
         };
 
     let hud = presenter.overlay_drawn();
+    let canvas = !runtime.ui_draw_items().is_empty();
+    let shadow = unitas_runtime::presenter::shadow_settings_for_runtime(&runtime).enabled;
     let final_ball_position = player_ball_position(&runtime);
     let loaded_scene_count = runtime.scene_count();
     let root_object_count = runtime.scene_graph().map_or(0, |graph| graph.roots().len());
@@ -648,6 +654,8 @@ pub fn launch_bundle_windowed(
         won,
         hud,
         hud_text,
+        canvas,
+        shadow,
         captured_frame,
     })
 }
@@ -1049,6 +1057,8 @@ pub fn run_device_verification(
         total: windowed_result.total_pickups,
         won: windowed_result.won,
         hud: windowed_result.hud,
+        canvas: windowed_result.canvas,
+        shadow: windowed_result.shadow,
         reference_path: reference_bmp_path.to_path_buf(),
     })
 }

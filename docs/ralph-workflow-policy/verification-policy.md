@@ -316,14 +316,21 @@ The named non-default profiles, each with the five required fields:
   milestone touching presentation; evidence: lane exit status and captured
   GPU/audio/input artifacts; fails hard when run; last run 2026-11-26, recorded
   in this tree by the gate-lane review entry below; `tools/approved_gpu_reference.bmp`
-  was not re-approved for the directional-shadow change and remains the
-  pre-shadow baseline, because the staged player's bundle carries no
-  `ProjectSettings/` directory, so the device frame takes the documented
-  shadows-off fallback (`ShadowSettings::disabled()`) and comes out
-  byte-identical to that pre-shadow baseline (max_diff=0) — the lane proves
-  that fallback path, not the shadow; the durable source for the shadow
-  evidence is the re-approved S8 reference set under
-  `samples/roll-a-ball/References/`; staleness horizon one milestone.
+  was re-approved on 2026-11-26 against the real shadowed device frame: the
+  staged player's bundle now carries the project's `ProjectSettings/` directory
+  next to `Assets/`, so the runtime resolves the `Standalone` quality level
+  (`shadows: 2`, `shadowResolution: 2`, `shadowDistance: 50`) and the device
+  frame carries the directional shadow instead of the shadows-off fallback; the
+  re-approved file is the exact capture the lane produces today (two
+  consecutive captures differ in 0 of 76 800 pixels, and the fresh capture
+  matches the approved file with max_diff=0); against the prior pre-shadow
+  baseline the shadowed capture differs in 3 834 of 76 800 pixels (4.99 %); the
+  lane also asserts that the presented window frame carries the scene's uGUI
+  canvas and the project shadows (`canvas=true`, `shadow=true` in the
+  `device_verify=ok` line), so the windowed frame, not only the capture, is
+  proven; the durable source for the shadow evidence is also the re-approved
+  S8 reference set under `samples/roll-a-ball/References/`; staleness horizon
+  one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
   presentation, or the editor; evidence: per-measurement OK/FAIL lines with
@@ -356,7 +363,7 @@ The named non-default profiles, each with the five required fields:
 |---|---|---|
 | `make verify-samples` | 2026-11-26 | the re-approved directional-shadow S8 reference baselines under `samples/roll-a-ball/References/` |
 | `make verify-benchmark` | 2026-11-26 | this gate-lane review entry and the benchmark inputs under `samples/roll-a-ball/Benchmarks/agent-authoring/bonus-pickup/` |
-| `make verify-device` | 2026-11-26 | this gate-lane review entry; `tools/approved_gpu_reference.bmp` was not re-approved for the directional-shadow change and remains the pre-shadow baseline, because the staged player's bundle carries no `ProjectSettings/` directory, so the device frame takes the documented shadows-off fallback (`ShadowSettings::disabled()`) and comes out byte-identical to that pre-shadow baseline (max_diff=0) — the lane proves that fallback path, not the shadow; the durable source for the shadow evidence is the re-approved S8 reference set under `samples/roll-a-ball/References/` |
+| `make verify-device` | 2026-11-26 | this gate-lane review entry; `tools/approved_gpu_reference.bmp` was re-approved on 2026-11-26 against the real shadowed device frame: the staged player's bundle now carries the project's `ProjectSettings/` directory next to `Assets/`, so the runtime resolves the `Standalone` quality level and the device frame carries the directional shadow instead of the shadows-off fallback; the approved file is the exact capture the lane produces today (two consecutive captures differ in 0 of 76 800 pixels; the fresh capture matches the approved file with max_diff=0), and against the prior pre-shadow baseline the shadowed capture differs in 3 834 of 76 800 pixels (4.99 %); the lane also asserts that the presented window frame carries the scene's uGUI canvas and the project shadows |
 | `make verify-perf` | 2026-11-26 | this gate-lane review entry |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |
 RALPH-FACT: verification_time_budget: 26.24 seconds wall for `make verify` on an Apple Silicon host on 2026-11-25, of which 22.37 seconds is controllable time above the recorded 3.87-second full-gate cost floor; the full .NET formatter took 21.49s of that run. This is the measurement each re-measurement is compared against, not a limit the gate fails on

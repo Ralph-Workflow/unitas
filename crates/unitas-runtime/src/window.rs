@@ -29,15 +29,15 @@ use winit::window::{Window, WindowId};
 
 use crate::Runtime;
 use crate::input::{
-    GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_RIGHT_X, GAMEPAD_AXIS_RIGHT_Y,
-    GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT, GAMEPAD_BUTTON_DPAD_RIGHT,
-    GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_EAST, GAMEPAD_BUTTON_LEFT_STICK,
-    GAMEPAD_BUTTON_LEFT_TRIGGER, GAMEPAD_BUTTON_NORTH, GAMEPAD_BUTTON_RIGHT_STICK,
-    GAMEPAD_BUTTON_RIGHT_TRIGGER, GAMEPAD_BUTTON_SELECT, GAMEPAD_BUTTON_SOUTH,
-    GAMEPAD_BUTTON_START, GAMEPAD_BUTTON_WEST, InputState, KEY_BACKSPACE, KEY_DELETE,
-    KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT, KEY_LEFT_ARROW, KEY_LEFT_CONTROL, KEY_LEFT_SHIFT,
-    KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW, KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT, KEY_SPACE,
-    KEY_TAB, KEY_UP_ARROW, RumbleHandler,
+    FocusPause, GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_RIGHT_X,
+    GAMEPAD_AXIS_RIGHT_Y, GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT,
+    GAMEPAD_BUTTON_DPAD_RIGHT, GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_EAST,
+    GAMEPAD_BUTTON_LEFT_STICK, GAMEPAD_BUTTON_LEFT_TRIGGER, GAMEPAD_BUTTON_NORTH,
+    GAMEPAD_BUTTON_RIGHT_STICK, GAMEPAD_BUTTON_RIGHT_TRIGGER, GAMEPAD_BUTTON_SELECT,
+    GAMEPAD_BUTTON_SOUTH, GAMEPAD_BUTTON_START, GAMEPAD_BUTTON_WEST, InputState, KEY_BACKSPACE,
+    KEY_DELETE, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ALT, KEY_LEFT_ARROW, KEY_LEFT_CONTROL,
+    KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ALT, KEY_RIGHT_ARROW, KEY_RIGHT_CONTROL, KEY_RIGHT_SHIFT,
+    KEY_SPACE, KEY_TAB, KEY_UP_ARROW, RumbleHandler,
 };
 pub use crate::presenter::{
     FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding, GpuWindowPresenter,
@@ -337,6 +337,7 @@ struct WindowApp<'a> {
     presenting_started: Option<Instant>,
     presenting_finished: Option<Instant>,
     gamepad: Option<Arc<Mutex<GamepadBackend>>>,
+    focus_pause: FocusPause,
 }
 
 impl<'a> WindowApp<'a> {
@@ -369,6 +370,7 @@ impl<'a> WindowApp<'a> {
             presenting_started: None,
             presenting_finished: None,
             gamepad,
+            focus_pause: FocusPause::default(),
         }
     }
 
@@ -493,6 +495,7 @@ impl ApplicationHandler for WindowApp<'_> {
                 }
             }
             WindowEvent::Focused(focused) => {
+                self.focus_pause.apply_focus(self.runtime, focused);
                 self.presenter
                     .apply_focus(self.runtime.input_mut(), focused);
             }
@@ -857,6 +860,34 @@ mod tests {
         assert!(audio_paused);
         apply_focus_change(&mut input, &mut audio_paused, None, true);
         assert!(!audio_paused);
+    }
+
+    #[test]
+    fn focus_loss_clears_input_and_freezes_the_player_until_focus_returns()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        let mut audio_paused = false;
+        let mut focus = FocusPause::default();
+        apply_key_event(
+            runtime.input_mut(),
+            PhysicalKey::Code(KeyCode::KeyW),
+            ElementState::Pressed,
+        );
+        runtime.input_mut().begin_frame(1.0 / 60.0);
+
+        focus.apply_focus(&mut runtime, false);
+        apply_focus_change(runtime.input_mut(), &mut audio_paused, None, false);
+
+        assert!(!runtime.input().is_key_down(u32::from(b'w')));
+        assert_eq!(runtime.time_scale(), 0.0);
+        assert!(audio_paused);
+
+        focus.apply_focus(&mut runtime, true);
+        apply_focus_change(runtime.input_mut(), &mut audio_paused, None, true);
+
+        assert_eq!(runtime.time_scale(), 1.0);
+        assert!(!audio_paused);
+        Ok(())
     }
 
     #[test]

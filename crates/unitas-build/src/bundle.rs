@@ -14,6 +14,7 @@ pub const DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME: &str = "development_diagnosti
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE: &str = "UNITAS_DEV_DIAGNOSTICS_ENABLED";
 pub const BUNDLE_MANIFEST_FORMAT_VERSION: u32 = 1;
 pub const MANAGED_DIR_NAME: &str = "Managed";
+pub const PROJECT_SETTINGS_DIR_NAME: &str = "ProjectSettings";
 pub const MANAGED_GAME_ASSEMBLY_FILENAME: &str = "Assembly-CSharp.dll";
 pub const PLAYER_HOST_ASSEMBLY_FILENAME: &str = "Unitas.PlayerHost.dll";
 pub const PLAYER_HOST_RUNTIME_CONFIG_FILENAME: &str = "Unitas.PlayerHost.runtimeconfig.json";
@@ -643,6 +644,7 @@ pub fn stage_bundle_for_host(
         // materials, scripts), so the assets they point at travel with the
         // bundle: without them the player cannot resolve those references.
         stage_project_assets(&project_root, output_dir)?;
+        stage_project_settings(&project_root, output_dir)?;
         // Only projects that actually carry scripts get a Managed/ payload;
         // scene-only fixture projects stage content alone.
         if project_has_scripts(&project_root) {
@@ -774,6 +776,21 @@ fn stage_project_assets(project_root: &Path, output_dir: &Path) -> Result<(), Bu
         return Ok(());
     }
     let destination = output_dir.join("Assets");
+    if destination.starts_with(&source) {
+        return Ok(());
+    }
+    copy_directory(&source, &destination)
+}
+
+/// Copies the project settings into the bundle so the player resolves the
+/// project's quality levels (and the shadows they enable) instead of falling
+/// back to the settings-less defaults.
+fn stage_project_settings(project_root: &Path, output_dir: &Path) -> Result<(), BundleError> {
+    let source = project_root.join(PROJECT_SETTINGS_DIR_NAME);
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let destination = output_dir.join(PROJECT_SETTINGS_DIR_NAME);
     if destination.starts_with(&source) {
         return Ok(());
     }
