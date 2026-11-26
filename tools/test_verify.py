@@ -1301,8 +1301,10 @@ def test_timed_gate_passes_a_command_that_finishes_inside_its_budget() -> None:
 
 def test_timed_gate_terminates_a_command_past_its_budget(tmp_path: Path) -> None:
     marker = tmp_path / "grandchild.txt"
+    grandchild_record_delay_seconds = 5
     grandchild = (
-        f"import pathlib, time\ntime.sleep(1)\npathlib.Path({str(marker)!r}).write_text('alive')\n"
+        f"import pathlib, time\ntime.sleep({grandchild_record_delay_seconds})\n"
+        f"pathlib.Path({str(marker)!r}).write_text('alive')\n"
     )
     script = (
         "import subprocess, sys, time\n"
@@ -1311,7 +1313,7 @@ def test_timed_gate_terminates_a_command_past_its_budget(tmp_path: Path) -> None
     )
     exit_code = verify.run_timed(["timed", "probe", "0.3", sys.executable, "-c", script])
     assert exit_code == 1
-    time.sleep(1.5)
+    time.sleep(grandchild_record_delay_seconds + 1.0)
     assert not marker.exists()
 
 

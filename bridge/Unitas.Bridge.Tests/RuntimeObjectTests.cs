@@ -161,6 +161,7 @@ namespace Unitas.Bridge.Tests
                 Check.That("Doomed runtime object has non-zero native entity id", entity != 0UL);
 
                 RuntimeObjectProbeScript probe = runtimeObject.AddComponent<RuntimeObjectProbeScript>();
+                int probeInstanceId = probe.GetInstanceID();
                 host.Tick(0.02);
 
                 UnityEngine.Object.Destroy(runtimeObject);
@@ -168,6 +169,24 @@ namespace Unitas.Bridge.Tests
 
                 Check.That("Destroyed runtime GameObject compares equal to null", runtimeObject == null);
                 Check.That("Destroyed runtime MonoBehaviour compares equal to null", probe == null);
+                Check.That(
+                    "Destroyed runtime GameObject does not compare unequal to null",
+                    !(runtimeObject != null));
+                Check.That("Destroyed runtime MonoBehaviour does not compare unequal to null", !(probe != null));
+                Check.That("Destroyed runtime GameObject does not convert to true", !(bool)runtimeObject);
+                Check.That("Destroyed runtime MonoBehaviour does not convert to true", !(bool)probe);
+                Check.That("Destroyed runtime GameObject keeps its managed reference", runtimeObject is not null);
+                Check.That(
+                    "Null-conditional access on a destroyed MonoBehaviour still evaluates",
+                    probe?.GetInstanceID() == probeInstanceId);
+
+                GameObject liveObject = new GameObject("LiveRuntimeObject");
+                Check.That("Live runtime GameObject compares unequal to null", liveObject != null);
+                Check.That("Live runtime GameObject converts to true", (bool)liveObject);
+                Check.That("Live runtime GameObject keeps its name", liveObject?.name == "LiveRuntimeObject");
+                UnityEngine.Object.Destroy(liveObject);
+                host.Tick(0.02);
+                Check.That("Destroyed live runtime GameObject compares equal to null", liveObject == null);
                 host.Shutdown();
             }
         }

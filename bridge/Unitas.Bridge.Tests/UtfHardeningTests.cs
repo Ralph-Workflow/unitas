@@ -10,13 +10,37 @@ namespace Unitas.Bridge.Tests
 {
     public static class UtfHardeningTests
     {
-        public static void Run()
+        public static void DeepCoroutineYieldsAndLogAssertAndXmlParity()
         {
             string tempProject = CreateHardeningTestProject();
             try
             {
                 VerifyDeepCoroutineYieldsAndLogAssertAndXmlParity(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        public static void AssemblyCategoryAndNamePatternFilters()
+        {
+            string tempProject = CreateHardeningTestProject();
+            try
+            {
                 VerifyAssemblyCategoryAndNamePatternFilters(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        public static void MidRunCancellationReporting()
+        {
+            string tempProject = CreateHardeningTestProject();
+            try
+            {
                 VerifyMidRunCancellationReporting(tempProject);
             }
             finally

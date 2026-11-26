@@ -385,7 +385,7 @@ SUITE_BUDGET_RE = re.compile(r"(?m)^SUITE_BUDGET_SECONDS\s*:?=\s*(\d+)")
 RUST_TEST_GATE_RUNNER = "verify.py cargo-test"
 MONOLITHIC_RUST_TEST_PATTERN = re.compile(r"cargo test --workspace")
 CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
-RUST_TEST_CONCURRENCY = 4
+RUST_TEST_CONCURRENCY = max(4, min(12, os.cpu_count() or 4))
 RUST_TEST_PACKAGE_CONCURRENCY = 4
 LANE_LIMIT_FACTS = (
     ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),

@@ -10,8 +10,8 @@ DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
 EDITOR_TEST_SHARD_FANOUT := 12
-BRIDGE_TEST_SHARD_COUNT := 8
-BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8
+BRIDGE_TEST_SHARD_COUNT := 12
+BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8,9,10,11,12
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
 EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
 	HttpTransportTests \

@@ -2927,6 +2927,14 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 evidence: &[],
                 missing: Some("the managed Transform keeps a separate hierarchy mirror rather than converging wholesale onto the native transform hierarchy, and Object.Instantiate does not copy native child hierarchies and serialized field values into native clones"),
             },
+            OwnedCapabilityPart {
+                behavior: "a destroyed managed object compares equal to null through the UnityEngine.Object operators and converts to false, while the managed reference and null-conditional access still observe the destroyed object and a live object compares non-null",
+                location: "bridge/UnityEngine/Object.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/RuntimeObjectTests.cs::TestRuntimeObjectDestroyFakeNull",
+                ],
+                missing: None,
+            },
         ],
     },
     OwnedFeatureCapability {
