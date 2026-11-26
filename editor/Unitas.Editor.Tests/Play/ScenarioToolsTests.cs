@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
+using Unitas.Scripting;
 
 namespace Unitas.Editor.Tests.Play
 {
@@ -18,6 +19,7 @@ namespace Unitas.Editor.Tests.Play
         public static void Run()
         {
             CliArgsParsesRunScenarioOption();
+            EnsureSampleProjectScriptsCompiled();
             RegisteredToolRunsCollectAllPickupsWithAllCheckpointsPassed();
             RegisteredToolRunsRestartRecoveryWithExpectedObservations();
             RegisteredToolReportsMissingScenarioFileAsMcpError();
@@ -38,6 +40,26 @@ namespace Unitas.Editor.Tests.Play
             CliArgs missing = CliArgs.Parse(new[] { "-runScenario" });
             Check.Equal("cli-args: -runScenario without value reports a missing value", 1, missing.MissingValueArguments.Count);
             Check.Equal("cli-args: missing option name is -runScenario", "-runScenario", missing.MissingValueArguments[0]);
+        }
+
+        // The scenarios drive the real roll-a-ball project, so the editor can
+        // only load its scripts when the project is compiled. The compiled
+        // output is rebuilt from the current sources because a compile state
+        // left behind by another lane can name an assembly as current while
+        // the file on disk still comes from older sources.
+        private static void EnsureSampleProjectScriptsCompiled()
+        {
+            string projectRoot = ResolveRepoDirectory("samples/roll-a-ball");
+            string outputDirectory = Path.Combine(projectRoot, "Library", "UnitasScriptAssemblies");
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+
+            ScriptCompilationResult result = ScriptCompilation.CompileProject(
+                projectRoot,
+                new ScriptCompilationOptions());
+            Check.That("scenario-run: the sample project scripts compile", result.Succeeded);
         }
 
         private static void RegisteredToolRunsCollectAllPickupsWithAllCheckpointsPassed()
@@ -265,11 +287,24 @@ namespace Unitas.Editor.Tests.Play
 
         private static string ResolveRepoPath(string relativePath)
         {
+            return ResolveFromWorkingDirectory(relativePath, File.Exists, "path");
+        }
+
+        private static string ResolveRepoDirectory(string relativePath)
+        {
+            return ResolveFromWorkingDirectory(relativePath, Directory.Exists, "directory");
+        }
+
+        private static string ResolveFromWorkingDirectory(
+            string relativePath,
+            Func<string, bool> exists,
+            string kind)
+        {
             DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
             for (int depth = 0; depth < 12 && directory != null; depth++)
             {
                 string candidate = Path.Combine(directory.FullName, relativePath);
-                if (File.Exists(candidate))
+                if (exists(candidate))
                 {
                     return candidate;
                 }
@@ -277,7 +312,7 @@ namespace Unitas.Editor.Tests.Play
                 directory = directory.Parent;
             }
 
-            throw new FileNotFoundException("path not found from current directory: " + relativePath);
+            throw new FileNotFoundException(kind + " not found from current directory: " + relativePath);
         }
     }
 }
