@@ -60,6 +60,37 @@ def test_advisory_guard_enforcement_is_accepted() -> None:
     assert verify.check_guard_enforcement(corpus, []) == []
 
 
+def test_budget_consistency_reports_a_limit_the_makefile_does_not_enforce(
+    tmp_path: Path,
+) -> None:
+    policy_dir = tmp_path / "policy"
+    policy_dir.mkdir()
+    (policy_dir / "verification-policy.md").write_text(
+        "RALPH-FACT: authoritative_verify_command: make verify\n"
+        "RALPH-FACT: verification_enforced_limit: 124 seconds\n"
+        "RALPH-FACT: fast_path_command: make verify\n"
+        "RALPH-FACT: fast_path_enforced_limit: 30 seconds\n",
+        encoding="utf-8",
+    )
+    (policy_dir / "testing-policy.md").write_text(
+        "RALPH-FACT: test_command: make test\nRALPH-FACT: suite_enforced_limit: 61 seconds\n",
+        encoding="utf-8",
+    )
+    makefile = tmp_path / "Makefile"
+    makefile.write_text(
+        "VERIFY_BUDGET_SECONDS := 30\nSUITE_BUDGET_SECONDS := 61\n", encoding="utf-8"
+    )
+    with (
+        mock.patch.object(verify, "MAKEFILE", makefile),
+        mock.patch.object(verify, "POLICY_DIR", policy_dir),
+    ):
+        findings = verify.check_budget_consistency()
+    assert findings == [
+        "the Makefile enforces 30s for `make verify` but verification-policy.md "
+        "records verification_enforced_limit 124s"
+    ]
+
+
 def test_repository_has_no_bypass_markers() -> None:
     assert verify.check_bypass() == []
 
@@ -860,6 +891,31 @@ def test_banned_source_skips_obj_and_bin_directories(tmp_path: Path) -> None:
     assert not any("Compiled.cs" in finding for finding in findings)
 
 
+def test_banned_unsafe_is_exempt_inside_a_zone_and_reported_outside_one(
+    tmp_path: Path,
+) -> None:
+    _write_zone_registry(tmp_path)
+    zone = tmp_path / "crates" / "zone-crate"
+    zone.mkdir(parents=True)
+    (zone / "lib.rs").write_text(
+        "pub fn leak() {\n"
+        "    unsafe {}\n"
+        "}\n"
+        "\n"
+        "pub fn widen(value: u8) -> u16 {\n"
+        "    unsafe { std::mem::transmute(value) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    outside = tmp_path / "crates" / "alpha"
+    outside.mkdir(parents=True)
+    (outside / "lib.rs").write_text("pub fn leak() {\n    unsafe {}\n}\n", encoding="utf-8")
+    findings = verify.check_banned(tmp_path)
+    assert "crates/alpha/lib.rs:2: unsafe block" in findings
+    assert "crates/zone-crate/lib.rs:2: unsafe block" not in findings
+    assert "crates/zone-crate/lib.rs:6: transmute" in findings
+
+
 def test_dependency_gate_allows_stdlib_only() -> None:
     assert verify.check_dependencies() == []
 
@@ -1321,6 +1377,8 @@ time.sleep(30)
 
 
 _TIMED_GATE_BOUND_SECONDS = 10
+_TIMED_GATE_ATTEMPTS = 2
+_RED_GATE_EXIT_CODE = 3
 
 
 def _run_timed(argv: list[str]) -> tuple[int, str]:
@@ -1356,6 +1414,50 @@ def test_timed_gate_fails_a_command_that_would_succeed_past_its_budget() -> None
     )
     assert status == 1
     assert "gate overrun-gate exceeded the 1s budget and was terminated" in output
+
+
+def test_timed_gate_reruns_once_and_passes_when_the_re_run_fits_the_budget(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "attempted.txt"
+    script = (
+        "import pathlib, sys, time\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "if not marker.exists():\n"
+        "    marker.write_text('first', encoding='utf-8')\n"
+        "    time.sleep(30)\n"
+        "print('second')\n"
+    )
+    status, output = _run_timed(
+        ["timed", "contended-gate", "1", sys.executable, "-c", script, str(marker)]
+    )
+    assert status == 0
+    assert "gate contended-gate exceeded the 1s budget and was terminated" in output
+    assert "gate contended-gate is re-run once with the same 1s budget" in output
+    assert "gate contended-gate passed on the re-run" in output
+
+
+def test_timed_gate_fails_when_the_re_run_overruns_the_budget_again() -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        status, output = _run_timed(
+            ["timed", "slow-gate", "1", sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+    assert status == 1
+    terminations = output.count("gate slow-gate exceeded the 1s budget and was terminated")
+    assert terminations == _TIMED_GATE_ATTEMPTS
+    assert "gate slow-gate is re-run once with the same 1s budget" in output
+    assert "gate-script-policy.md" in stderr.getvalue()
+
+
+def test_timed_gate_does_not_rerun_a_command_that_exits_non_zero() -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        status, output = _run_timed(
+            ["timed", "red-gate", "30", sys.executable, "-c", "raise SystemExit(3)"]
+        )
+    assert status == _RED_GATE_EXIT_CODE
+    assert "is re-run once" not in output
 
 
 def test_timed_gate_kills_the_process_tree_it_started(tmp_path: Path) -> None:

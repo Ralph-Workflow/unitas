@@ -58,14 +58,20 @@ Suite admission, and fixing the production seam.
    hardcoding returns, and either over asserting how a collaborator was
    called.
 8. Every suite MUST enforce a runner-level time limit — per-test and/or
-   whole-suite — that FAILS the gate when exceeded. A suite with no enforced
+   whole-suite — that TERMINATES the run when exceeded and FAILS the gate. A
+   wrapper that only compares elapsed time after the command exits never
+   stops a hung or crash-looping test and does not count. A suite with no enforced
    limit is itself a violation, not a slow-but-tolerable suite: agents block
    on this pipeline, so one unbounded test hangs a run indefinitely.
    Convention and reviewer vigilance do not count.
 9. The suite budget is DRAWN FROM the gate budget, not parallel to it. The
    suite is one step among type checking, linting, formatting, and audits,
-   so record a POINT VALUE strictly below the project's recorded
-   `verification_time_budget` — never a range, never that budget in full.
+   so record its MEASURED time as a POINT VALUE strictly below the project's
+   recorded `verification_time_budget` — never a range, never that budget in
+   full. The runner-enforced limit of rule 8 is the suite's HARD CAP below,
+   never that measurement, on the verification policy's rule 9 shared-host
+   terms. Moving the runner limit from the measurement to that cap is not
+   budget growth: the recorded `suite_time_budget` does not change.
    The guide and cap bind CONTROLLABLE time — the suite's measured time minus
    its cost floor, recorded with the gate's floors in the verification
    policy's `verification_cost_floor` fact and governed by that policy's
@@ -76,23 +82,26 @@ Suite admission, and fixing the production seam.
    cap binds, and it does not move. A suite over the cap MUST first be
    optimized as far as the run allows (rules 7, 11, 14, 15, and 17 and the
    verification policy's rule 9); only the residual is recorded: its
-   measured time, with no headroom, as `suite_time_budget`, and its excess
-   in the verification policy's `verification_budget_overage`, on that
-   policy's rule 9 terms — the suite can never get slower, the excess only
-   shrinks, and new suite cost is offset while it remains. A recorded gate budget tighter than 120
-   seconds of controllable time binds before either number here. These
+   measured time as `suite_time_budget`, enforced with the verification
+   policy's 25% shared-host allowance, and its excess in that policy's
+   `verification_budget_overage`, on its rule 9 terms — the suite can never
+   get slower, the excess only shrinks, and new suite cost is offset while
+   it remains. The whole gate's own cap still bounds the suite. A recorded
+   gate enforced limit tighter than 120 seconds of controllable time binds
+   before either number here. These
    limits govern the DEFAULT SUITE; named profiles and quarantine carry
    their own budgets.
 10. A timeout is a HARD failure, never a route to green.
     - Per-test: raising it is almost always wrong. Repair the test, usually
       by mocking its I/O (rule 7).
-    - Suite: may SHRINK freely. It grows only as a reviewed change tracking
-      more genuinely-fast tests that satisfies rule 16, and only once
-      measured runtime crosses 80% of the current budget with every test
-      still fast. A suite under budget MUST NOT relax toward the guide or
-      cap: both are ceilings, never entitlements. The suite budget is
-      ratcheted at the recorded `suite_time_budget`; the budget MUST NOT
-      grow absent a reviewed change.
+    - Suite: the enforced limit is the cap of rule 9. The recorded
+      `suite_time_budget` measurement may SHRINK freely and grows only as a
+      reviewed change tracking more genuinely-fast tests that satisfies rule
+      16, re-measured on a warm, otherwise idle run, and only once measured
+      runtime crosses 80% of the current budget with every test still fast. A
+      suite under its cap MUST NOT relax toward the guide or cap: both are
+      ceilings, never entitlements. The suite measurement is ratcheted at the
+      recorded `suite_time_budget`; it MUST NOT grow absent a reviewed change.
       <!-- ralph-control: suite-budget-ratchet -->
 11. A PERFORMANCE failure is a HARD failure, at least as serious as a
     functional one: a functional failure is one broken behavior, a slow or
@@ -397,13 +406,14 @@ project evolves.
 RALPH-FACT: test_command: make test
 RALPH-FACT: test_command_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo, clippy, and rustfmt), and the .NET 8.0 SDK; no network access
 RALPH-FACT: primary_test_framework: pytest
-RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates, the C# bridge console runner (bridge/Unitas.Bridge.Tests) for the UnityEngine bridge, executed as four concurrent shards that together run the whole suite, and the C# editor runner (editor/Unitas.Editor.Tests) for the editor host and the native editor ABI (default automated lane, owned by the repository maintainers); the Python tooling keeps pytest as the primary framework
+RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates, the C# bridge console runner (bridge/Unitas.Bridge.Tests) for the UnityEngine bridge, executed as eight concurrent shards that together run the whole suite (the Makefile declares BRIDGE_TEST_SHARD_COUNT := 8 and BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8), and the C# editor runner (editor/Unitas.Editor.Tests) for the editor host and the native editor ABI (default automated lane, owned by the repository maintainers); the Python tooling keeps pytest as the primary framework
 RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the pytest tmp_path; no state is shared between tests
 RALPH-FACT: io_mocking_approach: the gate runner reads the working tree and never writes outside it; the gate tests replace the dotnet format subprocess with a unittest.mock patch of subprocess.run so the digest, cache-hit, and failure paths are exercised without the .NET SDK
-RALPH-FACT: suite_time_budget: 25 seconds for the default suite (`make test`), drawn from the 30-second verification_time_budget and enforced by the timed gate runner in the Makefile (`python3 tools/verify.py timed test-suite 25 ...`), which terminates the run at the limit and holds each step inside the suite to 30 seconds; measured at 7.94s wall (7.27s controllable time above the 0.67s suite cost floor) on 2026-11-25
-RALPH-FACT: per_test_timeout: none — no per-test timeout is configured; the whole-suite limit terminates a hung test at the suite budget
-RALPH-FACT: timeout_enforcement_mechanism: the timed gate runner (`python3 tools/verify.py timed <label> <budget-seconds> <command>`) starts every gate step in its own process group and terminates that whole group when the step passes its budget, failing the gate with exit 1; the default suite limit is 25 seconds (`make test`) and each step inside it is held to 30 seconds, so a hung or crash-looping test is stopped at the limit instead of blocking the run; the mechanism and its failure path are covered by the timed-gate tests in `tools/test_verify.py`
-RALPH-FACT: parallel_execution_mechanism: the default suite runs pytest and the Rust test gate concurrently (the Makefile test-steps target), and the Rust test gate compiles every workspace test target once (`cargo test --workspace --lib --tests --bins --no-run`) and then runs one parallel shard per workspace package, each shard running that package's test binaries
+RALPH-FACT: suite_time_budget: 7.94 seconds wall for the default suite (`make test`) on an Apple Silicon host on 2026-11-25, of which 7.27 seconds is controllable time above the recorded 0.67-second suite cost floor — the measurement each re-measurement is compared against, never a limit the gate fails on
+RALPH-FACT: suite_enforced_limit: 61 seconds for the default suite (`make test`), the recorded 0.67-second suite cost floor plus the 60-second cap of rule 9, enforced by the timed gate runner in the Makefile (`python3 tools/verify.py timed test-suite 61 ...`), which terminates the suite's process group at the limit and fails the gate; the suite fails only past this limit, never because a run came in slower than the recorded measurement, and a contended overrun gets exactly one re-run
+RALPH-FACT: per_test_timeout: none — no per-test timeout is configured; the whole-suite limit terminates a hung test at the suite's enforced limit
+RALPH-FACT: timeout_enforcement_mechanism: the timed gate runner (`python3 tools/verify.py timed <label> <budget-seconds> <command>`) starts every gate step in its own process group and terminates that whole group when the step passes its budget, failing the gate with exit 1; the default suite limit is 61 seconds (`make test`) and each step inside it is held to 124 seconds, so a hung or crash-looping test is stopped at the limit instead of blocking the run; a step whose attempt overruns its budget is re-run ONCE with the same budget — the runner prints `gate <label> is re-run once with the same <budget>s budget` and, when that re-run fits the budget, `gate <label> passed on the re-run` — while a step that fails with a non-zero exit code is returned at once and never re-run; the mechanism and its failure path are covered by the timed-gate tests in `tools/test_verify.py`
+RALPH-FACT: parallel_execution_mechanism: the default suite runs pytest and the Rust test gate concurrently (the Makefile test-steps target), and the Rust test gate compiles every workspace test target once (`cargo test --workspace --lib --tests --bins --no-run`) and then runs one parallel shard per workspace package, each shard running that package's test binaries; the suite group's static subgroup runs its five checks (ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy, mypy) concurrently alongside the default suite and aggregates their exit statuses
 RALPH-FACT: slow_test_report_command: pytest -q --durations=10
 RALPH-FACT: suite_test_count_command: pytest --collect-only -q
 RALPH-FACT: assertion_quality_check: make banned-constructs

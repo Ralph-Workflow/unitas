@@ -850,6 +850,10 @@ namespace Unitas.Bridge
             {
                 UnitySynchronizationContext.PumpFrame();
             }
+
+            // The clicks the runtime queued this frame reach the managed buttons
+            // here, the point the packaged player pumps them at.
+            UnityEngine.UI.Ui.PumpClicks();
         }
 
         private void SyncAudioSourceTransforms()

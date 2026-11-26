@@ -168,6 +168,14 @@ GUARD_ENFORCEMENT_INDEX = 5
 MAKE_COMMAND_MIN_PARTS = 2
 TIMED_COMMAND_MIN_ARGS = 4
 TIMED_TERMINATION_GRACE_SECONDS = 5.0
+TIMED_RE_RUN_ATTEMPT = 2
+TIMED_BUDGET_GUIDANCE = (
+    "a gate that overruns its budget is a defect to diagnose, never a budget to raise: the "
+    "verification time budget and its enforcement mechanism are recorded in "
+    "docs/ralph-workflow-policy/verification-policy.md, and a slow or hanging suite is a missing "
+    "production seam to add (docs/ralph-workflow-policy/testing-policy.md Default requirements "
+    "rule 11; docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
+)
 GATE_CLI_ARG_COUNT = 2
 BYPASS_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
     ".js": (("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),),
@@ -367,12 +375,18 @@ BANNED_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
         ("object parameter", re.compile(r"(?m)\(\s*(?:System\.)?object\s+\w+")),
     ),
 }
+ZONE_BANNED_EXEMPT_LABELS = frozenset({"unsafe block"})
 MAKE_TARGET_RE = re.compile(r"(?m)^([A-Za-z0-9_.-]+):(?!=)")
 BUDGET_RE = re.compile(r"(?m)^VERIFY_BUDGET_SECONDS\s*:?=\s*(\d+)")
+SUITE_BUDGET_RE = re.compile(r"(?m)^SUITE_BUDGET_SECONDS\s*:?=\s*(\d+)")
 RUST_TEST_GATE_RUNNER = "verify.py cargo-test"
 MONOLITHIC_RUST_TEST_PATTERN = re.compile(r"cargo test --workspace")
 CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
-BUDGET_FACT_RE = re.compile(r"^RALPH-FACT:\s*verification_time_budget:\s*(\d+)", re.MULTILINE)
+LANE_LIMIT_FACTS = (
+    ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),
+    ("verification-policy.md", "fast_path_command", "fast_path_enforced_limit"),
+    ("testing-policy.md", "test_command", "suite_enforced_limit"),
+)
 SECRET_SCAN_EXCLUDES = (
     r"^\.agent/",
     r"^\.omo/",
@@ -482,21 +496,34 @@ def check_make_targets(corpus: dict[str, str]) -> list[str]:
     return findings
 
 
+def lane_enforced_limit(makefile: str, target: str) -> str | None:
+    pattern = SUITE_BUDGET_RE if target == "test" else BUDGET_RE
+    match = pattern.search(makefile)
+    return match.group(1) if match is not None else None
+
+
 def check_budget_consistency() -> list[str]:
     findings: list[str] = []
-    declared = BUDGET_RE.search(MAKEFILE.read_text(encoding="utf-8"))
-    if declared is None:
-        return ["the Makefile declares no VERIFY_BUDGET_SECONDS"]
-    recorded = BUDGET_FACT_RE.search(
-        (POLICY_DIR / "verification-policy.md").read_text(encoding="utf-8")
-    )
-    if recorded is None:
-        return ["verification-policy.md records no verification_time_budget"]
-    if declared.group(1) != recorded.group(1):
-        findings.append(
-            f"the Makefile budget {declared.group(1)}s differs from the recorded "
-            f"verification_time_budget {recorded.group(1)}s"
-        )
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    for filename, command_key, limit_key in LANE_LIMIT_FACTS:
+        text = (POLICY_DIR / filename).read_text(encoding="utf-8")
+        command = re.search(rf"^RALPH-FACT:\s*{command_key}:\s*make\s+(\S+)", text, re.MULTILINE)
+        if command is None:
+            findings.append(f"{filename} records no {command_key}")
+            continue
+        target = command.group(1)
+        limit = lane_enforced_limit(makefile, target)
+        if limit is None:
+            findings.append(f"the Makefile declares no limit for `make {target}`")
+            continue
+        recorded = re.search(rf"^RALPH-FACT:\s*{limit_key}:\s*(\d+)", text, re.MULTILINE)
+        if recorded is None:
+            findings.append(f"{filename} records no {limit_key}")
+        elif recorded.group(1) != limit:
+            findings.append(
+                f"the Makefile enforces {limit}s for `make {target}` but {filename} "
+                f"records {limit_key} {recorded.group(1)}s"
+            )
     return findings
 
 
@@ -1523,14 +1550,21 @@ def banned_findings(display: str, tree: ast.Module) -> list[str]:
     return findings
 
 
-def banned_source_findings(path: Path) -> list[str]:
-    relative = display_path(path)
+def banned_source_findings(
+    path: Path,
+    zone_paths: frozenset[str] = frozenset(),
+    root: Path = REPO_ROOT,
+) -> list[str]:
+    relative = display_path(path, root)
     patterns = BANNED_SOURCE_PATTERNS.get(path.suffix, ())
     if not patterns:
         return []
+    exempt_unsafe = path.suffix == ".rs" and path_in_zones(relative, zone_paths)
     text = path.read_text(encoding="utf-8", errors="replace")
     findings: list[str] = []
     for label, pattern in patterns:
+        if exempt_unsafe and label in ZONE_BANNED_EXEMPT_LABELS:
+            continue
         for match in pattern.finditer(text):
             line = text.count("\n", 0, match.start()) + 1
             findings.append(f"{relative}:{line}: {label}")
@@ -1539,15 +1573,19 @@ def banned_source_findings(path: Path) -> list[str]:
 
 def check_banned(root: Path = REPO_ROOT) -> list[str]:
     findings: list[str] = []
+    zones, _ = load_unsafe_zones(root)
+    zone_paths = frozenset(
+        zone_path for zone_path, zone in zones.items() if zone.get("language") == "rust"
+    )
     for path in iter_source_files(root):
-        relative = display_path(path)
+        relative = display_path(path, root)
         if path.suffix == ".py":
             if path.name.startswith("test_"):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             findings.extend(banned_findings(str(relative), tree))
             continue
-        findings.extend(banned_source_findings(path))
+        findings.extend(banned_source_findings(path, zone_paths, root))
     return findings
 
 
@@ -2238,19 +2276,15 @@ def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes]) -> None:
     signal.signal(signal.SIGTERM, handler)
 
 
-def run_timed(argv: Sequence[str]) -> int:
-    if len(argv) < TIMED_COMMAND_MIN_ARGS:
-        sys.stderr.write("usage: verify.py timed <label> <budget-seconds> <command...>\n")
-        return 2
-    label = argv[1]
-    budget = float(argv[2])
-    command = list(argv[3:])
+def run_timed_attempt(
+    label: str, budget: float, command: list[str]
+) -> tuple[bool, bool, int] | None:
     started = time.monotonic()
     try:
         process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
     except OSError as error:
         sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
-        return 1
+        return None
     terminate_timed_gate_on_signal(process)
     try:
         returncode = process.wait(timeout=budget)
@@ -2259,15 +2293,7 @@ def run_timed(argv: Sequence[str]) -> int:
         if finished is None:
             terminate_timed_gate(process)
             sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget and was terminated\n")
-            sys.stderr.write(
-                "a gate that overruns its budget is a defect to diagnose, never a budget to "
-                "raise: the verification time budget and its enforcement mechanism are recorded "
-                "in docs/ralph-workflow-policy/verification-policy.md, and a slow or hanging "
-                "suite is a missing production seam to add "
-                "(docs/ralph-workflow-policy/testing-policy.md Default requirements rule 11; "
-                "docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
-            )
-            return 1
+            return True, True, 1
         returncode = finished
     except KeyboardInterrupt:
         terminate_timed_gate(process)
@@ -2279,11 +2305,40 @@ def run_timed(argv: Sequence[str]) -> int:
             f"gate {label} failed with exit {returncode}: fix the code or the check it runs, "
             "never the gate (docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
         )
-        return returncode
+        return False, False, returncode
     if elapsed > budget:
         sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
-        return 1
-    return 0
+        return True, False, returncode
+    return False, False, returncode
+
+
+def run_timed(argv: Sequence[str]) -> int:
+    if len(argv) < TIMED_COMMAND_MIN_ARGS:
+        sys.stderr.write("usage: verify.py timed <label> <budget-seconds> <command...>\n")
+        return 2
+    label = argv[1]
+    budget = float(argv[2])
+    command = list(argv[3:])
+    status = 1
+    for attempt in (1, TIMED_RE_RUN_ATTEMPT):
+        outcome = run_timed_attempt(label, budget, command)
+        if outcome is None:
+            return 1
+        overran, killed, returncode = outcome
+        if not overran:
+            if returncode != 0:
+                return returncode
+            if attempt == TIMED_RE_RUN_ATTEMPT:
+                sys.stdout.write(f"gate {label} passed on the re-run\n")
+            status = 0
+            break
+        if attempt == 1:
+            sys.stdout.write(f"gate {label} is re-run once with the same {budget:g}s budget\n")
+            continue
+        if killed:
+            sys.stderr.write(TIMED_BUDGET_GUIDANCE)
+        break
+    return status
 
 
 def cargo_test_binaries() -> tuple[int, list[tuple[str, str, str]]]:

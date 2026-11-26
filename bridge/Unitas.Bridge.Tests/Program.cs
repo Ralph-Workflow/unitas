@@ -81,6 +81,7 @@ namespace Unitas.Bridge.Tests
                 () => PlaytestTests.Run(),
                 () => RollABallScenarioTests.Run(),
                 () => SceneCameraTests.Run(),
+                () => UiClickPumpTests.Run(),
                 () => TestCharacterControllerDefaultsAndNullProvider(),
                 () => TestEndToEndCharacterControllerMoveAndSceneLoad(),
                 () => TestAudioDefaultsAndNullProvider(),

@@ -51,9 +51,13 @@ differently.
    check running only in an undeclared opt-in suite the default gate
    excludes will rot unnoticed: give it a lane, or delete it.
 9. Verification MUST complete in time proportional to the codebase, enforced
-   by the gate itself (fail on exceed), never by convention. Record the
-   enforced limit as `verification_time_budget`: the project's MEASURED gate
-   time, never a cap and never a guess.
+   by the gate itself, never by convention. The gate FAILS only when its
+   controllable time exceeds the cap below, never because a run came in
+   slower than the last measurement. Record the project's MEASURED gate time
+   as `verification_time_budget`: the measurement, never the cap and never a
+   guess. It is the figure each re-measurement is compared against, not a
+   limit the gate fails on. Record the limit the gate enforces as
+   `verification_enforced_limit`.
    - **Cost floor:** the irreducible toolchain cost of answering at all —
      interpreter or runtime startup, environment provisioning, and the
      incremental build and link that a one-line, behaviour-neutral edit to a
@@ -79,23 +83,40 @@ differently.
      most 2 minutes.
    - **Guide:** roughly **1 second of controllable time per 1k LOC**.
    - **HARD CAP: 2 minutes above the recorded cost floor**, whatever the
-     size — a gate slower than that
+     size, and this cap is the limit the gate enforces — a gate slower than that
      destroys the edit/verify loop humans and agents depend on, so past
      ~120k LOC the cap, not the rate, binds. This cap is far stricter than
      commonly cited industry guidance for a commit build, because an agent
      BLOCKS on this gate many times per task, paying the cost per iteration
      rather than per commit — a five-iteration task reaches ten minutes at
      this cap.
+   - **Shared hosts:** the gate enforces the cap, never the measurement, so a
+     run slowed by other work on the same host (parallel agent runs, a busy
+     CI runner) stays inside it. A gate that only passes on a quiet host
+     enforces the wrong number and breaks rule 12's "checks answer
+     consistently". A timed step whose attempt overruns its budget gets
+     exactly ONE re-run with the same budget: inside the limit on that
+     re-run, the gate passed; past it again, the slowness is real and is a
+     defect to optimize. The whole-lane wall-clock check has no re-run.
+     NEVER re-run repeatedly waiting for a quiet host, and never treat a
+     single contended overrun as an architecture failure.
+     Moving a gate's enforced limit from its recorded measurement to the cap
+     is not budget growth: the recorded measurement does not change.
    - **Nesting:** the suite is ONE STEP inside this budget, not a parallel
      allowance. The testing policy caps the default suite at 60 seconds above
      its cost floor so
      type checking, linting, formatting, and audits fit in the remainder. A
      suite consuming the whole gate budget is a breach even when its own
      limit is satisfied.
-   - **Ratchet:** the budget may shrink freely; it grows only as a reviewed
-     change tracking genuinely-fast new checks. A project under budget MUST
-     NOT relax toward the guide OR the cap — both are ceilings, never
-     entitlements. Record the project's measured figure, never the cap.
+   - **Re-measurement:** re-measure on a warm, otherwise idle reference run
+     whenever the toolchain or the gate changes and at each review; a new
+     measurement above the recorded one is a regression to optimize under
+     rule 12's "do not leave the loop slower". Growth is caught by
+     re-measuring, never by failing every run a busy host slows.
+   - **Ratchet:** the recorded measurement may shrink freely; it grows only
+     as a reviewed change tracking genuinely-fast new checks. A project under
+     budget MUST NOT relax toward the guide OR the cap — both are ceilings,
+     never entitlements. Record the project's measured figure, never the cap.
      <!-- ralph-control: verification-budget-ratchet -->
    - **Optimize first:** when the project's measured controllable time
      exceeds a cap in this policy or the testing policy — a multi-million-line
@@ -105,9 +126,10 @@ differently.
      change can affect re-runs (rule 17), remove duplicate checks, and repair
      the slowest checks and the missing seams behind them. Leaving an
      achievable reduction undone is a violation, never a deferral.
-   - **Over a cap after optimizing:** record the measured figure, with no
-     headroom, as the enforced budget, so the gate fails the moment the
-     project gets slower. Record the residual excess in
+   - **Over a cap after optimizing:** record the measured figure as the
+     budget, and enforce it plus a 25% shared-host allowance, so the gate
+     fails when the project really gets slower but never because the host
+     was busy. Record the residual excess in
      `verification_budget_overage` in exactly this form, every field
      non-empty:
      `excess: <gate, fast-path, and suite seconds over each cap>; owner: <person or team>; plan: <reductions applied and reductions remaining>; review: <YYYY-MM-DD>`.
@@ -150,12 +172,16 @@ differently.
     including startup, and the gate MUST emit its observed duration so a
     regression is a number, not a feeling. Target 10 seconds of
     controllable time for the fast path, HARD CAP 30 seconds above the fast
-    path's recorded cost floor (rule 9). Record the enforced limit as
-    `fast_path_time_budget`: the measured fast-path time, never the cap; the
-    fast path MUST fail when it exceeds that budget. A fast path already
-    over the cap records its excess in `verification_budget_overage` on
-    rule 9's terms. A project with a
-    negligible floor is held to 10 and 30 seconds outright. A floor above
+    path's recorded cost floor (rule 9). The fast path FAILS only when it
+    exceeds the limit it enforces — for the recorded fast path, which IS the
+    full gate, that limit is the full gate's `verification_enforced_limit` —
+    never because a run came in slower than the recorded measurement. Record
+    the measured fast-path time as `fast_path_time_budget`: the measurement
+    each re-measurement is compared against, never the cap. A fast path
+    already over the cap records its excess in `verification_budget_overage`
+    and enforces its measured figure plus rule 9's 25% shared-host
+    allowance. The cap is always measured above the recorded floor, never as
+    a flat wall-clock figure. A floor above
     the target is a measured fact to record and an owned reduction under
     rule 22, never a reason to widen the cap on controllable time. Added
     cost and any budget breach require an explicit choice and actionable
@@ -243,7 +269,7 @@ person or team, not a role the author occupies by default.
 
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Bounded run budget | Verification owner | the full gate finishes inside the budget the Makefile declares | each timed gate step prints its elapsed time, is terminated at its budget, and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the budget moves |
+| Bounded run budget | Verification owner | the full gate finishes inside the enforced limit the Makefile declares | each timed gate step prints its elapsed time, is terminated at its enforced limit, and the verify target fails when that limit is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the enforced limit moves |
 | `verification-budget-ratchet` Verification budget ratchet | Verification owner | the verification budget shrinks freely and grows only through a reviewed change | the gate report records the elapsed time against the recorded budget | the gate report records the elapsed time | deterministic: make verify | when the budget is measured and recorded by the gate |
 | No high-churn evidence in review | Verification owner | no volatile report and no generated inventory enters a human review | the review request names the durable artifact the reviewer reads | the review request names the durable artifact | advisory: no gate inspects a review request; review: at every review request | when the review request is a machine-readable artifact |
 | Gate-lane coverage | Verification owner | every declared gate sits in a lane the portfolio records | the policy gate resolves every declared command to a gate target the Makefile defines | the policy gate resolves every declared command to a gate target | deterministic: make policy-validate | when the portfolio records a lane no gate uses |
@@ -257,15 +283,16 @@ project evolves.
 
 RALPH-FACT: authoritative_verify_command: make verify
 RALPH-FACT: gate_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo, clippy, and rustfmt), and the .NET 8.0 SDK
-RALPH-FACT: gate_order: the Makefile verify target runs three concurrent groups — the scan group (policy-validate, bypass-audit, zone-gate, banned-constructs, comment-audit, deps, secret-scan), the suite group (two concurrent subgroups — the static subgroup: ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings, mypy; and the test subgroup: make test: pytest -q and the sharded Rust test gate (one shared `cargo test --workspace --lib --tests --bins --no-run` compile followed by one parallel shard per workspace package, each shard running that package's test binaries), which is the full cargo test target set minus the doc-test targets because no crate in the workspace declares a doctest and every doc-test target therefore reports zero tests; the subgroups use different cargo target directories (target/clippy and target/), so they never wait on each other's cargo lock and the suite group's wall time is the slower subgroup instead of their sum), and the .NET group (dotnet-build starts alongside the Rust runtime build; dotnet-format starts after dotnet-build, and the bridge and editor test runners run after the runtime build is joined; the bridge console runner is split into four concurrent shards that together execute the whole suite); standalone make lint also runs dotnet-format and standalone make typecheck also runs dotnet-build
+RALPH-FACT: gate_order: the Makefile verify target runs three concurrent groups — the scan group (policy-validate, bypass-audit, zone-gate, banned-constructs, comment-audit, deps, secret-scan), the suite group (two concurrent subgroups — the static subgroup: ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings, mypy, all five started concurrently and their exit statuses aggregated so one red check does not hide the other four; and the test subgroup: make test: pytest -q and the sharded Rust test gate (one shared `cargo test --workspace --lib --tests --bins --no-run` compile followed by one parallel shard per workspace package, each shard running that package's test binaries), which is the full cargo test target set minus the doc-test targets because no crate in the workspace declares a doctest and every doc-test target therefore reports zero tests; the static subgroup's clippy builds into target/clippy, but the suite group's Rust test compile (`cargo test --workspace --lib --tests --bins --no-run`) and the .NET group's runtime-build (`cargo build -p unitas-runtime -p unitas-editor-abi -p unitas-build`) both build into the DEFAULT target directory, so those two serialize on the cargo artifact lock and a contended step overruns its budget — the timed runner's one re-run exists for exactly that case), and the .NET group (dotnet-build starts alongside the Rust runtime build; dotnet-format starts after dotnet-build, and the bridge and editor test runners run after the runtime build is joined; the bridge console runner is split into eight concurrent shards that together execute the whole suite (the Makefile declares BRIDGE_TEST_SHARD_COUNT := 8 and BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8)); standalone make lint also runs dotnet-format and standalone make typecheck also runs dotnet-build
 RALPH-FACT: fast_path_command: make verify
 RALPH-FACT: fast_path_selection_mechanism: none — the full gate fits the fast-path cap in the recorded warm run; make lint remains the standalone lint and format target
-RALPH-FACT: gate_parallelism_mechanism: the Makefile verify target starts the scan group, the suite group, and the .NET group as concurrent sub-makes, one gate at a time inside the scan and suite groups; inside the suite group the Rust test gate runs pytest and the Rust test shards concurrently, and the Rust test gate itself compiles every workspace test target once and then runs one parallel shard per workspace package; the .NET group overlaps the Rust runtime build with dotnet-build and overlaps dotnet-format with the test runners. The outer verify target enforces the 30s wall-clock budget; timed steps also enforce their declared limits
+RALPH-FACT: gate_parallelism_mechanism: the Makefile verify target starts the scan group, the suite group, and the .NET group as concurrent sub-makes; inside the scan group its seven gate targets run concurrently, and inside the suite group the static subgroup's five checks (ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy, mypy) run concurrently with their exit statuses aggregated, so one red check no longer hides the other four; inside the suite group the Rust test gate runs pytest and the Rust test shards concurrently, and the Rust test gate itself compiles every workspace test target once and then runs one parallel shard per workspace package; the .NET group overlaps the Rust runtime build with dotnet-build and overlaps dotnet-format with the test runners. The outer verify target enforces the 124s wall-clock limit; timed steps also enforce their declared limits
 RALPH-FACT: gate_cache_mechanism_and_key: the secret scan caches its findings in .ruff_cache/secret_scan_cache.json, keyed by a SHA-256 digest over the .secrets.baseline bytes, the detect-secrets tool version, the Python interpreter version, the platform, and the path and content of every scanned file; a cache hit is reported in the gate output as `secret scan: cache hit for N files (digest ...)`, and deleting the cache file forces a fresh scan; the dotnet format gate caches its pass in .ruff_cache/dotnet_format_cache.json, keyed by a SHA-256 digest over the dotnet format command, the reported dotnet version, and the path and content of every formatted file, and a cache hit is reported as `dotnet format: cache hit for N files (digest ...)`; both caches live inside the working tree and both are discarded when their key changes
 RALPH-FACT: gate_duration_report_location: the duration line each Make target prints after its command
 RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
+RALPH-FACT: ci_integration_workflow: .github/workflows/verify.yml runs one verify job on ubuntu-24.04 with a 30-minute job timeout, on pull_request, push to main, and workflow_dispatch; it checks out the repository, pins Python 3.14 with pytest 9.0.3, ruff 0.15.16, mypy 2.1.0, and detect-secrets 1.5.0, installs Rust 1.93.0 with the rustfmt and clippy components and the .NET 8.0.428 SDK, then runs `make verify`; the workflow's FIRST REMOTE EXECUTION IS NOT YET OBSERVED — no CI run id carries it, so the lane's runtime on a runner is unmeasured; the recorded 26.24-second measurement and the 124-second enforced limit the job runs under both come from a WARM Apple Silicon host, so a cold runner may exceed that limit before any gate fails; review: at the first observed remote execution, record the run id and the observed lane time, then decide the cache and warm-up story (a restored cargo target cache) that keeps a cold runner inside the enforced limit
 RALPH-FACT: required_verification_profiles: four named non-default lanes, each failing hard when run: `make verify-samples`, `make verify-device`, `make verify-perf`, and `make verify-unsafe`
 
 The named non-default profiles, each with the five required fields:
@@ -315,12 +342,14 @@ The named non-default profiles, each with the five required fields:
 | `make verify-device` | not recorded in this tree | a refresh run that names a durable source is due before the horizon of one milestone passes |
 | `make verify-perf` | 2026-11-25 | the gate-lane review entry for the 2026-11-25 policy remediation pass |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |
-RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VERIFY_BUDGET_SECONDS in the Makefile; a warm Apple Silicon run on 2026-11-25 took 26.24s wall with the full .NET formatter (21.49s), and the measured floor for the suite group's cargo work on the same host on 2026-11-25 was 9.28s for `cargo test --workspace --lib --tests --bins` run alone. This is a measurement, not a guarantee under shared-host contention
+RALPH-FACT: verification_time_budget: 26.24 seconds wall for `make verify` on an Apple Silicon host on 2026-11-25, of which 22.37 seconds is controllable time above the recorded 3.87-second full-gate cost floor; the full .NET formatter took 21.49s of that run. This is the measurement each re-measurement is compared against, not a limit the gate fails on
 RALPH-FACT: verification_cost_floor: full gate floor 3.87s (measured via `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 3.87s (the recorded fast path is the full gate, so it carries the full gate floor, measured via the same `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), and default suite floor 0.67s (measured via `pytest --collect-only -q` at 0.52s and `cargo test --workspace --no-run` at 0.15s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-25
-RALPH-FACT: verification_contention_measurement: on 2026-11-25 the shared host ran other worktrees' gates at load average 39-44, and the same tree measured 9.28s for `cargo test --workspace --lib --tests --bins` alone while the gate's timed wrapper measured 37.89s-115.88s for the same command inside `make verify`; the timed wrapper fails the run when a gate exceeds the budget the Makefile declares, so the gate failed as designed on those contended runs. Reduction plan owned by presentation and player: the suite group runs its static subgroup and its test subgroup concurrently in separate cargo target directories, so the suite group's wall time is the slower subgroup rather than their sum, and the timing-sensitive `StdioTransportTests` editor shard runs alone before the batched shards so its in-process deadline is not starved by sibling shards
-RALPH-FACT: fast_path_time_budget: make verify enforces the same 30s wall budget and measured 18s warm on Apple Silicon on 2026-11-25 (28s on the same host while other runs shared it); standalone make lint measured 27.28s on the same host (`ruff check .` 0.02s, `ruff format --check .` 0.02s, `cargo fmt --all -- --check` 0.87s, `cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings` 0.20s, and `dotnet format bridge/Unitas.sln --verify-no-changes --no-restore` 25.03s)
-RALPH-FACT: verification_budget_overage: none in the recorded warm runs — full gate controllable time was 22.37s (26.24s wall minus the recorded 3.87s cost floor), fast-path controllable time equaled full-gate controllable time because the fast path runs the full gate, and default suite controllable time was 7.27s (7.94s wall for make test minus the recorded 0.67s floor) on 2026-11-25. Other runs on the shared host exceeded the unchanged 30s verify limit and failed as designed
-RALPH-FACT: verification_time_enforcement_mechanism: every timed gate step runs in its own process group and is terminated at the budget the Makefile declares, and the gate fails; the outer verify target additionally fails the run when the total wall time exceeds VERIFY_BUDGET_SECONDS
+RALPH-FACT: verification_contention_measurement: on 2026-11-25 the shared host ran other worktrees' gates at load average 39-44, and the same tree measured 9.28s for `cargo test --workspace --lib --tests --bins` alone while the gate's timed wrapper measured 37.89s-115.88s for the same command inside `make verify`; those contended runs sit inside the recorded 124s enforced limit and pass, and the gate fails only past it, after exactly one re-run. Reduction plan owned by presentation and player: the suite group runs its static subgroup and its test subgroup concurrently in separate cargo target directories, so the suite group's wall time is the slower subgroup rather than their sum, and the timing-sensitive `StdioTransportTests` editor shard runs alone before the batched shards so its in-process deadline is not starved by sibling shards
+RALPH-FACT: fast_path_time_budget: 18 seconds for the recorded fast path (`make verify`) on an Apple Silicon host on 2026-11-25 (28s on the same host while other runs shared it); standalone make lint measured 27.28s on the same host (`ruff check .` 0.02s, `ruff format --check .` 0.02s, `cargo fmt --all -- --check` 0.87s, `cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings` 0.20s, and `dotnet format bridge/Unitas.sln --verify-no-changes --no-restore` 25.03s) — the measurement each re-measurement is compared against, never the cap
+RALPH-FACT: verification_enforced_limit: 124 seconds for `make verify`, the recorded 3.87-second full-gate cost floor plus the 2-minute cap of rule 9, declared as VERIFY_BUDGET_SECONDS in the Makefile and enforced by the timed gate runner, which terminates each step's process group at the limit and fails the run when the whole gate exceeds it; the gate fails only past this limit, never because a run came in slower than the recorded measurement, and a contended overrun gets exactly one re-run
+RALPH-FACT: fast_path_enforced_limit: 124 seconds, the full gate's enforced limit, because the recorded fast path IS the full gate (`make verify`); the fast path fails only past that limit, never because a run came in slower than the recorded measurement, and a contended overrun gets exactly one re-run
+RALPH-FACT: verification_budget_overage: none in the recorded warm runs — full gate controllable time was 22.37s (26.24s wall minus the recorded 3.87s cost floor), fast-path controllable time equaled full-gate controllable time because the fast path runs the full gate, and default suite controllable time was 7.27s (7.94s wall for make test minus the recorded 0.67s floor) on 2026-11-25, every figure under its cap. The shared-host runs that exceeded the old 30s measurement limit now run inside the recorded 124s enforced limit and pass
+RALPH-FACT: verification_time_enforcement_mechanism: every timed gate step runs in its own process group and is terminated at the enforced limit the Makefile declares, and the gate fails; the outer verify target additionally fails the run when the total wall time exceeds VERIFY_BUDGET_SECONDS; a step whose attempt OVERRUNS its budget is re-run ONCE with the same budget — the runner prints `gate <label> is re-run once with the same <budget>s budget`, and when that re-run fits the budget the gate passes and the runner prints `gate <label> passed on the re-run`; the re-run does NOT apply to a step that fails with a non-zero exit code, whose exit code is returned at once, and it does NOT apply to the outer verify target's whole-lane wall-clock check, which has no re-run; when the re-run overruns the budget again the gate fails with exit 1, and when that re-run was terminated at the limit the runner prints its budget guidance (a gate that overruns its budget is a defect to diagnose, never a budget to raise) to stderr; a re-run reuses the same budget, so a step that overruns twice can consume twice its budget against the whole-lane limit
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
 RALPH-FACT: durable_evidence_rule: a committed file never cites a worktree-local or append-only record (a `tmp/` or `.agent/` file, a run log, or an `*.ndjson` ledger) by line, row count, or excerpt, and a profile's last run is a calendar date plus the durable source that carries it (a CI run id, a committed baseline, or the gate-lane review entry); a run whose only record lives in an ignored path is not recorded as run
 

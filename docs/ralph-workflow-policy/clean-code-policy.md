@@ -184,9 +184,9 @@ check is as small as possible.
     reached through function pointers, never delegates that the garbage
     collector can move or collect.
   * A `GCHandle` is owned by a `SafeHandle` or a `using` scope.
-* **Layout agreement is tested.** For every type that crosses the boundary, the
-  binding generator emits a test on each side. Rust checks `size_of`,
-  `align_of`, and `offset_of!`, and C# checks `Unsafe.SizeOf` and
+* **Layout agreement is tested.** The types that cross the boundary are
+  pinned by a layout test on each side that reads them. Rust checks
+  `size_of`, `align_of`, and `offset_of!`, and C# checks `Marshal.SizeOf` and
   `Marshal.OffsetOf`, both against the same expected values.
 
 Documentation inside a zone:
@@ -212,7 +212,7 @@ Verification:
   * a boundary type lacks its `repr` attribute or its size and alignment
     assertions
   * a public API takes an untyped integer handle
-* The generated cross-language layout tests run in the default lane.
+* The cross-language layout tests run in the default lane.
 * `make verify-unsafe` runs in a declared non-default lane and is required for
   every change that touches a zone:
   * every zone's tests under Miri where the code does not call into foreign
@@ -294,17 +294,17 @@ is a finding even when it carries a reason, and the gate holds no list of
 exempted source lines.
 
 The comment audit enforces this deterministically: it fails on every comment
-token and every docstring in tracked Python, Rust, and C# source files, and on
-every comment in shell, YAML, `Makefile`, and Jinja sources, except a line-1
-shebang; in tool configuration files (`pyproject.toml`, `Cargo.toml`,
-`rustfmt.toml`, `.editorconfig`, and `Directory.Build.props`) it permits the
-governing-policy header comment and the per-rule rationale comments required
-by `linting-policy.md` and `typechecking-policy.md` while rejecting any other
-comment. It reads Python comments with the `tokenize` module and docstrings
-through the `ast` module, and it reads the other formats with quote
-awareness, so a `#` or `//` inside a string is never misread. A finding carries
-`path:line`, the comment text, and the fix hint "delete the comment or
-encode it in code".
+token and every docstring in a tracked Python source file, and on every `#`
+comment in the root `Makefile`. Its file rule covers the `.py`, `.cfg`, `.ini`,
+`.j2`, `.jinja`, `.sh`, `.toml`, `.yaml`, and `.yml` suffixes: a comment
+outside a string is a finding in each of those formats, and a line-1 shebang
+is the only exception. It reads Python comments with the `tokenize` module and
+docstrings through the `ast` module, and it reads the other formats with quote
+awareness, so a `#` inside a string is never misread. A finding carries
+`path:line` and the label `comment token` or `docstring`. The audit reaches
+neither Rust nor C# source files, and it reaches no tool configuration file;
+the file set it covers and the reason it stops there are recorded in
+`comment_audit_coverage`.
 
 ## Documentation restriction
 
@@ -329,13 +329,13 @@ this rule is deleted or reduced to current facts.
 |---|---|---|---|---|---|---|
 | Syntax-proxy ban | Clean-code owner | no banned construct reaches the tree through a wrapper or an alias | the ban gate reports zero findings over the tracked tree | the ban gate reports zero findings | deterministic: make banned-constructs | when the ban catalog is enforced by the linter itself |
 | Bounded premature abstraction | Clean-code owner | a new abstraction carries a demonstrated boundary, volatility, testing, or reuse value | the change record names the boundary, volatility, testing, or reuse value the abstraction serves | the change record names the value the abstraction serves | advisory: no gate measures an abstraction against its justification; review: at every architecture review | when a gate can compare an abstraction with its justification |
-| Comment and docstring absence | Documentation owner | the tracked tree carries no comment token and no docstring | the comment audit reports zero findings over the tracked tree | the comment audit reports zero findings | deterministic: make comment-audit | when the comment gate is retired |
+| Comment and docstring absence | Documentation owner | the audited Python sources and the root `Makefile` carry no comment token and no docstring | the comment audit reports zero findings over the tracked tree | the comment audit covers the tracked Python sources and the root `Makefile` | deterministic: make comment-audit | when the comment gate is retired |
 | Python type-system escape-hatch ban | Clean-code owner | the Python ban catalog reports zero findings over the tracked tree | the ban gate reports zero findings in the Python sources | the ban gate reports zero findings in the Python sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Rust type-system escape-hatch ban | Clean-code owner | the Rust ban catalog reports zero findings over the tracked Rust sources | the ban gate reports zero findings in the Rust sources | the ban gate reports zero findings in the Rust sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | C# type-system escape-hatch ban | Clean-code owner | the C# ban catalog reports zero findings over the tracked C# sources | the ban gate reports zero findings in the C# sources | the ban gate reports zero findings in the C# sources | deterministic: make banned-constructs | when the linter enforces the catalog itself |
 | Unsafe zone containment | Clean-code owner | memory-unsafe code exists only in registered zones, each with enforced lints, a registered block count, and safety comments | the zone gate reports zero findings over the tracked tree, including each zone's enforced lint levels and its registered unsafe block count | the zone gate reports zero findings | deterministic: make zone-gate | when the linter alone enforces zone containment |
-| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: sanitizer Loom fuzz Kani and layout-test stages are declared and not yet wired; review: at every change that touches a zone | when no unsafe zone remains |
-| Unsafe boundary layout agreement | Clean-code owner | Rust and C# agree on the size, alignment, and field offsets of every type that crosses the C ABI | the generated layout tests pass on both sides | the generated layout tests pass | advisory: the layout tests are generated in the change that registers the first zone; review: in the change that registers the first zone | when no type crosses the C ABI |
+| Unsafe zone verification | Clean-code owner | every change to a zone passes Miri, sanitizer, Loom, fuzz, and Kani checks and an independent invariant review | make verify-unsafe exits zero for the change and the review record names the invariants checked | make verify-unsafe exits zero for the change | advisory: the sanitizer Loom fuzz and Kani stages are declared and not yet wired while the cross-language layout tests run in the default lane; review: at every change that touches a zone | when no unsafe zone remains |
+| Unsafe boundary layout agreement | Clean-code owner | Rust and C# agree on the size, alignment, and field offsets of every type that crosses the C ABI | the layout tests in crates/unitas-editor-abi/tests/abi_layout.rs, crates/unitas-runtime/tests/abi_layout.rs, crates/unitas-dotnet/tests/host_layout.rs, and editor/Unitas.Editor.Tests/AbiLayoutTests.cs pass in the default lane | the editor ABI zone crosses only pointer-sized addresses, one four-byte status code, and UTF-8 JSON text, so its guard pins the scalar widths, the six exported signatures, and the scope names; the runtime ABI zone crosses two sequential structs by pointer, fixed-width scalars, C function pointers, and fixed-size byte records, so its guard pins their sizes, alignments, field offsets, callback count, and blob sizes; the .NET host zone crosses only scalars, pointers, and function pointers, so its guard pins their widths | deterministic: make verify | when no registered zone crosses a native boundary |
 
 ## Project facts to resolve
 
@@ -350,6 +350,7 @@ RALPH-FACT: logging_convention: a gate writes findings to standard output and wr
 RALPH-FACT: generated_code_marker: none — the repository generates no source
 RALPH-FACT: vendored_code_marker: none — the repository vendors no third-party source
 RALPH-FACT: dead_code_audit_command: make lint
+RALPH-FACT: comment_audit_coverage: the comment audit reads the tracked Python source files and the root `Makefile`; it fails on every Python comment token and every Python docstring and on every `#` comment in the `Makefile`, and its file rule covers the `.cfg`, `.ini`, `.j2`, `.jinja`, `.sh`, `.toml`, `.yaml`, and `.yml` suffixes as well. Justification: the audit reaches neither Rust nor C# source files and must not, because a registered Rust zone denies `clippy::undocumented_unsafe_blocks` and `clippy::missing_safety_doc`, so every unsafe block carries a `// SAFETY:` comment and every unsafe function a `# Safety` doc section, and the zone gate fails when a safety comment is missing or misplaced; deleting those comments to satisfy a text rule would remove the required safety documentation. Review trigger: the Documentation owner extends the audit to Rust and C# source files once a language's mandatory comments can be told apart from commentary
 
 ## AI execution instructions
 

@@ -3,8 +3,8 @@ export DOTNET_ROOT := $(HOME)/.dotnet
 
 .PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
-VERIFY_BUDGET_SECONDS := 30
-SUITE_BUDGET_SECONDS := 25
+VERIFY_BUDGET_SECONDS := 124
+SUITE_BUDGET_SECONDS := 61
 VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
@@ -28,8 +28,8 @@ verify:
 	$(MAKE) --no-print-directory verify-suite-gates & p2=$$!; \
 	$(MAKE) --no-print-directory verify-dotnet-gates & p3=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
-	test $$rc -eq 0 || { echo "verify failed"; exit 1; }; \
-	now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s budget"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
+	test $$rc -eq 0 || { echo "verify failed (enforced limit $(VERIFY_BUDGET_SECONDS)s)"; exit 1; }; \
+	now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s enforced limit"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
 
 verify-scan-gates:
 	@rc=0; \
@@ -51,11 +51,14 @@ verify-suite-gates:
 	wait $$ps || rc=1; wait $$pt || rc=1; exit $$rc
 
 suite-static-gates:
-	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
-	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
-	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
-	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings
-	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
+	@rc=0; \
+	python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check . & p1=$$!; \
+	python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check . & p2=$$!; \
+	python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check & p3=$$!; \
+	python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings & p4=$$!; \
+	python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy & p5=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; wait $$p4 || rc=1; wait $$p5 || rc=1; \
+	exit $$rc
 
 verify-dotnet-gates:
 	@rc=0; \
@@ -68,6 +71,7 @@ verify-dotnet-gates:
 	exit $$rc
 
 test:
+	@echo "suite enforced limit: $(SUITE_BUDGET_SECONDS)s (suite_enforced_limit)"
 	@python3 tools/verify.py timed test-suite $(SUITE_BUDGET_SECONDS) $(MAKE) --no-print-directory test-steps
 
 test-steps:

@@ -1,0 +1,48 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
+
+      - name: Install the Python tools the gate invokes
+        run: python3 -m pip install pytest==9.0.3 ruff==0.15.16 mypy==2.1.0 detect-secrets==1.5.0
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install 1.93.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.93.0
+
+      - name: Install the .NET 8 SDK
+        run: |
+          curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$HOME/dotnet-install.sh"
+          bash "$HOME/dotnet-install.sh" --version 8.0.428 --install-dir "$HOME/.dotnet"
+
+      - name: Run the verification gate
+        run: make verify
