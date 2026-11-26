@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps cargo-test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -9,9 +9,9 @@ VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
-EDITOR_TEST_SHARD_FANOUT := 8
-BRIDGE_TEST_SHARD_COUNT := 4
-BRIDGE_TEST_SHARDS := 1,2,3,4
+EDITOR_TEST_SHARD_FANOUT := 12
+BRIDGE_TEST_SHARD_COUNT := 8
+BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
 EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
 	HttpTransportTests \
@@ -32,13 +32,17 @@ verify:
 	now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s budget"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
 
 verify-scan-gates:
-	@$(MAKE) --no-print-directory policy-validate
-	@$(MAKE) --no-print-directory bypass-audit
-	@$(MAKE) --no-print-directory zone-gate
-	@$(MAKE) --no-print-directory banned-constructs
-	@$(MAKE) --no-print-directory comment-audit
-	@$(MAKE) --no-print-directory deps
-	@$(MAKE) --no-print-directory secret-scan
+	@rc=0; \
+	$(MAKE) --no-print-directory policy-validate & p1=$$!; \
+	$(MAKE) --no-print-directory bypass-audit & p2=$$!; \
+	$(MAKE) --no-print-directory zone-gate & p3=$$!; \
+	$(MAKE) --no-print-directory banned-constructs & p4=$$!; \
+	$(MAKE) --no-print-directory comment-audit & p5=$$!; \
+	$(MAKE) --no-print-directory deps & p6=$$!; \
+	$(MAKE) --no-print-directory secret-scan & p7=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; wait $$p4 || rc=1; \
+	wait $$p5 || rc=1; wait $$p6 || rc=1; wait $$p7 || rc=1; \
+	exit $$rc
 
 verify-suite-gates:
 	@rc=0; \
@@ -68,8 +72,15 @@ test:
 
 test-steps:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
-	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace --lib --tests --bins & p2=$$!; \
+	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) $(MAKE) --no-print-directory cargo-test & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
+
+cargo-test:
+	@if cargo nextest --version >/dev/null 2>&1; then \
+		cargo nextest run --workspace --lib --tests --bins; \
+	else \
+		cargo test --workspace --lib --tests --bins; \
+	fi
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
