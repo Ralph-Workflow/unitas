@@ -19,7 +19,7 @@
       "after_step": 1,
       "kind": "log",
       "severity": "log",
-      "contains": "Records loaded medals 1"
+      "contains": "Records loaded medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160"
     }
   ]
 }

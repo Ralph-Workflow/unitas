@@ -7,23 +7,17 @@ using UnityEngine;
 
 namespace Unitas.Samples.RollABall
 {
+    /// <summary>
+    /// Owns the arena's ghost file: the record of the ball's real per-fixed-step
+    /// trajectory, written under the persistent data path through the engine's
+    /// atomic save path.
+    /// </summary>
     public static class SavedState
     {
-        private const string BestTimeKey = "records.bestTime";
-        private const string BestScoreKey = "records.bestScore";
-        private const string UnlockedArenasKey = "records.unlockedArenas";
-        private const string QualityKey = "settings.quality";
-        private const string MedalsKey = "records.medals";
-
         private const string GhostArena = "arena1";
-        private const string BallObjectName = "PlayerBall";
-        private const int GhostFileVersion = 1;
+        private const string GhostFolder = "ghosts";
+        private const int GhostFileVersion = 2;
         private const int CurrentGhostVersion = 2;
-        private const int RouteStepCount = 120;
-        private const int ArenaScore = 900;
-        private const float RouteStepX = 0.02f;
-        private const float RouteStepZ = 0.01f;
-        private const float RouteOriginY = 0.5f;
         private const float ReplayToleranceMetres = 0.01f;
 
         private static readonly IReadOnlyList<SaveMigrationStep> GhostMigrationSteps = new SaveMigrationStep[]
@@ -31,69 +25,82 @@ namespace Unitas.Samples.RollABall
             new SaveMigrationStep(1, 2, MigrateGhostV1ToV2),
         };
 
+        /// <summary>The path of the arena's ghost file under the persistent data path.</summary>
+        public static string GhostPath
+        {
+            get { return Path.Combine(Application.persistentDataPath, GhostFolder, GhostArena + ".ghost"); }
+        }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         public static void RestoreAndSave()
         {
-            if (string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("UNITAS_PERSISTENT_DATA_PATH")))
+            if (!RecordsStore.IsArmed)
             {
                 return;
             }
 
-            float restoredBestTime = PlayerPrefs.GetFloat(BestTimeKey, 0f);
-            int restoredBestScore = PlayerPrefs.GetInt(BestScoreKey, 0);
-            string restoredArenas = PlayerPrefs.GetString(UnlockedArenasKey, string.Empty);
-            string quality = PlayerPrefs.GetString(QualityKey, "high");
-            int medals = PlayerPrefs.GetInt(MedalsKey, 0);
-            Debug.Log($"Saved state restored quality {quality} medals {medals} bestTime {FormatSeconds(restoredBestTime)} bestScore {restoredBestScore} arenas {restoredArenas}");
+            RecordsStore.Restore();
+            RestoreGhost(null);
+        }
 
-            Vector3[] route = RecordRoute();
-            string ghostPath = Path.Combine(Application.persistentDataPath, "ghosts", GhostArena + ".ghost");
-
-            if (File.Exists(ghostPath))
+        /// <summary>
+        /// Ends a finished run: it awards the run's records and writes the
+        /// trajectory the run recorded as the arena's ghost. The run's update
+        /// path calls this once the arena is cleared.
+        /// </summary>
+        public static void FinishRun(IReadOnlyList<Vector3> route, float seconds, int score)
+        {
+            if (!RecordsStore.IsArmed)
             {
-                ReplayGhost(ghostPath, route);
+                return;
             }
 
+            if (route.Count == 0)
+            {
+                Debug.LogWarning("Ghost not written the run recorded no trajectory");
+                return;
+            }
+
+            if (!RecordsStore.SaveRun(seconds, score) && File.Exists(GhostPath))
+            {
+                Debug.Log($"Ghost not written the run did not beat the recorded best {FormatSeconds(RecordsStore.BestTime)} s");
+                return;
+            }
+
+            WriteGhost(route);
+        }
+
+        private static void WriteGhost(IReadOnlyList<Vector3> route)
+        {
             byte[] record = EncodeRoute(route);
-            string envelope = BuildEnvelope(GhostFileVersion, route.Length, Convert.ToBase64String(record));
-            SaveMigration.WriteSaveFileAtomically(ghostPath, new UTF8Encoding(false).GetBytes(envelope));
-            Debug.Log($"Ghost written {ghostPath} steps {route.Length} bytes {record.Length}");
-
-            float bestTime = route.Length * Time.fixedDeltaTime;
-            int bestScore = ArenaScore;
-            string arenas = MergeArena(restoredArenas, GhostArena);
-            PlayerPrefs.SetFloat(BestTimeKey, bestTime);
-            PlayerPrefs.SetInt(BestScoreKey, bestScore);
-            PlayerPrefs.SetString(UnlockedArenasKey, arenas);
-            PlayerPrefs.Save();
-            Debug.Log($"Saved state saved quality {quality} medals {medals} bestTime {FormatSeconds(bestTime)} bestScore {bestScore} arenas {arenas}");
-        }
-
-        private static Vector3[] RecordRoute()
-        {
-            Vector3 origin = new Vector3(0f, RouteOriginY, 0f);
-            GameObject? ball = GameObject.Find(BallObjectName);
-            if (ball != null)
+            string envelope = BuildEnvelope(GhostFileVersion, route.Count, Convert.ToBase64String(record));
+            byte[] bytes = new UTF8Encoding(false).GetBytes(envelope);
+            SaveMigration.WriteSaveFileAtomically(GhostPath, bytes);
+            Vector3[] written = DecodeRoute(record);
+            if (written == null)
             {
-                origin = ball.transform.position;
+                Debug.LogWarning("Ghost written the encoded route is malformed");
+                return;
             }
 
-            Vector3[] route = new Vector3[RouteStepCount];
-            for (int step = 0; step < route.Length; step++)
-            {
-                route[step] = new Vector3(
-                    origin.x + (step * RouteStepX),
-                    origin.y,
-                    origin.z + (step * RouteStepZ));
-            }
-
-            return route;
+            Debug.Log($"Ghost written {Describe(GhostFileVersion, written, bytes.Length)} at {GhostPath}");
+            RestoreGhost(route);
         }
 
-        private static void ReplayGhost(string ghostPath, Vector3[] recorded)
+        /// <summary>
+        /// Reads the persisted ghost back and reports what the file holds. When
+        /// a recorded route is given, the restored route is compared with it.
+        /// </summary>
+        private static void RestoreGhost(IReadOnlyList<Vector3>? recorded)
         {
+            string ghostPath = GhostPath;
+            if (!File.Exists(ghostPath))
+            {
+                Debug.Log($"Ghost restored outcome {SaveMigrationOutcome.Absent} at {ghostPath}");
+                return;
+            }
+
             SaveMigrationResult result = SaveMigration.MigrateFile(ghostPath, CurrentGhostVersion, GhostMigrationSteps);
-            Debug.Log($"Ghost restored outcome {result.Outcome} from v{result.InputVersion} to v{result.ResultingVersion}");
             if (result.Outcome != SaveMigrationOutcome.Migrated && result.Outcome != SaveMigrationOutcome.AlreadyCurrent)
             {
                 Debug.LogWarning($"Ghost replay failed outcome {result.Outcome} diagnostic {result.DiagnosticMessage}");
@@ -114,7 +121,14 @@ namespace Unitas.Samples.RollABall
                 return;
             }
 
-            int steps = Math.Min(restored.Length, recorded.Length);
+            long size = new FileInfo(ghostPath).Length;
+            Debug.Log($"Ghost restored {Describe(ExtractJsonInt(result.Payload, "version"), restored, size)} at {ghostPath} outcome {result.Outcome}");
+            if (recorded == null)
+            {
+                return;
+            }
+
+            int steps = Math.Min(restored.Length, recorded.Count);
             float maxDeviation = 0f;
             for (int step = 0; step < steps; step++)
             {
@@ -169,11 +183,37 @@ namespace Unitas.Samples.RollABall
             return builder.ToString();
         }
 
-        private static byte[] EncodeRoute(Vector3[] route)
+        private static string Describe(int version, Vector3[] route, long size)
         {
-            byte[] bytes = new byte[route.Length * 6];
+            StringBuilder builder = new StringBuilder();
+            builder.Append("version ");
+            builder.Append(version.ToString(CultureInfo.InvariantCulture));
+            builder.Append(" steps ");
+            builder.Append(route.Length.ToString(CultureInfo.InvariantCulture));
+            builder.Append(" bytes ");
+            builder.Append(size.ToString(CultureInfo.InvariantCulture));
+            builder.Append(" first ");
+            builder.Append(FormatPoint(route[0]));
+            builder.Append(" last ");
+            builder.Append(FormatPoint(route[route.Length - 1]));
+            return builder.ToString();
+        }
+
+        private static string FormatPoint(Vector3 point)
+        {
+            return string.Concat(
+                point.x.ToString("F3", CultureInfo.InvariantCulture),
+                " ",
+                point.y.ToString("F3", CultureInfo.InvariantCulture),
+                " ",
+                point.z.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        private static byte[] EncodeRoute(IReadOnlyList<Vector3> route)
+        {
+            byte[] bytes = new byte[route.Count * 6];
             int offset = 0;
-            for (int step = 0; step < route.Length; step++)
+            for (int step = 0; step < route.Count; step++)
             {
                 offset = WriteInt16(bytes, offset, route[step].x);
                 offset = WriteInt16(bytes, offset, route[step].y);
@@ -230,20 +270,6 @@ namespace Unitas.Samples.RollABall
             }
 
             return value;
-        }
-
-        private static string MergeArena(string arenas, string arena)
-        {
-            string[] existing = arenas.Split(',');
-            for (int index = 0; index < existing.Length; index++)
-            {
-                if (string.Equals(existing[index].Trim(), arena, StringComparison.Ordinal))
-                {
-                    return arenas;
-                }
-            }
-
-            return string.IsNullOrEmpty(arenas) ? arena : arenas + "," + arena;
         }
 
         private static string ExtractJsonString(string json, string key)

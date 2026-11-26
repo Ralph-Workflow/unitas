@@ -19,21 +19,14 @@
       "after_step": 1,
       "kind": "log",
       "severity": "log",
-      "contains": "Saved state restored"
+      "contains": "Records loaded medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160"
     },
     {
-      "id": "restored_records",
+      "id": "ghost_file_restored",
       "after_step": 1,
       "kind": "log",
       "severity": "log",
-      "contains": "bestTime 2.400 bestScore 900 arenas arena1"
-    },
-    {
-      "id": "ghost_replayed",
-      "after_step": 1,
-      "kind": "log",
-      "severity": "log",
-      "contains": "Ghost replay within 0.01 m"
+      "contains": "Ghost restored version 2 steps 245 bytes 1996 first -3.150 0.500 3.300 last 2.250 0.500 3.300"
     }
   ]
 }

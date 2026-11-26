@@ -2256,19 +2256,16 @@ GATES: dict[str, Callable[[], list[str]]] = {
 }
 
 
+def kill_timed_gate_group(process: subprocess.Popen[bytes]) -> None:
+    if hasattr(os, "killpg"):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError):
+        process.kill()
+
+
 def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
-    if not hasattr(os, "killpg"):
-        with contextlib.suppress(ProcessLookupError):
-            process.kill()
-        process.wait()
-        return
-    group = process.pid
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(group, signal.SIGTERM)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(group, signal.SIGKILL)
+    kill_timed_gate_group(process)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
 
@@ -2276,7 +2273,7 @@ def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
 def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes] | None) -> None:
     def handler(signum: int, _frame: object) -> None:
         if process is not None:
-            terminate_timed_gate(process)
+            kill_timed_gate_group(process)
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)

@@ -43,6 +43,7 @@ namespace Unitas.Samples.RollABall
 
         private readonly List<GameObject> _pickups = new List<GameObject>();
         private readonly Dictionary<string, int> _pickupTriggers = new Dictionary<string, int>();
+        private readonly List<Vector3> _route = new List<Vector3>();
 
         private PlayerController? _player;
         private GameObject? _goldPickup;
@@ -64,6 +65,7 @@ namespace Unitas.Samples.RollABall
         private Vector3 _pausedPosition;
         private float _resumeScale = 1f;
         private float _scaleBeforeSlowMotion = 1f;
+        private bool _runRecorded;
 
         public int Score => _score;
 
@@ -112,6 +114,24 @@ namespace Unitas.Samples.RollABall
                 CheckFrozenWhilePaused();
             }
             ReportSlowMotionScale();
+            RecordFinishedRun();
+        }
+
+        private new void FixedUpdate()
+        {
+            // The ghost holds the ball's real position at every fixed step of the run.
+            if (_runRecorded || !_runStarted)
+            {
+                return;
+            }
+
+            PlayerController? player = _player;
+            if (player == null)
+            {
+                return;
+            }
+
+            _route.Add(player.transform.position);
         }
 
         private new void OnTriggerEnter(Collider? other)
@@ -163,6 +183,8 @@ namespace Unitas.Samples.RollABall
                 _goldPickup = null;
             }
             _pickupTriggers.Clear();
+            _route.Clear();
+            _runRecorded = false;
             _score = 0;
             _pickupsCollected = 0;
             _multiplier = 1;
@@ -175,6 +197,17 @@ namespace Unitas.Samples.RollABall
                 controller.ResetPlayer();
             }
             Debug.Log("Retry complete score 0 pickups 12 multiplier x1");
+        }
+
+        private void RecordFinishedRun()
+        {
+            if (_runRecorded || !_won)
+            {
+                return;
+            }
+
+            _runRecorded = true;
+            SavedState.FinishRun(_route, _route.Count * Time.fixedDeltaTime, _score);
         }
 
         private void AwardPickup()

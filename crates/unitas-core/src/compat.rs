@@ -2814,8 +2814,13 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "the sample's ghost file records the ball's real per-fixed-step run and the restored route matches that recorded run within 0.01 m",
                 location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
-                evidence: &[],
-                missing: Some("the sample's ghost route is a synthesized straight line stepped from the ball's start position, not the ball's real per-fixed-step trajectory, and the replay comparison runs against that synthesized route instead of a recorded run"),
+                evidence: &[
+                    "samples/roll-a-ball/Assets/Scripts/ScoreManager.cs::FixedUpdate",
+                    "samples/roll-a-ball/Assets/Scripts/SavedState.cs::FinishRun",
+                    "samples/roll-a-ball/Scenarios/persist_write.json::persist_write",
+                    "samples/roll-a-ball/Scenarios/persist_read.json::persist_read",
+                ],
+                missing: None,
             },
             OwnedCapabilityPart {
                 behavior: "the engine states each target's PlayerPrefs durability point, persistent-data write durability point, crash loss window, and write-then-replace guarantees",
