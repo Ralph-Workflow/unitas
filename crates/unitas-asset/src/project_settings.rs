@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::unity_yaml::{self, Node, Stream, YamlError};
 
@@ -38,6 +38,27 @@ pub struct InputManagerSettings {
     pub skipped_axes: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualityLevel {
+    pub name: String,
+    pub pixel_light_count: u32,
+    pub shadows: u32,
+    pub shadow_resolution: u32,
+    pub shadow_distance: f64,
+    pub texture_quality: u32,
+    pub anisotropic_textures: u32,
+    pub anti_aliasing: u32,
+    pub v_sync_count: u32,
+    pub lod_bias: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QualitySettings {
+    pub current_quality: usize,
+    pub levels: Vec<QualityLevel>,
+    pub per_platform_default_quality: Vec<(String, usize)>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectIdentity {
     pub company_name: Option<String>,
@@ -48,7 +69,13 @@ pub struct ProjectIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectSettingsError {
     MissingDocument(&'static str),
-    Yaml { error: YamlError },
+    Yaml {
+        error: YamlError,
+    },
+    MalformedFile {
+        path: PathBuf,
+        error: Box<ProjectSettingsError>,
+    },
 }
 
 impl fmt::Display for ProjectSettingsError {
@@ -58,6 +85,9 @@ impl fmt::Display for ProjectSettingsError {
                 write!(formatter, "stream contains no {document} document")
             }
             ProjectSettingsError::Yaml { error } => write!(formatter, "{error}"),
+            ProjectSettingsError::MalformedFile { path, error } => {
+                write!(formatter, "{}: {}", path.display(), error)
+            }
         }
     }
 }
@@ -67,6 +97,7 @@ impl std::error::Error for ProjectSettingsError {
         match self {
             ProjectSettingsError::Yaml { error } => Some(error),
             ProjectSettingsError::MissingDocument(_) => None,
+            ProjectSettingsError::MalformedFile { error, .. } => Some(error.as_ref()),
         }
     }
 }
@@ -175,17 +206,17 @@ pub fn parse_input_manager_stream(
             .and_then(Node::as_str)
             .ok_or(ProjectSettingsError::MissingDocument("InputManager"))?
             .to_string();
-        let axis_type = parse_optional_u32(entry, "type", "m_Type", 0)?;
+        let axis_type = parse_optional_u32_alias(entry, "type", "m_Type", 0, "InputManager")?;
         if axis_type >= 2 {
             skipped_axes += 1;
             continue;
         }
-        let axis = parse_optional_u32(entry, "axis", "m_Axis", 0)?;
-        let gravity = parse_optional_f64(entry, "gravity", 0.0)?;
-        let dead = parse_optional_f64(entry, "dead", 0.0)?;
-        let sensitivity = parse_optional_f64(entry, "sensitivity", 1.0)?;
-        let snap = parse_optional_bool(entry, "snap", false)?;
-        let invert = parse_optional_bool(entry, "invert", false)?;
+        let axis = parse_optional_u32_alias(entry, "axis", "m_Axis", 0, "InputManager")?;
+        let gravity = parse_optional_f64(entry, "gravity", 0.0, "InputManager")?;
+        let dead = parse_optional_f64(entry, "dead", 0.0, "InputManager")?;
+        let sensitivity = parse_optional_f64(entry, "sensitivity", 1.0, "InputManager")?;
+        let snap = parse_optional_bool(entry, "snap", false, "InputManager")?;
+        let invert = parse_optional_bool(entry, "invert", false, "InputManager")?;
 
         axes.push(InputAxis {
             name,
@@ -231,6 +262,86 @@ pub fn parse_player_settings_stream(
     })
 }
 
+pub fn parse_quality_settings(
+    path: &Path,
+) -> Result<Option<QualitySettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_quality_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_quality_settings_stream(
+    stream: &Stream,
+) -> Result<QualitySettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| document.root.get("QualitySettings"))
+        .ok_or(ProjectSettingsError::MissingDocument("QualitySettings"))?;
+
+    let entries = body
+        .get("m_QualitySettings")
+        .and_then(Node::as_sequence)
+        .ok_or(ProjectSettingsError::MissingDocument("QualitySettings"))?;
+
+    let mut levels = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry
+            .get("name")
+            .and_then(Node::as_str)
+            .ok_or(ProjectSettingsError::MissingDocument("QualitySettings"))?
+            .to_string();
+        levels.push(QualityLevel {
+            name,
+            pixel_light_count: parse_optional_u32(entry, "pixelLightCount", 1, "QualitySettings")?,
+            shadows: parse_optional_u32(entry, "shadows", 1, "QualitySettings")?,
+            shadow_resolution: parse_optional_u32(entry, "shadowResolution", 2, "QualitySettings")?,
+            shadow_distance: parse_optional_f64(entry, "shadowDistance", 50.0, "QualitySettings")?,
+            texture_quality: parse_optional_u32(entry, "textureQuality", 0, "QualitySettings")?,
+            anisotropic_textures: parse_optional_u32(
+                entry,
+                "anisotropicTextures",
+                1,
+                "QualitySettings",
+            )?,
+            anti_aliasing: parse_optional_u32(entry, "antiAliasing", 0, "QualitySettings")?,
+            v_sync_count: parse_optional_u32(entry, "vSyncCount", 0, "QualitySettings")?,
+            lod_bias: parse_optional_f64(entry, "lodBias", 1.0, "QualitySettings")?,
+        });
+    }
+
+    let current_quality = quality_level_index(body.get("m_CurrentQuality"), levels.len())?;
+
+    let mut per_platform_default_quality = Vec::new();
+    if let Some(Node::Mapping(platforms)) = body.get("m_PerPlatformDefaultQuality") {
+        for (platform, value) in platforms {
+            per_platform_default_quality.push((
+                platform.clone(),
+                quality_level_index(Some(value), levels.len())?,
+            ));
+        }
+    }
+
+    Ok(QualitySettings {
+        current_quality,
+        levels,
+        per_platform_default_quality,
+    })
+}
+
+fn quality_level_index(
+    node: Option<&Node>,
+    level_count: usize,
+) -> Result<usize, ProjectSettingsError> {
+    node.and_then(Node::as_i64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|index| *index < level_count)
+        .ok_or(ProjectSettingsError::MissingDocument("QualitySettings"))
+}
+
 fn parse_optional_non_empty_string(node: &Node, key: &str) -> Option<String> {
     node.get(key)
         .and_then(Node::as_str)
@@ -246,27 +357,48 @@ fn parse_optional_string(node: &Node, key: &str) -> String {
     }
 }
 
-fn parse_optional_f64(node: &Node, key: &str, default: f64) -> Result<f64, ProjectSettingsError> {
+fn parse_optional_f64(
+    node: &Node,
+    key: &str,
+    default: f64,
+    document: &'static str,
+) -> Result<f64, ProjectSettingsError> {
     match node.get(key) {
         Some(child) => child
             .as_f64()
             .filter(|value| value.is_finite())
-            .ok_or(ProjectSettingsError::MissingDocument("InputManager")),
+            .ok_or(ProjectSettingsError::MissingDocument(document)),
         None => Ok(default),
     }
 }
 
 fn parse_optional_u32(
     node: &Node,
+    key: &str,
+    default: u32,
+    document: &'static str,
+) -> Result<u32, ProjectSettingsError> {
+    match node.get(key) {
+        Some(child) => child
+            .as_i64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(ProjectSettingsError::MissingDocument(document)),
+        None => Ok(default),
+    }
+}
+
+fn parse_optional_u32_alias(
+    node: &Node,
     primary_key: &str,
     fallback_key: &str,
     default: u32,
+    document: &'static str,
 ) -> Result<u32, ProjectSettingsError> {
     match node.get(primary_key).or_else(|| node.get(fallback_key)) {
         Some(child) => child
             .as_i64()
             .and_then(|value| u32::try_from(value).ok())
-            .ok_or(ProjectSettingsError::MissingDocument("InputManager")),
+            .ok_or(ProjectSettingsError::MissingDocument(document)),
         None => Ok(default),
     }
 }
@@ -275,6 +407,7 @@ fn parse_optional_bool(
     node: &Node,
     key: &str,
     default: bool,
+    document: &'static str,
 ) -> Result<bool, ProjectSettingsError> {
     match node.get(key) {
         Some(child) => {
@@ -284,10 +417,10 @@ fn parse_optional_bool(
                 match text.trim() {
                     "true" | "True" | "TRUE" => Ok(true),
                     "false" | "False" | "FALSE" => Ok(false),
-                    _ => Err(ProjectSettingsError::MissingDocument("InputManager")),
+                    _ => Err(ProjectSettingsError::MissingDocument(document)),
                 }
             } else {
-                Err(ProjectSettingsError::MissingDocument("InputManager"))
+                Err(ProjectSettingsError::MissingDocument(document))
             }
         }
         None => Ok(default),
@@ -334,6 +467,7 @@ pub struct LoadedProjectSettings {
     pub gravity_2d: [f64; 2],
     pub layer_collision_matrix_2d: [u32; 32],
     pub identity: ProjectIdentity,
+    pub quality: QualitySettings,
     pub default_scripting_defines: String,
     pub target_scripting_defines: Vec<(String, String)>,
 }
@@ -361,6 +495,34 @@ pub struct RecompileBoundaryEvaluation {
     pub target_name: String,
     pub active_symbols: Vec<String>,
     pub source: SettingValueSource,
+}
+
+impl QualitySettings {
+    pub fn effective_quality(
+        &self,
+        target_group_id: &str,
+        target_name: &str,
+    ) -> EffectiveTargetSetting {
+        let (index, source) = match self
+            .per_platform_default_quality
+            .iter()
+            .find(|(platform, _)| platform == target_group_id)
+        {
+            Some((_, index)) => (*index, SettingValueSource::TargetOverride),
+            None => (self.current_quality, SettingValueSource::Default),
+        };
+        EffectiveTargetSetting {
+            target_group_id: target_group_id.to_string(),
+            target_name: target_name.to_string(),
+            effective_value: self
+                .levels
+                .get(index)
+                .map(|level| level.name.clone())
+                .unwrap_or_default(),
+            source,
+            boundary: SettingBoundary::NextPlaySession,
+        }
+    }
 }
 
 impl LoadedProjectSettings {
@@ -487,6 +649,14 @@ impl LoadedProjectSettings {
             boundary: SettingBoundary::NextRecompilation,
         }
     }
+
+    pub fn effective_quality(
+        &self,
+        target_group_id: &str,
+        target_name: &str,
+    ) -> EffectiveTargetSetting {
+        self.quality.effective_quality(target_group_id, target_name)
+    }
 }
 
 pub fn parse_layer_collision_matrix(hex: &str) -> [u32; 32] {
@@ -513,6 +683,13 @@ pub fn format_layer_collision_matrix(matrix: &[u32; 32]) -> String {
     out
 }
 
+fn malformed_file(path: &Path, error: impl Into<ProjectSettingsError>) -> ProjectSettingsError {
+    ProjectSettingsError::MalformedFile {
+        path: path.to_path_buf(),
+        error: Box::new(error.into()),
+    }
+}
+
 pub fn load_project_settings(
     settings_dir: &Path,
 ) -> Result<LoadedProjectSettings, ProjectSettingsError> {
@@ -521,10 +698,11 @@ pub fn load_project_settings(
     let mut maximum_allowed_timestep = 0.33333334;
     let mut time_scale = 1.0;
     if time_path.exists() {
-        let stream = unity_yaml::parse_file(&time_path)?;
-        if let Ok(t) = parse_time_manager_stream(&stream) {
-            fixed_timestep = t.fixed_timestep;
-        }
+        let stream = unity_yaml::parse_file(&time_path)
+            .map_err(|error| malformed_file(&time_path, error))?;
+        fixed_timestep = parse_time_manager_stream(&stream)
+            .map_err(|error| malformed_file(&time_path, error))?
+            .fixed_timestep;
         if let Some(body) = stream
             .documents
             .iter()
@@ -552,10 +730,11 @@ pub fn load_project_settings(
     let mut gravity = DEFAULT_GRAVITY;
     let mut layer_collision_matrix = [0xFFFF_FFFFu32; 32];
     if dynamics_path.exists() {
-        let stream = unity_yaml::parse_file(&dynamics_path)?;
-        if let Ok(dyn_settings) = parse_dynamics_manager_stream(&stream) {
-            gravity = dyn_settings.gravity;
-        }
+        let stream = unity_yaml::parse_file(&dynamics_path)
+            .map_err(|error| malformed_file(&dynamics_path, error))?;
+        gravity = parse_dynamics_manager_stream(&stream)
+            .map_err(|error| malformed_file(&dynamics_path, error))?
+            .gravity;
         if let Some(body) = stream
             .documents
             .iter()
@@ -576,7 +755,8 @@ pub fn load_project_settings(
     let mut gravity_2d = [0.0, -9.81];
     let mut layer_collision_matrix_2d = [0xFFFF_FFFFu32; 32];
     if physics2d_path.exists() {
-        let stream = unity_yaml::parse_file(&physics2d_path)?;
+        let stream = unity_yaml::parse_file(&physics2d_path)
+            .map_err(|error| malformed_file(&physics2d_path, error))?;
         if let Some(body) = stream
             .documents
             .iter()
@@ -596,15 +776,24 @@ pub fn load_project_settings(
         }
     }
 
+    let quality_path = settings_dir.join("QualitySettings.asset");
+    let mut quality = QualitySettings::default();
+    if quality_path.exists() {
+        let stream = unity_yaml::parse_file(&quality_path)
+            .map_err(|error| malformed_file(&quality_path, error))?;
+        quality = parse_quality_settings_stream(&stream)
+            .map_err(|error| malformed_file(&quality_path, error))?;
+    }
+
     let player_path = settings_dir.join("ProjectSettings.asset");
     let mut identity = ProjectIdentity::default();
     let mut default_scripting_defines = String::new();
     let mut target_scripting_defines = Vec::new();
     if player_path.exists() {
-        let stream = unity_yaml::parse_file(&player_path)?;
-        if let Ok(id) = parse_player_settings_stream(&stream) {
-            identity = id;
-        }
+        let stream = unity_yaml::parse_file(&player_path)
+            .map_err(|error| malformed_file(&player_path, error))?;
+        identity = parse_player_settings_stream(&stream)
+            .map_err(|error| malformed_file(&player_path, error))?;
         if let Some(body) = stream
             .documents
             .iter()
@@ -634,6 +823,7 @@ pub fn load_project_settings(
         gravity_2d,
         layer_collision_matrix_2d,
         identity,
+        quality,
         default_scripting_defines,
         target_scripting_defines,
     })

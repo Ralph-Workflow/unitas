@@ -1,0 +1,104 @@
+{
+  "name": "gamepad-axis",
+  "scene": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+        "mode": "single"
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Horizontal",
+        "value": 0.0
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 0.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "horizontal-axis-accepted",
+      "after_step": 4,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "vertical-axis-accepted",
+      "after_step": 6,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "axis-released",
+      "after_step": 9,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "total-frames",
+      "after_step": 9,
+      "kind": "frame_count",
+      "expected": 65
+    }
+  ]
+}

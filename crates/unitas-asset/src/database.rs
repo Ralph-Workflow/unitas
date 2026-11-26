@@ -388,7 +388,7 @@ pub fn identify_asset_family(
                 outcome: ImportOutcome::ready(),
             });
         }
-        "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" => {
+        "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" | "psd" | "hdr" => {
             return Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::Texture2D,
                 outcome: ImportOutcome::ready(),

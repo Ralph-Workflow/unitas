@@ -2077,3 +2077,432 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
         }
     }
 }
+
+const OWNED_FEATURE_IDS: [&str; 26] = [
+    "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
+    "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
+    "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-004", "EDT-007",
+    "CMP-002", "BLD-005",
+];
+
+fn workspace_file(relative: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join(relative)
+}
+
+fn empty_project() -> unitas_core::compat::ProjectContent {
+    unitas_core::compat::ProjectContent {
+        unitas_version: "0.4.0".to_string(),
+        declared_unity_version: Some("2022.3.20f1".to_string()),
+        packages: Vec::new(),
+        assets: Vec::new(),
+        settings: Vec::new(),
+        additional_findings: Vec::new(),
+        track_absent_catalog_features: Vec::new(),
+    }
+}
+
+#[test]
+fn cmp_002_every_owned_feature_reports_a_real_state_from_assess_project() {
+    use unitas_core::compat::{assess_project, CompatibilityState};
+
+    let assessment = assess_project(&empty_project());
+
+    let reported: Vec<_> = assessment
+        .owned_feature_states
+        .iter()
+        .filter(|state| OWNED_FEATURE_IDS.contains(&state.feature_id.as_str()))
+        .collect();
+
+    assert_eq!(
+        reported.len(),
+        OWNED_FEATURE_IDS.len(),
+        "CMP-002: assess_project must report a state for every owned feature id"
+    );
+
+    for state in reported {
+        assert!(
+            matches!(
+                state.state,
+                CompatibilityState::Supported
+                    | CompatibilityState::PartiallySupported
+                    | CompatibilityState::Unsupported
+            ),
+            "CMP-002: '{}' must report a real state, never Unknown or an external state",
+            state.feature_id
+        );
+        assert!(
+            !state.capability.trim().is_empty(),
+            "CMP-002: '{}' must name the capability it assessed",
+            state.feature_id
+        );
+        if state.state != CompatibilityState::Supported {
+            let gap = state.gap.as_deref().unwrap_or_default();
+            assert!(
+                !gap.trim().is_empty(),
+                "CMP-002: '{}' must name the gap that keeps it from Supported",
+                state.feature_id
+            );
+            assert!(
+                gap.contains(".rs"),
+                "CMP-002: the gap for '{}' must name the module where the capability is missing: {}",
+                state.feature_id,
+                gap
+            );
+        }
+    }
+}
+
+#[test]
+fn cmp_002_owned_capability_sources_exist_in_the_workspace_and_drive_the_state() {
+    use unitas_core::compat::{
+        lookup_owned_feature_capability, CompatibilityState, OWNED_FEATURE_CAPABILITIES,
+    };
+
+    for capability in OWNED_FEATURE_CAPABILITIES {
+        assert!(
+            !capability.parts.is_empty(),
+            "CMP-002: '{}' must name the capabilities it probes",
+            capability.feature_id
+        );
+        assert!(
+            lookup_owned_feature_capability(capability.feature_id).is_some(),
+            "CMP-002: '{}' must be reachable by id",
+            capability.feature_id
+        );
+
+        let demonstrated = capability
+            .parts
+            .iter()
+            .filter(|part| !part.evidence.is_empty())
+            .count();
+        let missing = capability.parts.len() - demonstrated;
+        if demonstrated == capability.parts.len() {
+            assert_eq!(
+                capability.state(),
+                CompatibilityState::Supported,
+                "CMP-002: '{}' demonstrates every probed capability",
+                capability.feature_id
+            );
+        } else if demonstrated == 0 {
+            assert_eq!(
+                capability.state(),
+                CompatibilityState::Unsupported,
+                "CMP-002: '{}' demonstrates no probed capability",
+                capability.feature_id
+            );
+        } else {
+            assert!(
+                missing > 0,
+                "CMP-002: '{}' demonstrates part of its probed capability",
+                capability.feature_id
+            );
+            assert_eq!(
+                capability.state(),
+                CompatibilityState::PartiallySupported,
+                "CMP-002: '{}' demonstrates part of its probed capability",
+                capability.feature_id
+            );
+        }
+
+        for part in capability.parts {
+            assert!(
+                workspace_file(part.location).is_file(),
+                "CMP-002: the capability source '{}' of '{}' must exist in the workspace",
+                part.location,
+                capability.feature_id
+            );
+            if part.evidence.is_empty() {
+                assert!(
+                    part.missing.is_some(),
+                    "CMP-002: the missing capability '{}' of '{}' must name the gap",
+                    part.behavior,
+                    capability.feature_id
+                );
+            } else {
+                for evidence in part.evidence {
+                    let mut split = evidence.splitn(2, "::");
+                    let file = split.next().unwrap_or_default();
+                    let test_name = split.next().unwrap_or_default();
+                    assert!(
+                        !test_name.is_empty(),
+                        "CMP-002: the evidence '{}' of '{}' must be written as path::test_name",
+                        evidence,
+                        capability.feature_id
+                    );
+                    let path = workspace_file(file);
+                    assert!(
+                        path.is_file(),
+                        "CMP-002: the evidence file '{}' of '{}' must exist in the workspace",
+                        file,
+                        capability.feature_id
+                    );
+                    let source = std::fs::read_to_string(&path).unwrap_or_default();
+                    assert!(
+                        !source.is_empty(),
+                        "CMP-002: the evidence file '{}' of '{}' must be readable",
+                        file,
+                        capability.feature_id
+                    );
+                    assert!(
+                        source.contains(&format!("fn {test_name}(")),
+                        "CMP-002: the evidence '{}' of '{}' must name a test that exists in the workspace",
+                        evidence,
+                        capability.feature_id
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cmp_002_owned_capabilities_match_the_catalog_and_the_familiar_differences() {
+    use unitas_core::compat::{
+        lookup_catalog_feature, lookup_familiar_behavior_differences, Tier,
+        OWNED_FEATURE_CAPABILITIES,
+    };
+
+    for capability in OWNED_FEATURE_CAPABILITIES {
+        let catalog = lookup_catalog_feature(capability.feature_id);
+        assert!(
+            catalog.is_some(),
+            "CMP-002: owned feature '{}' must be a catalog feature",
+            capability.feature_id
+        );
+        if let Some(catalog) = catalog {
+            assert_eq!(
+                capability.owning_spec, catalog.owning_spec,
+                "CMP-002: owned feature '{}' must name the spec that owns it",
+                capability.feature_id
+            );
+            if catalog.tier == Tier::Familiar {
+                assert!(
+                    lookup_familiar_behavior_differences(capability.feature_id).is_some(),
+                    "CMP-002: a Familiar owned feature '{}' must list its differences from Unity 2022.3 LTS",
+                    capability.feature_id
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cmp_002_project_findings_take_the_probe_state_and_name_the_gap_and_its_location() {
+    use unitas_core::compat::{
+        assess_project, CompatibilityState, PackageSource, ProjectAssetEntry, ProjectContent,
+        ProjectPackageEntry, ProjectSettingEntry,
+    };
+
+    let content = ProjectContent {
+        packages: vec![ProjectPackageEntry {
+            package_id: "com.unity.collab-proxy".to_string(),
+            version: "2.3.1".to_string(),
+            source: PackageSource::Registry,
+            is_locally_modified_embedded: false,
+        }],
+        assets: vec![ProjectAssetEntry {
+            family: "Texture2D".to_string(),
+            content: ContentIdentity {
+                guid: Some("guid-texture".to_string()),
+                asset_path: Some("Assets/Textures/Stone.png".to_string()),
+                sub_asset_id: None,
+                object_name: Some("Stone".to_string()),
+            },
+            owning_feature_id: Some("PRJ-004".to_string()),
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        settings: vec![ProjectSettingEntry {
+            setting_name: "ProjectSettings/QualitySettings.asset".to_string(),
+            family: "Quality".to_string(),
+            owning_feature_id: None,
+            tier: None,
+            state: None,
+            observable_consequence: None,
+        }],
+        ..empty_project()
+    };
+
+    let assessment = assess_project(&content);
+
+    let texture = assessment
+        .report
+        .findings
+        .iter()
+        .find(|f| f.content.asset_path.as_deref() == Some("Assets/Textures/Stone.png"));
+    assert!(
+        texture.is_some(),
+        "CMP-002: the imported texture must produce a finding"
+    );
+    if let Some(texture) = texture {
+        assert_eq!(texture.feature_id, "PRJ-004");
+        assert_eq!(
+            texture.state,
+            CompatibilityState::PartiallySupported,
+            "CMP-002: the texture import is partially supported because no compressed texture encoder exists"
+        );
+        assert!(
+            texture
+                .observable_consequence
+                .contains("no BCn, ASTC, or ETC2 texture encoder"),
+            "CMP-002: the texture finding must name the precise gap: {}",
+            texture.observable_consequence
+        );
+        assert!(
+            texture
+                .observable_consequence
+                .contains("crates/unitas-asset/src/texture/import.rs"),
+            "CMP-002: the texture finding must name where the gap is: {}",
+            texture.observable_consequence
+        );
+    }
+
+    let quality =
+        assessment.report.findings.iter().find(|f| {
+            f.content.asset_path.as_deref() == Some("ProjectSettings/QualitySettings.asset")
+        });
+    assert!(
+        quality.is_some(),
+        "CMP-002: the project setting must produce a finding"
+    );
+    if let Some(quality) = quality {
+        assert_eq!(quality.feature_id, "PRJ-007");
+        assert_eq!(
+            quality.state,
+            CompatibilityState::PartiallySupported,
+            "CMP-002: a project setting is partially supported because only some settings are represented"
+        );
+        assert!(
+            quality.observable_consequence.contains("tags and layers"),
+            "CMP-002: the setting finding must name the precise gap: {}",
+            quality.observable_consequence
+        );
+        assert!(
+            quality
+                .observable_consequence
+                .contains("crates/unitas-asset/src/project_settings.rs"),
+            "CMP-002: the setting finding must name where the gap is: {}",
+            quality.observable_consequence
+        );
+    }
+
+    let collab = assessment
+        .report
+        .findings
+        .iter()
+        .find(|f| f.content.asset_path.as_deref() == Some("Packages/com.unity.collab-proxy"));
+    assert!(
+        collab.is_some(),
+        "CMP-002: the package must produce a finding"
+    );
+    if let Some(collab) = collab {
+        assert_eq!(collab.feature_id, "EDT-007");
+        assert_eq!(
+            collab.state,
+            CompatibilityState::PartiallySupported,
+            "CMP-002: the version control package is partially supported because no version-control client is provided"
+        );
+        assert!(
+            collab
+                .observable_consequence
+                .contains("no version-control client is provided"),
+            "CMP-002: the package finding must name the precise gap: {}",
+            collab.observable_consequence
+        );
+        assert!(
+            collab
+                .observable_consequence
+                .contains("crates/unitas-asset/src/merge.rs"),
+            "CMP-002: the package finding must name where the gap is: {}",
+            collab.observable_consequence
+        );
+    }
+}
+
+#[test]
+fn cmp_002_a_project_using_a_recognized_unsupported_family_reports_unsupported_with_its_gap() {
+    use unitas_core::compat::{
+        assess_project, CompatibilityState, ProjectAssetEntry, ProjectContent,
+    };
+
+    let content = ProjectContent {
+        assets: vec![
+            ProjectAssetEntry {
+                family: "High Definition Render Pipeline".to_string(),
+                content: ContentIdentity {
+                    guid: Some("guid-hdrp".to_string()),
+                    asset_path: Some("Assets/HDRP/SkyVolume.asset".to_string()),
+                    sub_asset_id: None,
+                    object_name: Some("SkyVolume".to_string()),
+                },
+                owning_feature_id: None,
+                tier: None,
+                state: None,
+                observable_consequence: None,
+            },
+            ProjectAssetEntry {
+                family: "URP Scene".to_string(),
+                content: ContentIdentity {
+                    guid: Some("guid-urp".to_string()),
+                    asset_path: Some("Assets/Scenes/Main.unity".to_string()),
+                    sub_asset_id: None,
+                    object_name: Some("Main".to_string()),
+                },
+                owning_feature_id: Some("REN-006".to_string()),
+                tier: Some(Tier::Native),
+                state: Some(CompatibilityState::Supported),
+                observable_consequence: None,
+            },
+        ],
+        ..empty_project()
+    };
+
+    let assessment = assess_project(&content);
+
+    let hdrp = assessment
+        .report
+        .findings
+        .iter()
+        .find(|f| f.content.asset_path.as_deref() == Some("Assets/HDRP/SkyVolume.asset"));
+    assert!(
+        hdrp.is_some(),
+        "CMP-002: recognized content must produce a finding"
+    );
+    if let Some(hdrp) = hdrp {
+        assert_eq!(
+            hdrp.state,
+            CompatibilityState::Unsupported,
+            "CMP-002: the compatibility contract defines Unsupported as recognized content whose required behavior is unavailable"
+        );
+        assert!(
+            hdrp.observable_consequence
+                .contains("HDRP materials, volumes, and pipeline assets do not render"),
+            "CMP-002: the finding must name the excluded behavior: {}",
+            hdrp.observable_consequence
+        );
+        assert!(
+            hdrp.observable_consequence
+                .contains("URP and Built-in scenes remain editable and playable"),
+            "CMP-002: the finding must name what stays usable: {}",
+            hdrp.observable_consequence
+        );
+    }
+
+    assert!(
+        assessment
+            .playable_scenes
+            .contains(&"Assets/Scenes/Main.unity".to_string()),
+        "CMP-002: unrelated content stays playable"
+    );
+    assert!(
+        !assessment
+            .present_supported_features
+            .contains(&"REN-006".to_string())
+            || assessment.overall_state != CompatibilityState::Supported,
+        "CMP-002: the project state must reflect the unsupported content"
+    );
+}

@@ -4,12 +4,16 @@ use unitas_physics::{BodyDesc, BodyRole, ForceMode, PhysicsError, Shape, World};
 const NO_GRAVITY: [f64; 3] = [0.0, 0.0, 0.0];
 
 fn body(role: BodyRole, mass: f64) -> BodyDesc {
+    body_at(role, mass, [0.0, 0.0, 0.0])
+}
+
+fn body_at(role: BodyRole, mass: f64, position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         role,
         shape: Shape::Box {
             half_extents: [0.5, 0.5, 0.5],
         },
-        position: [0.0, 0.0, 0.0],
+        position,
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass,
         velocity: [0.0, 0.0, 0.0],
@@ -58,15 +62,12 @@ fn force_mode_acceleration_applies_a_times_dt_regardless_of_mass() -> Result<(),
     let mut world = World::with_gravity(NO_GRAVITY);
     let light = EntityId::new(1);
     let heavy = EntityId::new(2);
-    world.add_body(light, body(BodyRole::Dynamic, 2.0))?;
-    // The two bodies must not overlap: two coincident dynamic boxes form a
-    // deep-interpenetration contact whose separation lawfully exchanges
-    // x-momentum, corrupting the velocity pin. The expected 1.5 derives from
-    // ForceMode::Acceleration alone: dv = a*dt = 3.0*0.5 = 1.5, independent
-    // of mass (verified exact for isolated bodies).
-    let mut heavy_desc = body(BodyRole::Dynamic, 8.0);
-    heavy_desc.position = [3.0, 0.0, 0.0];
-    world.add_body(heavy, heavy_desc)?;
+    // Spawn the boxes apart: coincident dynamic boxes form a deep-interpenetration
+    // contact whose separation lawfully exchanges x-momentum, corrupting the
+    // velocity pin. The expected 1.5 derives from ForceMode::Acceleration alone:
+    // dv = a*dt = 3.0*0.5 = 1.5, independent of mass.
+    world.add_body(light, body_at(BodyRole::Dynamic, 2.0, [-2.0, 0.0, 0.0]))?;
+    world.add_body(heavy, body_at(BodyRole::Dynamic, 8.0, [2.0, 0.0, 0.0]))?;
     world.add_force(light, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.add_force(heavy, [3.0, 0.0, 0.0], ForceMode::Acceleration)?;
     world.step(0.5)?;

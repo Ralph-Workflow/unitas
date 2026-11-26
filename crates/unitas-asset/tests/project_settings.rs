@@ -3,6 +3,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use unitas_asset::project_settings::{
+    parse_quality_settings, parse_quality_settings_stream, QualityLevel, QualitySettings,
+    SettingBoundary, SettingValueSource,
+};
 use unitas_asset::scene_save;
 use unitas_asset::unity_yaml::Node;
 use unitas_asset::{
@@ -883,6 +887,402 @@ fn prj007_outcome10_fixed_timestep_collision_matrix_and_scripting_defines_change
         scene_save::save_stream(path, &parsed)?;
         assert_eq!(fs::read_to_string(path)?, before);
     }
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+const QUALITY_SETTINGS_YAML: &str = r"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!47 &1
+QualitySettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 5
+  m_CurrentQuality: 1
+  m_QualitySettings:
+  - serializedVersion: 2
+    name: Low
+    pixelLightCount: 1
+    shadows: 0
+    shadowResolution: 0
+    shadowProjection: 1
+    shadowCascades: 1
+    shadowDistance: 40
+    shadowNearPlaneOffset: 3
+    shadowCascade2Split: 0.33333334
+    shadowCascade4Split: {x: 0.06666667, y: 0.2, z: 0.46666667}
+    shadowmaskMode: 0
+    skinWeights: 2
+    textureQuality: 0
+    anisotropicTextures: 0
+    antiAliasing: 0
+    softParticles: 0
+    softVegetation: 0
+    realtimeReflectionProbes: 0
+    billboardsFaceCameraPosition: 0
+    vSyncCount: 0
+    lodBias: 0.7
+    maximumLODLevel: 0
+    enableLODCrossFade: 1
+    streamingMipmapsActive: 0
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 512
+    streamingMipmapsRenderersPerFrame: 512
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 1024
+    particleRaycastBudget: 4
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 16
+    asyncUploadPersistentBuffer: 1
+    resolutionScalingFixedDPIFactor: 1
+    customRenderPipeline: {fileID: 0}
+    terrainQualityOverrides: 0
+    reflectionQualityOverrides: 0
+    unrecognizedVendorQualityKey: retained_verbatim
+  - serializedVersion: 2
+    name: High
+    pixelLightCount: 4
+    shadows: 2
+    shadowResolution: 2
+    shadowProjection: 1
+    shadowCascades: 4
+    shadowDistance: 50
+    shadowNearPlaneOffset: 3
+    shadowCascade2Split: 0.33333334
+    shadowCascade4Split: {x: 0.06666667, y: 0.2, z: 0.46666667}
+    shadowmaskMode: 0
+    skinWeights: 2
+    textureQuality: 0
+    anisotropicTextures: 1
+    antiAliasing: 2
+    softParticles: 0
+    softVegetation: 1
+    realtimeReflectionProbes: 1
+    billboardsFaceCameraPosition: 0
+    vSyncCount: 1
+    lodBias: 1
+    maximumLODLevel: 0
+    enableLODCrossFade: 1
+    streamingMipmapsActive: 0
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 512
+    streamingMipmapsRenderersPerFrame: 512
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 1024
+    particleRaycastBudget: 4
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 16
+    asyncUploadPersistentBuffer: 1
+    resolutionScalingFixedDPIFactor: 1
+    customRenderPipeline: {fileID: 0}
+    terrainQualityOverrides: 0
+    reflectionQualityOverrides: 0
+  m_PerPlatformDefaultQuality:
+    Android: 1
+    Standalone: 0
+  m_PerPlatformCustomRenderPipeline: {}
+";
+
+fn expected_quality_settings() -> QualitySettings {
+    QualitySettings {
+        current_quality: 1,
+        levels: vec![
+            QualityLevel {
+                name: String::from("Low"),
+                pixel_light_count: 1,
+                shadows: 0,
+                shadow_resolution: 0,
+                shadow_distance: 40.0,
+                texture_quality: 0,
+                anisotropic_textures: 0,
+                anti_aliasing: 0,
+                v_sync_count: 0,
+                lod_bias: 0.7,
+            },
+            QualityLevel {
+                name: String::from("High"),
+                pixel_light_count: 4,
+                shadows: 2,
+                shadow_resolution: 2,
+                shadow_distance: 50.0,
+                texture_quality: 0,
+                anisotropic_textures: 1,
+                anti_aliasing: 2,
+                v_sync_count: 1,
+                lod_bias: 1.0,
+            },
+        ],
+        per_platform_default_quality: vec![
+            (String::from("Android"), 1),
+            (String::from("Standalone"), 0),
+        ],
+    }
+}
+
+#[test]
+fn parses_quality_settings_asset_and_reports_per_target_effective_value() -> TestResult {
+    let root = temp_settings_dir("quality_parse")?;
+    let path = root.join("QualitySettings.asset");
+    fs::write(&path, QUALITY_SETTINGS_YAML)?;
+
+    let parsed = parse_quality_settings(&path)?;
+    assert_eq!(parsed, Some(expected_quality_settings()));
+
+    let stream = unity_yaml::parse_file(&path)?;
+    assert_eq!(
+        parse_quality_settings_stream(&stream),
+        Ok(expected_quality_settings())
+    );
+
+    let settings = parsed.ok_or("missing quality settings")?;
+    let standalone = settings.effective_quality("Standalone", "Standalone");
+    assert_eq!(
+        standalone.effective_value, "Low",
+        "PRJ-007 Outcome 10: the per-target quality default of Standalone names its level"
+    );
+    assert_eq!(standalone.target_group_id, "Standalone");
+    assert_eq!(standalone.target_name, "Standalone");
+    assert_eq!(
+        standalone.source,
+        SettingValueSource::TargetOverride,
+        "PRJ-007 Outcome 10: a per-target quality default is reported as a target override"
+    );
+    assert_eq!(
+        standalone.boundary,
+        SettingBoundary::NextPlaySession,
+        "PRJ-007 Outcome 10: the quality level of a target applies at the next play session (REN-003)"
+    );
+
+    let android = settings.effective_quality("Android", "Android");
+    assert_eq!(android.effective_value, "High");
+    assert_eq!(android.source, SettingValueSource::TargetOverride);
+
+    let ios = settings.effective_quality("iOS", "iOS");
+    assert_eq!(
+        ios.effective_value, "High",
+        "PRJ-007 Outcome 10: a target without a quality default falls back to the project quality"
+    );
+    assert_eq!(
+        ios.source,
+        SettingValueSource::Default,
+        "PRJ-007 Outcome 10: the project quality is reported as the default source"
+    );
+    assert_eq!(ios.boundary, SettingBoundary::NextPlaySession);
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn prj007_quality_settings_round_trips_byte_exactly_and_preserves_unknown_keys() -> TestResult {
+    let root = temp_settings_dir("quality_round_trip")?;
+    let path = root.join("QualitySettings.asset");
+    fs::write(&path, QUALITY_SETTINGS_YAML)?;
+
+    let parsed = unity_yaml::parse(QUALITY_SETTINGS_YAML)?;
+    assert_eq!(
+        scene_save::emit_stream(&parsed),
+        QUALITY_SETTINGS_YAML,
+        "PRJ-007 Outcome 10: an unchanged QualitySettings file re-emits byte for byte"
+    );
+    scene_save::save_stream(&path, &parsed)?;
+    assert_eq!(
+        fs::read_to_string(&path)?,
+        QUALITY_SETTINGS_YAML,
+        "PRJ-007 Outcome 10: saving an unchanged QualitySettings file keeps every byte"
+    );
+
+    let mut stream = unity_yaml::parse_file(&path)?;
+    assert!(set_settings_scalar(
+        &mut stream.documents[0].root,
+        &["QualitySettings", "m_CurrentQuality"],
+        "0"
+    ));
+    scene_save::save_stream(&path, &stream)?;
+
+    let reloaded = parse_quality_settings(&path)?.ok_or("missing quality settings")?;
+    assert_eq!(reloaded.current_quality, 0);
+    assert_eq!(
+        reloaded.effective_quality("iOS", "iOS").effective_value,
+        "Low",
+        "PRJ-007 Outcome 10: the saved quality default is the effective value for the target"
+    );
+    assert_eq!(
+        reloaded.effective_quality("iOS", "iOS").source,
+        SettingValueSource::Default
+    );
+
+    let reloaded_stream = unity_yaml::parse_file(&path)?;
+    let aggregate = unitas_asset::project_settings::load_project_settings(&root)?;
+    assert_eq!(
+        aggregate
+            .effective_quality("Standalone", "Standalone")
+            .effective_value,
+        "Low",
+        "PRJ-007 Outcome 10: the loaded project settings report the per-target quality level"
+    );
+    assert_eq!(
+        aggregate
+            .effective_quality("Standalone", "Standalone")
+            .source,
+        SettingValueSource::TargetOverride
+    );
+    assert_eq!(
+        aggregate.effective_quality("iOS", "iOS").source,
+        SettingValueSource::Default
+    );
+    let level = reloaded_stream.documents[0]
+        .root
+        .get("QualitySettings")
+        .and_then(|body| body.get("m_QualitySettings"))
+        .and_then(Node::as_sequence)
+        .and_then(|levels| levels.first())
+        .ok_or("missing quality level")?;
+    assert_eq!(
+        level
+            .get("unrecognizedVendorQualityKey")
+            .and_then(Node::as_str),
+        Some("retained_verbatim"),
+        "PRJ-007 Outcome 22: a quality key no Unity 2022.3 level defines survives the save"
+    );
+    assert_eq!(
+        level
+            .get("shadowCascade4Split")
+            .and_then(|node| node.get("z"))
+            .and_then(Node::as_str),
+        Some("0.46666667"),
+        "PRJ-007 Outcome 22: a quality setting the model does not represent keeps its on-disk form"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn quality_settings_handles_missing_file_missing_document_and_invalid_level_index() -> TestResult {
+    let missing = settings_dir().join("MissingQualitySettings.asset");
+    assert_eq!(parse_quality_settings(&missing), Ok(None));
+
+    let empty = unity_yaml::parse("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n")?;
+    assert_eq!(
+        parse_quality_settings_stream(&empty),
+        Err(ProjectSettingsError::MissingDocument("QualitySettings"))
+    );
+
+    let out_of_range = unity_yaml::parse(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!47 &1\nQualitySettings:\n  m_CurrentQuality: 7\n  m_QualitySettings:\n  - name: Low\n",
+    )?;
+    assert_eq!(
+        parse_quality_settings_stream(&out_of_range),
+        Err(ProjectSettingsError::MissingDocument("QualitySettings"))
+    );
+
+    let without_levels = unity_yaml::parse(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!47 &1\nQualitySettings:\n  m_CurrentQuality: 0\n",
+    )?;
+    assert_eq!(
+        parse_quality_settings_stream(&without_levels),
+        Err(ProjectSettingsError::MissingDocument("QualitySettings"))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn sample_quality_settings_asset_is_unity_2022_3_on_disk_and_reports_per_target_levels(
+) -> TestResult {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../samples/roll-a-ball/ProjectSettings/QualitySettings.asset");
+    let text = fs::read_to_string(&path)?;
+    let parsed = unity_yaml::parse(&text)?;
+    assert_eq!(
+        scene_save::emit_stream(&parsed),
+        text,
+        "PRJ-007 Outcome 10: the sample QualitySettings file is byte identical to its re-emitted form"
+    );
+
+    let settings = parse_quality_settings(&path)?.ok_or("missing sample quality settings")?;
+    assert_eq!(settings.levels.len(), 3);
+    assert_eq!(settings.levels[0].name, "Low");
+    assert_eq!(settings.levels[1].name, "Medium");
+    assert_eq!(settings.levels[2].name, "High");
+    assert_eq!(settings.current_quality, 2);
+
+    let standalone = settings.effective_quality("Standalone", "Standalone");
+    assert_eq!(standalone.effective_value, "High");
+    assert_eq!(standalone.source, SettingValueSource::TargetOverride);
+    assert_eq!(standalone.boundary, SettingBoundary::NextPlaySession);
+
+    let android = settings.effective_quality("Android", "Android");
+    assert_eq!(android.effective_value, "Medium");
+    assert_eq!(android.source, SettingValueSource::TargetOverride);
+
+    let server = settings.effective_quality("Server", "Server");
+    assert_eq!(server.effective_value, "Low");
+    assert_eq!(server.source, SettingValueSource::TargetOverride);
+
+    Ok(())
+}
+
+#[test]
+fn malformed_quality_settings_file_reports_a_diagnostic_naming_the_file() -> TestResult {
+    let root = temp_settings_dir("quality_malformed")?;
+    let path = root.join("QualitySettings.asset");
+
+    fs::write(
+        &path,
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!47 &1\nQualitySettingsTypo:\n  m_CurrentQuality: 0\n  m_QualitySettings:\n  - name: Low\n",
+    )?;
+    let error = unitas_asset::project_settings::load_project_settings(&root)
+        .err()
+        .ok_or("expected a diagnostic for a malformed QualitySettings file")?;
+    assert!(
+        matches!(&error, ProjectSettingsError::MalformedFile { .. }),
+        "PRJ-007 Outcome 10: a malformed settings file reports a file naming diagnostic"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}: stream contains no QualitySettings document",
+            path.display()
+        ),
+        "PRJ-007 Outcome 10: the diagnostic names the malformed QualitySettings file"
+    );
+
+    fs::write(
+        &path,
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!47 &1\nQualitySettings:\n  m_CurrentQuality: 9\n  m_QualitySettings:\n  - name: Low\n",
+    )?;
+    let error = unitas_asset::project_settings::load_project_settings(&root)
+        .err()
+        .ok_or("expected a diagnostic for an out of range quality index")?;
+    assert!(
+        error
+            .to_string()
+            .contains(&path.to_string_lossy().to_string()),
+        "PRJ-007 Outcome 10: the diagnostic names the file with the out of range quality index: {error}"
+    );
+
+    fs::write(&path, "%YAML 1.1\nnot a unity settings document\n")?;
+    let error = unitas_asset::project_settings::load_project_settings(&root)
+        .err()
+        .ok_or("expected a diagnostic for an unparseable QualitySettings file")?;
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}: line 2: unexpected content not a unity settings document",
+            path.display()
+        ),
+        "PRJ-007 Outcome 10: the diagnostic names the unparseable QualitySettings file"
+    );
+
+    fs::remove_file(&path)?;
+    let settings = unitas_asset::project_settings::load_project_settings(&root)?;
+    assert_eq!(
+        settings.quality,
+        QualitySettings::default(),
+        "PRJ-007 Outcome 10: a missing QualitySettings file keeps the Unity-like silent default"
+    );
 
     fs::remove_dir_all(&root)?;
     Ok(())

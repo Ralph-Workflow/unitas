@@ -861,6 +861,7 @@ pub struct ProjectCompatibilityAssessment {
     pub unknown_features: Vec<String>,
     pub absent_features: Vec<String>,
     pub playable_scenes: Vec<String>,
+    pub owned_feature_states: Vec<OwnedFeatureState>,
 }
 
 pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessment {
@@ -898,6 +899,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
             .owning_feature_id
             .clone()
             .unwrap_or_else(|| "PRJ-006".to_string());
+        let capability = lookup_owned_feature_capability(&feature_id);
         let tier = owning_feature_tier(&feature_id, assessed.tier);
         let relied_upon_unity_differences = if tier == Tier::Familiar {
             lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
@@ -922,7 +924,15 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
             },
             behavior: format!("package {} ({})", pkg.package_id, pkg.version),
             relied_upon_unity_differences,
-            observable_consequence: assessed.notes.clone(),
+            observable_consequence: if assessed.state == CompatibilityState::PartiallySupported {
+                format!(
+                    "{}{}",
+                    assessed.notes,
+                    owned_capability_gap_suffix(&assessed.notes, capability)
+                )
+            } else {
+                assessed.notes.clone()
+            },
             conditions: vec!["package resolved in project manifest".to_string()],
             related_findings: Vec::new(),
         });
@@ -931,13 +941,20 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
 
     for asset in &content.assets {
         let unsupported_entry = lookup_unsupported_family(&asset.family);
-        let state = asset.state.unwrap_or_else(|| {
-            unsupported_entry.map_or(CompatibilityState::Unknown, |entry| entry.state)
-        });
         let feature_id = asset.owning_feature_id.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || "PRJ-004".to_string(),
                 |entry| entry.owning_feature_id.to_string(),
+            )
+        });
+        let capability = lookup_owned_feature_capability(&feature_id);
+        let state = asset.state.unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || match (asset.owning_feature_id.as_deref(), capability) {
+                    (Some(_), Some(capability)) => capability.state(),
+                    _ => CompatibilityState::Unknown,
+                },
+                |entry| entry.state,
             )
         });
         let tier = owning_feature_tier(&feature_id, asset.tier);
@@ -962,6 +979,15 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 |entry| entry.observable_consequence.to_string(),
             )
         });
+        let consequence = if state == CompatibilityState::PartiallySupported {
+            format!(
+                "{}{}",
+                consequence,
+                owned_capability_gap_suffix(&consequence, capability)
+            )
+        } else {
+            consequence
+        };
         if state == CompatibilityState::Supported {
             if let Some(path) = &asset.content.asset_path {
                 if path.ends_with(".unity") && !playable_scenes.contains(path) {
@@ -995,13 +1021,21 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
 
     for setting in &content.settings {
         let unsupported_entry = lookup_unsupported_family(&setting.family);
-        let state = setting.state.unwrap_or_else(|| {
-            unsupported_entry.map_or(CompatibilityState::Supported, |entry| entry.state)
-        });
         let feature_id = setting.owning_feature_id.clone().unwrap_or_else(|| {
             unsupported_entry.map_or_else(
                 || "PRJ-007".to_string(),
                 |entry| entry.owning_feature_id.to_string(),
+            )
+        });
+        let capability = lookup_owned_feature_capability(&feature_id);
+        let state = setting.state.unwrap_or_else(|| {
+            unsupported_entry.map_or_else(
+                || {
+                    capability.map_or(CompatibilityState::Supported, |capability| {
+                        capability.state()
+                    })
+                },
+                |entry| entry.state,
             )
         });
         let tier = owning_feature_tier(&feature_id, setting.tier);
@@ -1011,6 +1045,15 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
                 |entry| entry.observable_consequence.to_string(),
             )
         });
+        let consequence = if state == CompatibilityState::PartiallySupported {
+            format!(
+                "{}{}",
+                consequence,
+                owned_capability_gap_suffix(&consequence, capability)
+            )
+        } else {
+            consequence
+        };
         findings.push(Finding {
             feature_id,
             tier,
@@ -1112,6 +1155,7 @@ pub fn assess_project(content: &ProjectContent) -> ProjectCompatibilityAssessmen
         unknown_features,
         absent_features,
         playable_scenes,
+        owned_feature_states: probe_owned_features(),
     }
 }
 
@@ -1652,6 +1696,869 @@ fn owning_feature_tier(feature_id: &str, declared: Option<Tier>) -> Tier {
         .map(|entry| entry.tier)
         .or(declared)
         .unwrap_or(Tier::Native)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OwnedCapabilityPart {
+    pub behavior: &'static str,
+    pub location: &'static str,
+    /// The workspace tests that demonstrate this behavior, each written as
+    /// `path::test_name`. An empty list means the behavior is not demonstrated
+    /// by any test in this repository and `missing` names the gap.
+    pub evidence: &'static [&'static str],
+    pub missing: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OwnedFeatureCapability {
+    pub feature_id: &'static str,
+    pub owning_spec: &'static str,
+    pub capability: &'static str,
+    pub parts: &'static [OwnedCapabilityPart],
+}
+
+impl OwnedFeatureCapability {
+    pub fn state(&self) -> CompatibilityState {
+        if self.parts.is_empty() {
+            return CompatibilityState::Unsupported;
+        }
+        let demonstrated = self
+            .parts
+            .iter()
+            .filter(|part| !part.evidence.is_empty())
+            .count();
+        if demonstrated == self.parts.len() {
+            CompatibilityState::Supported
+        } else if demonstrated == 0 {
+            CompatibilityState::Unsupported
+        } else {
+            CompatibilityState::PartiallySupported
+        }
+    }
+
+    pub fn missing_parts(&self) -> Vec<&'static OwnedCapabilityPart> {
+        self.parts
+            .iter()
+            .filter(|part| part.evidence.is_empty())
+            .collect()
+    }
+
+    pub fn gap(&self) -> Option<String> {
+        let missing = self.missing_parts();
+        if missing.is_empty() {
+            return None;
+        }
+        let missing_text: Vec<String> = missing
+            .iter()
+            .map(|part| {
+                format!(
+                    "{} ({})",
+                    part.missing.unwrap_or(part.behavior),
+                    part.location
+                )
+            })
+            .collect();
+        match self.state() {
+            CompatibilityState::PartiallySupported => {
+                let provided: Vec<String> = self
+                    .parts
+                    .iter()
+                    .filter(|part| !part.evidence.is_empty())
+                    .map(|part| format!("{} ({})", part.behavior, part.location))
+                    .collect();
+                Some(format!(
+                    "Partially supported: {}; missing: {}",
+                    provided.join("; "),
+                    missing_text.join("; ")
+                ))
+            }
+            _ => Some(format!("Unsupported: {}", missing_text.join("; "))),
+        }
+    }
+}
+
+pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
+    OwnedFeatureCapability {
+        feature_id: "PRJ-001",
+        owning_spec: "project-and-assets.md",
+        capability: "Open and recognize existing Unity projects",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the project root is recognized and its asset inventory, GUID index, and duplicate GUID report are built",
+                location: "crates/unitas-asset/src/project.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/project_tests.rs::open_report_enumerates_assets_packages_settings",
+                    "crates/unitas-asset/tests/asset_import/project_tests.rs::duplicate_guids_are_reported_not_resolved",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the declared Unity version is read and an earlier release is reported as migrated with an upgrade preview",
+                location: "crates/unitas-asset/src/project.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/project_tests.rs::project_open_2021_3_reports_migration_without_writing",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-002",
+        owning_spec: "project-and-assets.md",
+        capability: "Browse, search, label, preview, move, and delete assets",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "assets are browsed and filtered by name, class, label, folder, and import state",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::search_combines_filters_and_distinguishes_sub_assets",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "assets are renamed, moved, deleted, and restored",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::move_preserves_guid_and_reference",
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::delete_exposes_missing_reference",
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::restore_re_resolves_reference",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a preview, favorites, the recent list, duplication, and undo are provided",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[],
+                missing: Some("no asset preview, favorites, recent list, duplication, or undo is provided"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-003",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Preserve GUID, local identifier, and sub-asset references",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "asset GUIDs are parsed from meta files and indexed",
+                location: "crates/unitas-asset/src/meta.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/meta_tests.rs::meta_guid_is_parsed_from_file",
+                    "crates/unitas-asset/tests/meta_tests.rs::meta_index_maps_guid_to_asset_path",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "local file identifiers are preserved on load",
+                location: "crates/unitas-asset/src/scene.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/project_tests.rs::prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similarly_named_siblings_and_duplicate_local_file_ids_are_rejected",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a sub-asset keeps its identity apart from its main asset",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::search_combines_filters_and_distinguishes_sub_assets",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-004",
+        owning_spec: "project-and-assets.md",
+        capability: "Import textures, models, animation, and audio",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "textures are decoded and imported, including the PSD and Radiance HDR decoders",
+                location: "crates/unitas-asset/src/texture/import.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/texture_tests.rs::dispatches_decoding_by_file_name",
+                    "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_psd_rle_composite_decodes_to_the_known_pixels",
+                    "crates/unitas-asset/tests/texture_decoders_tests.rs::u4_hdr_rle_scanlines_decode_to_the_known_float_pixels",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "models are imported",
+                location: "crates/unitas-asset/src/model/mod.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/model_tests.rs::glb_import_reads_positions_and_indices",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "audio assets are imported",
+                location: "crates/unitas-asset/src/audio_import.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/audio_import_tests.rs::decodes_aifc_with_none_compression",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an animation clip is decoded and imported",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[],
+                missing: Some("no animation clip importer decodes an .anim file, so an AnimationClip is identified as a family but never imported"),
+            },
+            OwnedCapabilityPart {
+                behavior: "a platform texture format is encoded",
+                location: "crates/unitas-asset/src/texture/import.rs",
+                evidence: &[],
+                missing: Some("no BCn, ASTC, or ETC2 texture encoder exists, so a platform format override is recorded while the imported pixels stay uncompressed"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-005",
+        owning_spec: "project-and-assets.md",
+        capability: "Inspect dependencies and reverse dependencies",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the dependency graph lists direct dependencies, transitive reverse dependencies, and cycles",
+                location: "crates/unitas-asset/src/dependencies.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/dependencies_tests.rs::dependencies_direct_and_transitive_reverse",
+                    "crates/unitas-asset/tests/asset_import/dependencies_tests.rs::prj005_outcome7_dependency_cycles_are_displayed_without_failure",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a dependency is classified by kind",
+                location: "crates/unitas-asset/src/dependencies.rs",
+                evidence: &[],
+                missing: Some("dependencies are not classified by kind, so script, package, Resources, AssetBundle, and Addressables relationships are reported as undifferentiated asset dependencies"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-006",
+        owning_spec: "project-and-assets.md",
+        capability: "Resolve package manifests, registries, and project extensions",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the manifest and lock file are parsed and dependencies resolve with conflicts and unresolved causes named",
+                location: "crates/unitas-asset/src/packages.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/packages_tests.rs::conflicting_transitive_requests_report_full_chains",
+                    "crates/unitas-asset/tests/asset_import/packages_tests.rs::offline_open_reproduces_the_lock_and_names_missing_packages",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "package content is fetched from a registry, git host, or tarball and a dependency is added, removed, upgraded, or downgraded",
+                location: "crates/unitas-asset/src/packages.rs",
+                evidence: &[],
+                missing: Some("no registry, git, or tarball client fetches package content and no dependency is added, removed, upgraded, or downgraded in manifest.json or packages-lock.json"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-007",
+        owning_spec: "project-and-assets.md",
+        capability: "Represent project settings and target-specific effects",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "time, dynamics, input, quality, player, and layer collision settings are parsed and honored, including per-target overrides",
+                location: "crates/unitas-asset/src/project_settings.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/project_settings.rs::parses_time_manager_asset",
+                    "crates/unitas-asset/tests/project_settings.rs::parses_dynamics_manager_asset",
+                    "crates/unitas-asset/tests/project_settings.rs::parses_input_manager_asset_and_skips_joystick_axes",
+                    "crates/unitas-asset/tests/project_settings.rs::parses_player_settings_from_prefab_fixture_and_inline_streams",
+                    "crates/unitas-asset/tests/project_settings.rs::parses_quality_settings_asset_and_reports_per_target_effective_value",
+                    "crates/unitas-asset/tests/project_settings.rs::prj007_outcome10_per_target_scripting_defines_collision_matrix_and_fixed_timestep_effective_target_resolution",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a changed setting is written back to its ProjectSettings file in Unity-readable form",
+                location: "crates/unitas-asset/src/scene_save.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/project_settings.rs::project_settings_unchanged_save_byte_identity_and_edit_save_reload_round_trip",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "every setting family stored under ProjectSettings is represented",
+                location: "crates/unitas-asset/src/project_settings.rs",
+                evidence: &[],
+                missing: Some("only time, dynamics, input, quality, player, and layer collision settings are represented; tags and layers, graphics, color space, audio, navigation areas, editor settings, script execution order, presets, package manager settings, version control settings, and the build scene list are not"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRJ-008",
+        owning_spec: "project-and-assets.md",
+        capability: "Project trust and safe opening of untrusted projects",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "per-user trust records decide whether project code may execute",
+                location: "crates/unitas-asset/src/trust.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/trust_tests.rs::trust_record_is_written_outside_the_project",
+                    "crates/unitas-asset/tests/asset_import/trust_tests.rs::untrusted_project_is_restricted",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the code vectors a project supplies are scanned and reported before anything executes",
+                location: "crates/unitas-asset/src/trust.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/trust_tests.rs::untrusted_open_blocks_initialize_on_load_source_generator_and_git_fetch_while_assets_stay_inspectable",
+                    "crates/unitas-asset/tests/asset_import/trust_tests.rs::trusted_open_with_fetch_consent_moves_vectors_to_permitted",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "SER-001",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Read, preserve, edit, and save supported serialized values",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "text-serialized values are parsed into documents and preserved",
+                location: "crates/unitas-asset/src/unity_yaml.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/unity_yaml_tests.rs::yaml_scene_fixture_is_parsed",
+                    "crates/unitas-asset/tests/asset_import/scene_save_tests.rs::emit_stream_round_trips_the_parsed_stream",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an edit is written back and the asset is saved in Unity-readable form",
+                location: "crates/unitas-asset/src/scene_save.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/scene_save_tests.rs::editing_one_field_changes_only_that_field",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "SER-002",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Author and load scenes, including additive scene sets",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a scene is assembled into a scene graph with its components",
+                location: "crates/unitas-asset/src/scene.rs",
+                evidence: &["crates/unitas-asset/tests/scene_tests.rs::scene_game_objects_become_named_entities"],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a scene set is saved",
+                location: "crates/unitas-asset/src/scene_save.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/scene_save_tests.rs::the_scene_set_save_rejects_a_scene_outside_the_set",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a scene set is loaded additively",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::runtime_additive_load_keeps_both_scenes_alive",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "SER-003",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Author prefab sources, instances, nesting, variants, and overrides",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "prefab sources, instances, and property modifications are read and edited",
+                location: "crates/unitas-asset/src/prefab.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/prefab_load_overrides_tests.rs::prefab_instance_property_override_applies_at_load",
+                    "crates/unitas-asset/tests/asset_import/prefab_variant_tests.rs::apply_override_targets_intermediate_variant_or_base_and_cleans_lower_redundant_overrides",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "variants, nested prefabs, and overrides are resolved",
+                location: "crates/unitas-asset/src/prefab_variant.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/prefab_variant_tests.rs::multi_level_variant_inheritance_resolves_closer_level_precedence_and_provenance",
+                    "crates/unitas-asset/tests/asset_import/prefab_variant_tests.rs::unchanged_prefab_save_byte_identity_and_nested_prefab_plus_broken_base_disk_round_trip",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "SER-004",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Preserve missing, unknown, cyclic, and cross-scene references accurately",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a missing game object, parent, child, or prefab source is reported and is not replaced by similarly named content",
+                location: "crates/unitas-asset/src/scene.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/scene_tests.rs::scene_missing_game_object_is_an_error",
+                    "crates/unitas-asset/tests/asset_import/project_tests.rs::prj003_ser004_missing_asset_and_sub_asset_keep_original_identity_with_similarly_named_siblings_and_duplicate_local_file_ids_are_rejected",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a dependency cycle is detected and terminates safely",
+                location: "crates/unitas-asset/src/dependencies.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/dependencies_tests.rs::prj005_outcome7_dependency_cycles_are_displayed_without_failure",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "SER-005",
+        owning_spec: "serialization-and-prefabs.md",
+        capability: "Text, binary, and mixed serialization forms and generated caches",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "text and binary serialized forms are read and their form is detected",
+                location: "crates/unitas-asset/src/binary_ser.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/binary_ser_tests.rs::mixed_sniffing_reads_text_yaml_and_binary_v22",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the generated import cache is written and reused",
+                location: "crates/unitas-asset/src/import_cache.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/import_cache_tests.rs::import_cache_persists_across_sessions_and_reimports_nothing_when_the_sources_are_unchanged",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PHY-001",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "3D bodies, colliders, joints, queries, and events",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "3D rigid bodies and colliders are simulated with forces and impulses",
+                location: "crates/unitas-physics/src/world.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/force_mode_tests.rs::force_mode_force_applies_f_over_m_times_dt_during_step",
+                    "crates/unitas-physics/tests/simulation/force_mode_tests.rs::force_mode_impulse_applies_f_over_m_at_call_time",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "spatial queries run and collision and trigger events are delivered",
+                location: "crates/unitas-physics/src/world.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/query_tests.rs::ray_hits_a_sphere_on_its_surface",
+                    "crates/unitas-physics/tests/physics/collision_tests.rs::trigger_and_non_trigger_pair_emits_trigger_enter_stay_exit_and_zero_collision_events",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a 3D rigid joint constrains two bodies",
+                location: "crates/unitas-physics/src/world.rs",
+                evidence: &[],
+                missing: Some("no 3D rigid joint is created or simulated, so the 3D world constrains bodies only through contact, friction, and restitution"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PHY-002",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "2D bodies, colliders, effectors, joints, queries, and events",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "2D bodies, colliders, and effectors are simulated",
+                location: "crates/unitas-physics/src/two_d/world.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/two_d_tests.rs::fixed_timestep_accumulator_sleeping_and_simulated_flag",
+                    "crates/unitas-physics/tests/simulation/two_d_effector_tests.rs::platform_effector_respects_collider_mask_and_surface_arc",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a 2D joint constrains two bodies and can break",
+                location: "crates/unitas-physics/src/two_d/body.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/two_d_tests.rs::phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "2D queries run and collision and trigger messages are delivered",
+                location: "crates/unitas-physics/src/two_d/world.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/two_d_tests.rs::trigger_events_fire_enter_stay_exit_only_when_rigidbody_present",
+                    "crates/unitas-physics/tests/simulation/two_d_tests.rs::shapes_box_circle_edge_polygon_and_spatial_queries_respect_contact_filter",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PHY-003",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "Character movement and grounding",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the character controller honors slope limit, step offset, skin width, and grounding",
+                location: "crates/unitas-physics/src/character.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/character_tests.rs::character_lands_on_ground_and_reports_below_and_grounded",
+                    "crates/unitas-physics/tests/physics/character_tests.rs::excessive_slope_steeper_than_slope_limit_acts_as_wall",
+                    "crates/unitas-physics/tests/physics/character_tests.rs::step_taller_than_step_offset_blocks_forward_motion_and_sets_sides",
+                    "crates/unitas-physics/tests/physics/character_tests.rs::narrow_step_too_thin_to_support_tread_is_rejected",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PHY-004",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "Wheels, articulations, cloth, and simulation control",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a wheel collider solves suspension and slip",
+                location: "crates/unitas-physics/src/wheel.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/wheel_tests.rs::wheel_reports_ground_hit_with_normal_point_and_compression",
+                    "crates/unitas-physics/tests/physics/wheel_tests.rs::suspension_compression_stays_within_the_configured_travel",
+                    "crates/unitas-physics/tests/physics/wheel_tests.rs::steer_angle_rotates_the_wheel_forward_direction",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an articulation body is simulated",
+                location: "crates/unitas-physics/src/articulation.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/articulation_tests.rs::joint_drive_never_leaves_the_authored_limits",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "cloth is simulated",
+                location: "crates/unitas-physics/src/cloth.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/cloth_tests.rs::cloth_grid_keeps_its_spacing_while_falling",
+                    "crates/unitas-physics/tests/simulation/cloth_tests.rs::cloth_collides_with_assigned_capsules_only",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "NAV-001",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "Walkable worlds, navigation data building, paths, agents, obstacles, and links",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "navigation data is built and is marked stale when it no longer matches its source",
+                location: "crates/unitas-physics/src/navigation/mesh.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::navigation_navmesh_builds_one_polygon_per_walkable_triangle",
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::nav_001_story_10_surface_edit_time_build_and_runtime_rebuild_after_geometry_change",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "agents, obstacles, and path queries resolve a path and name an unreachable reason",
+                location: "crates/unitas-physics/src/navigation/agent.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::navigation_agent_walks_towards_the_destination_at_its_speed",
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::navigation_path_query_reports_partial_when_the_goal_cannot_be_reached",
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::nav_001_story_9_carving_obstacle_detours_agent_and_reports_distinct_path_statuses",
+                    "crates/unitas-physics/tests/physics/navigation_tests.rs::navigation_off_mesh_link_manual_and_auto_traversal",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "ENV-001",
+        owning_spec: "physics-navigation-terrain.md",
+        capability: "Terrain, vegetation, large worlds, and environment behavior",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "terrain data, vegetation prototypes, and grass wind are authored and evaluated",
+                location: "crates/unitas-physics/src/terrain/mod.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/physics/terrain_tests.rs::terrain_data_reports_resolution_size_and_per_position_height",
+                    "crates/unitas-physics/tests/physics/terrain_tests.rs::vegetation_follows_the_terrain_height",
+                    "crates/unitas-physics/tests/physics/terrain_tests.rs::env_001_story_12_wind_zone_moves_tree_creator_trees_and_grass_while_excluding_speedtree",
+                    "crates/unitas-physics/tests/physics/terrain_tests.rs::large_world_terrain_is_accepted_and_reports_affected_systems",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "SpeedTree wind animation moves trunks, branches, and leaves",
+                location: "crates/unitas-physics/src/terrain/mod.rs",
+                evidence: &[],
+                missing: Some("SpeedTree wind animation is excluded, so a SpeedTree prototype keeps its geometry, materials, and LODs but reports wind_excluded"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "ANI-001",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Clips, curves, events, controllers, states, and blend trees",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "clips, curves, and animation events are sampled",
+                location: "crates/unitas-animation/src/clip.rs",
+                evidence: &[
+                    "crates/unitas-animation/tests/animation/clip_tests.rs::zero_duration_clip_evaluates_at_zero_and_fires_event_once_on_entry",
+                    "crates/unitas-animation/tests/animation/clip_tests.rs::same_frame_events_preserve_declared_order_even_at_identical_timestamps",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "state machines and blend trees drive parameters",
+                location: "crates/unitas-animation/src/controller.rs",
+                evidence: &[
+                    "crates/unitas-animation/tests/animation/controller_tests.rs::float_parameter_greater_and_less_conditions_drive_transition",
+                    "crates/unitas-animation/tests/animation/controller_tests.rs::ani_001_outcome_28_2d_and_direct_blend_trees_interruption_sources_and_callback_order",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "ANI-002",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Avatars, humanoid retargeting, inverse kinematics, and playable graphs",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a humanoid avatar is retargeted",
+                location: "crates/unitas-animation/src/humanoid.rs",
+                evidence: &[
+                    "crates/unitas-animation/tests/animation/humanoid_tests.rs::pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avatars",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "inverse kinematics is solved",
+                location: "crates/unitas-runtime/src/animation.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/animation_ik_tests.rs::two_bone_ik_reaches_reachable_target_within_tolerance_and_preserves_bone_lengths",
+                    "crates/unitas-runtime/tests/animation_ik_tests.rs::look_at_ik_rotates_forward_vector_toward_target_according_to_weights_and_clamp",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a playable graph evaluates its nodes and its script playables",
+                location: "crates/unitas-animation/src/playable.rs",
+                evidence: &[
+                    "crates/unitas-animation/tests/animation/playable_tests.rs::clip_playable_reports_time_speed_duration_and_done_state",
+                    "crates/unitas-animation/tests/animation/playable_tests.rs::ani_002_outcome_32_script_playable_callbacks_fire_in_the_order_the_specification_states",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "CIN-001",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Camera behavior and time-based cinematic sequencing",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "virtual cameras blend and the highest priority active camera is live",
+                location: "crates/unitas-runtime/src/cinemachine.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_custom_blend_is_used_for_a_matching_camera_pair",
+                    "crates/unitas-runtime/tests/runtime/cinemachine_tests.rs::cinemachine_highest_priority_active_camera_is_live",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a virtual camera follows a target and aims at a look-at target",
+                location: "crates/unitas-runtime/src/cinemachine.rs",
+                evidence: &[],
+                missing: Some("a virtual camera's follow and look-at targets are stored but never applied, so a camera does not track or aim at a target"),
+            },
+            OwnedCapabilityPart {
+                behavior: "a timeline drives bound animation and cameras",
+                location: "crates/unitas-runtime/src/timeline.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/timeline_tests.rs::timeline_animation_track_gates_the_bound_animator",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "REN-004",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Particles, trails, and visual effects",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a particle system simulates emission, lifetime, and over-lifetime curves",
+                location: "crates/unitas-physics/src/particles.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/particles_tests.rs::rate_emission_produces_the_expected_particle_count",
+                    "crates/unitas-physics/tests/simulation/particles_tests.rs::the_property_curves_interpolate_at_the_midpoint_of_the_lifetime",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a trail keeps a point history and fades",
+                location: "crates/unitas-physics/src/trails.rs",
+                evidence: &[
+                    "crates/unitas-physics/tests/simulation/trails_tests.rs::a_trail_fades_width_and_color_from_the_head_to_the_tail",
+                    "crates/unitas-physics/tests/simulation/trails_tests.rs::a_point_older_than_the_trail_time_expires",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a visual effect graph is simulated and rendered",
+                location: "crates/unitas-physics/src/particles.rs",
+                evidence: &[],
+                missing: Some("Visual Effect Graph content is not simulated or rendered, so only ParticleSystem and TrailRenderer behavior is implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "EDT-007",
+        owning_spec: "editor-and-authoring.md",
+        capability: "External-change, source-control, and semantic merge workflows",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a semantic merge reports conflicting properties, overrides, and unresolved references",
+                location: "crates/unitas-asset/src/merge.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/merge_tests.rs::merge_reports_property_conflict_with_base_and_both_values",
+                    "crates/unitas-asset/tests/merge_tests.rs::semantic_diff_reports_prefab_override_changes",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an external change is recorded and a conflict with unsaved work is named",
+                location: "crates/unitas-asset/src/merge.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/merge_tests.rs::edt_007_outcome_7_workspace_guard_accounts_for_unsaved_human_agent_and_conflicting_files_before_close_or_reload",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a source-control client is provided",
+                location: "crates/unitas-asset/src/merge.rs",
+                evidence: &[],
+                missing: Some("no version-control client is provided"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "CMP-002",
+        owning_spec: "compatibility-contract.md",
+        capability: "Supported package and version matrix",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the supported package matrix records each package's version line, tier, state, and owning feature",
+                location: "crates/unitas-core/src/compat.rs",
+                evidence: &[
+                    "crates/unitas-core/tests/core/compat_tests.rs::cmp_002_story_6_supported_package_matrix_reports_urp_and_input_system_supported_and_unlisted_or_preview_unknown",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the state of an owned feature is derived from its demonstrated and missing capabilities",
+                location: "crates/unitas-core/src/compat.rs",
+                evidence: &[
+                    "crates/unitas-core/tests/core/compat_tests.rs::cmp_002_every_owned_feature_reports_a_real_state_from_assess_project",
+                ],
+                missing: None,
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "BLD-005",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Content builds and post-release content updates",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a content bundle is staged and a content catalog is built",
+                location: "crates/unitas-build/src/bundle.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/content_catalog.rs::content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_updated_catalog",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a content update produces the changed bundles and a new catalog",
+                location: "crates/unitas-build/src/bundle.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/content_catalog.rs::bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_content_update_without_rebuild",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a Unity-built AssetBundle or Addressables catalog is loaded in a unitas player",
+                location: "crates/unitas-build/src/bundle.rs",
+                evidence: &[],
+                missing: Some("a Unity-built AssetBundle or Addressables catalog is not loaded, so a player loads only content unitas builds from project sources"),
+            },
+        ],
+    },
+];
+pub fn lookup_owned_feature_capability(
+    feature_id: &str,
+) -> Option<&'static OwnedFeatureCapability> {
+    OWNED_FEATURE_CAPABILITIES
+        .iter()
+        .find(|entry| entry.feature_id == feature_id)
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OwnedFeatureState {
+    pub feature_id: String,
+    pub tier: Tier,
+    pub state: CompatibilityState,
+    pub capability: String,
+    pub gap: Option<String>,
+}
+
+pub fn probe_owned_feature(feature_id: &str) -> Option<OwnedFeatureState> {
+    let capability = lookup_owned_feature_capability(feature_id)?;
+    Some(OwnedFeatureState {
+        feature_id: capability.feature_id.to_string(),
+        tier: owning_feature_tier(capability.feature_id, None),
+        state: capability.state(),
+        capability: capability.capability.to_string(),
+        gap: capability.gap(),
+    })
+}
+
+pub fn probe_owned_features() -> Vec<OwnedFeatureState> {
+    OWNED_FEATURE_CAPABILITIES
+        .iter()
+        .filter_map(|capability| probe_owned_feature(capability.feature_id))
+        .collect()
+}
+
+fn owned_capability_gap_suffix(
+    base: &str,
+    capability: Option<&'static OwnedFeatureCapability>,
+) -> String {
+    let Some(capability) = capability else {
+        return String::new();
+    };
+    let mut suffix = String::new();
+    for part in capability.missing_parts() {
+        let missing = part.missing.unwrap_or(part.behavior);
+        if base.contains(missing) {
+            suffix.push_str(&format!(" ({})", part.location));
+        } else {
+            suffix.push_str(&format!("; {missing} ({})", part.location));
+        }
+    }
+    suffix
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

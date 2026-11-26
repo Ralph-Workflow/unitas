@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using UnityEngine;
@@ -8,7 +9,11 @@ namespace Unitas.Bridge.Playtest
 {
     public sealed partial class ScenarioRunner
     {
-        private const string CaptureFolderName = "unitas-playtest";
+        // Per-process capture folder: sibling gate runs share the machine temp
+        // directory, and a shared folder lets one run delete or overwrite
+        // another run's capture between the write and the read.
+        private static readonly string CaptureFolderName =
+            "unitas-playtest-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
 
         public ScenarioResult Run(ScenarioDocument scenario, Func<BridgeHost>? hostFactory = null)
         {

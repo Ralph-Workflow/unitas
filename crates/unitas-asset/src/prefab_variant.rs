@@ -60,7 +60,7 @@ impl SourceObjectId {
 pub struct PrefabComponentRecord {
     pub file_id: i64,
     pub class_name: String,
-    pub properties: BTreeMap<String, String>,
+    pub properties: BTreeMap<String, Node>,
 }
 
 impl PrefabComponentRecord {
@@ -77,7 +77,8 @@ impl PrefabComponentRecord {
         property_path: impl Into<String>,
         value: impl Into<String>,
     ) -> Self {
-        self.properties.insert(property_path.into(), value.into());
+        self.properties
+            .insert(property_path.into(), Node::Scalar(value.into()));
         self
     }
 }
@@ -88,7 +89,7 @@ pub struct PrefabNodeRecord {
     pub name: String,
     pub parent_file_id: Option<i64>,
     pub children: Vec<i64>,
-    pub properties: BTreeMap<String, String>,
+    pub properties: BTreeMap<String, Node>,
     pub components: Vec<PrefabComponentRecord>,
 }
 
@@ -96,7 +97,7 @@ impl PrefabNodeRecord {
     pub fn new(file_id: i64, name: impl Into<String>, parent_file_id: Option<i64>) -> Self {
         let name_str = name.into();
         let mut properties = BTreeMap::new();
-        properties.insert(String::from("m_Name"), name_str.clone());
+        properties.insert(String::from("m_Name"), Node::Scalar(name_str.clone()));
         Self {
             file_id,
             name: name_str,
@@ -122,7 +123,7 @@ impl PrefabNodeRecord {
         if key == "m_Name" {
             self.name = val.clone();
         }
-        self.properties.insert(key, val);
+        self.properties.insert(key, Node::Scalar(val));
         self
     }
 
@@ -398,12 +399,12 @@ impl PrefabVariantDefinition {
                 if prop == "m_Name" {
                     node.name = val.clone();
                 }
-                node.properties.insert(prop, val);
+                set_property(&mut node.properties, &prop, Node::Scalar(val));
                 return Ok(());
             }
             for component in &mut node.components {
                 if component.file_id == target_file_id {
-                    component.properties.insert(prop, val);
+                    set_property(&mut component.properties, &prop, Node::Scalar(val));
                     return Ok(());
                 }
             }
@@ -640,7 +641,7 @@ pub struct ResolvedComponent {
     pub identity: SourceObjectId,
     pub defined_at: OverrideLevel,
     pub class_name: String,
-    pub properties: BTreeMap<String, String>,
+    pub properties: BTreeMap<String, Node>,
     pub object_references: BTreeMap<String, PrefabSourceReference>,
     pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
 }
@@ -652,7 +653,7 @@ pub struct ResolvedNode {
     pub name: String,
     pub parent: Option<SourceObjectId>,
     pub children: Vec<SourceObjectId>,
-    pub properties: BTreeMap<String, String>,
+    pub properties: BTreeMap<String, Node>,
     pub object_references: BTreeMap<String, PrefabSourceReference>,
     pub provenance: BTreeMap<String, Vec<ValueProvenanceEntry>>,
     pub components: Vec<ResolvedComponent>,
@@ -697,11 +698,11 @@ impl UnpackedPrefabHierarchy {
     pub fn effective_property(&self, target_file_id: i64, property_path: &str) -> Option<&str> {
         for node in &self.nodes {
             if node.file_id == target_file_id {
-                return node.properties.get(property_path).map(String::as_str);
+                return lookup_property(&node.properties, property_path).and_then(Node::as_str);
             }
             for comp in &node.components {
                 if comp.file_id == target_file_id {
-                    return comp.properties.get(property_path).map(String::as_str);
+                    return lookup_property(&comp.properties, property_path).and_then(Node::as_str);
                 }
             }
         }
@@ -783,11 +784,12 @@ impl ResolvedHierarchy {
     pub fn effective_property(&self, target_file_id: i64, property_path: &str) -> Option<&str> {
         for node in self.nodes.values() {
             if node.identity.target_file_id == target_file_id {
-                return node.properties.get(property_path).map(String::as_str);
+                return lookup_property(&node.properties, property_path).and_then(Node::as_str);
             }
             for component in &node.components {
                 if component.identity.target_file_id == target_file_id {
-                    return component.properties.get(property_path).map(String::as_str);
+                    return lookup_property(&component.properties, property_path)
+                        .and_then(Node::as_str);
                 }
             }
         }
@@ -1269,11 +1271,15 @@ impl PrefabRegistry {
 
             let mut provenance: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
             for (k, v) in &node_rec.properties {
+                let value = match v.as_str() {
+                    Some(text) => text.to_string(),
+                    None => continue,
+                };
                 provenance.insert(
                     k.clone(),
                     vec![ValueProvenanceEntry {
                         level: base_level.clone(),
-                        value: v.clone(),
+                        value,
                         is_effective: true,
                     }],
                 );
@@ -1285,11 +1291,15 @@ impl PrefabRegistry {
                 file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
                 let mut comp_prov: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
                 for (k, v) in &comp_rec.properties {
+                    let value = match v.as_str() {
+                        Some(text) => text.to_string(),
+                        None => continue,
+                    };
                     comp_prov.insert(
                         k.clone(),
                         vec![ValueProvenanceEntry {
                             level: base_level.clone(),
-                            value: v.clone(),
+                            value,
                             is_effective: true,
                         }],
                     );
@@ -2118,11 +2128,15 @@ fn apply_level_overrides(
 
         let mut provenance = BTreeMap::new();
         for (k, v) in &added_child.child.properties {
+            let value = match v.as_str() {
+                Some(text) => text.to_string(),
+                None => continue,
+            };
             provenance.insert(
                 k.clone(),
                 vec![ValueProvenanceEntry {
                     level: level.clone(),
-                    value: v.clone(),
+                    value,
                     is_effective: true,
                 }],
             );
@@ -2134,11 +2148,15 @@ fn apply_level_overrides(
             file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
             let mut comp_prov = BTreeMap::new();
             for (k, v) in &comp_rec.properties {
+                let value = match v.as_str() {
+                    Some(text) => text.to_string(),
+                    None => continue,
+                };
                 comp_prov.insert(
                     k.clone(),
                     vec![ValueProvenanceEntry {
                         level: level.clone(),
-                        value: v.clone(),
+                        value,
                         is_effective: true,
                     }],
                 );
@@ -2212,11 +2230,15 @@ fn apply_level_overrides(
             file_id_to_source.insert(added_comp.component.file_id, comp_id.clone());
             let mut comp_prov = BTreeMap::new();
             for (k, v) in &added_comp.component.properties {
+                let value = match v.as_str() {
+                    Some(text) => text.to_string(),
+                    None => continue,
+                };
                 comp_prov.insert(
                     k.clone(),
                     vec![ValueProvenanceEntry {
                         level: level.clone(),
-                        value: v.clone(),
+                        value,
                         is_effective: true,
                     }],
                 );
@@ -2244,9 +2266,10 @@ fn apply_level_overrides(
                 if modification.property_path == "m_Name" {
                     node.name = effective_display_value.clone();
                 }
-                node.properties.insert(
-                    modification.property_path.clone(),
-                    effective_display_value.clone(),
+                set_property(
+                    &mut node.properties,
+                    &modification.property_path,
+                    Node::Scalar(effective_display_value.clone()),
                 );
                 if let Some(reference) = &modification.object_reference {
                     node.object_references
@@ -2276,9 +2299,10 @@ fn apply_level_overrides(
                 for comp in &mut node.components {
                     if comp.identity.target_file_id == modification.target_file_id {
                         matched = true;
-                        comp.properties.insert(
-                            modification.property_path.clone(),
-                            effective_display_value.clone(),
+                        set_property(
+                            &mut comp.properties,
+                            &modification.property_path,
+                            Node::Scalar(effective_display_value.clone()),
                         );
                         if let Some(reference) = &modification.object_reference {
                             comp.object_references
@@ -2666,6 +2690,63 @@ fn class_id_for_component(class_name: &str) -> u32 {
     }
 }
 
+fn lookup_property<'a>(properties: &'a BTreeMap<String, Node>, path: &str) -> Option<&'a Node> {
+    if let Some(node) = properties.get(path) {
+        return Some(node);
+    }
+    let (parent, leaf) = path.rsplit_once('.')?;
+    lookup_property(properties, parent)?.get(leaf)
+}
+
+fn set_property(properties: &mut BTreeMap<String, Node>, path: &str, value: Node) {
+    if properties.contains_key(path) {
+        properties.insert(path.to_string(), value);
+        return;
+    }
+    if let Some((parent, leaf)) = path.rsplit_once('.') {
+        if let Some(Node::Mapping(parent_entries)) = properties.get_mut(parent) {
+            set_mapping_value(parent_entries, leaf, value);
+            return;
+        }
+    }
+    properties.insert(path.to_string(), value);
+}
+
+fn set_mapping_value(entries: &mut Vec<(String, Node)>, key: &str, value: Node) {
+    match entries.iter_mut().find(|(entry_key, _)| entry_key == key) {
+        Some(entry) => entry.1 = value,
+        None => entries.push((key.to_string(), value)),
+    }
+}
+
+fn property_entries(properties: &BTreeMap<String, Node>) -> Vec<(String, Node)> {
+    let mut entries: Vec<(String, Node)> = Vec::new();
+    for (key, value) in properties {
+        let merged = match key.rsplit_once('.') {
+            Some((parent, leaf)) => {
+                match entries
+                    .iter()
+                    .position(|(entry_key, _)| entry_key == parent)
+                {
+                    Some(index) => match &mut entries[index].1 {
+                        Node::Mapping(parent_entries) => {
+                            set_mapping_value(parent_entries, leaf, value.clone());
+                            true
+                        }
+                        _ => false,
+                    },
+                    None => false,
+                }
+            }
+            None => false,
+        };
+        if !merged {
+            entries.push((key.clone(), value.clone()));
+        }
+    }
+    entries
+}
+
 fn emit_prefab_node_documents(
     node: &PrefabNodeRecord,
     prefab_instance_file_id: Option<i64>,
@@ -2728,17 +2809,17 @@ fn emit_prefab_node_documents(
         .collect();
     go_entries.push((String::from("m_Children"), Node::Sequence(child_refs)));
     go_entries.push((String::from("m_Name"), Node::Scalar(node.name.clone())));
-    for (k, v) in &node.properties {
-        if k == "m_Name"
-            || k == "m_ObjectHideFlags"
-            || k == "m_Component"
-            || k == "m_Father"
-            || k == "m_Children"
-            || k == "m_PrefabInstance"
+    for (key, value) in property_entries(&node.properties) {
+        if key == "m_Name"
+            || key == "m_ObjectHideFlags"
+            || key == "m_Component"
+            || key == "m_Father"
+            || key == "m_Children"
+            || key == "m_PrefabInstance"
         {
             continue;
         }
-        go_entries.push((k.clone(), Node::Scalar(v.clone())));
+        go_entries.push((key, value));
     }
 
     docs.push(Document {
@@ -2789,11 +2870,11 @@ fn emit_component_document(
             Node::Scalar(owner_go_file_id.to_string()),
         )]),
     ));
-    for (k, v) in &comp.properties {
-        if k == "m_ObjectHideFlags" || k == "m_GameObject" || k == "m_PrefabInstance" {
+    for (key, value) in property_entries(&comp.properties) {
+        if key == "m_ObjectHideFlags" || key == "m_GameObject" || key == "m_PrefabInstance" {
             continue;
         }
-        entries.push((k.clone(), Node::Scalar(v.clone())));
+        entries.push((key, value));
     }
     Document {
         class_id,
@@ -3381,7 +3462,7 @@ fn parse_node_record_from_stream(
     }
 
     let mut properties = BTreeMap::new();
-    properties.insert(String::from("m_Name"), name.clone());
+    properties.insert(String::from("m_Name"), Node::Scalar(name.clone()));
     if let Some(entries) = go_body.as_mapping() {
         for (k, v) in entries {
             if k == "m_ObjectHideFlags"
@@ -3389,14 +3470,10 @@ fn parse_node_record_from_stream(
                 || k == "m_Father"
                 || k == "m_Children"
                 || k == "m_PrefabInstance"
-                || k == "m_CorrespondingSourceObject"
-                || k == "m_PrefabAsset"
             {
                 continue;
             }
-            if let Some(scalar) = v.as_str() {
-                properties.insert(k.clone(), scalar.to_string());
-            }
+            properties.insert(k.clone(), v.clone());
         }
     }
 
@@ -3445,17 +3522,10 @@ fn parse_component_record_from_stream(
     let mut properties = BTreeMap::new();
     if let Some(body_entries) = body.as_mapping() {
         for (k, v) in body_entries {
-            if k == "m_ObjectHideFlags"
-                || k == "m_GameObject"
-                || k == "m_PrefabInstance"
-                || k == "m_CorrespondingSourceObject"
-                || k == "m_PrefabAsset"
-            {
+            if k == "m_ObjectHideFlags" || k == "m_GameObject" || k == "m_PrefabInstance" {
                 continue;
             }
-            if let Some(scalar) = v.as_str() {
-                properties.insert(k.clone(), scalar.to_string());
-            }
+            properties.insert(k.clone(), v.clone());
         }
     }
     Some(PrefabComponentRecord {

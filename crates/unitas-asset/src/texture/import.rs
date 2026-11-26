@@ -2,8 +2,10 @@ use std::fmt;
 
 use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use crate::texture::exr::decode_exr;
+use crate::texture::hdr::decode_hdr;
 use crate::texture::jpeg::{decode_jpeg, has_jpeg_signature};
 use crate::texture::png::decode_png;
+use crate::texture::psd::decode_psd;
 use crate::texture::tga::decode_tga;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1123,6 +1125,12 @@ pub fn decode_texture(bytes: &[u8], file_name: &str) -> Result<DecodedTexture, T
     }
     if lower.ends_with(".exr") {
         return decode_exr(bytes);
+    }
+    if lower.ends_with(".psd") {
+        return decode_psd(bytes);
+    }
+    if lower.ends_with(".hdr") {
+        return decode_hdr(bytes);
     }
     Err(TextureImportError::UnsupportedFormat(file_name.to_string()))
 }
