@@ -39,7 +39,8 @@ reported with its real state, never hidden.
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` now drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`), but its click assertion does **not** pass yet: the native runtime detects the button hit and queues the clicked object id, and the managed `UnityEngine.UI.Button` wrapper exists, but the bridge does not yet install the managed uGUI provider that pumps those clicks into `Button.onClick`. The scenario is therefore not in the `make verify-samples` scenario list yet, and the lane stays green |
 | S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
-| S9 edit and restore, S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
+| S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, proves the edit landed, undoes it and proves the scene file is byte identical to the original; the person-facing editor half and play-mode edit-state restoration are not demonstrated |
+| S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -64,8 +65,9 @@ cannot show).
 
 - The specification asks for a capture of **every** visual checkpoint on
   **both** pipelines at **every** quality level. The sample has one pipeline
-  (Built-in) and no quality levels at all (the project has no
-  `QualitySettings.asset`), so no pipeline or quality sweep is possible yet.
+  (Built-in) and never sweeps the three levels its `QualitySettings.asset`
+  declares (Low, Medium, High), so no pipeline or quality sweep is possible
+  yet.
 - The specification's checkpoints are a title screen with an attract ghost,
   every arena at its countdown, Arena 1 at x5 with its speed trail, and a
   results panel with the gold medal. This sample has **no** title screen, **no**
@@ -116,6 +118,43 @@ cannot show).
 
 The specification text is not weakened by this note. The gap above is what
 remains before S8 can be claimed complete.
+
+## S9 edit and restore — what is demonstrated and what is not
+
+**Demonstrated.** The editor owns the scene content as a document, and the
+document is edited through the editor's own commands, not by writing files
+behind the editor's back. `Scenarios/scene_edit_restore.json` runs in the
+headless editor and does exactly that against the real
+`Assets/Scenes/RollABall.unity`: it records the scene file's digest, opens the
+scene (`scene.open`), moves a pickup with `scene.set_property` on the
+pickup's `Transform`, saves the scene (`scene.save`), and asserts that the
+file on disk really changed. It then undoes the edit (`editor.undo`), saves
+again, and asserts that the file is **byte identical** to the digest recorded
+before the edit. The scenario finishes by loading the restored scene in the
+runtime and checking the pickup's position, so the restored file is proved to
+be the playable scene it was, not just a matching byte sequence.
+
+The edit is reachable by an agent through the same registry every other
+command uses: the eight scene commands (`scene.open`, `scene.hierarchy`,
+`scene.set_property`, `scene.create_object`, `scene.destroy_object`,
+`scene.save`, `editor.undo`, `editor.redo`) are MCP tools with scopes, and a
+scene edit is recorded as a change set that a person can review.
+
+**Not demonstrated.**
+
+- The **person-facing half** of the editor is not shown: there is no scene
+  view, inspector or hierarchy window yet, so a person cannot yet edit a scene
+  by hand. The commands exist and are agent-facing; the windows that drive
+  them do not.
+- **Play-mode edit-state restoration** is not shown: the scenario edits the
+  scene on disk outside a play session. Restoring the edit state of a running
+  play session is still open.
+- Only a **single-object property edit** is exercised. Creating and deleting
+  objects, multi-object selection, prefab variants and component templates are
+  implemented in the command surface but are not covered by this scenario.
+
+The specification text is not weakened by this note. The gap above is what
+remains before S9 can be claimed complete.
 
 ## Non-default lane
 

@@ -25,6 +25,7 @@ EDITOR_CLI = (
 EDITOR_SCENARIOS = (
     "collect_all.json",
     "retry_clean.json",
+    "scene_edit_restore.json",
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"

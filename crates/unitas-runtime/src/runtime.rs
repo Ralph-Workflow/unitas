@@ -2958,7 +2958,9 @@ impl Runtime {
                     return None;
                 }
                 let entity = renderer.entity?;
-                let mesh = renderer.mesh.and_then(|mesh| self.render.meshes.get(&mesh))?;
+                let mesh = renderer
+                    .mesh
+                    .and_then(|mesh| self.render.meshes.get(&mesh))?;
                 let color = renderer
                     .material
                     .and_then(|material| self.render.materials.get(&material))

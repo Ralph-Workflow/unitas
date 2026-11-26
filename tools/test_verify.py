@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import subprocess
+import sys
+import time
 from itertools import product
 from typing import TYPE_CHECKING
 from unittest import mock
@@ -1237,3 +1241,86 @@ def test_samples_lane_lists_s8_visual_scenarios() -> None:
         assert entries[scenario] == ((), False)
         assert (verify_samples.SCENARIO_DIR / scenario).is_file()
     assert not set(s8) & set(verify_samples.EDITOR_SCENARIOS)
+
+
+_TIMED_GATE_CHILD_SOURCE = """import pathlib
+import sys
+import time
+
+marker = pathlib.Path(sys.argv[1])
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    with marker.open("a", encoding="utf-8") as handle:
+        handle.write("x")
+    time.sleep(0.05)
+"""
+
+_TIMED_GATE_PARENT_SOURCE = """import subprocess
+import sys
+import time
+
+subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])
+time.sleep(30)
+"""
+
+
+_TIMED_GATE_BOUND_SECONDS = 10
+
+
+def _run_timed(argv: list[str]) -> tuple[int, str]:
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        status = verify.run_timed(argv)
+    return status, buffer.getvalue()
+
+
+def test_timed_gate_fails_red_when_the_command_outlives_its_budget() -> None:
+    started = time.monotonic()
+    status, output = _run_timed(
+        ["timed", "slow-gate", "1", sys.executable, "-c", "import time; time.sleep(30)"]
+    )
+    elapsed = time.monotonic() - started
+    assert status == 1
+    assert elapsed < _TIMED_GATE_BOUND_SECONDS
+    assert "gate slow-gate took " in output
+    assert "gate slow-gate exceeded the 1s budget" in output
+    assert "gate slow-gate timed out after 1s" in output
+
+
+def test_timed_gate_reports_elapsed_time_for_a_passing_gate() -> None:
+    status, output = _run_timed(
+        ["timed", "fast-gate", "30", sys.executable, "-c", "print('gate ran')"]
+    )
+    assert status == 0
+    assert "gate fast-gate took " in output
+    assert "exceeded the 30s budget" not in output
+
+
+def test_timed_gate_fails_a_command_that_would_succeed_past_its_budget() -> None:
+    status, output = _run_timed(
+        ["timed", "overrun-gate", "1", sys.executable, "-c", "import time; time.sleep(3)"]
+    )
+    assert status == 1
+    assert "gate overrun-gate exceeded the 1s budget" in output
+    assert "gate overrun-gate timed out after 1s" in output
+
+
+def test_timed_gate_kills_the_process_tree_it_started(tmp_path: Path) -> None:
+    child = tmp_path / "child.py"
+    parent = tmp_path / "parent.py"
+    marker = tmp_path / "grandchild.log"
+    child.write_text(_TIMED_GATE_CHILD_SOURCE, encoding="utf-8")
+    parent.write_text(_TIMED_GATE_PARENT_SOURCE, encoding="utf-8")
+    status = verify.run_timed(
+        ["timed", "tree-gate", "1", sys.executable, str(parent), str(child), str(marker)]
+    )
+    assert status == 1
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert marker.exists()
+    time.sleep(0.2)
+    size = marker.stat().st_size
+    assert size > 0
+    time.sleep(0.5)
+    assert marker.stat().st_size == size

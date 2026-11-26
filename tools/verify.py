@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -2191,6 +2192,19 @@ GATES: dict[str, Callable[[], list[str]]] = {
 }
 
 
+def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    else:
+        taskkill = shutil.which("taskkill")
+        if taskkill is not None:
+            with contextlib.suppress(OSError):
+                subprocess.run([taskkill, "/F", "/T", "/PID", str(process.pid)], check=False)
+    with contextlib.suppress(OSError):
+        process.kill()
+
+
 def run_timed(argv: Sequence[str]) -> int:
     if len(argv) < TIMED_COMMAND_MIN_ARGS:
         sys.stderr.write("usage: verify.py timed <label> <budget-seconds> <command...>\n")
@@ -2199,13 +2213,28 @@ def run_timed(argv: Sequence[str]) -> int:
     budget = float(argv[2])
     command = list(argv[3:])
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
+    process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
+    timed_out = False
+    try:
+        returncode = process.wait(timeout=budget)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(process)
+        returncode = process.wait()
+        timed_out = True
+    except KeyboardInterrupt:
+        _kill_process_tree(process)
+        process.wait()
+        raise
     elapsed = time.monotonic() - started
-    sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {completed.returncode})\n")
-    if completed.returncode != 0:
-        return completed.returncode
+    sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
+    if timed_out:
+        sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
+        sys.stdout.write(f"gate {label} timed out after {budget:g}s and killed its process tree\n")
+        return 1
+    if returncode != 0:
+        return returncode
     if elapsed > budget:
-        sys.stdout.write(f"gate {label} exceeded the {budget:.0f}s budget\n")
+        sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
         return 1
     return 0
 

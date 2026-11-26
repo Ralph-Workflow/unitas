@@ -35,6 +35,9 @@ namespace Unitas.Editor.Tests
                 ("UntrustedContentTests", UntrustedContentTests.Run),
                 ("AuthoringToolsTests", AuthoringToolsTests.Run),
                 ("ScenarioGlueDiscoveryTests", ScenarioGlueDiscoveryTests.Run),
+                ("SceneTests", SceneTests.Run),
+                ("UndoHistoryTests", UndoHistoryTests.Run),
+                ("SceneToolsTests", SceneToolsTests.Run),
             };
 
             if (args.Length == 0)

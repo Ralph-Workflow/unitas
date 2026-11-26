@@ -161,6 +161,7 @@ namespace Unitas.Editor.Mcp
             ChangeSetStore changeSets = new ChangeSetStore(host);
             ChangeReviewTools.Register(host, changeSets);
             ProjectTools.Register(host, changeSets);
+            SceneTools.Register(host, changeSets);
             ScriptTools.Register(host);
             TestTools.Register(host);
             BuildTools.Register(host);

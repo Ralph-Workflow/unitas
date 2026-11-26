@@ -521,6 +521,11 @@ namespace Unitas.Editor.Mcp
             }
 
             host.GrantStanding(CliAgentName, Scope.ExecuteProjectCode, GrantAuthority.Person);
+
+            // A headless scenario is a person-driven local invocation, so the
+            // session it runs in may author scene content through the editor's
+            // own scene commands; the grant is session scoped and never stands.
+            host.GrantScope(sessionId, Scope.EditContent, GrantAuthority.Person);
             JsonObject arguments = new JsonObject
             {
                 ["scenarioPath"] = scenarioPath,

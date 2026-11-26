@@ -20,7 +20,8 @@ EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeRevi
 	PlaySessionLifecycleTests \
 	PlayWorkerCrashTests \
 	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests \
-	AuthoringToolsTests,ScenarioGlueDiscoveryTests
+	AuthoringToolsTests,ScenarioGlueDiscoveryTests \
+	SceneTests,UndoHistoryTests,SceneToolsTests
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \

@@ -27,6 +27,16 @@ dotnet-build, dotnet-format, and dotnet-test gates run in the default
 `make verify` lane. The C# editor host and the Rust editor ABI are implemented
 too, and their gates run in that same default lane.
 
+The editor owns a scene document model now: it parses Unity tagged-YAML
+scenes and prefabs byte-exactly, edits them through eight scene commands
+(`scene.open`, `scene.hierarchy`, `scene.set_property`, `scene.create_object`,
+`scene.destroy_object`, `scene.save`, `editor.undo`, `editor.redo`) that are
+registered on the same MCP tool registry as every other command, with scopes,
+untrusted-content marking and change-set recording, and it undoes and redoes
+those edits byte-exactly. A headless edit-and-restore scenario on roll-a-ball
+proves the round trip against the real sample scene. The person-facing half of
+the editor (scene view, inspector, hierarchy window) is still open.
+
 <!-- ralph-workflow-policy:begin v3 -->
 Quality policies live under `docs/ralph-workflow-policy/`. Every agent role loads
 them in this order: execution-kernel.md first, then its role slice, then any domain

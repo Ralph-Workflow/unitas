@@ -18,6 +18,31 @@ namespace Unitas.Editor.Mcp
         private const int PathSearchDepth = 8;
         private const string ScriptAssemblyFileName = "Assembly-CSharp.dll";
         private const string ScriptAssemblyFolderName = "UnitasScriptAssemblies";
+        private const string EditorToolStep = "editor_tool";
+        private const string EditorFileDigestStep = "editor_file_digest";
+        private const string EditorAssertFileUnchangedStep = "editor_assert_file_unchanged";
+        private const string EditorAssertFileChangedStep = "editor_assert_file_changed";
+
+        private static readonly string[] EditorStepKinds =
+        {
+            EditorToolStep,
+            EditorFileDigestStep,
+            EditorAssertFileUnchangedStep,
+            EditorAssertFileChangedStep,
+        };
+
+        private sealed class EditorStep
+        {
+            public EditorStep(string kind, JsonObject body)
+            {
+                Kind = kind;
+                Body = body;
+            }
+
+            public string Kind { get; }
+
+            public JsonObject Body { get; }
+        }
 
         public static void Register(McpHost host)
         {
@@ -56,11 +81,16 @@ namespace Unitas.Editor.Mcp
             System.Threading.SynchronizationContext? previousContext = System.Threading.SynchronizationContext.Current;
             try
             {
-                ScenarioDocument document = LoadDocument(scenarioPath, projectPath);
+                string scenarioText = LoadScenarioText(scenarioPath, projectPath);
+                string playText = SplitEditorSteps(scenarioText, out List<EditorStep> editorSteps);
+                ScenarioDocument document = ParsePlayDocument(playText);
+                string? projectRoot = ResolveScenarioProjectRoot(document, projectPath);
+                JsonArray editorResults = RunEditorSteps(host, callerSessionId, editorSteps, projectRoot);
                 RegisterProjectGlue(document, projectPath);
                 PurgeStaleSceneObjects();
                 ScenarioResult result = new ScenarioRunner().Run(document);
                 JsonObject payload = BuildPayload(result);
+                payload["editorSteps"] = editorResults;
                 host.CompleteOperation(operationId, ScenarioRunOrigin, payload);
                 return ToolOutput.Untrusted(ScenarioRunOrigin, payload)
                     .WithOperation(operationId);
@@ -81,7 +111,7 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        private static ScenarioDocument LoadDocument(string scenarioPath, string? projectPath)
+        private static string LoadScenarioText(string scenarioPath, string? projectPath)
         {
             string root = string.IsNullOrWhiteSpace(projectPath)
                 ? Directory.GetCurrentDirectory()
@@ -94,7 +124,11 @@ namespace Unitas.Editor.Mcp
 
             string text = File.ReadAllText(resolved);
             string scenarioDirectory = Path.GetDirectoryName(resolved) ?? root;
-            string json = ResolveEmbeddedPaths(text, scenarioDirectory);
+            return ResolveEmbeddedPaths(text, scenarioDirectory);
+        }
+
+        private static ScenarioDocument ParsePlayDocument(string json)
+        {
             try
             {
                 return ScenarioDocument.Parse(json);
@@ -103,6 +137,221 @@ namespace Unitas.Editor.Mcp
             {
                 throw new McpError.InvalidRequest("scenario document is invalid: " + error.Message);
             }
+        }
+
+        private static string? ResolveScenarioProjectRoot(ScenarioDocument document, string? projectPath)
+        {
+            string root = string.IsNullOrWhiteSpace(projectPath)
+                ? Directory.GetCurrentDirectory()
+                : Path.GetFullPath(projectPath);
+            return ResolveProjectRoot(document, root);
+        }
+
+        // Editor steps are the authoring half of a scenario: they run the
+        // editor's own commands before the play phase starts, so a scenario can
+        // edit a scene, prove the edit landed, and undo it again.
+        private static string SplitEditorSteps(string scenarioText, out List<EditorStep> editorSteps)
+        {
+            editorSteps = new List<EditorStep>();
+            JsonNode? parsed = JsonNode.Parse(scenarioText);
+            if (parsed is not JsonObject map || map["steps"] is not JsonArray steps)
+            {
+                return scenarioText;
+            }
+
+            JsonArray playSteps = new JsonArray();
+            foreach (JsonNode? step in steps)
+            {
+                if (step is JsonObject stepObject && stepObject.Count == 1)
+                {
+                    KeyValuePair<string, JsonNode?> only = default;
+                    foreach (KeyValuePair<string, JsonNode?> pair in stepObject)
+                    {
+                        only = pair;
+                        break;
+                    }
+
+                    if (Array.IndexOf(EditorStepKinds, only.Key) >= 0)
+                    {
+                        editorSteps.Add(new EditorStep(
+                            only.Key,
+                            only.Value as JsonObject ?? new JsonObject()));
+                        continue;
+                    }
+                }
+
+                playSteps.Add(step?.DeepClone());
+            }
+
+            map["steps"] = playSteps;
+            return map.ToJsonString();
+        }
+
+        private static JsonArray RunEditorSteps(
+            McpHost host,
+            string sessionId,
+            List<EditorStep> editorSteps,
+            string? projectRoot)
+        {
+            JsonArray results = new JsonArray();
+            Dictionary<string, string> digests = new Dictionary<string, string>(StringComparer.Ordinal);
+            Dictionary<string, byte[]> baselines = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            foreach (EditorStep step in editorSteps)
+            {
+                JsonObject result = RunEditorStep(host, sessionId, step, projectRoot, digests, baselines);
+                results.Add(result);
+                if (result["ok"]?.GetValue<bool>() != true)
+                {
+                    string reason = result["error"]?.GetValue<string>() ?? "editor step failed";
+                    RestoreBaselines(baselines);
+                    throw new McpError.InvalidRequest(
+                        "scenario editor step " + step.Kind + " failed: " + reason);
+                }
+            }
+
+            return results;
+        }
+
+        // A failed authoring step must not leave the project scene edited, so the
+        // bytes recorded before the first edit are written back.
+        private static void RestoreBaselines(Dictionary<string, byte[]> baselines)
+        {
+            foreach (KeyValuePair<string, byte[]> baseline in baselines)
+            {
+                try
+                {
+                    File.WriteAllBytes(baseline.Key, baseline.Value);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        private static JsonObject RunEditorStep(
+            McpHost host,
+            string sessionId,
+            EditorStep step,
+            string? projectRoot,
+            Dictionary<string, string> digests,
+            Dictionary<string, byte[]> baselines)
+        {
+            JsonObject result = new JsonObject
+            {
+                ["kind"] = step.Kind,
+                ["ok"] = false,
+            };
+            try
+            {
+                switch (step.Kind)
+                {
+                    case EditorToolStep:
+                        {
+                            string tool = RequireStepString(step, "tool");
+                            JsonObject arguments = step.Body["arguments"] as JsonObject ?? new JsonObject();
+                            if (projectRoot != null && arguments["projectPath"] == null)
+                            {
+                                arguments["projectPath"] = projectRoot;
+                            }
+
+                            JsonNode payload = host.CallTool(sessionId, tool, arguments);
+                            result["tool"] = tool;
+                            result["payload"] = payload.DeepClone();
+                            result["ok"] = true;
+                            break;
+                        }
+
+                    case EditorFileDigestStep:
+                        {
+                            string path = ResolveStepFile(step, projectRoot);
+                            string digest = FileDigest(path);
+                            if (!digests.ContainsKey(path))
+                            {
+                                digests[path] = digest;
+                                baselines[path] = File.ReadAllBytes(path);
+                            }
+
+                            result["path"] = path;
+                            result["sha256"] = digest;
+                            result["ok"] = true;
+                            break;
+                        }
+
+                    case EditorAssertFileUnchangedStep:
+                    case EditorAssertFileChangedStep:
+                        {
+                            string path = ResolveStepFile(step, projectRoot);
+                            if (!digests.TryGetValue(path, out string? baseline))
+                            {
+                                throw new McpError.InvalidRequest(
+                                    step.Kind + " has no recorded digest for " + path);
+                            }
+
+                            string current = FileDigest(path);
+                            bool changed = !string.Equals(current, baseline, StringComparison.Ordinal);
+                            bool expectChanged = step.Kind == EditorAssertFileChangedStep;
+                            result["path"] = path;
+                            result["baseline"] = baseline;
+                            result["current"] = current;
+                            result["ok"] = changed == expectChanged;
+                            if (result["ok"]?.GetValue<bool>() != true)
+                            {
+                                result["error"] = expectChanged
+                                    ? "the file did not change: " + path
+                                    : "the file changed but was expected to be restored: " + path;
+                            }
+
+                            break;
+                        }
+
+                    default:
+                        throw new McpError.InvalidRequest("unknown editor step kind: " + step.Kind);
+                }
+            }
+            catch (McpError error)
+            {
+                result["error"] = error.Message;
+            }
+            catch (Exception error)
+            {
+                result["error"] = error.Message;
+            }
+
+            return result;
+        }
+
+        private static string RequireStepString(EditorStep step, string property)
+        {
+            if (step.Body[property] is JsonValue value && value.TryGetValue(out string? text))
+            {
+                return text;
+            }
+
+            throw new McpError.InvalidRequest(
+                "editor step " + step.Kind + " requires a '" + property + "' string");
+        }
+
+        private static string ResolveStepFile(EditorStep step, string? projectRoot)
+        {
+            string path = RequireStepString(step, "path");
+            string candidate = Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(projectRoot ?? Directory.GetCurrentDirectory(), path);
+            if (!File.Exists(candidate))
+            {
+                throw new McpError.InvalidRequest("editor step file does not exist: " + candidate);
+            }
+
+            return Path.GetFullPath(candidate);
+        }
+
+        private static string FileDigest(string path)
+        {
+            byte[] bytes = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path));
+            return System.BitConverter.ToString(bytes).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
         }
 
         private static JsonObject BuildPayload(ScenarioResult result)

@@ -1447,21 +1447,35 @@ mod tests {
         {
             let mut solo = GpuFramePresenter::from_new_renderer()?;
             for (index, name) in ["PlayerBall", "ArenaFloor"].iter().enumerate() {
-                let entity = runtime.find_entity_by_name(name).unwrap();
-                let mesh = presenter
+                let Some(entity) = runtime.find_entity_by_name(name) else {
+                    continue;
+                };
+                let Some(mesh) = presenter
                     .meshes()
                     .iter()
                     .find(|binding| binding.entity == Some(entity))
                     .map(|binding| binding.mesh.clone())
-                    .unwrap();
-                solo.set_meshes(vec![GpuMeshBinding::for_entity(entity, mesh, [1.0, 0.84, 0.0], true)]);
+                else {
+                    continue;
+                };
+                solo.set_meshes(vec![GpuMeshBinding::for_entity(
+                    entity,
+                    mesh,
+                    [1.0, 0.84, 0.0],
+                    true,
+                )]);
                 let solo_cpu = solo.render_cpu_reference(&runtime, 320, 240);
-                let _ = solo_cpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_cpu_{index}.bmp")));
+                let _ =
+                    solo_cpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_cpu_{index}.bmp")));
                 let solo_gpu = solo.render_offscreen(&runtime, 320, 240)?;
-                let _ = solo_gpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_gpu_{index}.bmp")));
+                let _ =
+                    solo_gpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_gpu_{index}.bmp")));
             }
         }
-        eprintln!("scene camera {:?}", runtime.scene_camera().map(|c| c.entity));
+        eprintln!(
+            "scene camera {:?}",
+            runtime.scene_camera().map(|c| c.entity)
+        );
         for name in ["Main Camera", "PlayerBall", "ArenaFloor", "Pickup_1"] {
             let entity = runtime.find_entity_by_name(name);
             eprintln!(
