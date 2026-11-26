@@ -736,6 +736,9 @@ impl World {
             if body.role == BodyRole::Kinematic {
                 if body.pending_move_position.is_some() || body.pending_move_rotation.is_some() {
                     if delta_seconds > 0.0 {
+                        let current = self.backend.position(body.handles);
+                        let target = body.pending_move_position.unwrap_or(current);
+                        body.sweep_velocity = velocity_between(target, current, delta_seconds);
                         self.backend.set_next_kinematic_pose(
                             body.handles,
                             body.pending_move_position,
@@ -756,6 +759,8 @@ impl World {
                         .set_translation(body.handles, body.previous_position, false);
                     self.backend
                         .set_rotation(body.handles, body.previous_rotation, false);
+                    body.sweep_velocity =
+                        velocity_between(body.position, body.previous_position, delta_seconds);
                     self.backend.set_next_kinematic_pose(
                         body.handles,
                         Some(body.position),
@@ -2707,6 +2712,10 @@ impl World {
 
 fn scale3(v: [f64; 3], s: f64) -> [f64; 3] {
     [v[0] * s, v[1] * s, v[2] * s]
+}
+
+fn velocity_between(target: [f64; 3], current: [f64; 3], delta_seconds: f64) -> [f64; 3] {
+    scale3(subtract(target, current), 1.0 / delta_seconds)
 }
 
 fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

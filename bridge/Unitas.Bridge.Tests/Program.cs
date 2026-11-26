@@ -119,6 +119,8 @@ namespace Unitas.Bridge.Tests
                 () => FixedStepDeterminismTests.Run(),
                 () => SaveMigrationTests.Run(),
                 () => RuntimeObjectTests.Run(),
+                () => SceneIsolationTests.Run(),
+                () => UiPointerClickTests.Run(),
             };
 
             int shard = 1;

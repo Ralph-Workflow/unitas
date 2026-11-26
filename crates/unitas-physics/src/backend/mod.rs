@@ -645,9 +645,6 @@ impl Backend {
                 let normal = manifold.data.normal;
                 for point in &manifold.points {
                     let impulse = point.data.impulse as f64;
-                    if point.dist > 0.0 && impulse <= 0.0 {
-                        continue;
-                    }
                     let world = first.translation() + first.rotation() * point.local_p1;
                     let normal = if flipped { -normal } else { normal };
                     contacts.push(CollisionContact {

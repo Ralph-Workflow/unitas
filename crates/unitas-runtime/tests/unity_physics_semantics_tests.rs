@@ -18,9 +18,16 @@ const VELOCITY_TOLERANCE: f64 = 1e-6;
 static LAYER_COLLISIONS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
 static PAYLOAD_COLLISIONS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
 static TRIGGER_EVENTS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
+static KINEMATIC_COLLISIONS: Mutex<Vec<(u64, u64, u32)>> = Mutex::new(Vec::new());
 
 extern "C" fn record_layer_collision(first: u64, second: u64, phase: u32) {
     if let Ok(mut events) = LAYER_COLLISIONS.lock() {
+        events.push((first, second, phase));
+    }
+}
+
+extern "C" fn record_kinematic_collision(first: u64, second: u64, phase: u32) {
+    if let Ok(mut events) = KINEMATIC_COLLISIONS.lock() {
         events.push((first, second, phase));
     }
 }
@@ -712,6 +719,171 @@ fn trigger_pair_without_a_rigidbody_produces_no_trigger_event() -> TestResult {
     assert!(
         collides(trigger_body.as_u64(), trigger_target.as_u64(), &events),
         "expected a trigger event once one of the pair carries a rigidbody, got {events:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    Ok(())
+}
+#[test]
+fn kinematic_move_position_delivers_contacts_and_impulse() -> TestResult {
+    let dir = project_dir("kinematic-payload")?;
+    write_physics_settings(&dir)?;
+    let mut runtime = load_scene(
+        &dir,
+        "KinematicPayload.unity",
+        &[
+            Object {
+                name: "KinematicFloor",
+                layer: 0,
+                position: [0.8, -0.5, 0.0],
+                rigidbody: None,
+                collider: Collider::Cube {
+                    size: [6.0, 1.0, 6.0],
+                    is_trigger: false,
+                },
+            },
+            Object {
+                name: "KinematicMover",
+                layer: 0,
+                position: [0.0, 0.5, 0.0],
+                rigidbody: Some(Rigidbody {
+                    mass: 1.0,
+                    drag: 0.0,
+                    angular_drag: 0.0,
+                    use_gravity: false,
+                    is_kinematic: true,
+                    interpolate: 0,
+                    collision_detection: 0,
+                }),
+                collider: Collider::Cube {
+                    size: [1.0, 1.0, 1.0],
+                    is_trigger: false,
+                },
+            },
+            Object {
+                name: "KinematicTarget",
+                layer: 0,
+                position: [1.6, 0.5, 0.0],
+                rigidbody: Some(Rigidbody {
+                    mass: 1.0,
+                    drag: 0.0,
+                    angular_drag: 0.0,
+                    use_gravity: true,
+                    is_kinematic: false,
+                    interpolate: 0,
+                    collision_detection: 0,
+                }),
+                collider: Collider::Sphere {
+                    radius: 0.5,
+                    is_trigger: false,
+                },
+            },
+        ],
+    )?;
+    runtime.set_callbacks(callbacks(record_kinematic_collision, record_trigger));
+    let mover = entity_id(&runtime, "KinematicMover")?;
+    let target = entity_id(&runtime, "KinematicTarget")?;
+    let mut destination = [0.0f64, 0.5, 0.0];
+    let mut payload = None;
+    for _ in 0..30 {
+        destination[0] += 0.04;
+        runtime.move_body_position(mover, destination)?;
+        runtime.tick(FIXED_STEP)?;
+        let events = recorded(&KINEMATIC_COLLISIONS);
+        if !collides(mover.as_u64(), target.as_u64(), &events) {
+            continue;
+        }
+        payload = runtime
+            .collision_payload(mover.as_u64(), target.as_u64())
+            .cloned();
+        break;
+    }
+    let payload = payload.ok_or_else(|| {
+        String::from("the kinematic move delivered no collision payload to the pushed body")
+    })?;
+    assert!(
+        !payload.contacts.is_empty(),
+        "expected the kinematic move to deliver a contact point"
+    );
+    assert!(
+        payload.total_impulse > 0.0,
+        "expected a non-zero total impulse, got {}",
+        payload.total_impulse
+    );
+    assert!(
+        payload
+            .relative_velocity
+            .iter()
+            .any(|value| value.abs() > 0.0),
+        "expected a non-zero relative velocity, got {:?}",
+        payload.relative_velocity
+    );
+    let _ = fs::remove_dir_all(&dir);
+    Ok(())
+}
+#[test]
+fn kinematic_move_position_reports_its_move_velocity() -> TestResult {
+    let dir = project_dir("kinematic-velocity")?;
+    write_physics_settings(&dir)?;
+    let mut runtime = load_scene(
+        &dir,
+        "KinematicVelocity.unity",
+        &[
+            Object {
+                name: "KinematicMover",
+                layer: 0,
+                position: [0.0, 0.0, 0.0],
+                rigidbody: Some(Rigidbody {
+                    mass: 1.0,
+                    drag: 0.0,
+                    angular_drag: 0.0,
+                    use_gravity: false,
+                    is_kinematic: true,
+                    interpolate: 0,
+                    collision_detection: 0,
+                }),
+                collider: Collider::Cube {
+                    size: [1.0, 1.0, 1.0],
+                    is_trigger: false,
+                },
+            },
+            Object {
+                name: "KinematicTarget",
+                layer: 0,
+                position: [1.02, 0.0, 0.0],
+                rigidbody: Some(dynamic(1.0, 0.0, 0.0, 0, 0)),
+                collider: Collider::Sphere {
+                    radius: 0.5,
+                    is_trigger: false,
+                },
+            },
+        ],
+    )?;
+    runtime.set_callbacks(callbacks(record_kinematic_collision, record_trigger));
+    let mover = entity_id(&runtime, "KinematicMover")?;
+    let target = entity_id(&runtime, "KinematicTarget")?;
+    runtime.move_body_position(mover, [0.04, 0.0, 0.0])?;
+    let mut payload = None;
+    for _ in 0..10 {
+        runtime.tick(FIXED_STEP)?;
+        let events = recorded(&KINEMATIC_COLLISIONS);
+        if !collides(mover.as_u64(), target.as_u64(), &events) {
+            continue;
+        }
+        payload = runtime
+            .collision_payload(mover.as_u64(), target.as_u64())
+            .cloned();
+        break;
+    }
+    let payload = payload.ok_or_else(|| {
+        String::from("the kinematic move delivered no collision payload to the pushed body")
+    })?;
+    assert!(
+        payload
+            .relative_velocity
+            .iter()
+            .any(|value| value.abs() > 0.0),
+        "expected the move velocity as the relative velocity, got {:?}",
+        payload.relative_velocity
     );
     let _ = fs::remove_dir_all(&dir);
     Ok(())

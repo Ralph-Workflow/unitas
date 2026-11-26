@@ -595,6 +595,30 @@ namespace UnityEngine
             }
         }
 
+        /// <summary>
+        /// Destroys a game object and drops its components from the live registry without
+        /// replaying their lifecycle callbacks. The native scene teardown already delivered
+        /// the replaced scene's script callbacks, so the components stay readable for the
+        /// code that still holds them.
+        /// </summary>
+        internal static void DestroySceneObject(GameObject target)
+        {
+            if (target is null || target._destroyed || target._unassignedReference)
+            {
+                return;
+            }
+
+            target._destroyed = true;
+            DeregisterLiveObject(target);
+            IReadOnlyList<Component> components = target.Components;
+            for (int index = 0; index < components.Count; index++)
+            {
+                DeregisterLiveObject(components[index]);
+            }
+
+            QueueDestroy(target, Time.time);
+        }
+
         private static bool IsEffectivelyEnabled(Component component)
         {
             if (component is not null && !component._destroyed && component is MonoBehaviour behaviour)

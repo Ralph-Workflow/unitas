@@ -335,6 +335,7 @@ namespace Unitas.Bridge
             }
 
             DropReplacedScripts();
+            DestroyReplacedSceneObjects();
             ParseLoadedSceneRigidbodies(path, LoadSceneMode.Single);
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
@@ -399,6 +400,7 @@ namespace Unitas.Bridge
             if (mode == LoadSceneMode.Single)
             {
                 DropReplacedScripts();
+                DestroyReplacedSceneObjects();
             }
 
             ParseLoadedSceneRigidbodies(scenePath, mode);
@@ -550,6 +552,49 @@ namespace Unitas.Bridge
                     UnityEngine.Object.DeregisterLiveObject(candidate);
                 }
             }
+        }
+
+        /// <summary>
+        /// Destroys the objects of the scenes a single-mode load replaces. The scene handle
+        /// is keyed by path, so reloading the same path leaves the objects of the previous
+        /// load looking like members of the new scene; Unity destroys the replaced scene's
+        /// objects, and the bridge has to do the same.
+        /// </summary>
+        private void DestroyReplacedSceneObjects()
+        {
+            List<UnityEngine.Object> snapshot = UnityEngine.Object.SnapshotLiveObjects();
+            for (int index = 0; index < snapshot.Count; index++)
+            {
+                UnityEngine.Object candidate = snapshot[index];
+                if (candidate is null || candidate.IsDestroyed || candidate.IsPersistent)
+                {
+                    continue;
+                }
+
+                if (candidate is GameObject gameObject && BelongsToLoadedScene(gameObject))
+                {
+                    UnityEngine.Object.DestroySceneObject(gameObject);
+                }
+            }
+        }
+
+        private bool BelongsToLoadedScene(UnityEngine.Object candidate)
+        {
+            int handle = candidate.scene.handle;
+            if (handle == 0)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < _loadedScenes.Count; index++)
+            {
+                if (_loadedScenes[index].handle == handle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public bool TryResolveScenePath(string sceneName, out string scenePath)
