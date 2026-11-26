@@ -88,42 +88,23 @@ namespace Unitas.Samples.RollABall
         }
 
         /// <summary>
+        /// Reads the route the arena's ghost file holds. The file is migrated to
+        /// the current version first, so a ghost an older build wrote still
+        /// replays.
+        /// </summary>
+        public static Vector3[]? LoadGhostRoute()
+        {
+            return ReadPersistedRoute();
+        }
+
+        /// <summary>
         /// Reads the persisted ghost back and reports what the file holds. When
         /// a recorded route is given, the restored route is compared with it.
         /// </summary>
         private static void RestoreGhost(IReadOnlyList<Vector3>? recorded)
         {
-            string ghostPath = GhostPath;
-            if (!File.Exists(ghostPath))
-            {
-                Debug.Log($"Ghost restored outcome {SaveMigrationOutcome.Absent} at {ghostPath}");
-                return;
-            }
-
-            SaveMigrationResult result = SaveMigration.MigrateFile(ghostPath, CurrentGhostVersion, GhostMigrationSteps);
-            if (result.Outcome != SaveMigrationOutcome.Migrated && result.Outcome != SaveMigrationOutcome.AlreadyCurrent)
-            {
-                Debug.LogWarning($"Ghost replay failed outcome {result.Outcome} diagnostic {result.DiagnosticMessage}");
-                return;
-            }
-
-            string routeBase64 = ExtractJsonString(result.Payload, "route");
-            if (string.IsNullOrEmpty(routeBase64))
-            {
-                Debug.LogWarning("Ghost replay failed the migrated ghost carries no route");
-                return;
-            }
-
-            Vector3[] restored = DecodeRoute(Convert.FromBase64String(routeBase64));
-            if (restored == null)
-            {
-                Debug.LogWarning("Ghost replay failed the migrated ghost route is malformed");
-                return;
-            }
-
-            long size = new FileInfo(ghostPath).Length;
-            Debug.Log($"Ghost restored {Describe(ExtractJsonInt(result.Payload, "version"), restored, size)} at {ghostPath} outcome {result.Outcome}");
-            if (recorded == null)
+            Vector3[]? restored = ReadPersistedRoute();
+            if (restored == null || recorded == null)
             {
                 return;
             }
@@ -147,6 +128,41 @@ namespace Unitas.Samples.RollABall
             {
                 Debug.Log("Ghost replay within 0.01 m");
             }
+        }
+
+        private static Vector3[]? ReadPersistedRoute()
+        {
+            string ghostPath = GhostPath;
+            if (!File.Exists(ghostPath))
+            {
+                Debug.Log($"Ghost restored outcome {SaveMigrationOutcome.Absent} at {ghostPath}");
+                return null;
+            }
+
+            SaveMigrationResult result = SaveMigration.MigrateFile(ghostPath, CurrentGhostVersion, GhostMigrationSteps);
+            if (result.Outcome != SaveMigrationOutcome.Migrated && result.Outcome != SaveMigrationOutcome.AlreadyCurrent)
+            {
+                Debug.LogWarning($"Ghost replay failed outcome {result.Outcome} diagnostic {result.DiagnosticMessage}");
+                return null;
+            }
+
+            string routeBase64 = ExtractJsonString(result.Payload, "route");
+            if (string.IsNullOrEmpty(routeBase64))
+            {
+                Debug.LogWarning("Ghost replay failed the migrated ghost carries no route");
+                return null;
+            }
+
+            Vector3[] restored = DecodeRoute(Convert.FromBase64String(routeBase64));
+            if (restored == null)
+            {
+                Debug.LogWarning("Ghost replay failed the migrated ghost route is malformed");
+                return null;
+            }
+
+            long size = new FileInfo(ghostPath).Length;
+            Debug.Log($"Ghost restored {Describe(ExtractJsonInt(result.Payload, "version"), restored, size)} at {ghostPath} outcome {result.Outcome}");
+            return restored;
         }
 
         private static bool MigrateGhostV1ToV2(

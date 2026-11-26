@@ -272,6 +272,7 @@ pub struct ParticleSystem {
     custom_data_2: Vec<[f32; 4]>,
     collision_events: Vec<ParticleCollisionEvent>,
     trigger_events: Vec<ParticleTriggerEvent>,
+    overlap_hits: Vec<(EntityId, bool)>,
     pending_stop_action: Option<StopAction>,
     stopped_callback: Option<Box<dyn FnMut() + Send>>,
     stopped_count: u32,
@@ -312,6 +313,7 @@ impl ParticleSystem {
             custom_data_2: Vec::new(),
             collision_events: Vec::new(),
             trigger_events: Vec::new(),
+            overlap_hits: Vec::new(),
             pending_stop_action: None,
             stopped_callback: None,
             stopped_count: 0,
@@ -616,6 +618,8 @@ impl ParticleSystem {
         if self.disabled || self.destroyed {
             return;
         }
+        let layer_mask = self.collision_layer_mask;
+        let bodies = world.query_bodies();
         for index in 0..self.particles.len() {
             let particle = self.particles[index];
             let radius = (particle.size * 0.5) as f64;
@@ -627,22 +631,27 @@ impl ParticleSystem {
                 particle.position[1] as f64,
                 particle.position[2] as f64,
             ];
-            let solid = world.overlap_sphere(center, radius, self.collision_layer_mask);
-            let overlapping =
-                world.overlap_sphere_with_triggers(center, radius, self.collision_layer_mask, true);
-            for entity in overlapping {
-                if solid.contains(&entity) {
-                    self.collision_events.push(ParticleCollisionEvent {
-                        particle_index: index,
-                        entity,
-                        position: particle.position,
-                        normal: self.contact_normal(world, entity, center),
-                    });
-                } else {
+            world.overlap_sphere_classified(
+                &bodies,
+                center,
+                radius,
+                layer_mask,
+                &mut self.overlap_hits,
+            );
+            for &(entity, is_trigger) in &self.overlap_hits {
+                if is_trigger {
                     self.trigger_events.push(ParticleTriggerEvent {
                         particle_index: index,
                         entity,
                         position: particle.position,
+                    });
+                } else {
+                    let normal = self.contact_normal(world, entity, center);
+                    self.collision_events.push(ParticleCollisionEvent {
+                        particle_index: index,
+                        entity,
+                        position: particle.position,
+                        normal,
                     });
                 }
             }

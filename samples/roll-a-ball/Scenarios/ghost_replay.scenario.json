@@ -212,7 +212,7 @@
     },
     {
       "tick": {
-        "frames": 10,
+        "frames": 20,
         "delta_seconds": 0.016666666666666666
       }
     },
@@ -244,47 +244,53 @@
       "load_scene": {
         "path": "Assets/Scenes/RollABall.unity"
       }
+    },
+    {
+      "tick": {
+        "frames": 340,
+        "delta_seconds": 0.016666666666666666
+      }
     }
   ],
   "checkpoints": [
     {
-      "id": "ghost_replay_within_1cm",
-      "after_step": 36,
-      "kind": "log",
-      "severity": "log",
-      "contains": "Ghost replay within 0.01 m"
-    },
-    {
-      "id": "ghost_route_compared",
-      "after_step": 36,
-      "kind": "log",
-      "severity": "log",
-      "contains": "Ghost replay max deviation"
-    },
-    {
       "id": "ghost_file_written",
-      "after_step": 36,
+      "after_step": 33,
       "kind": "log",
       "severity": "log",
       "contains": "Ghost written version 2 steps 245 bytes 1996 first -3.150 0.500 3.300 last 2.250 0.500 3.300"
     },
     {
+      "id": "ghost_file_round_trip_compared",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost replay max deviation"
+    },
+    {
+      "id": "ghost_file_round_trip_within_1cm",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost replay within 0.01 m"
+    },
+    {
       "id": "arena1_finished",
-      "after_step": 36,
+      "after_step": 33,
       "kind": "log",
       "severity": "log",
       "contains": "All 12 pickups collected, press R to play again."
     },
     {
       "id": "next_attempt_reset",
-      "after_step": 40,
+      "after_step": 38,
       "kind": "log",
       "severity": "log",
       "contains": "Retry complete score 0 pickups 12 multiplier x1"
     },
     {
       "id": "next_attempt_origin",
-      "after_step": 40,
+      "after_step": 38,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -307,13 +313,28 @@
       "tolerance": 0.01
     },
     {
+      "id": "ghost_route_compared",
+      "after_step": 42,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost attempt replay max deviation"
+    },
+    {
+      "id": "ghost_replay_within_1cm",
+      "after_step": 42,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost attempt replay within 0.01 m"
+    },
+    {
       "id": "frames_under_30s",
-      "after_step": 41,
+      "after_step": 42,
       "kind": "frame_count",
-      "expected": 446
+      "expected": 796
     }
   ],
   "absent_logs": [
-    "Ghost replay failed"
+    "Ghost replay failed",
+    "Ghost attempt replay failed"
   ]
 }

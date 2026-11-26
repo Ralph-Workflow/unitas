@@ -22,6 +22,7 @@ namespace Unitas.Bridge.Tests
         public static void Run()
         {
             ReloadingASceneDestroysTheReplacedScenesObjects();
+            ReloadingASceneKeepsTheReloadedSceneUsable();
         }
 
         private sealed class FallingBallProbe : MonoBehaviour
@@ -95,6 +96,66 @@ namespace Unitas.Bridge.Tests
                         second != null
                             && host.TryGetBodyPosition(second.NativeEntityId, out Vector3 bodyPosition)
                             && (second.transform.position - bodyPosition).sqrMagnitude < 0.0001f);
+                }
+            }
+            finally
+            {
+                ScriptGlueRegistry.Clear();
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The runtime hands a reloaded scene different entity ids than the
+        /// first load used, because it already gave entities out. The managed
+        /// objects of the reloaded scene have to follow those ids, or they lose
+        /// their names, their transforms and their physics.
+        /// </summary>
+        private static void ReloadingASceneKeepsTheReloadedSceneUsable()
+        {
+            string tempDir = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_bridge_scene_reload_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string scenePath = Path.Combine(tempDir, "scene_reload.unity");
+            File.WriteAllText(scenePath, FallingBallScene);
+
+            try
+            {
+                ScriptGlueRegistry.Clear();
+                ScriptGlueRegistry.Register(BallGuidHi, BallGuidLo, () => new FallingBallProbe());
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(scenePath);
+                    host.Tick(0.02);
+                    GameObject? first = GameObject.Find("SceneBall");
+                    Check.That("the first load materialises the scene object", first != null);
+
+                    // A runtime object takes an entity id, so the runtime hands
+                    // the reloaded scene ids that start where the first load's
+                    // ids did not.
+                    GameObject marker = new GameObject("RuntimeMarker");
+                    Check.That("the runtime object took an entity id", marker.NativeEntityId != 0);
+
+                    host.LoadScene(scenePath, LoadSceneMode.Single);
+                    host.Tick(0.02);
+                    GameObject? reloaded = GameObject.Find("SceneBall");
+                    Check.That("the reloaded scene keeps the names of its objects", reloaded != null);
+                    Check.That(
+                        "the reloaded scene keeps the transforms of its objects",
+                        reloaded != null && Math.Abs(reloaded.transform.position.y - SpawnHeight) < 0.5f);
+                    Check.That(
+                        "the reloaded scene keeps the physics of its objects",
+                        reloaded != null && reloaded.GetComponent<Rigidbody>() != null);
+                    Check.That(
+                        "the reloaded object carries the entity the runtime gave it",
+                        reloaded != null
+                            && host.TryGetBodyPosition(reloaded.NativeEntityId, out Vector3 bodyPosition)
+                            && (reloaded.transform.position - bodyPosition).sqrMagnitude < 0.0001f);
                 }
             }
             finally

@@ -182,7 +182,11 @@ fn collect_meta_files(directory: &Path, collected: &mut Vec<PathBuf>) -> Result<
             }
         };
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() || (file_type.is_symlink() && path.is_dir()) {
             collect_meta_files(&path, collected)?;
         } else if is_meta_file(&path) {
             collected.push(path);

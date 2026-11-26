@@ -404,9 +404,9 @@ impl<'a> Parser<'a> {
                 }
             };
             let key = decode_key(line.text[..separator].trim(), line.number)?;
-            let inline = line.text[separator + 1..].trim().to_string();
+            let inline = line.text[separator + 1..].trim();
             self.position += 1;
-            let value = self.parse_value(indent, &inline, line.number)?;
+            let value = self.parse_value(indent, inline, line.number)?;
             entries.push((key, value));
         }
         Ok(Node::Mapping(entries))

@@ -27,6 +27,37 @@ const MAX_CONVEX_MESH_HULL_TRIANGLES: usize = 255;
 type PairSet = BTreeSet<(EntityId, EntityId)>;
 type BodyState3D = (usize, [f64; 3], [f64; 4], [f64; 3], [f64; 3], f64);
 
+pub(crate) struct QueryBody {
+    entity: EntityId,
+    position: [f64; 3],
+    rotation: [f64; 4],
+    shape: Shape,
+    axis_coord: f64,
+    broad_radius: f64,
+    layer: u32,
+    is_trigger: bool,
+}
+
+pub(crate) struct QueryBodies {
+    entries: Vec<QueryBody>,
+    axis: usize,
+    max_broad_radius: f64,
+}
+
+fn lower_bound_axis(entries: &[QueryBody], value: f64) -> usize {
+    let mut low = 0usize;
+    let mut high = entries.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if entries[mid].axis_coord < value {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum ForceMode {
@@ -275,6 +306,7 @@ struct Body {
     entity: EntityId,
     handles: BackendHandles,
     collider_shape: ColliderShape,
+    bounding_radius: f64,
     mass: f64,
     role: BodyRole,
     is_trigger: bool,
@@ -675,11 +707,16 @@ impl World {
             self.ccd_body_count += 1;
         }
         self.note_convex_hull_limit(entity, &desc.collider_shape);
+        let bounding_radius = match &desc.collider_shape {
+            ColliderShape::Primitive(shape) => shape.bounding_radius(),
+            ColliderShape::Mesh { .. } => f64::INFINITY,
+        };
         let index = self.bodies.len();
         self.bodies.push(Body {
             entity,
             handles,
             collider_shape: desc.collider_shape,
+            bounding_radius,
             mass: desc.mass,
             role,
             is_trigger: desc.is_trigger,
@@ -1712,37 +1749,15 @@ impl World {
         query_layer: usize,
     ) -> Vec<EntityId> {
         let mask = self.layer_mask_for_layer(query_layer);
-        if !radius.is_finite() || radius <= 0.0 {
-            return Vec::new();
-        }
-        let probe = probe_shape(&Shape::Sphere { radius });
-        let dispatcher = self.backend.dispatcher();
-        let mut entities: Vec<EntityId> = self
-            .bodies
-            .iter()
-            .filter(|body| body.simulated)
-            .filter(|body| Self::layer_index_matches_mask(body.layer, mask))
-            .filter(|body| !body.is_trigger)
-            .filter(|body| {
-                body.query_shape().is_some_and(|shape| {
-                    overlaps_at(
-                        dispatcher,
-                        &probe,
-                        center,
-                        body.query_position,
-                        body.query_rotation,
-                        &shape,
-                    )
-                })
-            })
-            .map(|body| body.entity)
-            .collect();
-        entities.sort();
-        entities
+        let mut hits = Vec::new();
+        self.collect_overlaps(center, radius, mask, false, true, &mut hits);
+        hits.into_iter().map(|(entity, _)| entity).collect()
     }
 
     pub fn overlap_sphere(&self, center: [f64; 3], radius: f64, layer_mask: u32) -> Vec<EntityId> {
-        self.overlap_sphere_with_triggers(center, radius, layer_mask, false)
+        let mut hits = Vec::new();
+        self.collect_overlaps(center, radius, layer_mask, false, false, &mut hits);
+        hits.into_iter().map(|(entity, _)| entity).collect()
     }
 
     pub fn overlap_sphere_with_triggers(
@@ -1752,33 +1767,172 @@ impl World {
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<EntityId> {
-        if !radius.is_finite() || radius <= 0.0 {
-            return Vec::new();
-        }
-        let probe = probe_shape(&Shape::Sphere { radius });
-        let dispatcher = self.backend.dispatcher();
-        let mut entities: Vec<EntityId> = self
+        let mut hits = Vec::new();
+        self.collect_overlaps(
+            center,
+            radius,
+            layer_mask,
+            include_triggers,
+            false,
+            &mut hits,
+        );
+        hits.into_iter().map(|(entity, _)| entity).collect()
+    }
+
+    pub(crate) fn query_bodies(&self) -> QueryBodies {
+        let mut entries: Vec<QueryBody> = self
             .bodies
             .iter()
             .filter(|body| body.simulated)
-            .filter(|body| body.layer & layer_mask != 0)
-            .filter(|body| !body.is_trigger || include_triggers)
-            .filter(|body| {
-                body.query_shape().is_some_and(|shape| {
-                    overlaps_at(
-                        dispatcher,
-                        &probe,
-                        center,
-                        body.query_position,
-                        body.query_rotation,
-                        &shape,
-                    )
+            .filter_map(|body| {
+                body.query_shape().map(|shape| QueryBody {
+                    entity: body.entity,
+                    position: body.query_position,
+                    rotation: body.query_rotation,
+                    shape,
+                    axis_coord: 0.0,
+                    broad_radius: body.bounding_radius * (1.0 + 1.0e-3) + 1.0e-9,
+                    layer: body.layer,
+                    is_trigger: body.is_trigger,
                 })
             })
-            .map(|body| body.entity)
             .collect();
-        entities.sort();
-        entities
+        let mut low = [f64::INFINITY; 3];
+        let mut high = [f64::NEG_INFINITY; 3];
+        for entry in &entries {
+            for index in 0..3 {
+                if entry.position[index] < low[index] {
+                    low[index] = entry.position[index];
+                }
+                if entry.position[index] > high[index] {
+                    high[index] = entry.position[index];
+                }
+            }
+        }
+        let mut axis = 0usize;
+        let mut extent = high[0] - low[0];
+        for index in 1..3 {
+            let span = high[index] - low[index];
+            if span > extent {
+                extent = span;
+                axis = index;
+            }
+        }
+        let mut max_broad_radius = 0.0f64;
+        for entry in &mut entries {
+            entry.axis_coord = entry.position[axis];
+            if entry.broad_radius > max_broad_radius {
+                max_broad_radius = entry.broad_radius;
+            }
+        }
+        entries.sort_unstable_by(|left, right| left.axis_coord.total_cmp(&right.axis_coord));
+        QueryBodies {
+            entries,
+            axis,
+            max_broad_radius,
+        }
+    }
+
+    pub(crate) fn overlap_sphere_classified(
+        &self,
+        bodies: &QueryBodies,
+        center: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        hits: &mut Vec<(EntityId, bool)>,
+    ) {
+        hits.clear();
+        if !radius.is_finite() || radius <= 0.0 || bodies.entries.is_empty() {
+            return;
+        }
+        let coord = center[bodies.axis];
+        let span = radius + bodies.max_broad_radius;
+        let upper = coord + span;
+        let start = lower_bound_axis(&bodies.entries, coord - span);
+        let probe = probe_shape(&Shape::Sphere { radius });
+        let dispatcher = self.backend.dispatcher();
+        for body in &bodies.entries[start..] {
+            if body.axis_coord > upper {
+                break;
+            }
+            if body.layer & layer_mask == 0 {
+                continue;
+            }
+            let limit = radius + body.broad_radius;
+            let dx = body.position[0] - center[0];
+            let dy = body.position[1] - center[1];
+            let dz = body.position[2] - center[2];
+            if dx * dx + dy * dy + dz * dz > limit * limit {
+                continue;
+            }
+            if !overlaps_at(
+                dispatcher,
+                &probe,
+                center,
+                body.position,
+                body.rotation,
+                &body.shape,
+            ) {
+                continue;
+            }
+            hits.push((body.entity, body.is_trigger));
+        }
+        hits.sort();
+    }
+
+    fn collect_overlaps(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+        use_layer_index: bool,
+        hits: &mut Vec<(EntityId, bool)>,
+    ) {
+        hits.clear();
+        if !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
+        let probe = probe_shape(&Shape::Sphere { radius });
+        let dispatcher = self.backend.dispatcher();
+        for body in &self.bodies {
+            if !body.simulated {
+                continue;
+            }
+            if use_layer_index {
+                if !Self::layer_index_matches_mask(body.layer, layer_mask) {
+                    continue;
+                }
+            } else if body.layer & layer_mask == 0 {
+                continue;
+            }
+            if body.is_trigger && !include_triggers {
+                continue;
+            }
+            let limit = radius + body.bounding_radius;
+            let dx = body.query_position[0] - center[0];
+            let dy = body.query_position[1] - center[1];
+            let dz = body.query_position[2] - center[2];
+            let reach = limit * (1.0 + 1.0e-3) + 1.0e-9;
+            if dx * dx + dy * dy + dz * dz > reach * reach {
+                continue;
+            }
+            let Some(shape) = body.query_shape() else {
+                continue;
+            };
+            if !overlaps_at(
+                dispatcher,
+                &probe,
+                center,
+                body.query_position,
+                body.query_rotation,
+                &shape,
+            ) {
+                continue;
+            }
+            hits.push((body.entity, body.is_trigger));
+        }
+        hits.sort();
     }
 
     fn layer_index_matches_mask(body_layer: u32, layer_mask: u32) -> bool {

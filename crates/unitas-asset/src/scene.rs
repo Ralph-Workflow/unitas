@@ -640,6 +640,8 @@ struct PrefabContext<'a> {
     stack: Vec<String>,
     composed_modifications: Vec<(String, TargetedModification)>,
     composed_structural: Vec<(String, StructuralOverrides)>,
+    prefab_streams: HashMap<PathBuf, Stream>,
+    material_colors: HashMap<PathBuf, [f32; 3]>,
 }
 
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
@@ -739,6 +741,8 @@ fn assemble_stream(
         stack: Vec::new(),
         composed_modifications: Vec::new(),
         composed_structural: Vec::new(),
+        prefab_streams: HashMap::new(),
+        material_colors: HashMap::new(),
     };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
     let mut diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
@@ -1058,7 +1062,15 @@ fn assemble_documents(
     }
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
-    set.render = collect_render(stream, &set.game_objects, &instance_roots, context.index)?;
+    let index = context.index;
+    let material_colors = &mut context.material_colors;
+    set.render = collect_render(
+        stream,
+        &set.game_objects,
+        &instance_roots,
+        index,
+        material_colors,
+    )?;
     set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
     let (particles, trails) =
         collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
@@ -1124,7 +1136,14 @@ fn expand_instance(
             guid: instance.source.guid.clone(),
         });
     }
-    let mut stream = unity_yaml::parse_file(&path)?;
+    let mut stream = match context.prefab_streams.get(&path) {
+        Some(cached) => cached.clone(),
+        None => {
+            let parsed = unity_yaml::parse_file(&path)?;
+            context.prefab_streams.insert(path.clone(), parsed.clone());
+            parsed
+        }
+    };
     let guid = instance.source.guid.clone();
     let scene_instance =
         ScenePrefabInstance::from_stream(containing, format!("prefab-instance-{file_id}"), file_id);
@@ -1227,6 +1246,7 @@ fn expand_instance(
         &stream,
         &mut prefab_set,
         context.index,
+        &mut context.material_colors,
     );
     if instance.transform_parent != ROOT_FILE_ID {
         let parent = match set.transforms.get(&instance.transform_parent) {
@@ -1433,6 +1453,7 @@ fn apply_overridden_bindings(
     stream: &Stream,
     set: &mut DocumentSet,
     index: Option<&GuidIndex>,
+    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
 ) {
     for modification in modifications {
         let document =
@@ -1460,7 +1481,7 @@ fn apply_overridden_bindings(
             None => continue,
         };
         if document.class_id == MESH_RENDERER_CLASS {
-            apply_material_override(modification, entity, set, index);
+            apply_material_override(modification, entity, set, index, material_colors);
         } else {
             apply_script_field_override(modification, entity, set);
         }
@@ -1478,6 +1499,7 @@ fn apply_material_override(
     entity: EntityId,
     set: &mut DocumentSet,
     index: Option<&GuidIndex>,
+    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
 ) {
     if material_slot(&modification.property_path) != Some(0) {
         return;
@@ -1504,7 +1526,7 @@ fn apply_material_override(
         .and_then(|guids| guids.get(&guid))
         .map(Path::to_path_buf);
     if let (Some(path), Some(index)) = (&path, index) {
-        renderer.material_color = resolve_material_color(path, index);
+        renderer.material_color = resolve_material_color(path, index, material_colors);
     }
     renderer.material_guid = Some(guid);
     renderer.material_path = path;
@@ -2285,6 +2307,7 @@ fn collect_render(
     game_objects: &GameObjectRecords,
     instance_roots: &HashSet<i64>,
     index: Option<&GuidIndex>,
+    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
 ) -> Result<RenderBinding, SceneError> {
     let mut binding = RenderBinding::default();
     let mut mesh_filters: HashMap<EntityId, &Node> = HashMap::new();
@@ -2336,9 +2359,13 @@ fn collect_render(
             CAMERA_CLASS => binding.cameras.push(camera_component(entity, body)),
             MESH_RENDERER_CLASS => {
                 let mesh_filter = mesh_filters.get(&entity).copied();
-                binding
-                    .renderers
-                    .push(mesh_renderer_component(entity, body, mesh_filter, index));
+                binding.renderers.push(mesh_renderer_component(
+                    entity,
+                    body,
+                    mesh_filter,
+                    index,
+                    material_colors,
+                ));
             }
             LIGHT_CLASS => binding.lights.push(light_component(entity, body)),
             _ => {}
@@ -2743,6 +2770,7 @@ fn mesh_renderer_component(
     body: &Node,
     mesh_filter: Option<&Node>,
     index: Option<&GuidIndex>,
+    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
 ) -> MeshRendererComponent {
     let (mesh_guid, mesh_file_id, mesh_path, mesh_diagnostic) = match mesh_filter {
         Some(filter) => resolve_mesh_reference(entity, filter, index),
@@ -2759,7 +2787,7 @@ fn mesh_renderer_component(
     let (material_guid, material_path, material_diagnostic) =
         resolve_material_reference(entity, body, index);
     let material_color = match (&material_path, index) {
-        (Some(path), Some(index)) => resolve_material_color(path, index),
+        (Some(path), Some(index)) => resolve_material_color(path, index, material_colors),
         _ => DEFAULT_MATERIAL_COLOR,
     };
     MeshRendererComponent {
@@ -2879,11 +2907,20 @@ fn resolve_material_reference(
     (Some(guid), path, None)
 }
 
-fn resolve_material_color(path: &Path, index: &GuidIndex) -> [f32; 3] {
-    match crate::material::parse_material_with_guids(path, index) {
+fn resolve_material_color(
+    path: &Path,
+    index: &GuidIndex,
+    cache: &mut HashMap<PathBuf, [f32; 3]>,
+) -> [f32; 3] {
+    if let Some(color) = cache.get(path) {
+        return *color;
+    }
+    let color = match crate::material::parse_material_with_guids(path, index) {
         Ok(material) => [material.color[0], material.color[1], material.color[2]],
         Err(_) => DEFAULT_MATERIAL_COLOR,
-    }
+    };
+    cache.insert(path.to_path_buf(), color);
+    color
 }
 
 fn light_component(entity: EntityId, body: &Node) -> LightComponent {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use unitas_animation::curve::AssetReference;
 use unitas_animation::{
@@ -116,6 +116,10 @@ pub struct AnimationWorld {
     next_controller_handle: u64,
     entries: BTreeMap<EntityId, EntityAnimatorEntry>,
     legacy: BTreeMap<EntityId, LegacyAnimationComponent>,
+    /// The entries that carry a controller, the only ones a frame has to evaluate.
+    animated: BTreeSet<EntityId>,
+    /// The entries whose transform changed and still has to reach the scene graph.
+    pending_transform_writes: BTreeSet<EntityId>,
 }
 
 impl AnimationWorld {
@@ -125,6 +129,8 @@ impl AnimationWorld {
             next_controller_handle: 1,
             entries: BTreeMap::new(),
             legacy: BTreeMap::new(),
+            animated: BTreeSet::new(),
+            pending_transform_writes: BTreeSet::new(),
         }
     }
 
@@ -157,12 +163,15 @@ impl AnimationWorld {
         entity: EntityId,
         initial_transform: Transform,
     ) -> &mut EntityAnimatorEntry {
+        self.pending_transform_writes.insert(entity);
         self.entries
             .entry(entity)
             .or_insert_with(|| EntityAnimatorEntry::new(initial_transform))
     }
 
     pub fn remove_animator(&mut self, entity: EntityId) -> bool {
+        self.animated.remove(&entity);
+        self.pending_transform_writes.remove(&entity);
         self.entries.remove(&entity).is_some()
     }
 
@@ -197,6 +206,19 @@ impl AnimationWorld {
         self.entries.keys().copied().collect()
     }
 
+    /// The entities whose transform changed since the last frame and still has to
+    /// reach the scene graph, in entity order.
+    pub(crate) fn take_pending_transform_writes(&mut self) -> Vec<EntityId> {
+        std::mem::take(&mut self.pending_transform_writes)
+            .into_iter()
+            .collect()
+    }
+
+    /// Re-queue the transform write of an entity that has no scene graph yet.
+    pub(crate) fn queue_transform_write(&mut self, entity: EntityId) {
+        self.pending_transform_writes.insert(entity);
+    }
+
     pub fn set_controller(
         &mut self,
         entity: EntityId,
@@ -208,6 +230,7 @@ impl AnimationWorld {
             };
             entry.controller_handle = 0;
             entry.animator = None;
+            self.animated.remove(&entity);
             entry.fired_events.clear();
             entry.typed_diagnostics.clear();
             entry.diagnostics.clear();
@@ -243,9 +266,11 @@ impl AnimationWorld {
         entry.fired_events.extend(step_result.fired_events);
         entry.callbacks = step_result.callbacks;
         entry.animator = Some(animator);
+        self.animated.insert(entity);
         let child_bindings =
             apply_bindings_to_transform(entity, entry, &mut transform, &step_result.bindings);
         entry.transform = transform;
+        self.pending_transform_writes.insert(entity);
         default_children.extend(child_bindings);
         Ok(default_children)
     }
@@ -428,6 +453,7 @@ impl AnimationWorld {
         if let Some(entry) = self.entries.get_mut(&entity) {
             entry.transform = transform;
         }
+        self.pending_transform_writes.insert(entity);
     }
 
     pub fn fired_events(&self, entity: EntityId) -> Option<&[AnimationEvent]> {
@@ -477,7 +503,12 @@ impl AnimationWorld {
 
     pub fn tick_frame(&mut self, frame: &AnimatorFrame) -> Vec<(EntityId, Vec<SampledBinding>)> {
         let mut all_child_bindings = Vec::new();
-        for (entity, entry) in &mut self.entries {
+        let animated: Vec<EntityId> = self.animated.iter().copied().collect();
+        let mut written = Vec::new();
+        for entity in animated {
+            let Some(entry) = self.entries.get_mut(&entity) else {
+                continue;
+            };
             if !entry.enabled {
                 continue;
             }
@@ -494,17 +525,21 @@ impl AnimationWorld {
             let previous = entry.transform.clone();
             let mut sampled = entry.transform.clone();
             let child_bindings =
-                apply_bindings_to_transform(*entity, entry, &mut sampled, &step_result.bindings);
+                apply_bindings_to_transform(entity, entry, &mut sampled, &step_result.bindings);
             entry.root_motion = AnimatorRootMotion {
                 delta_position: subtract_vectors(sampled.translation, previous.translation),
                 delta_rotation: rotation_delta(previous.rotation, sampled.rotation),
             };
             if step_result.writes_transforms {
                 entry.transform = sampled;
+                written.push(entity);
             }
             if !child_bindings.is_empty() {
-                all_child_bindings.push((*entity, child_bindings));
+                all_child_bindings.push((entity, child_bindings));
             }
+        }
+        for entity in written {
+            self.pending_transform_writes.insert(entity);
         }
         self.tick_legacy(frame, &mut all_child_bindings);
         all_child_bindings
@@ -546,6 +581,7 @@ impl AnimationWorld {
                 sampled.scale = blend_vector(previous.scale, sampled.scale, weight);
             }
             entry.transform = sampled;
+            self.pending_transform_writes.insert(entity);
             if !child_bindings.is_empty() {
                 all_child_bindings.push((entity, child_bindings));
             }
@@ -651,6 +687,7 @@ impl AnimationWorld {
         let mut transform = entry.transform.clone();
         apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
         entry.transform = transform;
+        self.pending_transform_writes.insert(entity);
         Ok(())
     }
 

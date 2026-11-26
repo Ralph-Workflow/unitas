@@ -10,11 +10,11 @@ macro_rules! ffi_export {
 }
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 use unitas_animation::decode_controller_binary;
 use unitas_audio::{AudioClip, AudioMixerGroup};
@@ -134,7 +134,7 @@ impl RuntimeState {
     }
 }
 
-static REGISTRY: OnceLock<Mutex<HashMap<u64, RuntimeState>>> = OnceLock::new();
+static REGISTRY: Mutex<BTreeMap<u64, RuntimeState>> = Mutex::new(BTreeMap::new());
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static INVALID_HANDLE_ERROR_TARGET: AtomicU64 = AtomicU64::new(0);
 const INVALID_HANDLE_MESSAGE: &[u8] = b"runtime handle not found\0";
@@ -143,8 +143,8 @@ thread_local! {
     static ACTIVE_STATES: RefCell<Vec<(u64, RuntimeState)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn registry() -> Result<&'static Mutex<HashMap<u64, RuntimeState>>, RuntimeError> {
-    Ok(REGISTRY.get_or_init(|| Mutex::new(HashMap::new())))
+fn registry() -> &'static Mutex<BTreeMap<u64, RuntimeState>> {
+    &REGISTRY
 }
 
 ffi_export! {
@@ -153,10 +153,7 @@ pub extern "C" fn unitas_runtime_new() -> u64 {
         Ok(r) => r,
         Err(_) => return 0,
     };
-    let reg = match registry() {
-        Ok(r) => r,
-        Err(_) => return 0,
-    };
+    let reg = registry();
     let mut map = match reg.lock() {
         Ok(guard) => guard,
         Err(_) => return 0,
@@ -735,10 +732,7 @@ pub extern "C" fn unitas_runtime_error_message(handle: u64) -> u64 {
     }) {
         return result;
     }
-    let reg = match registry() {
-        Ok(r) => r,
-        Err(_) => return 0,
-    };
+    let reg = registry();
     let map = match reg.lock() {
         Ok(guard) => guard,
         Err(_) => return 0,
@@ -1159,10 +1153,7 @@ fn with_active_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<
 }
 
 fn with_registered_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<T> {
-    let Ok(reg) = registry() else {
-        return None;
-    };
-    let Ok(mut map) = reg.lock() else {
+    let Ok(mut map) = registry().lock() else {
         return None;
     };
     for state in map.values_mut() {
@@ -3401,8 +3392,7 @@ fn with_active_state<T>(handle: u64, action: impl FnOnce(&mut RuntimeState) -> T
 }
 
 fn take_from_registry(handle: u64) -> Option<RuntimeState> {
-    let reg = registry().ok()?;
-    let mut map = reg.lock().ok()?;
+    let mut map = registry().lock().ok()?;
     map.remove(&handle)
 }
 
@@ -3448,10 +3438,7 @@ fn run_scene_operation(
 }
 
 fn restore_to_registry(handle: u64, state: RuntimeState) -> bool {
-    let Ok(reg) = registry() else {
-        return false;
-    };
-    let Ok(mut map) = reg.lock() else {
+    let Ok(mut map) = registry().lock() else {
         return false;
     };
     map.insert(handle, state);
@@ -3510,9 +3497,12 @@ fn with_runtime_state<T>(
     let Some(f) = action_opt else {
         return Err(-1);
     };
-    let reg = registry().map_err(|_| -1)?;
-    let mut map = reg.lock().map_err(|_| -1)?;
-    let state = map.get_mut(&handle).ok_or(-1)?;
+    let Ok(mut map) = registry().lock() else {
+        return Err(-1);
+    };
+    let Some(state) = map.get_mut(&handle) else {
+        return Err(-1);
+    };
     Ok(f(state))
 }
 
@@ -3537,8 +3527,7 @@ fn with_runtime_state_err<T>(
     let Some(f) = action_opt else {
         return Err(RuntimeError::NotFound);
     };
-    let reg = registry()?;
-    let mut map = match reg.lock() {
+    let mut map = match registry().lock() {
         Ok(guard) => guard,
         Err(_) => return Err(RuntimeError::Poisoned),
     };

@@ -45,6 +45,19 @@ impl Shape {
             }
         }
     }
+
+    pub(crate) fn bounding_radius(&self) -> f64 {
+        match self {
+            Self::Sphere { radius } => *radius,
+            Self::Box { half_extents } => (half_extents[0] * half_extents[0]
+                + half_extents[1] * half_extents[1]
+                + half_extents[2] * half_extents[2])
+                .sqrt(),
+            Self::Capsule { radius, height, .. } => {
+                capsule_half_segment(*radius, *height) + *radius
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -46,6 +46,9 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
         private readonly Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord> _sceneUiComponents = new Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>();
+        private readonly Dictionary<(ulong, ulong), List<ulong>> _sceneScriptOwners = new Dictionary<(ulong, ulong), List<ulong>>();
+        private bool _alignSceneEntityBase;
+        private ulong _sceneEntityKeyShift;
         private readonly List<GameObject> _materializedSceneCameras = new List<GameObject>();
         private ulong _nextSceneEntityBase = 1;
         private readonly List<Scene> _loadedScenes = new List<Scene>();
@@ -363,6 +366,7 @@ namespace Unitas.Bridge
                 finally
                 {
                     _deferStartDuringSceneLoad = false;
+                    _alignSceneEntityBase = false;
                 }
                 if (_pendingAfterSceneLoadRuntimeInit)
                 {
@@ -430,6 +434,7 @@ namespace Unitas.Bridge
                 finally
                 {
                     _deferStartDuringSceneLoad = false;
+                    _alignSceneEntityBase = false;
                 }
                 if (_pendingAfterSceneLoadRuntimeInit)
                 {
@@ -2544,8 +2549,178 @@ namespace Unitas.Bridge
             camera.backgroundColor = settings.BackgroundColor;
         }
 
+        private void RecordSceneScriptOwner(
+            ulong guidHi,
+            ulong guidLo,
+            string gameObjectFileId,
+            Dictionary<string, ulong> gameObjectEntities)
+        {
+            if (string.IsNullOrEmpty(gameObjectFileId) || !gameObjectEntities.TryGetValue(gameObjectFileId, out ulong localEntity))
+            {
+                return;
+            }
+
+            if (!_sceneScriptOwners.TryGetValue((guidHi, guidLo), out List<ulong>? owners))
+            {
+                owners = new List<ulong>();
+                _sceneScriptOwners[(guidHi, guidLo)] = owners;
+            }
+
+            owners.Add(_nextSceneEntityBase + localEntity);
+        }
+
+        /// <summary>
+        /// Aligns the parsed scene's entity ids with the ids the runtime gave the
+        /// scene it loaded. The runtime shifts the ids of a scene it loads after
+        /// another one by the entities it already handed out, so the parsed
+        /// metadata has to move with them: without the shift the managed objects
+        /// lose their names, their transforms and their physics.
+        /// </summary>
+        private void AlignSceneEntityBase(ulong nativeEntity, ulong guidHi, ulong guidLo)
+        {
+            if (!_alignSceneEntityBase)
+            {
+                return;
+            }
+
+            if (_sceneObjectNames.ContainsKey(nativeEntity))
+            {
+                _alignSceneEntityBase = false;
+                return;
+            }
+
+            if (!_sceneScriptOwners.TryGetValue((guidHi, guidLo), out List<ulong>? owners))
+            {
+                return;
+            }
+
+            for (int index = 0; index < owners.Count; index++)
+            {
+                if (nativeEntity < owners[index])
+                {
+                    continue;
+                }
+
+                ulong shift = nativeEntity - owners[index];
+                if (shift != _sceneEntityKeyShift)
+                {
+                    ShiftSceneEntityKeys((long)shift - (long)_sceneEntityKeyShift);
+                    _sceneEntityKeyShift = shift;
+                }
+
+                _alignSceneEntityBase = false;
+                return;
+            }
+        }
+
+        private void ShiftSceneEntityKeys(long delta)
+        {
+            if (delta == 0)
+            {
+                return;
+            }
+
+            ShiftEntityKeys(_sceneObjectNames, delta);
+            ShiftEntityKeys(_sceneTransforms, delta);
+            ShiftEntityKeys(_sceneRigidbodies, delta);
+            ShiftEntityKeys(_sceneSphereColliders, delta);
+            ShiftEntityKeys(_sceneBoxColliders, delta);
+            ShiftEntityKeys(_sceneCapsuleColliders, delta);
+            ShiftEntityKeys(_sceneMeshColliders, delta);
+            ShiftEntityKeys(_sceneCameras, delta);
+            ShiftParentEntities(delta);
+            ShiftUiComponents(delta);
+            ShiftMaterializedSceneEntities(delta);
+            ShiftMaterializedSceneCameras();
+        }
+
+        private static void ShiftEntityKeys<T>(Dictionary<ulong, T> table, long delta)
+        {
+            if (table.Count == 0)
+            {
+                return;
+            }
+
+            List<KeyValuePair<ulong, T>> entries = new List<KeyValuePair<ulong, T>>(table);
+            table.Clear();
+            for (int index = 0; index < entries.Count; index++)
+            {
+                table[ShiftEntityKey(entries[index].Key, delta)] = entries[index].Value;
+            }
+        }
+
+        private void ShiftParentEntities(long delta)
+        {
+            if (_sceneParentEntities.Count == 0)
+            {
+                return;
+            }
+
+            List<KeyValuePair<ulong, ulong>> entries = new List<KeyValuePair<ulong, ulong>>(_sceneParentEntities);
+            _sceneParentEntities.Clear();
+            for (int index = 0; index < entries.Count; index++)
+            {
+                _sceneParentEntities[ShiftEntityKey(entries[index].Key, delta)] = ShiftEntityKey(entries[index].Value, delta);
+            }
+        }
+
+        private void ShiftUiComponents(long delta)
+        {
+            if (_sceneUiComponents.Count == 0)
+            {
+                return;
+            }
+
+            List<KeyValuePair<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>> entries =
+                new List<KeyValuePair<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>>(_sceneUiComponents);
+            _sceneUiComponents.Clear();
+            for (int index = 0; index < entries.Count; index++)
+            {
+                (ulong entity, ScriptGlueRegistry.BuiltInUiComponent kind) = entries[index].Key;
+                _sceneUiComponents[(ShiftEntityKey(entity, delta), kind)] = entries[index].Value;
+            }
+        }
+
+        private void ShiftMaterializedSceneEntities(long delta)
+        {
+            for (int index = 0; index < _materializedSceneEntities.Count; index++)
+            {
+                ulong previous = _materializedSceneEntities[index];
+                ulong shifted = ShiftEntityKey(previous, delta);
+                _materializedSceneEntities[index] = shifted;
+                if (_entityGameObjects.TryGetValue(previous, out GameObject? owner) && owner != null)
+                {
+                    _entityGameObjects.Remove(previous);
+                    _entityGameObjects[shifted] = owner;
+                    owner.AssignNativeEntityId(shifted);
+                }
+            }
+        }
+
+        private void ShiftMaterializedSceneCameras()
+        {
+            for (int index = 0; index < _materializedSceneCameras.Count; index++)
+            {
+                GameObject cameraOwner = _materializedSceneCameras[index];
+                if (cameraOwner == null || cameraOwner.IsDestroyed)
+                {
+                    continue;
+                }
+
+                ulong shifted = cameraOwner.NativeEntityId;
+                ApplySceneTransform(shifted, cameraOwner);
+                ApplySceneCameraComponent(shifted, cameraOwner);
+            }
+        }
+
+        private static ulong ShiftEntityKey(ulong key, long delta)
+        {
+            return delta >= 0 ? key + (ulong)delta : key - (ulong)(-delta);
+        }
+
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
+            AlignSceneEntityBase(entity, guidHi, guidLo);
             if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
             {
                 return 0;
@@ -2992,6 +3167,9 @@ namespace Unitas.Bridge
                 _sceneTransforms.Clear();
                 _sceneCameras.Clear();
                 _sceneUiComponents.Clear();
+                _sceneScriptOwners.Clear();
+                _sceneEntityKeyShift = 0;
+                _alignSceneEntityBase = true;
                 DropMaterializedSceneObjects();
                 DropMaterializedSceneCameras();
                 _nextSceneEntityBase = 1;
@@ -3085,6 +3263,7 @@ namespace Unitas.Bridge
                         && !string.IsNullOrEmpty(currentUiGuid)
                         && TryParseScriptGuid(currentUiGuid, out ulong scriptGuidHi, out ulong scriptGuidLo))
                     {
+                        RecordSceneScriptOwner(scriptGuidHi, scriptGuidLo, currentUiGameObjectFileId, gameObjectEntities);
                         ScriptGlueRegistry.BuiltInUiComponent kind = ScriptGlueRegistry.GetBuiltInUiComponent(scriptGuidHi, scriptGuidLo);
                         if (kind != ScriptGlueRegistry.BuiltInUiComponent.None)
                         {
@@ -3420,6 +3599,7 @@ namespace Unitas.Bridge
                 && !string.IsNullOrEmpty(currentUiGuid)
                 && TryParseScriptGuid(currentUiGuid, out ulong finalScriptGuidHi, out ulong finalScriptGuidLo))
             {
+                RecordSceneScriptOwner(finalScriptGuidHi, finalScriptGuidLo, currentUiGameObjectFileId, gameObjectEntities);
                 ScriptGlueRegistry.BuiltInUiComponent finalKind = ScriptGlueRegistry.GetBuiltInUiComponent(finalScriptGuidHi, finalScriptGuidLo);
                 if (finalKind != ScriptGlueRegistry.BuiltInUiComponent.None)
                 {

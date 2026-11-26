@@ -90,6 +90,31 @@ namespace Unitas.Samples.RollABall
                 }
             }
             SpawnAllPickups();
+            StartGhostReplay();
+        }
+
+        /// <summary>
+        /// Starts the ghost of the previous attempt: the route the arena
+        /// persisted is replayed on a ghost object, so the attempt that follows
+        /// runs against the recorded route.
+        /// </summary>
+        private void StartGhostReplay()
+        {
+            Vector3[]? route = SavedState.LoadGhostRoute();
+            if (route == null || route.Length == 0)
+            {
+                return;
+            }
+
+            GameObject ghost = new GameObject("GhostBall");
+            GhostReplay? replay = ghost.AddComponent<GhostReplay>();
+            if (replay == null)
+            {
+                Debug.LogWarning("Ghost attempt replay failed the ghost carries no replay component");
+                return;
+            }
+
+            replay.Begin(route);
         }
 
         private new void Update()

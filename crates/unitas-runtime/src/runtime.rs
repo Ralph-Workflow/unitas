@@ -1096,9 +1096,10 @@ impl Runtime {
             }
         }
         let child_updates = self.animation.tick(scaled_delta);
-        let entities = self.animation.entities();
-        for entity in entities {
-            self.write_back_animator_transform(entity);
+        for entity in self.animation.take_pending_transform_writes() {
+            if !self.write_back_animator_transform(entity) {
+                self.animation.queue_transform_write(entity);
+            }
         }
         for (entity, child_bindings) in child_updates {
             self.apply_child_animator_bindings(entity, &child_bindings);
@@ -1116,18 +1117,19 @@ impl Runtime {
         self.trails.step_all(delta_time, &positions);
     }
 
-    fn write_back_animator_transform(&mut self, entity: EntityId) {
-        let Some(anim_transform) = self.animation.transform(entity).cloned() else {
-            return;
+    fn write_back_animator_transform(&mut self, entity: EntityId) -> bool {
+        let Some(anim_transform) = self.animation.transform(entity) else {
+            return true;
         };
         for scene in &mut self.scenes {
             if let Some(graph_transform) = scene.graph.transform_mut(entity) {
                 graph_transform.translation = anim_transform.translation;
                 graph_transform.rotation = anim_transform.rotation;
                 graph_transform.scale = anim_transform.scale;
-                return;
+                return true;
             }
         }
+        false
     }
 
     fn apply_child_animator_bindings(
