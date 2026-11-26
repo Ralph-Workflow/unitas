@@ -41,80 +41,115 @@ namespace Unitas.Bridge.Tests
                 return Check.FailureCount > 0 ? 1 : 0;
             }
 
-            TestVector3();
-            TestGameObjectAndTransform();
-            TestMonoBehaviourLifecycleOrder();
-            TestPhysicsComponentDefaults();
-            TestEndToEndRustLifecycleOrder();
-            TestEndToEndRustCollisionOrder();
-            TestEndToEndRustTriggerOrder();
-            CollisionCounterpartTests.Run();
-            SceneTransformSeedTests.Run();
-            PrefabInstanceSceneTests.Run();
-            TestSceneReloadDropsPreviousSceneScripts();
-            TestLayerMaskConversions();
-            TestEndToEndRustPhysicsQuery();
-            TimeDiagnosticsTests.Run();
-            QuerySurfaceTests.Run();
-            RandomTests.Run();
-            IntegrationTests.Run();
-            CoroutineTests.Run();
-            TimeSemanticsTests.Run();
-            LifetimeTests.Run();
-            CloneTests.Run();
-            ActivationTests.Run();
-            ExceptionContainmentTests.Run();
-            InputTests.Run();
-            SceneManagementTests.Run();
-            SceneManagementIntegrationTests.Run();
-            SceneManagementPersistenceTests.Run();
-            SceneMergeTests.Run();
-            ApplicationTests.Run();
-            RuntimeInitializeTests.Run();
-            PlayerPrefsTests.Run();
-            ObjectDiscoveryTests.Run();
-            GameObjectDiscoveryTests.Run();
-            LoggingTests.Run();
-            RenderTests.Run();
-            PlaytestTests.Run();
-            RollABallScenarioTests.Run();
-            SceneCameraTests.Run();
-            TestCharacterControllerDefaultsAndNullProvider();
-            TestEndToEndCharacterControllerMoveAndSceneLoad();
-            TestAudioDefaultsAndNullProvider();
-            TestEndToEndAudioPlaybackAndSceneLoad();
-            TestAnimatorDefaultsAndNullProvider();
-            TestAnimatorControllerBinaryEncoding();
-            TestEndToEndAnimatorControllerAndTransitions();
-            CoreApiTests.Run();
-            ValueTypeCompletionTests.Run();
-            CompilationTests.Run();
-            EventsTests.Run();
-            UnityEventArityTests.Run();
-            UnityWebRequestMethodTests.Run();
-            ResourcesSceneTests.Run();
-            SceneAcceptanceTests.Run();
-            LifecycleAcceptanceTests.Run();
-            CoroutineAcceptanceTests.Run();
-            PlayerPrefsPersistenceTests.Run();
-            JsonUtilityTests.Run();
-            JsonUtilityRoundTripTests.Run();
-            SerializerMatrixTests.Run();
-            IdeGenerationTests.Run();
-            AgentWorkflowTests.Run();
-            AgentCodeLoopTests.Run();
-            UtfRunnerTests.Run();
-            UtfHardeningTests.Run();
-            DebuggingTests.Run();
-            DapSteppingTests.Run();
-            EditorMenuTests.Run();
-            LifecycleMessageTests.Run();
-            ExecutionOrderDispatchTests.Run();
-            ExecutionOrderSettingsTests.Run();
-            UnityStyleMessagingTests.Run();
-            JobSystemTests.Run();
-            FixedStepDeterminismTests.Run();
-            SaveMigrationTests.Run();
+            Action[] suite = new Action[]
+            {
+                () => TestVector3(),
+                () => TestGameObjectAndTransform(),
+                () => TestMonoBehaviourLifecycleOrder(),
+                () => TestPhysicsComponentDefaults(),
+                () => TestEndToEndRustLifecycleOrder(),
+                () => TestEndToEndRustCollisionOrder(),
+                () => TestEndToEndRustTriggerOrder(),
+                () => CollisionCounterpartTests.Run(),
+                () => SceneTransformSeedTests.Run(),
+                () => PrefabInstanceSceneTests.Run(),
+                () => TestSceneReloadDropsPreviousSceneScripts(),
+                () => TestLayerMaskConversions(),
+                () => TestEndToEndRustPhysicsQuery(),
+                () => TimeDiagnosticsTests.Run(),
+                () => QuerySurfaceTests.Run(),
+                () => RandomTests.Run(),
+                () => IntegrationTests.Run(),
+                () => CoroutineTests.Run(),
+                () => TimeSemanticsTests.Run(),
+                () => LifetimeTests.Run(),
+                () => CloneTests.Run(),
+                () => ActivationTests.Run(),
+                () => ExceptionContainmentTests.Run(),
+                () => InputTests.Run(),
+                () => SceneManagementTests.Run(),
+                () => SceneManagementIntegrationTests.Run(),
+                () => SceneManagementPersistenceTests.Run(),
+                () => SceneMergeTests.Run(),
+                () => ApplicationTests.Run(),
+                () => RuntimeInitializeTests.Run(),
+                () => PlayerPrefsTests.Run(),
+                () => ObjectDiscoveryTests.Run(),
+                () => GameObjectDiscoveryTests.Run(),
+                () => LoggingTests.Run(),
+                () => RenderTests.Run(),
+                () => PlaytestTests.Run(),
+                () => RollABallScenarioTests.Run(),
+                () => SceneCameraTests.Run(),
+                () => TestCharacterControllerDefaultsAndNullProvider(),
+                () => TestEndToEndCharacterControllerMoveAndSceneLoad(),
+                () => TestAudioDefaultsAndNullProvider(),
+                () => TestEndToEndAudioPlaybackAndSceneLoad(),
+                () => TestAnimatorDefaultsAndNullProvider(),
+                () => TestAnimatorControllerBinaryEncoding(),
+                () => TestEndToEndAnimatorControllerAndTransitions(),
+                () => CoreApiTests.Run(),
+                () => ValueTypeCompletionTests.Run(),
+                () => CompilationTests.Run(),
+                () => EventsTests.Run(),
+                () => UnityEventArityTests.Run(),
+                () => UnityWebRequestMethodTests.Run(),
+                () => ResourcesSceneTests.Run(),
+                () => SceneAcceptanceTests.Run(),
+                () => LifecycleAcceptanceTests.Run(),
+                () => CoroutineAcceptanceTests.Run(),
+                () => PlayerPrefsPersistenceTests.Run(),
+                () => JsonUtilityTests.Run(),
+                () => JsonUtilityRoundTripTests.Run(),
+                () => SerializerMatrixTests.Run(),
+                () => IdeGenerationTests.Run(),
+                () => AgentWorkflowTests.Run(),
+                () => AgentCodeLoopTests.Run(),
+                () => UtfRunnerTests.Run(),
+                () => UtfHardeningTests.Run(),
+                () => DebuggingTests.Run(),
+                () => DapSteppingTests.Run(),
+                () => EditorMenuTests.Run(),
+                () => LifecycleMessageTests.Run(),
+                () => ExecutionOrderDispatchTests.Run(),
+                () => ExecutionOrderSettingsTests.Run(),
+                () => UnityStyleMessagingTests.Run(),
+                () => JobSystemTests.Run(),
+                () => FixedStepDeterminismTests.Run(),
+                () => SaveMigrationTests.Run(),
+            };
+
+            int shard = 1;
+            int shardCount = 1;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (!string.Equals(args[i], "--shard", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string[] parts = args[i + 1].Split('/');
+                if (parts.Length == 2
+                    && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int shardIndex)
+                    && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int shardTotal)
+                    && shardIndex >= 1
+                    && shardTotal >= 1
+                    && shardIndex <= shardTotal)
+                {
+                    shard = shardIndex;
+                    shardCount = shardTotal;
+                }
+            }
+
+            for (int i = 0; i < suite.Length; i++)
+            {
+                if (shardCount > 1 && i % shardCount != shard - 1)
+                {
+                    continue;
+                }
+
+                suite[i]();
+            }
 
             if (Check.FailureCount > 0)
             {

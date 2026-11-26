@@ -165,7 +165,7 @@ RALPH-FACT: deployment_exposure (owner-supplied): pending owner confirmation; op
 RALPH-FACT: secrets_management_mechanism: none — the repository stores no credential; the secret gate fails on any credential-shaped string absent from the committed baseline
 RALPH-FACT: secret_scan_command: make secret-scan
 RALPH-FACT: secret_scan_scope: the secret gate scans every file in the working tree except the agent scratch directories (.agent, .omo, and .opencode), checkpoint.json, and any build output directory named target, bin, or obj; the ban gate and bypass audit also skip bin and obj; committed sources, fixtures and configuration are in scope
-RALPH-FACT: security_scanner_per_language: the ban gate and ruff security rules (S) for Python, cargo clippy --workspace --all-targets -- -D warnings (with all, pedantic, and ban-catalog lints denied and rust.unsafe_code = "forbid") for Rust, and the .NET Roslyn security and reliability analyzers (AnalysisMode=All, AnalysisLevel=latest-all, TreatWarningsAsErrors=true) for C#
+RALPH-FACT: security_scanner_per_language: the ban gate and ruff security rules (S) for Python, cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings (with all, pedantic, and ban-catalog lints denied and rust.unsafe_code = "forbid") for Rust, and the .NET Roslyn security and reliability analyzers (AnalysisMode=All, AnalysisLevel=latest-all, TreatWarningsAsErrors=true) for C#
 RALPH-FACT: finding_waiver_convention: a scanner finding raised by a published test vector is recorded in .secrets.baseline and documented under Exceptions below; every other finding is fixed in the code
 
 ## AI execution instructions
@@ -237,7 +237,7 @@ RALPH-LANG: Python
 RALPH-COMMAND: make banned-constructs
 
 RALPH-LANG: Rust
-RALPH-COMMAND: cargo clippy --workspace --all-targets -- -D warnings
+RALPH-COMMAND: cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings
 
 RALPH-LANG: C#
 RALPH-COMMAND: make dotnet-build

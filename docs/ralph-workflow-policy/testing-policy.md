@@ -396,7 +396,7 @@ project evolves.
 RALPH-FACT: test_command: make test
 RALPH-FACT: test_command_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo, clippy, and rustfmt), and the .NET 8.0 SDK; no network access
 RALPH-FACT: primary_test_framework: pytest
-RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates, the C# bridge console runner (bridge/Unitas.Bridge.Tests) for the UnityEngine bridge, and the C# editor runner (editor/Unitas.Editor.Tests) for the editor host and the native editor ABI (default automated lane, owned by the repository maintainers); the Python tooling keeps pytest as the primary framework
+RALPH-FACT: secondary_test_frameworks: cargo test for the Rust crates, the C# bridge console runner (bridge/Unitas.Bridge.Tests) for the UnityEngine bridge, executed as four concurrent shards that together run the whole suite, and the C# editor runner (editor/Unitas.Editor.Tests) for the editor host and the native editor ABI (default automated lane, owned by the repository maintainers); the Python tooling keeps pytest as the primary framework
 RALPH-FACT: test_isolation_strategy: each test builds its own fixtures under the pytest tmp_path; no state is shared between tests
 RALPH-FACT: io_mocking_approach: none — the gates read the working tree and never write outside it
 RALPH-FACT: suite_time_budget: 25 seconds for the default suite (`make test`), drawn from the 30-second verification_time_budget and enforced by the suite-level timed wrapper in the Makefile (`python3 tools/verify.py timed test-suite 25 ...`), which also holds each step to 30 seconds; measured at 3.18s (2.51s controllable time above the 0.67s suite cost floor) on 2026-11-25

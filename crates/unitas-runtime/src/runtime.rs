@@ -2674,7 +2674,17 @@ impl Runtime {
 
     fn render_instances(&self) -> Vec<MeshInstance<'_>> {
         let mut instances = Vec::new();
-        for renderer in self.render.renderers.values() {
+        // Renderer handles are sorted so the instance order, and therefore the
+        // rendered image, is the same in every process: a HashMap's iteration
+        // order is seeded per process, so consecutive captures of one scene
+        // otherwise disagree on which coincident surface wins the depth test.
+        let mut handles: Vec<u64> = self.render.renderers.keys().copied().collect();
+        handles.sort_unstable();
+        for handle in handles {
+            let renderer = match self.render.renderers.get(&handle) {
+                Some(renderer) => renderer,
+                None => continue,
+            };
             if !renderer.enabled {
                 continue;
             }

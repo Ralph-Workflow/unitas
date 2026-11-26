@@ -7,10 +7,12 @@ VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
 VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
-DOTNET_RESTORE_COMMAND := dotnet restore bridge/Unitas.sln
 EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
 EDITOR_TEST_SHARD_FANOUT := 6
+BRIDGE_TEST_SHARD_COUNT := 4
+BRIDGE_TEST_SHARDS := 1,2,3,4
+CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
 EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
 	HttpTransportTests \
 	ScenarioToolsTests \
@@ -41,16 +43,15 @@ verify-suite-gates:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
 	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
 	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
-	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D warnings
+	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings
 	@python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy
 	@$(MAKE) --no-print-directory test
 
 verify-dotnet-gates:
 	@rc=0; \
 	$(MAKE) --no-print-directory runtime-build & pr=$$!; \
-	python3 tools/verify.py timed dotnet-restore $(VERIFY_BUDGET_SECONDS) $(DOTNET_RESTORE_COMMAND) || rc=1; \
+	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) || rc=1; \
 	wait $$pr || rc=1; \
-	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) --no-restore || rc=1; \
 	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
 	$(MAKE) --no-print-directory dotnet-test-run || rc=1; \
 	wait $$pf || rc=1; \
@@ -61,14 +62,14 @@ test:
 
 test-steps:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
-	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace & p2=$$!; \
+	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) cargo test --workspace --lib --tests --bins & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
 	@python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check .
 	@python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check
-	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets -- -D warnings
+	@python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings
 	@$(MAKE) --no-print-directory dotnet-format
 
 typecheck:
@@ -115,11 +116,19 @@ dotnet-test-run:
 		rm -rf "$(EDITOR_TEST_BUNDLE)"; \
 		"$(CURDIR)/target/debug/unitas-player" --sample "$(EDITOR_TEST_BUNDLE)" --frames 1 > /dev/null 2>&1 & staging=$$!; \
 	fi; \
-	python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
+	python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) $(MAKE) --no-print-directory bridge-test-shards & p1=$$!; \
 	python3 tools/verify.py timed dotnet-test-playerhost $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.PlayerHost.Tests/bin/Release/net8.0/Unitas.PlayerHost.Tests & p3=$$!; \
 	if [ -n "$$staging" ]; then wait $$staging || rc=1; fi; \
 	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) $(MAKE) --no-print-directory editor-test-shards & p2=$$!; \
 	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; exit $$rc
+
+bridge-test-shards:
+	@rc=0; pids=""; \
+	for shard in $(BRIDGE_TEST_SHARDS); do \
+		env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests --shard $$shard/$(BRIDGE_TEST_SHARD_COUNT) & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || rc=1; done; \
+	exit $$rc
 
 editor-test-shards:
 	@rc=0; pids=""; running=0; \

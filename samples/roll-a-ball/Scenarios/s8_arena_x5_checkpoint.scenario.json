@@ -142,7 +142,9 @@
       "camera": "Main Camera",
       "width": 256,
       "height": 256,
-      "expected_non_background_pixels": 1000
+      "expected_non_background_pixels": 1000,
+      "reference": "../References/s8_arena_x5_checkpoint.bmp",
+      "tolerance": 0.005
     }
   ]
 }

@@ -1,0 +1,47 @@
+# Approved visual references
+
+These BMPs are the approved visual references for the roll-a-ball sample
+game's S8 checkpoints. Each scenario names its reference with the `reference`
+key and the allowed fraction of differing pixels with `tolerance`; the samples
+lane compares every fresh capture against the file and fails the step when the
+difference exceeds the tolerance.
+
+| Reference | Scenario | Checkpoint | Approved tolerance |
+|---|---|---|---|
+| `s8_title_checkpoint.bmp` | `s8_title_checkpoint.scenario.json` | `title-screen` | 0.005 |
+| `s8_arena_countdown.bmp` | `s8_arena_countdown.scenario.json` | `arena-at-countdown` | 0.005 |
+| `s8_arena_x5_checkpoint.bmp` | `s8_arena_x5_checkpoint.scenario.json` | `arena-at-x5` | 0.005 |
+| `s8_results_gold_checkpoint.bmp` | `s8_results_gold_checkpoint.scenario.json` | `results-gold-medal` | 0.005 |
+
+## How the references were produced
+
+Each file is the capture the unitas CPU rasterizer produced for that
+scenario's `render_capture` checkpoint (256x256, `Main Camera`, the background
+colour the scenario declares), taken from the scenario run itself — not a Unity
+screenshot.
+
+The captures are reproducible. The native renderer used to order its draw list
+by `HashMap` iteration order, which is seeded per process, so two runs of the
+same scene could disagree on which of two coincident surfaces won the depth
+test and the arena materials swapped between runs.
+`crates/unitas-runtime/src/runtime.rs` now sorts the renderer handles before it
+builds the instance list, and three consecutive runs of every scenario produce
+byte-identical BMPs.
+
+## Why the tolerance is 0.005
+
+`tolerance` is the fraction of pixels allowed to differ. The references are
+byte-identical on the machine that produced them (0 differing pixels), so the
+tolerance only absorbs floating-point differences of the CPU rasterizer between
+processors. It is bounded from both sides by measurement: the two captures of
+different checkpoints differ by 502 of 65 536 pixels (0.77 %), so a tolerance
+above 0.5 % would admit a changed scene, and the old per-process draw order
+swapped the arena materials over 3.1 %-31.9 % of the pixels, so a tolerance
+below 0.5 % keeps every material regression visible.
+
+## Approval
+
+Approved on 2026-11-25 by the development session that removed the draw-order
+nondeterminism, against the presentation requirements of
+`docs/product-specification/sample-games/01-roll-a-ball.md` (S8, TST-002).
+Each reference is bound to exactly one scenario and one checkpoint.

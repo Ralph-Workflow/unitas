@@ -37,7 +37,7 @@ reported with its real state, never hidden.
 | S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes; no pointer scenario exists yet |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json` — all four pass, their `render_capture` checkpoints included |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore, S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
 
@@ -55,11 +55,10 @@ scenarios (`Scenarios/s8_title_checkpoint.scenario.json`,
 `s8_arena_countdown.scenario.json`, `s8_arena_x5_checkpoint.scenario.json`,
 `s8_results_gold_checkpoint.scenario.json`) drive the sample to the countdown,
 the x5 combo and the gold pickup, capture the arena at each of those moments,
-and run in the `make verify-samples` lane. Their log checkpoints and their
-`render_capture` checkpoints pass today: each 256 x 256 capture holds 33 408
-non-background pixels of 65 536 against the declared
-`expected_non_background_pixels: 1000`. They carry no approved reference image
-yet, because the captures are not reproducible (see the gap below).
+and run in the `make verify-samples` lane. Their log checkpoints pass, and
+their `render_capture` checkpoints now compare against approved reference
+images under `References/` (see the gap below for what the references can and
+cannot show).
 
 **Not demonstrated — the exact gap.**
 
@@ -80,22 +79,28 @@ yet, because the captures are not reproducible (see the gap below).
   score, the multiplier or the results text.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
-- **The four captures render the arena, but they are not reproducible, so no
-  reference image can honestly be approved yet.** Each 256 x 256 capture shows
+- **The four captures render the arena and are reproducible, and approved
+  reference images now exist for them.** Each 256 x 256 capture shows
   the arena floor, its four walls, the four bumper boxes, the gold pickups and
   the player ball: 33 408 non-background pixels of 65 536 against the declared
   `expected_non_background_pixels: 1000`, so all four `render_capture`
-  checkpoints pass. The capture is however **not deterministic**: consecutive
-  runs of the same scenario draw different images, because the arena floor and
-  the bumper boxes swap their materials between runs. Measured over four runs
-  of `s8_title_checkpoint`, the floor/bumper pixel split was 20 275/5 048,
-  3 868/21 455, 784/24 539 and 0/25 323 grey/teal pixels, and the four images
-  differ in 3.1 %-31.9 % of their pixels; `s8_arena_countdown` measured the
-  same spread (3.1 %, 7.4 % and 31.9 % differing pixels). A reference compared
-  at any tolerance that admits that swap would not detect a real visual
-  regression, so no reference is approved yet. The next step is to find where
-  the arena floor and the bumper boxes get each other's material and to make
-  the capture reproducible; only then can a reference be recorded.
+  checkpoints pass. The capture used to be **not deterministic** — consecutive
+  runs of the same scenario drew different images, because the arena floor and
+  the bumper boxes swapped their materials between runs (measured over four
+  runs of `s8_title_checkpoint`: 3.1 %-31.9 % differing pixels). The cause was
+  the native renderer ordering its draw list by `HashMap` iteration order,
+  which is seeded per process, so two runs could disagree on which of two
+  coincident surfaces won the depth test.
+  `crates/unitas-runtime/src/runtime.rs` now sorts the renderer handles
+  before it builds the instance list; three consecutive runs of every scenario
+  produce byte-identical BMPs, and the four approved references under
+  `References/` are compared at `tolerance: 0.005` (0 differing pixels on the
+  machine that produced them; the tolerance only absorbs rasterizer
+  floating-point differences between processors and stays far below the 3.1 %
+  the old draw order produced). What the references still cannot show is the
+  specification's title screen, attract ghost, speed trail and results panel:
+  this sample has no such scene content, so the references record the arena,
+  not the specification's screens.
 
 The specification text is not weakened by this note. The gap above is what
 remains before S8 can be claimed complete.
@@ -136,5 +141,8 @@ The steps this note owns are recorded here rather than left implicit:
   `s8_results_gold_checkpoint`: the captures are wired into the lane and run,
   and each `render_capture` checkpoint passes its
   `expected_non_background_pixels: 1000` check with 33 408 observed
-  non-background pixels of 65 536. They do **not** yet compare against an
-  approved reference image; the reason is recorded above.
+  non-background pixels of 65 536. Each of them now also compares against the
+  approved reference image under `References/` at `tolerance: 0.005`, and the
+  lane fails the step when a capture drifts past that tolerance; the
+  reference-approval record is `References/README.md` and the determinism
+  fix that made the approval honest is recorded above.
