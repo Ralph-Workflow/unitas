@@ -543,6 +543,10 @@ impl Backend {
         self.integration.max_ccd_substeps = usize::from(enabled);
     }
 
+    pub(crate) fn set_prediction_distance(&mut self, distance: f64) {
+        self.integration.normalized_prediction_distance = distance.max(0.0) as Real;
+    }
+
     pub(crate) fn apply_forces(
         &mut self,
         handles: BackendHandles,

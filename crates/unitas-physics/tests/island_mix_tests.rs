@@ -1,7 +1,5 @@
 use unitas_core::EntityId;
-use unitas_physics::{
-    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape, World,
-};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape, World};
 
 const ROTATE: bool = true;
 const CCD: bool = true;

@@ -1884,7 +1884,6 @@ fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 const COMPOUND_FIXTURE_PATH: &str = "tests/fixtures/scene_compound_collider.unity";
 
 /// A GameObject that carries two colliders contributes two shapes to the
@@ -1901,7 +1900,11 @@ fn a_game_object_with_two_colliders_contributes_two_shapes() -> Result<(), Box<d
     };
     let entity = graph
         .iter_breadth_first()
-        .find(|id| graph.entity(*id).is_some_and(|entity| entity.name == "Compound"))
+        .find(|id| {
+            graph
+                .entity(*id)
+                .is_some_and(|entity| entity.name == "Compound")
+        })
         .ok_or("scene has no entity named Compound")?;
     let scene = runtime.scene(0).ok_or("no loaded scene")?;
     let colliders = scene.body_colliders(entity);

@@ -170,7 +170,10 @@ fn write_scene(path: &Path, objects: &[Object]) -> TestResult {
             yaml.push_str(&format!("  m_Interpolate: {interpolate}\n"));
             yaml.push_str(&format!("  m_CollisionDetection: {collision_detection}\n"));
         }
-        yaml.push_str(&format!("--- !u!{class} &{collider_id}\n", class = collider_class(&object.collider)));
+        yaml.push_str(&format!(
+            "--- !u!{class} &{collider_id}\n",
+            class = collider_class(&object.collider)
+        ));
         yaml.push_str(&format!(
             "{}:\n",
             match &object.collider {
@@ -240,7 +243,10 @@ fn write_physics_settings(dir: &Path) -> TestResult {
         "  m_LayerCollisionMatrix: {}\n",
         layer_collision_matrix_hex()
     ));
-    fs::write(dir.join("ProjectSettings").join("DynamicsManager.asset"), yaml)?;
+    fs::write(
+        dir.join("ProjectSettings").join("DynamicsManager.asset"),
+        yaml,
+    )?;
     Ok(())
 }
 
@@ -286,9 +292,9 @@ fn recorded(events: &Mutex<Vec<(u64, u64, u32)>>) -> Vec<(u64, u64, u32)> {
 }
 
 fn collides(first: u64, second: u64, events: &[(u64, u64, u32)]) -> bool {
-    events
-        .iter()
-        .any(|(left, right, _)| (*left == first && *right == second) || (*left == second && *right == first))
+    events.iter().any(|(left, right, _)| {
+        (*left == first && *right == second) || (*left == second && *right == first)
+    })
 }
 
 #[test]
@@ -625,8 +631,10 @@ fn move_position_on_a_kinematic_body_pushes_a_dynamic_body() -> TestResult {
     let velocity = runtime
         .body_velocity(pushed)
         .ok_or_else(|| String::from("the pushed body has no velocity"))?;
-    let moved = (after[0] - before[0]).abs() + (after[1] - before[1]).abs() + (after[2] - before[2]).abs();
-    let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]).sqrt();
+    let moved =
+        (after[0] - before[0]).abs() + (after[1] - before[1]).abs() + (after[2] - before[2]).abs();
+    let speed =
+        (velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]).sqrt();
     println!("MOVE before {before:?} after {after:?} velocity {velocity:?}");
     assert!(
         speed > 0.0,
@@ -698,11 +706,7 @@ fn trigger_pair_without_a_rigidbody_produces_no_trigger_event() -> TestResult {
     tick(&mut runtime, 10)?;
     let events = recorded(&TRIGGER_EVENTS);
     assert!(
-        !collides(
-            trigger_box.as_u64(),
-            trigger_sphere.as_u64(),
-            &events
-        ),
+        !collides(trigger_box.as_u64(), trigger_sphere.as_u64(), &events),
         "expected no trigger event without a rigidbody, got {events:?}"
     );
     assert!(

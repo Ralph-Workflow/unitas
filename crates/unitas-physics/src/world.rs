@@ -725,6 +725,10 @@ impl World {
         if !delta_seconds.is_finite() || delta_seconds < 0.0 {
             return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
         }
+        let sweep_distance = self.kinematic_sweep_distance();
+        if sweep_distance > self.solver_settings.contact_offset {
+            self.backend.set_prediction_distance(sweep_distance);
+        }
         for body in &mut self.bodies {
             if !body.simulated {
                 continue;
@@ -797,6 +801,10 @@ impl World {
                 .step(self.gravity, delta_seconds, &self.collision_matrix);
             self.collect_collision_payloads();
         }
+        if sweep_distance > self.solver_settings.contact_offset {
+            self.backend
+                .set_prediction_distance(self.solver_settings.contact_offset);
+        }
         for body in &mut self.bodies {
             if !body.simulated {
                 continue;
@@ -842,6 +850,21 @@ impl World {
         self.commit_kinematic_poses();
         self.sync_transforms();
         Ok(())
+    }
+
+    fn kinematic_sweep_distance(&self) -> f64 {
+        let mut distance: f64 = 0.0;
+        for body in &self.bodies {
+            if !body.simulated || body.role != BodyRole::Kinematic {
+                continue;
+            }
+            let Some(target) = body.pending_move_position else {
+                continue;
+            };
+            let current = self.backend.position(body.handles);
+            distance = distance.max(vector_length(subtract(target, current)));
+        }
+        distance
     }
 
     fn prepare_collision_detection(&mut self, delta_seconds: f64) {

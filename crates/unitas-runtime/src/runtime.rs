@@ -509,9 +509,11 @@ impl Runtime {
                 .insert(*entity, controller_from_component(Some(*entity), config));
         }
         let mut diagnostics = collect_material_diagnostics(&physics, entity_base);
-        diagnostics.extend(collider_diagnostics.into_iter().map(|(entity, text)| {
-            (EntityId::new(entity_base + entity.as_u64()), text)
-        }));
+        diagnostics.extend(
+            collider_diagnostics
+                .into_iter()
+                .map(|(entity, text)| (EntityId::new(entity_base + entity.as_u64()), text)),
+        );
         diagnostics.extend(self.populate_render_world(&render_binding, entity_base, &graph));
         let mut audio_sources = Vec::with_capacity(audio_bindings.len());
         for (entity, comp) in audio_bindings {
@@ -568,9 +570,11 @@ impl Runtime {
             })
             .collect::<HashMap<EntityId, RigidbodyComponent>>();
         for (body, (_, spec)) in bodies.iter().zip(descs.iter()) {
-            self.physics
-                .world_3d_mut()
-                .add_body_with_material(*body, spec.desc.clone(), spec.material)?;
+            self.physics.world_3d_mut().add_body_with_material(
+                *body,
+                spec.desc.clone(),
+                spec.material,
+            )?;
             // The body's own shape already is the first Unity collider, so
             // only the remaining ones become extra colliders. Adding the
             // first one again would put a second copy of it in the world.
@@ -2517,10 +2521,7 @@ struct BodySpec {
 type BodySpecs = Vec<(EntityId, BodySpec)>;
 type ColliderDiagnostics = Vec<(EntityId, String)>;
 
-fn body_descs(
-    graph: &SceneGraph,
-    bindings: &[PhysicsBinding],
-) -> (BodySpecs, ColliderDiagnostics) {
+fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> (BodySpecs, ColliderDiagnostics) {
     let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
         .iter()
         .filter(|binding| binding.rigidbody.is_some())
@@ -2629,9 +2630,7 @@ fn collect_material_diagnostics(
         let entity = EntityId::new(entity_base + binding.entity.as_u64());
         for collider in &binding.colliders {
             let (material_diagnostic, geometry_diagnostic) = match collider {
-                ColliderComponent::Box(component) => {
-                    (component.material_diagnostic.as_ref(), None)
-                }
+                ColliderComponent::Box(component) => (component.material_diagnostic.as_ref(), None),
                 ColliderComponent::Sphere(component) => {
                     (component.material_diagnostic.as_ref(), None)
                 }
@@ -2786,7 +2785,10 @@ fn mesh_shape(
 
 fn cook_file_mesh(path: &Path, file_id: Option<i64>) -> Result<CollisionMesh, String> {
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     cook_collision_mesh(&bytes, file_name, file_id).map_err(|error| error.to_string())
 }
 
