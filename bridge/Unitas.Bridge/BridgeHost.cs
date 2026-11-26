@@ -4197,12 +4197,29 @@ namespace Unitas.Bridge
             UnityEngine.Object.FlushPendingDestroys(_destroyedObjects);
             for (int index = 0; index < _destroyedObjects.Count; index++)
             {
-                ulong entity = UnityEngine.Object.NativeEntityIdOf(_destroyedObjects[index]);
-                if (entity != 0)
+                UnityEngine.Object destroyed = _destroyedObjects[index];
+                ulong entity = UnityEngine.Object.NativeEntityIdOf(destroyed);
+                if (entity != 0 && OwnsDestroyedEntity(entity, destroyed))
                 {
                     NativeDestroyInterop.unitas_runtime_mark_destroyed(_runtimeHandle, entity);
                 }
             }
+        }
+
+        // Scene entities are renumbered on every load, so a deferred destroy can already name a live entity.
+        private bool OwnsDestroyedEntity(ulong entity, UnityEngine.Object destroyed)
+        {
+            if (!_entityGameObjects.TryGetValue(entity, out GameObject? current) || current == null)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(current, destroyed))
+            {
+                return true;
+            }
+
+            return destroyed is Component component && ReferenceEquals(component.OwnerOrNull, current);
         }
 
         private static class NativeDestroyInterop

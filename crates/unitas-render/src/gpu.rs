@@ -1473,13 +1473,14 @@ impl Renderer {
         }
         let mut vertex_data: Vec<f32> = Vec::with_capacity(mesh.positions.len() * VERTEX_FLOATS);
         for (index, position) in mesh.positions.iter().enumerate() {
-            vertex_data.push(position.x);
-            vertex_data.push(position.y);
-            vertex_data.push(position.z);
+            vertex_data.extend_from_slice(&[position.x, position.y, position.z]);
             let normal = mesh.normals.get(index).copied().unwrap_or(Vec3::ZERO);
-            vertex_data.push(normal.x);
-            vertex_data.push(normal.y);
-            vertex_data.push(normal.z);
+            vertex_data.extend_from_slice(&[normal.x, normal.y, normal.z]);
+            // The layout declares uv and tangent after the normal; a Mesh
+            // carries neither, so they stay zero (flat albedo lookup, no
+            // normal map).
+            vertex_data.extend_from_slice(&[0.0, 0.0]);
+            vertex_data.extend_from_slice(&[0.0, 0.0, 0.0]);
         }
         let vertex_bytes = bytemuck::try_cast_slice::<f32, u8>(&vertex_data)
             .map_err(|_| RenderError::BufferCast("vertex"))?;

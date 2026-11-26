@@ -4,7 +4,7 @@ use unitas_render::RenderError;
 use unitas_render::capture::{CaptureFrame, CaptureInstance};
 
 use crate::runtime::Runtime;
-use crate::window::{GpuFramePresenter, transform_to_mat4};
+use crate::window::{GpuFramePresenter, scene_gpu_meshes, transform_to_mat4};
 
 const UNNAMED_OBJECT: &str = "object";
 
@@ -30,11 +30,15 @@ impl From<RenderError> for CaptureError {
 }
 
 pub fn capture_offscreen(
-    presenter: &GpuFramePresenter<'_>,
+    presenter: &mut GpuFramePresenter<'_>,
     runtime: &Runtime,
     width: u32,
     height: u32,
 ) -> Result<CaptureFrame, CaptureError> {
+    // A presenter with no meshes of its own draws the loaded scene.
+    if presenter.meshes().is_empty() {
+        presenter.set_meshes(scene_gpu_meshes(runtime));
+    }
     let (camera, view, background) = presenter.resolved_camera_and_view(runtime, width, height);
     let light = *presenter.light();
     let instances = capture_instances(presenter, runtime);
@@ -63,6 +67,9 @@ fn capture_instances<'a>(
             .and_then(|entity| runtime.world_transform_of(entity))
         {
             Some(transform) => transform_to_mat4(&transform),
+            // The entity is gone: capture nothing rather than its mesh at
+            // the world origin.
+            None if entry.entity.is_some() => continue,
             None => entry.model,
         };
         let name = entry
@@ -120,7 +127,7 @@ mod tests {
             [0.2, 0.4, 0.8],
             true,
         )]);
-        let frame = capture_offscreen(&presenter, &runtime, WIDTH, HEIGHT)?;
+        let frame = capture_offscreen(&mut presenter, &runtime, WIDTH, HEIGHT)?;
         assert_eq!(frame.id_map.len(), (WIDTH * HEIGHT) as usize);
         assert_eq!(frame.objects.len(), 1);
         assert_eq!(frame.objects[0].id, 1);
@@ -144,7 +151,7 @@ mod tests {
             [0.2, 0.4, 0.8],
             true,
         )]);
-        let frame = capture_offscreen(&presenter, &runtime, WIDTH, HEIGHT)?;
+        let frame = capture_offscreen(&mut presenter, &runtime, WIDTH, HEIGHT)?;
         assert_eq!(frame.objects.len(), 1);
         assert_eq!(frame.objects[0].name, UNNAMED_OBJECT);
         Ok(())

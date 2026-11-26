@@ -280,11 +280,13 @@ fn collect_gpu_instances_from<'b>(
         if !entry.enabled {
             continue;
         }
-        let model = match entry
-            .entity
-            .and_then(|entity| runtime.world_transform_of(entity))
-        {
-            Some(transform) => transform_to_mat4(&transform),
+        let model = match entry.entity {
+            Some(entity) => match runtime.world_transform_of(entity) {
+                Some(transform) => transform_to_mat4(&transform),
+                // The entity is gone: draw nothing rather than its mesh at
+                // the world origin.
+                None => continue,
+            },
             None => entry.model,
         };
         instances.push(GpuInstance {
@@ -295,6 +297,22 @@ fn collect_gpu_instances_from<'b>(
         });
     }
     instances
+}
+
+/// The loaded scene's renderers as presenter mesh bindings.
+pub(crate) fn scene_gpu_meshes(runtime: &Runtime) -> Vec<GpuMeshBinding> {
+    runtime
+        .scene_renderables()
+        .iter()
+        .map(|renderable| {
+            GpuMeshBinding::for_entity(
+                renderable.entity,
+                renderable.mesh.clone(),
+                renderable.color,
+                true,
+            )
+        })
+        .collect()
 }
 
 fn is_transient_surface_error(error: &RenderError) -> bool {
@@ -364,6 +382,22 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn set_meshes(&mut self, meshes: Vec<GpuMeshBinding>) {
         self.meshes = meshes;
+    }
+
+    /// Binds the loaded scene to the presenter: the scene renderers' meshes
+    /// and colours, the scene camera and the scene light.
+    pub fn bind_scene(&mut self, runtime: &Runtime) {
+        self.set_meshes(scene_gpu_meshes(runtime));
+        if let Some(camera) = runtime.scene_camera() {
+            let default = GpuCameraBinding::default();
+            self.set_camera_binding(GpuCameraBinding {
+                entity: camera.entity,
+                camera: crate::runtime::projection_for(&camera.params, default.camera.aspect),
+                view: default.view,
+                background: camera.params.background_color,
+            });
+        }
+        self.set_light(runtime.directional_light());
     }
 
     pub fn add_mesh(&mut self, binding: GpuMeshBinding) -> usize {
@@ -1358,10 +1392,118 @@ mod tests {
     use super::*;
     use crate::RuntimeError;
     use crate::input::{KEY_MOUSE_0, STATE_DOWN, STATE_PRESSED, STATE_RELEASED};
+    use std::path::{Path, PathBuf};
     use unitas_render::cube;
+
+    const SAMPLE_SCENE: &str = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+
+    fn sample_scene_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(SAMPLE_SCENE)
+    }
+
+    fn mean_channel_error(left: &Image, right: &Image) -> f32 {
+        let mut total = 0.0f32;
+        let mut samples = 0usize;
+        for (a, b) in left.pixels.iter().zip(right.pixels.iter()) {
+            for channel in 0..3 {
+                total += (f32::from(a[channel]) - f32::from(b[channel])).abs();
+                samples += 1;
+            }
+        }
+        if samples == 0 {
+            0.0
+        } else {
+            total / samples as f32
+        }
+    }
 
     fn input_state() -> InputState {
         InputState::with_default_axes()
+    }
+
+    #[test]
+    fn bound_scene_renders_the_same_frame_on_gpu_and_cpu() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut presenter = match GpuFramePresenter::from_new_renderer() {
+            Ok(presenter) => presenter,
+            Err(error) => {
+                eprintln!("skipping GPU scene test, no GPU device available: {error}");
+                return Ok(());
+            }
+        };
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&sample_scene_path())?;
+        presenter.bind_scene(&runtime);
+        assert!(
+            !presenter.meshes().is_empty(),
+            "the scene renderers were not bound to the presenter"
+        );
+        let gpu = presenter.render_offscreen(&runtime, 320, 240)?;
+        let cpu = presenter.render_cpu_reference(&runtime, 320, 240);
+        let _ = gpu.write_bmp(Path::new("/tmp/ua_wu4b/gpu.bmp"));
+        let _ = cpu.write_bmp(Path::new("/tmp/ua_wu4b/cpu.bmp"));
+        {
+            let mut solo = GpuFramePresenter::from_new_renderer()?;
+            for (index, name) in ["PlayerBall", "ArenaFloor"].iter().enumerate() {
+                let entity = runtime.find_entity_by_name(name).unwrap();
+                let mesh = presenter
+                    .meshes()
+                    .iter()
+                    .find(|binding| binding.entity == Some(entity))
+                    .map(|binding| binding.mesh.clone())
+                    .unwrap();
+                solo.set_meshes(vec![GpuMeshBinding::for_entity(entity, mesh, [1.0, 0.84, 0.0], true)]);
+                let solo_cpu = solo.render_cpu_reference(&runtime, 320, 240);
+                let _ = solo_cpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_cpu_{index}.bmp")));
+                let solo_gpu = solo.render_offscreen(&runtime, 320, 240)?;
+                let _ = solo_gpu.write_bmp(Path::new(&format!("/tmp/ua_wu4b/solo_gpu_{index}.bmp")));
+            }
+        }
+        eprintln!("scene camera {:?}", runtime.scene_camera().map(|c| c.entity));
+        for name in ["Main Camera", "PlayerBall", "ArenaFloor", "Pickup_1"] {
+            let entity = runtime.find_entity_by_name(name);
+            eprintln!(
+                "{name} entity={entity:?} transform={:?}",
+                entity.and_then(|e| runtime.world_transform_of(e))
+            );
+        }
+        for binding in presenter.meshes() {
+            let mut lo = [f32::MAX; 3];
+            let mut hi = [f32::MIN; 3];
+            for p in &binding.mesh.positions {
+                lo[0] = lo[0].min(p.x);
+                lo[1] = lo[1].min(p.y);
+                lo[2] = lo[2].min(p.z);
+                hi[0] = hi[0].max(p.x);
+                hi[1] = hi[1].max(p.y);
+                hi[2] = hi[2].max(p.z);
+            }
+            eprintln!(
+                "mesh entity={:?} verts={} color={:?} bounds={:?}..{:?} transform={:?}",
+                binding.entity,
+                binding.mesh.positions.len(),
+                binding.color,
+                lo,
+                hi,
+                binding
+                    .entity
+                    .and_then(|e| runtime.world_transform_of(e))
+                    .map(|t| (t.translation, t.scale))
+            );
+        }
+        let distinct: std::collections::HashSet<_> = gpu.pixels.iter().copied().collect();
+        assert!(
+            distinct.len() > 1,
+            "the captured frame is a single flat colour"
+        );
+        let error = mean_channel_error(&gpu, &cpu);
+        assert!(
+            error <= unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE,
+            "gpu/cpu mean channel error {error} exceeds the declared tolerance"
+        );
+        Ok(())
     }
 
     #[test]

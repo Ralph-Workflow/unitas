@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 
 namespace UnityEngine
@@ -53,6 +54,8 @@ namespace UnityEngine
         private int _pixelHeight = DefaultPixelHeight;
 
         public static IRenderProvider? Provider { get; set; }
+
+        public string? LastCaptureFailure { get; private set; }
 
         public bool orthographic
         {
@@ -183,22 +186,40 @@ namespace UnityEngine
             IRenderProvider? provider = Provider;
             if (provider == null)
             {
+                LastCaptureFailure = "no render provider is bound to the camera";
                 return;
             }
 
             ulong cameraHandle = EnsureNativeCamera();
             if (cameraHandle == 0UL)
             {
+                LastCaptureFailure = "the camera has no native camera handle (provider " + provider.ToString() + ")";
                 return;
             }
 
-            byte[] frame = provider.RenderFrame(cameraHandle, (uint)_pixelWidth, (uint)_pixelHeight);
+            byte[] frame;
+            try
+            {
+                frame = provider.RenderFrame(cameraHandle, (uint)_pixelWidth, (uint)_pixelHeight);
+            }
+            catch (Exception ex)
+            {
+                LastCaptureFailure = "the render provider " + provider.ToString()
+                    + " failed for camera handle " + cameraHandle.ToString(CultureInfo.InvariantCulture)
+                    + ": " + ex.Message;
+                throw;
+            }
+
             if (frame.Length == 0)
             {
+                LastCaptureFailure = "the render provider " + provider.ToString()
+                    + " returned an empty frame for camera handle " + cameraHandle.ToString(CultureInfo.InvariantCulture)
+                    + " at " + _pixelWidth.ToString(CultureInfo.InvariantCulture) + "x" + _pixelHeight.ToString(CultureInfo.InvariantCulture);
                 return;
             }
 
             File.WriteAllBytes(path, frame);
+            LastCaptureFailure = null;
         }
 
         private void PushSettings()

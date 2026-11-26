@@ -37,32 +37,22 @@ namespace Unitas.PlayerHost.Tests
                 IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
                 IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
                 IntPtr missingPtr = Marshal.StringToCoTaskMemUTF8(missingScene);
-                int missingResult;
                 try
                 {
-                    missingResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, missingPtr);
-                }
-                finally
-                {
-                    Marshal.FreeCoTaskMem(missingPtr);
-                }
+                    int missingResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, missingPtr);
+                    Check.Equal("a startup scene that does not exist is refused", 2, missingResult);
+                    Check.That("the refused boot left no host behind", PlayerHostCore.Host == null);
 
-                Check.Equal("a startup scene that does not exist is refused", 2, missingResult);
-                Check.That("the refused boot left no host behind", PlayerHostCore.Host == null);
-
-                int noSceneResult;
-                try
-                {
-                    noSceneResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, IntPtr.Zero);
+                    int noSceneResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, IntPtr.Zero);
+                    Check.Equal("a missing startup scene path is refused", 1, noSceneResult);
+                    Check.That("the refused boot left no host behind", PlayerHostCore.Host == null);
                 }
                 finally
                 {
                     Marshal.FreeCoTaskMem(bundlePtr);
                     Marshal.FreeCoTaskMem(persistPtr);
+                    Marshal.FreeCoTaskMem(missingPtr);
                 }
-
-                Check.Equal("a missing startup scene path is refused", 1, noSceneResult);
-                Check.That("the refused boot left no host behind", PlayerHostCore.Host == null);
             }
             finally
             {

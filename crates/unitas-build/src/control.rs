@@ -79,6 +79,9 @@ pub enum ProtocolError {
     UnknownTool(String),
     NotPlaying,
     CaptureWithoutIdMap,
+    #[cfg(not(feature = "device"))]
+    CaptureRequiresDevice,
+    #[cfg(feature = "device")]
     CaptureUnsupported,
     FrameFailed(String),
     SessionStartFailed(String),
@@ -95,6 +98,11 @@ impl ProtocolError {
             ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
+            #[cfg(not(feature = "device"))]
+            ProtocolError::CaptureRequiresDevice => {
+                String::from("capture requires the device feature")
+            }
+            #[cfg(feature = "device")]
             ProtocolError::CaptureUnsupported => {
                 String::from("capture requires the device feature; the scripted control session does not support capture")
             }
@@ -236,7 +244,7 @@ impl ControlSession {
         if self.state == SessionState::Stopped {
             return Err(ProtocolError::NotPlaying);
         }
-        Err(ProtocolError::CaptureUnsupported)
+        Err(capture_refusal())
     }
 
     fn state_payload(&self) -> Value {
@@ -261,6 +269,16 @@ impl ControlSession {
             "script_host": script_host,
         })
     }
+}
+
+#[cfg(not(feature = "device"))]
+fn capture_refusal() -> ProtocolError {
+    ProtocolError::CaptureRequiresDevice
+}
+
+#[cfg(feature = "device")]
+fn capture_refusal() -> ProtocolError {
+    ProtocolError::CaptureUnsupported
 }
 
 fn parse_request(line: &str) -> Result<Request, ProtocolError> {
@@ -657,6 +675,23 @@ mod tests {
     }
 
     #[cfg(not(feature = "device"))]
+    #[test]
+    fn capture_without_the_device_feature_is_refused() -> Result<(), String> {
+        let mut session = session(23)?;
+        let result = session.dispatch(&Request::Capture {
+            width: 8,
+            height: 8,
+            id_map: true,
+        });
+        assert_eq!(result, Err(ProtocolError::CaptureRequiresDevice));
+        assert_eq!(
+            ProtocolError::CaptureRequiresDevice.outcome(),
+            String::from("capture requires the device feature")
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "device")]
     #[test]
     fn capture_is_refused_by_the_scripted_control_session() -> Result<(), String> {
         let mut session = session(23)?;

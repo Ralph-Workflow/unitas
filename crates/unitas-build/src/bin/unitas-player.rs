@@ -447,6 +447,9 @@ fn run_control_stdio(cli: &CliOptions) -> ExitCode {
 
     if let Err(error) = install_project_trust(&bundle_dir) {
         eprintln!("unitas-player refused to run project code: {error}");
+        if let Some(dir) = staged_dir {
+            let _ = fs::remove_dir_all(dir);
+        }
         return ExitCode::from(TRUST_REQUIRED_EXIT_CODE);
     }
 

@@ -232,6 +232,23 @@ pub struct RenderRenderer {
     pub enabled: bool,
 }
 
+/// One scene renderer a presenter can draw: the mesh it draws, the material
+/// colour it uses and the entity it belongs to.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneRenderable<'a> {
+    pub entity: EntityId,
+    pub mesh: &'a Mesh,
+    pub color: [f32; 3],
+}
+
+/// The scene camera a presenter can draw with: the entity it follows and the
+/// projection and background parameters.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneCamera {
+    pub entity: Option<EntityId>,
+    pub params: RenderCameraParams,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderLight {
     pub entity: Option<EntityId>,
@@ -2432,7 +2449,7 @@ fn effect_model(position: [f32; 3], size: f32) -> Mat4 {
     model_matrix(&transform)
 }
 
-fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
+pub(crate) fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
     let near = params.near_clip_plane.max(0.001);
     let far = params.far_clip_plane.max(near + 0.001);
     if params.orthographic {
@@ -2767,7 +2784,9 @@ impl Runtime {
         })
     }
 
-    fn directional_light(&self) -> DirectionalLight {
+    /// The scene's directional light, or a default one when the scene has
+    /// none.
+    pub fn directional_light(&self) -> DirectionalLight {
         let mut selected: Option<(u64, RenderLight)> = None;
         for (handle, light) in &self.render.lights {
             let replace = match selected {
@@ -2792,53 +2811,71 @@ impl Runtime {
         }
     }
 
-    fn render_instances(&self) -> Vec<MeshInstance<'_>> {
-        let mut instances = Vec::new();
+    /// The loaded scene's enabled renderers with the mesh and material colour
+    /// each one draws, in the deterministic order the renderer draws them.
+    pub fn scene_renderables(&self) -> Vec<SceneRenderable<'_>> {
         // Renderer handles are sorted so the instance order, and therefore the
         // rendered image, is the same in every process: a HashMap's iteration
         // order is seeded per process, so consecutive captures of one scene
         // otherwise disagree on which coincident surface wins the depth test.
         let mut handles: Vec<u64> = self.render.renderers.keys().copied().collect();
         handles.sort_unstable();
-        for handle in handles {
-            let renderer = match self.render.renderers.get(&handle) {
-                Some(renderer) => renderer,
-                None => continue,
+        handles
+            .iter()
+            .filter_map(|handle| {
+                let renderer = self.render.renderers.get(handle)?;
+                if !renderer.enabled {
+                    return None;
+                }
+                let entity = renderer.entity?;
+                let mesh = renderer.mesh.and_then(|mesh| self.render.meshes.get(&mesh))?;
+                let color = renderer
+                    .material
+                    .and_then(|material| self.render.materials.get(&material))
+                    .map(|material| [material.color[0], material.color[1], material.color[2]])
+                    .unwrap_or([
+                        DEFAULT_MATERIAL_COLOR[0],
+                        DEFAULT_MATERIAL_COLOR[1],
+                        DEFAULT_MATERIAL_COLOR[2],
+                    ]);
+                Some(SceneRenderable {
+                    entity,
+                    mesh,
+                    color,
+                })
+            })
+            .collect()
+    }
+
+    /// The scene camera with the highest handle, so the choice does not depend
+    /// on map iteration order.
+    pub fn scene_camera(&self) -> Option<SceneCamera> {
+        let mut selected: Option<(u64, RenderCamera)> = None;
+        for (handle, camera) in &self.render.cameras {
+            let replace = match selected {
+                Some((best, _)) => *handle > best,
+                None => true,
             };
-            if !renderer.enabled {
-                continue;
+            if replace {
+                selected = Some((*handle, *camera));
             }
-            let entity = match renderer.entity {
-                Some(entity) => entity,
-                None => continue,
-            };
-            let mesh_handle = match renderer.mesh {
-                Some(handle) => handle,
-                None => continue,
-            };
-            let mesh = match self.render.meshes.get(&mesh_handle) {
-                Some(mesh) => mesh,
-                None => continue,
-            };
-            let transform = match self.entity_transform(entity) {
-                Some(transform) => transform,
-                None => continue,
-            };
-            let color = match renderer
-                .material
-                .and_then(|handle| self.render.materials.get(&handle))
-            {
-                Some(material) => [material.color[0], material.color[1], material.color[2]],
-                None => [
-                    DEFAULT_MATERIAL_COLOR[0],
-                    DEFAULT_MATERIAL_COLOR[1],
-                    DEFAULT_MATERIAL_COLOR[2],
-                ],
+        }
+        selected.map(|(_, camera)| SceneCamera {
+            entity: camera.entity,
+            params: camera.params,
+        })
+    }
+
+    fn render_instances(&self) -> Vec<MeshInstance<'_>> {
+        let mut instances = Vec::new();
+        for renderable in self.scene_renderables() {
+            let Some(transform) = self.entity_transform(renderable.entity) else {
+                continue;
             };
             instances.push(MeshInstance {
-                mesh,
+                mesh: renderable.mesh,
                 model: model_matrix(&transform),
-                color,
+                color: renderable.color,
             });
         }
         let effect_mesh = &self.render.effect_mesh;

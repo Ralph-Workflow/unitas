@@ -106,12 +106,12 @@ namespace Unitas.Bridge.Playtest
             }
             catch (Exception ex)
             {
-                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Unevaluable, null, null, "capture failed: " + ex.Message);
+                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Unevaluable, null, null, "capture failed: " + CaptureFailureDetail(camera, ex.Message));
             }
 
             if (!File.Exists(capturePath))
             {
-                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Unevaluable, null, null, "capture failed");
+                return new CheckpointResult(checkpoint.Id, CheckpointStatus.Unevaluable, null, null, "capture failed: " + CaptureFailureDetail(camera, null));
             }
 
             writtenPath = capturePath;
@@ -193,6 +193,17 @@ namespace Unitas.Bridge.Playtest
             }
 
             return new CheckpointResult(checkpoint.Id, CheckpointStatus.Passed, referenceExpected, referenceObserved, null);
+        }
+
+        private static string CaptureFailureDetail(Camera camera, string? errorMessage)
+        {
+            string? failure = camera.LastCaptureFailure;
+            if (!string.IsNullOrEmpty(failure))
+            {
+                return failure;
+            }
+
+            return string.IsNullOrEmpty(errorMessage) ? "the capture file was not written" : errorMessage;
         }
 
         private static LogSeverity? RequiredSeverity(string? severity)

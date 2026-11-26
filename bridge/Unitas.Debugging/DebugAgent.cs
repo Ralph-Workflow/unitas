@@ -15,14 +15,21 @@ namespace Unitas.Debugging
 
         private const int SelfStartTimeoutMilliseconds = 10000;
 
+        /// <summary>
+        /// How long a self-started session waits for its client to configure it.
+        /// The script thread parks on <see cref="SessionConfigured"/> instead of
+        /// polling, so a loaded host cannot starve the adapter reader thread and
+        /// lose the breakpoint stop.
+        /// </summary>
+        private const int SessionConfigurationTimeoutMilliseconds = 120000;
+
         private static readonly object Gate = new object();
+        private static readonly ManualResetEventSlim SessionConfigured = new ManualResetEventSlim(false);
         private static readonly Dictionary<(string File, int Line), string?> Breakpoints = new Dictionary<(string File, int Line), string?>();
         private static SequencePointTable _sequencePoints = new SequencePointTable();
         private static DebugSession? _session;
         private static int _callDepth;
         private static int _selfStartState;
-        private static bool _configured;
-        private static long _selfStartDeadline;
         private static int _selfStartedPort;
         private static TcpListener? _selfStartedListener;
         private static TcpClient? _selfStartedClient;
@@ -325,10 +332,9 @@ namespace Unitas.Debugging
                 _selfStartedListener = null;
                 _selfStartedClient = null;
                 Volatile.Write(ref _selfStartedPort, 0);
-                Volatile.Write(ref _selfStartDeadline, 0);
                 Volatile.Write(ref _selfStartState, 0);
-                _configured = false;
             }
+            SessionConfigured.Set();
             session?.Dispose();
             client?.Close();
             listener?.Stop();
@@ -336,8 +342,8 @@ namespace Unitas.Debugging
 
         internal static void MarkConfigured()
         {
-            _configured = true;
             Volatile.Write(ref _selfStartState, 2);
+            SessionConfigured.Set();
         }
 
         private static void EnsureDebugSession()
@@ -376,21 +382,17 @@ namespace Unitas.Debugging
             {
                 return;
             }
-            long remaining = Volatile.Read(ref _selfStartDeadline) - Environment.TickCount64;
-            if (remaining > 0)
+            if (!SessionConfigured.Wait(SessionConfigurationTimeoutMilliseconds))
             {
-                SpinWait.SpinUntil(() => _configured, (int)Math.Min(remaining, int.MaxValue));
+                throw new TimeoutException(
+                    "the DAP client did not configure the session within "
+                    + (SessionConfigurationTimeoutMilliseconds / 1000).ToString(CultureInfo.InvariantCulture)
+                    + " s");
             }
-        }
-
-        private static void Diag(string message)
-        {
-            File.AppendAllText("/tmp/u6_diag.log", message + "\n");
         }
 
         private static void StartSelfStartedListener(string portText)
         {
-            File.AppendAllText("/tmp/u6_diag.log", "start: begin\n");
             if (!int.TryParse(portText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int port) || port < 0 || port > 65535)
             {
                 throw new InvalidOperationException(
@@ -398,10 +400,9 @@ namespace Unitas.Debugging
             }
             TcpListener listener = BeginLoopbackListener(IPAddress.Loopback, port);
             _selfStartedListener = listener;
+            SessionConfigured.Reset();
             Volatile.Write(ref _selfStartedPort, ((IPEndPoint)listener.LocalEndpoint).Port);
-            Volatile.Write(ref _selfStartDeadline, Environment.TickCount64 + SelfStartTimeoutMilliseconds);
             Volatile.Write(ref _selfStartState, 1);
-            File.AppendAllText("/tmp/u6_diag.log", "start: listening on " + Volatile.Read(ref _selfStartedPort).ToString(CultureInfo.InvariantCulture) + "\n");
             _ = Task.Run(() => AcceptSelfStartedClientAsync(listener));
         }
 
@@ -409,14 +410,16 @@ namespace Unitas.Debugging
         {
             try
             {
-                Diag("accept: waiting");
-                TcpClient client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
-                Diag("accept: got client");
+                using CancellationTokenSource acceptTimeout = new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(SelfStartTimeoutMilliseconds * 3));
+                TcpClient client = await listener.AcceptTcpClientAsync(acceptTimeout.Token).ConfigureAwait(false);
                 _selfStartedClient = client;
                 BeginSession(client.GetStream());
-                Diag("accept: session begun");
             }
             catch (SocketException)
+            {
+            }
+            catch (OperationCanceledException)
             {
             }
             catch (ObjectDisposedException)

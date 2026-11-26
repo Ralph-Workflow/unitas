@@ -152,6 +152,7 @@ namespace Unitas.Bridge.Tests
                 UnevaluableCheckpointScenario();
                 SetupFailureScenario();
                 RepeatabilityScenario();
+                ReloadedSceneKeepsCameraRenderable();
                 VisualReferenceTests.Run();
             }
             finally
@@ -185,10 +186,14 @@ namespace Unitas.Bridge.Tests
             for (int index = 0; index < checkpoints.Count; index++)
             {
                 JsonNode checkpoint = checkpoints[index]!;
+                string id = GetString(checkpoint, "id");
+                string status = GetString(checkpoint, "status");
+                string reason = GetString(checkpoint, "reason");
                 Check.Equal(
-                    "Full pass checkpoint " + GetString(checkpoint, "id") + " passed",
+                    "Full pass checkpoint " + id + " passed"
+                        + (status == "passed" || reason.Length == 0 ? string.Empty : " (" + reason + ")"),
                     "passed",
-                    GetString(checkpoint, "status"));
+                    status);
             }
 
             Check.That("Full pass collected log messages", GetArray(report, "messages").Count > 0);
@@ -200,6 +205,48 @@ namespace Unitas.Bridge.Tests
                 string capturePath = GetText(captures[0]!);
                 Check.That("Full pass capture file exists on disk", File.Exists(capturePath));
             }
+        }
+
+        private static void ReloadedSceneKeepsCameraRenderable()
+        {
+            ScenarioDocument document = ScenarioDocument.Parse(ResolveScenePaths(ReloadedSceneScenarioJson()));
+            ScenarioResult result = new ScenarioRunner().Run(document);
+            JsonNode report = ParseReport(result);
+
+            Check.Equal("Reloaded scene scenario status is passed", "passed", GetString(report, "status"));
+            JsonArray checkpoints = GetArray(report, "checkpoints");
+            Check.Equal("Reloaded scene reports one checkpoint", 1, checkpoints.Count);
+            if (checkpoints.Count == 1)
+            {
+                JsonNode checkpoint = checkpoints[0]!;
+                string status = GetString(checkpoint, "status");
+                string reason = GetString(checkpoint, "reason");
+                Check.Equal(
+                    "Reloaded scene checkpoint shot passed"
+                        + (status == "passed" || reason.Length == 0 ? string.Empty : " (" + reason + ")"),
+                    "passed",
+                    status);
+            }
+
+            Check.Equal("Reloaded scene captured one frame", 1, GetArray(report, "captures").Count);
+        }
+
+        private static string ReloadedSceneScenarioJson()
+        {
+            string scene = "\"" + FixtureDirectory + SceneFileName + "\"";
+            return "{"
+                + "\"name\": \"reloaded-scene\","
+                + "\"scene\": " + scene + ","
+                + "\"steps\": ["
+                + "{ \"load_scene\": { \"path\": " + scene + ", \"mode\": \"single\" } },"
+                + "{ \"load_scene\": { \"path\": " + scene + ", \"mode\": \"single\" } },"
+                + "{ \"tick\": { \"frames\": 30, \"delta_seconds\": 0.02 } }"
+                + "],"
+                + "\"checkpoints\": ["
+                + "{ \"id\": \"shot\", \"after_step\": 3, \"kind\": \"render_capture\", \"camera\": \"Main Camera\","
+                + " \"width\": 64, \"height\": 64, \"expected_non_background_pixels\": 4096 }"
+                + "]"
+                + "}";
         }
 
         private static void FailingCheckpointScenario()
@@ -260,7 +307,11 @@ namespace Unitas.Bridge.Tests
 
         private static string LoadScenarioJson(string fileName)
         {
-            string text = File.ReadAllText(ResolveFixture(FixtureDirectory + fileName));
+            return ResolveScenePaths(File.ReadAllText(ResolveFixture(FixtureDirectory + fileName)));
+        }
+
+        private static string ResolveScenePaths(string text)
+        {
             string marker = "\"" + FixtureDirectory + SceneFileName + "\"";
             if (text.Contains(marker, StringComparison.Ordinal))
             {

@@ -517,6 +517,7 @@ pub fn launch_bundle_windowed(
     })?;
 
     let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
+    presenter.bind_scene(&runtime);
 
     let (audio_device_active, audio_device_status) = if options.start_audio_device {
         match presenter.start_default_audio_output() {
@@ -828,7 +829,8 @@ pub fn capture_sample_reference_bmp(
             message: error.to_string(),
         }
     })?;
-    let presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
+    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
+    presenter.bind_scene(&runtime);
 
     runtime
         .tick(1.0 / 60.0)
@@ -909,7 +911,8 @@ pub fn run_device_verification(
         }
     })?;
 
-    let presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
+    let mut presenter = GpuFramePresenter::from_new_renderer().map_err(render_failure)?;
+    presenter.bind_scene(&runtime);
 
     let initial_ball_position = runtime
         .find_entity_by_name("PlayerBall")
