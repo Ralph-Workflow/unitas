@@ -21,7 +21,7 @@ use unitas_audio::{AudioClip, AudioMixerGroup};
 use unitas_core::EntityId;
 use unitas_jobs::JobHandle;
 use unitas_physics::trails::TrailSettings;
-use unitas_physics::{CollisionDetectionMode3D, ForceMode};
+use unitas_physics::{CollisionDetectionMode3D, CollisionPayload, ForceMode};
 use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
@@ -82,6 +82,24 @@ pub struct AbiCharacterMoveOutput {
     pub collision_flags: u32,
     pub is_grounded: u8,
     pub reserved: [u8; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CollisionSummary {
+    pub impulse: f32,
+    pub relative_velocity: [f32; 3],
+    pub contact_count: u32,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CollisionContactPoint {
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub impulse: f32,
 }
 
 pub struct RuntimeState {
@@ -1015,6 +1033,129 @@ pub extern "C" fn unitas_runtime_body_set_collision_detection_mode(
         Err(code) => code,
     }
 }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collision_summary(
+    a: u64,
+    b: u64,
+    out: *mut CollisionSummary,
+) -> i32 {
+    let Some(summary) = with_collision_payload(a, b, &|payload| CollisionSummary {
+        impulse: payload.total_impulse as f32,
+        relative_velocity: to_f32(payload.relative_velocity),
+        contact_count: payload.contacts.len() as u32,
+        point: payload.contacts.first().map_or([0.0; 3], |contact| to_f32(contact.point)),
+        normal: payload
+            .contacts
+            .first()
+            .map_or([0.0; 3], |contact| to_f32(contact.normal)),
+    }) else {
+        return -1;
+    };
+    if !write_output(out, summary) {
+        return -2;
+    }
+    0
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collision_contact(
+    a: u64,
+    b: u64,
+    index: u32,
+    out: *mut CollisionContactPoint,
+) -> i32 {
+    let Some(contact) = with_collision_payload(a, b, &|payload| {
+        payload
+            .contacts
+            .get(index as usize)
+            .map(|contact| CollisionContactPoint {
+                point: contact.point,
+                normal: contact.normal,
+                impulse: contact.impulse as f32,
+            })
+    }) else {
+        return -1;
+    };
+    let Some(contact) = contact else {
+        return -1;
+    };
+    if !write_output(out, contact) {
+        return -2;
+    }
+    0
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_move_body_position(entity: u64, x: f32, y: f32, z: f32) -> i32 {
+    let entity = EntityId::new(entity);
+    let target = [f64::from(x), f64::from(y), f64::from(z)];
+    let moved = with_active_runtime(|runtime| runtime.move_body_position(entity, target).ok())
+        .or_else(|| {
+            with_registered_runtime(|runtime| runtime.move_body_position(entity, target).ok())
+        });
+    match moved {
+        Some(()) => 0,
+        None => -1,
+    }
+}
+}
+
+fn to_f32(vector: [f64; 3]) -> [f32; 3] {
+    [vector[0] as f32, vector[1] as f32, vector[2] as f32]
+}
+
+fn write_output<T>(out: *mut T, value: T) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    // SAFETY: the caller owns the memory the pointer names and passes a pointer to a
+    // writable value of the same repr(C) type the export declares.
+    unsafe { out.write(value) };
+    true
+}
+
+fn with_collision_payload<T>(
+    first: u64,
+    second: u64,
+    action: &impl Fn(&CollisionPayload) -> T,
+) -> Option<T> {
+    if let Some(value) =
+        with_active_runtime(|runtime| runtime.collision_payload(first, second).map(action))
+    {
+        return Some(value);
+    }
+    with_registered_runtime(|runtime| runtime.collision_payload(first, second).map(action))
+}
+
+fn with_active_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<T> {
+    ACTIVE_STATES.with(|cell| {
+        let mut stack = cell.borrow_mut();
+        for (_, state) in stack.iter_mut().rev() {
+            if let Some(value) = action(&mut state.runtime) {
+                return Some(value);
+            }
+        }
+        None
+    })
+}
+
+fn with_registered_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<T> {
+    let Ok(reg) = registry() else {
+        return None;
+    };
+    let Ok(mut map) = reg.lock() else {
+        return None;
+    };
+    for state in map.values_mut() {
+        if let Some(value) = action(&mut state.runtime) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 ffi_export! {

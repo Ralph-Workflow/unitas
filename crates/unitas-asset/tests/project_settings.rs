@@ -6,22 +6,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unitas_asset::project_settings::{
     load_project_settings, parse_audio_manager, parse_color_space, parse_editor_build_settings,
     parse_editor_settings, parse_graphics_settings, parse_mono_manager, parse_nav_mesh_areas,
-    parse_package_manager_settings, parse_preset_manager, parse_quality_settings,
-    parse_quality_settings_stream, parse_tag_manager, parse_version_control_settings,
-    AudioManagerSettings, BuildSceneEntry, ColorSpaceSetting, EditorBuildSettings, EditorSettings,
-    GraphicsSettings, MonoManagerSettings, NavMeshAreaEntry, NavMeshAreaSettings,
-    PackageManagerSettings, PlayerSettings, PresetManagerSettings, QualityLevel, QualitySettings,
-    SettingBoundary, SettingValueSource, SortingLayerEntry, TagManagerSettings,
-    VersionControlSettings,
+    parse_package_manager_settings, parse_physics_manager, parse_physics_manager_stream,
+    parse_preset_manager, parse_quality_settings, parse_quality_settings_stream, parse_tag_manager,
+    parse_version_control_settings, AudioManagerSettings, BuildSceneEntry, ColorSpaceSetting,
+    EditorBuildSettings, EditorSettings, GraphicsSettings, MonoManagerSettings, NavMeshAreaEntry,
+    NavMeshAreaSettings, PackageManagerSettings, PhysicsProjectSettings, PhysicsSolverType,
+    PlayerSettings, PresetManagerSettings, QualityLevel, QualitySettings, SettingBoundary,
+    SettingValueSource, SortingLayerEntry, TagManagerSettings, VersionControlSettings,
+};
+use unitas_asset::scene::{
+    parse_physic_material, BounceCombine, FrictionCombine, RigidbodyCollisionDetection,
+    RigidbodyInterpolation,
 };
 use unitas_asset::scene_save;
 use unitas_asset::unity_yaml::Node;
 use unitas_asset::{
-    parse_dynamics_manager, parse_dynamics_manager_stream, parse_input_manager,
-    parse_input_manager_stream, parse_player_settings, parse_player_settings_stream,
-    parse_time_manager, parse_time_manager_stream, unity_yaml, DynamicsSettings, InputAxis,
-    InputManagerSettings, ProjectIdentity, ProjectSettingsError, TimeSettings,
-    DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
+    assemble_scene_with_physics, parse_dynamics_manager, parse_dynamics_manager_stream,
+    parse_input_manager, parse_input_manager_stream, parse_player_settings,
+    parse_player_settings_stream, parse_time_manager, parse_time_manager_stream, unity_yaml,
+    DynamicsSettings, InputAxis, InputManagerSettings, ProjectIdentity, ProjectSettingsError,
+    TimeSettings, DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -34,6 +38,10 @@ fn fixtures_dir() -> PathBuf {
 
 fn settings_dir() -> PathBuf {
     fixtures_dir().join("project").join("ProjectSettings")
+}
+
+fn sample_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
 }
 
 #[test]
@@ -1730,5 +1738,141 @@ fn parses_all_project_settings_families_and_round_trips_edits() -> TestResult {
     assert!(loaded_build.scenes()[1].enabled);
 
     fs::remove_dir_all(&project_root)?;
+    Ok(())
+}
+
+#[test]
+fn parses_the_sample_physics_manager_settings() -> TestResult {
+    let path = sample_root()
+        .join("ProjectSettings")
+        .join("DynamicsManager.asset");
+    let settings: PhysicsProjectSettings =
+        parse_physics_manager(&path)?.ok_or("expected Some(physics settings)")?;
+    assert_eq!(settings.gravity, [0.0, -9.81, 0.0]);
+    assert_eq!(settings.default_solver_iterations, 6);
+    assert_eq!(settings.default_solver_velocity_iterations, 2);
+    assert_eq!(settings.bounce_threshold, 2.0);
+    assert_eq!(settings.default_contact_offset, 0.01);
+    assert_eq!(settings.sleep_threshold, 0.005);
+    assert_eq!(settings.sleep_angular_threshold, 0.02);
+    assert_eq!(settings.solver_type, PhysicsSolverType::Default);
+    assert!(!settings.enhanced_determinism);
+    assert_eq!(settings.layer_collision_matrix, [u32::MAX; 32]);
+
+    let stream = unity_yaml::parse_file(&path)?;
+    assert_eq!(parse_physics_manager_stream(&stream)?, settings);
+    Ok(())
+}
+
+#[test]
+fn parses_the_sample_bumper_physic_material() -> TestResult {
+    let path = sample_root()
+        .join("Assets")
+        .join("Materials")
+        .join("Bumper.physicMaterial");
+    let material = parse_physic_material(&path).map_err(std::io::Error::other)?;
+    assert_eq!(material.friction, 0.2);
+    assert_eq!(material.restitution, 1.5);
+    assert_eq!(material.friction_combine, FrictionCombine::Average);
+    assert_eq!(material.bounce_combine, BounceCombine::Maximum);
+    Ok(())
+}
+
+#[test]
+fn physics_manager_parses_every_setting_and_preserves_an_unknown_key() -> TestResult {
+    let root = temp_settings_dir("physics_manager")?;
+    let path = root.join("DynamicsManager.asset");
+    let raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 13\n  m_Gravity: {x: 0, y: -19.62, z: 1.5}\n  m_DefaultSolverIterations: 12\n  m_DefaultSolverVelocityIterations: 4\n  m_BounceThreshold: 1.5\n  m_DefaultContactOffset: 0.02\n  m_DefaultSleepThreshold: 0.01\n  m_SleepAngularThreshold: 0.03\n  m_EnableEnhancedDeterminism: 1\n  m_SolverType: 2\n  m_LayerCollisionMatrix: 0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\n  m_UnknownPhysicsSetting: preserved_physics\n";
+    fs::write(&path, raw)?;
+
+    let settings = parse_physics_manager(&path)?.ok_or("expected Some(physics settings)")?;
+    assert_eq!(settings.gravity, [0.0, -19.62, 1.5]);
+    assert_eq!(settings.default_solver_iterations, 12);
+    assert_eq!(settings.default_solver_velocity_iterations, 4);
+    assert_eq!(settings.bounce_threshold, 1.5);
+    assert_eq!(settings.default_contact_offset, 0.02);
+    assert_eq!(settings.sleep_threshold, 0.01);
+    assert_eq!(settings.sleep_angular_threshold, 0.03);
+    assert_eq!(settings.solver_type, PhysicsSolverType::TgsSoft);
+    assert!(settings.enhanced_determinism);
+    assert_eq!(settings.layer_collision_matrix[0], 0xFFFF0000);
+    assert_eq!(settings.layer_collision_matrix[1], 0xFFFF0000);
+
+    let parsed = unity_yaml::parse(raw)?;
+    assert_eq!(scene_save::emit_stream(&parsed), raw);
+    scene_save::save_stream(&path, &parsed)?;
+    assert_eq!(fs::read_to_string(&path)?, raw);
+    let reloaded = unity_yaml::parse_file(&path)?;
+    assert_eq!(
+        reloaded.documents[0]
+            .root
+            .get("PhysicsManager")
+            .and_then(|node| node.get("m_UnknownPhysicsSetting"))
+            .and_then(Node::as_str),
+        Some("preserved_physics")
+    );
+    assert_eq!(parse_physics_manager(&path)?, Some(settings));
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[test]
+fn parses_rigidbody_physics_settings_into_typed_values() -> TestResult {
+    let raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Marble\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 2.5\n  m_Drag: 0.25\n  m_AngularDrag: 0.5\n  m_UseGravity: 1\n  m_IsKinematic: 0\n  m_Interpolate: 2\n  m_CollisionDetection: 3\n  m_SleepThreshold: 0.01\n  m_SleepAngularThreshold: 0.03\n  m_SolverIterations: 12\n  m_SolverVelocityIterations: 3\n  m_MaxAngularVelocity: 15\n  m_MaxDepenetrationVelocity: 20\n  m_IncludeLayers:\n    m_Bits: 6\n  m_ExcludeLayers:\n    m_Bits: 3\n  m_LayerOverridePriority: 5\n";
+    let stream = unity_yaml::parse(raw)?;
+    let (_graph, _scripts, physics) = assemble_scene_with_physics(&stream)?;
+    let rigidbody = physics
+        .first()
+        .and_then(|binding| binding.rigidbody.as_ref())
+        .ok_or("expected a rigidbody binding")?;
+    assert_eq!(rigidbody.mass, 2.5);
+    assert_eq!(rigidbody.drag, 0.25);
+    assert_eq!(rigidbody.angular_drag, 0.5);
+    assert!(rigidbody.use_gravity);
+    assert!(!rigidbody.is_trigger);
+    assert!(!rigidbody.is_kinematic);
+    assert_eq!(rigidbody.interpolation, RigidbodyInterpolation::Extrapolate);
+    assert_eq!(
+        rigidbody.collision_detection,
+        RigidbodyCollisionDetection::ContinuousSpeculative
+    );
+    assert_eq!(rigidbody.sleep_threshold, 0.01);
+    assert_eq!(rigidbody.sleep_angular_threshold, 0.03);
+    assert_eq!(rigidbody.solver_iterations, Some(12));
+    assert_eq!(rigidbody.solver_velocity_iterations, Some(3));
+    assert_eq!(rigidbody.max_angular_velocity, 15.0);
+    assert_eq!(rigidbody.max_depenetration_velocity, 20.0);
+    assert_eq!(rigidbody.include_layers, Some(6));
+    assert_eq!(rigidbody.exclude_layers, Some(3));
+    assert_eq!(rigidbody.layer_override_priority, 5);
+    Ok(())
+}
+
+#[test]
+fn rigidbody_physics_settings_fall_back_to_unity_defaults_when_unset() -> TestResult {
+    let raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Marble\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n";
+    let stream = unity_yaml::parse(raw)?;
+    let (_graph, _scripts, physics) = assemble_scene_with_physics(&stream)?;
+    let rigidbody = physics
+        .first()
+        .and_then(|binding| binding.rigidbody.as_ref())
+        .ok_or("expected a rigidbody binding")?;
+    assert_eq!(rigidbody.drag, 0.0);
+    assert_eq!(rigidbody.angular_drag, 0.05);
+    assert_eq!(rigidbody.interpolation, RigidbodyInterpolation::None);
+    assert_eq!(
+        rigidbody.collision_detection,
+        RigidbodyCollisionDetection::Discrete
+    );
+    assert_eq!(rigidbody.sleep_threshold, 0.005);
+    assert_eq!(rigidbody.sleep_angular_threshold, 0.02);
+    assert_eq!(rigidbody.solver_iterations, None);
+    assert_eq!(rigidbody.solver_velocity_iterations, None);
+    assert_eq!(rigidbody.max_angular_velocity, 7.0);
+    assert_eq!(rigidbody.max_depenetration_velocity, 10.0);
+    assert_eq!(rigidbody.include_layers, None);
+    assert_eq!(rigidbody.exclude_layers, None);
+    assert_eq!(rigidbody.layer_override_priority, 0);
     Ok(())
 }

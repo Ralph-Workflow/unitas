@@ -148,11 +148,11 @@ bridge-test-shards:
 
 editor-test-shards:
 	@rc=0; \
-	UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) StdioTransportTests || rc=1; \
+	UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" UNITAS_RUNTIME_LIBRARY="$(CURDIR)/target/debug/libunitas_runtime.dylib" dotnet $(EDITOR_TEST_BINARY) StdioTransportTests || rc=1; \
 	pids=""; running=0; \
 	for shard in $(EDITOR_TEST_SHARDS); do \
 		[ "$$shard" = "StdioTransportTests" ] && continue; \
-		UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) $$shard & pids="$$pids $$!"; \
+		UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" UNITAS_RUNTIME_LIBRARY="$(CURDIR)/target/debug/libunitas_runtime.dylib" dotnet $(EDITOR_TEST_BINARY) $$shard & pids="$$pids $$!"; \
 		running=$$((running+1)); \
 		if [ $$running -ge $(EDITOR_TEST_SHARD_FANOUT) ]; then \
 			for pid in $$pids; do wait $$pid || rc=1; done; pids=""; running=0; \

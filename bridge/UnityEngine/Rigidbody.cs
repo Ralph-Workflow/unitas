@@ -63,6 +63,15 @@ namespace UnityEngine
                 }
             }
         }
+        public void MovePosition(Vector3 position)
+        {
+            GameObject? owner = gameObject;
+            IPhysicsProvider? provider = Physics.Provider;
+            if (owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0 && provider != null)
+            {
+                provider.TryMoveBodyPosition(owner.NativeEntityId, position);
+            }
+        }
         public void AddForce(Vector3 force)
         {
             AddForce(force, ForceMode.Force);

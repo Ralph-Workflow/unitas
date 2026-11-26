@@ -1389,6 +1389,85 @@ namespace Unitas.Bridge
             return RuntimeInterop.unitas_runtime_add_body_force(_runtimeHandle, entity, buffer) == 0;
         }
 
+        public bool TryGetCollisionSummary(ulong a, ulong b, out CollisionSummary summary)
+        {
+            summary = default;
+            if (_isDisposed || a == 0 || b == 0)
+            {
+                return false;
+            }
+            if (!TryReadCollisionSummary(a, b, out RuntimeInterop.AbiCollisionSummary native))
+            {
+                return false;
+            }
+            summary = new CollisionSummary
+            {
+                impulse = native.Impulse,
+                relativeVelocity = native.RelativeVelocity,
+                contactCount = (int)native.ContactCount,
+                point = native.Point,
+                normal = native.Normal,
+            };
+            return true;
+        }
+
+        public bool TryGetCollisionContact(ulong a, ulong b, uint index, out ContactPoint contact)
+        {
+            contact = default;
+            if (_isDisposed || a == 0 || b == 0)
+            {
+                return false;
+            }
+            if (!TryReadCollisionContact(a, b, index, out RuntimeInterop.AbiCollisionContactPoint native))
+            {
+                return false;
+            }
+            contact = new ContactPoint
+            {
+                point = new Vector3((float)native.PointX, (float)native.PointY, (float)native.PointZ),
+                normal = new Vector3((float)native.NormalX, (float)native.NormalY, (float)native.NormalZ),
+                impulse = native.Impulse,
+            };
+            return true;
+        }
+
+        public bool TryMoveBodyPosition(ulong entity, Vector3 position)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_move_body_position(entity, position.x, position.y, position.z) == 0;
+        }
+
+        private bool TryReadCollisionSummary(ulong a, ulong b, out RuntimeInterop.AbiCollisionSummary native)
+        {
+            if (RuntimeInterop.unitas_runtime_collision_summary(a, b, out native) == 0)
+            {
+                return true;
+            }
+            if (a != b && RuntimeInterop.unitas_runtime_collision_summary(b, a, out native) == 0)
+            {
+                return true;
+            }
+            native = default;
+            return false;
+        }
+
+        private bool TryReadCollisionContact(ulong a, ulong b, uint index, out RuntimeInterop.AbiCollisionContactPoint native)
+        {
+            if (RuntimeInterop.unitas_runtime_collision_contact(a, b, index, out native) == 0)
+            {
+                return true;
+            }
+            if (a != b && RuntimeInterop.unitas_runtime_collision_contact(b, a, index, out native) == 0)
+            {
+                return true;
+            }
+            native = default;
+            return false;
+        }
+
         public bool TryMove(CharacterMoveInput input, out CharacterMoveOutput output)
         {
             output = default;
@@ -2723,7 +2802,7 @@ namespace Unitas.Bridge
                 {
                     if (_scripts.TryGetValue(snapshotA[i], out MonoBehaviour? scriptA) && IsEligible(scriptA))
                     {
-                        DispatchCollision(scriptA!, new Collision(otherB), phase);
+                        DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phase);
                     }
                 }
             }
@@ -2732,7 +2811,7 @@ namespace Unitas.Bridge
                 MonoBehaviour? scriptA = FindScriptByEntity(entityA);
                 if (IsEligible(scriptA))
                 {
-                    DispatchCollision(scriptA!, new Collision(otherB), phase);
+                    DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phase);
                 }
             }
 
@@ -2745,7 +2824,7 @@ namespace Unitas.Bridge
                     {
                         if (_scripts.TryGetValue(snapshotB[i], out MonoBehaviour? scriptB) && IsEligible(scriptB))
                         {
-                            DispatchCollision(scriptB!, new Collision(otherA), phase);
+                            DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phase);
                         }
                     }
                 }
@@ -2754,7 +2833,7 @@ namespace Unitas.Bridge
                     MonoBehaviour? scriptB = FindScriptByEntity(entityB);
                     if (IsEligible(scriptB))
                     {
-                        DispatchCollision(scriptB!, new Collision(otherA), phase);
+                        DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phase);
                     }
                 }
             }

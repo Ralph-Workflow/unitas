@@ -36,10 +36,77 @@ pub enum ForceMode {
     VelocityChange = 3,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrictionCombine {
+    #[default]
+    Average,
+    Minimum,
+    Multiply,
+    Maximum,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BounceCombine {
+    #[default]
+    Average,
+    Minimum,
+    Maximum,
+    Multiply,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BodyInterpolation {
+    None,
+    #[default]
+    Interpolate,
+    Extrapolate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolverSettings {
+    pub num_solver_iterations: usize,
+    pub num_additional_friction_iterations: usize,
+    pub num_internal_pgs_iterations: usize,
+    pub contact_offset: f64,
+    pub allowed_linear_error: f64,
+    pub max_depenetration_velocity: f64,
+    pub deterministic_accumulation: bool,
+}
+
+impl Default for SolverSettings {
+    fn default() -> Self {
+        Self {
+            num_solver_iterations: 4,
+            num_additional_friction_iterations: 1,
+            num_internal_pgs_iterations: 1,
+            contact_offset: 0.02,
+            allowed_linear_error: 0.005,
+            max_depenetration_velocity: 3.0,
+            deterministic_accumulation: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollisionContact {
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub impulse: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollisionPayload {
+    pub contacts: Vec<CollisionContact>,
+    pub relative_velocity: [f64; 3],
+    pub total_impulse: f64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicsMaterial3D {
     pub friction: f64,
     pub restitution: f64,
+    pub friction_combine: FrictionCombine,
+    pub restitution_combine: BounceCombine,
 }
 
 impl Default for PhysicsMaterial3D {
@@ -47,6 +114,8 @@ impl Default for PhysicsMaterial3D {
         Self {
             friction: 0.6,
             restitution: 0.0,
+            friction_combine: FrictionCombine::Average,
+            restitution_combine: BounceCombine::Average,
         }
     }
 }
@@ -56,7 +125,66 @@ impl PhysicsMaterial3D {
         Self {
             friction: friction.max(0.0),
             restitution: restitution.max(0.0),
+            friction_combine: FrictionCombine::Average,
+            restitution_combine: BounceCombine::Average,
         }
+    }
+}
+
+pub fn combine_materials(a: &PhysicsMaterial3D, b: &PhysicsMaterial3D) -> PhysicsMaterial3D {
+    let friction_combine =
+        if friction_priority(a.friction_combine) >= friction_priority(b.friction_combine) {
+            a.friction_combine
+        } else {
+            b.friction_combine
+        };
+    let restitution_combine =
+        if bounce_priority(a.restitution_combine) >= bounce_priority(b.restitution_combine) {
+            a.restitution_combine
+        } else {
+            b.restitution_combine
+        };
+    PhysicsMaterial3D {
+        friction: combine_friction(a.friction, b.friction, friction_combine),
+        restitution: combine_restitution(a.restitution, b.restitution, restitution_combine),
+        friction_combine,
+        restitution_combine,
+    }
+}
+
+fn friction_priority(rule: FrictionCombine) -> u8 {
+    match rule {
+        FrictionCombine::Average => 0,
+        FrictionCombine::Minimum => 1,
+        FrictionCombine::Multiply => 2,
+        FrictionCombine::Maximum => 3,
+    }
+}
+
+fn bounce_priority(rule: BounceCombine) -> u8 {
+    match rule {
+        BounceCombine::Average => 0,
+        BounceCombine::Minimum => 1,
+        BounceCombine::Multiply => 2,
+        BounceCombine::Maximum => 3,
+    }
+}
+
+fn combine_friction(first: f64, second: f64, rule: FrictionCombine) -> f64 {
+    match rule {
+        FrictionCombine::Average => (first + second) / 2.0,
+        FrictionCombine::Minimum => first.min(second).abs(),
+        FrictionCombine::Multiply => first * second,
+        FrictionCombine::Maximum => first.max(second),
+    }
+}
+
+fn combine_restitution(first: f64, second: f64, rule: BounceCombine) -> f64 {
+    match rule {
+        BounceCombine::Average => (first + second) / 2.0,
+        BounceCombine::Minimum => first.min(second).abs(),
+        BounceCombine::Maximum => first.max(second),
+        BounceCombine::Multiply => first * second,
     }
 }
 
@@ -127,6 +255,27 @@ fn speed_of(body: &Body) -> f64 {
     sum.sqrt()
 }
 
+fn clamp_angular_velocity(velocity: [f64; 3], max: f64) -> [f64; 3] {
+    let speed = vector_length(velocity);
+    if speed <= max || speed == 0.0 {
+        return velocity;
+    }
+    let scale = max / speed;
+    [
+        velocity[0] * scale,
+        velocity[1] * scale,
+        velocity[2] * scale,
+    ]
+}
+
+pub(crate) fn ordered_pair(first: EntityId, second: EntityId) -> (EntityId, EntityId) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
 fn angular_speed_of(body: &Body) -> f64 {
     let sum = body.angular_velocity[0] * body.angular_velocity[0]
         + body.angular_velocity[1] * body.angular_velocity[1]
@@ -164,6 +313,16 @@ struct Body {
     layer: u32,
     friction: f64,
     restitution: f64,
+    friction_combine: FrictionCombine,
+    restitution_combine: BounceCombine,
+    collision_detection_mode: CollisionDetectionMode3D,
+    interpolation: BodyInterpolation,
+    max_angular_velocity: Option<f64>,
+    linear_drag: f64,
+    angular_drag: f64,
+    layer_include: Option<u32>,
+    layer_exclude: Option<u32>,
+    layer_priority: u32,
     uses_default_material: bool,
     previous_position: [f64; 3],
     previous_rotation: [f64; 4],
@@ -198,11 +357,15 @@ pub struct World {
     overlapping_triggers: PairSet,
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
+    collision_payloads: BTreeMap<(EntityId, EntityId), CollisionPayload>,
     collision_matrix: CollisionMatrix,
     sleep_threshold: f64,
     time_to_sleep: f64,
     auto_sync_transforms: bool,
     default_material: PhysicsMaterial3D,
+    solver_settings: SolverSettings,
+    ccd_body_count: usize,
+    last_delta_seconds: f64,
     diagnostics: Vec<PhysicsDiagnostic>,
     next_joint_id_3d: u64,
     joints_3d: BTreeMap<JointId3D, Joint3D>,
@@ -221,7 +384,7 @@ impl World {
     }
 
     pub fn with_gravity(gravity: [f64; 3]) -> Self {
-        Self {
+        let mut world = Self {
             gravity,
             backend: Backend::new(),
             bodies: Vec::new(),
@@ -230,16 +393,22 @@ impl World {
             overlapping_triggers: PairSet::new(),
             events: Vec::new(),
             trigger_events: Vec::new(),
+            collision_payloads: BTreeMap::new(),
             collision_matrix: CollisionMatrix::new(),
             sleep_threshold: DEFAULT_SLEEP_THRESHOLD,
             time_to_sleep: DEFAULT_TIME_TO_SLEEP,
             auto_sync_transforms: true,
             default_material: PhysicsMaterial3D::default(),
+            solver_settings: SolverSettings::default(),
+            ccd_body_count: 0,
+            last_delta_seconds: 0.0,
             diagnostics: Vec::new(),
             next_joint_id_3d: 1,
             joints_3d: BTreeMap::new(),
             broken_joints_3d: Vec::new(),
-        }
+        };
+        world.backend.set_solver_settings(world.solver_settings);
+        world
     }
 
     pub fn gravity(&self) -> [f64; 3] {
@@ -291,13 +460,25 @@ impl World {
 
     pub fn set_default_material(&mut self, material: PhysicsMaterial3D) {
         let clamped = PhysicsMaterial3D::new(material.friction, material.restitution);
-        self.default_material = clamped;
+        let rules = PhysicsMaterial3D {
+            friction_combine: material.friction_combine,
+            restitution_combine: material.restitution_combine,
+            ..clamped
+        };
+        self.default_material = rules;
         for body in &mut self.bodies {
             if body.uses_default_material {
-                body.friction = clamped.friction;
-                body.restitution = clamped.restitution;
-                self.backend
-                    .set_material(body.handles, clamped.friction, clamped.restitution);
+                body.friction = rules.friction;
+                body.restitution = rules.restitution;
+                body.friction_combine = rules.friction_combine;
+                body.restitution_combine = rules.restitution_combine;
+                self.backend.set_material(
+                    body.handles,
+                    rules.friction,
+                    rules.restitution,
+                    rules.friction_combine,
+                    rules.restitution_combine,
+                );
             }
         }
     }
@@ -308,6 +489,8 @@ impl World {
             PhysicsMaterial3D {
                 friction: body.friction,
                 restitution: body.restitution,
+                friction_combine: body.friction_combine,
+                restitution_combine: body.restitution_combine,
             }
         })
     }
@@ -322,6 +505,17 @@ impl World {
         self.add_body(entity, desc)?;
         if let Some(index) = self.indices.get(&entity).copied() {
             self.bodies[index].uses_default_material = true;
+            self.bodies[index].friction_combine = self.default_material.friction_combine;
+            self.bodies[index].restitution_combine = self.default_material.restitution_combine;
+            let handles = self.bodies[index].handles;
+            let material = self.default_material;
+            self.backend.set_material(
+                handles,
+                material.friction,
+                material.restitution,
+                material.friction_combine,
+                material.restitution_combine,
+            );
         }
         Ok(())
     }
@@ -336,7 +530,20 @@ impl World {
             Some(mat) => {
                 desc.friction = mat.friction;
                 desc.restitution = mat.restitution;
-                self.add_body(entity, desc)
+                self.add_body(entity, desc)?;
+                if let Some(index) = self.indices.get(&entity).copied() {
+                    self.bodies[index].friction_combine = mat.friction_combine;
+                    self.bodies[index].restitution_combine = mat.restitution_combine;
+                    let handles = self.bodies[index].handles;
+                    self.backend.set_material(
+                        handles,
+                        mat.friction,
+                        mat.restitution,
+                        mat.friction_combine,
+                        mat.restitution_combine,
+                    );
+                }
+                Ok(())
             }
             None => self.add_body_with_default_material(entity, desc),
         }
@@ -518,6 +725,9 @@ impl World {
         }
         let role = desc.effective_role();
         let handles = self.backend.add_body(entity, &desc, role);
+        if desc.collision_detection_mode.uses_ccd_solver() {
+            self.ccd_body_count += 1;
+        }
         let index = self.bodies.len();
         self.bodies.push(Body {
             entity,
@@ -535,6 +745,16 @@ impl World {
             layer: desc.layer,
             friction: desc.friction,
             restitution: desc.restitution,
+            friction_combine: FrictionCombine::Average,
+            restitution_combine: BounceCombine::Average,
+            collision_detection_mode: desc.collision_detection_mode,
+            interpolation: BodyInterpolation::default(),
+            max_angular_velocity: None,
+            linear_drag: 0.0,
+            angular_drag: 0.0,
+            layer_include: None,
+            layer_exclude: None,
+            layer_priority: 0,
             uses_default_material: false,
             previous_position: desc.position,
             previous_rotation: desc.rotation,
@@ -625,8 +845,10 @@ impl World {
             );
         }
         if delta_seconds > 0.0 {
+            self.prepare_collision_detection(delta_seconds);
             self.backend
                 .step(self.gravity, delta_seconds, &self.collision_matrix);
+            self.collect_collision_payloads();
         }
         for body in &mut self.bodies {
             if !body.simulated {
@@ -643,6 +865,14 @@ impl World {
                     if !body.sleeping {
                         body.velocity = self.backend.velocity(body.handles);
                         body.angular_velocity = self.backend.angular_velocity(body.handles);
+                        if let Some(max) = body.max_angular_velocity {
+                            let clamped = clamp_angular_velocity(body.angular_velocity, max);
+                            if clamped != body.angular_velocity {
+                                body.angular_velocity = clamped;
+                                self.backend
+                                    .set_angular_velocity(body.handles, clamped, false);
+                            }
+                        }
                     }
                 }
                 BodyRole::Kinematic => {
@@ -655,6 +885,7 @@ impl World {
         self.update_sweep_velocities(delta_seconds);
         self.solve_joints_3d(delta_seconds);
         self.update_sleeping(delta_seconds);
+        self.last_delta_seconds = delta_seconds;
         if delta_seconds > 0.0 {
             self.collect_events();
         } else {
@@ -664,6 +895,66 @@ impl World {
         self.commit_kinematic_poses();
         self.sync_transforms();
         Ok(())
+    }
+
+    fn prepare_collision_detection(&mut self, delta_seconds: f64) {
+        self.backend.set_ccd_solver_enabled(self.ccd_body_count > 0);
+        let contact_offset = self.solver_settings.contact_offset;
+        for body in &mut self.bodies {
+            if body.role != BodyRole::Dynamic {
+                continue;
+            }
+            if body.collision_detection_mode.uses_speculative_contacts() {
+                let travel = delta_seconds * vector_length(body.velocity);
+                let margin = travel.max(contact_offset);
+                self.backend.set_soft_ccd_prediction(body.handles, margin);
+            }
+        }
+    }
+
+    fn collect_collision_payloads(&mut self) {
+        self.collision_payloads.clear();
+        for (first, second, mut payload) in self.backend.collision_payloads() {
+            let first_velocity = self.effective_velocity(first).unwrap_or([0.0; 3]);
+            let second_velocity = self.effective_velocity(second).unwrap_or([0.0; 3]);
+            payload.relative_velocity = subtract(first_velocity, second_velocity);
+            if payload.total_impulse <= 0.0 {
+                self.derive_collision_impulse(first, second, &mut payload);
+            }
+            self.collision_payloads.insert((first, second), payload);
+        }
+    }
+
+    fn derive_collision_impulse(
+        &self,
+        first: EntityId,
+        second: EntityId,
+        payload: &mut CollisionPayload,
+    ) {
+        let Some(normal) = payload.contacts.first().map(|contact| contact.normal) else {
+            return;
+        };
+        let approach = dot(payload.relative_velocity, normal).abs();
+        if approach <= 0.0 {
+            return;
+        }
+        let inverse = self.body_inverse_mass(first) + self.body_inverse_mass(second);
+        if inverse <= 0.0 {
+            return;
+        }
+        let impulse = approach / inverse;
+        let share = impulse / payload.contacts.len() as f64;
+        for contact in &mut payload.contacts {
+            contact.impulse = share;
+        }
+        payload.total_impulse = impulse;
+    }
+
+    fn body_inverse_mass(&self, entity: EntityId) -> f64 {
+        self.indices
+            .get(&entity)
+            .map(|index| self.bodies[*index].inverse_mass())
+            .unwrap_or(0.0)
     }
 
     fn collect_events(&mut self) {
@@ -758,10 +1049,24 @@ impl World {
         let index = self.indices.get(&entity).copied()?;
         let body = &self.bodies[index];
         let alpha = alpha.clamp(0.0, 1.0);
-        Some((
-            lerp_vector(body.previous_position, body.position, alpha),
-            slerp_rotation(body.previous_rotation, body.rotation, alpha),
-        ))
+        Some(match body.interpolation {
+            BodyInterpolation::None => (body.position, body.rotation),
+            BodyInterpolation::Interpolate => (
+                lerp_vector(body.previous_position, body.position, alpha),
+                slerp_rotation(body.previous_rotation, body.rotation, alpha),
+            ),
+            BodyInterpolation::Extrapolate => {
+                let factor = alpha * self.last_delta_seconds;
+                (
+                    [
+                        body.position[0] + body.velocity[0] * factor,
+                        body.position[1] + body.velocity[1] * factor,
+                        body.position[2] + body.velocity[2] * factor,
+                    ],
+                    body.rotation,
+                )
+            }
+        })
     }
 
     pub fn effective_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
@@ -1024,6 +1329,10 @@ impl World {
             return Err(PhysicsError::InvalidBody(body));
         }
         let slot = &mut self.bodies[index];
+        let v = match slot.max_angular_velocity {
+            Some(max) => clamp_angular_velocity(v, max),
+            None => v,
+        };
         slot.angular_velocity = v;
         let handles = slot.handles;
         if slot.role == BodyRole::Dynamic {
@@ -1041,9 +1350,97 @@ impl World {
         let Some(index) = self.indices.get(&body).copied() else {
             return Err(PhysicsError::InvalidBody(body));
         };
+        let previous = self.bodies[index].collision_detection_mode;
+        if previous.uses_ccd_solver() && !mode.uses_ccd_solver() {
+            self.ccd_body_count = self.ccd_body_count.saturating_sub(1);
+        }
+        if !previous.uses_ccd_solver() && mode.uses_ccd_solver() {
+            self.ccd_body_count += 1;
+        }
+        self.bodies[index].collision_detection_mode = mode;
         let handles = self.bodies[index].handles;
         self.backend.set_collision_detection_mode(handles, mode);
         Ok(())
+    }
+
+    pub fn collision_detection_mode(&self, body: EntityId) -> Option<CollisionDetectionMode3D> {
+        self.indices
+            .get(&body)
+            .map(|index| self.bodies[*index].collision_detection_mode)
+    }
+
+    pub fn set_solver_settings(&mut self, settings: SolverSettings) {
+        self.solver_settings = settings;
+        self.backend.set_solver_settings(settings);
+    }
+
+    pub fn solver_settings(&self) -> SolverSettings {
+        self.solver_settings
+    }
+
+    pub fn set_body_drag(&mut self, entity: EntityId, linear_drag: f64, angular_drag: f64) {
+        let Some(index) = self.indices.get(&entity).copied() else {
+            return;
+        };
+        let linear_drag = if linear_drag.is_finite() {
+            linear_drag.max(0.0)
+        } else {
+            0.0
+        };
+        let angular_drag = if angular_drag.is_finite() {
+            angular_drag.max(0.0)
+        } else {
+            0.0
+        };
+        self.bodies[index].linear_drag = linear_drag;
+        self.bodies[index].angular_drag = angular_drag;
+        let handles = self.bodies[index].handles;
+        self.backend.set_drag(handles, linear_drag, angular_drag);
+    }
+
+    pub fn set_body_interpolation(&mut self, entity: EntityId, mode: BodyInterpolation) {
+        let Some(index) = self.indices.get(&entity).copied() else {
+            return;
+        };
+        self.bodies[index].interpolation = mode;
+    }
+
+    pub fn set_body_max_angular_velocity(&mut self, entity: EntityId, max: f64) {
+        let Some(index) = self.indices.get(&entity).copied() else {
+            return;
+        };
+        let max = if max.is_finite() {
+            max.max(0.0)
+        } else {
+            f64::MAX
+        };
+        self.bodies[index].max_angular_velocity = Some(max);
+        let clamped = clamp_angular_velocity(self.bodies[index].angular_velocity, max);
+        self.bodies[index].angular_velocity = clamped;
+        let handles = self.bodies[index].handles;
+        self.backend.set_angular_velocity(handles, clamped, false);
+    }
+
+    pub fn set_body_layer_overrides(
+        &mut self,
+        entity: EntityId,
+        include: Option<u32>,
+        exclude: Option<u32>,
+        priority: u32,
+    ) {
+        let Some(index) = self.indices.get(&entity).copied() else {
+            return;
+        };
+        self.bodies[index].layer_include = include;
+        self.bodies[index].layer_exclude = exclude;
+        self.bodies[index].layer_priority = priority;
+        let handles = self.bodies[index].handles;
+        self.backend
+            .set_layer_overrides(handles, include, exclude, priority);
+    }
+
+    pub fn collision_payload(&self, a: EntityId, b: EntityId) -> Option<&CollisionPayload> {
+        self.collision_payloads.get(&ordered_pair(a, b))
     }
 
     pub fn sleep(&mut self, body: EntityId) -> Result<(), PhysicsError> {
@@ -1139,6 +1536,11 @@ impl World {
         };
         let removed = self.bodies.remove(index);
         self.backend.remove_body(removed.handles);
+        if removed.collision_detection_mode.uses_ccd_solver() {
+            self.ccd_body_count = self.ccd_body_count.saturating_sub(1);
+        }
+        self.collision_payloads
+            .retain(|(first, second), _| *first != entity && *second != entity);
         for slot in self.indices.values_mut() {
             if *slot > index {
                 *slot -= 1;

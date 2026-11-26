@@ -33,6 +33,23 @@ namespace UnityEngine
         {
             return false;
         }
+
+        bool TryGetCollisionSummary(ulong a, ulong b, out CollisionSummary summary)
+        {
+            summary = default;
+            return false;
+        }
+
+        bool TryGetCollisionContact(ulong a, ulong b, uint index, out ContactPoint contact)
+        {
+            contact = default;
+            return false;
+        }
+
+        bool TryMoveBodyPosition(ulong entity, Vector3 position)
+        {
+            return false;
+        }
     }
 
     public static class Physics

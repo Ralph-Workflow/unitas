@@ -44,6 +44,12 @@ const ROOT_FILE_ID: i64 = 0;
 const UNIT_QUATERNION_TOLERANCE: f64 = 1e-3;
 const DEFAULT_PHYSIC_MATERIAL_FRICTION: f64 = 0.6;
 const DEFAULT_PHYSIC_MATERIAL_RESTITUTION: f64 = 0.0;
+const DEFAULT_RIGIDBODY_DRAG: f64 = 0.0;
+const DEFAULT_RIGIDBODY_ANGULAR_DRAG: f64 = 0.05;
+const DEFAULT_RIGIDBODY_SLEEP_THRESHOLD: f64 = 0.005;
+const DEFAULT_RIGIDBODY_SLEEP_ANGULAR_THRESHOLD: f64 = 0.02;
+const DEFAULT_RIGIDBODY_MAX_ANGULAR_VELOCITY: f64 = 7.0;
+const DEFAULT_RIGIDBODY_MAX_DEPENETRATION_VELOCITY: f64 = 10.0;
 const DEFAULT_CAPSULE_RADIUS: f64 = 0.5;
 const DEFAULT_CAPSULE_HEIGHT: f64 = 2.0;
 const DEFAULT_CAPSULE_DIRECTION: u32 = 1;
@@ -245,18 +251,64 @@ pub struct ScriptBinding {
     pub fields: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RigidbodyInterpolation {
+    None,
+    Interpolate,
+    Extrapolate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RigidbodyCollisionDetection {
+    Discrete,
+    Continuous,
+    ContinuousDynamic,
+    ContinuousSpeculative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrictionCombine {
+    Average,
+    Minimum,
+    Multiply,
+    Maximum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BounceCombine {
+    Average,
+    Minimum,
+    Maximum,
+    Multiply,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialValues {
     pub friction: f64,
     pub restitution: f64,
+    pub friction_combine: FrictionCombine,
+    pub bounce_combine: BounceCombine,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RigidbodyComponent {
     pub mass: f64,
+    pub drag: f64,
+    pub angular_drag: f64,
     pub use_gravity: bool,
     pub is_trigger: bool,
     pub is_kinematic: bool,
+    pub interpolation: RigidbodyInterpolation,
+    pub collision_detection: RigidbodyCollisionDetection,
+    pub sleep_threshold: f64,
+    pub sleep_angular_threshold: f64,
+    pub solver_iterations: Option<u32>,
+    pub solver_velocity_iterations: Option<u32>,
+    pub max_angular_velocity: f64,
+    pub max_depenetration_velocity: f64,
+    pub include_layers: Option<u32>,
+    pub exclude_layers: Option<u32>,
+    pub layer_override_priority: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1579,10 +1631,73 @@ fn collect_physics(
 fn rigidbody_component(body: &Node) -> RigidbodyComponent {
     RigidbodyComponent {
         mass: body.get("m_Mass").and_then(Node::as_f64).unwrap_or(1.0),
+        drag: yaml_f64(body.get("m_Drag"), DEFAULT_RIGIDBODY_DRAG, |value| {
+            value >= 0.0
+        }),
+        angular_drag: yaml_f64(
+            body.get("m_AngularDrag"),
+            DEFAULT_RIGIDBODY_ANGULAR_DRAG,
+            |value| value >= 0.0,
+        ),
         use_gravity: yaml_bool(body.get("m_UseGravity"), true),
         is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
         is_kinematic: yaml_bool(body.get("m_IsKinematic"), false),
+        interpolation: rigidbody_interpolation(body.get("m_Interpolate")),
+        collision_detection: rigidbody_collision_detection(body.get("m_CollisionDetection")),
+        sleep_threshold: yaml_f64(
+            body.get("m_SleepThreshold"),
+            DEFAULT_RIGIDBODY_SLEEP_THRESHOLD,
+            |value| value >= 0.0,
+        ),
+        sleep_angular_threshold: yaml_f64(
+            body.get("m_SleepAngularThreshold"),
+            DEFAULT_RIGIDBODY_SLEEP_ANGULAR_THRESHOLD,
+            |value| value >= 0.0,
+        ),
+        solver_iterations: optional_u32(body.get("m_SolverIterations")),
+        solver_velocity_iterations: optional_u32(body.get("m_SolverVelocityIterations")),
+        max_angular_velocity: yaml_f64(
+            body.get("m_MaxAngularVelocity"),
+            DEFAULT_RIGIDBODY_MAX_ANGULAR_VELOCITY,
+            |value| value >= 0.0,
+        ),
+        max_depenetration_velocity: yaml_f64(
+            body.get("m_MaxDepenetrationVelocity"),
+            DEFAULT_RIGIDBODY_MAX_DEPENETRATION_VELOCITY,
+            |value| value >= 0.0,
+        ),
+        include_layers: layer_mask_bits(body.get("m_IncludeLayers")),
+        exclude_layers: layer_mask_bits(body.get("m_ExcludeLayers")),
+        layer_override_priority: yaml_u32(body.get("m_LayerOverridePriority"), 0),
     }
+}
+
+fn rigidbody_interpolation(node: Option<&Node>) -> RigidbodyInterpolation {
+    match node.and_then(Node::as_i64) {
+        Some(1) => RigidbodyInterpolation::Interpolate,
+        Some(2) => RigidbodyInterpolation::Extrapolate,
+        _ => RigidbodyInterpolation::None,
+    }
+}
+
+fn rigidbody_collision_detection(node: Option<&Node>) -> RigidbodyCollisionDetection {
+    match node.and_then(Node::as_i64) {
+        Some(1) => RigidbodyCollisionDetection::Continuous,
+        Some(2) => RigidbodyCollisionDetection::ContinuousDynamic,
+        Some(3) => RigidbodyCollisionDetection::ContinuousSpeculative,
+        _ => RigidbodyCollisionDetection::Discrete,
+    }
+}
+
+fn optional_u32(node: Option<&Node>) -> Option<u32> {
+    node.and_then(Node::as_i64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn layer_mask_bits(node: Option<&Node>) -> Option<u32> {
+    let node = node?;
+    let bits = node.get("m_Bits").unwrap_or(node);
+    bits.as_i64().and_then(|value| u32::try_from(value).ok())
 }
 
 fn box_collider_component(
@@ -1804,7 +1919,7 @@ fn resolve_collider_material(
         }
     };
 
-    match load_physic_material(path) {
+    match parse_physic_material(path) {
         Ok(values) => (Some(values), None),
         Err(reason) => (
             None,
@@ -1816,7 +1931,7 @@ fn resolve_collider_material(
     }
 }
 
-fn load_physic_material(path: &Path) -> Result<MaterialValues, String> {
+pub fn parse_physic_material(path: &Path) -> Result<MaterialValues, String> {
     let stream = unity_yaml::parse_file(path).map_err(|error| error.to_string())?;
     let body = stream
         .documents
@@ -1861,7 +1976,33 @@ fn load_physic_material(path: &Path) -> Result<MaterialValues, String> {
     Ok(MaterialValues {
         friction,
         restitution,
+        friction_combine: friction_combine(
+            body.get("m_FrictionCombine")
+                .or_else(|| body.get("frictionCombine")),
+        ),
+        bounce_combine: bounce_combine(
+            body.get("m_BounceCombine")
+                .or_else(|| body.get("bounceCombine")),
+        ),
     })
+}
+
+fn friction_combine(node: Option<&Node>) -> FrictionCombine {
+    match node.and_then(Node::as_i64) {
+        Some(1) => FrictionCombine::Minimum,
+        Some(2) => FrictionCombine::Multiply,
+        Some(3) => FrictionCombine::Maximum,
+        _ => FrictionCombine::Average,
+    }
+}
+
+fn bounce_combine(node: Option<&Node>) -> BounceCombine {
+    match node.and_then(Node::as_i64) {
+        Some(1) => BounceCombine::Minimum,
+        Some(2) => BounceCombine::Maximum,
+        Some(3) => BounceCombine::Multiply,
+        _ => BounceCombine::Average,
+    }
 }
 
 fn collect_audio(

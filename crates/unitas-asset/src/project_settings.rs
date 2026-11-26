@@ -7,6 +7,13 @@ use crate::unity_yaml::{self, Document, Header, Node, Stream, YamlError};
 pub const DEFAULT_FIXED_TIMESTEP: f64 = 0.02;
 pub const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
 
+const DEFAULT_SOLVER_ITERATIONS: u32 = 6;
+const DEFAULT_SOLVER_VELOCITY_ITERATIONS: u32 = 2;
+const DEFAULT_BOUNCE_THRESHOLD: f64 = 2.0;
+const DEFAULT_CONTACT_OFFSET: f64 = 0.01;
+const DEFAULT_SLEEP_THRESHOLD: f64 = 0.005;
+const DEFAULT_SLEEP_ANGULAR_THRESHOLD: f64 = 0.02;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimeSettings {
     pub fixed_timestep: f64,
@@ -15,6 +22,27 @@ pub struct TimeSettings {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DynamicsSettings {
     pub gravity: [f64; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicsSolverType {
+    Default,
+    Tgs,
+    TgsSoft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PhysicsProjectSettings {
+    pub gravity: [f64; 3],
+    pub default_solver_iterations: u32,
+    pub default_solver_velocity_iterations: u32,
+    pub bounce_threshold: f64,
+    pub default_contact_offset: f64,
+    pub sleep_threshold: f64,
+    pub sleep_angular_threshold: f64,
+    pub solver_type: PhysicsSolverType,
+    pub enhanced_determinism: bool,
+    pub layer_collision_matrix: [u32; 32],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1397,6 +1425,108 @@ pub fn parse_dynamics_manager_stream(
     Ok(DynamicsSettings { gravity: [x, y, z] })
 }
 
+pub fn parse_physics_manager(
+    path: &Path,
+) -> Result<Option<PhysicsProjectSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_physics_manager_stream(&stream).map(Some)
+}
+
+pub fn parse_physics_manager_stream(
+    stream: &Stream,
+) -> Result<PhysicsProjectSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| {
+            document
+                .root
+                .get("PhysicsManager")
+                .or_else(|| document.root.get("DynamicsManager"))
+        })
+        .ok_or(ProjectSettingsError::MissingDocument("PhysicsManager"))?;
+
+    let gravity = match body.get("m_Gravity") {
+        Some(node) => [
+            parse_finite_f64(node, "x")
+                .ok_or(ProjectSettingsError::InvalidValue("PhysicsManager"))?,
+            parse_finite_f64(node, "y")
+                .ok_or(ProjectSettingsError::InvalidValue("PhysicsManager"))?,
+            parse_finite_f64(node, "z")
+                .ok_or(ProjectSettingsError::InvalidValue("PhysicsManager"))?,
+        ],
+        None => DEFAULT_GRAVITY,
+    };
+
+    let layer_collision_matrix = body
+        .get("m_LayerCollisionMatrix")
+        .and_then(Node::as_str)
+        .map(parse_layer_collision_matrix)
+        .unwrap_or([0xFFFF_FFFFu32; 32]);
+
+    Ok(PhysicsProjectSettings {
+        gravity,
+        default_solver_iterations: parse_optional_u32(
+            body,
+            "m_DefaultSolverIterations",
+            DEFAULT_SOLVER_ITERATIONS,
+            "PhysicsManager",
+        )?,
+        default_solver_velocity_iterations: parse_optional_u32(
+            body,
+            "m_DefaultSolverVelocityIterations",
+            DEFAULT_SOLVER_VELOCITY_ITERATIONS,
+            "PhysicsManager",
+        )?,
+        bounce_threshold: parse_optional_f64(
+            body,
+            "m_BounceThreshold",
+            DEFAULT_BOUNCE_THRESHOLD,
+            "PhysicsManager",
+        )?,
+        default_contact_offset: parse_optional_f64(
+            body,
+            "m_DefaultContactOffset",
+            DEFAULT_CONTACT_OFFSET,
+            "PhysicsManager",
+        )?,
+        sleep_threshold: parse_optional_f64_alias(
+            body,
+            "m_DefaultSleepThreshold",
+            "m_SleepThreshold",
+            DEFAULT_SLEEP_THRESHOLD,
+            "PhysicsManager",
+        )?,
+        sleep_angular_threshold: parse_optional_f64_alias(
+            body,
+            "m_SleepAngularThreshold",
+            "m_DefaultSleepAngularThreshold",
+            DEFAULT_SLEEP_ANGULAR_THRESHOLD,
+            "PhysicsManager",
+        )?,
+        solver_type: physics_solver_type(body.get("m_SolverType")),
+        enhanced_determinism: parse_optional_bool(
+            body,
+            "m_EnableEnhancedDeterminism",
+            false,
+            "PhysicsManager",
+        )?,
+        layer_collision_matrix,
+    })
+}
+
+fn physics_solver_type(node: Option<&Node>) -> PhysicsSolverType {
+    match node.and_then(Node::as_i64) {
+        Some(1) => PhysicsSolverType::Tgs,
+        Some(2) => PhysicsSolverType::TgsSoft,
+        _ => PhysicsSolverType::Default,
+    }
+}
+
 pub fn parse_input_manager(
     path: &Path,
 ) -> Result<Option<InputManagerSettings>, ProjectSettingsError> {
@@ -2073,6 +2203,22 @@ fn parse_optional_u32_alias(
         Some(child) => child
             .as_i64()
             .and_then(|value| u32::try_from(value).ok())
+            .ok_or(ProjectSettingsError::MissingDocument(document)),
+        None => Ok(default),
+    }
+}
+
+fn parse_optional_f64_alias(
+    node: &Node,
+    primary_key: &str,
+    fallback_key: &str,
+    default: f64,
+    document: &'static str,
+) -> Result<f64, ProjectSettingsError> {
+    match node.get(primary_key).or_else(|| node.get(fallback_key)) {
+        Some(child) => child
+            .as_f64()
+            .filter(|value| value.is_finite())
             .ok_or(ProjectSettingsError::MissingDocument(document)),
         None => Ok(default),
     }

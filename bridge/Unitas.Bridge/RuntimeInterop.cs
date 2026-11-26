@@ -313,6 +313,37 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_add_body_force(ulong runtime, ulong entity, IntPtr inBuffer);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collision_summary(ulong a, ulong b, out AbiCollisionSummary summary);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collision_contact(ulong a, ulong b, uint index, out AbiCollisionContactPoint contact);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_move_body_position(ulong entity, float x, float y, float z);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCollisionSummary
+        {
+            public float Impulse;
+            public UnityEngine.Vector3 RelativeVelocity;
+            public uint ContactCount;
+            public UnityEngine.Vector3 Point;
+            public UnityEngine.Vector3 Normal;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCollisionContactPoint
+        {
+            public double PointX;
+            public double PointY;
+            public double PointZ;
+            public double NormalX;
+            public double NormalY;
+            public double NormalZ;
+            public float Impulse;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct AbiCharacterMoveInput
         {

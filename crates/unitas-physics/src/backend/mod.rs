@@ -15,8 +15,12 @@ use rapier3d::pipeline::{
 use unitas_core::EntityId;
 
 use crate::body::{capsule_half_segment, BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
-use crate::matrix::CollisionMatrix;
+use crate::matrix::{CollisionMatrix, LAYER_COUNT};
 use crate::query::{pose_of, unit_rotation, Dispatcher};
+use crate::world::{
+    ordered_pair, BounceCombine, CollisionContact, CollisionPayload, FrictionCombine,
+    SolverSettings,
+};
 
 type EntityPairs = Vec<(EntityId, EntityId)>;
 
@@ -26,8 +30,16 @@ pub(crate) struct BackendHandles {
     pub(crate) collider: ColliderHandle,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ColliderLayer {
+    pub(crate) layer: usize,
+    pub(crate) include: Option<u32>,
+    pub(crate) exclude: Option<u32>,
+    pub(crate) priority: u32,
+}
+
 struct LayerHooks<'a> {
-    layers: &'a HashMap<ColliderHandle, usize>,
+    layers: &'a HashMap<ColliderHandle, ColliderLayer>,
     matrix: &'a CollisionMatrix,
 }
 
@@ -39,7 +51,25 @@ impl LayerHooks<'_> {
         ) else {
             return true;
         };
-        self.matrix.is_enabled(*first, *second)
+        if !self.matrix.is_enabled(first.layer, second.layer) {
+            return false;
+        }
+        let (decider, other) = if first.priority >= second.priority {
+            (first, second.layer)
+        } else {
+            (second, first.layer)
+        };
+        if other >= LAYER_COUNT {
+            return true;
+        }
+        let bit = 1u32 << other;
+        if decider.exclude.is_some_and(|mask| mask & bit != 0) {
+            return false;
+        }
+        if decider.include.is_some_and(|mask| mask & bit == 0) {
+            return false;
+        }
+        true
     }
 }
 
@@ -70,7 +100,7 @@ pub(crate) struct Backend {
     soft_bodies: SoftBodySet,
     ccd_solver: CCDSolver,
     integration: IntegrationParameters,
-    layers: HashMap<ColliderHandle, usize>,
+    layers: HashMap<ColliderHandle, ColliderLayer>,
 }
 
 impl Default for Backend {
@@ -130,6 +160,24 @@ fn vector3(value: [f64; 3]) -> Vector {
     Vector::new(value[0] as Real, value[1] as Real, value[2] as Real)
 }
 
+fn friction_rule(rule: FrictionCombine) -> CoefficientCombineRule {
+    match rule {
+        FrictionCombine::Average => CoefficientCombineRule::Average,
+        FrictionCombine::Minimum => CoefficientCombineRule::Min,
+        FrictionCombine::Multiply => CoefficientCombineRule::Multiply,
+        FrictionCombine::Maximum => CoefficientCombineRule::Max,
+    }
+}
+
+fn restitution_rule(rule: BounceCombine) -> CoefficientCombineRule {
+    match rule {
+        BounceCombine::Average => CoefficientCombineRule::Average,
+        BounceCombine::Minimum => CoefficientCombineRule::Min,
+        BounceCombine::Maximum => CoefficientCombineRule::Max,
+        BounceCombine::Multiply => CoefficientCombineRule::Multiply,
+    }
+}
+
 impl Backend {
     pub(crate) fn new() -> Self {
         Self {
@@ -164,7 +212,7 @@ impl Backend {
             .pose(pose_of(desc.position, desc.rotation))
             .gravity_scale(if desc.use_gravity { 1.0 } else { 0.0 })
             .can_sleep(false)
-            .ccd_enabled(desc.collision_detection_mode == CollisionDetectionMode3D::Continuous);
+            .ccd_enabled(desc.collision_detection_mode.uses_dynamic_ccd());
         if role == BodyRole::Dynamic {
             builder = builder.linvel(vector3(desc.velocity)).lock_rotations();
         }
@@ -186,7 +234,13 @@ impl Backend {
         let collider = self
             .colliders
             .insert_with_parent(collider, body, &mut self.bodies);
-        self.layers.insert(collider, desc.layer as usize);
+        self.layers.insert(
+            collider,
+            ColliderLayer {
+                layer: desc.layer as usize,
+                ..ColliderLayer::default()
+            },
+        );
         BackendHandles { body, collider }
     }
 
@@ -358,7 +412,59 @@ impl Backend {
         handles: BackendHandles,
         mode: CollisionDetectionMode3D,
     ) {
-        self.bodies[handles.body].enable_ccd(mode == CollisionDetectionMode3D::Continuous);
+        let body = &mut self.bodies[handles.body];
+        body.enable_ccd(mode.uses_dynamic_ccd());
+        body.set_soft_ccd_prediction(0.0);
+    }
+
+    pub(crate) fn set_soft_ccd_prediction(&mut self, handles: BackendHandles, distance: f64) {
+        self.bodies[handles.body].set_soft_ccd_prediction(distance as Real);
+    }
+
+    pub(crate) fn set_drag(
+        &mut self,
+        handles: BackendHandles,
+        linear_drag: f64,
+        angular_drag: f64,
+    ) {
+        let body = &mut self.bodies[handles.body];
+        body.set_linear_damping(linear_drag as Real);
+        body.set_angular_damping(angular_drag as Real);
+    }
+
+    pub(crate) fn set_layer_overrides(
+        &mut self,
+        handles: BackendHandles,
+        include: Option<u32>,
+        exclude: Option<u32>,
+        priority: u32,
+    ) {
+        if let Some(layer) = self.layers.get_mut(&handles.collider) {
+            layer.include = include;
+            layer.exclude = exclude;
+            layer.priority = priority;
+        }
+    }
+
+    pub(crate) fn set_solver_settings(&mut self, settings: SolverSettings) {
+        self.integration.num_solver_iterations = settings.num_solver_iterations.max(1);
+        self.integration.num_internal_pgs_iterations = settings.num_internal_pgs_iterations.max(1);
+        self.integration.num_internal_stabilization_iterations =
+            settings.num_additional_friction_iterations;
+        self.integration.normalized_prediction_distance = settings.contact_offset.max(0.0) as Real;
+        self.integration.normalized_allowed_linear_error =
+            settings.allowed_linear_error.max(0.0) as Real;
+        self.integration.normalized_max_corrective_velocity =
+            settings.max_depenetration_velocity.max(0.0) as Real;
+        self.integration.warmstart_coefficient = if settings.deterministic_accumulation {
+            1.0
+        } else {
+            0.0
+        };
+    }
+
+    pub(crate) fn set_ccd_solver_enabled(&mut self, enabled: bool) {
+        self.integration.max_ccd_substeps = usize::from(enabled);
     }
 
     pub(crate) fn apply_forces(
@@ -444,10 +550,65 @@ impl Backend {
         handles: BackendHandles,
         friction: f64,
         restitution: f64,
+        friction_combine: FrictionCombine,
+        restitution_combine: BounceCombine,
     ) {
         let collider = &mut self.colliders[handles.collider];
         collider.set_friction(friction as Real);
         collider.set_restitution(restitution as Real);
+        collider.set_friction_combine_rule(friction_rule(friction_combine));
+        collider.set_restitution_combine_rule(restitution_rule(restitution_combine));
+    }
+
+    pub(crate) fn collision_payloads(&self) -> Vec<(EntityId, EntityId, CollisionPayload)> {
+        let mut payloads = Vec::new();
+        for pair in self.narrow_phase.contact_pairs() {
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+            let Some(first) = self.colliders.get(pair.collider1) else {
+                continue;
+            };
+            let Some(second) = self.colliders.get(pair.collider2) else {
+                continue;
+            };
+            let first_entity = EntityId::new(first.user_data as u64);
+            let second_entity = EntityId::new(second.user_data as u64);
+            let flipped = first_entity > second_entity;
+            let mut contacts = Vec::new();
+            let mut total_impulse = 0.0;
+            for manifold in pair.solver_manifolds() {
+                let normal = manifold.data.normal;
+                for point in &manifold.points {
+                    let impulse = point.data.impulse as f64;
+                    if point.dist > 0.0 && impulse <= 0.0 {
+                        continue;
+                    }
+                    let world = first.translation() + first.rotation() * point.local_p1;
+                    let normal = if flipped { -normal } else { normal };
+                    contacts.push(CollisionContact {
+                        point: [world.x as f64, world.y as f64, world.z as f64],
+                        normal: [normal.x as f64, normal.y as f64, normal.z as f64],
+                        impulse,
+                    });
+                    total_impulse += impulse;
+                }
+            }
+            if contacts.is_empty() {
+                continue;
+            }
+            let (low, high) = ordered_pair(first_entity, second_entity);
+            payloads.push((
+                low,
+                high,
+                CollisionPayload {
+                    contacts,
+                    relative_velocity: [0.0; 3],
+                    total_impulse,
+                },
+            ));
+        }
+        payloads
     }
 }
 

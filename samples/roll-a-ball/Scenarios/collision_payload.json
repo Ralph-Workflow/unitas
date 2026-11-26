@@ -1,0 +1,38 @@
+{
+  "name": "collision_payload",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/PhysicsLab.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 60,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "push_contact_line_reported",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "PushedMarble contact Pusher non-zero impulse"
+    },
+    {
+      "id": "push_contact_carries_the_contact_count",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "contacts 1"
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 2,
+      "kind": "frame_count",
+      "expected": 61
+    }
+  ]
+}

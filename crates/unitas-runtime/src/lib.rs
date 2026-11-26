@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod navigation;
 pub mod particles;
 pub mod physics;
+pub mod physics_settings;
 pub mod presenter;
 pub mod resources;
 mod runtime;

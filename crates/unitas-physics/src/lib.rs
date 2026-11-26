@@ -15,7 +15,7 @@ pub mod terrain;
 pub mod trails;
 pub mod two_d;
 pub mod wheel;
-mod world;
+pub mod world;
 
 pub use body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
 pub use character::{CharacterController, CollisionFlags, MoveResult};
@@ -27,4 +27,7 @@ pub use joint::{
     JointSpring3D, SpringJoint3D,
 };
 pub use query::QueryHit;
-pub use world::{ForceMode, World};
+pub use world::{
+    combine_materials, BodyInterpolation, BounceCombine, CollisionContact, CollisionPayload,
+    ForceMode, FrictionCombine, PhysicsMaterial3D, SolverSettings, World,
+};

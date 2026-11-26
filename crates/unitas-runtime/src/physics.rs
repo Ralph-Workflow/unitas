@@ -11,8 +11,42 @@ use unitas_physics::two_d::{
 };
 use unitas_physics::{
     BodyDesc, BodyRole, CollisionDetectionMode3D, CollisionEvent, Phase, PhysicsError, QueryHit,
-    TriggerEvent, World,
+    SolverSettings, TriggerEvent, World,
 };
+
+pub(crate) fn layer_bits(layer: u32) -> u32 {
+    if layer >= 32 {
+        return layer;
+    }
+    1 << layer
+}
+
+fn encoded_layer_index(layer: u32) -> usize {
+    layer_bits(layer) as usize
+}
+
+fn encoded_matrix(source: &CollisionMatrix) -> CollisionMatrix {
+    let mut matrix = CollisionMatrix::new();
+    for layer in 0..32usize {
+        for other in 0..32usize {
+            matrix.set_enabled(
+                encoded_layer_index(layer as u32),
+                encoded_layer_index(other as u32),
+                source.is_enabled(layer, other),
+            );
+        }
+    }
+    matrix
+}
+
+fn encoded_object(object: &PhysicsObject) -> PhysicsObject {
+    let mut encoded = object.clone();
+    encoded.layer = layer_bits(object.layer as u32) as usize;
+    encoded.collider_layer = object
+        .collider_layer
+        .map(|layer| layer_bits(layer as u32) as usize);
+    encoded
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PhysicsWorldSummary {
@@ -136,14 +170,27 @@ impl PhysicsRuntimeWorld {
 
     pub fn set_layer_collision_3d(&mut self, layer_a: usize, layer_b: usize, enabled: bool) {
         let mut matrix = self.world_3d.collision_matrix().clone();
-        matrix.set_enabled(layer_a, layer_b, enabled);
+        matrix.set_enabled(
+            encoded_layer_index(layer_a as u32),
+            encoded_layer_index(layer_b as u32),
+            enabled,
+        );
         self.world_3d.set_collision_matrix(matrix);
     }
 
+    pub fn set_layer_collision_matrix_3d(&mut self, source: &CollisionMatrix) {
+        self.world_3d.set_collision_matrix(encoded_matrix(source));
+    }
+
     pub fn layer_collision_enabled_3d(&self, layer_a: usize, layer_b: usize) -> bool {
-        self.world_3d
-            .collision_matrix()
-            .is_enabled(layer_a, layer_b)
+        self.world_3d.collision_matrix().is_enabled(
+            encoded_layer_index(layer_a as u32),
+            encoded_layer_index(layer_b as u32),
+        )
+    }
+
+    pub fn set_solver_settings_3d(&mut self, settings: SolverSettings) {
+        self.world_3d.set_solver_settings(settings);
     }
 
     pub fn raycast_3d(
@@ -163,7 +210,11 @@ impl PhysicsRuntimeWorld {
         object_a: &PhysicsObject,
         object_b: &PhysicsObject,
     ) -> Vec<MessageDelivery> {
-        if !message_is_eligible(object_a, object_b, self.world_3d.collision_matrix()) {
+        if !message_is_eligible(
+            &encoded_object(object_a),
+            &encoded_object(object_b),
+            self.world_3d.collision_matrix(),
+        ) {
             return Vec::new();
         }
         route_message(message, object_a, object_b)

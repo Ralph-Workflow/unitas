@@ -6,9 +6,10 @@ use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{
     assemble_scene, assemble_scene_bundle, assemble_scene_bundle_with_guids, assemble_scene_file,
     assemble_scene_file_bundle, assemble_scene_file_bundle_with_guids,
-    assemble_scene_file_with_guids, assemble_scene_file_with_physics, assemble_scene_with_guids,
-    assemble_scene_with_physics, AssembledScene, AudioBinding, AudioSourceComponent,
-    CameraComponent, CapsuleColliderComponent, CharacterControllerComponent, LightComponent,
+    assemble_scene_file_with_guids, assemble_scene_file_with_index,
+    assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
+    AssembledScene, AudioBinding, AudioSourceComponent, BounceCombine, CameraComponent,
+    CapsuleColliderComponent, CharacterControllerComponent, FrictionCombine, LightComponent,
     MaterialValues, MeshRendererComponent, RenderBinding, SceneError, AUDIO_CLIP_CLASS,
     AUDIO_SOURCE_CLASS, CAMERA_CLASS, LIGHT_CLASS, MESH_FILTER_CLASS, MESH_RENDERER_CLASS,
 };
@@ -894,6 +895,8 @@ fn collider_resolves_physic_material_from_project_meta_index() -> TestResult {
         Some(MaterialValues {
             friction: 0.25,
             restitution: 0.8,
+            friction_combine: FrictionCombine::Average,
+            bounce_combine: BounceCombine::Average,
         })
     );
     assert_eq!(sphere.material_diagnostic, None);
@@ -912,6 +915,8 @@ fn collider_resolves_physic_material_from_project_meta_index() -> TestResult {
         Some(MaterialValues {
             friction: 0.6,
             restitution: 0.0,
+            friction_combine: FrictionCombine::Average,
+            bounce_combine: BounceCombine::Average,
         })
     );
     assert_eq!(box_collider.material_diagnostic, None);
@@ -1127,6 +1132,8 @@ fn capsule_collider_resolves_physic_material_and_reports_material_diagnostics() 
         Some(MaterialValues {
             friction: 0.35,
             restitution: 0.75,
+            friction_combine: FrictionCombine::Average,
+            bounce_combine: BounceCombine::Average,
         })
     );
     assert_eq!(bouncy_capsule.material_diagnostic, None);
@@ -1751,5 +1758,125 @@ fn renderer_material_color_comes_from_the_project_material() -> TestResult {
     assert!((renderer.material_color[0] as f64 - 1.0).abs() < 1e-6);
     assert!((renderer.material_color[1] as f64 - 0.5).abs() < 1e-6);
     assert!((renderer.material_color[2] as f64 - 0.25).abs() < 1e-6);
+    Ok(())
+}
+
+fn sample_project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+}
+
+#[test]
+fn sample_physics_lab_scene_carries_the_edge_marble_settings() -> TestResult {
+    let root = sample_project_root();
+    let scene_path = root.join("Assets/Scenes/PhysicsLab.unity");
+    let index = GuidIndex::build(&root)?;
+    let assembled = assemble_scene_file_with_index(&scene_path, &index)?;
+    let edge_marble = entity_named(&assembled.graph, "EdgeMarble")?;
+    let binding = assembled
+        .physics
+        .iter()
+        .find(|binding| binding.entity == edge_marble)
+        .ok_or("no physics binding for EdgeMarble")?;
+    let rigidbody = binding
+        .rigidbody
+        .as_ref()
+        .ok_or("EdgeMarble has no rigidbody")?;
+    assert_eq!(rigidbody.mass, 2.0);
+    assert_eq!(rigidbody.drag, 0.5);
+    assert_eq!(rigidbody.angular_drag, 0.05);
+    assert_eq!(
+        rigidbody.interpolation,
+        unitas_asset::scene::RigidbodyInterpolation::Interpolate
+    );
+    assert_eq!(
+        rigidbody.collision_detection,
+        unitas_asset::scene::RigidbodyCollisionDetection::ContinuousDynamic
+    );
+    let sphere = binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("EdgeMarble has no sphere collider")?;
+    assert_eq!(sphere.radius, 0.5);
+    assert!(!sphere.is_trigger);
+    Ok(())
+}
+
+#[test]
+fn sample_physics_lab_scene_carries_the_arena_bumper_material() -> TestResult {
+    let root = sample_project_root();
+    let scene_path = root.join("Assets/Scenes/PhysicsLab.unity");
+    let index = GuidIndex::build(&root)?;
+    let assembled = assemble_scene_file_with_index(&scene_path, &index)?;
+    let arena_bumper = entity_named(&assembled.graph, "ArenaBumper")?;
+    let binding = assembled
+        .physics
+        .iter()
+        .find(|binding| binding.entity == arena_bumper)
+        .ok_or("no physics binding for ArenaBumper")?;
+    assert!(binding.rigidbody.is_none());
+    let sphere = binding
+        .sphere_collider
+        .as_ref()
+        .ok_or("ArenaBumper has no sphere collider")?;
+    let material = sphere
+        .material
+        .as_ref()
+        .ok_or("ArenaBumper has no physic material")?;
+    assert_eq!(material.restitution, 1.4);
+    assert_eq!(material.friction, 0.2);
+    assert_eq!(
+        material.bounce_combine,
+        unitas_asset::scene::BounceCombine::Maximum
+    );
+    assert_eq!(
+        material.friction_combine,
+        unitas_asset::scene::FrictionCombine::Average
+    );
+    Ok(())
+}
+
+#[test]
+fn sample_physics_lab_scene_carries_the_trigger_pair_and_the_push_bodies() -> TestResult {
+    let root = sample_project_root();
+    let scene_path = root.join("Assets/Scenes/PhysicsLab.unity");
+    let index = GuidIndex::build(&root)?;
+    let assembled = assemble_scene_file_with_index(&scene_path, &index)?;
+    for name in ["TriggerPairA", "TriggerPairB"] {
+        let entity = entity_named(&assembled.graph, name)?;
+        let binding = assembled
+            .physics
+            .iter()
+            .find(|binding| binding.entity == entity)
+            .ok_or("no physics binding for trigger pair")?;
+        assert!(binding.rigidbody.is_none());
+        let sphere = binding
+            .sphere_collider
+            .as_ref()
+            .ok_or("trigger pair member has no sphere collider")?;
+        assert!(sphere.is_trigger);
+    }
+    let pushed = entity_named(&assembled.graph, "PushedMarble")?;
+    let pushed_binding = assembled
+        .physics
+        .iter()
+        .find(|binding| binding.entity == pushed)
+        .ok_or("no physics binding for PushedMarble")?;
+    let pushed_rigidbody = pushed_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("PushedMarble has no rigidbody")?;
+    assert!(!pushed_rigidbody.is_kinematic);
+    let pusher = entity_named(&assembled.graph, "Pusher")?;
+    let pusher_binding = assembled
+        .physics
+        .iter()
+        .find(|binding| binding.entity == pusher)
+        .ok_or("no physics binding for Pusher")?;
+    let pusher_rigidbody = pusher_binding
+        .rigidbody
+        .as_ref()
+        .ok_or("Pusher has no rigidbody")?;
+    assert!(pusher_rigidbody.is_kinematic);
+    assert!(pusher_binding.box_collider.is_some());
     Ok(())
 }

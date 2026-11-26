@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
+use unitas_asset::project_settings::PhysicsProjectSettings;
+use unitas_asset::project_settings::parse_physics_manager;
 use unitas_asset::scene::{
     AudioSourceComponent, CharacterControllerComponent, MeshRendererComponent, PhysicsBinding,
-    RenderBinding, ScriptBinding, assemble_scene_file_bundle,
+    RenderBinding, RigidbodyComponent, ScriptBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -22,7 +24,8 @@ use unitas_physics::navigation::NavMesh;
 use unitas_physics::particles::ParticleSystem;
 use unitas_physics::trails::Trail;
 use unitas_physics::{
-    BodyDesc, BodyRole, CharacterController, ForceMode, MoveResult, Phase, QueryHit, Shape, World,
+    BodyDesc, BodyRole, CharacterController, CollisionDetectionMode3D, CollisionPayload, ForceMode,
+    MoveResult, Phase, PhysicsMaterial3D, QueryHit, Shape, World,
 };
 use unitas_render::image::Image;
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
@@ -35,7 +38,10 @@ use crate::error::{RenderError, RuntimeError};
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
-use crate::physics::PhysicsRuntimeWorld;
+use crate::physics::{PhysicsRuntimeWorld, layer_bits};
+use crate::physics_settings::{
+    collision_detection_of, interpolation_of, layer_matrix_of, material_of, solver_settings_of,
+};
 use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
@@ -342,6 +348,8 @@ pub struct Runtime {
     pub(crate) pending_ui_clicks: Vec<u64>,
     pub(crate) ui_pressed_button: Option<EntityId>,
     pub(crate) project_identity: ProjectIdentity,
+    pub(crate) physics_settings: Option<PhysicsProjectSettings>,
+    pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
     pub(crate) callbacks: Option<Callbacks>,
     pub(crate) fixed_timestep: f64,
     pub(crate) maximum_delta_time: f64,
@@ -384,6 +392,8 @@ impl Runtime {
             pending_ui_clicks: Vec::new(),
             ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
+            physics_settings: None,
+            collision_payloads: HashMap::new(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             maximum_delta_time: DEFAULT_MAXIMUM_DELTA_TIME,
@@ -427,18 +437,18 @@ impl Runtime {
         let particle_bindings = assembled.particles;
         let trail_bindings = assembled.trails;
         let mut ui = assembled.ui;
-        let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
+        let settings = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
         validate_bodies(&descs)?;
         match mode {
             LoadSceneMode::Single => {
                 self.unload_all_scenes(&mut hook);
-                self.apply_project_settings(fixed_timestep, gravity, axes, identity);
+                self.apply_project_settings(&settings);
             }
             LoadSceneMode::Additive => {
                 if self.scenes.is_empty() {
-                    self.apply_project_settings(fixed_timestep, gravity, axes, identity);
+                    self.apply_project_settings(&settings);
                 }
             }
         }
@@ -458,11 +468,11 @@ impl Runtime {
             .collect::<Vec<_>>();
         let bodies = descs
             .iter()
-            .map(|(entity, _, _)| EntityId::new(entity_base + entity.as_u64()))
+            .map(|(entity, _)| EntityId::new(entity_base + entity.as_u64()))
             .collect::<Vec<_>>();
         let body_offsets = descs
             .iter()
-            .map(|(entity, _, offset)| (EntityId::new(entity_base + entity.as_u64()), *offset))
+            .map(|(entity, spec)| (EntityId::new(entity_base + entity.as_u64()), spec.offset))
             .collect::<Vec<_>>();
         let character_controllers = collect_character_controllers(&physics, entity_base);
         for (entity, config) in &character_controllers {
@@ -514,8 +524,32 @@ impl Runtime {
             }
             audio_sources.push((shifted, comp));
         }
-        for (body, desc) in bodies.iter().zip(descs.iter()) {
-            self.physics.world_3d_mut().add_body(*body, desc.1)?;
+        let rigidbodies = physics
+            .iter()
+            .filter_map(|binding| {
+                binding.rigidbody.as_ref().map(|rigidbody| {
+                    (
+                        EntityId::new(entity_base + binding.entity.as_u64()),
+                        rigidbody.clone(),
+                    )
+                })
+            })
+            .collect::<HashMap<EntityId, RigidbodyComponent>>();
+        for (body, (_, spec)) in bodies.iter().zip(descs.iter()) {
+            self.physics
+                .world_3d_mut()
+                .add_body_with_material(*body, spec.desc, spec.material)?;
+            if let Some(rigidbody) = rigidbodies.get(body) {
+                let world = self.physics.world_3d_mut();
+                world.set_body_drag(*body, rigidbody.drag, rigidbody.angular_drag);
+                world.set_body_interpolation(*body, interpolation_of(rigidbody.interpolation));
+                world.set_body_layer_overrides(
+                    *body,
+                    layer_override_mask(rigidbody.include_layers),
+                    layer_override_mask(rigidbody.exclude_layers),
+                    rigidbody.layer_override_priority,
+                );
+            }
         }
         let mut particle_entities = Vec::with_capacity(particle_bindings.len());
         for particle in &particle_bindings {
@@ -734,18 +768,23 @@ impl Runtime {
         self.persistent_entities.contains(&entity)
     }
 
-    fn apply_project_settings(
-        &mut self,
-        fixed_timestep: f64,
-        gravity: [f64; 3],
-        axes: Vec<AxisConfig>,
-        identity: ProjectIdentity,
-    ) {
-        self.physics.world_3d_mut().set_gravity(gravity);
-        self.fixed_timestep = fixed_timestep;
-        self.input.set_axes(axes);
+    fn apply_project_settings(&mut self, settings: &DiscoveredProject) {
+        self.physics.world_3d_mut().set_gravity(settings.gravity);
+        self.fixed_timestep = settings.fixed_timestep;
+        self.input.set_axes(settings.axes.clone());
         self.input.reset();
-        self.project_identity = identity;
+        self.project_identity = settings.identity.clone();
+        self.physics_settings = settings.physics;
+        if let Some(physics) = settings.physics.as_ref() {
+            let matrix = layer_matrix_of(physics);
+            self.physics.set_layer_collision_matrix_3d(&matrix);
+            let solver = solver_settings_of(physics);
+            self.physics.set_solver_settings_3d(solver);
+        }
+    }
+
+    pub fn physics_project_settings(&self) -> Option<&PhysicsProjectSettings> {
+        self.physics_settings.as_ref()
     }
 
     pub fn project_identity(&self) -> &ProjectIdentity {
@@ -1347,8 +1386,15 @@ impl Runtime {
                 // runs, so the message order does not depend on how many fixed
                 // steps a rendered frame happens to batch.
                 for event in events {
-                    let a = event.a.as_u64();
-                    let b = event.b.as_u64();
+                    let a = event.a;
+                    let b = event.b;
+                    let payload = self.physics.world_3d().collision_payload(a, b).cloned();
+                    if let Some(payload) = payload {
+                        self.collision_payloads
+                            .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
+                    }
+                    let a = a.as_u64();
+                    let b = b.as_u64();
                     let phase = phase_code(event.phase);
                     hook(self, &mut || {
                         (callbacks.collision)(a, b, phase);
@@ -1751,6 +1797,22 @@ impl Runtime {
             .teleport_position(entity, position)?;
         self.write_back_body_transform(entity, position);
         Ok(())
+    }
+
+    pub fn move_body_position(
+        &mut self,
+        entity: EntityId,
+        position: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        self.physics
+            .world_3d_mut()
+            .move_position(entity, position)?;
+        self.write_back_body_transform(entity, position);
+        Ok(())
+    }
+
+    pub fn collision_payload(&self, first: u64, second: u64) -> Option<&CollisionPayload> {
+        self.collision_payloads.get(&ordered_pair(first, second))
     }
 
     pub fn set_body_velocity(
@@ -2238,16 +2300,15 @@ impl Runtime {
     }
 }
 
-fn discover_project_settings(
-    scene_path: &Path,
-) -> (f64, [f64; 3], Vec<AxisConfig>, ProjectIdentity) {
+fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
     let Some(settings_dir) = find_project_settings_dir(scene_path) else {
-        return (
-            DEFAULT_FIXED_TIMESTEP,
-            DEFAULT_GRAVITY,
-            default_axis_configs(),
-            ProjectIdentity::default(),
-        );
+        return DiscoveredProject {
+            fixed_timestep: DEFAULT_FIXED_TIMESTEP,
+            gravity: DEFAULT_GRAVITY,
+            axes: default_axis_configs(),
+            identity: ProjectIdentity::default(),
+            physics: None,
+        };
     };
     let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
         Ok(Some(settings)) => settings.fixed_timestep,
@@ -2265,7 +2326,25 @@ fn discover_project_settings(
         Ok(Some(settings)) => settings,
         Ok(None) | Err(_) => ProjectIdentity::default(),
     };
-    (fixed_timestep, gravity, axes, identity)
+    let physics = match parse_physics_manager(&settings_dir.join("DynamicsManager.asset")) {
+        Ok(Some(settings)) => Some(settings),
+        Ok(None) | Err(_) => None,
+    };
+    DiscoveredProject {
+        fixed_timestep,
+        gravity,
+        axes,
+        identity,
+        physics,
+    }
+}
+
+struct DiscoveredProject {
+    fixed_timestep: f64,
+    gravity: [f64; 3],
+    axes: Vec<AxisConfig>,
+    identity: ProjectIdentity,
+    physics: Option<PhysicsProjectSettings>,
 }
 
 fn map_input_axes(axes: Vec<InputAxis>) -> Vec<AxisConfig> {
@@ -2326,10 +2405,13 @@ fn build_script_instances(bindings: &[ScriptBinding]) -> Result<Vec<ScriptInstan
     Ok(scripts)
 }
 
-fn body_descs(
-    graph: &SceneGraph,
-    bindings: &[PhysicsBinding],
-) -> Vec<(EntityId, BodyDesc, [f32; 3])> {
+struct BodySpec {
+    desc: BodyDesc,
+    offset: [f32; 3],
+    material: Option<PhysicsMaterial3D>,
+}
+
+fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Vec<(EntityId, BodySpec)> {
     let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
         .iter()
         .filter(|binding| binding.rigidbody.is_some())
@@ -2337,19 +2419,19 @@ fn body_descs(
         .collect();
     let mut descs = Vec::new();
     for binding in bindings {
-        let (desc, offset) = match body_desc(graph, binding, &rigid_entities) {
-            Some(pair) => pair,
+        let spec = match body_desc(graph, binding, &rigid_entities) {
+            Some(spec) => spec,
             None => continue,
         };
-        descs.push((binding.entity, desc, offset));
+        descs.push((binding.entity, spec));
     }
     descs
 }
 
-fn validate_bodies(descs: &[(EntityId, BodyDesc, [f32; 3])]) -> Result<(), RuntimeError> {
+fn validate_bodies(descs: &[(EntityId, BodySpec)]) -> Result<(), RuntimeError> {
     let mut world = World::new();
-    for (entity, desc, _) in descs {
-        world.add_body(*entity, *desc)?;
+    for (entity, spec) in descs {
+        world.add_body(*entity, spec.desc)?;
     }
     Ok(())
 }
@@ -2379,6 +2461,10 @@ fn scene_name_from_path(path: &Path) -> String {
         Some(stem) => stem.to_string(),
         None => String::from("scene"),
     }
+}
+
+fn layer_override_mask(mask: Option<u32>) -> Option<u32> {
+    mask.filter(|bits| *bits != 0)
 }
 
 fn collect_character_controllers(
@@ -2469,7 +2555,7 @@ fn body_desc(
     graph: &SceneGraph,
     binding: &PhysicsBinding,
     rigid_entities: &std::collections::BTreeSet<EntityId>,
-) -> Option<(BodyDesc, [f32; 3])> {
+) -> Option<BodySpec> {
     let (shape, center, collider_trigger, material) = match (
         &binding.sphere_collider,
         &binding.box_collider,
@@ -2509,6 +2595,7 @@ fn body_desc(
     };
     let friction = material.map_or(0.6, |m| m.friction);
     let restitution = material.map_or(0.0, |m| m.restitution);
+    let physics_material = material.as_ref().map(material_of);
     let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
         Some(world) => (world.translation, world.rotation, world.scale),
         None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
@@ -2537,8 +2624,14 @@ fn body_desc(
         }
         None => (0.0, false, false, BodyRole::Static),
     };
-    Some((
-        BodyDesc {
+    let collision_detection_mode = binding
+        .rigidbody
+        .as_ref()
+        .map_or(CollisionDetectionMode3D::Discrete, |rigidbody| {
+            collision_detection_of(rigidbody.collision_detection)
+        });
+    Some(BodySpec {
+        desc: BodyDesc {
             position: [
                 translation[0] as f64 + offset[0] as f64,
                 translation[1] as f64 + offset[1] as f64,
@@ -2559,10 +2652,11 @@ fn body_desc(
             role,
             friction,
             restitution,
-            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
+            collision_detection_mode,
         },
         offset,
-    ))
+        material: physics_material,
+    })
 }
 
 pub(crate) fn world_to_local_translation(
@@ -2596,13 +2690,6 @@ pub(crate) fn world_to_local_translation(
     ]
 }
 
-fn layer_bits(layer: u32) -> u32 {
-    if layer >= 32 {
-        return layer;
-    }
-    1 << layer
-}
-
 fn normalized(vector: [f64; 3]) -> Option<[f64; 3]> {
     let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
     if !length.is_finite() || length <= 0.0 {
@@ -2619,6 +2706,14 @@ fn rotations_equivalent(a: [f64; 4], b: [f64; 4]) -> bool {
         + f64::from(a[2]) * f64::from(b[2])
         + f64::from(a[3]) * f64::from(b[3]);
     (1.0 - dot.abs()) <= 1e-6
+}
+
+fn ordered_pair(first: u64, second: u64) -> (u64, u64) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 fn phase_code(phase: Phase) -> u32 {

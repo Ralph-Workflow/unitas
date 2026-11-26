@@ -32,6 +32,8 @@ mod perf_step;
 #[path = "simulation/perf_particles.rs"]
 mod perf_particles;
 
+#[path = "physics/ccd_mode_tests.rs"]
+mod ccd_mode_tests;
 #[path = "physics/character_tests.rs"]
 mod character_tests;
 #[path = "physics/collision_tests.rs"]
@@ -44,6 +46,8 @@ mod navigation_tests;
 mod query_tests;
 #[path = "physics/terrain_tests.rs"]
 mod terrain_tests;
+#[path = "physics/unity_semantics_tests.rs"]
+mod unity_semantics_tests;
 #[path = "physics/wheel_tests.rs"]
 mod wheel_tests;
 #[path = "physics/world_tests.rs"]

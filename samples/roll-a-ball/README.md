@@ -15,7 +15,15 @@ reported with its real state, never hidden.
   objects, and the scene also carries an authored prop (`ArenaProp`), a
   collect burst, a landing dust effect and the collect chime.
 - One physics-probe scene, `Assets/Scenes/PhysicsLab.unity`, used by the
-  physics scenarios; it is not an arena and carries no game scripts.
+  physics scenarios; it is not an arena and carries no game scripts. It now
+  also carries the bodies the S11 scenarios need: the `EdgeMarble` (a 2 kg
+  sphere with `m_Drag: 0.5`, `m_Interpolate: 1` and `m_CollisionDetection: 2`),
+  the `EdgeWall` corner (`EdgeWall`, `EdgeWall_Side` and `EdgeWall_End`), the
+  `ArenaBumper` sphere with
+  `Assets/Materials/ArenaBumper.physicMaterial` (`m_Bounciness: 1.4`,
+  `m_BounceCombine: 2`, Unity's Maximum rule), the `TriggerPairA` and
+  `TriggerPairB` trigger spheres that carry no Rigidbody, and the dynamic
+  `PushedMarble` next to the kinematic `Pusher`.
 - Eight scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
   `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`,
   `HudController`.
@@ -42,7 +50,8 @@ reported with its real state, never hidden.
 | S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-26 with the HUD and the title panel in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
-| S11 collision edge, S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
+| S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
+| S12 combo timing sweep, S14 medals/records/ghost, S16 reduced motion | not demonstrated | no scenario covers them yet |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -185,6 +194,60 @@ scene in the runtime and checking the pickup's position.
 The specification text is not weakened by this note. The gap above is what
 remains before S9 can be claimed complete.
 
+## S11 collision edge — what is demonstrated and what is not
+
+**Demonstrated.** The specification asks for a marble dashed from a boost pad
+into a wall corner and then into a bumper, with no tunneling, with bounces that
+follow each physic material, and with the bumper's outgoing speed above its
+incoming speed
+(`docs/product-specification/sample-games/01-roll-a-ball.md:387-391`). Three
+scenarios over the sample's physics-probe scene now cover that, and all three
+run in the `make verify-samples` lane with `--repeat 2`, so the lane also proves
+that two runs of the same scenario give the same result:
+
+- `Scenarios/collision_edge.json` loads `Assets/Scenes/PhysicsLab.unity` twice
+  and ticks it twice over the same 2.4 seconds of simulated time, 120 frames at
+  0.02 s and 240 frames at 0.01 s. It asserts that the `EdgeMarble` starts at
+  its authored position, that it ends at the same corner position
+  `[-20, 0.5, -15.25]` after the coarse step and after the fine step within
+  0.25, that the bumper contact is reported (`EdgeMarble bumper outgoing`),
+  that the outgoing speed is above the incoming speed (`restitution gained`),
+  and that the contact carried a non-zero impulse
+  (`EdgeMarble contact ArenaBumper non-zero impulse`).
+- `Scenarios/trigger_without_rigidbody.json` asserts the literal absence of a
+  trigger message for the `TriggerPairA`/`TriggerPairB` pair, two overlapping
+  trigger spheres that carry no Rigidbody, and that the kinematic `Pusher`
+  reports a collision against the dynamic `PushedMarble`.
+- `Scenarios/collision_payload.json` asserts that the probe's contact line is
+  printed and that it carries the contact count (`contacts 1`).
+
+**Not demonstrated.**
+
+- The scenarios run in `Assets/Scenes/PhysicsLab.unity`, the physics-probe
+  scene, and not in the gameplay arena `Assets/Scenes/RollABall.unity`. The
+  specification's dash from a boost pad is not exercised: the probe launches the
+  marble, and no boost pad, dash or `PlayerController` is involved.
+- "The bounces follow each physic material" is shown for one material pair per
+  run. The `ArenaBumper` carries
+  `Assets/Materials/ArenaBumper.physicMaterial` (`m_Bounciness: 1.4`, the
+  restitution the specification asks for at
+  `docs/product-specification/sample-games/01-roll-a-ball.md:78`, and
+  `m_BounceCombine: 2`, Unity's Maximum rule). No scenario puts two materials
+  with different combine rules against each other, so the per-material rule is
+  proven for the maximum rule alone.
+- The payload is proven through the probe's log line, which carries the contact
+  count, the impulse, the relative speed, the contact point and the normal. The
+  checkpoints match parts of that line (`non-zero impulse`, `contacts 1`), so
+  they do not pin the relative velocity, the contact point or the normal to a
+  value. No scenario runs `OnCollisionEnter` in the gameplay arena.
+- The lane proves that two runs of each scenario agree. It does not prove that
+  the arena's own bumper and wall geometry behaves the same way, because the
+  arena content the specification names (`BoostPad.prefab`, `Bumper.prefab`,
+  `Wall.prefab` and the three arena scenes) does not exist in this sample yet.
+
+The specification text is not weakened by this note. The gap above is what
+remains before S11 is claimed complete in the arena.
+
 ## Non-default lane
 
 `make verify-samples` runs this sample's scenarios and is the lane that owns
@@ -196,16 +259,19 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 27 scenario steps: the 21
+**Current lane state (honest).** The lane runs 30 scenario steps: the 24
 scripting scenarios (including `frame_independence`, `pointer_ui`,
-`restart_recovery` and the four `s8_*` visual checkpoints), the 4 headless
-editor scenarios (`collect_all`, `retry_clean`, `scene_edit_restore`,
-`play_mode_edit_restore`), the native scripted launch and the packaged-player
-proof. That number counts the scenario steps only; before them the lane runs
-its three build steps — the runtime, the bridge and the player build. Every
-step of the last full-lane run was green; the steps added since
-(`restart_recovery` and `play_mode_edit_restore`) were verified on their own —
-the lane's scripting runner and the headless editor both report
+`restart_recovery`, the four `s8_*` visual checkpoints and the three new
+physics scenarios `collision_edge`, `trigger_without_rigidbody` and
+`collision_payload`), the 4 headless editor scenarios (`collect_all`,
+`retry_clean`, `scene_edit_restore`, `play_mode_edit_restore`), the native
+scripted launch and the packaged-player proof. That number counts the
+scenario steps only; before them the lane runs its three build steps — the
+runtime, the bridge and the player build. The three new physics steps are
+the S11 evidence above, and the lane's own run of the current tree is what
+proves them. Every step of the last full-lane run was green; the steps added
+since (`restart_recovery` and `play_mode_edit_restore`) were verified on
+their own — the lane's scripting runner and the headless editor both report
 `restart_recovery` `passed` with 9 of 9 checkpoints, `--repeat 2` reports it
 repeatable, and the headless editor reports `play_mode_edit_restore`
 `passed`.

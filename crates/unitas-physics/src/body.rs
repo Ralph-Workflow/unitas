@@ -52,6 +52,22 @@ pub enum CollisionDetectionMode3D {
     #[default]
     Discrete,
     Continuous,
+    ContinuousDynamic,
+    ContinuousSpeculative,
+}
+
+impl CollisionDetectionMode3D {
+    pub(crate) fn uses_ccd_solver(self) -> bool {
+        matches!(self, Self::Continuous | Self::ContinuousDynamic)
+    }
+
+    pub(crate) fn uses_speculative_contacts(self) -> bool {
+        matches!(self, Self::ContinuousSpeculative)
+    }
+
+    pub(crate) fn uses_dynamic_ccd(self) -> bool {
+        matches!(self, Self::ContinuousDynamic)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

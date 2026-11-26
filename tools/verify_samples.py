@@ -48,6 +48,9 @@ class PackagedProofError(Exception):
 SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("bumper_restitution", "bumper_restitution.json", ("--repeat", "2"), False),
     ("ccd_containment", "ccd_containment.json", ("--repeat", "2"), False),
+    ("collision_edge", "collision_edge.json", ("--repeat", "2"), False),
+    ("trigger_without_rigidbody", "trigger_without_rigidbody.json", ("--repeat", "2"), False),
+    ("collision_payload", "collision_payload.json", ("--repeat", "2"), False),
     ("collect_all", "collect_all.json", ("--repeat", "2"), False),
     ("pause_holds_simulation", "pause_holds_simulation.json", ("--repeat", "2"), False),
     ("slowmo_finish", "slowmo_finish.json", ("--repeat", "2"), False),
@@ -153,20 +156,63 @@ def run_step(
     return completed.returncode
 
 
-def check_report(report_path: Path, captured_path: Path | None = None) -> int:
-    if not report_path.is_file():
-        emit(f"scenario report missing at {report_path}")
-        return 1
-    report_status = None
+def read_report(report_path: Path) -> dict[str, object] | None:
     report_text = report_path.read_text(encoding="utf-8")
     decoder = json.JSONDecoder()
+    report: dict[str, object] | None = None
     for match in re.finditer(r"^\{", report_text, re.MULTILINE):
         try:
             parsed, _ = decoder.raw_decode(report_text[match.start() :])
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict) and "status" in parsed:
-            report_status = parsed["status"]
+            report = parsed
+    return report
+
+
+def report_messages(report: dict[str, object]) -> list[str]:
+    messages = report.get("messages")
+    if not isinstance(messages, list):
+        return []
+    texts: list[str] = []
+    for entry in messages:
+        if isinstance(entry, dict):
+            message = entry.get("message")
+            if isinstance(message, str):
+                texts.append(message)
+    return texts
+
+
+def scenario_absent_logs(scenario_path: Path) -> tuple[str, ...]:
+    document = json.loads(scenario_path.read_text(encoding="utf-8"))
+    absent = document.get("absent_logs", [])
+    if not isinstance(absent, list):
+        return ()
+    return tuple(item for item in absent if isinstance(item, str))
+
+
+def check_absent_logs(scenario_path: Path, report_path: Path) -> int:
+    forbidden = scenario_absent_logs(scenario_path)
+    if not forbidden:
+        return 0
+    report = read_report(report_path)
+    if report is None:
+        emit(f"{scenario_path.stem}: the report carries no result to check for absent logs")
+        return 1
+    for message in report_messages(report):
+        for literal in forbidden:
+            if literal in message:
+                emit(f"{scenario_path.stem}: the run produced the absent log line: {message}")
+                return 1
+    return 0
+
+
+def check_report(report_path: Path, captured_path: Path | None = None) -> int:
+    if not report_path.is_file():
+        emit(f"scenario report missing at {report_path}")
+        return 1
+    report = read_report(report_path)
+    report_status = report.get("status") if report is not None else None
     emit(f"scenario report status: {report_status}")
     if report_status != "passed":
         return 1
@@ -206,7 +252,10 @@ def run_scenario(
     if rc != 0:
         return rc
     captured_path = report_path if "--frame-rates" in extra_args else None
-    return check_report(report_path, captured_path)
+    status = check_report(report_path, captured_path)
+    if status != 0:
+        return status
+    return check_absent_logs(SCENARIO_DIR / scenario_file, report_path)
 
 
 def native_scripted_launch(env: dict[str, str]) -> int:
