@@ -2282,41 +2282,63 @@ def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes] | None) -> N
     signal.signal(signal.SIGTERM, handler)
 
 
+def block_sigterm() -> set[int | signal.Signals] | None:
+    if not hasattr(signal, "pthread_sigmask"):
+        return None
+    return signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+
+
+def restore_signal_mask(previous: set[int | signal.Signals] | None) -> None:
+    if previous is None:
+        return
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 def run_timed_attempt(
     label: str, budget: float, command: list[str]
 ) -> tuple[bool, bool, int] | None:
     started = time.monotonic()
     terminate_timed_gate_on_signal(None)
+    previous = block_sigterm()
     try:
-        process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
-    except OSError as error:
-        sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
-        return None
-    terminate_timed_gate_on_signal(process)
+        try:
+            process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
+        except OSError as error:
+            sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
+            return None
+        terminate_timed_gate_on_signal(process)
+    finally:
+        restore_signal_mask(previous)
     try:
-        returncode = process.wait(timeout=budget)
-    except subprocess.TimeoutExpired:
-        finished = process.poll()
-        if finished is None:
+        try:
+            returncode = process.wait(timeout=budget)
+        except subprocess.TimeoutExpired:
+            finished = process.poll()
+            if finished is None:
+                terminate_timed_gate(process)
+                sys.stdout.write(
+                    f"gate {label} exceeded the {budget:g}s budget and was terminated\n"
+                )
+                return True, True, 1
+            returncode = finished
+        except KeyboardInterrupt:
             terminate_timed_gate(process)
-            sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget and was terminated\n")
-            return True, True, 1
-        returncode = finished
-    except KeyboardInterrupt:
-        terminate_timed_gate(process)
-        raise
-    elapsed = time.monotonic() - started
-    sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
-    if returncode != 0:
-        sys.stderr.write(
-            f"gate {label} failed with exit {returncode}: fix the code or the check it runs, "
-            "never the gate (docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
-        )
+            raise
+        elapsed = time.monotonic() - started
+        sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
+        if returncode != 0:
+            sys.stderr.write(
+                f"gate {label} failed with exit {returncode}: fix the code or the check it runs, "
+                "never the gate (docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
+            )
+            return False, False, returncode
+        if elapsed > budget:
+            sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
+            return True, False, returncode
         return False, False, returncode
-    if elapsed > budget:
-        sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
-        return True, False, returncode
-    return False, False, returncode
+    finally:
+        if process.poll() is None:
+            terminate_timed_gate(process)
 
 
 def run_timed(argv: Sequence[str]) -> int:
