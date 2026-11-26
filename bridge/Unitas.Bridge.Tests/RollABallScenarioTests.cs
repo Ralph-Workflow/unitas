@@ -34,6 +34,7 @@ namespace Unitas.Bridge.Tests
             }
 
             Score++;
+            Debug.Log($"Pickup collected score {Score}");
             if (Score >= TotalPickups)
             {
                 Won = true;

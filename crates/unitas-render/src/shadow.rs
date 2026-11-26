@@ -130,7 +130,11 @@ mod tests {
         assert!(ShadowQuality::Medium.map_size() < ShadowQuality::High.map_size());
         assert!(ShadowQuality::Low.distance() < ShadowQuality::Medium.distance());
         assert!(ShadowQuality::Medium.distance() < ShadowQuality::High.distance());
-        for quality in [ShadowQuality::Low, ShadowQuality::Medium, ShadowQuality::High] {
+        for quality in [
+            ShadowQuality::Low,
+            ShadowQuality::Medium,
+            ShadowQuality::High,
+        ] {
             let settings = ShadowSettings::for_quality(quality);
             assert_eq!(settings.map_size, quality.map_size());
             assert_eq!(settings.distance, quality.distance());
@@ -153,8 +157,14 @@ mod tests {
         let projected_center = matrix.project_point(center);
         assert!(projected_center.x.abs() < 1e-4, "{projected_center:?}");
         assert!(projected_center.y.abs() < 1e-4, "{projected_center:?}");
-        assert!((0.0..=1.0).contains(&projected_center.z), "{projected_center:?}");
-        for corner in corners(center - Vec3::new(radius, radius, radius), center + Vec3::new(radius, radius, radius)) {
+        assert!(
+            (0.0..=1.0).contains(&projected_center.z),
+            "{projected_center:?}"
+        );
+        for corner in corners(
+            center - Vec3::new(radius, radius, radius),
+            center + Vec3::new(radius, radius, radius),
+        ) {
             let projected = matrix.project_point(corner);
             assert!(projected.x.abs() <= 1.0 + 1e-4, "{projected:?}");
             assert!(projected.y.abs() <= 1.0 + 1e-4, "{projected:?}");
@@ -172,10 +182,7 @@ mod tests {
     #[test]
     fn scene_bounds_encloses_transformed_geometry() {
         let model = Mat4::from_cols_array([
-            2.0, 0.0, 0.0, 0.0,
-            0.0, 2.0, 0.0, 0.0,
-            0.0, 0.0, 2.0, 0.0,
-            10.0, 0.0, 0.0, 1.0,
+            2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 10.0, 0.0, 0.0, 1.0,
         ]);
         let (center, radius) = scene_bounds(std::iter::once((
             Vec3::new(-1.0, -1.0, -1.0),
@@ -234,16 +241,27 @@ mod device_tests {
 
     fn model(translation: Vec3, scale: f32) -> Mat4 {
         Mat4::from_cols_array([
-            scale, 0.0, 0.0, 0.0,
-            0.0, scale, 0.0, 0.0,
-            0.0, 0.0, scale, 0.0,
-            translation.x, translation.y, translation.z, 1.0,
+            scale,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            scale,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            scale,
+            0.0,
+            translation.x,
+            translation.y,
+            translation.z,
+            1.0,
         ])
     }
 
     #[test]
-    fn directional_shadow_darkens_occluded_texels(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn directional_shadow_darkens_occluded_texels() -> Result<(), Box<dyn std::error::Error>> {
         let renderer = match Renderer::new() {
             Ok(renderer) => renderer,
             Err(error) => {

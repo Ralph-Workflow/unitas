@@ -6,16 +6,7 @@ namespace Unitas.Editor.Tests.Play
 {
     public static class PlayAndCaptureTests
     {
-        public static void Run()
-        {
-            PlaySessionLifecycleAndIsolationWithWorker();
-            WorkerCrashEndsOnlyThatPlaySessionAndHostContinues();
-            PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential();
-            LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds();
-            RuntimeDisposalStopsThePlayWorker();
-        }
-
-        private static void PlaySessionLifecycleAndIsolationWithWorker()
+        public static void PlaySessionLifecycleAndIsolationWithWorker()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = new PlaySessionManager();
@@ -165,7 +156,7 @@ namespace Unitas.Editor.Tests.Play
                 ((JsonObject)exitB["content"]!)["state"]!.GetValue<string>());
         }
 
-        private static void WorkerCrashEndsOnlyThatPlaySessionAndHostContinues()
+        public static void WorkerCrashEndsOnlyThatPlaySessionAndHostContinues()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = new PlaySessionManager();
@@ -258,7 +249,7 @@ namespace Unitas.Editor.Tests.Play
                 });
         }
 
-        private static void PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential()
+        public static void PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential()
         {
             PersonCredential credential = PersonCredential.FromToken("person-secret-token");
             using McpHost host = new McpHost(new SystemClock(), credential);
@@ -344,7 +335,7 @@ namespace Unitas.Editor.Tests.Play
                 grantedContent["status"]!.GetValue<string>());
         }
 
-        private static void LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds()
+        public static void LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using PlaySessionManager manager = new PlaySessionManager();
@@ -503,7 +494,7 @@ namespace Unitas.Editor.Tests.Play
                 });
         }
 
-        private static void RuntimeDisposalStopsThePlayWorker()
+        public static void RuntimeDisposalStopsThePlayWorker()
         {
             using McpHost host = BuiltinDefaults.CreateHostWithDefaults();
             using TrackedWorker worker = new TrackedWorker();

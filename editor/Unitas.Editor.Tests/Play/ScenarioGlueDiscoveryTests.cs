@@ -40,7 +40,8 @@ namespace Unitas.Editor.Tests.Play
                 Check.That("glue-discovery: the discovered script guid creates its script type", created);
                 Check.That(
                     "glue-discovery: the discovered script guid creates the project script type",
-                    instance is GlueProbeScript);            }
+                    instance is GlueProbeScript);
+            }
             finally
             {
                 Directory.Delete(project, recursive: true);

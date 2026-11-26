@@ -39,7 +39,7 @@
     { "id": "pickup-2", "after_step": 20, "kind": "transform_position", "object": "PlayerBall", "expected": [-2.85, 0.5, 3.0], "tolerance": 0.02 },
     { "id": "pickup-3", "after_step": 23, "kind": "transform_position", "object": "PlayerBall", "expected": [-3.0, 0.5, -2.85], "tolerance": 0.02 },
     { "id": "pickup-4", "after_step": 26, "kind": "transform_position", "object": "PlayerBall", "expected": [2.85, 0.5, -3.0], "tolerance": 0.02 },
-    { "id": "win-log", "after_step": 28, "kind": "log", "severity": "log", "contains": "All 4 pickups collected" },
+    { "id": "win-log", "after_step": 28, "kind": "log", "severity": "log", "contains": "Pickup collected score 4" },
     { "id": "total-frames", "after_step": 28, "kind": "frame_count", "expected": 208 }
   ]
 }

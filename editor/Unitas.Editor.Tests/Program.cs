@@ -21,7 +21,11 @@ namespace Unitas.Editor.Tests
                 ("NativeToolBridgeTests", NativeToolBridgeTests.Run),
                 ("OperationStoreTests", OperationStoreTests.Run),
                 ("OperationToolsTests", OperationToolsTests.Run),
-                ("PlayAndCaptureTests", PlayAndCaptureTests.Run),
+                ("PlaySessionLifecycleTests", PlayAndCaptureTests.PlaySessionLifecycleAndIsolationWithWorker),
+                ("PlayWorkerCrashTests", PlayAndCaptureTests.WorkerCrashEndsOnlyThatPlaySessionAndHostContinues),
+                ("PlayPersonOnlyGrantTests", PlayAndCaptureTests.PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential),
+                ("PlayLiveCaptureTests", PlayAndCaptureTests.LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds),
+                ("PlayRuntimeDisposalTests", PlayAndCaptureTests.RuntimeDisposalStopsThePlayWorker),
                 ("RegistryTests", RegistryTests.Run),
                 ("ScenarioToolsTests", ScenarioToolsTests.Run),
                 ("ScopeTests", ScopeTests.Run),
@@ -50,17 +54,26 @@ namespace Unitas.Editor.Tests
 
         private static void RunSelected((string Name, Action Run)[] suites, string wanted)
         {
-            foreach ((string name, Action run) in suites)
+            foreach (string single in wanted.Split(',', StringSplitOptions.RemoveEmptyEntries))
             {
-                if (name == wanted)
+                string name = single.Trim();
+                bool found = false;
+                foreach ((string suiteName, Action run) in suites)
                 {
-                    RunSuite(name, run);
-                    return;
+                    if (suiteName == name)
+                    {
+                        RunSuite(suiteName, run);
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    System.Console.WriteLine("unknown suite: " + name);
+                    Check.That("suite " + name + " is in the suite table", false);
                 }
             }
-
-            System.Console.WriteLine("unknown suite: " + wanted);
-            Check.That("suite " + wanted + " is in the suite table", false);
         }
 
         private static void RunSuite(string name, Action run)

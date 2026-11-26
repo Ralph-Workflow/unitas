@@ -109,10 +109,7 @@ impl Simulation {
         Ok(Some(self.step(delta_seconds)?))
     }
 
-    pub fn advance_fixed(
-        &mut self,
-        frame_delta_seconds: f64,
-    ) -> Result<usize, SimulationError> {
+    pub fn advance_fixed(&mut self, frame_delta_seconds: f64) -> Result<usize, SimulationError> {
         if !frame_delta_seconds.is_finite() || frame_delta_seconds < 0.0 {
             return Err(SimulationError::World(PhysicsError::InvalidDeltaTime(
                 frame_delta_seconds,
@@ -140,7 +137,8 @@ impl Simulation {
     }
 
     pub fn interpolated_pose(&self, entity: EntityId) -> Option<([f64; 3], [f64; 4])> {
-        self.world.interpolated_pose(entity, self.interpolation_alpha())
+        self.world
+            .interpolated_pose(entity, self.interpolation_alpha())
     }
 
     pub fn simulate(&mut self, delta_seconds: f64) -> Result<StepResult, SimulationError> {

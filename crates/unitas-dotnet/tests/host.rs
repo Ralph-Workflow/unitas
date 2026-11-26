@@ -2,9 +2,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use unitas_asset::trust::ProjectCapabilities;
-use unitas_dotnet::{
-    install_code_execution_capabilities, DotnetHost, DotnetHostError,
-};
+use unitas_dotnet::{DotnetHost, DotnetHostError, install_code_execution_capabilities};
 
 const RUNTIME_CONFIG: &str = r#"{"runtimeOptions":{"tfm":"net8.0","framework":{"name":"Microsoft.NETCore.App","version":"8.0.0"},"rollForward":"LatestMinor"}}"#;
 

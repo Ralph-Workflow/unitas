@@ -378,8 +378,7 @@ impl Backend {
 
     pub(crate) fn apply_torque_impulse(&mut self, handles: BackendHandles, impulse: [f64; 3]) {
         if impulse != [0.0; 3] {
-            self.bodies[handles.body]
-                .apply_torque_impulse(vector3(impulse), false);
+            self.bodies[handles.body].apply_torque_impulse(vector3(impulse), false);
         }
     }
 

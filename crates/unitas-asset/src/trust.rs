@@ -62,9 +62,7 @@ pub fn per_user_trust_store_path() -> PathBuf {
     }
     for home_variable in ["HOME", "USERPROFILE"] {
         if let Some(home) = std::env::var_os(home_variable).filter(|value| !value.is_empty()) {
-            return PathBuf::from(home)
-                .join(".unitas")
-                .join("trust.json");
+            return PathBuf::from(home).join(".unitas").join("trust.json");
         }
     }
     std::env::temp_dir().join("unitas-trust.json")

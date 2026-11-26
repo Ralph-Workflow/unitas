@@ -86,7 +86,8 @@ fn a_torque_spins_a_dynamic_body_and_changes_its_orientation() -> Result<(), Phy
 }
 
 #[test]
-fn an_angular_impulse_changes_the_angular_velocity_and_the_orientation() -> Result<(), PhysicsError> {
+fn an_angular_impulse_changes_the_angular_velocity_and_the_orientation() -> Result<(), PhysicsError>
+{
     let mut world = World::with_gravity(NO_GRAVITY);
     let entity = EntityId::new(1);
     world.add_body(entity, dynamic_box([0.5, 0.5, 0.5], 2.0))?;

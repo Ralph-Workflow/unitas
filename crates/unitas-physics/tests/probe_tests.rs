@@ -4,7 +4,9 @@ use unitas_physics::{BodyDesc, BodyRole, ForceMode, PhysicsError, Shape, World};
 fn body(role: BodyRole, mass: f64) -> BodyDesc {
     BodyDesc {
         role,
-        shape: Shape::Box { half_extents: [0.5, 0.5, 0.5] },
+        shape: Shape::Box {
+            half_extents: [0.5, 0.5, 0.5],
+        },
         position: [0.0, 0.0, 0.0],
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass,

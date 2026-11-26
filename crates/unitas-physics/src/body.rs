@@ -146,10 +146,7 @@ pub(crate) fn lerp_vector(first: [f64; 3], second: [f64; 3], alpha: f64) -> [f64
 pub(crate) fn slerp_rotation(first: [f64; 4], second: [f64; 4], alpha: f64) -> [f64; 4] {
     let start = normalize_rotation(first);
     let mut end = normalize_rotation(second);
-    let mut cosine = start[0] * end[0]
-        + start[1] * end[1]
-        + start[2] * end[2]
-        + start[3] * end[3];
+    let mut cosine = start[0] * end[0] + start[1] * end[1] + start[2] * end[2] + start[3] * end[3];
     if cosine < 0.0 {
         cosine = -cosine;
         end = [-end[0], -end[1], -end[2], -end[3]];

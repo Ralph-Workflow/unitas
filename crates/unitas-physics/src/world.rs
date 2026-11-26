@@ -735,10 +735,9 @@ impl World {
     }
 
     pub fn angular_inertia(&self, entity: EntityId) -> Option<[f64; 3]> {
-        self.indices.get(&entity).map(|index| {
-            self.backend
-                .angular_inertia(self.bodies[*index].handles)
-        })
+        self.indices
+            .get(&entity)
+            .map(|index| self.backend.angular_inertia(self.bodies[*index].handles))
     }
 
     pub fn interpolated_pose(&self, entity: EntityId, alpha: f64) -> Option<([f64; 3], [f64; 4])> {

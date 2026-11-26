@@ -8,6 +8,15 @@ SUITE_BUDGET_SECONDS := 25
 VERIFY_START := $(shell date +%s)
 DOTNET_BUILD_COMMAND := dotnet build bridge/Unitas.sln --configuration Release
 DOTNET_RESTORE_COMMAND := dotnet restore bridge/Unitas.sln
+EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll
+EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
+EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
+	HttpTransportTests \
+	ScenarioToolsTests \
+	StdioTransportTests \
+	PlaySessionLifecycleTests \
+	PlayWorkerCrashTests \
+	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \
@@ -99,10 +108,24 @@ dotnet-test: runtime-build
 	@$(MAKE) --no-print-directory dotnet-test-run
 
 dotnet-test-run:
-	@python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
-	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) dotnet editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll & p2=$$!; \
+	@rc=0; staging=""; \
+	if [ ! -f "$(EDITOR_TEST_BUNDLE)/bundle.manifest" ] || [ -n "$$(find samples/roll-a-ball bridge/Unitas.PlayerHost/bin/Release/net8.0 -type f -newer "$(EDITOR_TEST_BUNDLE)/bundle.manifest" -print -quit 2>/dev/null)" ]; then \
+		rm -rf "$(EDITOR_TEST_BUNDLE)"; \
+		"$(CURDIR)/target/debug/unitas-player" --sample "$(EDITOR_TEST_BUNDLE)" --frames 1 > /dev/null 2>&1 & staging=$$!; \
+	fi; \
+	python3 tools/verify.py timed dotnet-test $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests & p1=$$!; \
 	python3 tools/verify.py timed dotnet-test-playerhost $(VERIFY_BUDGET_SECONDS) env "UNITAS_RUNTIME_LIBRARY=$(CURDIR)/target/debug/libunitas_runtime.dylib" bridge/Unitas.PlayerHost.Tests/bin/Release/net8.0/Unitas.PlayerHost.Tests & p3=$$!; \
-	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; exit $$rc
+	if [ -n "$$staging" ]; then wait $$staging || rc=1; fi; \
+	python3 tools/verify.py timed dotnet-test-editor $(VERIFY_BUDGET_SECONDS) $(MAKE) --no-print-directory editor-test-shards & p2=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; exit $$rc
+
+editor-test-shards:
+	@rc=0; pids=""; \
+	for shard in $(EDITOR_TEST_SHARDS); do \
+		UNITAS_PLAYER_BUNDLE_DIR="$(EDITOR_TEST_BUNDLE)" dotnet $(EDITOR_TEST_BINARY) $$shard & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || rc=1; done; \
+	exit $$rc
 
 verify-unsafe:
 	@echo "owner: editor and engine proof"

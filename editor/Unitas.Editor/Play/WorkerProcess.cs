@@ -25,6 +25,7 @@ namespace Unitas.Editor.Mcp
     public sealed class WorkerProcess : IPlayWorker
     {
         public const string PlayerBinaryEnvVar = "UNITAS_PLAYER_BINARY";
+        public const string BundleDirectoryEnvVar = "UNITAS_PLAYER_BUNDLE_DIR";
 
         private readonly Process process;
         private readonly object syncLock = new object();
@@ -136,13 +137,33 @@ namespace Unitas.Editor.Mcp
         {
             string executable = ResolvePlayerBinaryPath();
             List<string> arguments = new List<string>();
-            if (!string.IsNullOrWhiteSpace(bundleDirectory))
+            string? bundle = ResolveBundleDirectory(bundleDirectory);
+            if (!string.IsNullOrWhiteSpace(bundle))
             {
-                arguments.Add(bundleDirectory!);
+                arguments.Add(bundle!);
             }
 
             arguments.Add("--control-stdio");
             return new WorkerProcess(executable, arguments, FindRepositoryRoot());
+        }
+
+        /// The bundle a play worker runs against. A caller-supplied bundle wins;
+        /// otherwise the staged bundle the environment points at is reused, so a
+        /// worker start does not re-stage the project for every play session.
+        private static string? ResolveBundleDirectory(string? requested)
+        {
+            if (!string.IsNullOrWhiteSpace(requested))
+            {
+                return requested;
+            }
+
+            string? configured = Environment.GetEnvironmentVariable(BundleDirectoryEnvVar);
+            if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
+            {
+                return configured;
+            }
+
+            return null;
         }
 
         public static string ResolvePlayerBinaryPath()
