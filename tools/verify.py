@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -387,6 +388,7 @@ LANE_LIMIT_FACTS = (
     ("verification-policy.md", "fast_path_command", "fast_path_enforced_limit"),
     ("testing-policy.md", "test_command", "suite_enforced_limit"),
 )
+PYTEST_WORKERS = 4
 SECRET_SCAN_EXCLUDES = (
     r"^\.agent/",
     r"^\.omo/",
@@ -2268,9 +2270,10 @@ def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
 
 
-def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes]) -> None:
+def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes] | None) -> None:
     def handler(signum: int, _frame: object) -> None:
-        terminate_timed_gate(process)
+        if process is not None:
+            terminate_timed_gate(process)
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)
@@ -2280,6 +2283,7 @@ def run_timed_attempt(
     label: str, budget: float, command: list[str]
 ) -> tuple[bool, bool, int] | None:
     started = time.monotonic()
+    terminate_timed_gate_on_signal(None)
     try:
         process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
     except OSError as error:
@@ -2422,13 +2426,27 @@ def run_cargo_test() -> int:
     return 1 if failures else 0
 
 
+def pytest_command() -> list[str]:
+    command = [sys.executable, "-m", "pytest", "-q"]
+    if importlib.util.find_spec("xdist") is not None:
+        command.extend(["-n", str(PYTEST_WORKERS)])
+    return command
+
+
+def run_pytest() -> int:
+    return subprocess.run(pytest_command(), cwd=REPO_ROOT, check=False).returncode
+
+
 def main(argv: Sequence[str]) -> int:
     if len(argv) > 1 and argv[1] == "timed":
         return run_timed(argv[1:])
-    if len(argv) > 1 and argv[1] == "cargo-test":
-        return run_cargo_test()
-    if len(argv) > 1 and argv[1] == "dotnet-format":
-        return run_dotnet_format()
+    subcommands: dict[str, Callable[[], int]] = {
+        "cargo-test": run_cargo_test,
+        "dotnet-format": run_dotnet_format,
+        "pytest": run_pytest,
+    }
+    if len(argv) > 1 and argv[1] in subcommands:
+        return subcommands[argv[1]]()
     if len(argv) != GATE_CLI_ARG_COUNT or argv[1] not in GATES:
         sys.stderr.write("usage: verify.py {" + "|".join(sorted(GATES)) + "}\n")
         return 2

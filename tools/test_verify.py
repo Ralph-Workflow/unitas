@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import importlib.util
 import io
 import json
 import re
@@ -25,6 +26,15 @@ def test_repository_gates_report_no_findings() -> None:
     for name in sorted(verify.GATES):
         findings = verify.GATES[name]()
         assert findings == [], f"{name} reported findings: {findings}"
+
+
+def test_pytest_command_matches_the_xdist_availability() -> None:
+    command = verify.pytest_command()
+    assert command[1:4] == ["-m", "pytest", "-q"]
+    available = importlib.util.find_spec("xdist") is not None
+    assert ("-n" in command) == available
+    if available:
+        assert command[command.index("-n") + 1] == str(verify.PYTEST_WORKERS)
 
 
 def test_placeholder_tokens_are_detected() -> None:

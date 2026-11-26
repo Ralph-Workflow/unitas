@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 124
 SUITE_BUDGET_SECONDS := 61
@@ -25,9 +25,10 @@ EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeRevi
 
 verify:
 	@$(MAKE) --no-print-directory verify-scan-gates & p1=$$!; \
-	$(MAKE) --no-print-directory verify-suite-gates & p2=$$!; \
-	$(MAKE) --no-print-directory verify-dotnet-gates & p3=$$!; \
-	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
+	$(MAKE) --no-print-directory verify-static-gates & p2=$$!; \
+	$(MAKE) --no-print-directory verify-test-gates & p3=$$!; \
+	$(MAKE) --no-print-directory verify-dotnet-gates & p4=$$!; \
+	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; wait $$p4 || rc=1; \
 	test $$rc -eq 0 || { echo "verify failed (enforced limit $(VERIFY_BUDGET_SECONDS)s)"; exit 1; }; \
 	now=$$(date +%s); elapsed=$$(( now - $(VERIFY_START) )); test $$elapsed -le $(VERIFY_BUDGET_SECONDS) || { echo "verify exceeded the $(VERIFY_BUDGET_SECONDS)s enforced limit"; exit 1; }; echo "all gates passed in $$elapsed s (budget $(VERIFY_BUDGET_SECONDS)s)"
 
@@ -44,21 +45,23 @@ verify-scan-gates:
 	wait $$p5 || rc=1; wait $$p6 || rc=1; wait $$p7 || rc=1; \
 	exit $$rc
 
-verify-suite-gates:
-	@rc=0; \
-	$(MAKE) --no-print-directory suite-static-gates & ps=$$!; \
-	$(MAKE) --no-print-directory test & pt=$$!; \
-	wait $$ps || rc=1; wait $$pt || rc=1; exit $$rc
-
-suite-static-gates:
+verify-static-gates:
 	@rc=0; \
 	python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check . & p1=$$!; \
 	python3 tools/verify.py timed format $(VERIFY_BUDGET_SECONDS) ruff format --check . & p2=$$!; \
 	python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check & p3=$$!; \
 	python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings & p4=$$!; \
 	python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy & p5=$$!; \
-	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; wait $$p4 || rc=1; wait $$p5 || rc=1; \
+	python3 tools/verify.py timed typecheck-rs $(VERIFY_BUDGET_SECONDS) cargo check --workspace --all-targets & p6=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
+	wait $$p4 || rc=1; wait $$p5 || rc=1; wait $$p6 || rc=1; \
 	exit $$rc
+
+verify-test-gates:
+	@rc=0; \
+	python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py pytest & p1=$$!; \
+	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py cargo-test & p2=$$!; \
+	wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
 verify-dotnet-gates:
 	@rc=0; \
@@ -75,7 +78,7 @@ test:
 	@python3 tools/verify.py timed test-suite $(SUITE_BUDGET_SECONDS) $(MAKE) --no-print-directory test-steps
 
 test-steps:
-	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
+	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py pytest & p1=$$!; \
 	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py cargo-test & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
 
@@ -126,7 +129,7 @@ dotnet-test: runtime-build
 
 dotnet-test-run:
 	@rc=0; staging=""; \
-	if [ ! -f "$(EDITOR_TEST_BUNDLE)/bundle.manifest" ] || [ -n "$$(find samples/roll-a-ball bridge/Unitas.PlayerHost/bin/Release/net8.0 -type f -newer "$(EDITOR_TEST_BUNDLE)/bundle.manifest" -print -quit 2>/dev/null)" ]; then \
+	if [ ! -f "$(EDITOR_TEST_BUNDLE)/bundle.manifest" ] || [ -n "$$(find samples/roll-a-ball/Assets bridge/Unitas.PlayerHost/bin/Release/net8.0 -type f -newer "$(EDITOR_TEST_BUNDLE)/bundle.manifest" -print -quit 2>/dev/null)" ]; then \
 		rm -rf "$(EDITOR_TEST_BUNDLE)"; \
 		"$(CURDIR)/target/debug/unitas-player" --sample "$(EDITOR_TEST_BUNDLE)" --frames 1 > /dev/null 2>&1 & staging=$$!; \
 	fi; \
