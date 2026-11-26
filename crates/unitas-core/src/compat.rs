@@ -3019,6 +3019,226 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             },
         ],
     },
+    OwnedFeatureCapability {
+        feature_id: "EDT-004",
+        owning_spec: "editor-and-authoring.md",
+        capability: "Enter, pause, frame-step, and exit play mode, and restore the edit-time state",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "play mode starts an isolated play session, pauses it, advances a frame, injects input, and exits it, and the edit-time scene state is captured on entry and restored on exit",
+                location: "editor/Unitas.Editor/Play/PlayTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::PlayModeRestoresTheEditTimeSceneState",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a runtime value observed during play mode is applied to the edit-time scene and its destination is named",
+                location: "editor/Unitas.Editor/Registry/SceneTools.cs",
+                evidence: &[],
+                missing: Some("play.set_runtime_property applies the change to the open scene only while the play session runs, keeps it out of the undo history, and the editor discards it when the session ends, so no command applies a runtime value to the edit-time scene or names its destination"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "EDT-005",
+        owning_spec: "editor-and-authoring.md",
+        capability: "Undo and redo of a person's and an agent session's edits",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a scene edit is undone and redone exactly, an empty history returns a structured error, and the mutating call is recorded in a change set",
+                location: "editor/Unitas.Editor/Registry/SceneTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::SetPropertyUndoAndRedoRoundTrip",
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::UndoWithAnEmptyHistoryReturnsAStructuredError",
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::MutatingCallRecordsAChangeSet",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an agent session's undo applies only to that session's own operations and names the conflicting operation when another actor changed the same content",
+                location: "editor/Unitas.Editor/Core/UndoHistory.cs",
+                evidence: &[],
+                missing: Some("the undo history is one stack per open document whose entries record only the forward and the inverse operation, so an undo applies to another actor's operation and no conflict naming that operation is returned"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "EDT-006",
+        owning_spec: "editor-and-authoring.md",
+        capability: "Named editor commands with their availability, their disabled reason, and their MCP parity",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the command palette lists every registered tool and every project menu command with its identifier, its display name, its description, its required scope, its availability, and its disabled reason, and a command runs by its identifier",
+                location: "editor/Unitas.Editor/Registry/CommandPaletteTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::TheCommandPaletteListsTheRegisteredCommands",
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::TheCommandPaletteRunsACommand",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a project-contributed editor method is discovered from the compiled project assembly and registered as a tool with the execute-project-code scope",
+                location: "editor/Unitas.Editor/Registry/ExecuteMethodTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::DiscoversEditorCallableMethodsAndEmitsGlueRegistration",
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::ToolIsRegisteredWithExecuteProjectCodeScopeAndMethodSchema",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a shortcut is assigned per user and a conflicting assignment names the other command, and every drag-and-drop outcome is available as a command",
+                location: "editor/Unitas.Editor/Registry/CommandPaletteTools.cs",
+                evidence: &[],
+                missing: Some("the palette reads the shortcut of a menu command and searches only names and descriptions, so no command assigns a shortcut or reports a shortcut conflict, and no drag-and-drop outcome is available as a command"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "EDT-008",
+        owning_spec: "editor-and-authoring.md",
+        capability: "Agent change review: change sets under a review policy, and accepting, rejecting, and reverting them",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "an agent mutation is held under the project review policy, a person approves it and the transition is audited, and a rejection restores the files the change set changed",
+                location: "editor/Unitas.Editor/Core/ChangeSetStore.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/ChangeReviewTests.cs::AgentMutationIsHeldUnderReviewPolicy",
+                    "editor/Unitas.Editor.Tests/ChangeReviewTests.cs::PersonApproveAppliesHeldMutationAndAuditsTransitions",
+                    "editor/Unitas.Editor.Tests/ChangeReviewTests.cs::RejectRestoresTheFilesTheChangeSetChanged",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "each change-set item records the agent session, the identity, the time, the request that produced it, and its affected identities, and the change set lists the risk flags of its items",
+                location: "editor/Unitas.Editor/Core/ChangeSet.cs",
+                evidence: &[],
+                missing: Some("a change set records its id, its author, its creation time, its status, and its operations, and an operation records only the tool and its arguments, so no item names the request that produced it and no risk flag marks a change to tests, to scenario expectations, to tolerances, to project settings, to package manifests, to editor-time scripts, or to native plugins"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "AUT-001",
+        owning_spec: "automation-and-mcp.md",
+        capability: "Feature parity between the editor and automation, over any MCP client and without network access",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "every registered editor command is exposed as an MCP tool with the scope it requires, over the stdio transport and the HTTP transport",
+                location: "editor/Unitas.Editor/Registry/ToolRegistry.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::RegistersAuthoringToolsWithLeastPrivilegeScopes",
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::RegistersTheSceneToolsWithLeastPrivilegeScopes",
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::TheLiveHostRegistersTheSceneTools",
+                    "editor/Unitas.Editor.Tests/Transport/StdioTransportTests.cs::StdioInitializeToolsAndResourcesRoundTrip",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a project-contributed editor method is discovered from the compiled project assembly and registered as a tool with its own scope",
+                location: "editor/Unitas.Editor/Registry/ExecuteMethodTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::DiscoversEditorCallableMethodsAndEmitsGlueRegistration",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a binary asset is created or imported by a command",
+                location: "crates/unitas-editor-abi/src/asset_tools.rs",
+                evidence: &[],
+                missing: Some("the editor ABI exposes assets.search, assets.preview, assets.move, assets.delete, assets.restore, assets.duplicate, assets.favorites, assets.recents, and assets.dependencies, and project.write_file writes text only, so no command creates or imports a binary asset and the agent authoring benchmark records that absence as an AUT-001 parity finding"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "AUT-002",
+        owning_spec: "automation-and-mcp.md",
+        capability: "Capability discovery, structured inspection, and structured editing over MCP",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the outcome of a mutating request is queryable by its operation identifier and a running operation reports its stage",
+                location: "editor/Unitas.Editor/Registry/OperationTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/OperationToolsTests.cs::GetReturnsOneOperationAndRefusesAnUnknownId",
+                    "editor/Unitas.Editor.Tests/Registry/OperationToolsTests.cs::ListReturnsTheHostOperationsInStartOrder",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the project's tests and its declared scenarios run through MCP and report their outcome",
+                location: "editor/Unitas.Editor/Play/ScenarioTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::TestRunReturnsAPassFailSummary",
+                    "editor/Unitas.Editor.Tests/Play/ScenarioToolsTests.cs::RegisteredToolRunsCollectAllPickupsWithAllCheckpointsPassed",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the score, the multiplier, and the timer of the running sample are readable as structured state",
+                location: "crates/unitas-build/src/control.rs",
+                evidence: &[],
+                missing: Some("the worker's play-state payload carries score, total, won, and script_host only, and the editor's play.state payload reports the session, the state, the frames, delta_seconds, random_seed, and crashed, so the sample's multiplier and timer are not readable through the editor's MCP surface although the sample specification requires an agent to read score, multiplier, and timer state"),
+            },
+            OwnedCapabilityPart {
+                behavior: "discovery reports the version of each tool and resource schema and the release in which a deprecation ends",
+                location: "editor/Unitas.Editor/Registry/ToolRegistry.cs",
+                evidence: &[],
+                missing: Some("a registered tool carries its name, its description, its input schema, and its required scope, so discovery reports no schema version and no deprecation for a tool or a resource"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "AUT-007",
+        owning_spec: "automation-and-mcp.md",
+        capability: "Permission scopes, person grants, and the confirmation boundary",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a request without the scope a tool requires is refused with the missing scope named and changes nothing, and a session cannot widen its own scopes",
+                location: "editor/Unitas.Editor/Registry/McpHost.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/AuthoringToolsTests.cs::WriteRequiresTheEditScopes",
+                    "editor/Unitas.Editor.Tests/Registry/SceneToolsTests.cs::MutatingCallWithoutTheEditScopeIsRefused",
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::RefusesCallerWithoutExecuteProjectCodeScope",
+                    "editor/Unitas.Editor.Tests/Transport/HttpTransportTests.cs::HttpSelfWideningAndUnknownPrimitiveErrorsAreMappedAndAudited",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an irreversible or externally visible request returns a confirmation-required outcome and proceeds only after a person confirms it or under a standing grant",
+                location: "editor/Unitas.Editor/Core/Errors.cs",
+                evidence: &[],
+                missing: Some("the editor defines no confirmation-required outcome and checks no standing grant before an irreversible action, so a deletion outside the undo history, a deployment, a signing, or an external-network request proceeds without a person confirming it"),
+            },
+            OwnedCapabilityPart {
+                behavior: "every scope discovery lists is the scope a registered tool requires, so a session that holds that scope can exercise it",
+                location: "editor/Unitas.Editor/Core/Scope.cs",
+                evidence: &[],
+                missing: Some("the import-external-files, change-packages-and-settings, build, sign, deploy, and external-network scopes are declared, but no registered tool requires them, so a session that holds them exercises nothing"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "AUT-008",
+        owning_spec: "automation-and-mcp.md",
+        capability: "Audit log and provenance of an agent session's requests",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a tool call, a refusal, and a grant are recorded with the time, the session identity, the target, the scope, the outcome, and the affected identities",
+                location: "editor/Unitas.Editor/Core/Audit.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::RecordsAnAuditEntryForTheInvocation",
+                    "editor/Unitas.Editor.Tests/ChangeReviewTests.cs::PersonApproveAppliesHeldMutationAndAuditsTransitions",
+                    "editor/Unitas.Editor.Tests/Transport/HttpTransportTests.cs::ConcurrentClientsKeepTheirOwnAuditIdentity",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the provenance of an accepted agent change is queryable: which agent session made each change, under which request, and who accepted it",
+                location: "editor/Unitas.Editor/Core/Audit.cs",
+                evidence: &[],
+                missing: Some("the audit record carries the session, the identity, the target, the scope, the outcome, and the affected identities, and a change set carries the tool and its arguments, so no record names the request that produced an agent change"),
+            },
+        ],
+    },
 ];
 pub fn lookup_owned_feature_capability(
     feature_id: &str,

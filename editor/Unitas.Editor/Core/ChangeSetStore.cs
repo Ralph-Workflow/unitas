@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
@@ -15,6 +16,8 @@ namespace Unitas.Editor.Mcp
         private readonly List<ChangeSet> order = new List<ChangeSet>();
         private readonly Dictionary<string, ChangeSet> sets =
             new Dictionary<string, ChangeSet>(StringComparer.Ordinal);
+        private readonly Dictionary<string, JsonObject> restores =
+            new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         private long nextId;
 
         public ChangeSetStore(McpHost host, Func<JsonObject, JsonObject>? applier = null)
@@ -95,7 +98,202 @@ namespace Unitas.Editor.Mcp
             set.Status = ChangeSetStatus.Rejected;
             set.RejectionReason = reason;
             RecordTransition(set, "changes.reject");
+            restores[id] = RestoreFiles(set);
             return set;
+        }
+
+        public JsonObject RestoreReport(string id)
+        {
+            if (restores.TryGetValue(id, out JsonObject? report))
+            {
+                return report;
+            }
+
+            return new JsonObject
+            {
+                ["restoredCount"] = 0,
+                ["restoredPaths"] = new JsonArray(),
+                ["unrestoredPaths"] = new JsonArray(),
+            };
+        }
+
+        private JsonObject RestoreFiles(ChangeSet set)
+        {
+            List<string> restored = new List<string>();
+            List<string> unrestored = new List<string>();
+            List<string> roots = CandidateRoots();
+
+            for (int index = set.Operations.Count - 1; index >= 0; index--)
+            {
+                JsonObject operation = set.Operations[index];
+                string? path = OperationString(operation, "path");
+                if (path == null)
+                {
+                    continue;
+                }
+
+                string? before = OperationString(operation, "before");
+                string? after = OperationString(operation, "after");
+                string? target = before == null || after == null
+                    ? null
+                    : RecordedFile(roots, path, after);
+                if (target == null || before == null)
+                {
+                    unrestored.Add(path);
+                    continue;
+                }
+
+                try
+                {
+                    if (before.Length == 0)
+                    {
+                        File.Delete(target);
+                        PruneEmptyParentDirectories(target, roots);
+                    }
+                    else
+                    {
+                        File.WriteAllText(target, before);
+                    }
+                }
+                catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+                {
+                    unrestored.Add(path);
+                    continue;
+                }
+
+                restored.Add(path);
+            }
+
+            JsonArray restoredPaths = new JsonArray();
+            foreach (string path in restored)
+            {
+                restoredPaths.Add(path);
+            }
+
+            JsonArray unrestoredPaths = new JsonArray();
+            foreach (string path in unrestored)
+            {
+                unrestoredPaths.Add(path);
+            }
+
+            return new JsonObject
+            {
+                ["restoredCount"] = restored.Count,
+                ["restoredPaths"] = restoredPaths,
+                ["unrestoredPaths"] = unrestoredPaths,
+            };
+        }
+
+        private static void PruneEmptyParentDirectories(string targetFile, List<string> roots)
+        {
+            string? directory = Path.GetDirectoryName(targetFile);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                bool isRoot = false;
+                foreach (string root in roots)
+                {
+                    if (string.Equals(
+                        Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        StringComparison.Ordinal))
+                    {
+                        isRoot = true;
+                        break;
+                    }
+                }
+
+                if (isRoot || !Directory.Exists(directory))
+                {
+                    break;
+                }
+
+                if (Directory.GetFileSystemEntries(directory).Length > 0)
+                {
+                    break;
+                }
+
+                Directory.Delete(directory);
+                directory = Path.GetDirectoryName(directory);
+            }
+        }
+
+        private List<string> CandidateRoots()
+        {
+            List<string> roots = new List<string>();
+            string? project = host.ProjectPath;
+            if (!string.IsNullOrWhiteSpace(project))
+            {
+                roots.Add(project!);
+            }
+
+            string current = Directory.GetCurrentDirectory();
+            if (!roots.Contains(current))
+            {
+                roots.Add(current);
+            }
+
+            string samples = Path.Combine(current, "samples");
+            if (Directory.Exists(samples))
+            {
+                foreach (string child in Directory.GetDirectories(samples))
+                {
+                    if (!roots.Contains(child))
+                    {
+                        roots.Add(child);
+                    }
+                }
+            }
+
+            return roots;
+        }
+
+        private static string? RecordedFile(List<string> roots, string relative, string after)
+        {
+            foreach (string root in roots)
+            {
+                string? candidate = TargetPath(root, relative);
+                if (candidate != null && HoldsContent(candidate, after))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? TargetPath(string root, string relative)
+        {
+            try
+            {
+                string candidate = Path.GetFullPath(Path.Combine(root, relative));
+                return AuditStore.IsPathInsideDirectory(candidate, root) ? candidate : null;
+            }
+            catch (Exception error) when (error is ArgumentException || error is NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private static bool HoldsContent(string path, string content)
+        {
+            try
+            {
+                return File.Exists(path) && File.ReadAllText(path) == content;
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        private static string? OperationString(JsonObject operation, string propertyName)
+        {
+            if (operation[propertyName] is JsonValue value && value.TryGetValue(out string? text))
+            {
+                return text;
+            }
+
+            return null;
         }
 
         private ChangeSet PendingSet(string id)

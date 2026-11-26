@@ -1241,8 +1241,32 @@ namespace Unitas.Testing
                     "Unitas.TestGlue." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".dll");
                 File.Copy(compiledGlue.OutputPath, targetGlueDll, true);
 
+                AssemblyLoadContext testGlueContext = new AssemblyLoadContext(
+                    "UnitasTestGlue_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+                    isCollectible: true);
+                testGlueContext.Resolving += (alc, assemblyName) =>
+                {
+                    string simpleName = assemblyName.Name ?? string.Empty;
+                    foreach (var existing in loadContext.Assemblies)
+                    {
+                        if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return existing;
+                        }
+                    }
+
+                    foreach (var existing in AssemblyLoadContext.Default.Assemblies)
+                    {
+                        if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return existing;
+                        }
+                    }
+
+                    return null;
+                };
                 using FileStream testGlueStream = File.OpenRead(targetGlueDll);
-                var loaded = loadContext.LoadFromStream(testGlueStream);
+                var loaded = testGlueContext.LoadFromStream(testGlueStream);
                 RuntimeHelpers.RunModuleConstructor(loaded.ManifestModule.ModuleHandle);
                 loaded.CreateInstance("UnitasGeneratedTests.TestGlueInitializer");
                 return true;

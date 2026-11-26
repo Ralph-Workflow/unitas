@@ -2078,11 +2078,12 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
     }
 }
 
-const OWNED_FEATURE_IDS: [&str; 37] = [
+const OWNED_FEATURE_IDS: [&str; 45] = [
     "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
     "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
     "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-003", "REN-004",
-    "EDT-007", "CMP-002", "CMP-004", "BLD-005", "RUN-001", "RUN-003", "RUN-004", "RUN-005",
+    "EDT-004", "EDT-005", "EDT-006", "EDT-007", "EDT-008", "AUT-001", "AUT-002", "AUT-007",
+    "AUT-008", "CMP-002", "CMP-004", "BLD-005", "RUN-001", "RUN-003", "RUN-004", "RUN-005",
     "RUN-009", "DIA-001", "PRF-001", "ACC-001", "SAV-001",
 ];
 
@@ -2091,6 +2092,12 @@ fn workspace_file(relative: &str) -> std::path::PathBuf {
         .join("..")
         .join("..")
         .join(relative)
+}
+
+fn declares_test(source: &str, test_name: &str) -> bool {
+    source.contains(&format!("fn {test_name}("))
+        || source.contains(&format!("void {test_name}("))
+        || source.contains(&format!("Task {test_name}("))
 }
 
 fn empty_project() -> unitas_core::compat::ProjectContent {
@@ -2147,7 +2154,7 @@ fn cmp_002_every_owned_feature_reports_a_real_state_from_assess_project() {
                 state.feature_id
             );
             assert!(
-                gap.contains(".rs"),
+                gap.contains(".rs") || gap.contains(".cs"),
                 "CMP-002: the gap for '{}' must name the module where the capability is missing: {}",
                 state.feature_id,
                 gap
@@ -2255,7 +2262,7 @@ fn cmp_002_owned_capability_sources_exist_in_the_workspace_and_drive_the_state()
                         format!("fn {test_name}(")
                     };
                     assert!(
-                        source.contains(&declaration),
+                        source.contains(&declaration) || declares_test(&source, test_name),
                         "CMP-002: the evidence '{}' of '{}' must name a test that exists in the workspace",
                         evidence,
                         capability.feature_id

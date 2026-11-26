@@ -293,7 +293,7 @@ RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
 RALPH-FACT: ci_integration_command: make verify
 RALPH-FACT: ci_integration_workflow: .github/workflows/verify.yml runs one verify job on ubuntu-24.04 with a 30-minute job timeout, on pull_request, push to main, and workflow_dispatch; it checks out the repository, pins Python 3.14 with pytest 9.0.3, ruff 0.15.16, mypy 2.1.0, and detect-secrets 1.5.0, installs Rust 1.93.0 with the rustfmt and clippy components and the .NET 8.0.428 SDK, then runs `make verify`; the workflow's FIRST REMOTE EXECUTION IS NOT YET OBSERVED — no CI run id carries it, so the lane's runtime on a runner is unmeasured; the recorded 26.24-second measurement and the 124-second enforced limit the job runs under both come from a WARM Apple Silicon host, so a cold runner may exceed that limit before any gate fails; review: at the first observed remote execution, record the run id and the observed lane time, then decide the cache and warm-up story (a restored cargo target cache) that keeps a cold runner inside the enforced limit
-RALPH-FACT: required_verification_profiles: four named non-default lanes, each failing hard when run: `make verify-samples`, `make verify-device`, `make verify-perf`, and `make verify-unsafe`
+RALPH-FACT: required_verification_profiles: five named non-default lanes, each failing hard when run: `make verify-samples`, `make verify-benchmark`, `make verify-device`, `make verify-perf`, and `make verify-unsafe`
 
 The named non-default profiles, each with the five required fields:
 
@@ -306,6 +306,12 @@ The named non-default profiles, each with the five required fields:
   directional-shadow S8 reference baselines under
   `samples/roll-a-ball/References/` and the lane exit status of that run;
   staleness horizon one milestone.
+- `make verify-benchmark` — owner: editor and engine proof; trigger: changes
+  to the editor's MCP tool surface, the agent-authoring benchmark, or the
+  change-review policy; evidence: the lane report at
+  `target/benchmark-lane/report.json`, its per-criterion OK/FAIL lines, and the
+  lane exit status; fails hard when run; last run 2026-11-26, recorded in the
+  gate-lane review entry below; staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
   GPU/audio/input artifacts; fails hard when run; last run 2026-11-26, recorded
@@ -349,6 +355,7 @@ The named non-default profiles, each with the five required fields:
 | Profile | Last run | Durable source |
 |---|---|---|
 | `make verify-samples` | 2026-11-26 | the re-approved directional-shadow S8 reference baselines under `samples/roll-a-ball/References/` |
+| `make verify-benchmark` | 2026-11-26 | this gate-lane review entry and the benchmark inputs under `samples/roll-a-ball/Benchmarks/agent-authoring/bonus-pickup/` |
 | `make verify-device` | 2026-11-26 | this gate-lane review entry; `tools/approved_gpu_reference.bmp` was not re-approved for the directional-shadow change and remains the pre-shadow baseline, because the staged player's bundle carries no `ProjectSettings/` directory, so the device frame takes the documented shadows-off fallback (`ShadowSettings::disabled()`) and comes out byte-identical to that pre-shadow baseline (max_diff=0) — the lane proves that fallback path, not the shadow; the durable source for the shadow evidence is the re-approved S8 reference set under `samples/roll-a-ball/References/` |
 | `make verify-perf` | 2026-11-26 | this gate-lane review entry |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |

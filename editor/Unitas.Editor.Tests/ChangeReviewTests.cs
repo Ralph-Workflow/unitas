@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -12,6 +13,7 @@ namespace Unitas.Editor.Tests
             AgentMutationIsHeldUnderReviewPolicy();
             PersonApproveAppliesHeldMutationAndAuditsTransitions();
             PersonRejectRefusesHeldMutationAndClosesIt();
+            RejectRestoresTheFilesTheChangeSetChanged();
         }
 
         private static void AgentMutationIsHeldUnderReviewPolicy()
@@ -291,6 +293,131 @@ namespace Unitas.Editor.Tests
             List<AuditRecord> transitions = TransitionRecords(host);
             Check.Equal("reject: hold and reject transitions audited", 2, transitions.Count);
             Check.Equal("reject: reject transition audited", "changes.reject", transitions[1].Target);
+        }
+
+        private static void RejectRestoresTheFilesTheChangeSetChanged()
+        {
+            FixedClock clock = new FixedClock(4_000);
+            string project = CreateProject("reject-restore");
+            try
+            {
+                using McpHost host = new McpHost(clock, PersonCredential.FromToken("person-token"));
+                ChangeSetStore store = new ChangeSetStore(host);
+                ProjectTools.Register(host, store);
+                ChangeReviewTools.Register(host, store);
+                RegisterSyntheticMutator(host, store);
+                host.OpenProject(project);
+                string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+                host.GrantScope(agentSession, Scope.EditContent, GrantAuthority.Person);
+                string personSession = host.CreateSession(new SessionIdentity("person-ui", "http", "person-1"));
+
+                File.WriteAllText(Path.Combine(project, "Assets", "Existing.txt"), "original\n");
+                host.CallTool(
+                    agentSession,
+                    "project.write_file",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Added.txt",
+                        ["content"] = "added\n",
+                    });
+                host.CallTool(
+                    agentSession,
+                    "project.write_file",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Existing.txt",
+                        ["content"] = "changed\n",
+                    });
+                host.CallTool(
+                    agentSession,
+                    "test.mutate",
+                    new JsonObject
+                    {
+                        ["value"] = "risky",
+                    });
+
+                JsonObject added = ContentOf(host.CallTool(
+                    personSession,
+                    "changes.reject",
+                    new JsonObject
+                    {
+                        ["id"] = "cs-1",
+                        ["reason"] = "not wanted",
+                        ["personCredential"] = "person-token",
+                    }));
+                Check.That(
+                    "reject: the file that did not exist before is gone",
+                    !File.Exists(Path.Combine(project, "Assets", "Added.txt")));
+                JsonObject addedRestore = (JsonObject)added["restore"]!;
+                Check.Equal(
+                    "reject: the restore report counts the restored file",
+                    1,
+                    addedRestore["restoredCount"]!.GetValue<int>());
+                Check.Equal(
+                    "reject: the restore report names the restored path",
+                    "Assets/Added.txt",
+                    ((JsonArray)addedRestore["restoredPaths"]!)[0]!.GetValue<string>());
+
+                JsonObject existing = ContentOf(host.CallTool(
+                    personSession,
+                    "changes.reject",
+                    new JsonObject
+                    {
+                        ["id"] = "cs-2",
+                        ["reason"] = "not wanted",
+                        ["personCredential"] = "person-token",
+                    }));
+                Check.Equal(
+                    "reject: the pre-existing file holds its original content",
+                    "original\n",
+                    File.ReadAllText(Path.Combine(project, "Assets", "Existing.txt")));
+                JsonObject existingRestore = (JsonObject)existing["restore"]!;
+                Check.Equal(
+                    "reject: the restore report counts the rewritten file",
+                    1,
+                    existingRestore["restoredCount"]!.GetValue<int>());
+                Check.Equal(
+                    "reject: the restore report names the rewritten path",
+                    "Assets/Existing.txt",
+                    ((JsonArray)existingRestore["restoredPaths"]!)[0]!.GetValue<string>());
+
+                JsonObject held = ContentOf(host.CallTool(
+                    personSession,
+                    "changes.reject",
+                    new JsonObject
+                    {
+                        ["id"] = "cs-3",
+                        ["reason"] = "not wanted",
+                        ["personCredential"] = "person-token",
+                    }));
+                Check.Equal(
+                    "reject: a change set without a recorded path restores nothing",
+                    0,
+                    ((JsonObject)held["restore"]!)["restoredCount"]!.GetValue<int>());
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static string CreateProject(string label)
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-u3-" + label + "-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "Assets"));
+            return root;
+        }
+
+        private static void DeleteDirectory(string directory)
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
         }
 
         private static void RegisterSyntheticMutator(McpHost host, ChangeSetStore store)

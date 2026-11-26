@@ -25,6 +25,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.PlayerHost", "Unitas
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.PlayerHost.Tests", "Unitas.PlayerHost.Tests\Unitas.PlayerHost.Tests.csproj", "{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unitas.Benchmark", "..\editor\Unitas.Benchmark\Unitas.Benchmark.csproj", "{E3A4464E-EDFB-4A5E-BE65-47F81B17F63C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -78,5 +80,9 @@ Global
 		{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8C0E2F44-5D93-4A07-BE12-4F6A8C1E3B50}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E3A4464E-EDFB-4A5E-BE65-47F81B17F63C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E3A4464E-EDFB-4A5E-BE65-47F81B17F63C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E3A4464E-EDFB-4A5E-BE65-47F81B17F63C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E3A4464E-EDFB-4A5E-BE65-47F81B17F63C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

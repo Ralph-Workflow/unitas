@@ -157,7 +157,9 @@ namespace Unitas.Editor.Mcp
             }
 
             ChangeSet set = store.Reject(id, reason!);
-            return ToolOutput.Untrusted(PendingOrigin, set.ToValue())
+            JsonObject payload = set.ToValue();
+            payload["restore"] = store.RestoreReport(set.Id);
+            return ToolOutput.Untrusted(PendingOrigin, payload)
                 .WithAffectedIdentities(set.Id);
         }
 

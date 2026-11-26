@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 124
 SUITE_BUDGET_SECONDS := 61
@@ -198,3 +198,11 @@ verify-samples:
 	@echo "evidence: scenario report JSONs, packaged-player build-report assertions, and lane exit status"
 	@echo "review: when a second sample game gains real scripts"
 	@python3 tools/verify_samples.py
+
+verify-benchmark:
+	@echo "owner: editor and engine proof"
+	@echo "trigger: changes to the editor's MCP tool surface, the agent-authoring benchmark, or the change-review policy"
+	@echo "lane: make verify-benchmark"
+	@echo "evidence: the lane report at target/benchmark-lane/report.json, its per-criterion OK/FAIL lines, and the lane exit status"
+	@echo "review: when the agent-authoring benchmark, its acceptance scenario, or the change-review policy changes"
+	@python3 -m tools.verify_benchmark
