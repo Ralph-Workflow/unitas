@@ -287,7 +287,6 @@ pub struct GpuFramePresenter<'a> {
     meshes: Vec<GpuMeshBinding>,
     camera_binding: GpuCameraBinding,
     light: DirectionalLight,
-    shadow_settings: ShadowSettings,
     #[cfg(feature = "device")]
     audio_output: Option<DeviceOutput>,
     update_callback: Option<FrameUpdateCallback<'a>>,
@@ -316,7 +315,6 @@ impl<'a> GpuFramePresenter<'a> {
                 color: [1.0, 1.0, 1.0],
                 intensity: 0.85,
             },
-            shadow_settings: ShadowSettings::disabled(),
             #[cfg(feature = "device")]
             audio_output: None,
             update_callback: None,
@@ -398,12 +396,7 @@ impl<'a> GpuFramePresenter<'a> {
     }
 
     pub fn set_shadow_settings(&mut self, settings: ShadowSettings) {
-        self.shadow_settings = settings;
         self.renderer.set_shadow_settings(settings);
-    }
-
-    pub fn shadow_settings(&self) -> ShadowSettings {
-        self.shadow_settings
     }
 
     #[cfg(feature = "device")]

@@ -2557,6 +2557,18 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 evidence: &[],
                 missing: Some("cascade splitting for shadowCascades 2/4, per-renderer ShadowCastingMode, URP 14's UniversalRenderPipelineAsset shadow-atlas resolution source and cascade model, URP's 5x5 and 7x7 tent filter ladder, and skybox, ambient, and light probes are not implemented"),
             },
+            OwnedCapabilityPart {
+                behavior: "a staged or packaged unitas player carries no ProjectSettings/QualitySettings.asset because the bundler stages only the project's Assets directory, so the runtime finds no ProjectSettings directory, no quality level resolves, and the documented shadows-off fallback renders the player without the directional shadow; only the Standalone target group is wired end to end today, and the WebGL group is unreachable because no web player crate exists",
+                location: "crates/unitas-runtime/src/presenter.rs",
+                evidence: &[],
+                missing: Some("a packaged unitas player renders without the directional shadow until bundle staging copies ProjectSettings/QualitySettings.asset into the bundle, and the WebGL target group stays unreachable until a web player crate exists; the bundle-staging gap is recorded as the named follow-on 'stage ProjectSettings into the player bundle' with owner: presentation and player, trigger: a change to bundle staging or packaged-player presentation, lane: make verify-device and make verify-samples, evidence: device capture plus sample scenario reports, and review condition: re-approving tools/approved_gpu_reference.bmp"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the shadow map's texel count follows a quality level's max_texels cap down to a 64-texel floor, and the orthographic light volume is fitted as a cube of half-extent shadowDistance around the camera position",
+                location: "crates/unitas-render/src/shadow.rs",
+                evidence: &[],
+                missing: Some("the shadow map never falls below 64 texels even when the quality level's max_texels cap is lower, and the orthographic light volume keeps an aspect of 1.0, so a scene wider than the camera aspect can clip sideways out of the shadow volume"),
+            },
         ],
     },
     OwnedFeatureCapability {
