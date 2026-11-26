@@ -1,6 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    BodyDesc, BodyRole, CharacterController, CollisionFlags, PhysicsError, Shape, World,
+    BodyDesc, BodyRole, CharacterController, ColliderShape, CollisionFlags, PhysicsError, Shape,
+    World,
 };
 
 const ALL_LAYERS: u32 = 1;
@@ -13,7 +14,7 @@ fn static_box(position: [f64; 3], half_extents: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         layer: ALL_LAYERS,
         role: BodyRole::Static,
         friction: 0.6,
@@ -79,9 +80,9 @@ fn phy_003_story_4_character_traverses_step_slope_and_moving_platform_reporting_
             velocity: [2.0, 0.0, 0.0],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [1.5, 0.5, 5.0],
-            },
+            }),
             layer: ALL_LAYERS,
             role: BodyRole::Kinematic,
             friction: 0.6,
@@ -378,9 +379,9 @@ fn phy_003_story_4_kinematic_platform_moved_via_set_position_carries_grounded_ch
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             layer: ALL_LAYERS,
             role: BodyRole::Kinematic,
             friction: 0.6,
@@ -420,9 +421,9 @@ fn phy_003_story_4_moving_platform_carries_grounded_character_via_world_velocity
             velocity: [4.0, 0.0, -2.0],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             layer: ALL_LAYERS,
             role: BodyRole::Kinematic,
             friction: 0.6,

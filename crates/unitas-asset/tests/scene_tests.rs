@@ -8,10 +8,11 @@ use unitas_asset::scene::{
     assemble_scene_file_bundle, assemble_scene_file_bundle_with_guids,
     assemble_scene_file_with_guids, assemble_scene_file_with_index,
     assemble_scene_file_with_physics, assemble_scene_with_guids, assemble_scene_with_physics,
-    AssembledScene, AudioBinding, AudioSourceComponent, BounceCombine, CameraComponent,
-    CapsuleColliderComponent, CharacterControllerComponent, FrictionCombine, LightComponent,
-    MaterialValues, MeshRendererComponent, RenderBinding, SceneError, AUDIO_CLIP_CLASS,
-    AUDIO_SOURCE_CLASS, CAMERA_CLASS, LIGHT_CLASS, MESH_FILTER_CLASS, MESH_RENDERER_CLASS,
+    AssembledScene, AudioBinding, AudioSourceComponent, BounceCombine, BoxColliderComponent,
+    CameraComponent, CapsuleColliderComponent, CharacterControllerComponent, ColliderComponent,
+    FrictionCombine, LightComponent, MaterialValues, MeshRendererComponent, PhysicsBinding,
+    RenderBinding, SceneError, SphereColliderComponent, AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS,
+    CAMERA_CLASS, LIGHT_CLASS, MESH_FILTER_CLASS, MESH_RENDERER_CLASS,
 };
 use unitas_asset::unity_yaml;
 use unitas_core::{EntityId, SceneGraph};
@@ -248,6 +249,36 @@ fn entity_named(graph: &SceneGraph, name: &str) -> Result<EntityId, Box<dyn Erro
         }
     }
     Err(format!("no entity named {name}").into())
+}
+
+fn find_box_collider(binding: &PhysicsBinding) -> Option<&BoxColliderComponent> {
+    binding
+        .colliders
+        .iter()
+        .find_map(|collider| match collider {
+            ColliderComponent::Box(value) => Some(value),
+            _ => None,
+        })
+}
+
+fn find_sphere_collider(binding: &PhysicsBinding) -> Option<&SphereColliderComponent> {
+    binding
+        .colliders
+        .iter()
+        .find_map(|collider| match collider {
+            ColliderComponent::Sphere(value) => Some(value),
+            _ => None,
+        })
+}
+
+fn find_capsule_collider(binding: &PhysicsBinding) -> Option<&CapsuleColliderComponent> {
+    binding
+        .colliders
+        .iter()
+        .find_map(|collider| match collider {
+            ColliderComponent::Capsule(value) => Some(value),
+            _ => None,
+        })
 }
 
 fn entity_names(graph: &SceneGraph) -> Vec<String> {
@@ -487,22 +518,16 @@ fn physics_components_bind_to_their_game_object_entity() -> TestResult {
         .ok_or("Ball has no rigidbody")?;
     assert_eq!(rigidbody.mass, 2.5);
     assert!(!rigidbody.use_gravity);
-    let sphere = ball_binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("Ball has no sphere collider")?;
+    let sphere = find_sphere_collider(ball_binding).ok_or("Ball has no sphere collider")?;
     assert_eq!(sphere.radius, 0.75);
     assert_eq!(sphere.center, [0.0, 1.0, 0.0]);
-    assert!(ball_binding.box_collider.is_none());
+    assert!(find_box_collider(ball_binding).is_none());
     let crate_binding = &bindings[1];
-    let box_collider = crate_binding
-        .box_collider
-        .as_ref()
-        .ok_or("Crate has no box collider")?;
+    let box_collider = find_box_collider(crate_binding).ok_or("Crate has no box collider")?;
     assert_eq!(box_collider.size, [2.0, 3.0, 4.0]);
     assert_eq!(box_collider.center, [0.5, 0.0, -0.5]);
     assert!(crate_binding.rigidbody.is_none());
-    assert!(crate_binding.sphere_collider.is_none());
+    assert!(find_sphere_collider(crate_binding).is_none());
     Ok(())
 }
 
@@ -523,17 +548,11 @@ fn physics_defaults_apply_when_a_field_is_absent() -> TestResult {
     assert!(rigidbody.use_gravity);
     assert!(!rigidbody.is_trigger);
     assert!(!rigidbody.is_kinematic);
-    let box_collider = binding
-        .box_collider
-        .as_ref()
-        .ok_or("Defaults has no box collider")?;
+    let box_collider = find_box_collider(binding).ok_or("Defaults has no box collider")?;
     assert_eq!(box_collider.size, [1.0, 1.0, 1.0]);
     assert_eq!(box_collider.center, [0.0, 0.0, 0.0]);
     assert!(!box_collider.is_trigger);
-    let sphere = binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("Defaults has no sphere collider")?;
+    let sphere = find_sphere_collider(binding).ok_or("Defaults has no sphere collider")?;
     assert_eq!(sphere.radius, 0.5);
     assert_eq!(sphere.center, [0.0, 0.0, 0.0]);
     assert!(!sphere.is_trigger);
@@ -552,10 +571,7 @@ fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
         .iter()
         .find(|binding| binding.entity == trigger_zone)
         .ok_or("no physics binding for TriggerZone")?;
-    let zone_box = zone_binding
-        .box_collider
-        .as_ref()
-        .ok_or("TriggerZone has no box collider")?;
+    let zone_box = find_box_collider(zone_binding).ok_or("TriggerZone has no box collider")?;
     assert!(zone_box.is_trigger);
 
     let ball_binding = bindings
@@ -566,10 +582,7 @@ fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
         .rigidbody
         .as_ref()
         .ok_or("Ball has no rigidbody")?;
-    let ball_sphere = ball_binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("Ball has no sphere collider")?;
+    let ball_sphere = find_sphere_collider(ball_binding).ok_or("Ball has no sphere collider")?;
     assert!(!ball_rb.is_trigger);
     assert!(!ball_sphere.is_trigger);
 
@@ -581,10 +594,8 @@ fn physics_is_trigger_flag_parses_from_scene_components() -> TestResult {
         .rigidbody
         .as_ref()
         .ok_or("TriggerRig has no rigidbody")?;
-    let rig_sphere = rig_binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("TriggerRig has no sphere collider")?;
+    let rig_sphere =
+        find_sphere_collider(rig_binding).ok_or("TriggerRig has no sphere collider")?;
     assert!(rig_rb.is_trigger);
     assert!(rig_sphere.is_trigger);
     Ok(())
@@ -770,10 +781,7 @@ fn prefab_instance_merges_script_and_physics_records() -> TestResult {
         .iter()
         .find(|binding| binding.entity == barrel)
         .ok_or("no physics binding for Barrel")?;
-    let collider = barrel_binding
-        .box_collider
-        .as_ref()
-        .ok_or("Barrel has no box collider")?;
+    let collider = find_box_collider(barrel_binding).ok_or("Barrel has no box collider")?;
     assert_eq!(collider.size, [1.0, 2.0, 3.0]);
     assert_eq!(collider.center, [0.0, 0.5, 0.0]);
     Ok(())
@@ -886,10 +894,7 @@ fn collider_resolves_physic_material_from_project_meta_index() -> TestResult {
         .iter()
         .find(|binding| binding.entity == ball)
         .ok_or("missing BouncyBall binding")?;
-    let sphere = ball_binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("missing SphereCollider")?;
+    let sphere = find_sphere_collider(ball_binding).ok_or("missing SphereCollider")?;
     assert_eq!(
         sphere.material,
         Some(MaterialValues {
@@ -906,10 +911,7 @@ fn collider_resolves_physic_material_from_project_meta_index() -> TestResult {
         .iter()
         .find(|binding| binding.entity == crate_entity)
         .ok_or("missing DefaultCrate binding")?;
-    let box_collider = crate_binding
-        .box_collider
-        .as_ref()
-        .ok_or("missing BoxCollider")?;
+    let box_collider = find_box_collider(crate_binding).ok_or("missing BoxCollider")?;
     assert_eq!(
         box_collider.material,
         Some(MaterialValues {
@@ -932,10 +934,7 @@ fn collider_reports_diagnostic_for_unresolved_or_invalid_physic_material() -> Te
     ))?;
     let (_graph, _scripts, bindings) = assemble_scene_with_physics(&stream)?;
     assert_eq!(bindings.len(), 1);
-    let box_collider = bindings[0]
-        .box_collider
-        .as_ref()
-        .ok_or("missing BoxCollider")?;
+    let box_collider = find_box_collider(&bindings[0]).ok_or("missing BoxCollider")?;
     assert_eq!(box_collider.material, None);
     let diag = box_collider
         .material_diagnostic
@@ -976,10 +975,7 @@ fn collider_reports_diagnostic_for_unresolved_or_invalid_physic_material() -> Te
     let result = assemble_scene_file_with_physics(&scene_path);
     let _ = std::fs::remove_dir_all(&temp);
     let (_graph, _scripts, bindings) = result?;
-    let sphere = bindings[0]
-        .sphere_collider
-        .as_ref()
-        .ok_or("missing SphereCollider")?;
+    let sphere = find_sphere_collider(&bindings[0]).ok_or("missing SphereCollider")?;
     assert_eq!(sphere.material, None);
     let bad_diag = sphere
         .material_diagnostic
@@ -1004,10 +1000,7 @@ fn collider_without_material_or_zero_file_id_has_no_material_and_no_diagnostic()
         .iter()
         .find(|binding| binding.entity == plain_box)
         .ok_or("missing PlainBox binding")?;
-    let box_collider = box_binding
-        .box_collider
-        .as_ref()
-        .ok_or("missing BoxCollider")?;
+    let box_collider = find_box_collider(box_binding).ok_or("missing BoxCollider")?;
     assert_eq!(box_collider.material, None);
     assert_eq!(box_collider.material_diagnostic, None);
 
@@ -1016,10 +1009,7 @@ fn collider_without_material_or_zero_file_id_has_no_material_and_no_diagnostic()
         .iter()
         .find(|binding| binding.entity == plain_sphere)
         .ok_or("missing PlainSphere binding")?;
-    let sphere_collider = sphere_binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("missing SphereCollider")?;
+    let sphere_collider = find_sphere_collider(sphere_binding).ok_or("missing SphereCollider")?;
     assert_eq!(sphere_collider.material, None);
     assert_eq!(sphere_collider.material_diagnostic, None);
 
@@ -1044,12 +1034,10 @@ fn capsule_collider_parses_from_scene_fixture_with_explicit_and_default_values()
         .ok_or("Pillar has no rigidbody")?;
     assert_eq!(pillar_rb.mass, 1.5);
     assert!(pillar_rb.use_gravity);
-    assert!(pillar_binding.box_collider.is_none());
-    assert!(pillar_binding.sphere_collider.is_none());
-    let pillar_capsule: &CapsuleColliderComponent = pillar_binding
-        .capsule_collider
-        .as_ref()
-        .ok_or("Pillar has no capsule collider")?;
+    assert!(find_box_collider(pillar_binding).is_none());
+    assert!(find_sphere_collider(pillar_binding).is_none());
+    let pillar_capsule: &CapsuleColliderComponent =
+        find_capsule_collider(pillar_binding).ok_or("Pillar has no capsule collider")?;
     assert_eq!(pillar_capsule.radius, 0.25);
     assert_eq!(pillar_capsule.height, 2.0);
     assert_eq!(pillar_capsule.direction, 2);
@@ -1064,12 +1052,10 @@ fn capsule_collider_parses_from_scene_fixture_with_explicit_and_default_values()
         .find(|binding| binding.entity == default_capsule)
         .ok_or("no physics binding for DefaultCapsule")?;
     assert!(default_binding.rigidbody.is_none());
-    assert!(default_binding.box_collider.is_none());
-    assert!(default_binding.sphere_collider.is_none());
-    let capsule = default_binding
-        .capsule_collider
-        .as_ref()
-        .ok_or("DefaultCapsule has no capsule collider")?;
+    assert!(find_box_collider(default_binding).is_none());
+    assert!(find_sphere_collider(default_binding).is_none());
+    let capsule =
+        find_capsule_collider(default_binding).ok_or("DefaultCapsule has no capsule collider")?;
     assert_eq!(capsule.radius, 0.5);
     assert_eq!(capsule.height, 2.0);
     assert_eq!(capsule.direction, 1);
@@ -1123,10 +1109,8 @@ fn capsule_collider_resolves_physic_material_and_reports_material_diagnostics() 
         .iter()
         .find(|binding| binding.entity == bouncy)
         .ok_or("missing BouncyCapsule binding")?;
-    let bouncy_capsule = bouncy_binding
-        .capsule_collider
-        .as_ref()
-        .ok_or("missing CapsuleCollider on BouncyCapsule")?;
+    let bouncy_capsule =
+        find_capsule_collider(bouncy_binding).ok_or("missing CapsuleCollider on BouncyCapsule")?;
     assert_eq!(
         bouncy_capsule.material,
         Some(MaterialValues {
@@ -1143,9 +1127,7 @@ fn capsule_collider_resolves_physic_material_and_reports_material_diagnostics() 
         .iter()
         .find(|binding| binding.entity == dangling)
         .ok_or("missing DanglingCapsule binding")?;
-    let dangling_capsule = dangling_binding
-        .capsule_collider
-        .as_ref()
+    let dangling_capsule = find_capsule_collider(dangling_binding)
         .ok_or("missing CapsuleCollider on DanglingCapsule")?;
     assert_eq!(dangling_capsule.material, None);
     let diag = dangling_capsule
@@ -1171,7 +1153,7 @@ fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_d
     let short_capsule = bindings
         .iter()
         .find(|binding| binding.entity == short)
-        .and_then(|binding| binding.capsule_collider.as_ref())
+        .and_then(find_capsule_collider)
         .ok_or("missing ShortCapsule")?;
     assert_eq!(short_capsule.radius, 1.0);
     assert_eq!(short_capsule.height, 2.0);
@@ -1186,7 +1168,7 @@ fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_d
     let neg_rad_capsule = bindings
         .iter()
         .find(|binding| binding.entity == neg_rad)
-        .and_then(|binding| binding.capsule_collider.as_ref())
+        .and_then(find_capsule_collider)
         .ok_or("missing NegativeRadiusCapsule")?;
     assert!(neg_rad_capsule.radius > 0.0);
     assert!(neg_rad_capsule.height >= 2.0 * neg_rad_capsule.radius);
@@ -1201,7 +1183,7 @@ fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_d
     let neg_height_capsule = bindings
         .iter()
         .find(|binding| binding.entity == neg_height)
-        .and_then(|binding| binding.capsule_collider.as_ref())
+        .and_then(find_capsule_collider)
         .ok_or("missing NegativeHeightCapsule")?;
     assert!(neg_height_capsule.radius > 0.0);
     assert!(neg_height_capsule.height >= 2.0 * neg_height_capsule.radius);
@@ -1216,7 +1198,7 @@ fn capsule_collider_clamps_and_reports_diagnostic_for_invalid_radius_height_or_d
     let bad_dir_capsule = bindings
         .iter()
         .find(|binding| binding.entity == bad_dir)
-        .and_then(|binding| binding.capsule_collider.as_ref())
+        .and_then(find_capsule_collider)
         .ok_or("missing BadDirectionCapsule")?;
     assert_eq!(bad_dir_capsule.direction, 1);
     let bad_dir_diag = bad_dir_capsule
@@ -1241,10 +1223,7 @@ fn character_controller_parses_from_scene_with_explicit_and_default_values() -> 
         .iter()
         .find(|binding| binding.entity == player)
         .ok_or("no physics binding for Player")?;
-    let capsule = player_binding
-        .capsule_collider
-        .as_ref()
-        .ok_or("Player has no capsule collider")?;
+    let capsule = find_capsule_collider(player_binding).ok_or("Player has no capsule collider")?;
     assert_eq!(capsule.radius, 0.4);
     let controller: &CharacterControllerComponent = player_binding
         .character_controller
@@ -1792,10 +1771,7 @@ fn sample_physics_lab_scene_carries_the_edge_marble_settings() -> TestResult {
         rigidbody.collision_detection,
         unitas_asset::scene::RigidbodyCollisionDetection::ContinuousDynamic
     );
-    let sphere = binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("EdgeMarble has no sphere collider")?;
+    let sphere = find_sphere_collider(binding).ok_or("EdgeMarble has no sphere collider")?;
     assert_eq!(sphere.radius, 0.5);
     assert!(!sphere.is_trigger);
     Ok(())
@@ -1814,10 +1790,7 @@ fn sample_physics_lab_scene_carries_the_arena_bumper_material() -> TestResult {
         .find(|binding| binding.entity == arena_bumper)
         .ok_or("no physics binding for ArenaBumper")?;
     assert!(binding.rigidbody.is_none());
-    let sphere = binding
-        .sphere_collider
-        .as_ref()
-        .ok_or("ArenaBumper has no sphere collider")?;
+    let sphere = find_sphere_collider(binding).ok_or("ArenaBumper has no sphere collider")?;
     let material = sphere
         .material
         .as_ref()
@@ -1849,10 +1822,8 @@ fn sample_physics_lab_scene_carries_the_trigger_pair_and_the_push_bodies() -> Te
             .find(|binding| binding.entity == entity)
             .ok_or("no physics binding for trigger pair")?;
         assert!(binding.rigidbody.is_none());
-        let sphere = binding
-            .sphere_collider
-            .as_ref()
-            .ok_or("trigger pair member has no sphere collider")?;
+        let sphere =
+            find_sphere_collider(binding).ok_or("trigger pair member has no sphere collider")?;
         assert!(sphere.is_trigger);
     }
     let pushed = entity_named(&assembled.graph, "PushedMarble")?;
@@ -1877,6 +1848,47 @@ fn sample_physics_lab_scene_carries_the_trigger_pair_and_the_push_bodies() -> Te
         .as_ref()
         .ok_or("Pusher has no rigidbody")?;
     assert!(pusher_rigidbody.is_kinematic);
-    assert!(pusher_binding.box_collider.is_some());
+    assert!(find_box_collider(pusher_binding).is_some());
+    Ok(())
+}
+
+#[test]
+fn a_mesh_collider_naming_an_unknown_mesh_reports_a_diagnostic() -> TestResult {
+    let temp = std::env::temp_dir().join(format!(
+        "unitas_mesh_collider_diagnostic_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    let assets = temp.join("Assets");
+    std::fs::create_dir_all(&assets)?;
+    let scene_path = assets.join("TestScene.unity");
+    std::fs::write(
+        &scene_path,
+        "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: Frame\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Father: {fileID: 0}\n--- !u!64 &12\nMeshCollider:\n  m_GameObject: {fileID: 10}\n  m_Mesh: {fileID: 4300000, guid: cccccccccccccccccccccccccccccccc, type: 3}\n",
+    )?;
+
+    let result = assemble_scene_file_bundle(&scene_path);
+    let _ = std::fs::remove_dir_all(&temp);
+    let assembled = result?;
+    let messages: Vec<&String> = assembled
+        .diagnostics
+        .iter()
+        .map(|(_, message)| message)
+        .collect();
+    assert_eq!(
+        messages.len(),
+        1,
+        "the unresolved mesh must be reported once: {messages:?}"
+    );
+    assert!(
+        messages[0].contains("Frame"),
+        "the diagnostic must name the game object: {}",
+        messages[0]
+    );
+    assert!(
+        messages[0].contains("cccccccccccccccccccccccccccccccc"),
+        "the diagnostic must name the asset: {}",
+        messages[0]
+    );
     Ok(())
 }

@@ -2,7 +2,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 
 use unitas_core::EntityId;
 use unitas_physics::articulation::{ArticulationBody, ArticulationError, ArticulationJoint};
-use unitas_physics::{BodyDesc, BodyRole, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, Shape, World};
 
 const TIMESTEP: f64 = 1.0 / 60.0;
 const STEPS: usize = 300;
@@ -23,7 +23,7 @@ fn link(position: [f64; 3], shape: Shape) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape,
+        collider_shape: ColliderShape::Primitive(shape),
         layer: 0,
         role: BodyRole::Kinematic,
         friction: 0.6,

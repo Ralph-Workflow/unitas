@@ -1,6 +1,6 @@
 use unitas_core::EntityId;
 use unitas_physics::simulate::{Simulation, SimulationError};
-use unitas_physics::{BodyDesc, BodyRole, ForceMode, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, ForceMode, PhysicsError, Shape, World};
 
 const NO_GRAVITY: [f64; 3] = [0.0, 0.0, 0.0];
 const TOLERANCE: f64 = 1e-6;
@@ -8,7 +8,7 @@ const TOLERANCE: f64 = 1e-6;
 fn dynamic_box(half_extents: [f64; 3], mass: f64) -> BodyDesc {
     BodyDesc {
         role: BodyRole::Dynamic,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         position: [0.0, 0.0, 0.0],
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass,

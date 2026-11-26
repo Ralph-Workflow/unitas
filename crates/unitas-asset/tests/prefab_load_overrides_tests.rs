@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::path::Path;
 
-use unitas_asset::scene::{assemble_scene_file_bundle, AssembledScene};
+use unitas_asset::scene::{assemble_scene_file_bundle, AssembledScene, ColliderComponent};
 use unitas_core::EntityId;
 
 const OVERRIDE_SCENE_FIXTURE: &str =
@@ -38,11 +38,18 @@ fn prefab_instance_structural_overrides_apply_at_load() -> TestResult {
         .iter()
         .find(|binding| binding.entity == overrides)
         .ok_or("expanded prefab physics binding missing")?;
-    assert!(binding.box_collider.is_none());
+    assert!(!binding
+        .colliders
+        .iter()
+        .any(|collider| matches!(collider, ColliderComponent::Box(_))));
     assert!(binding.rigidbody.is_some());
     let sphere = binding
-        .sphere_collider
-        .as_ref()
+        .colliders
+        .iter()
+        .find_map(|collider| match collider {
+            ColliderComponent::Sphere(sphere) => Some(sphere),
+            _ => None,
+        })
         .ok_or("added sphere collider missing")?;
     assert_eq!(sphere.radius, 2.5);
     Ok(())

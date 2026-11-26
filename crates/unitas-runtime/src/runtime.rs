@@ -3,14 +3,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
+use unitas_asset::collision::{CollisionMesh, cook_builtin_collision_mesh, cook_collision_mesh};
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::project_settings::{
     PhysicsProjectSettings, QualityLevel, QualitySettings, parse_physics_manager,
     parse_quality_settings,
 };
 use unitas_asset::scene::{
-    AudioSourceComponent, CharacterControllerComponent, MeshRendererComponent, PhysicsBinding,
-    RenderBinding, RigidbodyComponent, ScriptBinding, assemble_scene_file_bundle,
+    AudioSourceComponent, CharacterControllerComponent, ColliderComponent, MeshColliderComponent,
+    MeshRendererComponent, PhysicsBinding, RenderBinding, RigidbodyComponent, ScriptBinding,
+    assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -26,8 +28,9 @@ use unitas_physics::navigation::NavMesh;
 use unitas_physics::particles::ParticleSystem;
 use unitas_physics::trails::Trail;
 use unitas_physics::{
-    BodyDesc, BodyRole, CharacterController, CollisionDetectionMode3D, CollisionPayload, ForceMode,
-    MoveResult, Phase, PhysicsMaterial3D, QueryHit, Shape, World,
+    BodyDesc, BodyRole, CharacterController, ColliderDesc, ColliderShape, CollisionDetectionMode3D,
+    CollisionPayload, ForceMode, MoveResult, Phase, PhysicsMaterial3D, QueryHit, Shape, SolverType,
+    World,
 };
 use unitas_render::image::Image;
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
@@ -111,6 +114,7 @@ pub struct LoadedScene {
     pub(crate) scripts: Vec<ScriptInstance>,
     pub(crate) bodies: Vec<EntityId>,
     pub(crate) body_offsets: Vec<(EntityId, [f32; 3])>,
+    pub(crate) body_colliders: Vec<(EntityId, Vec<ColliderDesc>)>,
     pub(crate) character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
     pub(crate) audio_sources: Vec<(EntityId, AudioSourceComponent)>,
     pub(crate) animators: Vec<EntityId>,
@@ -120,6 +124,7 @@ pub struct LoadedScene {
     pub(crate) diagnostics: Vec<(EntityId, String)>,
     pub(crate) entity_base: u64,
     pub(crate) entity_count: u64,
+    pub(crate) rigid_bodies: std::collections::BTreeSet<EntityId>,
 }
 
 impl LoadedScene {
@@ -129,6 +134,15 @@ impl LoadedScene {
 
     pub fn bodies(&self) -> &[EntityId] {
         &self.bodies
+    }
+
+    /// The colliders the scene bound to one body, one per Unity collider
+    /// component of the GameObject.
+    pub fn body_colliders(&self, entity: EntityId) -> &[ColliderDesc] {
+        self.body_colliders
+            .iter()
+            .find(|(body, _)| *body == entity)
+            .map_or(&[], |(_, colliders)| colliders.as_slice())
     }
 
     pub fn character_controllers(&self) -> &[(EntityId, CharacterControllerComponent)] {
@@ -445,7 +459,7 @@ impl Runtime {
         let mut ui = assembled.ui;
         let settings = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
-        let descs = body_descs(&graph, &physics);
+        let (descs, collider_diagnostics) = body_descs(&graph, &physics);
         validate_bodies(&descs)?;
         match mode {
             LoadSceneMode::Single => {
@@ -480,12 +494,24 @@ impl Runtime {
             .iter()
             .map(|(entity, spec)| (EntityId::new(entity_base + entity.as_u64()), spec.offset))
             .collect::<Vec<_>>();
+        let body_colliders = descs
+            .iter()
+            .map(|(entity, spec)| {
+                (
+                    EntityId::new(entity_base + entity.as_u64()),
+                    spec.colliders.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         let character_controllers = collect_character_controllers(&physics, entity_base);
         for (entity, config) in &character_controllers {
             self.character_states
                 .insert(*entity, controller_from_component(Some(*entity), config));
         }
         let mut diagnostics = collect_material_diagnostics(&physics, entity_base);
+        diagnostics.extend(collider_diagnostics.into_iter().map(|(entity, text)| {
+            (EntityId::new(entity_base + entity.as_u64()), text)
+        }));
         diagnostics.extend(self.populate_render_world(&render_binding, entity_base, &graph));
         let mut audio_sources = Vec::with_capacity(audio_bindings.len());
         for (entity, comp) in audio_bindings {
@@ -544,7 +570,15 @@ impl Runtime {
         for (body, (_, spec)) in bodies.iter().zip(descs.iter()) {
             self.physics
                 .world_3d_mut()
-                .add_body_with_material(*body, spec.desc, spec.material)?;
+                .add_body_with_material(*body, spec.desc.clone(), spec.material)?;
+            // The body's own shape already is the first Unity collider, so
+            // only the remaining ones become extra colliders. Adding the
+            // first one again would put a second copy of it in the world.
+            for collider in spec.colliders.iter().skip(1) {
+                self.physics
+                    .world_3d_mut()
+                    .add_collider(*body, collider.clone())?;
+            }
             if let Some(rigidbody) = rigidbodies.get(body) {
                 let world = self.physics.world_3d_mut();
                 world.set_body_drag(*body, rigidbody.drag, rigidbody.angular_drag);
@@ -575,12 +609,14 @@ impl Runtime {
             trail_entities.push(entity);
         }
         let entity_count = graph.len() as u64;
+        let rigid_body_ids = rigidbodies.keys().copied().collect();
         self.scenes.push(LoadedScene {
             name: scene_name_from_path(path),
             graph,
             scripts,
             bodies,
             body_offsets,
+            body_colliders,
             character_controllers,
             audio_sources,
             animators: Vec::new(),
@@ -590,6 +626,7 @@ impl Runtime {
             diagnostics,
             entity_base,
             entity_count,
+            rigid_bodies: rigid_body_ids,
         });
         if self.active_scene.is_none() {
             self.active_scene = Some(self.scenes.len() - 1);
@@ -1420,6 +1457,11 @@ impl Runtime {
                     });
                 }
                 for event in trigger_events {
+                    let has_rigidbody = self.entity_has_rigidbody(event.a)
+                        || self.entity_has_rigidbody(event.b);
+                    if !has_rigidbody {
+                        continue;
+                    }
                     let a = event.a.as_u64();
                     let b = event.b.as_u64();
                     let phase = phase_code(event.phase);
@@ -1763,6 +1805,24 @@ impl Runtime {
 
     pub fn fixed_timestep(&self) -> f64 {
         self.fixed_timestep
+    }
+
+    pub fn set_fixed_timestep(&mut self, seconds: f64) -> bool {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return false;
+        }
+        self.fixed_timestep = seconds;
+        true
+    }
+
+    pub fn solver_type(&self) -> SolverType {
+        self.physics.world_3d().solver_type()
+    }
+
+    pub fn entity_has_rigidbody(&self, entity: EntityId) -> bool {
+        self.scenes
+            .iter()
+            .any(|scene| scene.rigid_bodies.contains(&entity))
     }
 
     pub fn time_scale(&self) -> f64 {
@@ -2433,31 +2493,39 @@ fn build_script_instances(bindings: &[ScriptBinding]) -> Result<Vec<ScriptInstan
 
 struct BodySpec {
     desc: BodyDesc,
+    colliders: Vec<ColliderDesc>,
     offset: [f32; 3],
     material: Option<PhysicsMaterial3D>,
 }
 
-fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> Vec<(EntityId, BodySpec)> {
+fn body_descs(
+    graph: &SceneGraph,
+    bindings: &[PhysicsBinding],
+) -> (Vec<(EntityId, BodySpec)>, Vec<(EntityId, String)>) {
     let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
         .iter()
         .filter(|binding| binding.rigidbody.is_some())
         .map(|binding| binding.entity)
         .collect();
     let mut descs = Vec::new();
+    let mut diagnostics = Vec::new();
     for binding in bindings {
-        let spec = match body_desc(graph, binding, &rigid_entities) {
+        let spec = match body_spec(graph, binding, &rigid_entities, &mut diagnostics) {
             Some(spec) => spec,
             None => continue,
         };
         descs.push((binding.entity, spec));
     }
-    descs
+    (descs, diagnostics)
 }
 
 fn validate_bodies(descs: &[(EntityId, BodySpec)]) -> Result<(), RuntimeError> {
     let mut world = World::new();
     for (entity, spec) in descs {
-        world.add_body(*entity, spec.desc)?;
+        world.add_body(*entity, spec.desc.clone())?;
+        for collider in spec.colliders.iter().skip(1) {
+            world.add_collider(*entity, collider.clone())?;
+        }
     }
     Ok(())
 }
@@ -2540,21 +2608,26 @@ fn collect_material_diagnostics(
     let mut diagnostics = Vec::new();
     for binding in bindings {
         let entity = EntityId::new(entity_base + binding.entity.as_u64());
-        if let Some(sphere) = &binding.sphere_collider
-            && let Some(diag) = &sphere.material_diagnostic
-        {
-            diagnostics.push((entity, diag.clone()));
-        }
-        if let Some(collider) = &binding.box_collider
-            && let Some(diag) = &collider.material_diagnostic
-        {
-            diagnostics.push((entity, diag.clone()));
-        }
-        if let Some(capsule) = &binding.capsule_collider {
-            if let Some(diag) = &capsule.material_diagnostic {
+        for collider in &binding.colliders {
+            let (material_diagnostic, geometry_diagnostic) = match collider {
+                ColliderComponent::Box(component) => {
+                    (component.material_diagnostic.as_ref(), None)
+                }
+                ColliderComponent::Sphere(component) => {
+                    (component.material_diagnostic.as_ref(), None)
+                }
+                ColliderComponent::Capsule(component) => (
+                    component.material_diagnostic.as_ref(),
+                    component.geometry_diagnostic.as_ref(),
+                ),
+                ColliderComponent::Mesh(component) => {
+                    (component.material_diagnostic.as_ref(), None)
+                }
+            };
+            if let Some(diag) = material_diagnostic {
                 diagnostics.push((entity, diag.clone()));
             }
-            if let Some(diag) = &capsule.geometry_diagnostic {
+            if let Some(diag) = geometry_diagnostic {
                 diagnostics.push((entity, diag.clone()));
             }
         }
@@ -2577,61 +2650,188 @@ fn has_rigidbody_ancestor(
     false
 }
 
-fn body_desc(
+/// One Unity collider component, resolved into the shape the world needs.
+struct ColliderPlan {
+    shape: ColliderShape,
+    center: [f64; 3],
+    is_trigger: bool,
+    material: Option<PhysicsMaterial3D>,
+}
+
+/// The colliders of one GameObject, in the order the scene lists them. A
+/// collider whose mesh cannot be cooked is dropped with a diagnostic.
+fn collider_plans(
+    graph: &SceneGraph,
+    binding: &PhysicsBinding,
+    scale: [f32; 3],
+    diagnostics: &mut Vec<(EntityId, String)>,
+) -> Vec<ColliderPlan> {
+    let mut plans = Vec::new();
+    for collider in &binding.colliders {
+        let plan = match collider {
+            ColliderComponent::Box(component) => ColliderPlan {
+                shape: ColliderShape::Primitive(Shape::Box {
+                    half_extents: [
+                        component.size[0] / 2.0,
+                        component.size[1] / 2.0,
+                        component.size[2] / 2.0,
+                    ],
+                }),
+                center: component.center,
+                is_trigger: component.is_trigger,
+                material: component.material.as_ref().map(material_of),
+            },
+            ColliderComponent::Sphere(component) => ColliderPlan {
+                shape: ColliderShape::Primitive(Shape::Sphere {
+                    radius: component.radius,
+                }),
+                center: component.center,
+                is_trigger: component.is_trigger,
+                material: component.material.as_ref().map(material_of),
+            },
+            ColliderComponent::Capsule(component) => ColliderPlan {
+                shape: ColliderShape::Primitive(Shape::Capsule {
+                    radius: component.radius,
+                    height: component.height,
+                    direction: component.direction as u8,
+                }),
+                center: component.center,
+                is_trigger: component.is_trigger,
+                material: component.material.as_ref().map(material_of),
+            },
+            ColliderComponent::Mesh(component) => {
+                match mesh_shape(graph, binding.entity, component, scale, diagnostics) {
+                    Some(shape) => ColliderPlan {
+                        shape,
+                        center: component.center,
+                        is_trigger: component.is_trigger,
+                        material: component.material.as_ref().map(material_of),
+                    },
+                    None => continue,
+                }
+            }
+        };
+        plans.push(plan);
+    }
+    plans
+}
+
+/// Cook the geometry a mesh collider names: Unity's built-in primitive mesh
+/// by identity, otherwise the referenced asset file.
+fn mesh_shape(
+    graph: &SceneGraph,
+    entity: EntityId,
+    component: &MeshColliderComponent,
+    scale: [f32; 3],
+    diagnostics: &mut Vec<(EntityId, String)>,
+) -> Option<ColliderShape> {
+    let cooked = match &component.mesh_path {
+        Some(path) => match cook_file_mesh(path, component.mesh_file_id) {
+            Ok(mesh) => Some(mesh),
+            Err(reason) => {
+                diagnostics.push((
+                    entity,
+                    mesh_diagnostic_text(graph, entity, component, Some(&reason)),
+                ));
+                return None;
+            }
+        },
+        None => component
+            .mesh_file_id
+            .zip(component.mesh_guid.as_deref())
+            .and_then(|(file_id, guid)| cook_builtin_collision_mesh(file_id, guid)),
+    };
+    let mesh = match cooked {
+        Some(mesh) => mesh,
+        None => {
+            diagnostics.push((entity, mesh_diagnostic_text(graph, entity, component, None)));
+            return None;
+        }
+    };
+    Some(ColliderShape::Mesh {
+        vertices: mesh
+            .vertices
+            .iter()
+            .map(|vertex| {
+                [
+                    f64::from(vertex[0]) * f64::from(scale[0]),
+                    f64::from(vertex[1]) * f64::from(scale[1]),
+                    f64::from(vertex[2]) * f64::from(scale[2]),
+                ]
+            })
+            .collect(),
+        indices: mesh.indices,
+        convex: component.convex,
+    })
+}
+
+fn cook_file_mesh(path: &Path, file_id: Option<i64>) -> Result<CollisionMesh, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    cook_collision_mesh(&bytes, file_name, file_id).map_err(|error| error.to_string())
+}
+
+/// The diagnostic a mesh collider that names no cookable geometry produces.
+/// It always names the object and the asset it could not resolve.
+fn mesh_diagnostic_text(
+    graph: &SceneGraph,
+    entity: EntityId,
+    component: &MeshColliderComponent,
+    reason: Option<&str>,
+) -> String {
+    if let Some(diagnostic) = &component.mesh_diagnostic {
+        return diagnostic.clone();
+    }
+    let name = graph
+        .entity(entity)
+        .map_or("?", |entity| entity.name.as_str());
+    let owner = format!("MeshCollider on '{name}' (entity {})", entity.as_u64());
+    match (&component.mesh_path, component.mesh_guid.as_deref(), reason) {
+        (Some(path), _, Some(reason)) => {
+            format!(
+                "{owner} references mesh '{}' that could not be cooked: {reason}",
+                path.display()
+            )
+        }
+        (Some(path), _, None) => {
+            format!(
+                "{owner} references mesh '{}' that could not be cooked",
+                path.display()
+            )
+        }
+        (None, Some(guid), Some(reason)) => {
+            format!("{owner} references mesh guid {guid} that could not be cooked: {reason}")
+        }
+        (None, Some(guid), None) => {
+            format!("{owner} references mesh guid {guid} that could not be cooked")
+        }
+        (None, None, _) => format!("{owner} has no mesh reference"),
+    }
+}
+
+/// The offset of a collider from the body, in the body's own frame. The body
+/// sits at the centre of the first collider, so the first collider's offset is
+/// the origin and every other collider keeps its distance from it.
+fn collider_offset(center: [f64; 3], first_center: [f64; 3], scale: [f32; 3]) -> [f64; 3] {
+    [
+        ((center[0] as f32 - first_center[0] as f32) * scale[0]) as f64,
+        ((center[1] as f32 - first_center[1] as f32) * scale[1]) as f64,
+        ((center[2] as f32 - first_center[2] as f32) * scale[2]) as f64,
+    ]
+}
+
+fn body_spec(
     graph: &SceneGraph,
     binding: &PhysicsBinding,
     rigid_entities: &std::collections::BTreeSet<EntityId>,
+    diagnostics: &mut Vec<(EntityId, String)>,
 ) -> Option<BodySpec> {
-    let (shape, center, collider_trigger, material) = match (
-        &binding.sphere_collider,
-        &binding.box_collider,
-        &binding.capsule_collider,
-    ) {
-        (Some(sphere), _, _) => (
-            Shape::Sphere {
-                radius: sphere.radius,
-            },
-            sphere.center,
-            sphere.is_trigger,
-            sphere.material,
-        ),
-        (None, Some(collider), _) => (
-            Shape::Box {
-                half_extents: [
-                    collider.size[0] / 2.0,
-                    collider.size[1] / 2.0,
-                    collider.size[2] / 2.0,
-                ],
-            },
-            collider.center,
-            collider.is_trigger,
-            collider.material,
-        ),
-        (None, None, Some(capsule)) => (
-            Shape::Capsule {
-                radius: capsule.radius,
-                height: capsule.height,
-                direction: capsule.direction as u8,
-            },
-            capsule.center,
-            capsule.is_trigger,
-            capsule.material,
-        ),
-        (None, None, None) => return None,
-    };
-    let friction = material.map_or(0.6, |m| m.friction);
-    let restitution = material.map_or(0.0, |m| m.restitution);
-    let physics_material = material.as_ref().map(material_of);
     let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
         Some(world) => (world.translation, world.rotation, world.scale),
         None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
     };
-    let scaled_center = [
-        center[0] as f32 * scale[0],
-        center[1] as f32 * scale[1],
-        center[2] as f32 * scale[2],
-    ];
-    let offset = rotate_vector(rotation, scaled_center);
+    let plans = collider_plans(graph, binding, scale, diagnostics);
+    let first_center = plans.first()?.center;
     let (mass, use_gravity, rigidbody_trigger, role) = match &binding.rigidbody {
         Some(rigidbody) if rigidbody.is_kinematic => (
             rigidbody.mass,
@@ -2656,6 +2856,33 @@ fn body_desc(
         .map_or(CollisionDetectionMode3D::Discrete, |rigidbody| {
             collision_detection_of(rigidbody.collision_detection)
         });
+    let layer = layer_bits(binding.layer);
+    let colliders: Vec<ColliderDesc> = plans
+        .into_iter()
+        .enumerate()
+        .map(|(index, plan)| ColliderDesc {
+            shape: plan.shape,
+            offset: if index == 0 {
+                [0.0; 3]
+            } else {
+                collider_offset(plan.center, first_center, scale)
+            },
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            is_trigger: plan.is_trigger || rigidbody_trigger,
+            material: plan.material,
+            layer,
+        })
+        .collect();
+    let first = colliders.first()?;
+    let material = first.material;
+    let friction = material.map_or(0.6, |m| m.friction);
+    let restitution = material.map_or(0.0, |m| m.restitution);
+    let scaled_center = [
+        first_center[0] as f32 * scale[0],
+        first_center[1] as f32 * scale[1],
+        first_center[2] as f32 * scale[2],
+    ];
+    let offset = rotate_vector(rotation, scaled_center);
     Some(BodySpec {
         desc: BodyDesc {
             position: [
@@ -2672,16 +2899,17 @@ fn body_desc(
             mass,
             velocity: [0.0; 3],
             use_gravity,
-            is_trigger: collider_trigger || rigidbody_trigger,
-            shape,
-            layer: layer_bits(binding.layer),
+            is_trigger: first.is_trigger,
+            collider_shape: first.shape.clone(),
+            layer,
             role,
             friction,
             restitution,
             collision_detection_mode,
         },
+        colliders,
         offset,
-        material: physics_material,
+        material,
     })
 }
 

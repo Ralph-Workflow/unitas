@@ -17,7 +17,7 @@ pub mod two_d;
 pub mod wheel;
 pub mod world;
 
-pub use body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
+pub use body::{BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape};
 pub use character::{CharacterController, CollisionFlags, MoveResult};
 pub use error::PhysicsError;
 pub use event::{CollisionEvent, Phase, TriggerEvent};
@@ -28,6 +28,7 @@ pub use joint::{
 };
 pub use query::QueryHit;
 pub use world::{
-    combine_materials, BodyInterpolation, BounceCombine, CollisionContact, CollisionPayload,
-    ForceMode, FrictionCombine, PhysicsMaterial3D, SolverSettings, World,
+    combine_materials, BodyInterpolation, BounceCombine, ColliderDesc, CollisionContact,
+    CollisionPayload, ForceMode, FrictionCombine, PhysicsMaterial3D, SolverSettings, SolverType,
+    World,
 };

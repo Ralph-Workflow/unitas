@@ -1,11 +1,11 @@
 use unitas_core::EntityId;
 use unitas_physics::two_d::{BodyDesc2D, ColliderDesc2D, MessageKind2D, World2D};
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 
 fn dynamic_ball(position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         role: BodyRole::Dynamic,
-        shape: Shape::Sphere { radius: 0.5 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
         position,
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,
@@ -43,9 +43,9 @@ fn teleport_moves_a_kinematic_body_without_reporting_swept_motion() -> Result<()
         platform,
         BodyDesc {
             role: BodyRole::Kinematic,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [1.0, 0.25, 1.0],
-            },
+            }),
             position: [0.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,

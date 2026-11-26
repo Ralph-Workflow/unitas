@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use unitas_core::{EntityId, normalize_rotation};
-use unitas_physics::BodyRole;
+use unitas_physics::{BodyRole, ColliderShape};
 use unitas_runtime::{Callbacks, Runtime};
 
 const PHYSICS_FIXTURE_PATH: &str = "tests/fixtures/scene_physics_collision.unity";
@@ -761,9 +761,9 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
         floor,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 0.5, 2.0],
-            },
+            }),
             position: [0.0, -0.5, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -780,9 +780,9 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
         trigger_zone,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [10.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -799,9 +799,9 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
         crate_body,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [10.5, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -818,7 +818,7 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
         dynamic_body,
         BodyDesc {
             role: BodyRole::Dynamic,
-            shape: Shape::Sphere { radius: 0.5 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
             position: [0.0, 0.4, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,

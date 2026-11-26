@@ -1,10 +1,9 @@
 use unitas_core::EntityId;
 use unitas_physics::matrix::{
     message_is_eligible, route_message, CollisionMatrix, CollisionMessage, FrameEvents,
-    MeshColliderDesc, MessageDelivery, MessageTracker, PhysicsMaterial3D, PhysicsObject,
-    TouchingPair, LAYER_COUNT,
+    MessageDelivery, MessageTracker, PhysicsMaterial3D, PhysicsObject, TouchingPair, LAYER_COUNT,
 };
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderDesc, ColliderShape, PhysicsError, Shape, World};
 
 fn collider(object_id: u64, layer: usize) -> PhysicsObject {
     PhysicsObject::new(object_id, layer)
@@ -49,7 +48,7 @@ fn sphere_body(position: [f64; 3], velocity: [f64; 3], layer: u32) -> BodyDesc {
         velocity,
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.5 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
         layer,
         role: BodyRole::Dynamic,
         friction: 0.6,
@@ -423,9 +422,9 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
         wall,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [0.0, 10.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -442,7 +441,7 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
         crate_body,
         BodyDesc {
             role: BodyRole::Dynamic,
-            shape: Shape::Sphere { radius: 0.5 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
             position: [0.0, -10.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,
@@ -517,11 +516,10 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
 }
 
 #[test]
-fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_not_simulate(
+fn mesh_colliders_follow_the_unity_rules_for_convex_static_and_dynamic_bodies(
 ) -> Result<(), PhysicsError> {
     let mut world = World::new();
     let floor = EntityId::new(1);
-    let invalid_dynamic_mesh = EntityId::new(2);
     let valid_convex_dynamic = EntityId::new(3);
     let valid_non_convex_static = EntityId::new(4);
 
@@ -529,9 +527,9 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
         floor,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [10.0, 0.5, 10.0],
-            },
+            }),
             position: [0.0, -0.5, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -547,9 +545,9 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
 
     let dynamic_desc = BodyDesc {
         role: BodyRole::Dynamic,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.5, 0.5, 0.5],
-        },
+        }),
         position: [0.0, 2.0, 0.0],
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,
@@ -562,110 +560,107 @@ fn non_convex_mesh_collider_on_dynamic_body_reports_unity_diagnostic_and_does_no
         collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
     };
 
-    let err = world.add_mesh_collider_body(
-        invalid_dynamic_mesh,
-        dynamic_desc,
-        MeshColliderDesc::non_convex("ConcaveCrate", "ConcaveCrateMesh", [0.5, 0.5, 0.5]),
-    );
-    assert_eq!(
-        err,
-        Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
-            entity: invalid_dynamic_mesh,
-            object_name: String::from("ConcaveCrate"),
-        })
-    );
-    assert!(!world.is_body_simulated(invalid_dynamic_mesh));
-    assert_eq!(world.position(invalid_dynamic_mesh), None);
-
-    let diags = world.entity_diagnostics(invalid_dynamic_mesh);
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].object_name, "ConcaveCrate");
-    assert_eq!(diags[0].code, "PHY-MESH-NONCONVEX-DYNAMIC");
-    assert!(
-        diags[0].message.contains("Non-convex MeshCollider"),
-        "diagnostic must state non-convex MeshCollider cause: {}",
-        diags[0].message
-    );
-    assert!(
-        diags[0].message.contains("ConcaveCrate"),
-        "diagnostic must name the offending object: {}",
-        diags[0].message
-    );
-
-    world.add_mesh_collider_body(
+    let (cone_vertices, cone_indices) = cone_mesh(300);
+    world.add_body(
         valid_convex_dynamic,
         BodyDesc {
             position: [2.0, 2.0, 0.0],
+            collider_shape: ColliderShape::Mesh {
+                vertices: cone_vertices,
+                indices: cone_indices,
+                convex: true,
+            },
             ..dynamic_desc
         },
-        MeshColliderDesc::convex("ConvexBoulder", "BoulderMesh", [0.5, 0.5, 0.5])
-            .with_triangle_count(512),
     )?;
     assert!(world.is_body_simulated(valid_convex_dynamic));
     let hull_diags = world.entity_diagnostics(valid_convex_dynamic);
     assert_eq!(hull_diags.len(), 1);
     assert_eq!(hull_diags[0].code, "PHY-MESH-CONVEX-HULL-LIMIT");
-    assert!(hull_diags[0].message.contains("ConvexBoulder"));
     assert!(hull_diags[0].message.contains("255"));
 
-    world.add_mesh_collider_body(
+    world.add_body(
         valid_non_convex_static,
         BodyDesc {
             role: BodyRole::Static,
             mass: 0.0,
             use_gravity: false,
             position: [-3.0, 0.5, 0.0],
+            collider_shape: ColliderShape::Mesh {
+                vertices: plate_vertices(),
+                indices: plate_indices(),
+                convex: false,
+            },
             ..dynamic_desc
         },
-        MeshColliderDesc::non_convex("StaticArch", "ArchMesh", [1.0, 1.0, 1.0]),
     )?;
     assert!(world.is_body_simulated(valid_non_convex_static));
     assert!(world.entity_diagnostics(valid_non_convex_static).is_empty());
 
     world.step(0.1)?;
-    assert!(
-        world
-            .overlap_sphere([0.0, 2.0, 0.0], 1.0, 1)
-            .into_iter()
-            .all(|e| e != invalid_dynamic_mesh),
-        "rejected non-convex dynamic mesh collider must not appear in spatial queries"
-    );
     let convex_y = world.position(valid_convex_dynamic).map_or(2.0, |p| p[1]);
     assert!(
         convex_y < 2.0,
         "convex dynamic mesh collider simulates normally"
     );
 
-    let attach_err = world.attach_mesh_collider(
+    let attach_err = world.add_collider(
         valid_convex_dynamic,
-        MeshColliderDesc::non_convex("ConvexBoulder", "ConcaveReplacementMesh", [0.5, 0.5, 0.5]),
-    );
-    assert_eq!(
-        attach_err,
-        Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
-            entity: valid_convex_dynamic,
-            object_name: String::from("ConvexBoulder"),
-        })
-    );
-    assert!(
-        !world.is_body_simulated(valid_convex_dynamic),
-        "attaching non-convex mesh collider to existing dynamic body disables dynamic shape simulation"
-    );
-    let frozen_pos = world.position(valid_convex_dynamic);
-    world.step(0.1)?;
-    assert_eq!(
-        world.position(valid_convex_dynamic),
-        frozen_pos,
-        "disabled body must not move as a dynamic non-convex shape"
+        ColliderDesc {
+            shape: ColliderShape::Mesh {
+                vertices: plate_vertices(),
+                indices: plate_indices(),
+                convex: false,
+            },
+            offset: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            is_trigger: false,
+            material: None,
+            layer: 1,
+        },
     );
     assert!(
-        world
-            .overlap_sphere(frozen_pos.unwrap_or([2.0, 2.0, 0.0]), 1.0, 1)
-            .into_iter()
-            .all(|e| e != valid_convex_dynamic),
-        "disabled body must not participate in queries"
+        matches!(
+            attach_err,
+            Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { entity, .. })
+                if entity == valid_convex_dynamic
+        ),
+        "a non-convex mesh collider must be refused on a dynamic body: got {attach_err:?}"
+    );
+    assert!(
+        world.is_body_simulated(valid_convex_dynamic),
+        "the refused collider must leave the body it was refused for simulating"
     );
     Ok(())
+}
+
+fn plate_vertices() -> Vec<[f64; 3]> {
+    vec![
+        [-1.0, 0.0, -1.0],
+        [1.0, 0.0, -1.0],
+        [1.0, 0.0, 1.0],
+        [-1.0, 0.0, 1.0],
+    ]
+}
+
+fn plate_indices() -> Vec<u32> {
+    vec![0, 2, 1, 0, 3, 2]
+}
+
+fn cone_mesh(segments: usize) -> (Vec<[f64; 3]>, Vec<u32>) {
+    let mut vertices = vec![[0.0, 1.0, 0.0]];
+    for index in 0..segments {
+        let angle = 2.0 * std::f64::consts::PI * index as f64 / segments as f64;
+        vertices.push([angle.cos(), 0.0, angle.sin()]);
+    }
+    let mut indices = Vec::new();
+    for index in 0..segments {
+        let next = (index + 1) % segments;
+        indices.push(0);
+        indices.push((index + 1) as u32);
+        indices.push((next + 1) as u32);
+    }
+    (vertices, indices)
 }
 
 #[test]

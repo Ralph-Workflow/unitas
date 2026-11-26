@@ -2,7 +2,7 @@ use unitas_core::EntityId;
 use unitas_physics::wheel::{
     SuspensionSpring, Vehicle, WheelCollider, WheelDesc, WheelError, WheelFrictionCurve,
 };
-use unitas_physics::{BodyDesc, BodyRole, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, Shape, World};
 
 const ALL_LAYERS: u32 = 1;
 const GROUND: EntityId = EntityId::new(1);
@@ -22,7 +22,7 @@ fn ground_body(position: [f64; 3], half_extents: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         layer: ALL_LAYERS,
         role: BodyRole::Static,
         friction: 0.6,

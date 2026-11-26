@@ -1,13 +1,13 @@
 use unitas_core::EntityId;
 use unitas_physics::simulate::{Simulation, SimulationError, SimulationMode};
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 
 fn moving_box(position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         role: BodyRole::Dynamic,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.5, 0.5, 0.5],
-        },
+        }),
         position,
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,

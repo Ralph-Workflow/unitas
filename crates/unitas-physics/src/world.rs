@@ -2,11 +2,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use unitas_core::EntityId;
 
-use crate::backend::{Backend, BackendHandles};
+use crate::backend::{Backend, BackendHandles, ColliderLayer};
 use crate::body::{
     add, dot, inverse_rotation, lerp_vector, multiply_rotation, normalize_rotation, rotate_vector,
-    slerp_rotation, subtract, vector_length, BodyDesc, BodyRole, CollisionDetectionMode3D, Shape,
-    IDENTITY_ROTATION,
+    slerp_rotation, subtract, vector_length, BodyDesc, BodyRole, ColliderShape,
+    CollisionDetectionMode3D, Shape, IDENTITY_ROTATION,
 };
 use crate::error::PhysicsError;
 use crate::event::{CollisionEvent, Phase, TriggerEvent};
@@ -62,6 +62,20 @@ pub enum BodyInterpolation {
     Extrapolate,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SolverType {
+    #[default]
+    Default,
+    Tgs,
+    TgsSoft,
+}
+
+impl SolverType {
+    pub fn is_representable(self) -> bool {
+        !matches!(self, SolverType::TgsSoft)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SolverSettings {
     pub num_solver_iterations: usize,
@@ -71,6 +85,7 @@ pub struct SolverSettings {
     pub allowed_linear_error: f64,
     pub max_depenetration_velocity: f64,
     pub deterministic_accumulation: bool,
+    pub solver_type: SolverType,
 }
 
 impl Default for SolverSettings {
@@ -83,6 +98,7 @@ impl Default for SolverSettings {
             allowed_linear_error: 0.005,
             max_depenetration_velocity: 3.0,
             deterministic_accumulation: true,
+            solver_type: SolverType::Default,
         }
     }
 }
@@ -189,55 +205,13 @@ fn combine_restitution(first: f64, second: f64, rule: BounceCombine) -> f64 {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct MeshColliderDesc {
-    pub object_name: String,
-    pub mesh_name: String,
-    pub convex: bool,
+pub struct ColliderDesc {
+    pub shape: ColliderShape,
+    pub offset: [f64; 3],
+    pub rotation: [f64; 4],
     pub is_trigger: bool,
-    pub triangle_count: usize,
-    pub bounds_half_extents: [f64; 3],
-}
-
-impl MeshColliderDesc {
-    pub fn non_convex(
-        object_name: impl Into<String>,
-        mesh_name: impl Into<String>,
-        bounds_half_extents: [f64; 3],
-    ) -> Self {
-        Self {
-            object_name: object_name.into(),
-            mesh_name: mesh_name.into(),
-            convex: false,
-            is_trigger: false,
-            triangle_count: 12,
-            bounds_half_extents,
-        }
-    }
-
-    pub fn convex(
-        object_name: impl Into<String>,
-        mesh_name: impl Into<String>,
-        bounds_half_extents: [f64; 3],
-    ) -> Self {
-        Self {
-            object_name: object_name.into(),
-            mesh_name: mesh_name.into(),
-            convex: true,
-            is_trigger: false,
-            triangle_count: 12,
-            bounds_half_extents,
-        }
-    }
-
-    pub fn with_trigger(mut self, is_trigger: bool) -> Self {
-        self.is_trigger = is_trigger;
-        self
-    }
-
-    pub fn with_triangle_count(mut self, triangle_count: usize) -> Self {
-        self.triangle_count = triangle_count;
-        self
-    }
+    pub material: Option<PhysicsMaterial3D>,
+    pub layer: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,11 +270,11 @@ fn pair_exchanges_messages(first: &Body, second: &Body) -> bool {
     first.role != BodyRole::Static || second.role != BodyRole::Static
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Body {
     entity: EntityId,
     handles: BackendHandles,
-    shape: Shape,
+    collider_shape: ColliderShape,
     mass: f64,
     role: BodyRole,
     is_trigger: bool,
@@ -344,6 +318,13 @@ impl Body {
         match self.role {
             BodyRole::Dynamic if self.mass > 0.0 => 1.0 / self.mass,
             BodyRole::Dynamic | BodyRole::Kinematic | BodyRole::Static => 0.0,
+        }
+    }
+
+    fn query_shape(&self) -> Option<Shape> {
+        match &self.collider_shape {
+            ColliderShape::Primitive(shape) => Some(*shape),
+            ColliderShape::Mesh { .. } => None,
         }
     }
 }
@@ -549,149 +530,104 @@ impl World {
         }
     }
 
-    pub fn add_mesh_collider_body(
-        &mut self,
-        entity: EntityId,
-        mut body_desc: BodyDesc,
-        mesh_desc: MeshColliderDesc,
-    ) -> Result<(), PhysicsError> {
-        if self.indices.contains_key(&entity) {
-            return Err(PhysicsError::DuplicateEntity(entity));
+    fn refuse_non_convex_mesh(&mut self, entity: EntityId) -> PhysicsError {
+        let object_name = entity.to_string();
+        let message = format!(
+            "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{object_name}' (entity {entity})"
+        );
+        self.diagnostics.push(PhysicsDiagnostic {
+            entity,
+            object_name: object_name.clone(),
+            code: "PHY-MESH-NONCONVEX-DYNAMIC",
+            message,
+        });
+        PhysicsError::NonConvexMeshColliderOnDynamicBody {
+            entity,
+            object_name,
         }
-        body_desc.shape = Shape::Box {
-            half_extents: mesh_desc.bounds_half_extents,
-        };
-        body_desc.is_trigger = mesh_desc.is_trigger;
-        if !body_desc.is_valid() {
-            return Err(PhysicsError::InvalidBody(entity));
-        }
-        let effective_role = body_desc.effective_role();
-        if !mesh_desc.convex && effective_role == BodyRole::Dynamic {
-            let message = format!(
-                "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{}' (mesh '{}', entity {})",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name.clone(),
-                code: "PHY-MESH-NONCONVEX-DYNAMIC",
-                message,
-            });
-            return Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
-                entity,
-                object_name: mesh_desc.object_name,
-            });
-        }
-        if !mesh_desc.convex && mesh_desc.is_trigger {
-            let message = format!(
-                "A non-convex MeshCollider cannot be used as a trigger on '{}' (mesh '{}', entity {}); enable Convex to use a trigger MeshCollider.",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name.clone(),
-                code: "PHY-MESH-NONCONVEX-TRIGGER",
-                message,
-            });
-            body_desc.is_trigger = false;
-            self.add_body(entity, body_desc)?;
-            if let Some(index) = self.indices.get(&entity).copied() {
-                self.bodies[index].simulated = false;
-                let handles = self.bodies[index].handles;
-                self.backend.set_enabled(handles, false);
-            }
-            return Ok(());
-        }
-        if mesh_desc.convex && mesh_desc.triangle_count > MAX_CONVEX_MESH_HULL_TRIANGLES {
-            let message = format!(
-                "Convex MeshCollider on '{}' (mesh '{}', entity {}) has {} triangles, exceeding the 255-triangle hull limit; using reduced convex hull.",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity, mesh_desc.triangle_count
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name,
-                code: "PHY-MESH-CONVEX-HULL-LIMIT",
-                message,
-            });
-        }
-        self.add_body(entity, body_desc)
     }
 
-    pub fn attach_mesh_collider(
+    fn refuse_non_convex_trigger(&mut self, entity: EntityId) -> PhysicsError {
+        let message = format!(
+            "A non-convex MeshCollider cannot be used as a trigger (entity {entity}); enable Convex to use a trigger MeshCollider."
+        );
+        self.diagnostics.push(PhysicsDiagnostic {
+            entity,
+            object_name: entity.to_string(),
+            code: "PHY-MESH-NONCONVEX-TRIGGER",
+            message,
+        });
+        PhysicsError::InvalidBody(entity)
+    }
+
+    fn note_convex_hull_limit(&mut self, entity: EntityId, shape: &ColliderShape) {
+        let ColliderShape::Mesh {
+            indices,
+            convex: true,
+            ..
+        } = shape
+        else {
+            return;
+        };
+        let triangles = indices.len() / 3;
+        if triangles <= MAX_CONVEX_MESH_HULL_TRIANGLES {
+            return;
+        }
+        let message = format!(
+            "Convex MeshCollider (entity {entity}) has {triangles} triangles, exceeding the 255-triangle hull limit; using the convex hull of its vertices."
+        );
+        self.diagnostics.push(PhysicsDiagnostic {
+            entity,
+            object_name: entity.to_string(),
+            code: "PHY-MESH-CONVEX-HULL-LIMIT",
+            message,
+        });
+    }
+
+    pub fn add_collider(
         &mut self,
         entity: EntityId,
-        mesh_desc: MeshColliderDesc,
+        desc: ColliderDesc,
     ) -> Result<(), PhysicsError> {
         let Some(index) = self.indices.get(&entity).copied() else {
             return Err(PhysicsError::InvalidBody(entity));
         };
-        let new_shape = Shape::Box {
-            half_extents: mesh_desc.bounds_half_extents,
-        };
-        if !new_shape.is_valid() {
+        if !desc.shape.is_valid()
+            || !desc.offset.iter().all(|value| value.is_finite())
+            || !desc.rotation.iter().all(|value| value.is_finite())
+        {
             return Err(PhysicsError::InvalidBody(entity));
         }
         let role = self.bodies[index].role;
-        if !mesh_desc.convex && role == BodyRole::Dynamic {
-            let message = format!(
-                "Non-convex MeshCollider with non-kinematic Rigidbody is no longer supported since Unity 5. Object: '{}' (mesh '{}', entity {})",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name.clone(),
-                code: "PHY-MESH-NONCONVEX-DYNAMIC",
-                message,
-            });
-            self.bodies[index].simulated = false;
-            self.bodies[index].velocity = [0.0; 3];
-            let handles = self.bodies[index].handles;
-            self.backend.set_enabled(handles, false);
-            self.backend.set_velocity(handles, [0.0; 3], false);
-            self.overlapping
-                .retain(|(first, second)| *first != entity && *second != entity);
-            self.overlapping_triggers
-                .retain(|(first, second)| *first != entity && *second != entity);
-            return Err(PhysicsError::NonConvexMeshColliderOnDynamicBody {
-                entity,
-                object_name: mesh_desc.object_name,
-            });
+        if desc.shape.is_non_convex_mesh() {
+            if role == BodyRole::Dynamic {
+                return Err(self.refuse_non_convex_mesh(entity));
+            }
+            if desc.is_trigger {
+                return Err(self.refuse_non_convex_trigger(entity));
+            }
         }
-        if !mesh_desc.convex && mesh_desc.is_trigger {
-            let message = format!(
-                "A non-convex MeshCollider cannot be used as a trigger on '{}' (mesh '{}', entity {}); enable Convex to use a trigger MeshCollider.",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name,
-                code: "PHY-MESH-NONCONVEX-TRIGGER",
-                message,
-            });
-            self.bodies[index].simulated = false;
-            let handles = self.bodies[index].handles;
-            self.backend.set_enabled(handles, false);
-            return Ok(());
-        }
-        if mesh_desc.convex && mesh_desc.triangle_count > MAX_CONVEX_MESH_HULL_TRIANGLES {
-            let message = format!(
-                "Convex MeshCollider on '{}' (mesh '{}', entity {}) has {} triangles, exceeding the 255-triangle hull limit; using reduced convex hull.",
-                mesh_desc.object_name, mesh_desc.mesh_name, entity, mesh_desc.triangle_count
-            );
-            self.diagnostics.push(PhysicsDiagnostic {
-                entity,
-                object_name: mesh_desc.object_name,
-                code: "PHY-MESH-CONVEX-HULL-LIMIT",
-                message,
-            });
-        }
+        let material = desc.material.unwrap_or(PhysicsMaterial3D {
+            friction: self.bodies[index].friction,
+            restitution: self.bodies[index].restitution,
+            friction_combine: self.bodies[index].friction_combine,
+            restitution_combine: self.bodies[index].restitution_combine,
+        });
+        let layer = ColliderLayer {
+            layer: desc.layer as usize,
+            include: self.bodies[index].layer_include,
+            exclude: self.bodies[index].layer_exclude,
+            priority: self.bodies[index].layer_priority,
+        };
         let handles = self.bodies[index].handles;
-        self.backend.set_shape(handles, &new_shape);
-        self.backend.set_sensor(handles, mesh_desc.is_trigger);
-        self.backend.set_enabled(handles, true);
-        self.bodies[index].shape = new_shape;
-        self.bodies[index].is_trigger = mesh_desc.is_trigger;
-        self.bodies[index].simulated = true;
+        if self
+            .backend
+            .add_collider(entity, handles, &desc, material, layer)
+            .is_none()
+        {
+            return Err(PhysicsError::InvalidBody(entity));
+        }
+        self.note_convex_hull_limit(entity, &desc.shape);
         Ok(())
     }
 
@@ -724,15 +660,26 @@ impl World {
             return Err(PhysicsError::InvalidBody(entity));
         }
         let role = desc.effective_role();
-        let handles = self.backend.add_body(entity, &desc, role);
+        if desc.collider_shape.is_non_convex_mesh() {
+            if role == BodyRole::Dynamic {
+                return Err(self.refuse_non_convex_mesh(entity));
+            }
+            if desc.is_trigger {
+                return Err(self.refuse_non_convex_trigger(entity));
+            }
+        }
+        let Some(handles) = self.backend.add_body(entity, &desc, role) else {
+            return Err(PhysicsError::InvalidBody(entity));
+        };
         if desc.collision_detection_mode.uses_ccd_solver() {
             self.ccd_body_count += 1;
         }
+        self.note_convex_hull_limit(entity, &desc.collider_shape);
         let index = self.bodies.len();
         self.bodies.push(Body {
             entity,
             handles,
-            shape: desc.shape,
+            collider_shape: desc.collider_shape,
             mass: desc.mass,
             role,
             is_trigger: desc.is_trigger,
@@ -1378,6 +1325,10 @@ impl World {
         self.solver_settings
     }
 
+    pub fn solver_type(&self) -> SolverType {
+        self.solver_settings.solver_type
+    }
+
     pub fn set_body_drag(&mut self, entity: EntityId, linear_drag: f64, angular_drag: f64) {
         let Some(index) = self.indices.get(&entity).copied() else {
             return;
@@ -1745,14 +1696,16 @@ impl World {
             .filter(|body| Self::layer_index_matches_mask(body.layer, mask))
             .filter(|body| !body.is_trigger)
             .filter(|body| {
-                overlaps_at(
-                    dispatcher,
-                    &probe,
-                    center,
-                    body.query_position,
-                    body.query_rotation,
-                    &body.shape,
-                )
+                body.query_shape().is_some_and(|shape| {
+                    overlaps_at(
+                        dispatcher,
+                        &probe,
+                        center,
+                        body.query_position,
+                        body.query_rotation,
+                        &shape,
+                    )
+                })
             })
             .map(|body| body.entity)
             .collect();
@@ -1783,14 +1736,16 @@ impl World {
             .filter(|body| body.layer & layer_mask != 0)
             .filter(|body| !body.is_trigger || include_triggers)
             .filter(|body| {
-                overlaps_at(
-                    dispatcher,
-                    &probe,
-                    center,
-                    body.query_position,
-                    body.query_rotation,
-                    &body.shape,
-                )
+                body.query_shape().is_some_and(|shape| {
+                    overlaps_at(
+                        dispatcher,
+                        &probe,
+                        center,
+                        body.query_position,
+                        body.query_rotation,
+                        &shape,
+                    )
+                })
             })
             .map(|body| body.entity)
             .collect();
@@ -1853,22 +1808,28 @@ impl World {
                 continue;
             }
             let hit = match cast_shape {
-                CastShape::Point => cast_ray_against(
-                    origin,
-                    direction,
-                    max_distance,
-                    body.query_position,
-                    body.query_rotation,
-                    &body.shape,
-                ),
-                CastShape::Sphere { .. } | CastShape::Box { .. } => cast_shape_against(
-                    dispatcher,
-                    cast_shape,
-                    origin,
-                    direction,
-                    max_distance,
-                    (body.query_position, body.query_rotation, &body.shape),
-                ),
+                CastShape::Point => body.query_shape().and_then(|shape| {
+                    cast_ray_against(
+                        origin,
+                        direction,
+                        max_distance,
+                        body.query_position,
+                        body.query_rotation,
+                        &shape,
+                    )
+                }),
+                CastShape::Sphere { .. } | CastShape::Box { .. } => {
+                    body.query_shape().and_then(|shape| {
+                        cast_shape_against(
+                            dispatcher,
+                            cast_shape,
+                            origin,
+                            direction,
+                            max_distance,
+                            (body.query_position, body.query_rotation, &shape),
+                        )
+                    })
+                }
             };
             let Some(hit) = hit else {
                 continue;

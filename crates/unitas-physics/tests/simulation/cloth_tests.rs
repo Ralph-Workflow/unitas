@@ -1,6 +1,6 @@
 use unitas_core::EntityId;
 use unitas_physics::cloth::{Cloth, ClothCollider, ClothDesc, ClothError};
-use unitas_physics::{BodyDesc, BodyRole, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, Shape, World};
 
 const TIMESTEP: f64 = 1.0 / 60.0;
 const CAPSULE_RADIUS: f64 = 0.4;
@@ -15,11 +15,11 @@ fn static_capsule(position: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius: CAPSULE_RADIUS,
             height: CAPSULE_HEIGHT,
             direction: 1,
-        },
+        }),
         layer: 0,
         role: BodyRole::Static,
         friction: 0.6,

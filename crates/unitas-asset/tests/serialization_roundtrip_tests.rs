@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unitas_asset::binary_ser;
 use unitas_asset::prefab_variant::PrefabVariantDefinition;
 use unitas_asset::project_settings;
+use unitas_asset::scene::{assemble_scene_file_bundle, ColliderComponent};
 use unitas_asset::scene_save;
 use unitas_asset::unity_yaml::{self, Node, Stream};
 
@@ -17,6 +18,29 @@ const PREFAB: &str = "Assets/Prefabs/Pickup.prefab";
 const VARIANT: &str = "Assets/Prefabs/PickupGold.prefab";
 const PLAYER_SETTINGS: &str = "ProjectSettings/ProjectSettings.asset";
 const QUALITY_SETTINGS: &str = "ProjectSettings/QualitySettings.asset";
+
+const MESH_COLLIDER_SCENE: &str = "%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Frame
+  m_Layer: 0
+--- !u!4 &2
+Transform:
+  m_GameObject: {fileID: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Father: {fileID: 0}
+  m_Children: []
+--- !u!64 &3
+MeshCollider:
+  m_GameObject: {fileID: 1}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 3}
+  m_Convex: 0
+  m_IsTrigger: 0
+  m_Center: {x: 0, y: 1, z: 0}
+  m_Material: {fileID: 0}
+";
 
 const SCENE_CAMERA: i64 = 1000000003;
 const SCENE_BALL_RIGIDBODY: i64 = 1000000133;
@@ -681,4 +705,49 @@ fn the_sample_project_carries_no_binary_unity_asset_to_round_trip() -> TestResul
     }
     assert_eq!(checked, 13, "every sampled Unity asset must be checked");
     Ok(())
+}
+
+#[test]
+fn a_scene_with_a_mesh_collider_survives_load_save_and_load() -> TestResult {
+    let directory = temp_dir("mesh_collider")?;
+    let path = directory.join("MeshColliderScene.unity");
+    fs::write(&path, MESH_COLLIDER_SCENE)?;
+    let loaded = assemble_scene_file_bundle(&path)?;
+    let collider = mesh_collider_of(&loaded)?;
+    assert_eq!(collider.mesh_file_id, Some(10202));
+    assert_eq!(
+        collider.mesh_guid.as_deref(),
+        Some("0000000000000000e000000000000000")
+    );
+    assert_eq!(collider.center, [0.0, 1.0, 0.0]);
+
+    let stream = unity_yaml::parse_file(&path)?;
+    let saved = directory.join("SavedMeshColliderScene.unity");
+    scene_save::save_stream(&saved, &stream)?;
+    assert_eq!(
+        fs::read(&saved)?,
+        fs::read(&path)?,
+        "the saved scene must be byte-identical to the scene on disk"
+    );
+
+    let reloaded = assemble_scene_file_bundle(&saved)?;
+    let reloaded_collider = mesh_collider_of(&reloaded)?;
+    assert_eq!(
+        reloaded_collider, collider,
+        "the mesh collider must survive load, save and load"
+    );
+    Ok(())
+}
+
+fn mesh_collider_of(
+    scene: &unitas_asset::scene::AssembledScene,
+) -> Result<unitas_asset::scene::MeshColliderComponent, Box<dyn Error>> {
+    let binding = scene
+        .physics
+        .first()
+        .ok_or("the scene must bind a physics body")?;
+    match binding.colliders.first() {
+        Some(ColliderComponent::Mesh(collider)) => Ok(collider.clone()),
+        _ => Err("the scene must carry a mesh collider".into()),
+    }
 }

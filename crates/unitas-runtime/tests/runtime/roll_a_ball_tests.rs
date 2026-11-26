@@ -3,6 +3,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use unitas_asset::scene::ColliderComponent;
 use unitas_core::EntityId;
 use unitas_physics::{BodyRole, ForceMode};
 use unitas_runtime::{Callbacks, Runtime};
@@ -110,15 +111,12 @@ fn scene_bodies(runtime: &Runtime, path: &Path) -> Result<Vec<BodyInfo>, Box<dyn
     let assembled = unitas_asset::scene::assemble_scene_file_bundle(path)?;
     let mut triggers: BTreeMap<String, bool> = BTreeMap::new();
     for binding in &assembled.physics {
-        let trigger = binding
-            .sphere_collider
-            .as_ref()
-            .is_some_and(|c| c.is_trigger)
-            || binding.box_collider.as_ref().is_some_and(|c| c.is_trigger)
-            || binding
-                .capsule_collider
-                .as_ref()
-                .is_some_and(|c| c.is_trigger);
+        let trigger = binding.colliders.iter().any(|collider| match collider {
+            ColliderComponent::Box(component) => component.is_trigger,
+            ColliderComponent::Sphere(component) => component.is_trigger,
+            ColliderComponent::Capsule(component) => component.is_trigger,
+            ColliderComponent::Mesh(component) => component.is_trigger,
+        });
         if let Some(entity) = assembled.graph.entity(binding.entity) {
             triggers.insert(entity.name.clone(), trigger);
         }

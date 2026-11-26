@@ -53,7 +53,7 @@ impl CollisionMatrix {
     }
 }
 
-pub use crate::world::{MeshColliderDesc, PhysicsDiagnostic, PhysicsMaterial3D};
+pub use crate::world::{PhysicsDiagnostic, PhysicsMaterial3D};
 
 impl Default for CollisionMatrix {
     fn default() -> Self {

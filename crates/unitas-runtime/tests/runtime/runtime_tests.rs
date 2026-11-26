@@ -1883,3 +1883,42 @@ fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
     assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())
 }
+
+
+const COMPOUND_FIXTURE_PATH: &str = "tests/fixtures/scene_compound_collider.unity";
+
+/// A GameObject that carries two colliders contributes two shapes to the
+/// world. The runtime used to keep only the first collider it found and drop
+/// the rest; the scene's own collider list now reaches the world whole.
+#[test]
+fn a_game_object_with_two_colliders_contributes_two_shapes() -> Result<(), Box<dyn Error>> {
+    use unitas_physics::{ColliderShape, Shape};
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(Path::new(COMPOUND_FIXTURE_PATH))?;
+    let graph = match runtime.scene_graph() {
+        Some(graph) => graph,
+        None => return Err(String::from("no scene graph found").into()),
+    };
+    let entity = graph
+        .iter_breadth_first()
+        .find(|id| graph.entity(*id).is_some_and(|entity| entity.name == "Compound"))
+        .ok_or("scene has no entity named Compound")?;
+    let scene = runtime.scene(0).ok_or("no loaded scene")?;
+    let colliders = scene.body_colliders(entity);
+    assert_eq!(
+        colliders.len(),
+        2,
+        "a GameObject with two colliders contributes two shapes"
+    );
+    let shapes: Vec<&ColliderShape> = colliders.iter().map(|collider| &collider.shape).collect();
+    assert!(
+        shapes
+            .iter()
+            .any(|shape| matches!(shape, ColliderShape::Primitive(Shape::Box { .. })))
+            && shapes
+                .iter()
+                .any(|shape| matches!(shape, ColliderShape::Primitive(Shape::Sphere { .. }))),
+        "the two shapes are the box and the sphere the scene names: {shapes:?}"
+    );
+    Ok(())
+}

@@ -1,4 +1,4 @@
-use unitas_asset::project_settings::PhysicsProjectSettings;
+use unitas_asset::project_settings::{PhysicsProjectSettings, PhysicsSolverType};
 use unitas_asset::scene::{
     BounceCombine as SceneBounceCombine, FrictionCombine as SceneFrictionCombine, MaterialValues,
     RigidbodyCollisionDetection, RigidbodyInterpolation,
@@ -6,7 +6,7 @@ use unitas_asset::scene::{
 use unitas_physics::matrix::CollisionMatrix;
 use unitas_physics::{
     BodyInterpolation, BounceCombine, CollisionDetectionMode3D, FrictionCombine, PhysicsMaterial3D,
-    SolverSettings,
+    SolverSettings, SolverType,
 };
 
 pub(crate) fn material_of(values: &MaterialValues) -> PhysicsMaterial3D {
@@ -59,6 +59,14 @@ pub(crate) fn collision_detection_of(
     }
 }
 
+pub(crate) fn solver_type_of(value: PhysicsSolverType) -> SolverType {
+    match value {
+        PhysicsSolverType::Default => SolverType::Default,
+        PhysicsSolverType::Tgs => SolverType::Tgs,
+        PhysicsSolverType::TgsSoft => SolverType::TgsSoft,
+    }
+}
+
 pub(crate) fn solver_settings_of(settings: &PhysicsProjectSettings) -> SolverSettings {
     let defaults = SolverSettings::default();
     SolverSettings {
@@ -69,6 +77,7 @@ pub(crate) fn solver_settings_of(settings: &PhysicsProjectSettings) -> SolverSet
         allowed_linear_error: defaults.allowed_linear_error,
         max_depenetration_velocity: defaults.max_depenetration_velocity,
         deterministic_accumulation: settings.enhanced_determinism,
+        solver_type: solver_type_of(settings.solver_type),
     }
 }
 

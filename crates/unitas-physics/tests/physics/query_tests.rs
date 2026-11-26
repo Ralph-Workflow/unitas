@@ -1,6 +1,6 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, QueryHit, Shape, World,
+    BodyDesc, BodyRole, ColliderShape, CollisionEvent, Phase, PhysicsError, QueryHit, Shape, World,
 };
 
 const LAYER_ONE: u32 = 1;
@@ -40,7 +40,7 @@ fn sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         layer,
         role: BodyRole::Dynamic,
         friction: 0.6,
@@ -57,7 +57,7 @@ fn box_body(position: [f64; 3], half_extents: [f64; 3], layer: u32) -> BodyDesc 
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         layer,
         role: BodyRole::Static,
         friction: 0.6,
@@ -74,7 +74,7 @@ fn trigger_sphere(position: [f64; 3], radius: f64, layer: u32) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: true,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         layer,
         role: BodyRole::Static,
         friction: 0.6,
@@ -96,7 +96,7 @@ fn oriented_box(
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         layer,
         role: BodyRole::Static,
         friction: 0.6,
@@ -1300,11 +1300,11 @@ fn capsule_body(
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius,
             height,
             direction,
-        },
+        }),
         layer,
         role: BodyRole::Static,
         friction: 0.6,

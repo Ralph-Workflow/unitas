@@ -1,5 +1,5 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, ForceMode, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, ForceMode, PhysicsError, Shape, World};
 
 const NO_GRAVITY: [f64; 3] = [0.0, 0.0, 0.0];
 
@@ -10,9 +10,9 @@ fn body(role: BodyRole, mass: f64) -> BodyDesc {
 fn body_at(role: BodyRole, mass: f64, position: [f64; 3]) -> BodyDesc {
     BodyDesc {
         role,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.5, 0.5, 0.5],
-        },
+        }),
         position,
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass,

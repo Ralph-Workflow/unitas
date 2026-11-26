@@ -8,18 +8,20 @@ use rapier3d::geometry::{
     ActiveCollisionTypes, BroadPhaseBvh, ColliderBuilder, ColliderHandle, ColliderSet, NarrowPhase,
     SharedShape, SolverFlags,
 };
-use rapier3d::math::{Real, Rotation, Vector};
+use rapier3d::math::{Pose, Real, Rotation, Vector};
 use rapier3d::pipeline::{
     ActiveHooks, CollisionPipeline, PairFilterContext, PhysicsHooks, PhysicsPipeline,
 };
 use unitas_core::EntityId;
 
-use crate::body::{capsule_half_segment, BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
+use crate::body::{
+    capsule_half_segment, BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape,
+};
 use crate::matrix::{CollisionMatrix, LAYER_COUNT};
 use crate::query::{pose_of, unit_rotation, Dispatcher};
 use crate::world::{
-    ordered_pair, BounceCombine, CollisionContact, CollisionPayload, FrictionCombine,
-    SolverSettings,
+    ordered_pair, BounceCombine, ColliderDesc, CollisionContact, CollisionPayload, FrictionCombine,
+    PhysicsMaterial3D, SolverSettings,
 };
 
 type EntityPairs = Vec<(EntityId, EntityId)>;
@@ -101,6 +103,7 @@ pub(crate) struct Backend {
     ccd_solver: CCDSolver,
     integration: IntegrationParameters,
     layers: HashMap<ColliderHandle, ColliderLayer>,
+    extra_colliders: HashMap<RigidBodyHandle, Vec<ColliderHandle>>,
 }
 
 impl Default for Backend {
@@ -109,7 +112,7 @@ impl Default for Backend {
     }
 }
 
-fn collider_shape(shape: &Shape) -> SharedShape {
+fn primitive_shape(shape: &Shape) -> SharedShape {
     match shape {
         Shape::Sphere { radius } => SharedShape::ball(*radius as Real),
         Shape::Box { half_extents } => SharedShape::cuboid(
@@ -130,6 +133,29 @@ fn collider_shape(shape: &Shape) -> SharedShape {
                 _ => SharedShape::capsule_y(half_segment, radius),
             }
         }
+    }
+}
+
+fn mesh_shape(vertices: &[[f64; 3]], indices: &[u32], convex: bool) -> Option<SharedShape> {
+    let points: Vec<Vector> = vertices.iter().map(|vertex| vector3(*vertex)).collect();
+    if convex {
+        return SharedShape::convex_hull(&points);
+    }
+    let triangles: Vec<[u32; 3]> = indices
+        .chunks_exact(3)
+        .map(|triangle| [triangle[0], triangle[1], triangle[2]])
+        .collect();
+    SharedShape::trimesh(points, triangles).ok()
+}
+
+fn shape_of(shape: &ColliderShape) -> Option<SharedShape> {
+    match shape {
+        ColliderShape::Primitive(shape) => Some(primitive_shape(shape)),
+        ColliderShape::Mesh {
+            vertices,
+            indices,
+            convex,
+        } => mesh_shape(vertices, indices, *convex),
     }
 }
 
@@ -194,6 +220,7 @@ impl Backend {
             ccd_solver: CCDSolver::new(),
             integration: IntegrationParameters::default(),
             layers: HashMap::new(),
+            extra_colliders: HashMap::new(),
         }
     }
 
@@ -202,7 +229,8 @@ impl Backend {
         entity: EntityId,
         desc: &BodyDesc,
         role: BodyRole,
-    ) -> BackendHandles {
+    ) -> Option<BackendHandles> {
+        let shape = shape_of(&desc.collider_shape)?;
         let builder = match role {
             BodyRole::Dynamic => RigidBodyBuilder::dynamic(),
             BodyRole::Kinematic => RigidBodyBuilder::kinematic_position_based(),
@@ -217,7 +245,7 @@ impl Backend {
             builder = builder.linvel(vector3(desc.velocity)).lock_rotations();
         }
         let body = self.bodies.insert(builder.build());
-        let mut collider = ColliderBuilder::new(collider_shape(&desc.shape))
+        let mut collider = ColliderBuilder::new(shape)
             .friction(desc.friction as Real)
             .restitution(desc.restitution as Real)
             .friction_combine_rule(CoefficientCombineRule::Average)
@@ -241,11 +269,52 @@ impl Backend {
                 ..ColliderLayer::default()
             },
         );
-        BackendHandles { body, collider }
+        BackendHandles { body, collider }.into()
+    }
+
+    pub(crate) fn add_collider(
+        &mut self,
+        entity: EntityId,
+        handles: BackendHandles,
+        desc: &ColliderDesc,
+        material: PhysicsMaterial3D,
+        layer: ColliderLayer,
+    ) -> Option<ColliderHandle> {
+        let shape = shape_of(&desc.shape)?;
+        let mut collider = ColliderBuilder::new(shape)
+            .position(Pose::from_parts(
+                vector3(desc.offset),
+                unit_rotation(desc.rotation),
+            ))
+            .friction(material.friction as Real)
+            .restitution(material.restitution as Real)
+            .friction_combine_rule(friction_rule(material.friction_combine))
+            .restitution_combine_rule(restitution_rule(material.restitution_combine))
+            .sensor(desc.is_trigger)
+            .active_hooks(ActiveHooks::FILTER_CONTACT_PAIRS | ActiveHooks::FILTER_INTERSECTION_PAIR)
+            .user_data(u128::from(entity.as_u64()))
+            .mass(0.0);
+        if desc.is_trigger {
+            collider = collider.active_collision_types(ActiveCollisionTypes::all());
+        }
+        let collider = self
+            .colliders
+            .insert_with_parent(collider, handles.body, &mut self.bodies);
+        self.layers.insert(collider, layer);
+        self.extra_colliders
+            .entry(handles.body)
+            .or_default()
+            .push(collider);
+        Some(collider)
     }
 
     pub(crate) fn remove_body(&mut self, handles: BackendHandles) {
         self.layers.remove(&handles.collider);
+        if let Some(colliders) = self.extra_colliders.remove(&handles.body) {
+            for collider in colliders {
+                self.layers.remove(&collider);
+            }
+        }
         self.bodies.remove(
             handles.body,
             &mut self.islands,
@@ -439,10 +508,17 @@ impl Backend {
         exclude: Option<u32>,
         priority: u32,
     ) {
-        if let Some(layer) = self.layers.get_mut(&handles.collider) {
-            layer.include = include;
-            layer.exclude = exclude;
-            layer.priority = priority;
+        let extra: Vec<ColliderHandle> = self
+            .extra_colliders
+            .get(&handles.body)
+            .cloned()
+            .unwrap_or_default();
+        for collider in std::iter::once(handles.collider).chain(extra) {
+            if let Some(layer) = self.layers.get_mut(&collider) {
+                layer.include = include;
+                layer.exclude = exclude;
+                layer.priority = priority;
+            }
         }
     }
 
@@ -529,22 +605,6 @@ impl Backend {
         self.bodies[handles.body].is_sleeping()
     }
 
-    pub(crate) fn set_shape(&mut self, handles: BackendHandles, shape: &Shape) {
-        self.colliders[handles.collider].set_shape(collider_shape(shape));
-    }
-
-    pub(crate) fn set_sensor(&mut self, handles: BackendHandles, is_sensor: bool) {
-        let collider = &mut self.colliders[handles.collider];
-        collider.set_sensor(is_sensor);
-        if is_sensor {
-            collider.set_active_collision_types(ActiveCollisionTypes::all());
-        }
-    }
-
-    pub(crate) fn set_enabled(&mut self, handles: BackendHandles, enabled: bool) {
-        self.colliders[handles.collider].set_enabled(enabled);
-    }
-
     pub(crate) fn set_material(
         &mut self,
         handles: BackendHandles,
@@ -618,6 +678,7 @@ mod tests {
 
     use crate::body::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape};
     use crate::world::World;
+    use crate::ColliderShape;
 
     fn run_boosted_sphere(delta_seconds: f64) -> Result<[f64; 3], crate::PhysicsError> {
         let mut world = World::new();
@@ -630,9 +691,9 @@ mod tests {
                 velocity: [0.0; 3],
                 use_gravity: false,
                 is_trigger: false,
-                shape: Shape::Box {
+                collider_shape: ColliderShape::Primitive(Shape::Box {
                     half_extents: [0.05, 2.0, 2.0],
-                },
+                }),
                 layer: 0,
                 role: BodyRole::Static,
                 friction: 0.0,
@@ -649,7 +710,7 @@ mod tests {
                 velocity: [200.0, 0.0, 0.0],
                 use_gravity: false,
                 is_trigger: false,
-                shape: Shape::Sphere { radius: 0.25 },
+                collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.25 }),
                 layer: 0,
                 role: BodyRole::Dynamic,
                 friction: 0.0,

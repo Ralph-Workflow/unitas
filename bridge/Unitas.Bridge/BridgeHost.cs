@@ -16,6 +16,7 @@ namespace Unitas.Bridge
         private const int GAME_OBJECT_CLASS = 1;
         private const int TRANSFORM_CLASS = 4;
         private const int MONO_BEHAVIOUR_CLASS = 114;
+        private const int MESH_COLLIDER_CLASS = 64;
         private const int PREFAB_INSTANCE_CLASS = 1001;
         private const int MaxPrefabInstanceDepth = 8;
         private const uint CollisionPhaseStay = 1;
@@ -40,6 +41,8 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, SceneSphereColliderMetadata> _sceneSphereColliders = new Dictionary<ulong, SceneSphereColliderMetadata>();
         private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
         private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
+        private readonly Dictionary<ulong, SceneMeshColliderMetadata> _sceneMeshColliders = new Dictionary<ulong, SceneMeshColliderMetadata>();
+        private readonly Dictionary<string, Mesh> _sceneMeshes = new Dictionary<string, Mesh>(StringComparer.Ordinal);
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
         private readonly Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord> _sceneUiComponents = new Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>();
@@ -905,6 +908,7 @@ namespace Unitas.Bridge
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
+                _sceneMeshColliders.Clear();
                 _sceneTransforms.Clear();
                 _sceneUiComponents.Clear();
                 StopAllSafely();
@@ -2340,6 +2344,7 @@ namespace Unitas.Bridge
             created.AssignNativeEntityId(entity);
             ApplySceneTransform(entity, created);
             _entityGameObjects[entity] = created;
+            _materializedSceneEntities.Add(entity);
             return created;
         }
 
@@ -2371,7 +2376,6 @@ namespace Unitas.Bridge
 
             GameObject created = EnsureSceneGameObject(entity);
             ApplyScenePhysicsComponents(entity, created);
-            _materializedSceneEntities.Add(entity);
             return created;
         }
 
@@ -2386,7 +2390,8 @@ namespace Unitas.Bridge
                 || _sceneRigidbodies.ContainsKey(entity)
                 || _sceneSphereColliders.ContainsKey(entity)
                 || _sceneBoxColliders.ContainsKey(entity)
-                || _sceneCapsuleColliders.ContainsKey(entity);
+                || _sceneCapsuleColliders.ContainsKey(entity)
+                || _sceneMeshColliders.ContainsKey(entity);
         }
 
         private void ApplyScenePhysicsComponents(ulong entity, GameObject owner)
@@ -2421,6 +2426,38 @@ namespace Unitas.Bridge
                 capsule.center = capsuleMeta.Center;
                 capsule.isTrigger = capsuleMeta.IsTrigger;
             }
+            if (_sceneMeshColliders.TryGetValue(entity, out SceneMeshColliderMetadata meshMeta))
+            {
+                MeshCollider mesh = owner.GetComponent<MeshCollider>() ?? owner.AddComponent<MeshCollider>();
+                mesh.convex = meshMeta.Convex;
+                mesh.center = meshMeta.Center;
+                mesh.isTrigger = meshMeta.IsTrigger;
+                mesh.sharedMesh = ResolveSceneMesh(meshMeta.MeshGuid, meshMeta.MeshFileId);
+            }
+        }
+
+        /// <summary>
+        /// Resolves the mesh a scene collider names. The managed mesh is an identity handle for the
+        /// asset pointer, so colliders naming the same mesh share one handle and the geometry stays
+        /// owned by the native side.
+        /// </summary>
+        private Mesh? ResolveSceneMesh(string meshGuid, string meshFileId)
+        {
+            if (string.IsNullOrEmpty(meshFileId) || meshFileId == "0")
+            {
+                return null;
+            }
+
+            string identity = meshGuid + ":" + meshFileId;
+            if (_sceneMeshes.TryGetValue(identity, out Mesh? existing) && existing != null)
+            {
+                return existing;
+            }
+
+            Mesh created = new Mesh();
+            created.name = identity;
+            _sceneMeshes[identity] = created;
+            return created;
         }
 
         private void DropMaterializedSceneObjects()
@@ -2497,6 +2534,10 @@ namespace Unitas.Bridge
             }
             _entityGameObjects[entity] = owner;
             owner.AssignNativeEntityId(entity);
+            if (IsSceneEntity(entity) && !_materializedSceneEntities.Contains(entity))
+            {
+                _materializedSceneEntities.Add(entity);
+            }
             ApplySceneTransform(entity, owner);
             WireSceneParent(entity, owner);
             ApplyScenePhysicsComponents(entity, owner);
@@ -2902,6 +2943,7 @@ namespace Unitas.Bridge
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
+                _sceneMeshColliders.Clear();
                 _sceneTransforms.Clear();
                 _sceneCameras.Clear();
                 _sceneUiComponents.Clear();
@@ -2941,10 +2983,14 @@ namespace Unitas.Bridge
             bool currentIsTrigger = false;
             Vector3 currentCenter = Vector3.zero;
             Vector3 currentSize = new Vector3(1f, 1f, 1f);
+            bool currentConvex = false;
+            string currentMeshFileId = string.Empty;
+            string currentMeshGuid = string.Empty;
             List<ParsedRigidbodyRecord> rigidbodies = new List<ParsedRigidbodyRecord>();
             List<ParsedSphereColliderRecord> sphereColliders = new List<ParsedSphereColliderRecord>();
             List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
+            List<ParsedMeshColliderRecord> meshColliders = new List<ParsedMeshColliderRecord>();
             List<KeyValuePair<string, SceneCameraSettings>> cameras = new List<KeyValuePair<string, SceneCameraSettings>>();
             List<ParsedUiComponentRecord> uiComponents = new List<ParsedUiComponentRecord>();
             string currentUiGuid = string.Empty;
@@ -3027,6 +3073,9 @@ namespace Unitas.Bridge
                         currentIsTrigger,
                         currentCenter,
                         currentSize,
+                        currentConvex,
+                        currentMeshFileId,
+                        currentMeshGuid,
                         new SceneCameraSettings(currentCameraBackground, currentCameraFieldOfView, currentCameraNearClipPlane, currentCameraFarClipPlane, currentCameraOrthographic, currentCameraOrthographicSize),
                         ref localEntityIndex,
                         gameObjectEntities,
@@ -3035,6 +3084,7 @@ namespace Unitas.Bridge
                         sphereColliders,
                         boxColliders,
                         capsuleColliders,
+                        meshColliders,
                         cameras);
 
                     ParseDocumentHeader(line, out currentClassId, out currentFileId);
@@ -3049,6 +3099,9 @@ namespace Unitas.Bridge
                     currentIsTrigger = false;
                     currentCenter = Vector3.zero;
                     currentSize = new Vector3(1f, 1f, 1f);
+                    currentConvex = false;
+                    currentMeshFileId = string.Empty;
+                    currentMeshGuid = string.Empty;
                     currentFatherFileId = string.Empty;
                     currentLocalPosition = Vector3.zero;
                     currentLocalRotation = Quaternion.identity;
@@ -3160,6 +3213,30 @@ namespace Unitas.Bridge
                     else if (line.StartsWith("m_Size:", StringComparison.Ordinal))
                     {
                         currentSize = ParseVector3Value(line, new Vector3(1f, 1f, 1f));
+                    }
+                }
+                else if (currentClassId == MESH_COLLIDER_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_IsTrigger:", StringComparison.Ordinal))
+                    {
+                        currentIsTrigger = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_Center:", StringComparison.Ordinal))
+                    {
+                        currentCenter = ParseVector3Value(line, Vector3.zero);
+                    }
+                    else if (line.StartsWith("m_Convex:", StringComparison.Ordinal))
+                    {
+                        currentConvex = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_Mesh:", StringComparison.Ordinal))
+                    {
+                        currentMeshFileId = ExtractFileId(line);
+                        currentMeshGuid = ExtractGuidValue(line);
                     }
                 }
                 else if (currentClassId == 20)
@@ -3330,6 +3407,9 @@ namespace Unitas.Bridge
                 currentIsTrigger,
                 currentCenter,
                 currentSize,
+                currentConvex,
+                currentMeshFileId,
+                currentMeshGuid,
                 new SceneCameraSettings(currentCameraBackground, currentCameraFieldOfView, currentCameraNearClipPlane, currentCameraFarClipPlane, currentCameraOrthographic, currentCameraOrthographicSize),
                 ref localEntityIndex,
                 gameObjectEntities,
@@ -3338,6 +3418,7 @@ namespace Unitas.Bridge
                 sphereColliders,
                 boxColliders,
                 capsuleColliders,
+                meshColliders,
                 cameras);
 
             foreach (KeyValuePair<string, ulong> entry in gameObjectEntities)
@@ -3400,6 +3481,21 @@ namespace Unitas.Bridge
                         record.Direction,
                         record.Center,
                         record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < meshColliders.Count; index++)
+            {
+                ParsedMeshColliderRecord record = meshColliders[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneMeshColliders[shiftedEntity] = new SceneMeshColliderMetadata(
+                        record.MeshFileId,
+                        record.MeshGuid,
+                        record.Convex,
+                        record.IsTrigger,
+                        record.Center);
                 }
             }
 
@@ -3470,7 +3566,6 @@ namespace Unitas.Bridge
                 if (created)
                 {
                     _materializedSceneCameras.Add(cameraOwner);
-                    _materializedSceneEntities.Add(cameraEntity);
                 }
             }
 
@@ -3820,6 +3915,9 @@ namespace Unitas.Bridge
             bool isTrigger,
             Vector3 center,
             Vector3 size,
+            bool convex,
+            string meshFileId,
+            string meshGuid,
             SceneCameraSettings camera,
             ref ulong localEntityIndex,
             Dictionary<string, ulong> gameObjectEntities,
@@ -3828,6 +3926,7 @@ namespace Unitas.Bridge
             List<ParsedSphereColliderRecord> sphereColliders,
             List<ParsedBoxColliderRecord> boxColliders,
             List<ParsedCapsuleColliderRecord> capsuleColliders,
+            List<ParsedMeshColliderRecord> meshColliders,
             List<KeyValuePair<string, SceneCameraSettings>> cameras)
         {
             if (classId == 1 && !string.IsNullOrEmpty(fileId))
@@ -3851,6 +3950,10 @@ namespace Unitas.Bridge
             else if (classId == 136 && !string.IsNullOrEmpty(gameObjectFileId))
             {
                 capsuleColliders.Add(new ParsedCapsuleColliderRecord(gameObjectFileId, radius, height, direction, center, isTrigger));
+            }
+            else if (classId == MESH_COLLIDER_CLASS && !string.IsNullOrEmpty(gameObjectFileId))
+            {
+                meshColliders.Add(new ParsedMeshColliderRecord(gameObjectFileId, meshFileId, meshGuid, convex, isTrigger, center));
             }
             else if (classId == 20 && !string.IsNullOrEmpty(gameObjectFileId))
             {
@@ -4118,6 +4221,28 @@ namespace Unitas.Bridge
             public Vector3 Center { get; }
 
             public bool IsTrigger { get; }
+        }
+
+        private readonly struct SceneMeshColliderMetadata
+        {
+            public SceneMeshColliderMetadata(string meshFileId, string meshGuid, bool convex, bool isTrigger, Vector3 center)
+            {
+                MeshFileId = meshFileId;
+                MeshGuid = meshGuid;
+                Convex = convex;
+                IsTrigger = isTrigger;
+                Center = center;
+            }
+
+            public string MeshFileId { get; }
+
+            public string MeshGuid { get; }
+
+            public bool Convex { get; }
+
+            public bool IsTrigger { get; }
+
+            public Vector3 Center { get; }
         }
 
         private readonly struct ParsedTransformRecord
@@ -4529,6 +4654,31 @@ namespace Unitas.Bridge
             public Vector3 Center { get; }
 
             public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedMeshColliderRecord
+        {
+            public ParsedMeshColliderRecord(string gameObjectFileId, string meshFileId, string meshGuid, bool convex, bool isTrigger, Vector3 center)
+            {
+                GameObjectFileId = gameObjectFileId;
+                MeshFileId = meshFileId;
+                MeshGuid = meshGuid;
+                Convex = convex;
+                IsTrigger = isTrigger;
+                Center = center;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public string MeshFileId { get; }
+
+            public string MeshGuid { get; }
+
+            public bool Convex { get; }
+
+            public bool IsTrigger { get; }
+
+            public Vector3 Center { get; }
         }
 
         private MonoBehaviour? FindScriptByEntity(ulong entity)

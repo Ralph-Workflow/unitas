@@ -8,6 +8,8 @@ namespace Unitas.Samples.RollABall
         private const float ContainmentReportSeconds = 1.5f;
         private const float CarryDistanceThreshold = 0.5f;
         private const float PusherSpeed = 2f;
+        private const string MeshFrameName = "MeshFrame";
+        private const string CompoundTargetName = "CompoundTarget";
 
         [SerializeField]
         private float launchSpeed;
@@ -52,6 +54,12 @@ namespace Unitas.Samples.RollABall
                 case "EdgeMarble":
                     launchSpeed = 30f;
                     bumperName = "ArenaBumper";
+                    break;
+                case "FrameMarble":
+                case "BarMarble":
+                case "SphereMarble":
+                case "BoxMarble":
+                    launchSpeed = 10f;
                     break;
                 case "Pusher":
                     _isPusher = true;
@@ -134,6 +142,7 @@ namespace Unitas.Samples.RollABall
             if (contacts <= 0)
             {
                 LogContact(otherName, collision.impulse, collision.relativeVelocity, 0, collision.point, collision.normal);
+                ReportColliderSource(other);
                 return;
             }
 
@@ -141,7 +150,85 @@ namespace Unitas.Samples.RollABall
             {
                 ContactPoint contact = collision.GetContact(index);
                 LogContact(otherName, collision.impulse, collision.relativeVelocity, contacts, contact.point, contact.normal);
+                ReportColliderSource(other);
             }
+        }
+
+        private void ReportColliderSource(GameObject? other)
+        {
+            if (other == null)
+            {
+                return;
+            }
+
+            if (other.name != MeshFrameName && other.name != CompoundTargetName)
+            {
+                return;
+            }
+
+            Collider[] colliders = other.GetComponents<Collider>();
+            Vector3 probe = transform.position;
+            string kind = "none";
+            float nearest = float.MaxValue;
+            foreach (Collider collider in colliders)
+            {
+                Vector3 centre = other.transform.position + ColliderCentre(collider);
+                float distance = Vector3.Distance(centre, probe);
+                if (distance < nearest)
+                {
+                    nearest = distance;
+                    kind = ColliderKind(collider);
+                }
+            }
+
+            Debug.Log($"{gameObject.name} collider source {other.name} {kind} colliders {colliders.Length}");
+        }
+
+        private static Vector3 ColliderCentre(Collider collider)
+        {
+            if (collider is SphereCollider sphere)
+            {
+                return sphere.center;
+            }
+
+            if (collider is BoxCollider box)
+            {
+                return box.center;
+            }
+
+            return Vector3.zero;
+        }
+
+        private static string ColliderKind(Collider collider)
+        {
+            if (collider is SphereCollider)
+            {
+                return "sphere";
+            }
+
+            if (collider is BoxCollider)
+            {
+                return "box";
+            }
+
+            return "mesh";
+        }
+
+        private new void OnTriggerEnter(Collider other)
+        {
+            LogTrigger(other);
+        }
+
+        private new void OnTriggerStay(Collider other)
+        {
+            LogTrigger(other);
+        }
+
+        private void LogTrigger(Collider other)
+        {
+            GameObject? otherObject = other != null ? other.gameObject : null;
+            string otherName = otherObject != null ? otherObject.name : "unknown";
+            Debug.Log($"{gameObject.name} trigger with {otherName}");
         }
 
         private void LogContact(string otherName, float impulse, Vector3 relative, int contacts, Vector3 point, Vector3 normal)

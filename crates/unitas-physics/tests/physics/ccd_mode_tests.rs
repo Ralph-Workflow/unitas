@@ -1,5 +1,7 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, CollisionDetectionMode3D, PhysicsError, Shape, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, PhysicsError, Shape, World,
+};
 
 const BALL_SPEED: f64 = 200.0;
 const STEP: f64 = 0.02;
@@ -13,9 +15,9 @@ fn wall_desc(role: BodyRole, position: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.05, 2.0, 2.0],
-        },
+        }),
         layer: 0,
         role,
         friction: 0.0,
@@ -32,7 +34,7 @@ fn ball_desc(mode: CollisionDetectionMode3D) -> BodyDesc {
         velocity: [BALL_SPEED, 0.0, 0.0],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.25 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.25 }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.0,

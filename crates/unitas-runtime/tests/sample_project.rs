@@ -248,3 +248,31 @@ fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestRes
     }
     Ok(())
 }
+
+fn physics_lab_scene_path() -> PathBuf {
+    sample_root()
+        .join("Assets")
+        .join("Scenes")
+        .join("PhysicsLab.unity")
+}
+
+/// The target project's own physics-probe scene carries a `MeshCollider` that
+/// names a concave mesh, and the runtime binds it as the mesh it names rather
+/// than as the mesh's bounding box.
+#[test]
+fn the_sample_mesh_collider_produces_a_mesh_shaped_collider() -> TestResult {
+    use unitas_physics::ColliderShape;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&physics_lab_scene_path())?;
+    let graph = runtime.scene_graph().ok_or("no scene graph found")?;
+    let entity = entity_named(graph, "MeshFrame")?;
+    let scene = runtime.scene(0).ok_or("no loaded scene")?;
+    let colliders = scene.body_colliders(entity);
+    assert!(
+        colliders
+            .iter()
+            .any(|collider| matches!(&collider.shape, ColliderShape::Mesh { .. })),
+        "the MeshFrame's collider is the mesh it names: {colliders:?}"
+    );
+    Ok(())
+}

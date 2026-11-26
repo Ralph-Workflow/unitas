@@ -6,7 +6,7 @@ use unitas_physics::particles::{
     Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, Particle, ParticleBurst,
     ParticleShape, ParticleSystem, ParticleSystemForceField, ParticleSystemState, StopAction,
 };
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 
 fn emit_params(lifetime: f32) -> EmitParams {
     EmitParams {
@@ -273,7 +273,7 @@ fn collider(position: [f64; 3], radius: f64, is_trigger: bool) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         layer: 1,
         role: BodyRole::Static,
         friction: 0.5,

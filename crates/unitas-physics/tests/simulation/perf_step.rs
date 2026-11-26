@@ -2,7 +2,7 @@ use std::error::Error;
 use std::time::Instant;
 
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, Shape, World};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -31,7 +31,7 @@ fn perf_physics_step_moves_two_thousand_active_bodies_within_budget() -> TestRes
                 velocity: [0.0; 3],
                 use_gravity: true,
                 is_trigger: false,
-                shape: Shape::Sphere { radius: 0.5 },
+                collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
                 layer: 0,
                 role: BodyRole::Dynamic,
                 friction: 0.6,

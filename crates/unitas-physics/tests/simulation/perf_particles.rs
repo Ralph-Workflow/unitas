@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use unitas_core::EntityId;
 use unitas_physics::particles::{EmitParams, ParticleShape, ParticleSystem};
-use unitas_physics::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape, World};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -28,7 +28,7 @@ fn build_colliders() -> Result<World, Box<dyn Error>> {
                 velocity: [0.0; 3],
                 use_gravity: false,
                 is_trigger: false,
-                shape: Shape::Sphere { radius: 0.5 },
+                collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
                 layer: 0,
                 role: BodyRole::Static,
                 friction: 0.6,

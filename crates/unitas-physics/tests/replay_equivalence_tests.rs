@@ -1,6 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionDetectionMode3D, ForceMode, PhysicsError, Shape, World,
+    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, ForceMode, PhysicsError, Shape,
+    World,
 };
 
 const TIMESTEP: f64 = 0.02;
@@ -48,7 +49,7 @@ fn body(
         velocity,
         use_gravity,
         is_trigger: false,
-        shape,
+        collider_shape: ColliderShape::Primitive(shape),
         layer: 0,
         role,
         friction: 0.6,

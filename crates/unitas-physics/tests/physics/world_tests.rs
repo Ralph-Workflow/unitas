@@ -1,5 +1,5 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 
 const GRAVITY: f64 = 9.81;
 
@@ -11,7 +11,7 @@ fn sphere(position: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.5 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.6,
@@ -64,9 +64,9 @@ fn static_body_never_moves_and_never_accelerates() -> Result<(), PhysicsError> {
             velocity: [4.0, 5.0, 6.0],
             use_gravity: true,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             layer: 0,
             role: BodyRole::Dynamic,
             friction: 0.6,
@@ -115,15 +115,15 @@ fn invalid_body_descriptions_are_rejected() -> Result<(), PhysicsError> {
     let entity = EntityId::new(1);
 
     let zero_radius = BodyDesc {
-        shape: Shape::Sphere { radius: 0.0 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.0 }),
         friction: 0.6,
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
     let negative_extent = BodyDesc {
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [1.0, -1.0, 1.0],
-        },
+        }),
         friction: 0.6,
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
@@ -135,31 +135,31 @@ fn invalid_body_descriptions_are_rejected() -> Result<(), PhysicsError> {
         ..sphere([0.0, 0.0, 0.0])
     };
     let zero_capsule_radius = BodyDesc {
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius: 0.0,
             height: 2.0,
             direction: 1,
-        },
+        }),
         friction: 0.6,
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
     let negative_capsule_height = BodyDesc {
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius: 0.5,
             height: -1.0,
             direction: 1,
-        },
+        }),
         friction: 0.6,
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
     };
     let invalid_capsule_direction = BodyDesc {
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius: 0.5,
             height: 2.0,
             direction: 3,
-        },
+        }),
         friction: 0.6,
         restitution: 0.0,
         ..sphere([0.0, 0.0, 0.0])
@@ -209,7 +209,7 @@ fn capsule_bodies_support_dynamic_kinematic_and_static_roles() -> Result<(), Phy
         dynamic_capsule,
         BodyDesc {
             use_gravity: true,
-            shape: capsule_shape,
+            collider_shape: ColliderShape::Primitive(capsule_shape),
             ..sphere([0.0, 5.0, 0.0])
         },
     )?;
@@ -217,7 +217,7 @@ fn capsule_bodies_support_dynamic_kinematic_and_static_roles() -> Result<(), Phy
         kinematic_capsule,
         BodyDesc {
             role: BodyRole::Kinematic,
-            shape: capsule_shape,
+            collider_shape: ColliderShape::Primitive(capsule_shape),
             ..sphere([2.0, 0.0, 0.0])
         },
     )?;
@@ -226,7 +226,7 @@ fn capsule_bodies_support_dynamic_kinematic_and_static_roles() -> Result<(), Phy
         BodyDesc {
             role: BodyRole::Static,
             mass: 0.0,
-            shape: capsule_shape,
+            collider_shape: ColliderShape::Primitive(capsule_shape),
             ..sphere([-2.0, 0.0, 0.0])
         },
     )?;
@@ -391,9 +391,9 @@ fn kinematic_body_is_immovable_under_gravity_and_collision() -> Result<(), Physi
             velocity: [1.0, 2.0, 3.0],
             use_gravity: true,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 0.5, 2.0],
-            },
+            }),
             layer: 0,
             role: BodyRole::Kinematic,
             friction: 0.6,
@@ -526,9 +526,9 @@ fn set_position_moves_kinematic_and_static_bodies() -> Result<(), PhysicsError> 
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [1.0, 1.0, 1.0],
-            },
+            }),
             layer: 0,
             role: BodyRole::Kinematic,
             friction: 0.6,

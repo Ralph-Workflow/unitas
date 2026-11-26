@@ -3,7 +3,7 @@ use unitas_physics::terrain::{
     DetailInstance, DetailPrototype, DetailRenderMode, GrassWindSettings, Terrain, TerrainBody,
     TerrainData, TerrainError, TerrainLayer, TreeInstance, TreePrototype, WindZone,
 };
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 
 const STEP_SECONDS: f64 = 1.0 / 60.0;
 const SETTLE_STEPS: usize = 180;
@@ -38,7 +38,7 @@ fn sphere_desc(position: [f64; 3], radius: f64) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: true,
         is_trigger: false,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.6,
@@ -248,7 +248,7 @@ fn box_body_resting_on_terrain_is_supported_at_the_authored_height() -> TestResu
     world.add_body(
         entity,
         BodyDesc {
-            shape,
+            collider_shape: ColliderShape::Primitive(shape),
             ..sphere_desc([0.0, 12.0, 0.0], 0.0)
         },
     )?;
@@ -278,7 +278,7 @@ fn box_body_resting_on_terrain_is_supported_at_the_authored_height() -> TestResu
     slope_world.add_body(
         slope_entity,
         BodyDesc {
-            shape,
+            collider_shape: ColliderShape::Primitive(shape),
             ..sphere_desc([-3.0, 12.0, 0.0], 0.0)
         },
     )?;

@@ -47,6 +47,41 @@ impl Shape {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColliderShape {
+    Primitive(Shape),
+    Mesh {
+        vertices: Vec<[f64; 3]>,
+        indices: Vec<u32>,
+        convex: bool,
+    },
+}
+
+impl ColliderShape {
+    pub(crate) fn is_valid(&self) -> bool {
+        match self {
+            Self::Primitive(shape) => shape.is_valid(),
+            Self::Mesh {
+                vertices, indices, ..
+            } => {
+                vertices.len() >= 3
+                    && vertices
+                        .iter()
+                        .all(|vertex| vertex.iter().all(|value| value.is_finite()))
+                    && !indices.is_empty()
+                    && indices.len() % 3 == 0
+                    && indices.iter().all(|index| {
+                        usize::try_from(*index).is_ok_and(|index| index < vertices.len())
+                    })
+            }
+        }
+    }
+
+    pub(crate) fn is_non_convex_mesh(&self) -> bool {
+        matches!(self, Self::Mesh { convex: false, .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CollisionDetectionMode3D {
     #[default]
@@ -70,7 +105,7 @@ impl CollisionDetectionMode3D {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BodyDesc {
     pub position: [f64; 3],
     pub rotation: [f64; 4],
@@ -78,7 +113,7 @@ pub struct BodyDesc {
     pub velocity: [f64; 3],
     pub use_gravity: bool,
     pub is_trigger: bool,
-    pub shape: Shape,
+    pub collider_shape: ColliderShape,
     pub layer: u32,
     pub role: BodyRole,
     pub friction: f64,
@@ -107,7 +142,7 @@ impl BodyDesc {
             && self.friction >= 0.0
             && self.restitution.is_finite()
             && self.restitution >= 0.0
-            && self.shape.is_valid()
+            && self.collider_shape.is_valid()
     }
 }
 

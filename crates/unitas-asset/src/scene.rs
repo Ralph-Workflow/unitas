@@ -21,6 +21,7 @@ pub const AUDIO_CLIP_CLASS: u32 = 83;
 pub const CAMERA_CLASS: u32 = 20;
 pub const MESH_RENDERER_CLASS: u32 = 23;
 pub const MESH_FILTER_CLASS: u32 = 33;
+pub const MESH_COLLIDER_CLASS: u32 = 64;
 pub const LIGHT_CLASS: u32 = 108;
 pub const CANVAS_CLASS: u32 = 223;
 pub const RECT_TRANSFORM_CLASS: u32 = 224;
@@ -342,6 +343,27 @@ pub struct CapsuleColliderComponent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MeshColliderComponent {
+    pub mesh_guid: Option<AssetGuid>,
+    pub mesh_file_id: Option<i64>,
+    pub mesh_path: Option<PathBuf>,
+    pub convex: bool,
+    pub center: [f64; 3],
+    pub is_trigger: bool,
+    pub material: Option<MaterialValues>,
+    pub material_diagnostic: Option<String>,
+    pub mesh_diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColliderComponent {
+    Box(BoxColliderComponent),
+    Sphere(SphereColliderComponent),
+    Capsule(CapsuleColliderComponent),
+    Mesh(MeshColliderComponent),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CharacterControllerComponent {
     pub enabled: bool,
     pub radius: f64,
@@ -357,9 +379,7 @@ pub struct CharacterControllerComponent {
 pub struct PhysicsBinding {
     pub entity: EntityId,
     pub rigidbody: Option<RigidbodyComponent>,
-    pub box_collider: Option<BoxColliderComponent>,
-    pub sphere_collider: Option<SphereColliderComponent>,
-    pub capsule_collider: Option<CapsuleColliderComponent>,
+    pub colliders: Vec<ColliderComponent>,
     pub character_controller: Option<CharacterControllerComponent>,
     pub layer: u32,
 }
@@ -807,6 +827,7 @@ fn has_material_references(stream: &Stream) -> bool {
             BOX_COLLIDER_CLASS => document.root.get("BoxCollider"),
             SPHERE_COLLIDER_CLASS => document.root.get("SphereCollider"),
             CAPSULE_COLLIDER_CLASS => document.root.get("CapsuleCollider"),
+            MESH_COLLIDER_CLASS => document.root.get("MeshCollider"),
             _ => None,
         };
         body.and_then(|node| node.get("m_Material")).is_some()
@@ -835,6 +856,11 @@ fn has_render_references(stream: &Stream) -> bool {
             MESH_FILTER_CLASS => document
                 .root
                 .get("MeshFilter")
+                .and_then(|node| node.get("m_Mesh"))
+                .is_some(),
+            MESH_COLLIDER_CLASS => document
+                .root
+                .get("MeshCollider")
                 .and_then(|node| node.get("m_Mesh"))
                 .is_some(),
             MESH_RENDERER_CLASS => document
@@ -1515,6 +1541,7 @@ enum PhysicsComponent {
     BoxCollider(BoxColliderComponent),
     SphereCollider(SphereColliderComponent),
     CapsuleCollider(CapsuleColliderComponent),
+    MeshCollider(MeshColliderComponent),
     CharacterController(CharacterControllerComponent),
 }
 
@@ -1544,6 +1571,10 @@ fn collect_physics(
                 None => continue,
             },
             CAPSULE_COLLIDER_CLASS => match document.root.get("CapsuleCollider") {
+                Some(body) => body,
+                None => continue,
+            },
+            MESH_COLLIDER_CLASS => match document.root.get("MeshCollider") {
                 Some(body) => body,
                 None => continue,
             },
@@ -1590,6 +1621,12 @@ fn collect_physics(
                 CAPSULE_COLLIDER_CLASS => PhysicsComponent::CapsuleCollider(
                     capsule_collider_component(body, &record.name, index),
                 ),
+                MESH_COLLIDER_CLASS => PhysicsComponent::MeshCollider(mesh_collider_component(
+                    body,
+                    &record.name,
+                    record.entity,
+                    index,
+                )),
                 CHARACTER_CONTROLLER_CLASS | MONO_BEHAVIOUR_CLASS => {
                     PhysicsComponent::CharacterController(character_controller_component(body))
                 }
@@ -1603,9 +1640,7 @@ fn collect_physics(
                 bindings.push(PhysicsBinding {
                     entity,
                     rigidbody: None,
-                    box_collider: None,
-                    sphere_collider: None,
-                    capsule_collider: None,
+                    colliders: Vec::new(),
                     character_controller: None,
                     layer,
                 });
@@ -1617,9 +1652,18 @@ fn collect_physics(
         let binding = &mut bindings[position];
         match component {
             PhysicsComponent::Rigidbody(value) => binding.rigidbody = Some(value),
-            PhysicsComponent::BoxCollider(value) => binding.box_collider = Some(value),
-            PhysicsComponent::SphereCollider(value) => binding.sphere_collider = Some(value),
-            PhysicsComponent::CapsuleCollider(value) => binding.capsule_collider = Some(value),
+            PhysicsComponent::BoxCollider(value) => {
+                binding.colliders.push(ColliderComponent::Box(value));
+            }
+            PhysicsComponent::SphereCollider(value) => {
+                binding.colliders.push(ColliderComponent::Sphere(value));
+            }
+            PhysicsComponent::CapsuleCollider(value) => {
+                binding.colliders.push(ColliderComponent::Capsule(value));
+            }
+            PhysicsComponent::MeshCollider(value) => {
+                binding.colliders.push(ColliderComponent::Mesh(value));
+            }
             PhysicsComponent::CharacterController(value) => {
                 binding.character_controller = Some(value);
             }
@@ -1821,6 +1865,55 @@ fn capsule_collider_component(
         material_diagnostic,
         geometry_diagnostic,
     }
+}
+
+fn mesh_collider_component(
+    body: &Node,
+    game_object_name: &str,
+    entity: EntityId,
+    index: Option<&GuidIndex>,
+) -> MeshColliderComponent {
+    let (material, material_diagnostic) =
+        resolve_collider_material(body, "MeshCollider", game_object_name, index);
+    let owner = format!(
+        "MeshCollider on '{game_object_name}' (entity {})",
+        entity.as_u64()
+    );
+    let (mesh_guid, mesh_file_id, mesh_path, mesh_diagnostic) =
+        resolve_mesh_reference_for(body, index, &owner);
+    let mesh_diagnostic = match mesh_diagnostic {
+        Some(reason) => Some(reason),
+        None => {
+            unresolved_mesh_diagnostic(&owner, mesh_guid.as_deref(), mesh_path.as_deref(), index)
+        }
+    };
+    MeshColliderComponent {
+        mesh_guid,
+        mesh_file_id,
+        mesh_path,
+        convex: yaml_bool(body.get("m_Convex"), false),
+        center: vector3_or(body.get("m_Center"), [0.0, 0.0, 0.0]),
+        is_trigger: yaml_bool(body.get("m_IsTrigger"), false),
+        material,
+        material_diagnostic,
+        mesh_diagnostic,
+    }
+}
+
+fn unresolved_mesh_diagnostic(
+    owner: &str,
+    guid: Option<&str>,
+    path: Option<&Path>,
+    index: Option<&GuidIndex>,
+) -> Option<String> {
+    let guid = guid?;
+    if path.is_some() || index.is_none() {
+        return None;
+    }
+    if guid.eq_ignore_ascii_case(crate::primitive::BUILTIN_EXTRA_GUID) {
+        return None;
+    }
+    Some(format!("{owner} references unresolved mesh guid {guid}"))
 }
 
 fn is_character_controller(body: &Node) -> bool {
@@ -2600,6 +2693,7 @@ fn handled_component_class(class_id: u32) -> bool {
             | BOX_COLLIDER_CLASS
             | SPHERE_COLLIDER_CLASS
             | CAPSULE_COLLIDER_CLASS
+            | MESH_COLLIDER_CLASS
             | CHARACTER_CONTROLLER_CLASS
             | MONO_BEHAVIOUR_CLASS
             | AUDIO_SOURCE_CLASS
@@ -2692,17 +2786,31 @@ fn resolve_mesh_reference(
     Option<PathBuf>,
     Option<String>,
 ) {
-    let mesh_node = match filter.get("m_Mesh") {
+    resolve_mesh_reference_for(
+        filter,
+        index,
+        &format!("MeshFilter on entity {}", entity.as_u64()),
+    )
+}
+
+fn resolve_mesh_reference_for(
+    source: &Node,
+    index: Option<&GuidIndex>,
+    owner: &str,
+) -> (
+    Option<AssetGuid>,
+    Option<i64>,
+    Option<PathBuf>,
+    Option<String>,
+) {
+    let mesh_node = match source.get("m_Mesh") {
         Some(node) => node,
         None => {
             return (
                 None,
                 None,
                 None,
-                Some(format!(
-                    "MeshFilter on entity {} has no m_Mesh reference",
-                    entity.as_u64()
-                )),
+                Some(format!("{owner} has no m_Mesh reference")),
             )
         }
     };
@@ -2719,10 +2827,7 @@ fn resolve_mesh_reference(
                 None,
                 file_id,
                 None,
-                Some(format!(
-                    "MeshFilter on entity {} references m_Mesh without a guid",
-                    entity.as_u64()
-                )),
+                Some(format!("{owner} references m_Mesh without a guid")),
             )
         }
     };
@@ -2837,22 +2942,34 @@ fn collect_scene_diagnostics(
 ) -> Vec<(EntityId, String)> {
     let mut diagnostics = Vec::new();
     for binding in physics {
-        if let Some(sphere) = &binding.sphere_collider {
-            if let Some(diag) = &sphere.material_diagnostic {
-                diagnostics.push((binding.entity, diag.clone()));
-            }
-        }
-        if let Some(collider) = &binding.box_collider {
-            if let Some(diag) = &collider.material_diagnostic {
-                diagnostics.push((binding.entity, diag.clone()));
-            }
-        }
-        if let Some(capsule) = &binding.capsule_collider {
-            if let Some(diag) = &capsule.material_diagnostic {
-                diagnostics.push((binding.entity, diag.clone()));
-            }
-            if let Some(diag) = &capsule.geometry_diagnostic {
-                diagnostics.push((binding.entity, diag.clone()));
+        for collider in &binding.colliders {
+            match collider {
+                ColliderComponent::Box(collider) => {
+                    if let Some(diag) = &collider.material_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                }
+                ColliderComponent::Sphere(collider) => {
+                    if let Some(diag) = &collider.material_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                }
+                ColliderComponent::Capsule(collider) => {
+                    if let Some(diag) = &collider.material_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                    if let Some(diag) = &collider.geometry_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                }
+                ColliderComponent::Mesh(collider) => {
+                    if let Some(diag) = &collider.material_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                    if let Some(diag) = &collider.mesh_diagnostic {
+                        diagnostics.push((binding.entity, diag.clone()));
+                    }
+                }
             }
         }
     }

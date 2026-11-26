@@ -1,6 +1,8 @@
 use unitas_asset::scene::UiBinding;
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, multiply_rotation, normalize_rotation};
-use unitas_physics::{BodyDesc, BodyRole, CollisionDetectionMode3D, PhysicsError, Shape};
+use unitas_physics::{
+    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, PhysicsError, Shape,
+};
 
 use crate::error::RuntimeError;
 use crate::runtime::ui_components::UiComponents;
@@ -20,6 +22,7 @@ impl Runtime {
                 scripts: Vec::new(),
                 bodies: Vec::new(),
                 body_offsets: Vec::new(),
+                body_colliders: Vec::new(),
                 character_controllers: Vec::new(),
                 audio_sources: Vec::new(),
                 animators: Vec::new(),
@@ -29,6 +32,7 @@ impl Runtime {
                 diagnostics: Vec::new(),
                 entity_base,
                 entity_count: 0,
+                rigid_bodies: std::collections::BTreeSet::new(),
             });
             self.active_scene = Some(0);
         }
@@ -264,7 +268,7 @@ impl Runtime {
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger,
-            shape,
+            collider_shape: ColliderShape::Primitive(shape),
             layer: 1,
             role: BodyRole::Static,
             friction: 0.6,

@@ -10,7 +10,7 @@ use unitas_physics::particles::{
 use unitas_physics::two_d::{
     BodyDesc2D, ColliderDesc2D, ContactFilter2D, MessageKind2D, PlatformEffector2D,
 };
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape};
 use unitas_runtime::particles::ParticleRuntimeWorld;
 use unitas_runtime::physics::PhysicsRuntimeWorld;
 use unitas_runtime::{Callbacks, Runtime};
@@ -26,9 +26,9 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
         floor,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             position: [0.0, -0.5, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -45,9 +45,9 @@ fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Res
         crate_box,
         BodyDesc {
             role: BodyRole::Dynamic,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [0.0, 0.6, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,
@@ -110,9 +110,9 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
         floor,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 0.5, 2.0],
-            },
+            }),
             position: [0.0, -0.5, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -129,9 +129,9 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
         trigger_zone,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [10.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -148,9 +148,9 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
         crate_body,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             position: [10.5, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -167,7 +167,7 @@ fn subsystem_entry_physics_3d_stepping_and_message_routing_agree_on_the_collisio
         dynamic_body,
         BodyDesc {
             role: BodyRole::Dynamic,
-            shape: Shape::Sphere { radius: 0.5 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
             position: [0.0, 0.4, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,
@@ -268,7 +268,7 @@ fn subsystem_entry_particles_control_systems_and_collide_with_3d_world() -> Resu
         floor,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Sphere { radius: 1.0 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 1.0 }),
             position: [0.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -365,7 +365,7 @@ fn subsystem_entry_particles_custom_data_and_force_field_and_trigger_events_in_r
         trigger_zone,
         BodyDesc {
             role: BodyRole::Static,
-            shape: Shape::Sphere { radius: 2.0 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 2.0 }),
             position: [1.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             mass: 0.0,
@@ -523,7 +523,7 @@ fn subsystem_entry_navmesh() -> Result<NavMesh, NavigationError> {
 fn subsystem_entry_dynamic_sphere(position: [f64; 3], radius: f64) -> BodyDesc {
     BodyDesc {
         role: BodyRole::Dynamic,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         position,
         rotation: [0.0, 0.0, 0.0, 1.0],
         mass: 1.0,

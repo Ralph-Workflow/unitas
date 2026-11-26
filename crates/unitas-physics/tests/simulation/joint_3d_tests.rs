@@ -1,8 +1,8 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    BodyDesc, BodyRole, BrokenJointEvent3D, CharacterJoint3D, CollisionDetectionMode3D,
-    ConfigurableJoint3D, ConfigurableJointMotion, FixedJoint3D, HingeJoint3D, Joint3D,
-    JointDrive3D, Shape, SpringJoint3D, World,
+    BodyDesc, BodyRole, BrokenJointEvent3D, CharacterJoint3D, ColliderShape,
+    CollisionDetectionMode3D, ConfigurableJoint3D, ConfigurableJointMotion, FixedJoint3D,
+    HingeJoint3D, Joint3D, JointDrive3D, Shape, SpringJoint3D, World,
 };
 
 fn dynamic_sphere(position: [f64; 3], mass: f64) -> BodyDesc {
@@ -13,7 +13,7 @@ fn dynamic_sphere(position: [f64; 3], mass: f64) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.25 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.25 }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.5,
@@ -30,9 +30,9 @@ fn static_box(position: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.25, 0.25, 0.25],
-        },
+        }),
         layer: 0,
         role: BodyRole::Static,
         friction: 0.5,

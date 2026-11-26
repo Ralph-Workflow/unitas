@@ -1,5 +1,7 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, CollisionDetectionMode3D, PhysicsError, Shape, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, PhysicsError, Shape, World,
+};
 
 const ROTATION_SPEED_DEGREES: f64 = 60.0;
 const TICK: f64 = 1.0 / 60.0;
@@ -25,13 +27,13 @@ fn platform() -> BodyDesc {
         velocity: [0.0, 0.0, 0.0],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [
                 PLATFORM_HALF_EXTENT_X,
                 PLATFORM_HALF_EXTENT_Y,
                 PLATFORM_HALF_EXTENT_Z,
             ],
-        },
+        }),
         layer: 0,
         role: BodyRole::Kinematic,
         friction: FRICTION,
@@ -52,9 +54,9 @@ fn marble() -> BodyDesc {
         velocity: [0.0, 0.0, 0.0],
         use_gravity: true,
         is_trigger: false,
-        shape: Shape::Sphere {
+        collider_shape: ColliderShape::Primitive(Shape::Sphere {
             radius: MARBLE_RADIUS,
-        },
+        }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: FRICTION,

@@ -787,6 +787,21 @@ pub extern "C" fn unitas_runtime_set_time_scale(handle: u64, time_scale: f64) ->
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_set_fixed_timestep(handle: u64, seconds: f64) -> i32 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 1;
+    }
+    match with_runtime_state(handle, |state| {
+        state.runtime.set_fixed_timestep(seconds);
+        state.clear_error();
+    }) {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_time_scale(handle: u64) -> f64 {
     with_runtime_state(handle, |state| {
         state.clear_error();

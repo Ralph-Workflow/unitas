@@ -1,5 +1,7 @@
 use unitas_core::EntityId;
-use unitas_physics::{BodyDesc, BodyRole, CollisionDetectionMode3D, Shape, World};
+use unitas_physics::{
+    BodyDesc, BodyRole, ColliderShape, CollisionDetectionMode3D, Shape, World,
+};
 
 const ROTATE: bool = true;
 const CCD: bool = true;
@@ -22,7 +24,7 @@ fn desc(
         velocity,
         use_gravity: role == BodyRole::Dynamic,
         is_trigger: false,
-        shape,
+        collider_shape: ColliderShape::Primitive(shape),
         layer: 0,
         role,
         friction: 0.5,

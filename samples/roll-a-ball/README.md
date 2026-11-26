@@ -23,7 +23,10 @@ reported with its real state, never hidden.
   `Assets/Materials/ArenaBumper.physicMaterial` (`m_Bounciness: 1.4`,
   `m_BounceCombine: 2`, Unity's Maximum rule), the `TriggerPairA` and
   `TriggerPairB` trigger spheres that carry no Rigidbody, and the dynamic
-  `PushedMarble` next to the kinematic `Pusher`.
+  `PushedMarble` next to the kinematic `Pusher`. It also carries the two
+  objects the mesh-and-compound scenario needs: a GameObject whose
+  `MeshCollider` names the concave frame mesh under `Assets/Models/`, and a
+  GameObject that carries a `BoxCollider` and an offset `SphereCollider`.
 - Eight scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
   `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`,
   `HudController`.
@@ -248,6 +251,42 @@ that two runs of the same scenario give the same result:
 The specification text is not weakened by this note. The gap above is what
 remains before S11 is claimed complete in the arena.
 
+## Mesh and compound colliders — what is demonstrated and what is not
+
+**Demonstrated.** The engine simulates a mesh collider as the mesh it names
+and not as the box around it, and a GameObject contributes every collider it
+carries, so one body can carry more than one shape. The sample's
+physics-probe scene carries the two objects that only behave correctly with
+those two behaviours, and `Scenarios/mesh_and_compound_colliders.json` drives
+them in the `make verify-samples` lane with `--repeat 2`, so the lane also
+proves that two runs of the same scenario give the same result:
+
+- the mesh object: a GameObject whose `MeshCollider` names the concave frame
+  mesh under `Assets/Models/` (a square frame with an opening). The scenario
+  fires the marble at the frame's opening and asserts that it passes through
+  with no contact reported. A bounding-box approximation blocks the marble at
+  the box around the frame, so that assertion fails for it.
+- the compound object: a GameObject that carries a `BoxCollider` and an offset
+  `SphereCollider`. The scenario fires the marble at the offset collider and
+  asserts that the contact is reported, so the body carries both shapes and
+  not only the first collider of the GameObject.
+
+**Not demonstrated.**
+
+- The proof runs in `Assets/Scenes/PhysicsLab.unity`, the physics-probe scene,
+  and not in the gameplay arena `Assets/Scenes/RollABall.unity`, which still
+  carries no mesh collider and no compound collider.
+- The sample's mesh collider sits on a static body. A non-convex mesh collider
+  on a dynamic body is refused, as Unity's rule requires, and that refusal is
+  proven by the engine's own tests, not by a sample scenario.
+- The step is newer than the last full-lane run, so the lane's own run of the
+  merged tree is what proves it. A red run of this step is a red lane, and
+  this note is not a pass on its own.
+
+The specification text is not weakened by this note. The gap above is what
+remains before the sample's arena carries a mesh collider or a compound
+collider of its own.
+
 ## Non-default lane
 
 `make verify-samples` runs this sample's scenarios and is the lane that owns
@@ -259,22 +298,25 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 30 scenario steps: the 24
+**Current lane state (honest).** The lane runs 31 scenario steps: the 25
 scripting scenarios (including `frame_independence`, `pointer_ui`,
-`restart_recovery`, the four `s8_*` visual checkpoints and the three new
-physics scenarios `collision_edge`, `trigger_without_rigidbody` and
-`collision_payload`), the 4 headless editor scenarios (`collect_all`,
-`retry_clean`, `scene_edit_restore`, `play_mode_edit_restore`), the native
-scripted launch and the packaged-player proof. That number counts the
-scenario steps only; before them the lane runs its three build steps — the
-runtime, the bridge and the player build. The three new physics steps are
-the S11 evidence above, and the lane's own run of the current tree is what
-proves them. Every step of the last full-lane run was green; the steps added
-since (`restart_recovery` and `play_mode_edit_restore`) were verified on
-their own — the lane's scripting runner and the headless editor both report
-`restart_recovery` `passed` with 9 of 9 checkpoints, `--repeat 2` reports it
-repeatable, and the headless editor reports `play_mode_edit_restore`
-`passed`.
+`restart_recovery`, the four `s8_*` visual checkpoints and the four new
+physics scenarios `collision_edge`, `trigger_without_rigidbody`,
+`collision_payload` and `mesh_and_compound_colliders`), the 4 headless editor
+scenarios (`collect_all`, `retry_clean`, `scene_edit_restore`,
+`play_mode_edit_restore`), the native scripted launch and the packaged-player
+proof. That number counts the scenario steps only; before them the lane runs
+its three build steps — the runtime, the bridge and the player build. The four
+new physics steps are the S11 and mesh-and-compound evidence above, and the
+lane's own run of the current tree is what proves them. Every step of the last
+full-lane run was green; the steps added since (`restart_recovery` and
+`play_mode_edit_restore`) were verified on their own — the lane's scripting
+runner and the headless editor both report `restart_recovery` `passed` with 9
+of 9 checkpoints, `--repeat 2` reports it repeatable, and the headless editor
+reports `play_mode_edit_restore` `passed`. The `mesh_and_compound_colliders`
+step is newer than the last full-lane run, so the lane's own run of the merged
+tree is what proves it; a red run of that step is a red lane and this note is
+not a pass on its own.
 
 - `editor-scenario-collect_all`, `editor-scenario-retry_clean`: these were
   red until the headless editor host learned to load the generated glue

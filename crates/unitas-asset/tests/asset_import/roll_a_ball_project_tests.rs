@@ -331,14 +331,11 @@ fn roll_a_ball_scene_round_trip_is_exact_and_keeps_guid_and_file_id_stability() 
         .physics
         .iter()
         .filter(|binding| {
-            binding
-                .sphere_collider
-                .as_ref()
-                .is_some_and(|collider| collider.is_trigger)
-                || binding
-                    .box_collider
-                    .as_ref()
-                    .is_some_and(|collider| collider.is_trigger)
+            binding.colliders.iter().any(|collider| match collider {
+                scene::ColliderComponent::Sphere(collider) => collider.is_trigger,
+                scene::ColliderComponent::Box(collider) => collider.is_trigger,
+                _ => false,
+            })
         })
         .count();
     assert_eq!(
@@ -362,8 +359,12 @@ fn roll_a_ball_scene_round_trip_is_exact_and_keeps_guid_and_file_id_stability() 
     assert_eq!(rigidbody.mass, 2.5, "the Ball mass edit must reach import");
     assert!(!rigidbody.is_kinematic, "the Ball must stay dynamic");
     let ball_collider = ball
-        .sphere_collider
-        .as_ref()
+        .colliders
+        .iter()
+        .find_map(|collider| match collider {
+            scene::ColliderComponent::Sphere(collider) => Some(collider),
+            _ => None,
+        })
         .ok_or("the Ball must keep its sphere collider")?;
     assert_eq!(ball_collider.radius, 0.5, "the Ball radius must survive");
     assert!(
@@ -454,7 +455,15 @@ fn roll_a_ball_prefab_round_trip_is_exact_and_keeps_guid_and_file_id_stability()
     let collider = assembled
         .physics
         .iter()
-        .find_map(|binding| binding.sphere_collider.as_ref())
+        .find_map(|binding| {
+            binding
+                .colliders
+                .iter()
+                .find_map(|collider| match collider {
+                    scene::ColliderComponent::Sphere(collider) => Some(collider),
+                    _ => None,
+                })
+        })
         .ok_or("the reloaded prefab must bind its sphere collider")?;
     assert_eq!(collider.radius, 0.75, "the radius edit must reach import");
     assert!(

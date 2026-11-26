@@ -1,8 +1,8 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    combine_materials, BodyDesc, BodyInterpolation, BodyRole, BounceCombine,
+    combine_materials, BodyDesc, BodyInterpolation, BodyRole, BounceCombine, ColliderShape,
     CollisionDetectionMode3D, FrictionCombine, PhysicsError, PhysicsMaterial3D, Shape,
-    SolverSettings, World,
+    SolverSettings, SolverType, World,
 };
 
 const INCOMING_SPEED: f64 = 10.0;
@@ -24,9 +24,9 @@ fn bumper_desc() -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [0.05, 2.0, 2.0],
-        },
+        }),
         layer: 0,
         role: BodyRole::Static,
         friction: 0.0,
@@ -43,7 +43,7 @@ fn ball_desc() -> BodyDesc {
         velocity: [INCOMING_SPEED, 0.0, 0.0],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.25 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.25 }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.0,
@@ -254,9 +254,9 @@ fn slide_distance(friction: f64, combine: FrictionCombine) -> Result<f64, Physic
     let floor = EntityId::new(1);
     let ball = EntityId::new(2);
     let mut floor_desc = bumper_desc();
-    floor_desc.shape = Shape::Box {
+    floor_desc.collider_shape = ColliderShape::Primitive(Shape::Box {
         half_extents: [20.0, 0.5, 20.0],
-    };
+    });
     floor_desc.position = [0.0, -0.5, 0.0];
     world.add_body_with_material(
         floor,
@@ -305,9 +305,9 @@ fn floor_world() -> Result<(World, EntityId, EntityId), PhysicsError> {
     let floor = EntityId::new(1);
     let ball = EntityId::new(2);
     let mut floor_desc = bumper_desc();
-    floor_desc.shape = Shape::Box {
+    floor_desc.collider_shape = ColliderShape::Primitive(Shape::Box {
         half_extents: [10.0, 0.5, 10.0],
-    };
+    });
     floor_desc.position = [0.0, -0.5, 0.0];
     world.add_body(floor, floor_desc)?;
     let mut ball_desc = ball_desc();
@@ -402,9 +402,9 @@ fn deterministic_run() -> Result<Vec<[f64; 3]>, PhysicsError> {
     let mut world = World::with_gravity([0.0, -9.81, 0.0]);
     let ground = EntityId::new(1);
     let mut ground_desc = bumper_desc();
-    ground_desc.shape = Shape::Box {
+    ground_desc.collider_shape = ColliderShape::Primitive(Shape::Box {
         half_extents: [20.0, 0.5, 20.0],
-    };
+    });
     ground_desc.position = [0.0, -0.5, 0.0];
     world.add_body(ground, ground_desc)?;
     for index in 0..6u64 {
@@ -412,9 +412,9 @@ fn deterministic_run() -> Result<Vec<[f64; 3]>, PhysicsError> {
         let mut desc = ball_desc();
         desc.position = [index as f64 * 0.6, 1.0 + index as f64 * 0.4, 0.0];
         desc.velocity = [1.0, 0.0, 0.5];
-        desc.shape = Shape::Box {
+        desc.collider_shape = ColliderShape::Primitive(Shape::Box {
             half_extents: [0.25, 0.25, 0.25],
-        };
+        });
         desc.mass = 1.0 + index as f64;
         world.add_body(entity, desc)?;
     }
@@ -451,9 +451,11 @@ fn solver_settings_reach_the_world() {
         allowed_linear_error: 0.01,
         max_depenetration_velocity: 5.0,
         deterministic_accumulation: false,
+        solver_type: SolverType::Tgs,
     };
     world.set_solver_settings(settings);
     assert_eq!(world.solver_settings(), settings);
+    assert_eq!(world.solver_type(), SolverType::Tgs);
 }
 
 #[test]

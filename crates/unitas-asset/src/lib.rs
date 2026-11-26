@@ -1,6 +1,7 @@
 pub mod anim_import;
 pub mod audio_import;
 pub mod binary_ser;
+pub mod collision;
 pub mod database;
 pub mod dependencies;
 pub mod font;
@@ -25,6 +26,8 @@ pub mod trail;
 pub mod trust;
 pub mod unity_yaml;
 
+pub use collision::{CollisionCookError, CollisionMesh};
+
 pub use material::{
     parse_material, parse_material_stream, parse_material_stream_with_guids,
     parse_material_with_guids, Material, MaterialError,
@@ -44,7 +47,8 @@ pub use scene::{
     assemble_scene_file_with_physics, assemble_scene_with_audio, assemble_scene_with_guids,
     assemble_scene_with_index, assemble_scene_with_physics, AssembledScene, AssetGuid,
     AudioBinding, AudioSourceComponent, BoxColliderComponent, CapsuleColliderComponent,
-    CharacterControllerComponent, MaterialValues, PhysicsBinding, RigidbodyComponent, SceneError,
-    ScriptBinding, SphereColliderComponent, AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS,
+    CharacterControllerComponent, ColliderComponent, MaterialValues, MeshColliderComponent,
+    PhysicsBinding, RigidbodyComponent, SceneError, ScriptBinding, SphereColliderComponent,
+    AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS, MESH_COLLIDER_CLASS,
 };
 pub use unity_yaml::{AssetError, Document, Header, Node, Stream, YamlError, YamlNode};

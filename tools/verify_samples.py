@@ -51,6 +51,12 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("collision_edge", "collision_edge.json", ("--repeat", "2"), False),
     ("trigger_without_rigidbody", "trigger_without_rigidbody.json", ("--repeat", "2"), False),
     ("collision_payload", "collision_payload.json", ("--repeat", "2"), False),
+    (
+        "mesh_and_compound_colliders",
+        "mesh_and_compound_colliders.json",
+        ("--repeat", "2"),
+        False,
+    ),
     ("collect_all", "collect_all.json", ("--repeat", "2"), False),
     ("pause_holds_simulation", "pause_holds_simulation.json", ("--repeat", "2"), False),
     ("slowmo_finish", "slowmo_finish.json", ("--repeat", "2"), False),

@@ -2263,14 +2263,24 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "a mesh collider is simulated as the mesh it names",
                 location: "crates/unitas-physics/src/world.rs",
-                evidence: &[],
-                missing: Some("a mesh collider is a bounding-box approximation, so a body collides with the whole box and an opening in the mesh is solid"),
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import_tests.rs::mesh_collider_resolves_its_named_mesh_and_cooks_collision_geometry",
+                    "crates/unitas-physics/tests/simulation_tests.rs::a_mesh_collider_collides_with_the_mesh_and_not_with_its_bounding_box",
+                    "crates/unitas-physics/tests/simulation_tests.rs::a_non_convex_mesh_collider_on_a_dynamic_body_is_refused",
+                    "crates/unitas-runtime/tests/sample_project.rs::the_sample_mesh_collider_produces_a_mesh_shaped_collider",
+                    "bridge/Unitas.Bridge.Tests/CollisionCounterpartTests.cs::MeshColliderIsMaterializedFromTheScene",
+                ],
+                missing: None,
             },
             OwnedCapabilityPart {
                 behavior: "a GameObject carries more than one collider",
                 location: "crates/unitas-runtime/src/runtime.rs",
-                evidence: &[],
-                missing: Some("one collider per GameObject is supported and compound colliders are not, so a GameObject contributes a single collider to the world and a body never carries more than one shape"),
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import_tests.rs::a_game_object_keeps_every_one_of_its_colliders",
+                    "crates/unitas-physics/tests/simulation_tests.rs::a_body_carries_every_collider_of_its_game_object",
+                    "crates/unitas-runtime/tests/runtime/runtime_tests.rs::a_game_object_with_two_colliders_contributes_two_shapes",
+                ],
+                missing: None,
             },
         ],
     },

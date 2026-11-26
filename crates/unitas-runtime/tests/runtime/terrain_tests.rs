@@ -3,7 +3,7 @@ use unitas_physics::terrain::{
     DetailInstance, DetailPrototype, TerrainBody, TerrainData, TerrainError, TreeInstance,
     TreePrototype, WindZone,
 };
-use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
+use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape, World};
 use unitas_runtime::Runtime;
 use unitas_runtime::terrain::{TerrainRuntimeError, TerrainWorld, far_position_impact};
 
@@ -34,7 +34,7 @@ fn sphere_desc(position: [f64; 3], radius: f64) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.6,

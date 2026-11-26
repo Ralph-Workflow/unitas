@@ -1,6 +1,7 @@
 use unitas_core::EntityId;
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionEvent, Phase, PhysicsError, Shape, TriggerEvent, World,
+    BodyDesc, BodyRole, ColliderShape, CollisionEvent, Phase, PhysicsError, Shape, TriggerEvent,
+    World,
 };
 
 const ROTATED_45_DEGREES_ABOUT_Z: [f64; 4] = [0.0, 0.0, 0.38268343, 0.92387953];
@@ -13,7 +14,7 @@ fn oriented_box(position: [f64; 3], rotation: [f64; 4], half_extents: [f64; 3]) 
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box { half_extents },
+        collider_shape: ColliderShape::Primitive(Shape::Box { half_extents }),
         layer: 0,
         role: BodyRole::Static,
         friction: 0.6,
@@ -30,7 +31,7 @@ fn sphere(position: [f64; 3], velocity: [f64; 3]) -> BodyDesc {
         velocity,
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Sphere { radius: 0.5 },
+        collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
         layer: 0,
         role: BodyRole::Dynamic,
         friction: 0.6,
@@ -47,9 +48,9 @@ fn box_body(position: [f64; 3]) -> BodyDesc {
         velocity: [0.0; 3],
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Box {
+        collider_shape: ColliderShape::Primitive(Shape::Box {
             half_extents: [1.0, 1.0, 1.0],
-        },
+        }),
         layer: 0,
         role: BodyRole::Static,
         friction: 0.6,
@@ -123,9 +124,9 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
     world.add_body(
         floor,
         BodyDesc {
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 1.0, 2.0],
-            },
+            }),
             friction: 0.6,
             restitution: 0.0,
             ..box_body([0.0, 0.0, 0.0])
@@ -140,7 +141,7 @@ fn sphere_falling_into_static_box_reports_enter_then_stay() -> Result<(), Physic
             velocity: [0.0; 3],
             use_gravity: true,
             is_trigger: false,
-            shape: Shape::Sphere { radius: 0.5 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
             layer: 0,
             role: BodyRole::Dynamic,
             friction: 0.6,
@@ -447,9 +448,9 @@ fn resting_sphere_on_static_box_floor_settles_with_bounded_penetration() -> Resu
     world.add_body(
         floor,
         BodyDesc {
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             friction: 0.6,
             restitution: 0.0,
             ..box_body([0.0, -0.5, 0.0])
@@ -485,9 +486,9 @@ fn dynamic_box_landing_on_static_box_comes_to_rest() -> Result<(), PhysicsError>
     world.add_body(
         floor,
         BodyDesc {
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [4.0, 0.5, 4.0],
-            },
+            }),
             friction: 0.6,
             restitution: 0.0,
             ..box_body([0.0, -0.5, 0.0])
@@ -502,9 +503,9 @@ fn dynamic_box_landing_on_static_box_comes_to_rest() -> Result<(), PhysicsError>
             velocity: [0.0; 3],
             use_gravity: true,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             layer: 0,
             role: BodyRole::Dynamic,
             friction: 0.6,
@@ -665,9 +666,9 @@ fn sphere_with_restitution_rebounds_off_a_static_floor() -> Result<(), PhysicsEr
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             layer: 0,
             role: BodyRole::Static,
             friction: 0.6,
@@ -684,7 +685,7 @@ fn sphere_with_restitution_rebounds_off_a_static_floor() -> Result<(), PhysicsEr
             velocity: [0.0, -5.0, 0.0],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Sphere { radius: 0.5 },
+            collider_shape: ColliderShape::Primitive(Shape::Sphere { radius: 0.5 }),
             layer: 0,
             role: BodyRole::Dynamic,
             friction: 0.6,
@@ -720,9 +721,9 @@ fn sliding_box_decelerates_with_friction_and_keeps_its_speed_without_it() -> Res
                 velocity: [0.0; 3],
                 use_gravity: false,
                 is_trigger: false,
-                shape: Shape::Box {
+                collider_shape: ColliderShape::Primitive(Shape::Box {
                     half_extents: [5.0, 0.5, 5.0],
-                },
+                }),
                 layer: 0,
                 role: BodyRole::Static,
                 friction,
@@ -739,9 +740,9 @@ fn sliding_box_decelerates_with_friction_and_keeps_its_speed_without_it() -> Res
                 velocity: [2.0, 0.0, 0.0],
                 use_gravity: true,
                 is_trigger: false,
-                shape: Shape::Box {
+                collider_shape: ColliderShape::Primitive(Shape::Box {
                     half_extents: [0.5, 0.5, 0.5],
-                },
+                }),
                 layer: 0,
                 role: BodyRole::Dynamic,
                 friction,
@@ -791,9 +792,9 @@ fn pushed_kinematic_platform_carries_a_resting_dynamic_body() -> Result<(), Phys
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 0.5, 2.0],
-            },
+            }),
             layer: 0,
             role: BodyRole::Kinematic,
             friction: 0.6,
@@ -810,9 +811,9 @@ fn pushed_kinematic_platform_carries_a_resting_dynamic_body() -> Result<(), Phys
             velocity: [0.0; 3],
             use_gravity: true,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [0.5, 0.5, 0.5],
-            },
+            }),
             layer: 0,
             role: BodyRole::Dynamic,
             friction: 0.6,
@@ -859,11 +860,11 @@ fn capsule_body(
         velocity,
         use_gravity: false,
         is_trigger: false,
-        shape: Shape::Capsule {
+        collider_shape: ColliderShape::Primitive(Shape::Capsule {
             radius,
             height,
             direction,
-        },
+        }),
         layer: 0,
         role,
         friction: 0.6,
@@ -880,9 +881,9 @@ fn dynamic_capsule_landing_on_static_box_floor_comes_to_rest() -> Result<(), Phy
     world.add_body(
         floor,
         BodyDesc {
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [5.0, 0.5, 5.0],
-            },
+            }),
             friction: 0.6,
             restitution: 0.0,
             ..box_body([0.0, -0.5, 0.0])
@@ -1200,9 +1201,9 @@ fn rotating_kinematic_platform_drags_a_resting_dynamic_sphere() -> Result<(), Ph
             velocity: [0.0; 3],
             use_gravity: false,
             is_trigger: false,
-            shape: Shape::Box {
+            collider_shape: ColliderShape::Primitive(Shape::Box {
                 half_extents: [2.0, 0.25, 2.0],
-            },
+            }),
             layer: 0,
             role: BodyRole::Kinematic,
             friction: 0.6,
