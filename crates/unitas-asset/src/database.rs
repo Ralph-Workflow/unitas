@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::dependencies::{AssetImportState, ImportDiagnostic, ImportOutcome};
+use crate::font::{self, FontImportSettings};
 use crate::project::{build_inventory, AssetEntry, AssetKind, Project};
 use crate::unity_yaml::{self, Node};
 
@@ -298,7 +299,33 @@ pub fn identify_asset_family(
                 outcome: ImportOutcome::ready(),
             });
         }
-        "ttf" | "otf" | "fontsettings" => {
+        "ttf" | "otf" => {
+            let settings = match meta_text {
+                Some(text) => match FontImportSettings::from_meta_text(text) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        return Some(IdentifiedAssetFamily {
+                            family: RecognizedAssetFamily::Font,
+                            outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                                &asset_label,
+                                error.to_string(),
+                                "the font cannot be imported; the asset stays failed and no glyph data is available",
+                            )),
+                        });
+                    }
+                },
+                None => FontImportSettings::default(),
+            };
+            let outcome = match font::import_font(bytes, &asset_label, &settings) {
+                Ok(imported) => font::font_import_outcome(&asset_label, Ok(&imported)),
+                Err(error) => font::font_import_outcome(&asset_label, Err(&error)),
+            };
+            return Some(IdentifiedAssetFamily {
+                family: RecognizedAssetFamily::Font,
+                outcome,
+            });
+        }
+        "fontsettings" => {
             return Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::Font,
                 outcome: ImportOutcome::ready(),

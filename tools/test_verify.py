@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+SIGNALLED_EXIT_CODE = 143
+
 
 def test_repository_gates_report_no_findings() -> None:
     for name in sorted(verify.GATES):
@@ -1225,6 +1227,60 @@ def test_bypass_audit_flags_conditional_rust_lint_attribute(tmp_path: Path) -> N
     assert verify.check_bypass(tmp_path) == []
 
 
+def test_timed_gate_passes_a_command_that_finishes_inside_its_budget() -> None:
+    exit_code = verify.run_timed(["timed", "probe", "30", sys.executable, "-c", "pass"])
+    assert exit_code == 0
+
+
+def test_timed_gate_terminates_a_command_past_its_budget(tmp_path: Path) -> None:
+    marker = tmp_path / "grandchild.txt"
+    grandchild = (
+        f"import pathlib, time\ntime.sleep(1)\npathlib.Path({str(marker)!r}).write_text('alive')\n"
+    )
+    script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "time.sleep(30)\n"
+    )
+    exit_code = verify.run_timed(["timed", "probe", "0.3", sys.executable, "-c", script])
+    assert exit_code == 1
+    time.sleep(1.5)
+    assert not marker.exists()
+
+
+def test_timed_gate_timeout_cites_the_time_budget_policy() -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        exit_code = verify.run_timed(
+            ["timed", "probe", "0.3", sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+    assert exit_code == 1
+    output = stderr.getvalue()
+    assert "gate-script-policy.md" in output
+    assert "testing-policy.md" in output
+
+
+def test_timed_gate_terminates_its_child_when_the_runner_is_signalled(tmp_path: Path) -> None:
+    marker = tmp_path / "child.txt"
+    script = (
+        "import pathlib, time\n"
+        f"pathlib.Path({str(marker)!r}).write_text('started')\n"
+        "time.sleep(1)\n"
+        f"pathlib.Path({str(marker)!r}).write_text('finished')\n"
+    )
+    runner = subprocess.Popen(
+        [sys.executable, "tools/verify.py", "timed", "probe", "30", sys.executable, "-c", script],
+        cwd=verify.REPO_ROOT,
+    )
+    deadline = time.monotonic() + 10
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    runner.terminate()
+    assert runner.wait(timeout=10) == SIGNALLED_EXIT_CODE
+    time.sleep(1.5)
+    assert marker.read_text(encoding="utf-8") == "started"
+
+
 def test_samples_lane_lists_s8_visual_scenarios() -> None:
     s8 = (
         "s8_title_checkpoint.scenario.json",
@@ -1282,9 +1338,7 @@ def test_timed_gate_fails_red_when_the_command_outlives_its_budget() -> None:
     elapsed = time.monotonic() - started
     assert status == 1
     assert elapsed < _TIMED_GATE_BOUND_SECONDS
-    assert "gate slow-gate took " in output
-    assert "gate slow-gate exceeded the 1s budget" in output
-    assert "gate slow-gate timed out after 1s" in output
+    assert "gate slow-gate exceeded the 1s budget and was terminated" in output
 
 
 def test_timed_gate_reports_elapsed_time_for_a_passing_gate() -> None:
@@ -1301,8 +1355,7 @@ def test_timed_gate_fails_a_command_that_would_succeed_past_its_budget() -> None
         ["timed", "overrun-gate", "1", sys.executable, "-c", "import time; time.sleep(3)"]
     )
     assert status == 1
-    assert "gate overrun-gate exceeded the 1s budget" in output
-    assert "gate overrun-gate timed out after 1s" in output
+    assert "gate overrun-gate exceeded the 1s budget and was terminated" in output
 
 
 def test_timed_gate_kills_the_process_tree_it_started(tmp_path: Path) -> None:

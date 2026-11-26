@@ -7,6 +7,10 @@ use lewton::inside_ogg::OggStreamReader;
 use lewton::{OggReadError, VorbisError};
 use minimp3::{Decoder as Mp3Decoder, Error as Mp3Error};
 
+pub const AUDIO_IMPORTER_SECTION: &str = "AudioImporter:";
+
+const SAMPLE_RATE_OVERRIDE: u32 = 2;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioImportState {
     Imported,
@@ -131,6 +135,182 @@ impl AudioImportSettings {
             },
         }
     }
+
+    pub fn from_meta_text(text: &str) -> Result<AudioImportSettings, AudioImportError> {
+        let lines = importer_section_lines(text);
+        if !declares_audio_importer_section(text) {
+            return Err(AudioImportError::InvalidMetaText(
+                "the meta declares no AudioImporter section".to_string(),
+            ));
+        }
+        let values = importer_values(&lines);
+        let mut settings = AudioImportSettings::default();
+        if let Some(value) = values.iter().find(|(key, _)| key == "loadType") {
+            settings.load_type = parse_load_type(&value.1)?;
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "compressionFormat") {
+            settings.compression_format = parse_compression_format(&value.1)?;
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "forceToMono") {
+            settings.force_to_mono = parse_meta_bool("forceToMono", &value.1)?;
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "normalize") {
+            settings.normalize = parse_meta_bool("normalize", &value.1)?;
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "preloadAudioData") {
+            settings.preload_audio_data = parse_meta_bool("preloadAudioData", &value.1)?;
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "sampleRateSetting") {
+            if parse_meta_u32("sampleRateSetting", &value.1)? == SAMPLE_RATE_OVERRIDE {
+                if let Some(rate) = values.iter().find(|(key, _)| key == "sampleRateOverride") {
+                    settings.sample_rate_override =
+                        Some(parse_meta_u32("sampleRateOverride", &rate.1)?);
+                }
+            }
+        }
+        if let Some(value) = values.iter().find(|(key, _)| key == "quality") {
+            settings.quality = parse_meta_f32("quality", &value.1)?;
+        }
+        settings.platform_settings = parse_platform_settings(&lines)?;
+        Ok(settings)
+    }
+}
+
+fn declares_audio_importer_section(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        line.len() == trimmed.len() && trimmed == AUDIO_IMPORTER_SECTION
+    })
+}
+
+fn importer_section_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if line.len() == trimmed.len() {
+            inside = trimmed == AUDIO_IMPORTER_SECTION;
+            continue;
+        }
+        if inside {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+fn importer_values(lines: &[&str]) -> Vec<(String, String)> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (key, value) = line.trim().split_once(':')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn parse_platform_settings(lines: &[&str]) -> Result<Vec<AudioPlatformSettings>, AudioImportError> {
+    let mut settings = Vec::new();
+    let mut in_section = false;
+    let mut current: Option<AudioPlatformSettings> = None;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "platformSettings:" {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if !line.starts_with("  ") {
+            break;
+        }
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            if let Some(finished) = current.take() {
+                settings.push(finished);
+            }
+            let mut item = AudioPlatformSettings::default();
+            apply_platform_kv(&mut item, rest)?;
+            current = Some(item);
+            continue;
+        }
+        if let Some(item) = current.as_mut() {
+            if !trimmed.is_empty() {
+                apply_platform_kv(item, trimmed)?;
+            }
+        }
+    }
+    if let Some(finished) = current {
+        settings.push(finished);
+    }
+    Ok(settings)
+}
+
+fn apply_platform_kv(
+    item: &mut AudioPlatformSettings,
+    kv_line: &str,
+) -> Result<(), AudioImportError> {
+    let (key, raw_value) = match kv_line.split_once(':') {
+        Some((key, value)) => (key.trim(), value.trim()),
+        None => return Ok(()),
+    };
+    match key {
+        "buildTarget" => item.build_target = raw_value.to_string(),
+        "overridden" => item.overridden = parse_meta_bool("overridden", raw_value)?,
+        "compressionFormat" => item.compression_format = parse_compression_format(raw_value)?,
+        "quality" => item.quality = parse_meta_f32("quality", raw_value)?,
+        "sampleRate" => item.sample_rate = Some(parse_meta_u32("sampleRate", raw_value)?),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn parse_load_type(value: &str) -> Result<AudioLoadType, AudioImportError> {
+    match value {
+        "0" => Ok(AudioLoadType::DecompressOnLoad),
+        "1" => Ok(AudioLoadType::CompressedInMemory),
+        "2" => Ok(AudioLoadType::Streaming),
+        other => Err(AudioImportError::InvalidMetaText(format!(
+            "loadType is {other}"
+        ))),
+    }
+}
+
+fn parse_compression_format(value: &str) -> Result<AudioCompressionFormat, AudioImportError> {
+    match value {
+        "0" => Ok(AudioCompressionFormat::PCM),
+        "1" => Ok(AudioCompressionFormat::Vorbis),
+        "2" => Ok(AudioCompressionFormat::ADPCM),
+        "3" => Ok(AudioCompressionFormat::MP3),
+        other => Err(AudioImportError::InvalidMetaText(format!(
+            "compressionFormat is {other}"
+        ))),
+    }
+}
+
+fn parse_meta_bool(key: &str, value: &str) -> Result<bool, AudioImportError> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => Err(AudioImportError::InvalidMetaText(format!(
+            "{key} is {other}"
+        ))),
+    }
+}
+
+fn parse_meta_u32(key: &str, value: &str) -> Result<u32, AudioImportError> {
+    value
+        .parse::<u32>()
+        .map_err(|_| AudioImportError::InvalidMetaText(format!("{key} is not a number")))
+}
+
+fn parse_meta_f32(key: &str, value: &str) -> Result<f32, AudioImportError> {
+    value
+        .parse::<f32>()
+        .map_err(|_| AudioImportError::InvalidMetaText(format!("{key} is not a number")))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +345,7 @@ pub enum AudioImportError {
     Truncated,
     NotYetSupported(&'static str),
     InvalidSampleRate,
+    InvalidMetaText(String),
 }
 
 impl fmt::Display for AudioImportError {
@@ -198,6 +379,9 @@ impl fmt::Display for AudioImportError {
             AudioImportError::Truncated => formatter.write_str("audio data is truncated"),
             AudioImportError::NotYetSupported(reason) => write!(formatter, "{reason}"),
             AudioImportError::InvalidSampleRate => formatter.write_str("invalid sample rate"),
+            AudioImportError::InvalidMetaText(detail) => {
+                write!(formatter, "invalid audio importer meta: {detail}")
+            }
         }
     }
 }

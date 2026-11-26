@@ -32,6 +32,8 @@ mod prefab_variant_tests;
 mod primitive_tests;
 #[path = "asset_import/project_tests.rs"]
 mod project_tests;
+#[path = "asset_import/roll_a_ball_asset_breadth_tests.rs"]
+mod roll_a_ball_asset_breadth_tests;
 #[path = "asset_import/roll_a_ball_project_tests.rs"]
 mod roll_a_ball_project_tests;
 #[path = "asset_import/scene_particle_trail_tests.rs"]

@@ -73,13 +73,15 @@ make verify
 ```
 
 That runs the policy self-check (`policy-validate`), the bypass audit
-(`bypass-audit`), the ban-catalog gate (`banned-constructs`), the comment audit
-(`comment-audit`), the dependency gate (`deps`), the secret scan
-(`secret-scan`), the linting and format checks (`ruff check`,
-`ruff format --check`, `cargo fmt --all -- --check`,
+(`bypass-audit`), the unsafe-zone gate (`zone-gate`), the ban-catalog gate
+(`banned-constructs`), the comment audit (`comment-audit`), the dependency gate
+(`deps`), the secret scan (`secret-scan`), the linting and format checks
+(`ruff check`, `ruff format --check`, `cargo fmt --all -- --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, `dotnet-format`),
-the type checks (`mypy`, `cargo check`, `dotnet-build`), and the test suites
-(`pytest`, `cargo test`, `dotnet-test`), all within a fixed time budget. The C#
+the type checks (`mypy`, `dotnet-build`, and the Rust type check that
+`cargo clippy --workspace --all-targets -- -D warnings` performs while it
+compiles every workspace crate and target), and the test suites (`pytest`,
+`cargo test`, `dotnet-test`), all within a fixed time budget. The C#
 test step loads the runtime as a `.dylib`, so the full gate currently runs on
 macOS only.
 

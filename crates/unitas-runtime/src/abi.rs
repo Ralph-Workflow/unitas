@@ -20,6 +20,7 @@ use unitas_animation::decode_controller_binary;
 use unitas_audio::{AudioClip, AudioMixerGroup};
 use unitas_core::EntityId;
 use unitas_jobs::JobHandle;
+use unitas_physics::trails::TrailSettings;
 use unitas_physics::{CollisionDetectionMode3D, ForceMode};
 use unitas_render::Vec3;
 
@@ -3905,6 +3906,124 @@ pub extern "C" fn unitas_runtime_ui_poll_clicks(
         }
         state.clear_error();
         i32::try_from(count).unwrap_or(-4)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+/// The float layout a trail's settings travel in: time, width start, width
+/// end, minimum vertex distance, the start colour and the end colour.
+pub const TRAIL_SETTINGS_FLOATS: usize = 12;
+
+fn trail_settings_blob(settings: &TrailSettings) -> [f32; TRAIL_SETTINGS_FLOATS] {
+    [
+        settings.time,
+        settings.width_start,
+        settings.width_end,
+        settings.min_vertex_distance,
+        settings.start_color[0],
+        settings.start_color[1],
+        settings.start_color[2],
+        settings.start_color[3],
+        settings.end_color[0],
+        settings.end_color[1],
+        settings.end_color[2],
+        settings.end_color[3],
+    ]
+}
+
+fn trail_settings_from_blob(values: &[f32; TRAIL_SETTINGS_FLOATS]) -> TrailSettings {
+    TrailSettings {
+        time: values[0],
+        width_start: values[1],
+        width_end: values[2],
+        min_vertex_distance: values[3],
+        start_color: [values[4], values[5], values[6], values[7]],
+        end_color: [values[8], values[9], values[10], values[11]],
+    }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_trail_get_settings(handle: u64, entity: u64, blob: *mut f32) -> i32 {
+    if entity == 0 || blob.is_null() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let Some(trail) = state.runtime.trails().trail(EntityId::new(entity)) else {
+            return -3;
+        };
+        let values = trail_settings_blob(trail.settings());
+        // SAFETY: the caller passes a buffer of TRAIL_SETTINGS_FLOATS floats.
+        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), blob, values.len()) };
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_trail_configure(handle: u64, entity: u64, blob: *const f32) -> i32 {
+    if entity == 0 || blob.is_null() {
+        return -2;
+    }
+    // SAFETY: the caller passes a buffer of TRAIL_SETTINGS_FLOATS floats.
+    let values: [f32; TRAIL_SETTINGS_FLOATS] = unsafe { *blob.cast::<[f32; TRAIL_SETTINGS_FLOATS]>() };
+    match with_runtime_state(handle, |state| {
+        let Some(trail) = state
+            .runtime
+            .trails_mut()
+            .trail_mut(EntityId::new(entity))
+        else {
+            return -3;
+        };
+        trail.set_settings(trail_settings_from_blob(&values));
+        state.runtime.trails_mut().rebuild_draw_list();
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_trail_set_emitting(handle: u64, entity: u64, emitting: u8) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .trails_mut()
+            .set_emitting(EntityId::new(entity), emitting != 0);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_trail_set_full_width_speed(handle: u64, entity: u64, speed: f32) -> i32 {
+    if entity == 0 || !speed.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .trails_mut()
+            .set_full_width_speed(EntityId::new(entity), speed);
+        state.runtime.trails_mut().rebuild_draw_list();
+        state.clear_error();
+        0
     }) {
         Ok(code) => code,
         Err(code) => code,

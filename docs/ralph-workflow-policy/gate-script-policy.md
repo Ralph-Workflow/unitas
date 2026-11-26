@@ -30,7 +30,10 @@ A gate script is code. It is held to the same standard as the code it checks.
   PowerShell, `$ErrorActionPreference = 'Stop'`. An unset variable or a failed
   stage of a pipeline MUST NOT be silently ignored.
 * **Bounded.** Every gate MUST have a timeout. A gate that can hang forever is
-  a broken gate. (Implements the Bounded execution kernel rule.)
+  a broken gate. The timeout MUST TERMINATE the gate — the runner stops the
+  gate's process group at the limit and fails the run — not merely measure
+  the elapsed time after the command has already exited. (Implements the
+  Bounded execution kernel rule.)
 * **Deterministic and offline.** A gate MUST NOT depend on network access
   unless it is explicitly declared as requiring it. A gate whose result
   depends on the weather of the internet is not a gate.
@@ -135,7 +138,7 @@ artifact or adds a Windows CI job.
 
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Bounded gate execution | Gate-script owner | every gate runs inside the budget the Makefile declares and fails when it exceeds it | each gate target prints its elapsed time and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the gate reports a duration by another mechanism |
+| Bounded gate execution | Gate-script owner | every gate runs inside the budget the Makefile declares and fails when it exceeds it | each timed gate step prints its elapsed time, is terminated at its budget, and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the gate reports a duration by another mechanism |
 | No phantom dependencies | Gate-script owner | a declared gate depends only on tools the repository installs | the dependency gate reports zero third-party imports in the tracked sources | the dependency gate reports zero third-party imports | deterministic: make deps | when a dependency manifest lists every gate tool |
 | Meaning-preserving rewording | Gate-script owner | a gate change preserves the findings the gate reports | the gate tests assert the finding text for each failure mode | the gate tests assert the finding text for each failure mode | deterministic: make test | when the gate reports a machine-readable finding identifier |
 

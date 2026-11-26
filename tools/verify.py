@@ -14,6 +14,7 @@ import sys
 import time
 import tokenize
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -166,6 +167,7 @@ GUARD_CELL_COUNT = 7
 GUARD_ENFORCEMENT_INDEX = 5
 MAKE_COMMAND_MIN_PARTS = 2
 TIMED_COMMAND_MIN_ARGS = 4
+TIMED_TERMINATION_GRACE_SECONDS = 5.0
 GATE_CLI_ARG_COUNT = 2
 BYPASS_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
     ".js": (("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),),
@@ -367,6 +369,9 @@ BANNED_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
 }
 MAKE_TARGET_RE = re.compile(r"(?m)^([A-Za-z0-9_.-]+):(?!=)")
 BUDGET_RE = re.compile(r"(?m)^VERIFY_BUDGET_SECONDS\s*:?=\s*(\d+)")
+RUST_TEST_GATE_RUNNER = "verify.py cargo-test"
+MONOLITHIC_RUST_TEST_PATTERN = re.compile(r"cargo test --workspace")
+CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
 BUDGET_FACT_RE = re.compile(r"^RALPH-FACT:\s*verification_time_budget:\s*(\d+)", re.MULTILINE)
 SECRET_SCAN_EXCLUDES = (
     r"^\.agent/",
@@ -491,6 +496,21 @@ def check_budget_consistency() -> list[str]:
         findings.append(
             f"the Makefile budget {declared.group(1)}s differs from the recorded "
             f"verification_time_budget {recorded.group(1)}s"
+        )
+    return findings
+
+
+def check_rust_test_gate_structure() -> list[str]:
+    findings: list[str] = []
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    if RUST_TEST_GATE_RUNNER not in makefile:
+        findings.append(
+            "the Makefile does not run the Rust test gate through the sharded runner "
+            f"({RUST_TEST_GATE_RUNNER})"
+        )
+    if MONOLITHIC_RUST_TEST_PATTERN.search(makefile):
+        findings.append(
+            "the Makefile still runs the whole Rust test suite in one serial cargo invocation"
         )
     return findings
 
@@ -648,6 +668,7 @@ def check_policy() -> list[str]:
     findings.extend(check_portfolio(commands))
     findings.extend(check_make_targets(corpus))
     findings.extend(check_budget_consistency())
+    findings.extend(check_rust_test_gate_structure())
     findings.extend(check_applicability())
     findings.extend(check_agents_md())
     findings.extend(check_links(corpus))
@@ -2192,17 +2213,29 @@ GATES: dict[str, Callable[[], list[str]]] = {
 }
 
 
-def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
-    if os.name == "posix":
-        with contextlib.suppress(OSError):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    else:
-        taskkill = shutil.which("taskkill")
-        if taskkill is not None:
-            with contextlib.suppress(OSError):
-                subprocess.run([taskkill, "/F", "/T", "/PID", str(process.pid)], check=False)
-    with contextlib.suppress(OSError):
-        process.kill()
+def terminate_timed_gate(process: subprocess.Popen[bytes]) -> None:
+    if not hasattr(os, "killpg"):
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        process.wait()
+        return
+    group = process.pid
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(group, signal.SIGTERM)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(group, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TIMED_TERMINATION_GRACE_SECONDS)
+
+
+def terminate_timed_gate_on_signal(process: subprocess.Popen[bytes]) -> None:
+    def handler(signum: int, _frame: object) -> None:
+        terminate_timed_gate(process)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
 
 
 def run_timed(argv: Sequence[str]) -> int:
@@ -2213,25 +2246,39 @@ def run_timed(argv: Sequence[str]) -> int:
     budget = float(argv[2])
     command = list(argv[3:])
     started = time.monotonic()
-    process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
-    timed_out = False
+    try:
+        process = subprocess.Popen(command, cwd=REPO_ROOT, start_new_session=True)
+    except OSError as error:
+        sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
+        return 1
+    terminate_timed_gate_on_signal(process)
     try:
         returncode = process.wait(timeout=budget)
     except subprocess.TimeoutExpired:
-        _kill_process_tree(process)
-        returncode = process.wait()
-        timed_out = True
+        finished = process.poll()
+        if finished is None:
+            terminate_timed_gate(process)
+            sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget and was terminated\n")
+            sys.stderr.write(
+                "a gate that overruns its budget is a defect to diagnose, never a budget to "
+                "raise: the verification time budget and its enforcement mechanism are recorded "
+                "in docs/ralph-workflow-policy/verification-policy.md, and a slow or hanging "
+                "suite is a missing production seam to add "
+                "(docs/ralph-workflow-policy/testing-policy.md Default requirements rule 11; "
+                "docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
+            )
+            return 1
+        returncode = finished
     except KeyboardInterrupt:
-        _kill_process_tree(process)
-        process.wait()
+        terminate_timed_gate(process)
         raise
     elapsed = time.monotonic() - started
     sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
-    if timed_out:
-        sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
-        sys.stdout.write(f"gate {label} timed out after {budget:g}s and killed its process tree\n")
-        return 1
     if returncode != 0:
+        sys.stderr.write(
+            f"gate {label} failed with exit {returncode}: fix the code or the check it runs, "
+            "never the gate (docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
+        )
         return returncode
     if elapsed > budget:
         sys.stdout.write(f"gate {label} exceeded the {budget:g}s budget\n")
@@ -2239,9 +2286,92 @@ def run_timed(argv: Sequence[str]) -> int:
     return 0
 
 
+def cargo_test_binaries() -> tuple[int, list[tuple[str, str, str]]]:
+    command = ["cargo", "test", *CARGO_TEST_TARGETS, "--no-run", "--message-format=json"]
+    completed = subprocess.run(
+        command, cwd=REPO_ROOT, check=False, stdout=subprocess.PIPE, text=True
+    )
+    if completed.returncode != 0:
+        return completed.returncode, []
+    binaries: dict[str, tuple[str, str]] = {}
+    for line in (completed.stdout or "").splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if message.get("reason") != "compiler-artifact":
+            continue
+        executable = message.get("executable")
+        manifest = message.get("manifest_path")
+        if not (message.get("profile") or {}).get("test") or not executable or not manifest:
+            continue
+        target = message.get("target") or {}
+        name = str(target.get("name") or Path(executable).name)
+        binaries[str(executable)] = (name, str(Path(manifest).parent))
+    return completed.returncode, sorted(
+        (name, executable, package_dir) for executable, (name, package_dir) in binaries.items()
+    )
+
+
+def run_package_shard(
+    shard: tuple[str, list[tuple[str, str]]],
+) -> list[tuple[str, int, float, str]]:
+    package_dir, binaries = shard
+    results: list[tuple[str, int, float, str]] = []
+    for name, executable in binaries:
+        started = time.monotonic()
+        completed = subprocess.run(
+            [executable], cwd=package_dir, check=False, capture_output=True, text=True
+        )
+        elapsed = time.monotonic() - started
+        output = (completed.stdout or "") + (completed.stderr or "")
+        results.append((name, completed.returncode, elapsed, output))
+    return results
+
+
+def run_cargo_test() -> int:
+    started = time.monotonic()
+    code, binaries = cargo_test_binaries()
+    compiled = time.monotonic() - started
+    if code != 0:
+        sys.stderr.write(
+            f"cargo test --no-run failed with exit {code}; the Rust test gate cannot run\n"
+        )
+        return code
+    if not binaries:
+        sys.stderr.write(
+            "cargo test --no-run compiled no test binary; the Rust test gate cannot run\n"
+        )
+        return 1
+    shards: dict[str, list[tuple[str, str]]] = {}
+    for name, executable, package_dir in binaries:
+        shards.setdefault(package_dir, []).append((name, executable))
+    with ThreadPoolExecutor(max_workers=len(shards)) as pool:
+        results = list(pool.map(run_package_shard, sorted(shards.items())))
+    executed = time.monotonic() - started - compiled
+    failures = 0
+    for shard in results:
+        for name, code, elapsed, output in shard:
+            sys.stdout.write(f"rust test {name}: exit {code} ({elapsed:.2f}s)\n")
+            if code != 0:
+                failures += 1
+                sys.stdout.write(output)
+                sys.stderr.write(
+                    "a Rust test binary failed: fix the test or the code it covers, never the "
+                    "gate (docs/ralph-workflow-policy/testing-policy.md)\n"
+                )
+    sys.stdout.write(
+        f"rust test: {len(binaries)} binaries in {len(shards)} package shards "
+        f"(compile {compiled:.2f}s, execution {executed:.2f}s)\n"
+    )
+    return 1 if failures else 0
+
+
 def main(argv: Sequence[str]) -> int:
     if len(argv) > 1 and argv[1] == "timed":
         return run_timed(argv[1:])
+    if len(argv) > 1 and argv[1] == "cargo-test":
+        return run_cargo_test()
     if len(argv) > 1 and argv[1] == "dotnet-format":
         return run_dotnet_format()
     if len(argv) != GATE_CLI_ARG_COUNT or argv[1] not in GATES:

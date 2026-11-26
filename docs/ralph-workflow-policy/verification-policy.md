@@ -221,11 +221,11 @@ where they decay silently.
    A profile is legitimate only with all five declared here: its command,
    its OWNER, its TRIGGER or SCHEDULE, that it FAILS HARD when it runs, and
    the DATE IT LAST RAN with the staleness horizon past which it is decayed.
-   The last-run date names a durable source — a CI run id, a committed
-   baseline, or the gate-lane review entry — never a worktree-local or
-   append-only record.
-   A profile past its horizon with no run evidence belongs in the DELETED
-   lane — a check that never runs reports a safety it never verified.
+   The date MUST name the durable source that carries it (a CI run id, a
+   committed baseline, or the gate-lane review entry); a run whose only
+   record lives in an ignored path is not recorded as run. A profile past
+   its horizon with no run evidence belongs in the DELETED lane — a check
+   that never runs reports a safety it never verified.
    These categories are the single authoritative list; the testing policy
    routes into this lane rather than restating them, so a category added
    here is available there automatically.
@@ -243,7 +243,7 @@ person or team, not a role the author occupies by default.
 
 | Guard | Owner | Protected outcome | Detected condition | Claim scope | Enforcement | Retirement trigger |
 |---|---|---|---|---|---|---|
-| Bounded run budget | Verification owner | the full gate finishes inside the budget the Makefile declares | each gate target prints its elapsed time and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the budget moves |
+| Bounded run budget | Verification owner | the full gate finishes inside the budget the Makefile declares | each timed gate step prints its elapsed time, is terminated at its budget, and the verify target fails when the budget is exceeded | each gate target prints its elapsed time | deterministic: make verify | when the budget moves |
 | `verification-budget-ratchet` Verification budget ratchet | Verification owner | the verification budget shrinks freely and grows only through a reviewed change | the gate report records the elapsed time against the recorded budget | the gate report records the elapsed time | deterministic: make verify | when the budget is measured and recorded by the gate |
 | No high-churn evidence in review | Verification owner | no volatile report and no generated inventory enters a human review | the review request names the durable artifact the reviewer reads | the review request names the durable artifact | advisory: no gate inspects a review request; review: at every review request | when the review request is a machine-readable artifact |
 | Gate-lane coverage | Verification owner | every declared gate sits in a lane the portfolio records | the policy gate resolves every declared command to a gate target the Makefile defines | the policy gate resolves every declared command to a gate target | deterministic: make policy-validate | when the portfolio records a lane no gate uses |
@@ -257,11 +257,11 @@ project evolves.
 
 RALPH-FACT: authoritative_verify_command: make verify
 RALPH-FACT: gate_prerequisites: python3 with pytest, ruff, mypy, and detect-secrets installed, the Rust toolchain (cargo, clippy, and rustfmt), and the .NET 8.0 SDK
-RALPH-FACT: gate_order: the Makefile verify target runs three concurrent groups — the scan group (policy-validate, bypass-audit, banned-constructs, comment-audit, deps, secret-scan), the suite group (two concurrent subgroups — the static subgroup: ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings, mypy; and the test subgroup: make test: pytest -q and cargo test --workspace --lib --tests --bins, which is the full cargo test target set minus the doc-test targets because no crate in the workspace declares a doctest and every doc-test target therefore reports zero tests; the subgroups use different cargo target directories (target/clippy and target/), so they never wait on each other's cargo lock and the suite group's wall time is the slower subgroup instead of their sum), and the .NET group (dotnet-build starts alongside the Rust runtime build; dotnet-format starts after dotnet-build, and the bridge and editor test runners run after the runtime build is joined; the bridge console runner is split into four concurrent shards that together execute the whole suite); standalone make lint also runs dotnet-format and standalone make typecheck also runs dotnet-build
+RALPH-FACT: gate_order: the Makefile verify target runs three concurrent groups — the scan group (policy-validate, bypass-audit, zone-gate, banned-constructs, comment-audit, deps, secret-scan), the suite group (two concurrent subgroups — the static subgroup: ruff check ., ruff format --check ., cargo fmt --all -- --check, cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings, mypy; and the test subgroup: make test: pytest -q and the sharded Rust test gate (one shared `cargo test --workspace --lib --tests --bins --no-run` compile followed by one parallel shard per workspace package, each shard running that package's test binaries), which is the full cargo test target set minus the doc-test targets because no crate in the workspace declares a doctest and every doc-test target therefore reports zero tests; the subgroups use different cargo target directories (target/clippy and target/), so they never wait on each other's cargo lock and the suite group's wall time is the slower subgroup instead of their sum), and the .NET group (dotnet-build starts alongside the Rust runtime build; dotnet-format starts after dotnet-build, and the bridge and editor test runners run after the runtime build is joined; the bridge console runner is split into four concurrent shards that together execute the whole suite); standalone make lint also runs dotnet-format and standalone make typecheck also runs dotnet-build
 RALPH-FACT: fast_path_command: make verify
 RALPH-FACT: fast_path_selection_mechanism: none — the full gate fits the fast-path cap in the recorded warm run; make lint remains the standalone lint and format target
-RALPH-FACT: gate_parallelism_mechanism: the Makefile verify target starts the scan group, the suite group, and the .NET group as concurrent sub-makes, one gate at a time inside the scan and suite groups; the .NET group overlaps the Rust runtime build with dotnet-build and overlaps dotnet-format with the test runners. The outer verify target enforces the 30s wall-clock budget; timed steps also enforce their declared limits
-RALPH-FACT: gate_cache_mechanism_and_key: the secret scan caches its findings in .ruff_cache/secret_scan_cache.json, keyed by a SHA-256 digest over the .secrets.baseline bytes, the detect-secrets tool version, the Python interpreter version, the platform, and the path and content of every scanned file; a cache hit is reported in the gate output as `secret scan: cache hit for N files (digest ...)`, and deleting the cache file forces a fresh scan
+RALPH-FACT: gate_parallelism_mechanism: the Makefile verify target starts the scan group, the suite group, and the .NET group as concurrent sub-makes, one gate at a time inside the scan and suite groups; inside the suite group the Rust test gate runs pytest and the Rust test shards concurrently, and the Rust test gate itself compiles every workspace test target once and then runs one parallel shard per workspace package; the .NET group overlaps the Rust runtime build with dotnet-build and overlaps dotnet-format with the test runners. The outer verify target enforces the 30s wall-clock budget; timed steps also enforce their declared limits
+RALPH-FACT: gate_cache_mechanism_and_key: the secret scan caches its findings in .ruff_cache/secret_scan_cache.json, keyed by a SHA-256 digest over the .secrets.baseline bytes, the detect-secrets tool version, the Python interpreter version, the platform, and the path and content of every scanned file; a cache hit is reported in the gate output as `secret scan: cache hit for N files (digest ...)`, and deleting the cache file forces a fresh scan; the dotnet format gate caches its pass in .ruff_cache/dotnet_format_cache.json, keyed by a SHA-256 digest over the dotnet format command, the reported dotnet version, and the path and content of every formatted file, and a cache hit is reported as `dotnet format: cache hit for N files (digest ...)`; both caches live inside the working tree and both are discarded when their key changes
 RALPH-FACT: gate_duration_report_location: the duration line each Make target prints after its command
 RALPH-FACT: bypass_detection_lint_audit: make bypass-audit
 RALPH-FACT: bypass_detection_typecheck_audit: make bypass-audit
@@ -280,20 +280,24 @@ The named non-default profiles, each with the five required fields:
   status of that run; staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
-  GPU/audio/input artifacts; fails hard when run; last run not recorded in this
-  tree as of 2026-11-25, so a refresh run that names a durable source is due
-  before the horizon of one milestone passes.
+  GPU/audio/input artifacts; fails hard when run; last run not recorded in a
+  durable source as of 2026-11-25 — the lane writes its capture under the
+  ignored `target/` path and no CI job runs it, so a refresh run that records
+  a committed baseline or a CI run id is due before the horizon of one
+  milestone passes.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
   or presentation; evidence: per-measurement OK/FAIL lines with value_ms
   against ceiling_ms, and value_bytes against ceiling_bytes for the PlayerLoop
-  per-frame allocation measurement; fails hard when run; last run 2026-11-25,
-  recorded in the gate-lane review entry for the 2026-11-25 policy remediation
-  pass; staleness horizon one milestone. The lane reports eight measurements:
-  import throughput, scene load, physics step, particle eval, animation eval,
-  the 100,000-GameObject frame loop, the managed-to-native scripting call cost,
-  and the PlayerLoop per-frame managed allocation. Each area owns the
-  measurements of its own subsystems inside the shared lane.
+  per-frame allocation measurement; fails hard when run; last run not recorded
+  in a durable source as of 2026-11-25 — the lane prints its measurements and
+  keeps no report in the tracked tree, so a refresh run that records a
+  committed baseline or a CI run id is due before the horizon of one milestone
+  passes. The lane reports eight measurements: import
+  throughput, scene load, physics step, particle eval, animation eval, the
+  100,000-GameObject frame loop, the managed-to-native scripting call cost, and
+  the PlayerLoop per-frame managed allocation. Each area owns the measurements
+  of its own subsystems inside the shared lane.
 - `make verify-unsafe` — owner: editor and engine proof (lane runner); every
   area that registers an unsafe zone owns that zone's stages; trigger: every
   change that touches a registered unsafe zone; evidence: per-stage exit
@@ -315,17 +319,16 @@ RALPH-FACT: verification_time_budget: 30 seconds for make verify, declared as VE
 RALPH-FACT: verification_cost_floor: full gate floor 3.87s (measured via `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), fast-path floor 3.87s (the recorded fast path is the full gate, so it carries the full gate floor, measured via the same `pytest --collect-only -q` at 0.52s, `cargo check --workspace --all-targets` at 0.07s, and `dotnet build bridge/Unitas.sln --configuration Release --no-restore` with `AnalysisMode=All` in `Directory.Build.props` at 3.28s against `tools/verify.py`, `crates/unitas-core/src/lib.rs`, and `bridge/UnityEngine/Object.cs`), and default suite floor 0.67s (measured via `pytest --collect-only -q` at 0.52s and `cargo test --workspace --no-run` at 0.15s against `tools/test_verify.py` and `crates/unitas-core/src/lib.rs`) on Apple Silicon (macOS Darwin 25.5.0 arm64) on 2026-11-25
 RALPH-FACT: verification_contention_measurement: on 2026-11-25 the shared host ran other worktrees' gates at load average 39-44, and the same tree measured 9.28s for `cargo test --workspace --lib --tests --bins` alone while the gate's timed wrapper measured 37.89s-115.88s for the same command inside `make verify`; the timed wrapper fails the run when a gate exceeds the budget the Makefile declares, so the gate failed as designed on those contended runs. Reduction plan owned by presentation and player: the suite group runs its static subgroup and its test subgroup concurrently in separate cargo target directories, so the suite group's wall time is the slower subgroup rather than their sum, and the timing-sensitive `StdioTransportTests` editor shard runs alone before the batched shards so its in-process deadline is not starved by sibling shards
 RALPH-FACT: fast_path_time_budget: make verify enforces the same 30s wall budget and measured 18s warm on Apple Silicon on 2026-11-25 (28s on the same host while other runs shared it); standalone make lint measured 27.28s on the same host (`ruff check .` 0.02s, `ruff format --check .` 0.02s, `cargo fmt --all -- --check` 0.87s, `cargo clippy --workspace --all-targets --target-dir target/clippy -- -D warnings` 0.20s, and `dotnet format bridge/Unitas.sln --verify-no-changes --no-restore` 25.03s)
-RALPH-FACT: verification_budget_overage: none in the recorded warm runs — full gate controllable time was 22.37s (26.24s wall minus the recorded 3.87s cost floor), fast-path controllable time equaled full-gate controllable time because the fast path runs the full gate, and default suite controllable time was 4.81s (5.48s wall for make test minus the recorded 0.67s floor). Other runs on the shared host exceeded the unchanged 30s verify limit and failed as designed
-RALPH-FACT: verification_time_enforcement_mechanism: the timed gate wrapper fails the run when a gate exceeds the budget the Makefile declares
+RALPH-FACT: verification_budget_overage: none in the recorded warm runs — full gate controllable time was 22.37s (26.24s wall minus the recorded 3.87s cost floor), fast-path controllable time equaled full-gate controllable time because the fast path runs the full gate, and default suite controllable time was 7.27s (7.94s wall for make test minus the recorded 0.67s floor) on 2026-11-25. Other runs on the shared host exceeded the unchanged 30s verify limit and failed as designed
+RALPH-FACT: verification_time_enforcement_mechanism: every timed gate step runs in its own process group and is terminated at the budget the Makefile declares, and the gate fails; the outer verify target additionally fails the run when the total wall time exceeds VERIFY_BUDGET_SECONDS
 RALPH-FACT: gate_lane_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
-RALPH-FACT: durable_evidence_rule: committed files never cite a worktree-local or append-only record (a `tmp/` or `.agent/` file, a log, or an `*.ndjson` ledger) by line, row count, or excerpt, and a profile's last run is a calendar date with a durable source (a CI run id, a committed baseline, or the gate-lane review entry); a volatile citation is replaced, never re-pointed or recounted
+RALPH-FACT: durable_evidence_rule: a committed file never cites a worktree-local or append-only record (a `tmp/` or `.agent/` file, a run log, or an `*.ndjson` ledger) by line, row count, or excerpt, and a profile's last run is a calendar date plus the durable source that carries it (a CI run id, a committed baseline, or the gate-lane review entry); a run whose only record lives in an ignored path is not recorded as run
 
 `required_verification_profiles` is the single home for the project's named
 non-default profiles, including any declared by the testing policy. Record
 all five fields for each: command, named owner, trigger or schedule,
-fails-hard-when-run, and last-run date with staleness horizon. The last-run
-date names its durable source — a CI run id, a committed baseline, or the
-gate-lane review entry — never a worktree-local or append-only record.
+fails-hard-when-run, and last-run date with staleness horizon and the
+durable source that carries that date (see `durable_evidence_rule`).
 
 ## AI execution instructions
 
@@ -394,7 +397,7 @@ An agent MUST NOT:
 Run every gate below before claiming a change complies with this policy.
 
 RALPH-COMMAND: make verify
-RALPH-REVIEW: review that every declared profile has run within its staleness horizon, that no check has been demoted out of the default gate to avoid a red result, and that the recorded gate duration still matches reality; evidence: dated gate-lane review listing each profile with its last-run date and the durable source for that date; owner: the named person or team recorded in the gate_lane_review_cadence_and_owner fact
+RALPH-REVIEW: review that every declared profile has run within its staleness horizon, that no check has been demoted out of the default gate to avoid a red result, and that the recorded gate duration still matches reality; evidence: dated gate-lane review listing each profile with its last-run date and the durable source that carries that date; owner: the named person or team recorded in the gate_lane_review_cadence_and_owner fact
 
 Expected result: exit 0 from the authoritative entry point within the
 recorded budget. On failure report the failing gate and the category —

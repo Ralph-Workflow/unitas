@@ -2645,6 +2645,7 @@ dependencies = [
  "jpeg-decoder",
  "lewton",
  "minimp3",
+ "swash",
  "unitas-core",
 ]
 

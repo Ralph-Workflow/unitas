@@ -344,7 +344,7 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: naming_convention: snake_case for modules, functions, and variables; CapWords for classes; UPPER_CASE for module constants
-RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py and the gate tests in tools/test_verify.py; a new module needs a named owner
+RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py, the CLA check in tools/cla.py, the non-default lane runners in tools/verify_device.py, tools/verify_perf.py and tools/verify_samples.py, and the gate tests in tools/test_verify.py and tools/test_cla.py; a new module needs a named owner
 RALPH-FACT: error_handling_convention: a gate prints one finding per line and exits non-zero; an unexpected condition raises instead of returning a partial result
 RALPH-FACT: logging_convention: a gate writes findings to standard output and writes no log file
 RALPH-FACT: generated_code_marker: none — the repository generates no source

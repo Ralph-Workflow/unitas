@@ -1,10 +1,12 @@
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use unitas_core::EntityId;
 use unitas_runtime::Runtime;
 
 const EFFECTS_FIXTURE_PATH: &str = "tests/fixtures/scene_effects.unity";
+const SAMPLE_SCENE_RELATIVE: &str = "../../samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+const BALL_NAME: &str = "PlayerBall";
 
 fn load_effects() -> Result<(Runtime, EntityId), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
@@ -136,6 +138,89 @@ fn reloading_the_scene_reproduces_the_same_effects() -> Result<(), Box<dyn Error
         trails,
         trail_effects(&runtime),
         "the reloaded scene must produce the same trail draw list"
+    );
+    Ok(())
+}
+
+fn sample_scene_path() -> Option<PathBuf> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SAMPLE_SCENE_RELATIVE);
+    if path.is_file() { Some(path) } else { None }
+}
+
+fn entity_handle(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
+    let graph = runtime.scene_graph().ok_or("the scene holds no graph")?;
+    for id in graph.breadth_first_order() {
+        if let Some(entity) = graph.entity(id)
+            && entity.name == name
+        {
+            return Ok(entity.id.as_u64());
+        }
+    }
+    Err(String::from("entity not found in scene graph").into())
+}
+
+#[test]
+fn the_sample_scene_registers_the_ball_speed_trail() -> Result<(), Box<dyn Error>> {
+    let path = match sample_scene_path() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "the sample scene is absent at {SAMPLE_SCENE_RELATIVE}: the scene effects \
+                 fixture covers the same trail registration"
+            );
+            return Ok(());
+        }
+    };
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&path)?;
+
+    let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
+    let trail_entity = runtime
+        .trails()
+        .trail_entities()
+        .into_iter()
+        .find(|entity| runtime.trails().trail(*entity).is_some())
+        .ok_or("the sample scene registers no trail renderer")?;
+
+    let settings = runtime
+        .trails()
+        .trail(trail_entity)
+        .ok_or("the sample scene registers no trail renderer")?
+        .settings();
+    assert!(
+        settings.time > 0.0,
+        "the ball trail must live for a positive time: {settings:?}"
+    );
+    assert!(
+        settings.width_start > 0.0,
+        "the ball trail must start with a visible width: {settings:?}"
+    );
+    assert!(
+        settings.min_vertex_distance > 0.0,
+        "the ball trail must space its points: {settings:?}"
+    );
+
+    // The marble only leaves a ribbon once it is fast enough, so the trail
+    // records points as the ball travels and the draw list exposes them.
+    runtime.set_body_velocity(ball, [12.0, 0.0, 0.0])?;
+    for _ in 0..30 {
+        runtime.tick(0.02)?;
+    }
+
+    let points = runtime
+        .trails()
+        .points(trail_entity)
+        .ok_or("the sample scene registers no trail renderer")?;
+    eprintln!("DIAG trail points: {}", points.len());
+    eprintln!("DIAG ball position: {:?}", runtime.body_position(ball));
+    eprintln!("DIAG trail entity: {trail_entity:?}");
+    assert!(
+        !points.is_empty(),
+        "the moving ball must leave ribbon points in its trail"
+    );
+    assert!(
+        !runtime.trail_draw_list().is_empty(),
+        "the ball trail must reach the draw list"
     );
     Ok(())
 }

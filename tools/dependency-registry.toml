@@ -2334,7 +2334,7 @@ name = "swash"
 version = "0.1.19"
 license = "Apache-2.0 OR MIT"
 advisory_reviewed = "2026-11-25"
-note = "RustSec advisory-db and OSV consulted: no advisory affects this version"
+note = "RustSec advisory-db and OSV consulted: no advisory affects this version; direct dependency of unitas-asset for the PRJ-004 font import"
 
 [[package]]
 name = "sys-locale"

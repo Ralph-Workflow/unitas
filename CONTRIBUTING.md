@@ -8,13 +8,17 @@ Thank you for helping build unitas. Before you open a pull request:
    with `cargo`, `clippy`, and `rustfmt`, the .NET 8 SDK (in `~/.dotnet`), and
    Python 3.11 or later with `ruff`, `mypy`, `pytest`, and `detect-secrets`.
    `make verify` runs the policy self-check (`policy-validate`), the bypass
-   audit (`bypass-audit`), the ban-catalog gate (`banned-constructs`), the
-   comment audit (`comment-audit`), the dependency gate (`deps`), the secret
-   scan (`secret-scan`), the linting and format checks (`ruff check`,
-   `ruff format --check`, `cargo fmt --all -- --check`,
+   audit (`bypass-audit`), the unsafe-zone gate (`zone-gate`), the ban-catalog
+   gate (`banned-constructs`), the comment audit (`comment-audit`), the
+   dependency gate (`deps`), the secret scan (`secret-scan`), the linting and
+   format checks (`ruff check`, `ruff format --check`, `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-targets -- -D warnings`,
-   `dotnet-format`), the type checks (`mypy`, `cargo check`, `dotnet-build`),
-   and the test suites (`pytest`, `cargo test`, `dotnet-test`).
+   `dotnet-format`), the type checks (`mypy`, `dotnet-build`, and the Rust
+   type check that `cargo clippy --workspace --all-targets -- -D warnings`
+   performs while it compiles every workspace crate and target), and the test
+   suites (`pytest`, `cargo test`, `dotnet-test`). The standalone `make
+   typecheck` target runs `mypy`, `cargo check --workspace --all-targets`, and
+   `dotnet-build`.
 3. Keep pull requests small and focused, with tests for every behavior change.
 
 ## Independent implementation

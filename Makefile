@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps cargo-test lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-suite-gates suite-static-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
 
 VERIFY_BUDGET_SECONDS := 30
 SUITE_BUDGET_SECONDS := 25
@@ -72,15 +72,8 @@ test:
 
 test-steps:
 	@python3 tools/verify.py timed test $(VERIFY_BUDGET_SECONDS) pytest -q & p1=$$!; \
-	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) $(MAKE) --no-print-directory cargo-test & p2=$$!; \
+	python3 tools/verify.py timed test-rs $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py cargo-test & p2=$$!; \
 	rc=0; wait $$p1 || rc=1; wait $$p2 || rc=1; exit $$rc
-
-cargo-test:
-	@if cargo nextest --version >/dev/null 2>&1; then \
-		cargo nextest run --workspace --lib --tests --bins; \
-	else \
-		cargo test --workspace --lib --tests --bins; \
-	fi
 
 lint:
 	@python3 tools/verify.py timed lint $(VERIFY_BUDGET_SECONDS) ruff check .
