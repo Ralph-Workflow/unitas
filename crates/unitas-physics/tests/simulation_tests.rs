@@ -6,6 +6,8 @@ mod particles_tests;
 mod sleep_tests;
 #[path = "simulation/teleport_tests.rs"]
 mod teleport_tests;
+#[path = "simulation/trails_tests.rs"]
+mod trails_tests;
 #[path = "simulation/two_d_effector_tests.rs"]
 mod two_d_effector_tests;
 #[path = "simulation/two_d_tests.rs"]
@@ -24,6 +26,9 @@ mod sim_control_tests;
 
 #[path = "simulation/perf_step.rs"]
 mod perf_step;
+
+#[path = "simulation/perf_particles.rs"]
+mod perf_particles;
 
 #[path = "physics/character_tests.rs"]
 mod character_tests;

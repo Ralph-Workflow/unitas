@@ -1539,7 +1539,7 @@ fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar
         ("ANI-001", "rendering-and-animation.md", 5usize),
         ("ANI-002", "rendering-and-animation.md", 3usize),
         ("CIN-001", "rendering-and-animation.md", 2usize),
-        ("REN-004", "rendering-and-animation.md", 6usize),
+        ("REN-004", "rendering-and-animation.md", 11usize),
         ("PHY-004", "physics-navigation-terrain.md", 3usize),
         ("NAV-001", "physics-navigation-terrain.md", 4usize),
         ("ENV-001", "physics-navigation-terrain.md", 2usize),

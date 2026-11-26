@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use unitas_core::EntityId;
 use unitas_physics::particles::{
-    Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, Particle, ParticleShape,
-    ParticleSystem, ParticleSystemForceField, ParticleSystemState, StopAction,
+    Curve, CustomParticleDataStream, EmitParams, ForceFieldShape, Particle, ParticleBurst,
+    ParticleShape, ParticleSystem, ParticleSystemForceField, ParticleSystemState, StopAction,
 };
 use unitas_physics::{BodyDesc, BodyRole, PhysicsError, Shape, World};
 
@@ -752,4 +752,102 @@ fn ren_004_outcome_16_custom_particle_data_and_force_field_and_scripted_emission
     box_field_system.clear_force_fields();
     assert!(box_field_system.force_fields().is_empty());
     Ok(())
+}
+
+#[test]
+fn a_burst_emits_its_count_at_the_burst_time() {
+    let mut system = ParticleSystem::new(5);
+    system.set_shape(ParticleShape::Point);
+    system.set_emit_params(EmitParams {
+        start_speed: 0.0,
+        start_size: 0.2,
+        start_lifetime: 5.0,
+        start_color: [1.0; 4],
+    });
+    system.set_bursts(vec![ParticleBurst::new(0.5, 7, 1, 0.1)]);
+    system.simulate(0.4);
+    assert_eq!(
+        system.get_particles().len(),
+        0,
+        "the burst must not fire before its time"
+    );
+    system.simulate(0.2);
+    assert_eq!(
+        system.get_particles().len(),
+        7,
+        "the burst must emit its count at the burst time"
+    );
+}
+
+#[test]
+fn a_burst_repeats_its_cycles_over_the_burst_interval() {
+    let mut system = ParticleSystem::new(5);
+    system.set_shape(ParticleShape::Point);
+    system.set_emit_params(EmitParams {
+        start_speed: 0.0,
+        start_size: 0.2,
+        start_lifetime: 5.0,
+        start_color: [1.0; 4],
+    });
+    system.set_bursts(vec![ParticleBurst::new(0.2, 3, 3, 0.1)]);
+    system.simulate(0.25);
+    assert_eq!(system.get_particles().len(), 3, "the first cycle must fire");
+    system.simulate(0.1);
+    assert_eq!(
+        system.get_particles().len(),
+        6,
+        "the second cycle must fire one interval later"
+    );
+    system.simulate(0.1);
+    assert_eq!(
+        system.get_particles().len(),
+        9,
+        "the third cycle must fire one interval later"
+    );
+    system.simulate(0.1);
+    assert_eq!(
+        system.get_particles().len(),
+        9,
+        "a burst must not fire more cycles than it declares"
+    );
+}
+
+#[test]
+fn a_seeded_burst_produces_the_same_particles_on_every_run() {
+    let run = |seed: u64| {
+        let mut system = ParticleSystem::new(seed);
+        system.set_shape(ParticleShape::Sphere { radius: 1.0 });
+        system.set_emit_params(EmitParams {
+            start_speed: 2.0,
+            start_size: 0.5,
+            start_lifetime: 5.0,
+            start_color: [1.0; 4],
+        });
+        system.set_bursts(vec![ParticleBurst::new(0.0, 4, 2, 0.1)]);
+        for _ in 0..5 {
+            system.simulate(0.1);
+        }
+        system
+            .get_particles()
+            .iter()
+            .map(|particle| particle.position)
+            .collect::<Vec<_>>()
+    };
+    let first = run(42);
+    let second = run(42);
+    assert_eq!(first.len(), 8, "two cycles of four particles must be live");
+    assert_eq!(first, second, "the same seed must replay the same burst");
+}
+
+#[test]
+fn the_max_particle_count_caps_the_live_particles() {
+    let mut system = ParticleSystem::new(1);
+    system.set_max_particles(3);
+    system.set_bursts(vec![ParticleBurst::new(0.0, 10, 1, 0.1)]);
+    system.simulate(0.1);
+    assert_eq!(
+        system.get_particles().len(),
+        3,
+        "the live particle count must stay inside the maximum"
+    );
 }

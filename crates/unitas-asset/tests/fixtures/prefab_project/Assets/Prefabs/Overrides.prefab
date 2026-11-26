@@ -1,0 +1,55 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7000000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Component:
+  - component: {fileID: 7000001}
+  - component: {fileID: 7000002}
+  - component: {fileID: 7000003}
+  m_Name: Overrides
+  m_Layer: 0
+--- !u!4 &7000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 7000000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 7000011}
+  m_Father: {fileID: 0}
+--- !u!54 &7000002
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 7000000}
+  serializedVersion: 4
+  m_Mass: 1
+  m_UseGravity: 1
+  m_IsTrigger: 0
+--- !u!65 &7000003
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 7000000}
+  serializedVersion: 3
+  m_Size: {x: 1, y: 1, z: 1}
+  m_Center: {x: 0, y: 0, z: 0}
+  m_IsTrigger: 0
+--- !u!1 &7000010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Component:
+  - component: {fileID: 7000011}
+  m_Name: RemovedChild
+  m_Layer: 0
+--- !u!4 &7000011
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 7000010}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 7000001}

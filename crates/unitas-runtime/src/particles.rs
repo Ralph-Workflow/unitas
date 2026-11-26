@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
+use unitas_asset::particle::ParticleSystemBinding;
 use unitas_core::EntityId;
 use unitas_physics::World;
 use unitas_physics::particles::{
-    Curve, CustomParticleDataStream, EmitParams, Particle, ParticleCollisionEvent,
+    Curve, CustomParticleDataStream, EmitParams, Particle, ParticleBurst, ParticleCollisionEvent,
     ParticleCollisionEvent2D, ParticlePropertyCurves, ParticleShape, ParticleSystem,
     ParticleSystem2D, ParticleSystemForceField, ParticleSystemState, ParticleTriggerEvent,
     ParticleTriggerEvent2D, StopAction,
@@ -26,15 +27,25 @@ pub struct ParticleSystemSnapshot {
     pub destroyed: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleDrawItem {
+    pub entity: EntityId,
+    pub position: [f32; 3],
+    pub size: f32,
+    pub color: [f32; 4],
+}
+
 #[derive(Default)]
 pub struct ParticleRuntimeWorld {
     systems: BTreeMap<EntityId, ParticleSystem>,
+    draw_list: Vec<ParticleDrawItem>,
 }
 
 impl ParticleRuntimeWorld {
     pub fn new() -> Self {
         Self {
             systems: BTreeMap::new(),
+            draw_list: Vec::new(),
         }
     }
 
@@ -42,6 +53,42 @@ impl ParticleRuntimeWorld {
         self.systems
             .entry(entity)
             .or_insert_with(|| ParticleSystem::new(seed))
+    }
+
+    pub fn register_binding(
+        &mut self,
+        entity: EntityId,
+        seed: u64,
+        binding: &ParticleSystemBinding,
+    ) -> &mut ParticleSystem {
+        let system = self
+            .systems
+            .entry(entity)
+            .or_insert_with(|| ParticleSystem::new(seed));
+        system.set_duration(binding.duration);
+        system.set_looping(binding.looping);
+        system.set_max_particles(binding.max_particles);
+        system.set_emission_rate(binding.emission_rate);
+        system.set_emit_params(EmitParams {
+            start_speed: binding.start_speed,
+            start_size: binding.start_size,
+            start_lifetime: binding.start_lifetime,
+            start_color: binding.start_color,
+        });
+        system.set_bursts(
+            binding
+                .bursts
+                .iter()
+                .map(|burst| {
+                    ParticleBurst::new(burst.time, burst.count, burst.cycles, burst.interval)
+                })
+                .collect(),
+        );
+        system
+    }
+
+    pub fn draw_list(&self) -> &[ParticleDrawItem] {
+        &self.draw_list
     }
 
     pub fn insert_system(&mut self, entity: EntityId, system: ParticleSystem) {
@@ -216,6 +263,18 @@ impl ParticleRuntimeWorld {
         for entity in destroyed_entities {
             self.systems.remove(&entity);
         }
+        let mut draw_list = Vec::new();
+        for (entity, system) in &self.systems {
+            for particle in system.get_particles() {
+                draw_list.push(ParticleDrawItem {
+                    entity: *entity,
+                    position: particle.position,
+                    size: particle.size,
+                    color: particle.color,
+                });
+            }
+        }
+        self.draw_list = draw_list;
     }
 
     pub fn collision_events(&self, entity: EntityId) -> Option<&[ParticleCollisionEvent]> {

@@ -1,0 +1,115 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &8000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Component:
+  - component: {fileID: 8001}
+  m_Name: Stage
+  m_Layer: 0
+--- !u!4 &8001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 8000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!1 &8100
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 8200}
+  m_PrefabAsset: {fileID: 0}
+  m_Component:
+  - component: {fileID: 8101}
+  m_Name: AddedChild
+  m_Layer: 0
+--- !u!4 &8101
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 8200}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8100}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 2, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!1 &8400
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 7000000, guid: 33333333333333333333333333330001, type: 3}
+  m_PrefabInstance: {fileID: 8200}
+  m_PrefabAsset: {fileID: 0}
+  m_Component:
+  - component: {fileID: 8401}
+  m_Name: OverridesRoot
+  m_Layer: 0
+--- !u!4 &8401
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 7000001, guid: 33333333333333333333333333330001, type: 3}
+  m_PrefabInstance: {fileID: 8200}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8400}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!135 &8402
+SphereCollider:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 8400}
+  serializedVersion: 2
+  m_Radius: 2.5
+  m_Center: {x: 0, y: 0, z: 0}
+  m_IsTrigger: 0
+--- !u!1001 &8200
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 8001}
+    m_Modifications:
+    - target: {fileID: 7000002, guid: 33333333333333333333333333330001, type: 3}
+      propertyPath: m_Mass
+      value: 7.5
+      objectReference: {fileID: 0}
+    m_RemovedComponents:
+    - {fileID: 7000003, guid: 33333333333333333333333333330001, type: 3}
+    m_RemovedGameObjects:
+    - {fileID: 7000010, guid: 33333333333333333333333333330001, type: 3}
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: 7000000, guid: 33333333333333333333333333330001, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8100}
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 7000000, guid: 33333333333333333333333333330001, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8402}
+  m_SourcePrefab: {fileID: 100100000, guid: 33333333333333333333333333330001, type: 3}
+--- !u!1001 &8300
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 8001}
+    m_Modifications:
+    - target: {fileID: 2400000, guid: 11111111111111111111111111110002, type: 3}
+      propertyPath: m_Name
+      value: ComposedCannon
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 11111111111111111111111111110001, type: 3}

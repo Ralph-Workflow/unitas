@@ -10,6 +10,7 @@ pub mod merge;
 pub mod meta;
 pub mod model;
 pub mod packages;
+pub mod particle;
 pub mod prefab;
 pub mod prefab_variant;
 pub mod primitive;
@@ -18,6 +19,7 @@ pub mod project_settings;
 pub mod scene;
 pub mod scene_save;
 pub mod texture;
+pub mod trail;
 pub mod trust;
 pub mod unity_yaml;
 

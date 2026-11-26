@@ -5,8 +5,16 @@ use std::path::{Path, PathBuf};
 use unitas_core::{CoreError, EntityId, SceneGraph};
 
 use crate::meta::{GuidIndex, MetaError};
+use crate::particle::{parse_particle_system, ParticleSystemBinding};
 use crate::prefab;
-use crate::unity_yaml::{self, Node, Stream, YamlError};
+use crate::prefab_variant::{
+    ScenePrefabInstance, SourceObjectId, StructuralOverrides, TargetedModification,
+};
+use crate::trail::{trail_renderer_component, TrailRendererBinding};
+use crate::unity_yaml::{self, Document, Node, Stream, YamlError};
+
+pub use crate::particle::PARTICLE_SYSTEM_CLASS;
+pub use crate::trail::TRAIL_RENDERER_CLASS;
 
 pub const AUDIO_SOURCE_CLASS: u32 = 82;
 pub const AUDIO_CLIP_CLASS: u32 = 83;
@@ -373,6 +381,18 @@ pub struct RenderBinding {
     pub lights: Vec<LightComponent>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParticleBinding {
+    pub entity: EntityId,
+    pub binding: ParticleSystemBinding,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrailBinding {
+    pub entity: EntityId,
+    pub binding: TrailRendererBinding,
+}
+
 #[derive(Debug)]
 pub struct AssembledScene {
     pub graph: SceneGraph,
@@ -380,6 +400,8 @@ pub struct AssembledScene {
     pub physics: Vec<PhysicsBinding>,
     pub audio_bindings: Vec<AudioBinding>,
     pub render: RenderBinding,
+    pub particles: Vec<ParticleBinding>,
+    pub trails: Vec<TrailBinding>,
     pub diagnostics: Vec<(EntityId, String)>,
 }
 
@@ -391,11 +413,16 @@ struct DocumentSet {
     physics: Vec<PhysicsBinding>,
     audio_bindings: Vec<AudioBinding>,
     render: RenderBinding,
+    particles: Vec<ParticleBinding>,
+    trails: Vec<TrailBinding>,
+    unsupported_classes: Vec<(EntityId, u32)>,
 }
 
 struct PrefabContext<'a> {
     index: Option<&'a GuidIndex>,
     stack: Vec<String>,
+    composed_modifications: Vec<(String, TargetedModification)>,
+    composed_structural: Vec<(String, StructuralOverrides)>,
 }
 
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
@@ -493,15 +520,20 @@ fn assemble_stream(
     let mut context = PrefabContext {
         index,
         stack: Vec::new(),
+        composed_modifications: Vec::new(),
+        composed_structural: Vec::new(),
     };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
-    let diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
+    let mut diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
+    append_unsupported_class_diagnostics(&mut diagnostics, &set.unsupported_classes);
     Ok(AssembledScene {
         graph,
         scripts: set.scripts,
         physics: set.physics,
         audio_bindings: set.audio_bindings,
         render: set.render,
+        particles: set.particles,
+        trails: set.trails,
         diagnostics,
     })
 }
@@ -639,8 +671,12 @@ fn assemble_documents(
         physics: Vec::new(),
         audio_bindings: Vec::new(),
         render: RenderBinding::default(),
+        particles: Vec::new(),
+        trails: Vec::new(),
+        unsupported_classes: Vec::new(),
     };
-    let instance_roots = prefab_instance_roots(stream);
+    let mut instance_roots = prefab_instance_roots(stream);
+    instance_roots.extend(added_game_object_ids(stream));
     for document in &stream.documents {
         if document.class_id != GAME_OBJECT_CLASS || document.stripped {
             continue;
@@ -798,6 +834,12 @@ fn assemble_documents(
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     set.render = collect_render(stream, &set.game_objects, &instance_roots, context.index)?;
+    let (particles, trails) =
+        collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
+    set.particles = particles;
+    set.trails = trails;
+    set.unsupported_classes =
+        collect_unsupported_components(stream, &set.game_objects, &instance_roots);
     if expand {
         for document in &stream.documents {
             if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
@@ -815,8 +857,14 @@ fn assemble_documents(
                     })
                 }
             };
-            let expanded_root =
-                expand_instance(&instance, document.file_id, &mut set, graph, context)?;
+            let expanded_root = expand_instance(
+                &instance,
+                document.file_id,
+                stream,
+                &mut set,
+                graph,
+                context,
+            )?;
             if set.root.is_none() && instance.transform_parent == ROOT_FILE_ID {
                 set.root = Some(expanded_root);
             }
@@ -828,6 +876,7 @@ fn assemble_documents(
 fn expand_instance(
     instance: &prefab::PrefabInstance,
     file_id: i64,
+    containing: &Stream,
     set: &mut DocumentSet,
     graph: &mut SceneGraph,
     context: &mut PrefabContext,
@@ -849,10 +898,83 @@ fn expand_instance(
             guid: instance.source.guid.clone(),
         });
     }
-    let stream = unity_yaml::parse_file(&path)?;
+    let mut stream = unity_yaml::parse_file(&path)?;
+    let guid = instance.source.guid.clone();
+    let scene_instance =
+        ScenePrefabInstance::from_stream(containing, format!("prefab-instance-{file_id}"), file_id);
+    let targeted = scene_instance
+        .as_ref()
+        .map(|entry| entry.targeted_modifications.clone())
+        .unwrap_or_default();
+    let structural = scene_instance
+        .as_ref()
+        .map(|entry| entry.structural_overrides.clone())
+        .unwrap_or_default();
+
+    let mut direct: Vec<TargetedModification> = Vec::new();
+    let mut composed: Vec<TargetedModification> = Vec::new();
+    for modification in targeted {
+        let target_guid = modification.target.source_guid.clone();
+        if target_guid.is_empty() || target_guid == guid {
+            direct.push(modification);
+        } else {
+            composed.push(modification);
+        }
+    }
+
+    let inherited: Vec<TargetedModification> = context
+        .composed_modifications
+        .iter()
+        .filter(|(target_guid, _)| *target_guid == guid)
+        .map(|(_, modification)| modification.clone())
+        .collect();
+
+    for modification in &direct {
+        if apply_modification_to_stream(&mut stream, modification) {
+            continue;
+        }
+        if let Some((routed_guid, routed_file_id)) = routed_target(&stream, modification) {
+            composed.push(TargetedModification::new(
+                SourceObjectId::new(routed_guid, routed_file_id),
+                modification.property_path.clone(),
+                modification.value.clone(),
+            ));
+        }
+    }
+    for modification in &inherited {
+        apply_modification_to_stream(&mut stream, modification);
+    }
+
+    let inherited_structural: Vec<StructuralOverrides> = context
+        .composed_structural
+        .iter()
+        .filter(|(target_guid, _)| *target_guid == guid)
+        .map(|(_, overrides)| overrides.clone())
+        .collect();
+    let structural_mark = context.composed_structural.len();
+    for (target_guid, overrides) in group_structural_by_guid(&structural) {
+        if target_guid.is_empty() || target_guid == guid {
+            apply_structural_overrides(&mut stream, containing, &overrides);
+        } else {
+            context.composed_structural.push((target_guid, overrides));
+        }
+    }
+    for overrides in &inherited_structural {
+        apply_structural_overrides(&mut stream, containing, overrides);
+    }
+
+    let composed_mark = context.composed_modifications.len();
+    for modification in composed {
+        context
+            .composed_modifications
+            .push((modification.target.source_guid.clone(), modification));
+    }
+
     context.stack.push(instance.source.guid.clone());
     let assembled = assemble_documents(&stream, graph, context, true);
     context.stack.pop();
+    context.composed_modifications.truncate(composed_mark);
+    context.composed_structural.truncate(structural_mark);
     let prefab_set = assembled?;
     let root = match prefab_set.root {
         Some(root) => root,
@@ -863,13 +985,23 @@ fn expand_instance(
         }
     };
     let mut prefab_set = prefab_set;
+    let entity_modifications: Vec<prefab::Modification> = direct
+        .iter()
+        .chain(inherited.iter())
+        .map(TargetedModification::to_modification)
+        .collect();
     prefab::apply_modifications(
-        instance,
+        &entity_modifications,
         &prefab_set.game_objects,
         &prefab_set.transforms,
         graph,
     );
-    apply_overridden_bindings(instance, &stream, &mut prefab_set, context.index);
+    apply_overridden_bindings(
+        &entity_modifications,
+        &stream,
+        &mut prefab_set,
+        context.index,
+    );
     if instance.transform_parent != ROOT_FILE_ID {
         let parent = match set.transforms.get(&instance.transform_parent) {
             Some(parent) => *parent,
@@ -888,7 +1020,161 @@ fn expand_instance(
     set.render.cameras.extend(prefab_set.render.cameras);
     set.render.renderers.extend(prefab_set.render.renderers);
     set.render.lights.extend(prefab_set.render.lights);
+    set.particles.extend(prefab_set.particles);
+    set.trails.extend(prefab_set.trails);
+    set.unsupported_classes
+        .extend(prefab_set.unsupported_classes);
     Ok(root)
+}
+
+fn added_game_object_ids(stream: &Stream) -> HashSet<i64> {
+    let mut ids = HashSet::new();
+    for document in &stream.documents {
+        if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
+            continue;
+        }
+        let body = match document.root.get("PrefabInstance") {
+            Some(body) => body,
+            None => continue,
+        };
+        let items = match body
+            .get("m_Modification")
+            .and_then(|modification| modification.get("m_AddedGameObjects"))
+            .and_then(Node::as_sequence)
+        {
+            Some(items) => items,
+            None => continue,
+        };
+        for item in items {
+            if let Some(file_id) = item
+                .get("addedObject")
+                .and_then(|node| node.get("fileID"))
+                .and_then(Node::as_i64)
+            {
+                ids.insert(file_id);
+            }
+        }
+    }
+    ids
+}
+
+fn apply_modification_to_stream(stream: &mut Stream, modification: &TargetedModification) -> bool {
+    let index = match stream.documents.iter().position(|document| {
+        document.file_id == modification.target.target_file_id && !document.stripped
+    }) {
+        Some(index) => index,
+        None => return false,
+    };
+    let value = match &modification.object_reference {
+        Some(reference) if modification.value.is_empty() => reference.to_encoded_string(),
+        _ => modification.value.clone(),
+    };
+    prefab::apply_modification_to_document(
+        &mut stream.documents[index],
+        &modification.property_path,
+        &value,
+    )
+}
+
+fn routed_target(stream: &Stream, modification: &TargetedModification) -> Option<(String, i64)> {
+    for document in &stream.documents {
+        if !document.stripped {
+            continue;
+        }
+        let (guid, file_id) = match prefab::corresponding_source(document) {
+            Some(entry) => entry,
+            None => continue,
+        };
+        if guid.is_empty() || file_id != modification.target.target_file_id {
+            continue;
+        }
+        return Some((guid, file_id));
+    }
+    None
+}
+
+fn group_structural_by_guid(overrides: &StructuralOverrides) -> Vec<(String, StructuralOverrides)> {
+    let mut groups: Vec<(String, StructuralOverrides)> = Vec::new();
+    for removed in &overrides.removed_components {
+        let group = structural_group(&mut groups, &removed.source_guid);
+        group.removed_components.push(removed.clone());
+    }
+    for removed in &overrides.removed_children {
+        let group = structural_group(&mut groups, &removed.source_guid);
+        group.removed_children.push(removed.clone());
+    }
+    for added in &overrides.added_children {
+        let group = structural_group(&mut groups, &added.parent_target.source_guid);
+        group.added_children.push(added.clone());
+    }
+    for added in &overrides.added_components {
+        let group = structural_group(&mut groups, &added.owner_target.source_guid);
+        group.added_components.push(added.clone());
+    }
+    for (target, order) in &overrides.added_sibling_order {
+        let group = structural_group(&mut groups, &target.source_guid);
+        group
+            .added_sibling_order
+            .insert(target.clone(), order.clone());
+    }
+    groups
+}
+
+fn structural_group<'a>(
+    groups: &'a mut Vec<(String, StructuralOverrides)>,
+    guid: &str,
+) -> &'a mut StructuralOverrides {
+    if !groups.iter().any(|(entry, _)| entry == guid) {
+        groups.push((guid.to_string(), StructuralOverrides::default()));
+    }
+    let index = groups
+        .iter()
+        .position(|(entry, _)| entry == guid)
+        .unwrap_or(0);
+    &mut groups[index].1
+}
+
+fn apply_structural_overrides(
+    stream: &mut Stream,
+    containing: &Stream,
+    overrides: &StructuralOverrides,
+) {
+    let removed_components: Vec<i64> = overrides
+        .removed_components
+        .iter()
+        .map(|removed| removed.target_file_id)
+        .collect();
+    let removed_children: Vec<i64> = overrides
+        .removed_children
+        .iter()
+        .map(|removed| removed.target_file_id)
+        .collect();
+    prefab::remove_components(stream, &removed_components);
+    for child in removed_children {
+        prefab::remove_game_object(stream, child);
+    }
+    for added in &overrides.added_children {
+        let parent =
+            match prefab::resolve_transform_file_id(stream, added.parent_target.target_file_id) {
+                Some(parent) => parent,
+                None => continue,
+            };
+        prefab::copy_added_game_object(
+            stream,
+            containing,
+            added.child.file_id,
+            parent,
+            added.sibling_index,
+        );
+    }
+    for added in &overrides.added_components {
+        let owner =
+            match prefab::resolve_game_object_file_id(stream, added.owner_target.target_file_id) {
+                Some(owner) => owner,
+                None => continue,
+            };
+        prefab::copy_added_component(stream, containing, added.component.file_id, owner);
+    }
 }
 
 const SCRIPT_RESERVED_KEYS: [&str; 7] = [
@@ -917,12 +1203,12 @@ fn serialized_fields(body: &Node) -> BTreeMap<String, String> {
 }
 
 fn apply_overridden_bindings(
-    instance: &prefab::PrefabInstance,
+    modifications: &[prefab::Modification],
     stream: &Stream,
     set: &mut DocumentSet,
     index: Option<&GuidIndex>,
 ) {
-    for modification in &instance.modifications {
+    for modification in modifications {
         let document =
             match stream.documents.iter().find(|document| {
                 document.file_id == modification.target_file_id && !document.stripped
@@ -1677,6 +1963,128 @@ fn collect_render(
         }
     }
     Ok(binding)
+}
+
+fn collect_particles_and_trails(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+) -> (Vec<ParticleBinding>, Vec<TrailBinding>) {
+    let mut particles = Vec::new();
+    let mut trails = Vec::new();
+    for document in &stream.documents {
+        if document.stripped {
+            continue;
+        }
+        match document.class_id {
+            PARTICLE_SYSTEM_CLASS => {
+                let binding = match parse_particle_system(document) {
+                    Ok(binding) => binding,
+                    Err(_) => continue,
+                };
+                let body = match document.root.get("ParticleSystem") {
+                    Some(body) => body,
+                    None => continue,
+                };
+                if let Some(entity) = component_entity(body, game_objects, instance_roots) {
+                    particles.push(ParticleBinding { entity, binding });
+                }
+            }
+            TRAIL_RENDERER_CLASS => {
+                let body = match document.root.get("TrailRenderer") {
+                    Some(body) => body,
+                    None => continue,
+                };
+                if let Some(entity) = component_entity(body, game_objects, instance_roots) {
+                    trails.push(TrailBinding {
+                        entity,
+                        binding: trail_renderer_component(entity, body),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    (particles, trails)
+}
+
+fn collect_unsupported_components(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+) -> Vec<(EntityId, u32)> {
+    let mut unsupported = Vec::new();
+    for document in &stream.documents {
+        if document.stripped || handled_component_class(document.class_id) {
+            continue;
+        }
+        let body = match document_body(document) {
+            Some(body) => body,
+            None => continue,
+        };
+        if let Some(entity) = component_entity(body, game_objects, instance_roots) {
+            unsupported.push((entity, document.class_id));
+        }
+    }
+    unsupported
+}
+
+fn append_unsupported_class_diagnostics(
+    diagnostics: &mut Vec<(EntityId, String)>,
+    unsupported: &[(EntityId, u32)],
+) {
+    let mut reported: HashSet<u32> = HashSet::new();
+    for (entity, class_id) in unsupported {
+        if !reported.insert(*class_id) {
+            continue;
+        }
+        diagnostics.push((*entity, format!("unsupported component class {class_id}")));
+    }
+}
+
+fn component_entity(
+    body: &Node,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+) -> Option<EntityId> {
+    let file_id = match reference_id(body.get("m_GameObject")) {
+        Ok(Some(file_id)) => file_id,
+        _ => return None,
+    };
+    if instance_roots.contains(&file_id) {
+        return None;
+    }
+    game_objects.get(&file_id).map(|record| record.entity)
+}
+
+fn document_body(document: &Document) -> Option<&Node> {
+    let entries = document.root.as_mapping()?;
+    let (_, body) = entries.first()?;
+    Some(body)
+}
+
+fn handled_component_class(class_id: u32) -> bool {
+    matches!(
+        class_id,
+        GAME_OBJECT_CLASS
+            | TRANSFORM_CLASS
+            | CAMERA_CLASS
+            | MESH_RENDERER_CLASS
+            | MESH_FILTER_CLASS
+            | LIGHT_CLASS
+            | RIGIDBODY_CLASS
+            | BOX_COLLIDER_CLASS
+            | SPHERE_COLLIDER_CLASS
+            | CAPSULE_COLLIDER_CLASS
+            | CHARACTER_CONTROLLER_CLASS
+            | MONO_BEHAVIOUR_CLASS
+            | AUDIO_SOURCE_CLASS
+            | AUDIO_CLIP_CLASS
+            | PHYSIC_MATERIAL_CLASS
+            | PARTICLE_SYSTEM_CLASS
+            | TRAIL_RENDERER_CLASS
+            | PREFAB_INSTANCE_CLASS
+    )
 }
 
 fn camera_component(entity: EntityId, body: &Node) -> CameraComponent {

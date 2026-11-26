@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use unitas_animation::SampledBinding;
+use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::scene::{
     AudioSourceComponent, CharacterControllerComponent, PhysicsBinding, RenderBinding,
     ScriptBinding, assemble_scene_file_bundle,
 };
+use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
     DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY, InputAxis, ProjectIdentity, parse_dynamics_manager,
     parse_input_manager, parse_player_settings, parse_time_manager,
@@ -15,20 +17,23 @@ use unitas_core::{
     rotate_vector,
 };
 use unitas_physics::navigation::NavMesh;
+use unitas_physics::particles::ParticleSystem;
+use unitas_physics::trails::Trail;
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, ForceMode, MoveResult, Phase, QueryHit, Shape, World,
 };
 use unitas_render::{
-    Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, look_at, render_scene,
+    Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, cube, look_at, render_scene,
 };
 
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
 use crate::error::{RenderError, RuntimeError};
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
-use crate::particles::{ParticleRuntimeWorld, ParticleRuntimeWorld2D};
+use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::PhysicsRuntimeWorld;
 use crate::terrain::TerrainWorld;
+use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -45,6 +50,8 @@ pub struct LoadedScene {
     character_controllers: Vec<(EntityId, CharacterControllerComponent)>,
     audio_sources: Vec<(EntityId, AudioSourceComponent)>,
     animators: Vec<EntityId>,
+    particles: Vec<EntityId>,
+    trails: Vec<EntityId>,
     diagnostics: Vec<(EntityId, String)>,
     entity_base: u64,
     entity_count: u64,
@@ -192,7 +199,7 @@ struct CameraBasis {
     view: Mat4,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RenderWorld {
     meshes: HashMap<u64, Mesh>,
     materials: HashMap<u64, RenderMaterial>,
@@ -201,7 +208,24 @@ pub struct RenderWorld {
     lights: HashMap<u64, RenderLight>,
     camera_defaults: HashMap<EntityId, RenderCameraParams>,
     light_defaults: HashMap<EntityId, RenderLight>,
+    effect_mesh: Mesh,
     next_handle: u64,
+}
+
+impl Default for RenderWorld {
+    fn default() -> Self {
+        Self {
+            meshes: HashMap::new(),
+            materials: HashMap::new(),
+            cameras: HashMap::new(),
+            renderers: HashMap::new(),
+            lights: HashMap::new(),
+            camera_defaults: HashMap::new(),
+            light_defaults: HashMap::new(),
+            effect_mesh: cube(1.0),
+            next_handle: 0,
+        }
+    }
 }
 
 impl RenderWorld {
@@ -227,6 +251,7 @@ pub struct Runtime {
     physics: PhysicsRuntimeWorld,
     particles: ParticleRuntimeWorld,
     particles_2d: ParticleRuntimeWorld2D,
+    trails: TrailRuntimeWorld,
     navigation: NavigationRuntimeWorld,
     terrain: TerrainWorld,
     audio: AudioWorld,
@@ -261,6 +286,7 @@ impl Runtime {
             physics: PhysicsRuntimeWorld::new(),
             particles: ParticleRuntimeWorld::new(),
             particles_2d: ParticleRuntimeWorld2D::new(),
+            trails: TrailRuntimeWorld::new(),
             navigation: NavigationRuntimeWorld::new(NavMesh::default()),
             terrain: TerrainWorld::new(),
             audio: AudioWorld::new(),
@@ -306,6 +332,8 @@ impl Runtime {
         let physics = assembled.physics;
         let audio_bindings = assembled.audio_bindings;
         let render_binding = assembled.render;
+        let particle_bindings = assembled.particles;
+        let trail_bindings = assembled.trails;
         let (fixed_timestep, gravity, axes, identity) = discover_project_settings(path);
         let scripts = build_script_instances(&bindings)?;
         let descs = body_descs(&graph, &physics);
@@ -392,6 +420,23 @@ impl Runtime {
         for (body, desc) in bodies.iter().zip(descs.iter()) {
             self.physics.world_3d_mut().add_body(*body, desc.1)?;
         }
+        let mut particle_entities = Vec::with_capacity(particle_bindings.len());
+        for particle in &particle_bindings {
+            let entity = EntityId::new(entity_base + particle.entity.as_u64());
+            let system = self.register_particle_system(
+                entity,
+                particle_seed(particle.entity),
+                &particle.binding,
+            );
+            system.play();
+            particle_entities.push(entity);
+        }
+        let mut trail_entities = Vec::with_capacity(trail_bindings.len());
+        for trail in &trail_bindings {
+            let entity = EntityId::new(entity_base + trail.entity.as_u64());
+            self.register_trail(entity, &trail.binding);
+            trail_entities.push(entity);
+        }
         let entity_count = graph.len() as u64;
         self.scenes.push(LoadedScene {
             name: scene_name_from_path(path),
@@ -402,6 +447,8 @@ impl Runtime {
             character_controllers,
             audio_sources,
             animators: Vec::new(),
+            particles: particle_entities,
+            trails: trail_entities,
             diagnostics,
             entity_base,
             entity_count,
@@ -434,6 +481,13 @@ impl Runtime {
         for body in &scene.bodies {
             self.physics.world_3d_mut().remove_body(*body);
         }
+        for entity in &scene.particles {
+            self.particles.remove_system(*entity);
+        }
+        for entity in &scene.trails {
+            self.trails.remove_trail(*entity);
+        }
+        self.trails.rebuild_draw_list();
         for (entity, _) in &scene.character_controllers {
             if !self.persistent_entities.contains(entity) {
                 self.character_states.remove(entity);
@@ -625,6 +679,13 @@ impl Runtime {
             for body in &scene.bodies {
                 self.physics.world_3d_mut().remove_body(*body);
             }
+            for entity in &scene.particles {
+                self.particles.remove_system(*entity);
+            }
+            for entity in &scene.trails {
+                self.trails.remove_trail(*entity);
+            }
+            self.trails.rebuild_draw_list();
             for (entity, _) in &scene.character_controllers {
                 if !self.persistent_entities.contains(entity) {
                     self.character_states.remove(entity);
@@ -721,6 +782,39 @@ impl Runtime {
         &mut self.particles
     }
 
+    pub fn register_particle_system(
+        &mut self,
+        entity: EntityId,
+        seed: u64,
+        binding: &ParticleSystemBinding,
+    ) -> &mut ParticleSystem {
+        self.particles.register_binding(entity, seed, binding)
+    }
+
+    pub fn particle_draw_list(&self) -> &[ParticleDrawItem] {
+        self.particles.draw_list()
+    }
+
+    pub fn trails(&self) -> &TrailRuntimeWorld {
+        &self.trails
+    }
+
+    pub fn trails_mut(&mut self) -> &mut TrailRuntimeWorld {
+        &mut self.trails
+    }
+
+    pub fn register_trail(
+        &mut self,
+        entity: EntityId,
+        binding: &TrailRendererBinding,
+    ) -> &mut Trail {
+        self.trails.register_binding(entity, binding)
+    }
+
+    pub fn trail_draw_list(&self) -> &[TrailDrawItem] {
+        self.trails.draw_list()
+    }
+
     pub fn particles_2d_mut(&mut self) -> &mut ParticleRuntimeWorld2D {
         &mut self.particles_2d
     }
@@ -808,6 +902,17 @@ impl Runtime {
         for (entity, child_bindings) in child_updates {
             self.apply_child_animator_bindings(entity, &child_bindings);
         }
+    }
+
+    fn step_trails(&mut self, delta_time: f32) {
+        let entities = self.trails.trail_entities();
+        let mut positions = BTreeMap::new();
+        for entity in entities {
+            if let Some(transform) = self.entity_transform(entity) {
+                positions.insert(entity, transform.translation);
+            }
+        }
+        self.trails.step_all(delta_time, &positions);
     }
 
     fn write_back_animator_transform(&mut self, entity: EntityId) {
@@ -1103,6 +1208,7 @@ impl Runtime {
             .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
         self.particles_2d
             .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
+        self.step_trails(scaled_delta as f32);
         if scaled_delta >= 0.0 {
             let _ = self.navigation.step(scaled_delta);
         }
@@ -1856,6 +1962,10 @@ fn validate_bodies(descs: &[(EntityId, BodyDesc, [f32; 3])]) -> Result<(), Runti
     Ok(())
 }
 
+fn particle_seed(entity: EntityId) -> u64 {
+    entity.as_u64().wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
 fn teardown_handles(scripts: &[ScriptInstance]) -> (Vec<u64>, Vec<u64>) {
     let disable = scripts
         .iter()
@@ -2176,6 +2286,17 @@ fn model_matrix(transform: &Transform) -> Mat4 {
     values[14] = transform.translation[2];
     values[15] = 1.0;
     Mat4::from_cols_array(values)
+}
+
+fn effect_model(position: [f32; 3], size: f32) -> Mat4 {
+    let transform = Transform {
+        translation: position,
+        rotation: IDENTITY_ROTATION,
+        scale: [size, size, size],
+        parent: None,
+        children: Vec::new(),
+    };
+    model_matrix(&transform)
 }
 
 fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
@@ -2536,6 +2657,21 @@ impl Runtime {
                 mesh,
                 model: model_matrix(&transform),
                 color,
+            });
+        }
+        let effect_mesh = &self.render.effect_mesh;
+        for item in self.particle_draw_list() {
+            instances.push(MeshInstance {
+                mesh: effect_mesh,
+                model: effect_model(item.position, item.size),
+                color: [item.color[0], item.color[1], item.color[2]],
+            });
+        }
+        for item in self.trail_draw_list() {
+            instances.push(MeshInstance {
+                mesh: effect_mesh,
+                model: effect_model(item.position, item.width),
+                color: [item.color[0], item.color[1], item.color[2]],
             });
         }
         instances

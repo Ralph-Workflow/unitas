@@ -5,8 +5,10 @@ use unitas_core::{EntityId, SceneGraph};
 
 use crate::meta::{GuidIndex, MetaError};
 use crate::scene::GameObjectRecord;
-use crate::unity_yaml::Node;
+use crate::unity_yaml::{Document, Node, Stream};
 
+const GAME_OBJECT_CLASS: u32 = 1;
+const TRANSFORM_CLASS: u32 = 4;
 const NAME_PROPERTY: &str = "m_Name";
 const POSITION_PROPERTY: &str = "m_LocalPosition";
 const ROTATION_PROPERTY: &str = "m_LocalRotation";
@@ -237,12 +239,12 @@ pub(crate) fn parse_instance(body: &Node) -> Option<PrefabInstance> {
 }
 
 pub(crate) fn apply_modifications(
-    instance: &PrefabInstance,
+    modifications: &[Modification],
     game_objects: &HashMap<i64, GameObjectRecord>,
     transforms: &HashMap<i64, EntityId>,
     graph: &mut SceneGraph,
 ) {
-    for modification in &instance.modifications {
+    for modification in modifications {
         let property = match property(&modification.property_path) {
             Some(property) => property,
             None => continue,
@@ -276,6 +278,418 @@ pub(crate) fn apply_modifications(
                     Component::Scale => transform.scale[axis.index()] = value,
                 }
             }
+        }
+    }
+}
+
+pub fn apply_modification_to_document(
+    document: &mut Document,
+    property_path: &str,
+    value: &str,
+) -> bool {
+    if property_path.is_empty() || property_path.contains('[') {
+        return false;
+    }
+    let parts: Vec<&str> = property_path.split('.').collect();
+    let body = match body_mut(&mut document.root) {
+        Some(body) => body,
+        None => return false,
+    };
+    set_nested(body, &parts, value)
+}
+
+pub fn corresponding_source(document: &Document) -> Option<(String, i64)> {
+    let body = document_body(document)?;
+    let source = body.get("m_CorrespondingSourceObject")?;
+    let file_id = source.get("fileID").and_then(Node::as_i64)?;
+    let guid = source
+        .get("guid")
+        .and_then(Node::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Some((guid, file_id))
+}
+
+pub fn remove_components(stream: &mut Stream, file_ids: &[i64]) {
+    if file_ids.is_empty() {
+        return;
+    }
+    let owners: Vec<i64> = stream
+        .documents
+        .iter()
+        .filter(|document| file_ids.contains(&document.file_id))
+        .filter_map(|document| {
+            document_body(document)
+                .and_then(|body| body.get("m_GameObject"))
+                .and_then(|node| node.get("fileID"))
+                .and_then(Node::as_i64)
+        })
+        .collect();
+    for owner in owners {
+        remove_component_reference(stream, owner, file_ids);
+    }
+    stream
+        .documents
+        .retain(|document| !file_ids.contains(&document.file_id));
+}
+
+pub fn remove_game_object(stream: &mut Stream, game_object_file_id: i64) {
+    let mut doomed: Vec<i64> = vec![game_object_file_id];
+    let mut pending: Vec<i64> = vec![game_object_file_id];
+    while let Some(current) = pending.pop() {
+        for component_id in component_ids(stream, current) {
+            doomed.push(component_id);
+        }
+        let transform_id = match transform_for_game_object(stream, current) {
+            Some(transform_id) => transform_id,
+            None => continue,
+        };
+        doomed.push(transform_id);
+        for child_id in children_of_transform(stream, transform_id) {
+            match game_object_for_transform(stream, child_id) {
+                Some(child_game_object) => pending.push(child_game_object),
+                None => doomed.push(child_id),
+            }
+        }
+    }
+    for file_id in &doomed {
+        detach_from_parent(stream, *file_id);
+    }
+    stream
+        .documents
+        .retain(|document| !doomed.contains(&document.file_id));
+}
+
+pub fn copy_added_game_object(
+    target: &mut Stream,
+    source: &Stream,
+    added_game_object_file_id: i64,
+    parent_transform_file_id: i64,
+    sibling_index: Option<usize>,
+) {
+    let mut copies = Vec::new();
+    let mut transform_file_id = None;
+    for component_id in component_ids(source, added_game_object_file_id) {
+        let mut document = match source
+            .documents
+            .iter()
+            .find(|entry| entry.file_id == component_id && !entry.stripped)
+        {
+            Some(document) => document.clone(),
+            None => continue,
+        };
+        if document.class_id == TRANSFORM_CLASS {
+            transform_file_id = Some(component_id);
+            set_reference(&mut document, "m_Father", parent_transform_file_id);
+        }
+        clear_prefab_instance(&mut document);
+        copies.push(document);
+    }
+    let mut game_object = match source.documents.iter().find(|entry| {
+        entry.class_id == GAME_OBJECT_CLASS
+            && entry.file_id == added_game_object_file_id
+            && !entry.stripped
+    }) {
+        Some(document) => document.clone(),
+        None => return,
+    };
+    clear_prefab_instance(&mut game_object);
+    copies.insert(0, game_object);
+    let transform_id = match transform_file_id {
+        Some(transform_id) => transform_id,
+        None => return,
+    };
+    for copy in copies {
+        target.documents.push(copy);
+    }
+    insert_child(
+        target,
+        parent_transform_file_id,
+        transform_id,
+        sibling_index,
+    );
+}
+
+pub fn copy_added_component(
+    target: &mut Stream,
+    source: &Stream,
+    component_file_id: i64,
+    owner_game_object_file_id: i64,
+) {
+    let mut document = match source
+        .documents
+        .iter()
+        .find(|entry| entry.file_id == component_file_id && !entry.stripped)
+    {
+        Some(document) => document.clone(),
+        None => return,
+    };
+    clear_prefab_instance(&mut document);
+    set_reference(&mut document, "m_GameObject", owner_game_object_file_id);
+    target.documents.push(document);
+    for owner in &mut target.documents {
+        if owner.file_id != owner_game_object_file_id {
+            continue;
+        }
+        let body = match body_mut(&mut owner.root) {
+            Some(body) => body,
+            None => continue,
+        };
+        let items = match mapping_entry_mut(body, "m_Component") {
+            Some(Node::Sequence(items)) => items,
+            _ => continue,
+        };
+        items.push(Node::Mapping(vec![(
+            String::from("component"),
+            Node::Mapping(vec![(
+                String::from("fileID"),
+                Node::Scalar(component_file_id.to_string()),
+            )]),
+        )]));
+    }
+}
+
+pub fn resolve_transform_file_id(stream: &Stream, file_id: i64) -> Option<i64> {
+    if stream
+        .documents
+        .iter()
+        .any(|document| document.class_id == TRANSFORM_CLASS && document.file_id == file_id)
+    {
+        return Some(file_id);
+    }
+    transform_for_game_object(stream, file_id)
+}
+
+pub fn resolve_game_object_file_id(stream: &Stream, file_id: i64) -> Option<i64> {
+    if stream
+        .documents
+        .iter()
+        .any(|document| document.class_id == GAME_OBJECT_CLASS && document.file_id == file_id)
+    {
+        return Some(file_id);
+    }
+    game_object_for_transform(stream, file_id)
+}
+
+fn document_body(document: &Document) -> Option<&Node> {
+    match &document.root {
+        Node::Mapping(entries) => entries.first().map(|(_, body)| body),
+        _ => None,
+    }
+}
+
+fn body_mut(root: &mut Node) -> Option<&mut Node> {
+    match root {
+        Node::Mapping(entries) => entries.first_mut().map(|(_, body)| body),
+        _ => None,
+    }
+}
+
+fn mapping_entry_mut<'a>(node: &'a mut Node, key: &str) -> Option<&'a mut Node> {
+    match node {
+        Node::Mapping(entries) => entries
+            .iter_mut()
+            .find(|(entry_key, _)| entry_key == key)
+            .map(|(_, value)| value),
+        _ => None,
+    }
+}
+
+fn set_nested(node: &mut Node, path: &[&str], value: &str) -> bool {
+    let (head, tail) = match path.split_first() {
+        Some(parts) => parts,
+        None => return false,
+    };
+    match node {
+        Node::Mapping(entries) => {
+            let index = match entries.iter().position(|(entry_key, _)| entry_key == head) {
+                Some(index) => index,
+                None => return false,
+            };
+            if tail.is_empty() {
+                entries[index].1 = Node::Scalar(value.to_string());
+                return true;
+            }
+            set_nested(&mut entries[index].1, tail, value)
+        }
+        _ => false,
+    }
+}
+
+fn component_ids(stream: &Stream, game_object_file_id: i64) -> Vec<i64> {
+    stream
+        .documents
+        .iter()
+        .find(|document| {
+            document.class_id == GAME_OBJECT_CLASS
+                && document.file_id == game_object_file_id
+                && !document.stripped
+        })
+        .and_then(|document| document_body(document))
+        .and_then(|body| body.get("m_Component"))
+        .and_then(Node::as_sequence)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("component")
+                        .and_then(|node| node.get("fileID"))
+                        .and_then(Node::as_i64)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn transform_for_game_object(stream: &Stream, game_object_file_id: i64) -> Option<i64> {
+    stream
+        .documents
+        .iter()
+        .find(|document| {
+            document.class_id == TRANSFORM_CLASS
+                && !document.stripped
+                && document_body(document)
+                    .and_then(|body| body.get("m_GameObject"))
+                    .and_then(|node| node.get("fileID"))
+                    .and_then(Node::as_i64)
+                    == Some(game_object_file_id)
+        })
+        .map(|document| document.file_id)
+}
+
+fn game_object_for_transform(stream: &Stream, transform_file_id: i64) -> Option<i64> {
+    stream
+        .documents
+        .iter()
+        .find(|document| document.file_id == transform_file_id)
+        .and_then(|document| document_body(document))
+        .and_then(|body| body.get("m_GameObject"))
+        .and_then(|node| node.get("fileID"))
+        .and_then(Node::as_i64)
+}
+
+fn children_of_transform(stream: &Stream, transform_file_id: i64) -> Vec<i64> {
+    stream
+        .documents
+        .iter()
+        .find(|document| document.file_id == transform_file_id)
+        .and_then(|document| document_body(document))
+        .and_then(|body| body.get("m_Children"))
+        .and_then(Node::as_sequence)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("fileID").and_then(Node::as_i64))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn remove_component_reference(stream: &mut Stream, owner_file_id: i64, file_ids: &[i64]) {
+    for document in &mut stream.documents {
+        if document.file_id != owner_file_id {
+            continue;
+        }
+        let body = match body_mut(&mut document.root) {
+            Some(body) => body,
+            None => continue,
+        };
+        let items = match mapping_entry_mut(body, "m_Component") {
+            Some(Node::Sequence(items)) => items,
+            _ => continue,
+        };
+        items.retain(|item| {
+            match item
+                .get("component")
+                .and_then(|node| node.get("fileID"))
+                .and_then(Node::as_i64)
+            {
+                Some(file_id) => !file_ids.contains(&file_id),
+                None => true,
+            }
+        });
+    }
+}
+
+fn detach_from_parent(stream: &mut Stream, transform_file_id: i64) {
+    let father = match stream
+        .documents
+        .iter()
+        .find(|document| document.file_id == transform_file_id)
+        .and_then(|document| document_body(document))
+        .and_then(|body| body.get("m_Father"))
+        .and_then(|node| node.get("fileID"))
+        .and_then(Node::as_i64)
+    {
+        Some(father) if father != 0 => father,
+        _ => return,
+    };
+    for document in &mut stream.documents {
+        if document.file_id != father {
+            continue;
+        }
+        let body = match body_mut(&mut document.root) {
+            Some(body) => body,
+            None => continue,
+        };
+        let items = match mapping_entry_mut(body, "m_Children") {
+            Some(Node::Sequence(items)) => items,
+            _ => continue,
+        };
+        items.retain(|item| match item.get("fileID").and_then(Node::as_i64) {
+            Some(file_id) => file_id != transform_file_id,
+            None => true,
+        });
+    }
+}
+
+fn clear_prefab_instance(document: &mut Document) {
+    if let Some(body) = body_mut(&mut document.root) {
+        if let Some(node) = mapping_entry_mut(body, "m_PrefabInstance") {
+            *node = Node::Mapping(vec![(
+                String::from("fileID"),
+                Node::Scalar(String::from("0")),
+            )]);
+        }
+    }
+}
+
+fn set_reference(document: &mut Document, key: &str, file_id: i64) {
+    if let Some(body) = body_mut(&mut document.root) {
+        if let Some(node) = mapping_entry_mut(body, key) {
+            *node = Node::Mapping(vec![(
+                String::from("fileID"),
+                Node::Scalar(file_id.to_string()),
+            )]);
+        }
+    }
+}
+
+fn insert_child(
+    stream: &mut Stream,
+    parent_transform_file_id: i64,
+    child_transform_file_id: i64,
+    sibling_index: Option<usize>,
+) {
+    for document in &mut stream.documents {
+        if document.file_id != parent_transform_file_id {
+            continue;
+        }
+        let body = match body_mut(&mut document.root) {
+            Some(body) => body,
+            None => continue,
+        };
+        let items = match mapping_entry_mut(body, "m_Children") {
+            Some(Node::Sequence(items)) => items,
+            _ => continue,
+        };
+        let reference = Node::Mapping(vec![(
+            String::from("fileID"),
+            Node::Scalar(child_transform_file_id.to_string()),
+        )]);
+        match sibling_index {
+            Some(index) if index <= items.len() => items.insert(index, reference),
+            _ => items.push(reference),
         }
     }
 }

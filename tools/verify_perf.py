@@ -76,6 +76,21 @@ MEASUREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "particle_eval",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "unitas-physics",
+            "--test",
+            "simulation_tests",
+            "perf_particles",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ),
+    ),
+    (
         "animation_eval",
         (
             "cargo",
@@ -127,9 +142,9 @@ def help_text() -> str:
     return "\n".join(
         [
             "usage: verify_perf.py [--help] [--metadata]",
-            "Runs the six perf measurements (import throughput, scene load, physics",
-            "step, animation eval, scripting call cost, PlayerLoop frame allocations)",
-            "and fails hard when any value breaches its ceiling.",
+            "Runs the seven perf measurements (import throughput, scene load, physics",
+            "step, animation eval, particle eval, scripting call cost, PlayerLoop frame",
+            "allocations) and fails hard when any value breaches its ceiling.",
             "lane metadata:",
             *metadata_lines,
         ]

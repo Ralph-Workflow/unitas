@@ -18,6 +18,8 @@ mod json_tests;
 mod model_tests;
 #[path = "asset_import/packages_tests.rs"]
 mod packages_tests;
+#[path = "asset_import/particle_tests.rs"]
+mod particle_tests;
 #[path = "asset_import/perf_import.rs"]
 mod perf_import;
 #[path = "asset_import/perf_scene_load.rs"]
@@ -30,9 +32,13 @@ mod primitive_tests;
 mod project_tests;
 #[path = "asset_import/roll_a_ball_project_tests.rs"]
 mod roll_a_ball_project_tests;
+#[path = "asset_import/scene_particle_trail_tests.rs"]
+mod scene_particle_trail_tests;
 #[path = "asset_import/scene_save_tests.rs"]
 mod scene_save_tests;
 #[path = "asset_import/texture_tests.rs"]
 mod texture_tests;
+#[path = "asset_import/trail_tests.rs"]
+mod trail_tests;
 #[path = "asset_import/trust_tests.rs"]
 mod trust_tests;

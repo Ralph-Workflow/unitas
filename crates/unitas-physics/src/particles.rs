@@ -7,6 +7,7 @@ use crate::two_d::{Collider2D, ContactFilter2D, World2D};
 use crate::world::World;
 
 const DEFAULT_DURATION: f32 = 5.0;
+const DEFAULT_BURST_INTERVAL: f32 = 0.1;
 const IDENTITY_ROTATION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const ALL_LAYERS: u32 = u32::MAX;
 
@@ -138,6 +139,33 @@ impl Default for EmitParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleBurst {
+    pub time: f32,
+    pub count: u32,
+    pub cycles: u32,
+    pub interval: f32,
+}
+
+impl ParticleBurst {
+    pub fn new(time: f32, count: u32, cycles: u32, interval: f32) -> Self {
+        Self {
+            time: if time.is_finite() { time.max(0.0) } else { 0.0 },
+            count,
+            cycles: cycles.max(1),
+            interval: if interval.is_finite() && interval > 0.0 {
+                interval
+            } else {
+                DEFAULT_BURST_INTERVAL
+            },
+        }
+    }
+
+    fn occurrence(&self, cycle: u32) -> f32 {
+        self.time + cycle as f32 * self.interval
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Curve<const N: usize> {
     pub start: [f32; N],
     pub end: [f32; N],
@@ -222,6 +250,10 @@ pub struct ParticleSystem {
     state: ParticleSystemState,
     emission_rate: f32,
     emission_accumulator: f64,
+    bursts: Vec<ParticleBurst>,
+    burst_index: usize,
+    burst_cycle: u32,
+    max_particles: usize,
     emitting: bool,
     system_time: f32,
     shape: ParticleShape,
@@ -258,6 +290,10 @@ impl ParticleSystem {
             state: ParticleSystemState::Playing,
             emission_rate: 0.0,
             emission_accumulator: 0.0,
+            bursts: Vec::new(),
+            burst_index: 0,
+            burst_cycle: 0,
+            max_particles: usize::MAX,
             emitting: true,
             system_time: 0.0,
             shape: ParticleShape::Point,
@@ -329,6 +365,26 @@ impl ParticleSystem {
 
     pub fn emission_rate(&self) -> f32 {
         self.emission_rate
+    }
+
+    pub fn set_bursts(&mut self, bursts: Vec<ParticleBurst>) {
+        self.bursts = bursts;
+        self.bursts
+            .sort_by(|left, right| left.time.total_cmp(&right.time));
+        self.burst_index = 0;
+        self.burst_cycle = 0;
+    }
+
+    pub fn bursts(&self) -> &[ParticleBurst] {
+        &self.bursts
+    }
+
+    pub fn set_max_particles(&mut self, max_particles: usize) {
+        self.max_particles = max_particles;
+    }
+
+    pub fn max_particles(&self) -> usize {
+        self.max_particles
     }
 
     pub fn set_shape(&mut self, shape: ParticleShape) {
@@ -484,6 +540,8 @@ impl ParticleSystem {
                 self.rng = SplitMix64::new(self.seed);
                 self.system_time = 0.0;
                 self.emission_accumulator = 0.0;
+                self.burst_index = 0;
+                self.burst_cycle = 0;
                 self.emitting = true;
                 self.state = ParticleSystemState::Playing;
             }
@@ -623,6 +681,7 @@ impl ParticleSystem {
     fn advance(&mut self, delta_time: f32) {
         let emission_window = self.emission_window(delta_time);
         self.emit_over_time(emission_window);
+        self.emit_bursts(emission_window);
         self.integrate(delta_time);
         self.system_time += delta_time;
         if self.duration > 0.0 {
@@ -630,6 +689,8 @@ impl ParticleSystem {
                 if self.system_time >= self.duration {
                     self.system_time %= self.duration;
                     self.emission_accumulator = 0.0;
+                    self.burst_index = 0;
+                    self.burst_cycle = 0;
                 }
             } else if self.system_time >= self.duration {
                 self.emitting = false;
@@ -661,6 +722,29 @@ impl ParticleSystem {
         if whole >= 1.0 {
             let params = self.emit_params;
             self.spawn(whole as u32, params);
+        }
+    }
+
+    fn emit_bursts(&mut self, window: f32) {
+        if !self.emitting || window <= 0.0 {
+            return;
+        }
+        let end = self.system_time + window;
+        while self.burst_index < self.bursts.len() {
+            let burst = self.bursts[self.burst_index];
+            let occurrence = burst.occurrence(self.burst_cycle);
+            if occurrence > end {
+                break;
+            }
+            if occurrence + 1e-6 >= self.system_time {
+                let params = self.emit_params;
+                self.spawn(burst.count, params);
+            }
+            self.burst_cycle += 1;
+            if self.burst_cycle >= burst.cycles {
+                self.burst_index += 1;
+                self.burst_cycle = 0;
+            }
         }
     }
 
@@ -799,6 +883,8 @@ impl ParticleSystem {
     }
 
     fn spawn(&mut self, count: u32, params: EmitParams) {
+        let room = self.max_particles.saturating_sub(self.particles.len());
+        let count = (count as usize).min(room);
         let lifetime = if params.start_lifetime.is_finite() {
             params.start_lifetime.max(0.0)
         } else {

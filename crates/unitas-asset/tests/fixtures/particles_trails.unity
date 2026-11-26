@@ -1,0 +1,94 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Emitter
+--- !u!4 &1001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!198 &1002
+ParticleSystem:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1000}
+  m_Duration: 2.5
+  m_Loop: 1
+  m_MaxParticles: 64
+  m_StartLifetime: 1.5
+  m_StartSpeed: 3
+  m_StartSize: 0.25
+  m_StartColor: {r: 1, g: 0.5, b: 0.25, a: 0.75}
+  m_EmissionRate: 12
+  m_Bursts:
+  - m_Time: 0.5
+    m_Count: 7
+    m_Cycles: 3
+    m_RepeatInterval: 0.25
+--- !u!1 &2000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: Trail
+--- !u!4 &2001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!96 &2002
+TrailRenderer:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000}
+  m_Time: 2
+  m_Width: 0.75
+  m_MinVertexDistance: 0.25
+  m_StartColor: {r: 1, g: 0, b: 0, a: 1}
+  m_EndColor: {r: 0, g: 0, b: 1, a: 0.5}
+--- !u!1 &3000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: UnknownA
+--- !u!4 &3001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 2, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!222 &3002
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000}
+  m_CullTransparentMesh: 1
+--- !u!1 &4000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: UnknownB
+--- !u!4 &4001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 4000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 3, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!222 &4002
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 4000}
+  m_CullTransparentMesh: 1

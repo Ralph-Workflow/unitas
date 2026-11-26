@@ -11,6 +11,7 @@ pub mod particles;
 mod query;
 pub mod simulate;
 pub mod terrain;
+pub mod trails;
 pub mod two_d;
 pub mod wheel;
 mod world;
