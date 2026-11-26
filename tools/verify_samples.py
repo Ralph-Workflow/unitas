@@ -676,10 +676,19 @@ def run_lane() -> int:
     persist_dir = Path(tempfile.mkdtemp(prefix="prefs-", dir=REPO_ROOT / "target" / "samples-lane"))
     persist_env = dict(env)
     persist_env["UNITAS_PERSISTENT_DATA_PATH"] = str(persist_dir)
+    own_persist_scenarios = frozenset({"ghost_replay"})
 
     results: list[tuple[str, int]] = []
     for name, scenario_file, extra_args, needs_persist in SCENARIOS:
-        scenario_env = persist_env if needs_persist else env
+        if not needs_persist:
+            scenario_env = env
+        elif name in own_persist_scenarios:
+            scenario_env = dict(env)
+            scenario_env["UNITAS_PERSISTENT_DATA_PATH"] = str(
+                Path(tempfile.mkdtemp(prefix="prefs-", dir=REPO_ROOT / "target" / "samples-lane"))
+            )
+        else:
+            scenario_env = persist_env
         rc = run_scenario(name, scenario_file, extra_args, scenario_env)
         results.append((name, rc))
     results.extend((step[0], run_step(step, env)) for step in editor_scenario_steps())

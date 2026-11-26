@@ -348,6 +348,7 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(path);
             DeregisterReplacedSceneObjects(loaded, LoadSceneMode.Single);
             SceneManager.RaiseSceneLoaded(loaded, LoadSceneMode.Single);
+            MaterializeLoadedSceneObjects(loaded);
             Console.Error.WriteLine("DIAG LoadScene(1) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
@@ -420,6 +421,10 @@ namespace Unitas.Bridge
             Scene loaded = FindLoadedScene(scenePath);
             DeregisterReplacedSceneObjects(loaded, mode);
             SceneManager.RaiseSceneLoaded(loaded, mode);
+            if (mode == LoadSceneMode.Single)
+            {
+                MaterializeLoadedSceneObjects(loaded);
+            }
             Console.Error.WriteLine("DIAG LoadScene(2) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
@@ -2404,6 +2409,37 @@ namespace Unitas.Bridge
             _entityGameObjects[entity] = created;
             _materializedSceneEntities.Add(entity);
             return created;
+        }
+
+        /// <summary>
+        /// Creates the objects of the loaded scene, so a lookup finds them right after
+        /// the load, the way Unity creates the objects of a scene when it loads it.
+        /// The objects of the replaced scene are already destroyed, so the lookup
+        /// cannot hand back a stale object.
+        /// </summary>
+        private void MaterializeLoadedSceneObjects(Scene loadedScene)
+        {
+            List<ulong> entities = new List<ulong>(_sceneObjectNames.Keys);
+            for (int index = 0; index < entities.Count; index++)
+            {
+                ulong entity = entities[index];
+                GameObject? owner = ResolveGameObjectByEntity(entity);
+                if (owner == null)
+                {
+                    continue;
+                }
+
+                owner.scene = loadedScene;
+            }
+
+            for (int index = 0; index < entities.Count; index++)
+            {
+                ulong entity = entities[index];
+                if (_entityGameObjects.TryGetValue(entity, out GameObject? owner) && owner != null && !owner.IsDestroyed)
+                {
+                    WireSceneParent(entity, owner);
+                }
+            }
         }
 
         private void ApplySceneTransform(ulong entity, GameObject owner)
