@@ -28,6 +28,31 @@ test and the arena materials swapped between runs.
 builds the instance list, and three consecutive runs of every scenario produce
 byte-identical BMPs.
 
+## What the 2026-11-26 re-approval changed
+
+The four references were re-approved on 2026-11-26 because the runtime now
+composites the uGUI canvas of the loaded scene into the rendered frame
+(`Runtime::composite_canvas_onto_frame` in
+`crates/unitas-runtime/src/runtime.rs`): the capture shows the sample's HUD and
+its title panel, not only the arena. Before that change the four captures
+differed from the arena alone by 17.1 % of their pixels for the title
+checkpoint; the approved files are the new captures, taken from the same
+scenario runs.
+
+The re-approval keeps the declared tolerance of 0.005 unchanged. It widens
+nothing: the approved files are the exact captures the lane produces today, and
+the lane still fails when a capture differs from them by more than 0.5 % of its
+pixels.
+
+One property of the references changed with it. The canvas text is rasterized
+through the system font stack (`unitas_render::glyphs`), so the letterforms
+depend on the fonts of the machine that produced the capture. Two runs on one
+machine are byte-identical, but a machine with a different font set draws
+different glyphs and its capture no longer matches the approved file within
+0.005. The arena pixels stay reproducible everywhere; the HUD text does not.
+A reference-free approval, an embedded font, or a per-platform approved
+reference is what removes that dependence.
+
 ## Why the tolerance is 0.005
 
 `tolerance` is the fraction of pixels allowed to differ. The references are
@@ -45,3 +70,8 @@ Approved on 2026-11-25 by the development session that removed the draw-order
 nondeterminism, against the presentation requirements of
 `docs/product-specification/sample-games/01-roll-a-ball.md` (S8, TST-002).
 Each reference is bound to exactly one scenario and one checkpoint.
+
+Re-approved on 2026-11-26 by the development session that composited the uGUI
+canvas into the rendered frame, against the same requirements: the four files
+are the captures the lane produces now, with the HUD and the title panel in the
+picture. The tolerance is unchanged.

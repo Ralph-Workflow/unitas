@@ -37,7 +37,7 @@ reported with its real state, never hidden.
 | S5 combo multiplier, gold pickup window, dash cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` now drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`), but its click assertion does **not** pass yet: the native runtime detects the button hit and queues the clicked object id, and the managed `UnityEngine.UI.Button` wrapper exists, but the bridge does not yet install the managed uGUI provider that pumps those clicks into `Button.onClick`. The scenario is therefore not in the `make verify-samples` scenario list yet, and the lane stays green |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-26 with the HUD and the title panel in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, proves the edit landed, undoes it and proves the scene file is byte identical to the original; the person-facing editor half and play-mode edit-state restoration are not demonstrated |
 | S11 collision edge, S12 combo timing sweep, S14 medals/records/ghost, S16 | not demonstrated | no scenario covers them yet |
@@ -74,8 +74,8 @@ cannot show).
   attract ghost, **no** speed trail, **no** results panel and **no** gold-medal
   display: the four captures are Arena 1 at four moments of play, and the
   title-screen capture is the arena at startup, not a title screen.
-- The sample now **carries on-screen text in the scene** but does not yet
-  show it. `Assets/Scenes/RollABall.unity` carries a legacy uGUI `Canvas`
+- The sample now **carries on-screen text in the scene and shows it in the
+  captures**. `Assets/Scenes/RollABall.unity` carries a legacy uGUI `Canvas`
   (`HudCanvas`) with a `CanvasScaler` at an 800x600 reference resolution,
   three HUD labels (`ScoreLabel`, `ComboLabel`, `TimerLabel`), a title panel
   (`TitlePanel`, `TitleText`, `PlayButton`, `QuitButton`) and a results panel
@@ -84,13 +84,24 @@ cannot show).
   drives them. The engine side parses that hierarchy
   (`UiBinding`), resolves the canvas rects and the label text, and the runtime
   exposes `unitas_runtime_ui_text_set`, `unitas_runtime_ui_text_style` and
-  `unitas_runtime_ui_pointer_over` for the managed side. What is missing is
-  the render step: the canvas draw items are not composited into the windowed
-  frame or into the `render_capture` frame, so the score, the multiplier and
-  the results text still exist only as C# state and as log lines
-  (`ScoreManager.cs:198` logs the combo multiplier, `:227` the gold pickup,
-  `:292` the countdown), and a capture cannot show them. The four approved
-  references are therefore unchanged and still show the arena alone.
+  `unitas_runtime_ui_pointer_over` for the managed side. The runtime
+  composites the canvas draw items onto the rendered frame
+  (`Runtime::composite_canvas_onto_frame` in
+  `crates/unitas-runtime/src/runtime.rs`), so the `render_capture` checkpoints
+  show the HUD labels and the panels over the arena. The four approved
+  references were re-approved on 2026-11-26 with the HUD in the picture; see
+  `References/README.md` for what that re-approval changed and for the one
+  property it gives up (the canvas text is rasterized through the system font
+  stack, so a machine with other fonts draws other letterforms).
+- The managed side of the interface is still open: the bridge installs no
+  `UnityEngine.UI.IUiProvider`, so a managed `Text.text` write does not reach
+  the canvas and a native click does not reach `Button.onClick`. The HUD
+  therefore shows the text the scene authored and the text the runtime state
+  holds, not the text `HudController` writes, and the pointer scenario is
+  still out of the lane.
+- The windowed player does not show the canvas either: the windowed path
+  draws the scene and a text overlay, and the canvas draw items reach neither
+  of them yet.
 - The sample has one arena; the specification names three (Courtyard,
   Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
 - **The four captures render the arena and are reproducible, and approved

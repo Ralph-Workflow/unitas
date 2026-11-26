@@ -1447,17 +1447,15 @@ mod tests {
         {
             let mut solo = GpuFramePresenter::from_new_renderer()?;
             for (index, name) in ["PlayerBall", "ArenaFloor"].iter().enumerate() {
-                let Some(entity) = runtime.find_entity_by_name(name) else {
-                    continue;
-                };
-                let Some(mesh) = presenter
+                let entity = runtime
+                    .find_entity_by_name(name)
+                    .ok_or_else(|| format!("scene entity {name} was not found"))?;
+                let mesh = presenter
                     .meshes()
                     .iter()
                     .find(|binding| binding.entity == Some(entity))
                     .map(|binding| binding.mesh.clone())
-                else {
-                    continue;
-                };
+                    .ok_or_else(|| format!("no mesh binding for {name}"))?;
                 solo.set_meshes(vec![GpuMeshBinding::for_entity(
                     entity,
                     mesh,

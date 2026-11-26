@@ -9,7 +9,8 @@ workspace = true
 
 [features]
 default = []
-device = ["dep:wgpu", "dep:bytemuck", "dep:cosmic-text", "dep:pollster"]
+text = ["dep:cosmic-text"]
+device = ["dep:wgpu", "dep:bytemuck", "dep:pollster", "text"]
 
 [dependencies]
 bytemuck = { version = "1", optional = true }

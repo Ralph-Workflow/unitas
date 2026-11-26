@@ -275,8 +275,9 @@ The named non-default profiles, each with the five required fields:
   compilation, the play pipeline, the player, or `samples/`; evidence:
   per-scenario report JSONs, the packaged-player step's `build-report.json`
   assertions and control-stdio replay, and lane exit status; fails hard when
-  run; last run 2026-11-25, recorded in the gate-lane review entry for the
-  2026-11-25 policy remediation pass; staleness horizon one milestone.
+  run; last run 2026-11-26, recorded in this tree by the re-approved S8
+  reference baselines under `samples/roll-a-ball/References/` and the lane exit
+  status of that run; staleness horizon one milestone.
 - `make verify-device` — owner: presentation and player; trigger: every
   milestone touching presentation; evidence: lane exit status and captured
   GPU/audio/input artifacts; fails hard when run; last run not recorded in this

@@ -5,10 +5,12 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use unitas_runtime::{
-    PRIMARY_MOUSE_BUTTON, Runtime, test_read_path_buffer, test_write_path_buffer,
-    unitas_runtime_input_mouse_button_event, unitas_runtime_input_pointer_move,
-    unitas_runtime_load_scene, unitas_runtime_new, unitas_runtime_path_buffer, unitas_runtime_tick,
-    unitas_runtime_ui_pointer_over, unitas_runtime_ui_poll_clicks, unitas_runtime_ui_text_set,
+    PRIMARY_MOUSE_BUTTON, Runtime, test_read_path_buffer, test_read_render_buffer,
+    test_write_path_buffer, unitas_runtime_input_mouse_button_event,
+    unitas_runtime_input_pointer_move, unitas_runtime_load_scene, unitas_runtime_new,
+    unitas_runtime_path_buffer, unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
+    unitas_runtime_render_frame, unitas_runtime_tick, unitas_runtime_ui_pointer_over,
+    unitas_runtime_ui_poll_clicks, unitas_runtime_ui_text_set,
 };
 
 /// A scene with a canvas, a text element and a button. The canvas root is
@@ -140,6 +142,7 @@ MonoBehaviour:
 
 /// The middle of the button, in screen pixels.
 const BUTTON_CENTER: (f64, f64) = (400.0, 300.0);
+const FRAME_SIZE: u32 = 256;
 
 const TICK_DELTA: f64 = 0.016;
 
@@ -172,6 +175,74 @@ fn entity_id_for(scene_path: &Path, name: &str) -> Result<u64, Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
     runtime.load_scene(scene_path)?;
     entity_id(&runtime, name)
+}
+
+#[test]
+fn the_rendered_frame_carries_the_canvas_content() -> Result<(), Box<dyn Error>> {
+    let (_temp_dir, scene_path) = write_scene("frame")?;
+    let scene = scene_path
+        .to_str()
+        .ok_or(String::from("non-utf8 temp path"))?
+        .to_string();
+    let canvas_entity = entity_id_for(&scene_path, "HudCanvas")?;
+    let handle = unitas_runtime_new();
+    if handle == 0 {
+        return Err(String::from("runtime handle creation failed").into());
+    }
+    let address = unitas_runtime_path_buffer(handle, 512);
+    if address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    test_write_path_buffer(handle, scene.as_bytes())?;
+    if unitas_runtime_load_scene(handle, address, scene.len() as u64) != 0 {
+        return Err(String::from("the scene did not load").into());
+    }
+    let camera = unitas_runtime_render_camera_create(handle, canvas_entity);
+    if camera == 0 {
+        return Err(String::from("camera creation failed").into());
+    }
+    let count = unitas_runtime_render_frame(handle, camera, FRAME_SIZE, FRAME_SIZE);
+    if count < 0 {
+        return Err(format!("the render frame failed with code {count}").into());
+    }
+    let render_address = unitas_runtime_render_buffer(handle, count as u64);
+    if render_address == 0 {
+        return Err(String::from("render buffer allocation failed").into());
+    }
+    let mut bytes = vec![0u8; count as usize];
+    test_read_render_buffer(handle, &mut bytes)?;
+
+    let painted = painted_pixels(&bytes);
+    assert!(
+        painted > 0,
+        "the canvas content must reach the rendered frame, not only the runtime state"
+    );
+    Ok(())
+}
+
+/// The number of pixels of a 24 bit BMP that carry something other than the
+/// black background.
+fn painted_pixels(bytes: &[u8]) -> usize {
+    let read = |offset: usize| -> usize {
+        usize::from(bytes[offset])
+            | (usize::from(bytes[offset + 1]) << 8)
+            | (usize::from(bytes[offset + 2]) << 16)
+    };
+    let data_offset = read(10);
+    let width = read(18);
+    let height = read(22);
+    let stride = (width * 3).div_ceil(4) * 4;
+    let mut painted = 0;
+    for row in 0..height {
+        let start = data_offset + row * stride;
+        for column in 0..width {
+            let pixel = start + column * 3;
+            if bytes[pixel] != 0 || bytes[pixel + 1] != 0 || bytes[pixel + 2] != 0 {
+                painted += 1;
+            }
+        }
+    }
+    painted
 }
 
 #[test]

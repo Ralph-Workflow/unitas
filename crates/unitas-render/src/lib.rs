@@ -1,7 +1,7 @@
 pub mod camera;
 #[cfg(feature = "device")]
 pub mod capture;
-#[cfg(feature = "device")]
+#[cfg(feature = "text")]
 pub mod glyphs;
 pub mod image;
 pub mod math;

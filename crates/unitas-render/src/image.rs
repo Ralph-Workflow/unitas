@@ -106,6 +106,31 @@ impl Image {
         out
     }
 
+    /// The pixels as an RGBA buffer whose alpha is opaque.
+    pub fn to_rgba8(&self) -> Rgba8 {
+        let mut rgba = Rgba8::new(self.width, self.height);
+        for (index, pixel) in self.pixels.iter().enumerate() {
+            let offset = index * 4;
+            rgba.pixels[offset] = pixel[0];
+            rgba.pixels[offset + 1] = pixel[1];
+            rgba.pixels[offset + 2] = pixel[2];
+            rgba.pixels[offset + 3] = 255;
+        }
+        rgba
+    }
+
+    /// The image of an RGBA buffer, dropping the alpha channel.
+    pub fn from_rgba8(rgba: Rgba8) -> Image {
+        let mut image = Image::new(rgba.width, rgba.height);
+        for (index, pixel) in image.pixels.iter_mut().enumerate() {
+            let offset = index * 4;
+            pixel[0] = rgba.pixels[offset];
+            pixel[1] = rgba.pixels[offset + 1];
+            pixel[2] = rgba.pixels[offset + 2];
+        }
+        image
+    }
+
     pub fn to_bmp_bytes(&self) -> Vec<u8> {
         let row_bytes = (self.width as usize) * 3;
         let row_stride = (row_bytes + 3) & !3;

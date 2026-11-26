@@ -24,6 +24,8 @@ use unitas_physics::trails::Trail;
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, ForceMode, MoveResult, Phase, QueryHit, Shape, World,
 };
+use unitas_render::image::Image;
+use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_render::{
     Camera, DirectionalLight, Mat4, Mesh, MeshInstance, Vec3, cube, look_at, render_scene,
 };
@@ -338,6 +340,7 @@ pub struct Runtime {
     input: InputState,
     render: RenderWorld,
     ui_screen_size: Option<[f32; 2]>,
+    ui_painter: Option<GlyphTextPainter>,
     pending_ui_clicks: Vec<u64>,
     ui_pressed_button: Option<EntityId>,
     project_identity: ProjectIdentity,
@@ -378,6 +381,7 @@ impl Runtime {
             input: InputState::with_default_axes(),
             render: RenderWorld::default(),
             ui_screen_size: None,
+            ui_painter: None,
             pending_ui_clicks: Vec::new(),
             ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
@@ -2023,7 +2027,12 @@ impl Runtime {
 
     /// The draw items of the visible canvas content of the loaded scenes.
     pub fn ui_draw_items(&self) -> Vec<UiDrawItem> {
-        let screen_size = self.ui_screen_size();
+        self.ui_draw_items_for(self.ui_screen_size())
+    }
+
+    /// The draw items of the visible canvas content, laid out against the
+    /// given screen size.
+    fn ui_draw_items_for(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
         let mut items = Vec::new();
         for scene in &self.scenes {
             items.extend(scene.ui.draw_items(screen_size));
@@ -3054,7 +3063,7 @@ impl Runtime {
         let projection = projection_for(&state.params, width as f32 / height as f32);
         let light = self.directional_light();
         let instances = self.render_instances();
-        let image = render_scene(
+        let mut image = render_scene(
             &instances,
             &projection,
             basis.view,
@@ -3063,11 +3072,33 @@ impl Runtime {
             width,
             height,
         );
+        image = self.composite_canvas_onto_frame(image, width, height);
         let bytes = image.to_bmp_bytes();
         if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
             camera_state.viewport = Some((width, height));
         }
         Ok(bytes)
+    }
+
+    /// Draws the canvas content of the loaded scenes onto a rendered frame, so
+    /// the interface is part of the picture instead of only its state.
+    fn composite_canvas_onto_frame(&mut self, image: Image, width: u32, height: u32) -> Image {
+        let items = self.ui_draw_items_for([width as f32, height as f32]);
+        if items.is_empty() {
+            return image;
+        }
+        let mut rgba = image.to_rgba8();
+        let mut target = UiTarget {
+            image: &mut rgba,
+            ids: None,
+        };
+        if items.iter().any(|item| item.text.is_some()) {
+            let painter = self.ui_painter.get_or_insert_with(GlyphTextPainter::new);
+            composite_ui(&mut target, &items, 1, Some(painter));
+        } else {
+            composite_ui(&mut target, &items, 1, None);
+        }
+        Image::from_rgba8(rgba)
     }
 
     pub(crate) fn camera_world_to_screen_point(

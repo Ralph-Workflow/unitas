@@ -137,14 +137,14 @@ fn blend_pixel(pixels: &mut [u8], offset: usize, color: [f32; 4]) {
     pixels[offset + 3] = (alpha * 255.0).round() as u8;
 }
 
-#[cfg(feature = "device")]
+#[cfg(feature = "text")]
 pub struct GlyphTextPainter {
     pub fonts: crate::glyphs::FontLibrary,
     pub cache: crate::glyphs::SwashCache,
     pub atlas: crate::glyphs::GlyphAtlas,
 }
 
-#[cfg(feature = "device")]
+#[cfg(feature = "text")]
 impl GlyphTextPainter {
     pub fn new() -> Self {
         let mut fonts = crate::glyphs::FontLibrary::new();
@@ -157,14 +157,14 @@ impl GlyphTextPainter {
     }
 }
 
-#[cfg(feature = "device")]
+#[cfg(feature = "text")]
 impl Default for GlyphTextPainter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "device")]
+#[cfg(feature = "text")]
 impl UiTextPainter for GlyphTextPainter {
     fn paint(
         &mut self,

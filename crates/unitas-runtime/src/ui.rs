@@ -987,9 +987,8 @@ mod tests {
 
 /// Crispness proof through the real cosmic-text glyph pipeline: the label's
 /// overlay item is laid out and rasterized per resolution scale, so text is
-/// reshaped instead of stretched. Gated on `device` because
-/// `unitas_render::glyphs` only compiles with the device feature.
-#[cfg(all(test, feature = "device"))]
+/// reshaped instead of stretched.
+#[cfg(test)]
 mod text_glyph_tests {
     use super::UiTextItem;
     use unitas_render::glyphs::{

@@ -87,8 +87,8 @@ unitas-core = { path = "../unitas-core" }
 unitas-jobs = { path = "../unitas-jobs" }
 unitas-physics = { path = "../unitas-physics" }
 gilrs = { version = "0.11.2", optional = true }
-unitas-render = { path = "../unitas-render" }
+unitas-render = { path = "../unitas-render", features = ["text"] }
 winit = { version = "0.30.13", optional = true }
 
 [dev-dependencies]
-unitas-render = { path = "../unitas-render" }
+unitas-render = { path = "../unitas-render", features = ["text"] }
