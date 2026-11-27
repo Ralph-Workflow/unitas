@@ -13,22 +13,6 @@ namespace Unitas.Bridge.Tests
         private static readonly string ProcessSuffix =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "_";
 
-        public static void RunSharedA()
-        {
-            string tempProject = CreateTempTestProject("shared_a");
-            try
-            {
-                VerifyStory15(tempProject);
-                VerifyStory16(tempProject);
-                VerifyStory17(tempProject);
-                VerifyCliRunCommandExitCodes(tempProject);
-            }
-            finally
-            {
-                DeleteDirectoryIfExists(tempProject);
-            }
-        }
-
         public static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
         {
             string tempProject = CreateTempTestProject("shared_a");

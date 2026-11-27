@@ -1678,10 +1678,21 @@ _TIMED_GATE_ATTEMPTS = 2
 _RED_GATE_EXIT_CODE = 3
 
 
-def _run_timed(argv: list[str]) -> tuple[int, str]:
+class _ScriptedClock:
+    def __init__(self, readings: list[float]) -> None:
+        self._readings = list(readings)
+        self._current = self._readings[0]
+
+    def __call__(self) -> float:
+        if self._readings:
+            self._current = self._readings.pop(0)
+        return self._current
+
+
+def _run_timed(argv: list[str], clock: Callable[[], float] = time.monotonic) -> tuple[int, str]:
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        status = verify.run_timed(argv)
+        status = verify.run_timed(argv, clock)
     return status, buffer.getvalue()
 
 
@@ -1713,23 +1724,14 @@ def test_timed_gate_fails_a_command_that_would_succeed_past_its_budget() -> None
     assert "gate overrun-gate exceeded the 1s budget and was terminated" in output
 
 
-def test_timed_gate_reruns_once_and_passes_when_the_re_run_fits_the_budget(
-    tmp_path: Path,
-) -> None:
-    marker = tmp_path / "attempted.txt"
-    script = (
-        "import pathlib, sys, time\n"
-        "marker = pathlib.Path(sys.argv[1])\n"
-        "if not marker.exists():\n"
-        "    marker.write_text('first', encoding='utf-8')\n"
-        "    time.sleep(30)\n"
-        "print('second')\n"
-    )
+def test_timed_gate_reruns_once_and_passes_when_the_re_run_fits_the_budget() -> None:
+    clock = _ScriptedClock([0.0, 0.0, 2.0])
     status, output = _run_timed(
-        ["timed", "contended-gate", "1", sys.executable, "-c", script, str(marker)]
+        ["timed", "contended-gate", "1", sys.executable, "-c", "print('second')"],
+        clock,
     )
     assert status == 0
-    assert "gate contended-gate exceeded the 1s budget and was terminated" in output
+    assert "gate contended-gate exceeded the 1s budget" in output
     assert "gate contended-gate is re-run once with the same 1s budget" in output
     assert "gate contended-gate passed on the re-run" in output
 

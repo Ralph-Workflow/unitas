@@ -2429,13 +2429,16 @@ def restore_signal_mask(previous: set[int | signal.Signals] | None) -> None:
 
 
 def wait_for_timed_gate(
-    process: subprocess.Popen[bytes], deadline: float, pending: list[int]
+    process: subprocess.Popen[bytes],
+    deadline: float,
+    pending: list[int],
+    clock: Callable[[], float] = time.monotonic,
 ) -> int | None:
     while True:
         if pending:
             terminate_timed_gate(process)
             raise SystemExit(128 + pending[0])
-        remaining = deadline - time.monotonic()
+        remaining = deadline - clock()
         if remaining <= 0:
             return None
         try:
@@ -2445,9 +2448,12 @@ def wait_for_timed_gate(
 
 
 def run_timed_attempt(
-    label: str, budget: float, command: list[str]
+    label: str,
+    budget: float,
+    command: list[str],
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[bool, bool, int] | None:
-    started = time.monotonic()
+    started = clock()
     pending: list[int] = []
     active = True
 
@@ -2468,7 +2474,7 @@ def run_timed_attempt(
             sys.stderr.write(f"gate {label} could not start {command[0]!r}: {error}\n")
             return None
         try:
-            returncode = wait_for_timed_gate(process, started + budget, pending)
+            returncode = wait_for_timed_gate(process, started + budget, pending, clock)
         except KeyboardInterrupt:
             terminate_timed_gate(process)
             raise
@@ -2481,7 +2487,7 @@ def run_timed_attempt(
                 )
                 return True, True, 1
             returncode = finished
-        elapsed = time.monotonic() - started
+        elapsed = clock() - started
         sys.stdout.write(f"gate {label} took {elapsed:.2f}s (exit {returncode})\n")
         if returncode != 0:
             sys.stderr.write(
@@ -2500,7 +2506,7 @@ def run_timed_attempt(
         restore_signal_mask(previous_mask)
 
 
-def run_timed(argv: Sequence[str]) -> int:
+def run_timed(argv: Sequence[str], clock: Callable[[], float] = time.monotonic) -> int:
     if len(argv) < TIMED_COMMAND_MIN_ARGS:
         sys.stderr.write("usage: verify.py timed <label> <budget-seconds> <command...>\n")
         return 2
@@ -2509,7 +2515,7 @@ def run_timed(argv: Sequence[str]) -> int:
     command = list(argv[3:])
     status = 1
     for attempt in (1, TIMED_RE_RUN_ATTEMPT):
-        outcome = run_timed_attempt(label, budget, command)
+        outcome = run_timed_attempt(label, budget, command, clock)
         if outcome is None:
             return 1
         overran, killed, returncode = outcome
