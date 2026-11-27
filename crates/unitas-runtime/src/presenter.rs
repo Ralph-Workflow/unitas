@@ -19,8 +19,8 @@ use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
     BlendMode, Camera, CanvasRect, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image,
-    Mat4, Material, Mesh, MeshAttributes, RenderError, RenderScene, Renderer, ShadowSettings,
-    SurfaceFrame, TextOverlayItem, Vec3, gpu::GpuLight, look_at,
+    Mat4, Material, Mesh, MeshAttributes, PostSettings, RenderError, RenderScene, Renderer,
+    ShadowSettings, SurfaceFrame, TextOverlayItem, Vec3, gpu::GpuLight, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -364,6 +364,17 @@ pub fn shadow_settings_for_runtime(runtime: &Runtime) -> ShadowSettings {
         .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
         .map_or_else(ShadowSettings::disabled, shadow_settings_for_quality)
 }
+pub fn post_settings_for_quality(level: &QualityLevel) -> PostSettings {
+    PostSettings {
+        enabled: level.anti_aliasing >= 2,
+        ..PostSettings::default()
+    }
+}
+pub fn post_settings_for_runtime(runtime: &Runtime) -> PostSettings {
+    runtime
+        .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
+        .map_or_else(PostSettings::default, post_settings_for_quality)
+}
 
 pub fn v_sync_count_for_runtime(runtime: &Runtime) -> u32 {
     runtime
@@ -393,6 +404,7 @@ pub fn set_runtime_quality_level(runtime: &mut Runtime, index: usize) -> Option<
         && let Some(level) = runtime.quality_settings.levels.get(index)
     {
         renderer.set_shadow_settings(shadow_settings_for_quality(level));
+        renderer.set_post_settings(post_settings_for_quality(level));
         renderer.set_v_sync_count(level.v_sync_count);
     }
     runtime.quality_settings.levels.get(index)
@@ -800,6 +812,7 @@ impl<'a> GpuFramePresenter<'a> {
         self.set_lights(runtime.lights());
         self.set_ambient(runtime.ambient());
         self.set_shadow_settings(shadow_settings_for_runtime(runtime));
+        self.set_post_settings(post_settings_for_runtime(runtime));
         let vsync = v_sync_count_for_runtime(runtime);
         self.set_v_sync_count(vsync);
         let quality_index = quality_level_index_for_runtime(runtime).unwrap_or(0);
@@ -865,6 +878,14 @@ impl<'a> GpuFramePresenter<'a> {
         self.renderer.set_shadow_settings(settings);
     }
 
+    pub fn set_post_settings(&mut self, settings: PostSettings) {
+        self.renderer.set_post_settings(settings);
+    }
+
+    pub fn post_settings(&self) -> PostSettings {
+        self.renderer.post_settings()
+    }
+
     pub fn shadow_settings(&self) -> ShadowSettings {
         self.renderer.shadow_settings()
     }
@@ -888,6 +909,7 @@ impl<'a> GpuFramePresenter<'a> {
         let shadow = shadow_settings_for_quality(level);
         let vsync = level.v_sync_count;
         self.set_shadow_settings(shadow);
+        self.set_post_settings(post_settings_for_quality(level));
         self.set_v_sync_count(vsync);
         with_display_settings(|display| {
             display.quality_level = index;
@@ -900,6 +922,7 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn sync_quality_from_runtime(&mut self, runtime: &Runtime) {
         self.set_shadow_settings(shadow_settings_for_runtime(runtime));
+        self.set_post_settings(post_settings_for_runtime(runtime));
         let vsync = v_sync_count_for_runtime(runtime);
         self.set_v_sync_count(vsync);
     }
@@ -1078,7 +1101,7 @@ impl<'a> GpuFramePresenter<'a> {
                             )?;
                             configured = Some((frame.size, v_sync_count));
                         }
-                        renderer.render_surface_frame(&surface, frame)
+                        renderer.render_surface_frame_post(&surface, frame)
                     },
                 ));
             }

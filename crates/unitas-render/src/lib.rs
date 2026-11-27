@@ -15,6 +15,10 @@ pub use camera::{look_at, Camera};
 pub use capture::{
     render_offscreen_with_ids, CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds,
 };
+pub use gpu::post::{
+    aces_fit, bright_pass, luminance, tonemap, PostSettings, BLOOM_INTENSITY, BLOOM_THRESHOLD,
+    BLUR_WEIGHTS, EXPOSURE,
+};
 pub use gpu::{
     CanvasRect, GpuInstance, GpuMaterialInstance, GpuRenderer, RenderError, RenderScene, Renderer,
     SurfaceFrame, TextOverlayItem, GPU_CPU_MEAN_ERROR_TOLERANCE,
@@ -26,7 +30,9 @@ pub use model::{
     effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
     DEFAULT_MATERIAL,
 };
-pub use render_graph::{RenderGraph, RenderGraphPass, RenderPassKind, RenderTargetKind};
+pub use render_graph::{
+    PostChain, PostPassKind, RenderGraph, RenderGraphPass, RenderPassKind, RenderTargetKind,
+};
 pub use shadow::{light_view_projection, next_power_of_two, shadow_map_size, ShadowSettings};
 pub use sprite::{sort_sprites, sprite_quad, Sprite};
 pub use ui_pass::{

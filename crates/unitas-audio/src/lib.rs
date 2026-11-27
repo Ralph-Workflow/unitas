@@ -4,6 +4,9 @@ use std::path::Path;
 use unitas_asset::audio_import::{load_or_cook_audio, CookedAudio};
 use unitas_core::EntityId;
 
+use crate::fx::FilterChain;
+
+pub mod fx;
 #[cfg(feature = "device")]
 pub mod output;
 pub mod ring;
@@ -615,6 +618,7 @@ pub struct AudioWorld {
     device_sample_rate: Option<u32>,
     doppler_factor: f32,
     speed_of_sound: f32,
+    filters: BTreeMap<EntityId, FilterChain>,
 }
 
 impl Default for AudioWorld {
@@ -647,6 +651,7 @@ impl AudioWorld {
             device_sample_rate: None,
             doppler_factor: DEFAULT_DOPPLER_FACTOR,
             speed_of_sound: DEFAULT_SPEED_OF_SOUND,
+            filters: BTreeMap::new(),
         }
     }
 
@@ -716,6 +721,7 @@ impl AudioWorld {
 
     pub fn remove_source(&mut self, entity: EntityId) -> bool {
         let removed = self.sources.remove(&entity).is_some();
+        self.filters.remove(&entity);
         if removed {
             self.source_order.retain(|candidate| *candidate != entity);
             self.recompute_virtualization();
@@ -960,6 +966,9 @@ impl AudioWorld {
                 stream.resample(sample_rate);
             }
         }
+        for chain in self.filters.values_mut() {
+            chain.set_sample_rate(sample_rate);
+        }
     }
 
     fn effective_sample_rate(&self) -> u32 {
@@ -1073,7 +1082,101 @@ impl AudioWorld {
         source.sample_cursor = 0.0;
         source.scheduled_sample = None;
         source.state = AudioSourceState::Stopped;
+        if let Some(chain) = self.filters.get_mut(&entity) {
+            chain.reset();
+        }
         self.recompute_virtualization();
+    }
+
+    pub fn set_low_pass_filter(
+        &mut self,
+        entity: EntityId,
+        cutoff_hz: f32,
+        resonance_q: f32,
+    ) -> bool {
+        if !cutoff_hz.is_finite() || !resonance_q.is_finite() {
+            return false;
+        }
+        self.ensure_source(entity);
+        let sample_rate = self.effective_sample_rate();
+        let chain = self
+            .filters
+            .entry(entity)
+            .or_insert_with(|| FilterChain::new(sample_rate));
+        chain.set_low_pass(cutoff_hz, resonance_q);
+        true
+    }
+
+    pub fn set_high_pass_filter(
+        &mut self,
+        entity: EntityId,
+        cutoff_hz: f32,
+        resonance_q: f32,
+    ) -> bool {
+        if !cutoff_hz.is_finite() || !resonance_q.is_finite() {
+            return false;
+        }
+        self.ensure_source(entity);
+        let sample_rate = self.effective_sample_rate();
+        let chain = self
+            .filters
+            .entry(entity)
+            .or_insert_with(|| FilterChain::new(sample_rate));
+        chain.set_high_pass(cutoff_hz, resonance_q);
+        true
+    }
+
+    pub fn set_echo_filter(
+        &mut self,
+        entity: EntityId,
+        delay_seconds: f32,
+        dry_db: f32,
+        feedback_db: f32,
+        wet_db: f32,
+    ) -> bool {
+        if !delay_seconds.is_finite()
+            || !dry_db.is_finite()
+            || !feedback_db.is_finite()
+            || !wet_db.is_finite()
+        {
+            return false;
+        }
+        self.ensure_source(entity);
+        let sample_rate = self.effective_sample_rate();
+        let chain = self
+            .filters
+            .entry(entity)
+            .or_insert_with(|| FilterChain::new(sample_rate));
+        chain.set_echo(delay_seconds, dry_db, feedback_db, wet_db);
+        true
+    }
+
+    pub fn clear_filters(&mut self, entity: EntityId) {
+        self.filters.remove(&entity);
+    }
+
+    pub fn clear_low_pass_filter(&mut self, entity: EntityId) {
+        if let Some(chain) = self.filters.get_mut(&entity) {
+            chain.clear_low_pass();
+        }
+    }
+
+    pub fn clear_high_pass_filter(&mut self, entity: EntityId) {
+        if let Some(chain) = self.filters.get_mut(&entity) {
+            chain.clear_high_pass();
+        }
+    }
+
+    pub fn clear_echo_filter(&mut self, entity: EntityId) {
+        if let Some(chain) = self.filters.get_mut(&entity) {
+            chain.clear_echo();
+        }
+    }
+
+    pub fn has_filters(&self, entity: EntityId) -> bool {
+        self.filters
+            .get(&entity)
+            .is_some_and(|chain| chain.is_active())
     }
 
     pub fn set_volume(&mut self, entity: EntityId, volume: f32) {
@@ -1534,6 +1637,7 @@ impl AudioWorld {
             let Some(source) = self.sources.get_mut(&entity) else {
                 return false;
             };
+            let mut chain = self.filters.get_mut(&entity);
             let looping = source.looping && !source.one_shot_active;
             for frame_out in render_offset..n_frames {
                 let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
@@ -1542,6 +1646,8 @@ impl AudioWorld {
                     source.state = AudioSourceState::Completed;
                     return true;
                 };
+                let (sample_l, sample_r) =
+                    apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
                 output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
                 output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
                 source.sample_cursor += 1.0;
@@ -1565,6 +1671,7 @@ impl AudioWorld {
         let Some(source) = self.sources.get_mut(&entity) else {
             return false;
         };
+        let mut chain = self.filters.get_mut(&entity);
 
         for frame_out in render_offset..n_frames {
             let mut frame_idx = source.sample_cursor.floor() as usize;
@@ -1590,6 +1697,7 @@ impl AudioWorld {
                 let right = clip.samples.get(frame_idx * 2 + 1).copied().unwrap_or(0.0);
                 (left, right)
             };
+            let (sample_l, sample_r) = apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
 
             output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
             output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
@@ -1712,6 +1820,13 @@ impl AudioWorld {
                 }
             }
         }
+    }
+}
+
+fn apply_filter_chain(chain: Option<&mut FilterChain>, left: f32, right: f32) -> (f32, f32) {
+    match chain {
+        Some(filter) => filter.process(left, right),
+        None => (left, right),
     }
 }
 

@@ -193,6 +193,50 @@ namespace Unitas.Bridge
             RuntimeInterop.unitas_runtime_audio_set_position(_runtimeHandle, entityId, position.x, position.y, position.z);
         }
 
+        public void SetLowPassFilter(ulong entityId, bool enabled, float cutoffFrequency, float resonanceQ)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return;
+            }
+            RuntimeInterop.unitas_runtime_audio_set_low_pass_filter(
+                _runtimeHandle,
+                entityId,
+                enabled ? 1U : 0U,
+                cutoffFrequency,
+                resonanceQ);
+        }
+
+        public void SetHighPassFilter(ulong entityId, bool enabled, float cutoffFrequency, float resonanceQ)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return;
+            }
+            RuntimeInterop.unitas_runtime_audio_set_high_pass_filter(
+                _runtimeHandle,
+                entityId,
+                enabled ? 1U : 0U,
+                cutoffFrequency,
+                resonanceQ);
+        }
+
+        public void SetEchoFilter(ulong entityId, bool enabled, float delaySeconds, float dryLevel, float feedback, float wetLevel)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return;
+            }
+            RuntimeInterop.unitas_runtime_audio_set_echo_filter(
+                _runtimeHandle,
+                entityId,
+                enabled ? 1U : 0U,
+                delaySeconds,
+                dryLevel,
+                feedback,
+                wetLevel);
+        }
+
         public bool SetAudioGroup(ulong entityId, uint group)
         {
             if (_isDisposed || _runtimeHandle == 0 || entityId == 0)

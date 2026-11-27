@@ -220,6 +220,77 @@ fn fs_capture_sprite(vs_out: VertexOut) -> CaptureOut {
 }
 ";
 
+pub(super) const POST_SHADER_SOURCE: &str = r"
+struct PostParams {
+    threshold: f32,
+    intensity: f32,
+    exposure: f32,
+    texel_x: f32,
+    texel_y: f32,
+    direction_x: f32,
+    direction_y: f32,
+    reserved: f32,
+};
+@group(0) @binding(0) var source_tex: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
+@group(0) @binding(2) var<uniform> params: PostParams;
+@group(0) @binding(3) var bloom_tex: texture_2d<f32>;
+struct PostVertex {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_post(@builtin(vertex_index) index: u32) -> PostVertex {
+    var out: PostVertex;
+    let corner = f32(index);
+    let x = select(-1.0, 3.0, corner >= 1.0);
+    let y = select(-1.0, 3.0, corner >= 2.0);
+    out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+fn aces_fit_raw(value: f32) -> f32 {
+    let numerator = value * (value + 0.0245786) - 0.000090537;
+    let denominator = value * (0.983729 * value + 0.432951) + 0.238081;
+    return numerator / denominator;
+}
+fn aces_fit(value: f32) -> f32 {
+    return max(0.0, aces_fit_raw(value) / aces_fit_raw(1.0));
+}
+@fragment
+fn fs_bright(vertex: PostVertex) -> @location(0) vec4<f32> {
+    let color = textureSampleLevel(source_tex, source_sampler, vertex.uv, 0.0).rgb;
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (luma <= params.threshold) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    return vec4<f32>(color, 1.0);
+}
+fn blur_sample(uv: vec2<f32>) -> vec3<f32> {
+    let step = vec2<f32>(params.direction_x * params.texel_x, params.direction_y * params.texel_y);
+    var sum = textureSampleLevel(source_tex, source_sampler, uv, 0.0).rgb * 0.22702703;
+    sum = sum + (textureSampleLevel(source_tex, source_sampler, uv + step, 0.0).rgb
+        + textureSampleLevel(source_tex, source_sampler, uv - step, 0.0).rgb) * 0.1945946;
+    sum = sum + (textureSampleLevel(source_tex, source_sampler, uv + step * 2.0, 0.0).rgb
+        + textureSampleLevel(source_tex, source_sampler, uv - step * 2.0, 0.0).rgb) * 0.12162162;
+    sum = sum + (textureSampleLevel(source_tex, source_sampler, uv + step * 3.0, 0.0).rgb
+        + textureSampleLevel(source_tex, source_sampler, uv - step * 3.0, 0.0).rgb) * 0.05405405;
+    sum = sum + (textureSampleLevel(source_tex, source_sampler, uv + step * 4.0, 0.0).rgb
+        + textureSampleLevel(source_tex, source_sampler, uv - step * 4.0, 0.0).rgb) * 0.01621622;
+    return sum;
+}
+@fragment
+fn fs_blur(vertex: PostVertex) -> @location(0) vec4<f32> {
+    return vec4<f32>(blur_sample(vertex.uv), 1.0);
+}
+@fragment
+fn fs_tonemap(vertex: PostVertex) -> @location(0) vec4<f32> {
+    let scene = textureSampleLevel(source_tex, source_sampler, vertex.uv, 0.0).rgb;
+    let bloom = textureSampleLevel(bloom_tex, source_sampler, vertex.uv, 0.0).rgb;
+    let color = (scene + bloom * params.intensity) * params.exposure;
+    return vec4<f32>(aces_fit(color.r), aces_fit(color.g), aces_fit(color.b), 1.0);
+}
+";
 pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x3,

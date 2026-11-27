@@ -622,7 +622,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "2D physics is reachable from a Unity scene and from the C# surface",
                 location: "crates/unitas-runtime/src/physics.rs",
                 evidence: &[
-                    "crates/unitas-runtime/tests/physics2d_collider_surface_tests.rs::composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam",
+                    "crates/unitas-runtime/tests/physics2d_collider_surface_tests.rs::physics2d_composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam",
                     "bridge/Unitas.Bridge.Tests/Physics2DTests.cs::TestSceneParsesExtendedCollidersAndMaterials",
                     "bridge/Unitas.Bridge.Tests/Physics2DMessageTests.cs::TestWicksLanternEndToEndPlatformerScenario",
                 ],
@@ -873,6 +873,17 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                     "crates/unitas-render/src/gpu.rs::directional_shadow_darkens_occluded_surface_and_tracks_map_size",
                     "crates/unitas-render/src/shadow.rs::shadow_map_size_matches_unity_multiplier_table",
                     "crates/unitas-runtime/src/presenter.rs::quality_shadow_settings_mapping_covers_shadows_resolutions_and_distances",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a post chain of a bright pass, a separable blur, and an ACES-fit tone map runs as render-graph passes on the offscreen, capture, and surface paths, and is enabled per quality level",
+                location: "crates/unitas-render/src/post.rs",
+                evidence: &[
+                    "crates/unitas-render/src/post.rs::bright_pass_keeps_pixels_above_the_threshold_and_drops_the_rest",
+                    "crates/unitas-render/src/post.rs::aces_fit_maps_zero_to_zero_and_one_to_one",
+                    "crates/unitas-render/src/post.rs::aces_fit_stays_monotonic",
+                    "crates/unitas-render/src/post.rs::the_blur_weights_sum_to_one",
                 ],
                 missing: None,
             },
@@ -2088,12 +2099,22 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "SpriteRenderer Simple/Sliced/Tiled drawing, SpriteAtlas packing and runtime atlas binding, SortingGroup, SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are rendered",
+                behavior: "SpriteAtlas packing and runtime atlas binding, SortingGroup, SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are rendered",
                 location: "crates/unitas-render/src/ui_pass.rs",
                 evidence: &[],
                 missing: Some(
-                    "SpriteRenderer Simple, Sliced, and Tiled drawing, SpriteAtlas packing and runtime atlas binding, SortingGroup and SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are not implemented",
+                    "SpriteAtlas packing and runtime atlas binding, SortingGroup and SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are not implemented",
                 ),
+            },
+            OwnedCapabilityPart {
+                behavior: "SpriteRenderer Sliced and Tiled draw modes render nine-slice and tiled geometry built from the sprite's imported border, and the Simple draw mode is unchanged",
+                location: "crates/unitas-render/src/sprite.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime_sprite_tests.rs::scene_sprite_sliced_draw_mode_draws_the_nine_slice_parts",
+                    "crates/unitas-runtime/tests/runtime_sprite_tests.rs::sliced_sprite_draws_the_nine_slice_regions_into_the_frame",
+                    "crates/unitas-runtime/tests/runtime_sprite_tests.rs::script_sprite_tiled_draw_mode_repeats_the_sprite_rect",
+                ],
+                missing: None,
             },
         ],
     },
@@ -2173,6 +2194,15 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                     "crates/unitas-runtime/tests/pointer_ui.rs::keyboard_focus_still_cycles_and_enter_submits",
                     "crates/unitas-runtime/tests/ui_components.rs::a_pointer_click_on_a_button_is_dispatched",
                     "crates/unitas-runtime/tests/ui_components.rs::the_ui_abi_sets_the_text_and_reports_the_click",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a uGUI Image in Sliced mode draws the nine quads of the sprite's imported border and in Tiled mode repeats the sprite, while Simple still draws one stretched quad",
+                location: "crates/unitas-runtime/src/canvas.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/ui_sliced_tests.rs::sliced_image_with_an_eight_pixel_border_draws_nine_quads_with_the_border_uvs",
+                    "crates/unitas-runtime/tests/ui_sliced_tests.rs::simple_image_stays_one_stretched_quad_and_tiled_repeats_the_sprite",
                 ],
                 missing: None,
             },
@@ -2306,12 +2336,23 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "AudioMixer asset import, snapshots, exposed parameters, built-in mixer DSP effects, filter components, AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are supported",
+                behavior: "AudioMixer asset import, snapshots, exposed parameters, built-in mixer DSP effects, AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are supported",
                 location: "crates/unitas-audio/src/lib.rs",
                 evidence: &[],
                 missing: Some(
-                    "AudioMixer asset import, snapshots (TransitionTo), exposed parameters, and built-in mixer DSP effects, filter components (AudioLowPassFilter, AudioReverbFilter, OnAudioFilterRead), AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are not implemented",
+                    "AudioMixer asset import, snapshots (TransitionTo), exposed parameters, and built-in mixer DSP effects, AudioDistortionFilter, AudioReverbFilter, AudioChorusFilter, OnAudioFilterRead, AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are not implemented",
                 ),
+            },
+            OwnedCapabilityPart {
+                behavior: "AudioLowPassFilter, AudioHighPassFilter, and AudioEchoFilter on an AudioSource process the source's audio with a biquad low-pass, a biquad high-pass, and a feedback-delay echo on the real mix path",
+                location: "crates/unitas-audio/src/fx.rs",
+                evidence: &[
+                    "crates/unitas-audio/tests/audio_fx_tests.rs::low_pass_filter_attenuates_8khz_by_30db_and_passes_200hz",
+                    "crates/unitas-audio/tests/audio_fx_tests.rs::high_pass_filter_attenuates_200hz_by_30db_and_passes_8khz",
+                    "crates/unitas-audio/tests/audio_fx_tests.rs::echo_filter_repeats_after_the_delay_and_decays",
+                    "crates/unitas-runtime/tests/audio_filter_abi_tests.rs::runtime_abi_audio_filters_round_trip",
+                ],
+                missing: None,
             },
         ],
     },

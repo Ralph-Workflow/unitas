@@ -2,7 +2,7 @@ use std::error::Error;
 
 use unitas_asset::scene::{
     CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, CanvasScalerComponent,
-    RectTransformComponent, UiBinding, UiElementComponent, UiImageComponent,
+    RectTransformComponent, SpriteDrawMode, UiBinding, UiElementComponent, UiImageComponent,
 };
 use unitas_core::EntityId;
 use unitas_render::Rgba8;
@@ -236,6 +236,8 @@ fn canvas_binding_without_a_canvas_yields_no_items() {
             entity: EntityId::new(1),
             color: [1.0, 1.0, 1.0, 1.0],
             sprite_guid: None,
+            draw_mode: SpriteDrawMode::Simple,
+            sprite_border: [0.0; 4],
             enabled: true,
         })],
         layout_groups: Vec::new(),

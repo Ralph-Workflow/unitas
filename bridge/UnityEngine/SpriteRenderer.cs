@@ -189,9 +189,7 @@ namespace UnityEngine
         }
 
         /// <summary>
-        /// The way the renderer draws the sprite. The sliced and tiled modes are
-        /// not drawn yet and are reported as an error instead of being drawn
-        /// as a simple sprite without a word.
+        /// The way the renderer draws the sprite.
         /// </summary>
         public SpriteDrawMode drawMode
         {
@@ -203,13 +201,6 @@ namespace UnityEngine
                 {
                     Provider?.TrySetSpriteDrawMode(entity, value);
                 }
-
-                if (value != SpriteDrawMode.Simple)
-                {
-                    Debug.LogError(
-                        "SpriteRenderer draws in the " + DrawModeName(value)
-                        + " mode, which the renderer does not draw yet");
-                }
             }
         }
 
@@ -218,19 +209,6 @@ namespace UnityEngine
             if (TryNativeEntity(out ulong entity))
             {
                 Provider?.TrySetSpriteEnabled(entity, isEnabled);
-            }
-        }
-
-        private static string DrawModeName(SpriteDrawMode mode)
-        {
-            switch (mode)
-            {
-                case SpriteDrawMode.Sliced:
-                    return "Sliced";
-                case SpriteDrawMode.Tiled:
-                    return "Tiled";
-                default:
-                    return "Simple";
             }
         }
 

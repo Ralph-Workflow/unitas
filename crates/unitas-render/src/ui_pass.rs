@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use crate::glyphs::{HorizontalAlign, Rect, TextLayoutBox, VerticalAlign};
 use crate::image::Rgba8;
 
-static UI_SPRITE_REGISTRY: OnceLock<Mutex<HashMap<String, Rgba8>>> = OnceLock::new();
+static UI_SPRITE_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<Rgba8>>>> = OnceLock::new();
 
-fn ui_sprite_registry() -> &'static Mutex<HashMap<String, Rgba8>> {
+fn ui_sprite_registry() -> &'static Mutex<HashMap<String, Arc<Rgba8>>> {
     UI_SPRITE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -15,7 +15,7 @@ pub fn register_ui_sprite_image(guid: impl Into<String>, image: Rgba8) {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    guard.insert(guid.into(), image);
+    guard.insert(guid.into(), Arc::new(image));
 }
 
 pub fn ui_sprite_image(guid: &str) -> Option<Rgba8> {
@@ -23,7 +23,27 @@ pub fn ui_sprite_image(guid: &str) -> Option<Rgba8> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
+    guard.get(guid).map(|image| (**image).clone())
+}
+
+/// The registered sprite texture, shared so a sliced image does not copy it per quad.
+pub fn ui_sprite_texture(guid: &str) -> Option<Arc<Rgba8>> {
+    let guard = match ui_sprite_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     guard.get(guid).cloned()
+}
+
+/// The pixel size of a registered sprite, used to split its nine-slice border.
+pub fn ui_sprite_size(guid: &str) -> Option<[f32; 2]> {
+    let guard = match ui_sprite_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard
+        .get(guid)
+        .map(|image| [image.width as f32, image.height as f32])
 }
 
 pub const FOCUS_INDICATOR_COLOR: [f32; 4] = [1.0, 0.9, 0.0, 1.0];
@@ -150,7 +170,7 @@ pub fn composite_ui<T: UiElement>(
                     None => bounds,
                 };
                 if let Some((sprite, image)) = item.sprite().and_then(|s| {
-                    ui_sprite_image(&s.texture_guid)
+                    ui_sprite_texture(&s.texture_guid)
                         .filter(|img| img.width > 0 && img.height > 0)
                         .map(|img| (s, img))
                 }) {

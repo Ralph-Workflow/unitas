@@ -1,3 +1,4 @@
+use unitas_asset::scene::{AudioFilterComponent, AudioFilterKind};
 use unitas_audio::RolloffMode;
 
 use super::{
@@ -330,6 +331,122 @@ pub extern "C" fn unitas_runtime_audio_set_loop(handle: u64, entity: u64, loopin
             .runtime
             .audio_mut()
             .set_looping(EntityId::new(entity), looping != 0);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_low_pass_filter(
+    handle: u64,
+    entity: u64,
+    enabled: u32,
+    cutoff_hz: f32,
+    resonance_q: f32,
+) -> i32 {
+    if entity == 0 || !cutoff_hz.is_finite() || !resonance_q.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let id = EntityId::new(entity);
+        if enabled != 0 {
+            state
+                .runtime
+                .audio_mut()
+                .set_low_pass_filter(id, cutoff_hz, resonance_q);
+        } else {
+            state.runtime.audio_mut().clear_low_pass_filter(id);
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_high_pass_filter(
+    handle: u64,
+    entity: u64,
+    enabled: u32,
+    cutoff_hz: f32,
+    resonance_q: f32,
+) -> i32 {
+    if entity == 0 || !cutoff_hz.is_finite() || !resonance_q.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let id = EntityId::new(entity);
+        if enabled != 0 {
+            state
+                .runtime
+                .audio_mut()
+                .set_high_pass_filter(id, cutoff_hz, resonance_q);
+        } else {
+            state.runtime.audio_mut().clear_high_pass_filter(id);
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_echo_filter(
+    handle: u64,
+    entity: u64,
+    enabled: u32,
+    delay_seconds: f32,
+    dry_db: f32,
+    feedback_db: f32,
+    wet_db: f32,
+) -> i32 {
+    if entity == 0
+        || !delay_seconds.is_finite()
+        || !dry_db.is_finite()
+        || !feedback_db.is_finite()
+        || !wet_db.is_finite()
+    {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let id = EntityId::new(entity);
+        if enabled != 0 {
+            state.runtime.audio_mut().set_echo_filter(
+                id,
+                delay_seconds,
+                dry_db,
+                feedback_db,
+                wet_db,
+            );
+        } else {
+            state.runtime.audio_mut().clear_echo_filter(id);
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_clear_filters(handle: u64, entity: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state.runtime.audio_mut().clear_filters(EntityId::new(entity));
         state.clear_error();
         0
     }) {
@@ -925,6 +1042,7 @@ pub extern "C" fn unitas_runtime_audio_source_config(
         state.path_buffer[39] = u8::from(config.mute);
         state.path_buffer[40] = u8::from(config.enabled);
         state.path_buffer[41..44].fill(0);
+        apply_scene_filters(state, EntityId::new(entity));
         state.clear_error();
         0
     }) {
@@ -932,4 +1050,51 @@ pub extern "C" fn unitas_runtime_audio_source_config(
         Err(code) => code,
     }
 }
+}
+
+fn apply_scene_filters(state: &mut RuntimeState, entity: EntityId) {
+    let filters: Vec<AudioFilterComponent> = state
+        .runtime
+        .audio_source_config(entity)
+        .map(|config| config.filters.clone())
+        .unwrap_or_default();
+    for filter in filters {
+        match filter.kind {
+            AudioFilterKind::LowPass => {
+                if filter.enabled {
+                    state.runtime.audio_mut().set_low_pass_filter(
+                        entity,
+                        filter.cutoff_hz,
+                        filter.resonance_q,
+                    );
+                } else {
+                    state.runtime.audio_mut().clear_low_pass_filter(entity);
+                }
+            }
+            AudioFilterKind::HighPass => {
+                if filter.enabled {
+                    state.runtime.audio_mut().set_high_pass_filter(
+                        entity,
+                        filter.cutoff_hz,
+                        filter.resonance_q,
+                    );
+                } else {
+                    state.runtime.audio_mut().clear_high_pass_filter(entity);
+                }
+            }
+            AudioFilterKind::Echo => {
+                if filter.enabled {
+                    state.runtime.audio_mut().set_echo_filter(
+                        entity,
+                        filter.delay_seconds,
+                        filter.dry_db,
+                        filter.feedback_db,
+                        filter.wet_db,
+                    );
+                } else {
+                    state.runtime.audio_mut().clear_echo_filter(entity);
+                }
+            }
+        }
+    }
 }

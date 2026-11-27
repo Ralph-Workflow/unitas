@@ -14,7 +14,7 @@ use crate::mesh::{Mesh, MeshAttributes};
 use crate::model::{
     effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
 };
-use crate::render_graph::{RenderGraph, RenderPassKind};
+use crate::render_graph::{PostChain, RenderGraph, RenderPassKind};
 use crate::shadow::{light_view_projection, shadow_map_size, ShadowSettings};
 use crate::sprite::{sprite_quad, Sprite};
 
@@ -33,6 +33,8 @@ mod gpu_pipelines;
 mod gpu_shader;
 #[path = "gpu_surface.rs"]
 mod gpu_surface;
+#[path = "post.rs"]
+pub mod post;
 
 pub use crate::model::{GpuLight, GpuLightKind, MAX_GPU_LIGHTS};
 pub use gpu_surface::{present_mode_for_v_sync_count, SurfaceFrame};
@@ -302,6 +304,7 @@ pub struct Renderer {
     lighting: Mutex<SceneLightingState>,
     sprite_quad: (Mesh, MeshAttributes),
     v_sync_count: AtomicU32,
+    post: Mutex<post::PostState>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -473,6 +476,7 @@ impl Renderer {
         let material_bind =
             create_default_material_bind(&device, &queue, &material_layout, &material_sampler);
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 1);
+        let post = post::PostState::new(&device);
         let mut fonts = FontLibrary::new();
         fonts.load_bundled_font();
         fonts.load_system_fonts();
@@ -513,6 +517,7 @@ impl Renderer {
             }),
             sprite_quad: sprite_quad(),
             v_sync_count: AtomicU32::new(1),
+            post: Mutex::new(post),
         })
     }
 
@@ -769,8 +774,14 @@ impl Renderer {
         } = scene;
         let shadows_enabled = self.prepare_shadow_map(width.max(height));
         let sprites = self.sprites();
+        let post_enabled = self.post_settings().enabled;
         let graph = RenderGraph::offscreen(!overlay.is_empty(), shadows_enabled)
-            .with_sprites(!sprites.is_empty());
+            .with_sprites(!sprites.is_empty())
+            .with_post(if post_enabled {
+                PostChain::bloom_tonemap()
+            } else {
+                PostChain::default()
+            });
         let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen-color"),
             size: wgpu::Extent3d {
@@ -788,6 +799,7 @@ impl Renderer {
         let depth_texture = self.create_depth_texture(width, height);
         let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (scene_view, scene_pipelines) = self.post_scene_target((width, height), &color_view)?;
 
         let (prepared, prepared_sprites) =
             self.prepare_draw_items(&items, &sprites, camera, view, light)?;
@@ -805,7 +817,7 @@ impl Renderer {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("offscreen-opaque"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &color_view,
+                            view: &scene_view,
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -827,7 +839,7 @@ impl Renderer {
                     });
                     self.draw_pass_indices(
                         &mut pass,
-                        &self.offscreen_pipelines,
+                        &scene_pipelines,
                         &items,
                         &prepared,
                         &opaque_order(&items),
@@ -839,7 +851,7 @@ impl Renderer {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("offscreen-transparent"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &color_view,
+                                view: &scene_view,
                                 depth_slice: None,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
@@ -863,7 +875,7 @@ impl Renderer {
                         });
                         self.draw_pass_indices(
                             &mut pass,
-                            &self.offscreen_pipelines,
+                            &scene_pipelines,
                             &items,
                             &prepared,
                             &indices,
@@ -873,25 +885,44 @@ impl Renderer {
                 RenderPassKind::Sprites => {
                     self.encode_sprite_pass(
                         &mut encoder,
-                        &[&color_view],
+                        &[&scene_view],
                         &depth_view,
                         &prepared_sprites,
-                        &self.offscreen_pipelines.sprite,
+                        &scene_pipelines.sprite,
                         items.len(),
                     );
                 }
                 RenderPassKind::UiOverlay => {
-                    self.draw_text_overlay(
-                        &mut encoder,
-                        &color_view,
-                        OFFSCREEN_FORMAT,
-                        (width, height),
-                        1.0,
-                        overlay,
-                    );
+                    if !post_enabled {
+                        self.draw_text_overlay(
+                            &mut encoder,
+                            &color_view,
+                            OFFSCREEN_FORMAT,
+                            (width, height),
+                            1.0,
+                            overlay,
+                        );
+                    }
                 }
                 RenderPassKind::CaptureIds => {}
             }
+        }
+        if post_enabled {
+            self.encode_post_chain(
+                &mut encoder,
+                graph.post_passes(),
+                &color_view,
+                OFFSCREEN_FORMAT,
+                (width, height),
+            )?;
+            self.draw_text_overlay(
+                &mut encoder,
+                &color_view,
+                OFFSCREEN_FORMAT,
+                (width, height),
+                1.0,
+                overlay,
+            );
         }
 
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);

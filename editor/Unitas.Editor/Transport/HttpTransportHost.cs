@@ -29,6 +29,7 @@ namespace Unitas.Editor.Mcp
         public const string AgentHeaderName = "X-Unitas-Agent";
         public const string AuthorizedByHeaderName = "X-Unitas-Authorized-By";
         public const string SessionIdHeaderName = "Mcp-Session-Id";
+        public const int StartTimeoutSeconds = 60;
         public const int MissingScopeErrorCode = -32001;
         public const int SelfWideningErrorCode = -32002;
         public const int ServerErrorCode = -32000;
@@ -120,7 +121,21 @@ namespace Unitas.Editor.Mcp
             WebApplication builtApp = builder.Build();
             builtApp.MapMcp();
 
-            await builtApp.StartAsync(cancellationToken).ConfigureAwait(false);
+            using CancellationTokenSource startCts = new CancellationTokenSource(
+                TimeSpan.FromSeconds(StartTimeoutSeconds));
+            using CancellationTokenRegistration registration = cancellationToken.Register(
+                () => startCts.Cancel());
+            try
+            {
+                await builtApp.StartAsync(startCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await builtApp.DisposeAsync().ConfigureAwait(false);
+                throw new TimeoutException(
+                    "HttpTransportHost did not start within " + StartTimeoutSeconds + " seconds.");
+            }
+
             app = builtApp;
             ResolveBoundAddress(builtApp);
         }

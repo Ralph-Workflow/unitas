@@ -24,6 +24,35 @@ namespace Unitas.Editor.Tests
             HttpSelfWideningAndUnknownPrimitiveErrorsAreMappedAndAudited()
                 .GetAwaiter()
                 .GetResult();
+            HttpServerStartIsBoundedAndFailsWithAClearMessageInsteadOfHanging()
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        private static async Task HttpServerStartIsBoundedAndFailsWithAClearMessageInsteadOfHanging()
+        {
+            using McpHost host = BuildTestHost();
+            HttpTransportHost transportHost = new HttpTransportHost(host, 0);
+            using CancellationTokenSource cts = new CancellationTokenSource();
+            await cts.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                bool cancelled = false;
+                try
+                {
+                    await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                }
+
+                Check.That("http: server start honours cancellation instead of hanging", cancelled);
+            }
+            finally
+            {
+                await transportHost.DisposeAsync().ConfigureAwait(false);
+            }
         }
 
         private static async Task ConcurrentHttpClientsHaveIsolatedSessionsScopesAndAuditRecordsWhilePersonSessionRemainsUnaffected()
@@ -34,7 +63,7 @@ namespace Unitas.Editor.Tests
             host.GrantScope(personSessionId, Scope.Deploy, GrantAuthority.Person);
 
             HttpTransportHost transportHost = new HttpTransportHost(host, 0);
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using CancellationTokenSource cts = new CancellationTokenSource();
             await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
             try
             {
@@ -96,6 +125,7 @@ namespace Unitas.Editor.Tests
             finally
             {
                 await transportHost.DisposeAsync().ConfigureAwait(false);
+                await cts.CancelAsync().ConfigureAwait(false);
             }
         }
 
@@ -278,7 +308,7 @@ namespace Unitas.Editor.Tests
         {
             using McpHost host = BuildTestHost();
             HttpTransportHost transportHost = new HttpTransportHost(host, 0);
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using CancellationTokenSource cts = new CancellationTokenSource();
             await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
             try
             {
@@ -382,6 +412,7 @@ namespace Unitas.Editor.Tests
             finally
             {
                 await transportHost.DisposeAsync().ConfigureAwait(false);
+                await cts.CancelAsync().ConfigureAwait(false);
             }
         }
 
@@ -389,7 +420,7 @@ namespace Unitas.Editor.Tests
         {
             using McpHost host = BuildTestHost();
             HttpTransportHost transportHost = new HttpTransportHost(host, 0);
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using CancellationTokenSource cts = new CancellationTokenSource();
             await transportHost.StartAsync(cts.Token).ConfigureAwait(false);
             try
             {
@@ -455,6 +486,7 @@ namespace Unitas.Editor.Tests
             finally
             {
                 await transportHost.DisposeAsync().ConfigureAwait(false);
+                await cts.CancelAsync().ConfigureAwait(false);
             }
         }
 

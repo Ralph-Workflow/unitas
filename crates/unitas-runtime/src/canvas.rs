@@ -3,13 +3,13 @@ use std::sync::{Mutex, OnceLock, RwLock};
 
 use unitas_asset::scene::{
     CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, ContentSizeFitMode,
-    LayoutGroupAxis, RectTransformComponent, UiBinding, UiButtonComponent,
+    LayoutGroupAxis, RectTransformComponent, SpriteDrawMode, UiBinding, UiButtonComponent,
     UiContentSizeFitterComponent, UiElementComponent, UiLayoutGroupComponent,
 };
 use unitas_core::EntityId;
 use unitas_render::glyphs::{FontLibrary, TextStyle, layout_text};
 use unitas_render::ui_pass::{
-    FOCUS_INDICATOR_COLOR, HorizontalAlign, VerticalAlign, focus_border_rects,
+    FOCUS_INDICATOR_COLOR, HorizontalAlign, VerticalAlign, focus_border_rects, ui_sprite_size,
 };
 
 use crate::input::{
@@ -25,6 +25,8 @@ pub use unitas_render::ui_pass::SpriteRef;
 const MAX_HIERARCHY_DEPTH: usize = 64;
 const FOCUS_BORDER_THICKNESS: f32 = 2.0;
 const STICK_NAVIGATION_THRESHOLD: f64 = 0.5;
+/// The uv region of a whole sprite.
+const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextAnchor {
@@ -173,6 +175,126 @@ impl unitas_render::ui_pass::UiElement for UiDrawItem {
 pub struct CanvasRect {
     pub min: [f32; 2],
     pub size: [f32; 2],
+}
+
+/// A sprite quad: the screen rect it covers and the sprite uv region it shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteQuad {
+    pub rect: [f32; 4],
+    pub uv: [f32; 4],
+}
+
+/// The nine-slice quads of a sprite drawn into `rect`, as Unity's sliced `Image`
+/// does: the corners keep the border's pixel size, the edges stretch on one axis
+/// and the centre stretches on both.
+pub fn slice_sprite_quads(
+    border: [f32; 4],
+    sprite_size: [f32; 2],
+    rect: [f32; 4],
+    uv_rect: [f32; 4],
+    scale: f32,
+) -> Vec<SpriteQuad> {
+    let (mut left, mut bottom, mut right, mut top) = (
+        border[0] * scale,
+        border[1] * scale,
+        border[2] * scale,
+        border[3] * scale,
+    );
+    let (width, height) = (rect[2], rect[3]);
+    if left + right > width {
+        let difference = left - right;
+        left = 0.5 * width + 0.5 * difference;
+        right = 0.5 * width - 0.5 * difference;
+    }
+    if bottom + top > height {
+        let difference = top - bottom;
+        bottom = 0.5 * height - 0.5 * difference;
+        top = 0.5 * height + 0.5 * difference;
+    }
+    let (u0, v0, u1, v1) = (uv_rect[0], uv_rect[1], uv_rect[2], uv_rect[3]);
+    let u_span = u1 - u0;
+    let v_span = v1 - v0;
+    let u_left = u0 + border[0] / sprite_size[0] * u_span;
+    let u_right = u1 - border[2] / sprite_size[0] * u_span;
+    let v_top = v0 + border[3] / sprite_size[1] * v_span;
+    let v_bottom = v1 - border[1] / sprite_size[1] * v_span;
+    let (x, y) = (rect[0], rect[1]);
+    let mid_x = x + left;
+    let end_x = x + width - right;
+    let mid_y = y + top;
+    let end_y = y + height - bottom;
+    vec![
+        SpriteQuad {
+            rect: [x, y, left, top],
+            uv: [u0, v0, u_left, v_top],
+        },
+        SpriteQuad {
+            rect: [mid_x, y, end_x - mid_x, top],
+            uv: [u_left, v0, u_right, v_top],
+        },
+        SpriteQuad {
+            rect: [end_x, y, right, top],
+            uv: [u_right, v0, u1, v_top],
+        },
+        SpriteQuad {
+            rect: [x, mid_y, left, end_y - mid_y],
+            uv: [u0, v_top, u_left, v_bottom],
+        },
+        SpriteQuad {
+            rect: [mid_x, mid_y, end_x - mid_x, end_y - mid_y],
+            uv: [u_left, v_top, u_right, v_bottom],
+        },
+        SpriteQuad {
+            rect: [end_x, mid_y, right, end_y - mid_y],
+            uv: [u_right, v_top, u1, v_bottom],
+        },
+        SpriteQuad {
+            rect: [x, end_y, left, bottom],
+            uv: [u0, v_bottom, u_left, v1],
+        },
+        SpriteQuad {
+            rect: [mid_x, end_y, end_x - mid_x, bottom],
+            uv: [u_left, v_bottom, u_right, v1],
+        },
+        SpriteQuad {
+            rect: [end_x, end_y, right, bottom],
+            uv: [u_right, v_bottom, u1, v1],
+        },
+    ]
+}
+
+/// The tiled quads of a sprite drawn into `rect`: the sprite repeats at its own
+/// pixel size and the tiles are clipped to the rect.
+pub fn tile_sprite_quads(
+    sprite_size: [f32; 2],
+    rect: [f32; 4],
+    uv_rect: [f32; 4],
+    scale: f32,
+) -> Vec<SpriteQuad> {
+    let tile_width = sprite_size[0] * scale;
+    let tile_height = sprite_size[1] * scale;
+    if tile_width <= 0.0 || tile_height <= 0.0 {
+        return Vec::new();
+    }
+    let columns = (rect[2] / tile_width).ceil().max(1.0) as usize;
+    let rows = (rect[3] / tile_height).ceil().max(1.0) as usize;
+    let mut quads = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        for column in 0..columns {
+            let x = rect[0] + column as f32 * tile_width;
+            let y = rect[1] + row as f32 * tile_height;
+            let width = tile_width.min(rect[0] + rect[2] - x);
+            let height = tile_height.min(rect[1] + rect[3] - y);
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
+            quads.push(SpriteQuad {
+                rect: [x, y, width, height],
+                uv: uv_rect,
+            });
+        }
+    }
+    quads
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -415,17 +537,33 @@ impl CanvasState {
                     if !self.is_element_enabled(image.entity, image.enabled) {
                         continue;
                     }
-                    items.push(UiDrawItem {
-                        rect_px,
-                        color: image.color,
-                        sprite: image.sprite_guid.as_ref().map(|guid| SpriteRef {
-                            texture_guid: guid.clone(),
-                            uv_rect: [0.0, 0.0, 1.0, 1.0],
-                        }),
-                        text: None,
-                        text_layout: TextLayoutConfig::default(),
-                        text_clip_rect: None,
-                    });
+                    let sprite_guid = image.sprite_guid.clone();
+                    let sprite_size = sprite_guid.as_deref().and_then(ui_sprite_size);
+                    let quads = match (image.draw_mode, sprite_size) {
+                        (SpriteDrawMode::Sliced, Some(size)) => {
+                            slice_sprite_quads(image.sprite_border, size, rect_px, FULL_UV, scale)
+                        }
+                        (SpriteDrawMode::Tiled, Some(size)) => {
+                            tile_sprite_quads(size, rect_px, FULL_UV, scale)
+                        }
+                        _ => vec![SpriteQuad {
+                            rect: rect_px,
+                            uv: FULL_UV,
+                        }],
+                    };
+                    for quad in quads {
+                        items.push(UiDrawItem {
+                            rect_px: quad.rect,
+                            color: image.color,
+                            sprite: sprite_guid.as_ref().map(|guid| SpriteRef {
+                                texture_guid: guid.clone(),
+                                uv_rect: quad.uv,
+                            }),
+                            text: None,
+                            text_layout: TextLayoutConfig::default(),
+                            text_clip_rect: None,
+                        });
+                    }
                 }
                 UiElementComponent::Text(text) => {
                     if !self.is_element_enabled(text.entity, text.enabled) {
@@ -1145,7 +1283,8 @@ mod tests {
         KEY_TAB, KEY_UP_ARROW,
     };
     use unitas_asset::scene::{
-        CanvasScalerComponent, UiButtonComponent, UiImageComponent, UiPadding, UiTextComponent,
+        CanvasScalerComponent, SpriteDrawMode, UiButtonComponent, UiImageComponent, UiPadding,
+        UiTextComponent,
     };
     use unitas_render::image::Rgba8;
     use unitas_render::ui_pass::{FOCUS_INDICATOR_COLOR, UiTarget, composite_ui};
@@ -1236,12 +1375,16 @@ mod tests {
                     enabled: true,
                     color: [0.08, 0.1, 0.16, 0.88],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Image(UiImageComponent {
                     entity: PLAY_BUTTON_ID,
                     enabled: true,
                     color: [0.2, 0.65, 0.32, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Button(UiButtonComponent {
                     entity: PLAY_BUTTON_ID,
@@ -1260,6 +1403,8 @@ mod tests {
                     enabled: true,
                     color: [0.55, 0.2, 0.22, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Button(UiButtonComponent {
                     entity: QUIT_BUTTON_ID,
@@ -1271,6 +1416,8 @@ mod tests {
                     enabled: true,
                     color: [0.3, 0.3, 0.3, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Button(UiButtonComponent {
                     entity: DISABLED_BUTTON_ID,
@@ -1282,12 +1429,16 @@ mod tests {
                     enabled: false,
                     color: [0.08, 0.1, 0.16, 0.92],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Image(UiImageComponent {
                     entity: RETRY_BUTTON_ID,
                     enabled: true,
                     color: [0.2, 0.65, 0.32, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Button(UiButtonComponent {
                     entity: RETRY_BUTTON_ID,
@@ -1299,6 +1450,8 @@ mod tests {
                     enabled: true,
                     color: [0.22, 0.45, 0.72, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Button(UiButtonComponent {
                     entity: ARENA_SELECT_BUTTON_ID,
@@ -1603,12 +1756,16 @@ mod tests {
                     enabled: true,
                     color: [0.1, 0.1, 0.1, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Image(UiImageComponent {
                     entity: icon_id,
                     enabled: true,
                     color: [1.0, 0.0, 0.0, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
                 UiElementComponent::Text(UiTextComponent {
                     entity: label_id,
@@ -1622,6 +1779,8 @@ mod tests {
                     enabled: true,
                     color: [0.0, 0.5, 1.0, 1.0],
                     sprite_guid: None,
+                    draw_mode: SpriteDrawMode::Simple,
+                    sprite_border: [0.0; 4],
                 }),
             ],
             layout_groups: vec![

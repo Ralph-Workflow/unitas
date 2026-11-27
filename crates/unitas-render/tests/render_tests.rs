@@ -1,5 +1,7 @@
 #[path = "render/integration_tests.rs"]
 mod integration_tests;
+#[path = "render/post_tests.rs"]
+mod post_tests;
 #[path = "render/render_tests.rs"]
 mod render_tests;
 #[path = "render/shadow_tests.rs"]

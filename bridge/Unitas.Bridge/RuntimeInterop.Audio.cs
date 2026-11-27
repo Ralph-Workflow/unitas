@@ -99,5 +99,17 @@ namespace Unitas.Bridge
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_audio_source_config(ulong handle, ulong entity, ulong outBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_low_pass_filter(ulong handle, ulong entity, uint enabled, float cutoffHz, float resonanceQ);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_high_pass_filter(ulong handle, ulong entity, uint enabled, float cutoffHz, float resonanceQ);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_echo_filter(ulong handle, ulong entity, uint enabled, float delaySeconds, float dryDb, float feedbackDb, float wetDb);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_clear_filters(ulong handle, ulong entity);
     }
 }

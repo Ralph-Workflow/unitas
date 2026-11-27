@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use crate::audio_import::is_supported_audio_path;
 use crate::meta::GuidIndex;
-use crate::unity_yaml::{Node, Stream};
+use crate::unity_yaml::{Document, Node, Stream};
+use unitas_core::EntityId;
 
 use super::{
     reference_id, yaml_bool, yaml_f32, yaml_u8, AssetGuid, AudioBinding, AudioSourceComponent,
@@ -13,12 +14,166 @@ use super::{
     DEFAULT_AUDIO_SPATIAL_BLEND, DEFAULT_AUDIO_VOLUME, ROOT_FILE_ID,
 };
 
+const LOW_PASS_FILTER_BODY: &str = "AudioLowPassFilter";
+const HIGH_PASS_FILTER_BODY: &str = "AudioHighPassFilter";
+const ECHO_FILTER_BODY: &str = "AudioEchoFilter";
+const DEFAULT_FILTER_CUTOFF_HZ: f32 = 5000.0;
+const DEFAULT_FILTER_RESONANCE_Q: f32 = 1.0;
+const DEFAULT_ECHO_DELAY_SECONDS: f32 = 0.5;
+const DEFAULT_ECHO_DRY_DB: f32 = 0.0;
+const DEFAULT_ECHO_FEEDBACK_DB: f32 = -10.0;
+const DEFAULT_ECHO_WET_DB: f32 = 0.0;
+const MIN_FILTER_CUTOFF_HZ: f32 = 10.0;
+const MAX_FILTER_CUTOFF_HZ: f32 = 22000.0;
+const MIN_FILTER_RESONANCE_Q: f32 = 1.0;
+const MAX_FILTER_RESONANCE_Q: f32 = 10.0;
+const MIN_ECHO_DELAY_SECONDS: f32 = 0.02;
+const MAX_ECHO_DELAY_SECONDS: f32 = 1.0;
+const MIN_ECHO_DB: f32 = -60.0;
+const MAX_ECHO_DRY_DB: f32 = 0.0;
+const MAX_ECHO_FEEDBACK_DB: f32 = 20.0;
+const MAX_ECHO_WET_DB: f32 = 0.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioFilterKind {
+    LowPass,
+    HighPass,
+    Echo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioFilterComponent {
+    pub kind: AudioFilterKind,
+    pub enabled: bool,
+    pub cutoff_hz: f32,
+    pub resonance_q: f32,
+    pub delay_seconds: f32,
+    pub dry_db: f32,
+    pub feedback_db: f32,
+    pub wet_db: f32,
+}
+
+pub fn collect_audio_filters(
+    stream: &Stream,
+    game_objects: &GameObjectRecords,
+    instance_roots: &HashSet<i64>,
+) -> Result<Vec<(EntityId, AudioFilterComponent)>, SceneError> {
+    let mut bindings = Vec::new();
+    for document in &stream.documents {
+        if document.stripped {
+            continue;
+        }
+        let Some((kind, body)) = filter_body(document) else {
+            continue;
+        };
+        let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
+            Some(file_id) => file_id,
+            None => {
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id: ROOT_FILE_ID,
+                })
+            }
+        };
+        let record = match game_objects.get(&game_object_file_id) {
+            Some(record) => record,
+            None => {
+                if instance_roots.contains(&game_object_file_id) {
+                    continue;
+                }
+                return Err(SceneError::MissingGameObject {
+                    transform_file_id: document.file_id,
+                    game_object_file_id,
+                });
+            }
+        };
+        bindings.push((record.entity, audio_filter_component(kind, body)));
+    }
+    Ok(bindings)
+}
+
+fn filter_body(document: &Document) -> Option<(AudioFilterKind, &Node)> {
+    if let Some(body) = document.root.get(LOW_PASS_FILTER_BODY) {
+        return Some((AudioFilterKind::LowPass, body));
+    }
+    if let Some(body) = document.root.get(HIGH_PASS_FILTER_BODY) {
+        return Some((AudioFilterKind::HighPass, body));
+    }
+    if let Some(body) = document.root.get(ECHO_FILTER_BODY) {
+        return Some((AudioFilterKind::Echo, body));
+    }
+    None
+}
+
+fn audio_filter_component(kind: AudioFilterKind, body: &Node) -> AudioFilterComponent {
+    let enabled = yaml_bool(
+        body.get("m_Enabled").or_else(|| body.get("m_enabled")),
+        true,
+    );
+    let cutoff_hz = yaml_f32(
+        body.get("m_CutoffFrequency")
+            .or_else(|| body.get("CutoffFrequency"))
+            .or_else(|| body.get("cutoffFrequency")),
+        DEFAULT_FILTER_CUTOFF_HZ,
+        |value| (MIN_FILTER_CUTOFF_HZ..=MAX_FILTER_CUTOFF_HZ).contains(&value),
+    );
+    let resonance_q = yaml_f32(
+        body.get("m_LowpassResonanceQ")
+            .or_else(|| body.get("m_HighpassResonanceQ"))
+            .or_else(|| body.get("LowpassResonanceQ"))
+            .or_else(|| body.get("HighpassResonanceQ"))
+            .or_else(|| body.get("lowpassResonanceQ"))
+            .or_else(|| body.get("highpassResonanceQ")),
+        DEFAULT_FILTER_RESONANCE_Q,
+        |value| (MIN_FILTER_RESONANCE_Q..=MAX_FILTER_RESONANCE_Q).contains(&value),
+    );
+    let delay_seconds = yaml_f32(
+        body.get("m_EchoDelay")
+            .or_else(|| body.get("EchoDelay"))
+            .or_else(|| body.get("echoDelay")),
+        DEFAULT_ECHO_DELAY_SECONDS,
+        |value| (MIN_ECHO_DELAY_SECONDS..=MAX_ECHO_DELAY_SECONDS).contains(&value),
+    );
+    let dry_db = yaml_f32(
+        body.get("m_EchoDryLevel")
+            .or_else(|| body.get("EchoDryLevel"))
+            .or_else(|| body.get("echoDryLevel")),
+        DEFAULT_ECHO_DRY_DB,
+        |value| (MIN_ECHO_DB..=MAX_ECHO_DRY_DB).contains(&value),
+    );
+    let feedback_db = yaml_f32(
+        body.get("m_EchoFeedback")
+            .or_else(|| body.get("EchoFeedback"))
+            .or_else(|| body.get("echoFeedback")),
+        DEFAULT_ECHO_FEEDBACK_DB,
+        |value| (MIN_ECHO_DB..=MAX_ECHO_FEEDBACK_DB).contains(&value),
+    );
+    let wet_db = yaml_f32(
+        body.get("m_EchoWetLevel")
+            .or_else(|| body.get("EchoWetLevel"))
+            .or_else(|| body.get("echoWetLevel")),
+        DEFAULT_ECHO_WET_DB,
+        |value| (MIN_ECHO_DB..=MAX_ECHO_WET_DB).contains(&value),
+    );
+    AudioFilterComponent {
+        kind,
+        enabled,
+        cutoff_hz,
+        resonance_q,
+        delay_seconds,
+        dry_db,
+        feedback_db,
+        wet_db,
+    }
+}
+
 pub(super) fn collect_audio(
     stream: &Stream,
     game_objects: &GameObjectRecords,
     instance_roots: &HashSet<i64>,
     index: Option<&GuidIndex>,
 ) -> Result<Vec<AudioBinding>, SceneError> {
+    let filters = collect_audio_filters(stream, game_objects, instance_roots)?;
     let mut bindings = Vec::new();
     for document in &stream.documents {
         if document.stripped {
@@ -55,7 +210,12 @@ pub(super) fn collect_audio(
                 });
             }
         };
-        let component = audio_source_component(body, &record.name, index);
+        let mut component = audio_source_component(body, &record.name, index);
+        component.filters = filters
+            .iter()
+            .filter(|(entity, _)| *entity == record.entity)
+            .map(|(_, filter)| *filter)
+            .collect();
         bindings.push((record.entity, component));
     }
     Ok(bindings)
@@ -125,6 +285,7 @@ fn audio_source_component(
         min_distance,
         max_distance,
         mute,
+        filters: Vec::new(),
     }
 }
 
@@ -191,12 +352,16 @@ fn resolve_audio_clip(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
     use crate::audio_import::{decode_audio_for_path, PcmClip};
     use crate::meta::GuidIndex;
-    use crate::scene::{assemble_scene_bundle_with_guids, AudioSourceComponent};
+    use crate::scene::{assemble_scene_bundle_with_guids, AudioSourceComponent, GameObjectRecord};
     use crate::unity_yaml;
+    use unitas_core::EntityId;
+
+    use super::{collect_audio_filters, AudioFilterKind, GameObjectRecords};
 
     const OGG_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.ogg");
     const MP3_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.mp3");
@@ -348,6 +513,67 @@ mod tests {
             assert!(diagnostic.contains(expected_ext));
             assert!(decode_clip(b"not-audio", path).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn scene_audio_parses_filter_components_for_their_audio_source() -> Result<(), String> {
+        let yaml = "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: Emitter\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Father: {fileID: 0}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {fileID: 10}\n--- !u!90 &13\nAudioLowPassFilter:\n  m_GameObject: {fileID: 10}\n  m_CutoffFrequency: 1200\n  m_LowpassResonanceQ: 2\n--- !u!91 &14\nAudioHighPassFilter:\n  m_GameObject: {fileID: 10}\n  m_CutoffFrequency: 300\n  m_HighpassResonanceQ: 3\n--- !u!92 &15\nAudioEchoFilter:\n  m_GameObject: {fileID: 10}\n  m_EchoDelay: 0.25\n  m_EchoDryLevel: -6\n  m_EchoFeedback: -12\n  m_EchoWetLevel: -3\n";
+        let stream = unity_yaml::parse(yaml).map_err(|err| err.to_string())?;
+        let mut records = GameObjectRecords::new();
+        records.insert(
+            10,
+            GameObjectRecord {
+                entity: EntityId::new(7),
+                name: "Emitter".to_string(),
+                layer: 0,
+            },
+        );
+        let filters = collect_audio_filters(&stream, &records, &HashSet::new())
+            .map_err(|err| err.to_string())?;
+        assert_eq!(filters.len(), 3);
+
+        let (entity, low_pass) = filters[0];
+        assert_eq!(entity, EntityId::new(7));
+        assert_eq!(low_pass.kind, AudioFilterKind::LowPass);
+        assert!(low_pass.enabled);
+        assert_eq!(low_pass.cutoff_hz, 1200.0);
+        assert_eq!(low_pass.resonance_q, 2.0);
+
+        let (_, high_pass) = filters[1];
+        assert_eq!(high_pass.kind, AudioFilterKind::HighPass);
+        assert_eq!(high_pass.cutoff_hz, 300.0);
+        assert_eq!(high_pass.resonance_q, 3.0);
+
+        let (_, echo) = filters[2];
+        assert_eq!(echo.kind, AudioFilterKind::Echo);
+        assert_eq!(echo.delay_seconds, 0.25);
+        assert_eq!(echo.dry_db, -6.0);
+        assert_eq!(echo.feedback_db, -12.0);
+        assert_eq!(echo.wet_db, -3.0);
+        Ok(())
+    }
+
+    #[test]
+    fn scene_audio_clamps_out_of_range_filter_values() -> Result<(), String> {
+        let yaml = "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: Emitter\n--- !u!90 &13\nAudioLowPassFilter:\n  m_GameObject: {fileID: 10}\n  m_CutoffFrequency: 999999\n  m_LowpassResonanceQ: 99\n  m_Enabled: 0\n";
+        let stream = unity_yaml::parse(yaml).map_err(|err| err.to_string())?;
+        let mut records = GameObjectRecords::new();
+        records.insert(
+            10,
+            GameObjectRecord {
+                entity: EntityId::new(3),
+                name: "Emitter".to_string(),
+                layer: 0,
+            },
+        );
+        let filters = collect_audio_filters(&stream, &records, &HashSet::new())
+            .map_err(|err| err.to_string())?;
+        assert_eq!(filters.len(), 1);
+        let (_, filter) = filters[0];
+        assert!(!filter.enabled);
+        assert_eq!(filter.cutoff_hz, 5000.0);
+        assert_eq!(filter.resonance_q, 1.0);
         Ok(())
     }
 }

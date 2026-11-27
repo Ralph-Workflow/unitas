@@ -22,9 +22,39 @@ pub struct RenderGraphPass {
     pub target: RenderTargetKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostPassKind {
+    Bright,
+    BlurHorizontal,
+    BlurVertical,
+    Tonemap,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PostChain {
+    passes: Vec<PostPassKind>,
+}
+impl PostChain {
+    pub fn bloom_tonemap() -> Self {
+        Self {
+            passes: vec![
+                PostPassKind::Bright,
+                PostPassKind::BlurHorizontal,
+                PostPassKind::BlurVertical,
+                PostPassKind::Tonemap,
+            ],
+        }
+    }
+    pub fn passes(&self) -> &[PostPassKind] {
+        &self.passes
+    }
+    pub fn is_empty(&self) -> bool {
+        self.passes.is_empty()
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderGraph {
     passes: Vec<RenderGraphPass>,
+    post: PostChain,
 }
 
 impl RenderGraph {
@@ -50,7 +80,10 @@ impl RenderGraph {
                 target: RenderTargetKind::OffscreenColorDepth,
             });
         }
-        Self { passes }
+        Self {
+            passes,
+            post: PostChain::default(),
+        }
     }
 
     pub fn surface(has_overlay: bool, shadows: bool) -> Self {
@@ -75,7 +108,10 @@ impl RenderGraph {
                 target: RenderTargetKind::SurfaceColorDepth,
             });
         }
-        Self { passes }
+        Self {
+            passes,
+            post: PostChain::default(),
+        }
     }
 
     pub fn capture(shadows: bool) -> Self {
@@ -98,11 +134,28 @@ impl RenderGraph {
             kind: RenderPassKind::CaptureIds,
             target: RenderTargetKind::CaptureColorIdDepth,
         });
-        Self { passes }
+        Self {
+            passes,
+            post: PostChain::default(),
+        }
     }
 
     pub fn passes(&self) -> &[RenderGraphPass] {
         &self.passes
+    }
+
+    pub fn post_passes(&self) -> &[PostPassKind] {
+        self.post.passes()
+    }
+
+    pub fn with_post(self, post: PostChain) -> Self {
+        if post.is_empty() {
+            return self;
+        }
+        Self {
+            passes: self.passes,
+            post,
+        }
     }
 
     pub fn with_sprites(self, has_sprites: bool) -> Self {
@@ -131,7 +184,10 @@ impl RenderGraph {
                 target,
             },
         );
-        Self { passes }
+        Self {
+            passes,
+            post: self.post,
+        }
     }
 
     pub fn has_sprite_pass(&self) -> bool {

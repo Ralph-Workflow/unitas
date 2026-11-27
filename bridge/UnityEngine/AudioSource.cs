@@ -132,6 +132,18 @@ namespace UnityEngine
         AudioClip CreateClip(string name, int lengthSamples, int channels, int frequency);
 
         AudioClip? LoadClip(string path);
+
+        void SetLowPassFilter(ulong entityId, bool enabled, float cutoffFrequency, float resonanceQ);
+
+        void SetHighPassFilter(ulong entityId, bool enabled, float cutoffFrequency, float resonanceQ);
+
+        void SetEchoFilter(
+            ulong entityId,
+            bool enabled,
+            float delaySeconds,
+            float dryLevel,
+            float feedback,
+            float wetLevel);
     }
 
     public sealed class AudioSource : Behaviour
@@ -591,6 +603,7 @@ namespace UnityEngine
         {
             if (_nativeEntityId != 0UL)
             {
+                ApplySiblingFilters(_nativeEntityId);
                 return _nativeEntityId;
             }
 
@@ -625,9 +638,71 @@ namespace UnityEngine
                 {
                     provider.SetPosition(_nativeEntityId, owner.transform.position);
                 }
+                ApplySiblingFilters(_nativeEntityId);
             }
 
             return _nativeEntityId;
+        }
+
+        private void ApplySiblingFilters(ulong entityId)
+        {
+            IAudioProvider? provider = Provider;
+            if (provider == null)
+            {
+                return;
+            }
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed)
+            {
+                return;
+            }
+            AudioLowPassFilter? lowPass = owner.GetComponent<AudioLowPassFilter>();
+            if (lowPass != null)
+            {
+                provider.SetLowPassFilter(
+                    entityId,
+                    lowPass.enabled,
+                    lowPass.cutoffFrequency,
+                    lowPass.lowpassResonanceQ);
+            }
+            AudioHighPassFilter? highPass = owner.GetComponent<AudioHighPassFilter>();
+            if (highPass != null)
+            {
+                provider.SetHighPassFilter(
+                    entityId,
+                    highPass.enabled,
+                    highPass.cutoffFrequency,
+                    highPass.highpassResonanceQ);
+            }
+            AudioEchoFilter? echo = owner.GetComponent<AudioEchoFilter>();
+            if (echo != null)
+            {
+                provider.SetEchoFilter(
+                    entityId,
+                    echo.enabled,
+                    echo.echoDelay,
+                    echo.echoDryLevel,
+                    echo.echoFeedback,
+                    echo.echoWetLevel);
+            }
+        }
+    }
+
+    internal static class AudioFilterBinding
+    {
+        internal static ulong ResolveEntityId(Component component)
+        {
+            GameObject? owner = component.OwnerOrNull;
+            if (owner == null || owner.IsDestroyed)
+            {
+                return 0UL;
+            }
+            AudioSource? source = owner.GetComponent<AudioSource>();
+            if (source != null && source.TryGetEntityId(out ulong entityId))
+            {
+                return entityId;
+            }
+            return owner.NativeEntityId;
         }
     }
 }

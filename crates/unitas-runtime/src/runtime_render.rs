@@ -6,6 +6,7 @@ use unitas_animation::CurveBindingTarget;
 use unitas_animation::curve::AssetReference;
 use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{LightComponent, MeshRendererComponent, RenderBinding, SpriteDrawMode};
+use unitas_asset::texture::import::TextureImportSettings;
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
@@ -132,6 +133,16 @@ pub struct RenderSprite {
     pub flip_x: bool,
     pub flip_y: bool,
     pub enabled: bool,
+    pub draw_mode: SpriteDrawMode,
+    pub border: [f32; 4],
+    slices: Option<SpriteSlices>,
+}
+
+#[derive(Clone, Debug)]
+struct SpriteSlices {
+    source: Arc<Image>,
+    mode: SpriteDrawMode,
+    parts: Vec<Arc<Image>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -467,9 +478,6 @@ impl Runtime {
                         .register_sprite_texture(guid, path, Arc::clone(tex));
                 }
             }
-            if let Some(diagnostic) = &sprite.diagnostic {
-                diagnostics.push((entity, diagnostic.clone()));
-            }
             if texture.is_none() {
                 diagnostics.push((
                     entity,
@@ -497,6 +505,9 @@ impl Runtime {
                 flip_x: sprite.flip_x,
                 flip_y: sprite.flip_y,
                 enabled: sprite.enabled,
+                draw_mode: sprite.draw_mode,
+                border: sprite_border_from_meta(sprite.sprite_path.as_deref()),
+                slices: None,
             });
         }
         for light in &binding.lights {
@@ -760,32 +771,93 @@ impl Runtime {
         })
     }
 
-    pub fn sprite_instances(&self) -> Vec<unitas_render::Sprite> {
-        let mut sprites: Vec<unitas_render::Sprite> = self
-            .render
-            .sprites
-            .iter()
-            .filter(|sprite| sprite.enabled)
-            .filter_map(|sprite| {
-                let texture = self.effective_sprite_texture(sprite)?;
-                let size = [
-                    texture.width as f32 / SPRITE_PIXELS_PER_UNIT,
-                    texture.height as f32 / SPRITE_PIXELS_PER_UNIT,
-                ];
-                let transform = self.entity_transform(sprite.entity)?;
-                let mut adjusted = sprite.clone();
-                adjusted.size = size;
-                Some(unitas_render::Sprite {
+    pub fn sprite_instances(&mut self) -> Vec<unitas_render::Sprite> {
+        let mut sprites: Vec<unitas_render::Sprite> = Vec::new();
+        for index in 0..self.render.sprites.len() {
+            let mut adjusted = self.render.sprites[index].clone();
+            if !adjusted.enabled {
+                continue;
+            }
+            let Some(texture) = self.effective_sprite_texture(&adjusted) else {
+                continue;
+            };
+            let Some(transform) = self.entity_transform(adjusted.entity) else {
+                continue;
+            };
+            adjusted.size = [
+                texture.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                texture.height as f32 / SPRITE_PIXELS_PER_UNIT,
+            ];
+            if adjusted.draw_mode == SpriteDrawMode::Simple {
+                sprites.push(unitas_render::Sprite {
                     texture,
                     model: sprite_model(&transform, &adjusted),
-                    color: sprite.color,
-                    sorting_layer: sprite.sorting_layer,
-                    sorting_order: sprite.sorting_order,
-                })
-            })
-            .collect();
+                    color: adjusted.color,
+                    sorting_layer: adjusted.sorting_layer,
+                    sorting_order: adjusted.sorting_order,
+                });
+                continue;
+            }
+            let source_size = [texture.width as f32, texture.height as f32];
+            let target_size = [
+                source_size[0] * transform.scale[0].abs(),
+                source_size[1] * transform.scale[1].abs(),
+            ];
+            let parts = match adjusted.draw_mode {
+                SpriteDrawMode::Tiled => {
+                    unitas_render::sprite::tiled_parts(source_size, target_size)
+                }
+                _ => unitas_render::sprite::nine_slice_parts(
+                    adjusted.border,
+                    source_size,
+                    target_size,
+                ),
+            };
+            let textures = self.sprite_part_textures(index, &texture, adjusted.draw_mode, &parts);
+            for (part, part_texture) in parts.iter().zip(textures.iter()) {
+                sprites.push(unitas_render::Sprite {
+                    texture: Arc::clone(part_texture),
+                    model: sprite_part_model(&transform, &adjusted, target_size, part),
+                    color: adjusted.color,
+                    sorting_layer: adjusted.sorting_layer,
+                    sorting_order: adjusted.sorting_order,
+                });
+            }
+        }
         unitas_render::sort_sprites(&mut sprites);
         sprites
+    }
+
+    fn sprite_part_textures(
+        &mut self,
+        index: usize,
+        texture: &Arc<Image>,
+        mode: SpriteDrawMode,
+        parts: &[unitas_render::sprite::SpritePart],
+    ) -> Vec<Arc<Image>> {
+        if let Some(slices) = &self.render.sprites[index].slices
+            && slices.mode == mode
+            && slices.parts.len() == parts.len()
+            && Arc::ptr_eq(&slices.source, texture)
+        {
+            return slices.parts.clone();
+        }
+        let textures: Vec<Arc<Image>> = parts
+            .iter()
+            .map(|part| {
+                if part.source == [0, 0, texture.width, texture.height] {
+                    Arc::clone(texture)
+                } else {
+                    Arc::new(unitas_render::sprite::crop_texture(texture, part.source))
+                }
+            })
+            .collect();
+        self.render.sprites[index].slices = Some(SpriteSlices {
+            source: Arc::clone(texture),
+            mode,
+            parts: textures.clone(),
+        });
+        textures
     }
 
     fn runtime_sprite_index(&self, entity: EntityId) -> Option<usize> {
@@ -832,6 +904,8 @@ impl Runtime {
                 let sprite = &mut self.render.sprites[index];
                 sprite.texture = texture;
                 sprite.size = size;
+                sprite.border = sprite_border_from_meta(texture_path);
+                sprite.slices = None;
             }
             None => self.render.sprites.push(RenderSprite {
                 entity,
@@ -843,6 +917,9 @@ impl Runtime {
                 flip_x: false,
                 flip_y: false,
                 enabled: true,
+                draw_mode: SpriteDrawMode::Simple,
+                border: sprite_border_from_meta(texture_path),
+                slices: None,
             }),
         }
         true
@@ -898,13 +975,9 @@ impl Runtime {
         if entity.as_u64() == 0 {
             return false;
         }
-        self.clear_runtime_diagnostic(
-            entity,
-            &draw_mode_diagnostic(entity, SpriteDrawMode::Sliced),
-        );
-        self.clear_runtime_diagnostic(entity, &draw_mode_diagnostic(entity, SpriteDrawMode::Tiled));
-        if mode != SpriteDrawMode::Simple {
-            self.push_runtime_diagnostic(entity, draw_mode_diagnostic(entity, mode));
+        if let Some(index) = self.runtime_sprite_index(entity) {
+            self.render.sprites[index].draw_mode = mode;
+            self.render.sprites[index].slices = None;
         }
         true
     }
@@ -1084,18 +1157,6 @@ impl Runtime {
             return;
         }
         scene.diagnostics.push((entity, message));
-    }
-
-    fn clear_runtime_diagnostic(&mut self, entity: EntityId, message: &str) {
-        let Some(index) = self.active_scene else {
-            return;
-        };
-        let Some(scene) = self.scenes.get_mut(index) else {
-            return;
-        };
-        scene
-            .diagnostics
-            .retain(|(id, text)| !(*id == entity && text == message));
     }
 
     pub(crate) fn render_frame(
@@ -1409,13 +1470,6 @@ fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
     }
 }
 
-fn draw_mode_diagnostic(entity: EntityId, mode: SpriteDrawMode) -> String {
-    format!(
-        "SpriteRenderer on entity {} draws in the {mode:?} mode, which the renderer does not draw yet",
-        entity.as_u64()
-    )
-}
-
 fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
     let flip_x = if sprite.flip_x { -1.0 } else { 1.0 };
     let flip_y = if sprite.flip_y { -1.0 } else { 1.0 };
@@ -1438,6 +1492,48 @@ fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
         1.0,
     ]);
     crate::presenter::transform_to_mat4(transform) * scale
+}
+
+fn sprite_part_model(
+    transform: &Transform,
+    sprite: &RenderSprite,
+    target_size: [f32; 2],
+    part: &unitas_render::sprite::SpritePart,
+) -> Mat4 {
+    let width = part.target[2] / target_size[0];
+    let height = part.target[3] / target_size[1];
+    let center_x = part.target[0] / target_size[0] + width * 0.5 - 0.5;
+    let center_y = part.target[1] / target_size[1] + height * 0.5 - 0.5;
+    let offset = Mat4::from_cols_array([
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, center_x, center_y, 0.0, 1.0,
+    ]);
+    let scale = Mat4::from_cols_array([
+        width, 0.0, 0.0, 0.0, 0.0, height, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    sprite_model(transform, sprite) * offset * scale
+}
+
+fn sprite_border_from_meta(path: Option<&Path>) -> [f32; 4] {
+    let Some(path) = path else {
+        return [0.0; 4];
+    };
+    let mut meta = path.as_os_str().to_os_string();
+    meta.push(".meta");
+    let Ok(text) = std::fs::read_to_string(PathBuf::from(meta)) else {
+        return [0.0; 4];
+    };
+    let Ok(settings) = TextureImportSettings::from_meta_text(&text) else {
+        return [0.0; 4];
+    };
+    let Some(slice) = settings.sprite_slices.first() else {
+        return [0.0; 4];
+    };
+    [
+        slice.border_left,
+        slice.border_bottom,
+        slice.border_right,
+        slice.border_top,
+    ]
 }
 
 fn load_texture_image(path: Option<&Path>) -> Option<Image> {

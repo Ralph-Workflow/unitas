@@ -21,12 +21,17 @@ use self::scene_physics::{
 
 pub use crate::particle::PARTICLE_SYSTEM_CLASS;
 pub use crate::trail::TRAIL_RENDERER_CLASS;
+pub use scene_audio::{AudioFilterComponent, AudioFilterKind};
 pub use scene_physics::parse_physic_material;
 
 #[path = "scene_audio.rs"]
 mod scene_audio;
 #[path = "scene_physics.rs"]
 pub mod scene_physics;
+#[path = "scene_sprite.rs"]
+mod scene_sprite;
+
+use self::scene_sprite::{sprite_border, ui_image_draw_mode};
 
 pub const AUDIO_SOURCE_CLASS: u32 = 82;
 pub const AUDIO_CLIP_CLASS: u32 = 83;
@@ -416,6 +421,7 @@ pub struct AudioSourceComponent {
     pub min_distance: f32,
     pub max_distance: f32,
     pub mute: bool,
+    pub filters: Vec<AudioFilterComponent>,
 }
 
 impl Default for AudioSourceComponent {
@@ -434,6 +440,7 @@ impl Default for AudioSourceComponent {
             min_distance: DEFAULT_AUDIO_MIN_DISTANCE,
             max_distance: DEFAULT_AUDIO_MAX_DISTANCE,
             mute: DEFAULT_AUDIO_MUTE,
+            filters: Vec::new(),
         }
     }
 }
@@ -501,7 +508,6 @@ pub struct SpriteRendererComponent {
     pub flip_x: bool,
     pub flip_y: bool,
     pub enabled: bool,
-    pub diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -566,6 +572,9 @@ pub struct UiImageComponent {
     pub color: [f32; 4],
     pub sprite_guid: Option<AssetGuid>,
     pub enabled: bool,
+    pub draw_mode: SpriteDrawMode,
+    /// The nine-slice border of the sprite in sprite pixels: left, bottom, right, top.
+    pub sprite_border: [f32; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1103,7 +1112,7 @@ fn assemble_documents(
         index,
         material_properties,
     )?;
-    set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
+    set.ui = collect_ui(stream, &set.game_objects, &instance_roots, index);
     let (particles, trails) =
         collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
     set.particles = particles;
@@ -1820,10 +1829,10 @@ fn collect_ui(
     stream: &Stream,
     game_objects: &GameObjectRecords,
     instance_roots: &HashSet<i64>,
+    index: Option<&GuidIndex>,
 ) -> UiBinding {
     let mut binding = UiBinding::default();
-    let mut graphics: HashMap<i64, EntityId> = HashMap::new();
-    let mut button_targets: Vec<(usize, i64)> = Vec::new();
+    let mut collectors = UiCollectors::default();
     let mut rect_entities: HashMap<i64, EntityId> = HashMap::new();
     let mut rect_fathers: HashMap<i64, i64> = HashMap::new();
     let mut rects: Vec<(i64, RectTransformComponent)> = Vec::new();
@@ -1891,19 +1900,27 @@ fn collect_ui(
             entity,
             guid,
             body,
+            index,
             &mut binding,
-            &mut graphics,
-            &mut button_targets,
+            &mut collectors,
         );
     }
-    for (index, target) in button_targets {
-        if let Some(entity) = graphics.get(&target).copied() {
-            if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(index) {
+    for (slot, target) in collectors.button_targets {
+        if let Some(entity) = collectors.graphics.get(&target).copied() {
+            if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(slot) {
                 button.target_graphic = Some(entity);
             }
         }
     }
     binding
+}
+
+/// The graphics and button targets the UI parser collects while it walks the
+/// scene's `MonoBehaviour` components.
+#[derive(Default)]
+struct UiCollectors {
+    graphics: HashMap<i64, EntityId>,
+    button_targets: Vec<(usize, i64)>,
 }
 
 fn parse_rect_transform(entity: EntityId, body: &Node) -> RectTransformComponent {
@@ -1923,20 +1940,24 @@ fn collect_ui_mono_behaviour(
     entity: EntityId,
     guid: &str,
     body: &Node,
+    index: Option<&GuidIndex>,
     binding: &mut UiBinding,
-    graphics: &mut HashMap<i64, EntityId>,
-    button_targets: &mut Vec<(usize, i64)>,
+    collectors: &mut UiCollectors,
 ) {
     match guid {
         IMAGE_SCRIPT_GUID => {
-            graphics.insert(file_id, entity);
+            collectors.graphics.insert(file_id, entity);
+            let sprite = body.get("m_Sprite");
+            let sprite_guid = sprite_guid(sprite);
             binding
                 .elements
                 .push(UiElementComponent::Image(UiImageComponent {
                     entity,
                     color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
-                    sprite_guid: sprite_guid(body.get("m_Sprite")),
+                    sprite_border: sprite_border(index, sprite_guid.as_deref()),
+                    sprite_guid,
                     enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+                    draw_mode: ui_image_draw_mode(body.get("m_Type")),
                 }));
         }
         TEXT_SCRIPT_GUID => binding
@@ -1962,7 +1983,7 @@ fn collect_ui_mono_behaviour(
                     interactable: yaml_bool(body.get("m_Interactable"), DEFAULT_UI_ENABLED),
                 }));
             if let Ok(Some(target)) = reference_id(body.get("m_TargetGraphic")) {
-                button_targets.push((index, target));
+                collectors.button_targets.push((index, target));
             }
         }
         CANVAS_SCALER_SCRIPT_GUID => {
@@ -2494,13 +2515,6 @@ fn sprite_renderer_component(
         2 => SpriteDrawMode::Tiled,
         _ => SpriteDrawMode::Simple,
     };
-    let diagnostic = match draw_mode {
-        SpriteDrawMode::Simple => None,
-        mode => Some(format!(
-            "SpriteRenderer on entity {} draws in the {mode:?} mode, which the renderer does not draw yet",
-            entity.as_u64()
-        )),
-    };
     SpriteRendererComponent {
         entity,
         sprite_guid,
@@ -2519,7 +2533,6 @@ fn sprite_renderer_component(
         flip_x: yaml_bool(body.get("m_FlipX"), false),
         flip_y: yaml_bool(body.get("m_FlipY"), false),
         enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_RENDERER_ENABLED),
-        diagnostic,
     }
 }
 
