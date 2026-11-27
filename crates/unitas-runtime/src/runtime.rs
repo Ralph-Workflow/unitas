@@ -44,12 +44,12 @@ use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::{ContactEvent2D, PhysicsRuntimeWorld, layer_bits};
-use crate::player_loop::{
-    BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
-    PlayerLoopSystem, PlayerLoopStep,
-};
 use crate::physics_settings::{
     collision_detection_of, interpolation_of, layer_matrix_of, material_of, solver_settings_of,
+};
+use crate::player_loop::{
+    BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
+    PlayerLoopStep, PlayerLoopSystem,
 };
 use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
 use crate::terrain::TerrainWorld;

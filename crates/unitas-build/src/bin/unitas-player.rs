@@ -7,9 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_build::control;
 use unitas_build::package::package_desktop_targets;
-use unitas_build::player::{install_project_trust, STARTUP_FAILURE_EXIT_CODE};
 #[cfg(feature = "device")]
 use unitas_build::player::CANVAS_TEXT_SEPARATOR;
+use unitas_build::player::{install_project_trust, STARTUP_FAILURE_EXIT_CODE};
 #[cfg(feature = "device")]
 use unitas_build::{
     capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,

@@ -10,10 +10,10 @@ mod input_tests;
 mod jobs_tests;
 #[path = "runtime/navigation_tests.rs"]
 mod navigation_tests;
-#[path = "runtime/player_loop_tests.rs"]
-mod player_loop_tests;
 #[path = "runtime/physics_tests.rs"]
 mod physics_tests;
+#[path = "runtime/player_loop_tests.rs"]
+mod player_loop_tests;
 #[path = "runtime/render_tests.rs"]
 mod render_tests;
 #[path = "runtime/runtime_object_tests.rs"]

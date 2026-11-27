@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import pytest
-
 from tools import verify_device
 
 DEVICE_LINE = (
-    'device_verify=ok reference=tools/approved_gpu_reference.bmp size=320x240 '
+    "device_verify=ok reference=tools/approved_gpu_reference.bmp size=320x240 "
     "frames_presented=240 mean_error=0.0000 tolerance=4.0000 audio_active=true "
     'audio_status="active" audio_frames=240 final_pos=(1.000,0.500,2.000) '
     'canvas=true canvas_texts="Score 0 | Combo x1 | Time 0.0" shadow=true'
@@ -85,11 +83,19 @@ def test_the_control_state_carries_the_generic_fields() -> None:
 
 def test_the_control_state_requires_the_coreclr_script_host() -> None:
     payload = {"ok": True, "state": "playing", "frames": CONTROL_FRAMES, "script_host": "none"}
-    with pytest.raises(verify_device.ControlCheckError, match="CoreCLR"):
+    caught = ""
+    try:
         verify_device.control_state(payload)
+    except verify_device.ControlCheckError as error:
+        caught = str(error)
+    assert "CoreCLR" in caught
 
 
 def test_the_control_state_requires_its_fields() -> None:
     payload = {"ok": True, "state": "playing"}
-    with pytest.raises(verify_device.ControlCheckError, match="frames"):
+    caught = ""
+    try:
         verify_device.control_state(payload)
+    except verify_device.ControlCheckError as error:
+        caught = str(error)
+    assert "frames" in caught

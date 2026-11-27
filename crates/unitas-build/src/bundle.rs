@@ -1034,6 +1034,134 @@ fn stage_managed_payload(
     Ok(())
 }
 
+/// Copies the cached game assemblies into the staging output. Returns whether
+/// the cache held any assembly.
+fn publish_cached_assemblies(cache_dir: &Path, output_dir: &Path) -> Result<bool, String> {
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return Ok(false);
+    };
+    let mut published = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_none_or(|extension| extension != "dll") {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        fs::copy(&path, output_dir.join(name)).map_err(|error| error.to_string())?;
+        published = true;
+    }
+    Ok(published)
+}
+
+/// The cache key of a script compile: the project's script sources and the
+/// bridge assemblies the compile reads. A change to either invalidates it.
+fn script_compile_cache_key(workspace_root: &Path, project_root: &Path) -> String {
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    collect_script_sources(&project_root.join("Assets"), "", &mut parts, 8);
+    collect_bridge_assemblies(&workspace_root.join("bridge"), &mut parts, 8);
+    parts.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut bytes = Vec::new();
+    for (name, content) in parts {
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&content);
+        bytes.push(0);
+    }
+    content_hash_hex(&bytes)
+}
+
+fn collect_script_sources(
+    directory: &Path,
+    prefix: &str,
+    out: &mut Vec<(String, Vec<u8>)>,
+    depth: usize,
+) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let name = if prefix.is_empty() {
+            file_name.to_string()
+        } else {
+            format!("{prefix}/{file_name}")
+        };
+        if path.is_dir() {
+            collect_script_sources(&path, &name, out, depth - 1);
+        } else if path.extension().is_some_and(|extension| extension == "cs") {
+            if let Ok(content) = fs::read(&path) {
+                out.push((format!("script:{name}"), content));
+            }
+        }
+    }
+}
+
+/// Collects the published bridge assemblies the compile reads. Only the
+/// `Release/net8.0` output folders carry them, and their identity (name, size
+/// and modification time) is enough to invalidate a stale cache.
+fn collect_bridge_assemblies(directory: &Path, out: &mut Vec<(String, Vec<u8>)>, depth: usize) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if file_name == "net8.0" {
+            collect_published_assemblies(&path, out);
+            continue;
+        }
+        if file_name == "obj" || file_name == "ref" || file_name == "runtimes" {
+            continue;
+        }
+        collect_bridge_assemblies(&path, out, depth - 1);
+    }
+}
+
+fn collect_published_assemblies(directory: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_none_or(|extension| extension != "dll") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let mut identity = metadata.len().to_le_bytes().to_vec();
+        identity.extend_from_slice(&modified.to_le_bytes());
+        out.push((format!("bridge:{name}"), identity));
+    }
+}
+
 /// Compiles a project's scripts through the bridge compile pipeline
 /// (`Unitas.Scripting compile <projectRoot> --player`). Returns `Ok(false)`
 /// when the bridge tooling has not been built yet.
@@ -1052,18 +1180,62 @@ fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<boo
         return Ok(false);
     }
     fs::create_dir_all(output_dir).map_err(|error| error.to_string())?;
+    // The compile is the slowest step of staging and the same project is
+    // staged by several gates and tests. Cache the compiled assemblies by the
+    // content of the project's script sources and of the bridge assemblies the
+    // compile references, so a repeated staging reuses them instead of paying
+    // for another compile.
+    let cache_dir = workspace_root
+        .join("target")
+        .join("unitas-script-cache")
+        .join(script_compile_cache_key(&workspace_root, project_root));
+    if publish_cached_assemblies(&cache_dir, output_dir)? {
+        return Ok(true);
+    }
+    let staging_dir = std::env::temp_dir().join(format!(
+        "unitas-script-compile-{}-{}",
+        std::process::id(),
+        content_hash_hex(cache_dir.to_string_lossy().as_bytes())
+    ));
+    let _ = fs::remove_dir_all(&staging_dir);
+    fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
     let output = Command::new("dotnet")
         .arg(&scripting_assembly)
         .arg("compile")
         .arg(project_root)
         .arg("--player")
         .arg("--out")
-        .arg(output_dir)
+        .arg(&staging_dir)
         .output()
         .map_err(|error| format!("failed to launch dotnet: {error}"))?;
     if !output.status.success() {
+        let _ = fs::remove_dir_all(&staging_dir);
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
+    let _ = fs::create_dir_all(&cache_dir);
+    for entry in fs::read_dir(&staging_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|extension| extension == "dll") {
+            if let Some(name) = path.file_name() {
+                // Publish atomically: a concurrent staging must never read a
+                // half-written assembly.
+                let temporary = cache_dir.join(format!(
+                    "{}.{}.tmp",
+                    name.to_string_lossy(),
+                    std::process::id()
+                ));
+                if fs::copy(&path, &temporary).is_ok() {
+                    let _ = fs::rename(&temporary, cache_dir.join(name));
+                }
+                let _ = fs::remove_file(&temporary);
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&staging_dir);
+    publish_cached_assemblies(&cache_dir, output_dir)?;
     Ok(true)
 }
 

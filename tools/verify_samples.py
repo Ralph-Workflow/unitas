@@ -48,8 +48,6 @@ CONTROL_STDIO_CHUNK_FRAMES = 30
 CONTROL_STDIO_MAX_FRAMES = 300
 CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
 CONTROL_STATE_FIELDS = ("frames", "script_host")
-# The sample game's own progress marker. The engine reports no game state, so
-# the lane reads the game's log output and interprets it here.
 GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
 
 
@@ -409,7 +407,6 @@ def control_state(payload: dict[str, object]) -> int:
 
 
 def game_score(lines: Sequence[str]) -> int | None:
-    """Read the sample game's own progress marker from the player's log output."""
     score: int | None = None
     for line in lines:
         match = GAME_SCORE_PATTERN.search(line)
@@ -454,8 +451,7 @@ def drive_packaged_replay(
         if score is not None:
             return score
     message = (
-        f"replayed input for {frames} frames but the packaged player logged no "
-        "collected pickup"
+        f"replayed input for {frames} frames but the packaged player logged no collected pickup"
     )
     raise PackagedProofError(message)
 

@@ -2,9 +2,9 @@
 //! systems it runs, and the frame order the engine kept when the tree took
 //! over the frame loop.
 
+use std::cell::RefCell;
 use std::error::Error;
 use std::path::Path;
-use std::sync::Mutex;
 
 use unitas_runtime::player_loop;
 use unitas_runtime::{
@@ -23,12 +23,15 @@ const POST_LATE_SYSTEM: &str = "UnityEngine.PlayerLoop.PostLateUpdate.CustomSyst
 type TestResult = Result<(), Box<dyn Error>>;
 type TraceResult = Result<Vec<&'static str>, Box<dyn Error>>;
 
-static TRACE: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+// The trace is per test thread: the runtime runs the callbacks on the
+// calling thread, so a thread-local recorder keeps parallel tests from
+// reading each other's frames.
+thread_local! {
+    static TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
 
 fn record(entry: &'static str) {
-    if let Ok(mut trace) = TRACE.lock() {
-        trace.push(entry);
-    }
+    TRACE.with(|trace| trace.borrow_mut().push(entry));
 }
 
 extern "C" fn noop_create_script(_entity: u64, _guid_hi: u64, _guid_lo: u64) -> u64 {
@@ -86,13 +89,11 @@ fn callbacks() -> Callbacks {
 }
 
 fn trace() -> TraceResult {
-    let guard = TRACE.lock().map_err(|_| "trace mutex poisoned")?;
-    Ok(guard.clone())
+    Ok(TRACE.with(|trace| trace.borrow().clone()))
 }
 
 fn clear_trace() -> TestResult {
-    let mut guard = TRACE.lock().map_err(|_| "trace mutex poisoned")?;
-    guard.clear();
+    TRACE.with(|trace| trace.borrow_mut().clear());
     Ok(())
 }
 
@@ -150,7 +151,7 @@ fn a_custom_system_runs_at_its_registered_position_every_frame() -> TestResult {
     // The custom systems run at their position in every frame.
     clear_trace()?;
     runtime.tick(0.01)?;
-    assert_eq!(trace()?, vec!["before", "update", "after", "late"]);
+    assert_eq!(trace()?, vec!["fixed", "before", "update", "after", "late"]);
     Ok(())
 }
 
@@ -251,7 +252,7 @@ fn a_custom_system_can_be_unregistered() -> TestResult {
     assert!(runtime.unregister_player_loop_custom_system(AFTER_UPDATE));
     clear_trace()?;
     runtime.tick(0.01)?;
-    assert_eq!(trace()?, vec!["update", "late"]);
+    assert_eq!(trace()?, vec!["fixed", "update", "late"]);
     Ok(())
 }
 
@@ -261,11 +262,13 @@ fn a_tree_that_drops_a_phase_drops_the_work_it_carried() -> TestResult {
     runtime.load_scene(Path::new(SCENE_WITH_SCRIPT))?;
     runtime.set_callbacks(callbacks());
     let mut tree: PlayerLoopSystem = runtime.player_loop_tree().clone();
-    let post_late = tree
+    let Some(post_late) = tree
         .children
         .iter()
         .position(|phase| phase.type_name == player_loop::POST_LATE_UPDATE)
-        .expect("the default tree has a post late update phase");
+    else {
+        return Err("the default tree has a post late update phase".into());
+    };
     tree.children.remove(post_late);
     runtime.set_player_loop_tree(tree)?;
     runtime.tick(0.0)?;

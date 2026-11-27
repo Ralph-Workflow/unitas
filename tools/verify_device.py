@@ -37,8 +37,6 @@ CONTROL_STDIO_BUDGET_SECONDS = 90.0
 CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
 CONTROL_STATE_FIELDS = ("frames", "script_host")
 CANVAS_TEXT_SEPARATOR = " | "
-# The sample game's own progress marker. The engine reports no game state,
-# so the lane reads the game's log output and interprets it here.
 GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
@@ -314,7 +312,6 @@ def canvas_texts(report: dict[str, str] | None) -> list[str]:
 
 
 def game_score(lines: Sequence[str]) -> int | None:
-    """Read the sample game's own progress marker from the player's log output."""
     score: int | None = None
     for line in lines:
         match = GAME_SCORE_PATTERN.search(line)
@@ -468,7 +465,9 @@ def drive_control_session(
         frames += CONTROL_STDIO_CHUNK_FRAMES
         if game_progress_reason(errors) is None:
             return game_score(errors) or 0
-    message = f"drove the ball forward for {frames} frames but the player logged no collected pickup"
+    message = (
+        f"drove the ball forward for {frames} frames but the player logged no collected pickup"
+    )
     raise ControlCheckError(message)
 
 

@@ -25,8 +25,7 @@ pub const POST_LATE_UPDATE: &str = "UnityEngine.PlayerLoop.PostLateUpdate";
 pub const PLAYER_UPDATE_TIME: &str = "UnityEngine.PlayerLoop.Initialization.PlayerUpdateTime";
 pub const SYNCHRONIZE_INPUTS: &str = "UnityEngine.PlayerLoop.Initialization.SynchronizeInputs";
 pub const PHYSICS_FIXED_UPDATE: &str = "UnityEngine.PlayerLoop.FixedUpdate.PhysicsFixedUpdate";
-pub const PHYSICS_2D_FIXED_UPDATE: &str =
-    "UnityEngine.PlayerLoop.FixedUpdate.Physics2DFixedUpdate";
+pub const PHYSICS_2D_FIXED_UPDATE: &str = "UnityEngine.PlayerLoop.FixedUpdate.Physics2DFixedUpdate";
 pub const SCRIPT_RUN_BEHAVIOUR_FIXED_UPDATE: &str =
     "UnityEngine.PlayerLoop.FixedUpdate.ScriptRunBehaviourFixedUpdate";
 pub const SCRIPT_RUN_BEHAVIOUR_UPDATE: &str =
@@ -67,7 +66,10 @@ impl std::fmt::Display for PlayerLoopError {
                 write!(formatter, "player loop anchor not found: {anchor}")
             }
             PlayerLoopError::DuplicateType(type_name) => {
-                write!(formatter, "player loop system type already used: {type_name}")
+                write!(
+                    formatter,
+                    "player loop system type already used: {type_name}"
+                )
             }
             PlayerLoopError::InvalidTree(message) => {
                 write!(formatter, "invalid player loop tree: {message}")
@@ -103,9 +105,7 @@ impl PlayerLoopSystem {
         if self.type_name == type_name {
             return Some(self);
         }
-        self.children
-            .iter()
-            .find_map(|child| child.find(type_name))
+        self.children.iter().find_map(|child| child.find(type_name))
     }
 
     /// The first node with the given type, anywhere in the tree.
@@ -191,7 +191,9 @@ pub(crate) enum PlayerLoopStep {
         user_data: u64,
     },
     /// The fixed update phase: its systems run once per fixed step.
-    FixedPhase { steps: Vec<PlayerLoopStep> },
+    FixedPhase {
+        steps: Vec<PlayerLoopStep>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -263,15 +265,16 @@ impl PlayerLoop {
         }
         let mut node = Some(PlayerLoopSystem::new(name, type_name));
         if self.root.type_name == anchor_type {
-            let child = node.take().expect("custom node");
+            let Some(child) = node.take() else {
+                return Err(PlayerLoopError::InvalidTree(String::from(
+                    "the custom system node was not available",
+                )));
+            };
             match position {
                 CustomSystemPosition::Before => self.root.children.insert(0, child),
                 CustomSystemPosition::After => self.root.children.push(child),
             }
-        } else if !self
-            .root
-            .insert_sibling(anchor_type, &mut node, position)
-        {
+        } else if !self.root.insert_sibling(anchor_type, &mut node, position) {
             return Err(PlayerLoopError::AnchorNotFound(anchor_type.to_string()));
         }
         self.customs.insert(
@@ -427,7 +430,10 @@ fn short_name(type_name: &str) -> &str {
 }
 
 /// Compiles the tree into the flat list of steps the runtime walks.
-fn compile(root: &PlayerLoopSystem, customs: &BTreeMap<String, CustomSystem>) -> Vec<PlayerLoopStep> {
+fn compile(
+    root: &PlayerLoopSystem,
+    customs: &BTreeMap<String, CustomSystem>,
+) -> Vec<PlayerLoopStep> {
     let mut steps = Vec::new();
     compile_node(root, customs, &mut steps);
     steps
