@@ -1650,10 +1650,8 @@ fn encodes_and_decodes_bcn_etc2_and_astc_compressed_texture_blocks_for_platform_
     Ok(())
 }
 
-#[test]
-fn imports_unity_yaml_anim_clip_curves_settings_and_events(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let anim_yaml = r"%YAML 1.1
+fn hero_run_anim_yaml() -> &'static str {
+    r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!74 &7400000
 AnimationClip:
@@ -1817,7 +1815,13 @@ AnimationClip:
     floatParameter: 0.75
     intParameter: 3
 messageOptions: 0
-";
+"
+}
+
+#[test]
+fn imports_unity_yaml_anim_clip_curves_settings_and_events(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let anim_yaml = hero_run_anim_yaml();
 
     let clip = import_animation_clip(anim_yaml.as_bytes(), "Assets/Animations/HeroRun.anim")?;
     assert_eq!(clip.name, "HeroRun");

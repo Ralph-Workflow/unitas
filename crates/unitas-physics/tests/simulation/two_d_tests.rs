@@ -1,7 +1,9 @@
 use unitas_core::EntityId;
 use unitas_physics::two_d::{
-    BodyDesc2D, BodyType2D, ColliderDesc2D, ContactFilter2D, MessageKind2D, PhysicsMaterial2D,
-    Shape2D, World2D,
+    BodyDesc2D, BodyId2D, BodyType2D, ColliderDesc2D, ConstantForce2D, ContactFilter2D,
+    DistanceJoint2D, FixedJoint2D, FrictionJoint2D, HingeJoint2D, Joint2D, JointLimits2D,
+    JointMotor2D, MessageKind2D, PhysicsMaterial2D, RelativeJoint2D, Shape2D, SliderJoint2D,
+    SpringJoint2D, TargetJoint2D, WheelJoint2D, World2D,
 };
 
 #[test]
@@ -911,13 +913,15 @@ fn phy_002_story_2_auto_sync_transforms_off_hides_moved_2d_collider_from_queries
 
 #[test]
 fn phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break() {
-    use unitas_physics::two_d::{
-        ConstantForce2D, DistanceJoint2D, FixedJoint2D, FrictionJoint2D, HingeJoint2D, Joint2D,
-        JointLimits2D, JointMotor2D, RelativeJoint2D, SliderJoint2D, SpringJoint2D, TargetJoint2D,
-        WheelJoint2D,
-    };
-
     let mut world = World2D::with_gravity([0.0, 0.0]);
+    phy_002_story_5_constant_force(&mut world);
+    let anchor_b = world.add_body(BodyDesc2D::static_body(EntityId::new(901), [0.0, 0.0]));
+    phy_002_story_5_core_joints(&mut world, anchor_b);
+    phy_002_story_5_motorized_joints(&mut world, anchor_b);
+    phy_002_story_5_break_joint(&mut world, anchor_b);
+}
+
+fn phy_002_story_5_constant_force(world: &mut World2D) {
     let cf_go = EntityId::new(900);
     let cf_body = world.add_body(
         BodyDesc2D::dynamic(cf_go, [0.0, 0.0]).with_rotation(std::f32::consts::FRAC_PI_2),
@@ -943,8 +947,9 @@ fn phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break() {
         (b_ang - 1.4625).abs() < 1e-3,
         "PHY-002 story 5: ConstantForce2D must apply torque every step, got {b_ang}"
     );
+}
 
-    let anchor_b = world.add_body(BodyDesc2D::static_body(EntityId::new(901), [0.0, 0.0]));
+fn phy_002_story_5_core_joints(world: &mut World2D, anchor_b: BodyId2D) {
     let orb_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(902), [5.0, 0.0]));
     let dist_j = world.add_joint(Joint2D::Distance(DistanceJoint2D {
         body_a: anchor_b,
@@ -1038,7 +1043,9 @@ fn phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break() {
         rb_x < 4.5 && rb_rot < 0.0,
         "PHY-002 story 5: RelativeJoint2D must drive body toward linear and angular offsets"
     );
+}
 
+fn phy_002_story_5_motorized_joints(world: &mut World2D, anchor_b: BodyId2D) {
     let fric_b = world
         .add_body(BodyDesc2D::dynamic(EntityId::new(907), [0.0, 0.0]).with_velocity([10.0, 0.0]));
     if let Some(b) = world.body_mut(fric_b) {
@@ -1137,7 +1144,9 @@ fn phy_002_story_5_constant_force_2d_and_2d_joints_constrain_and_break() {
         wb_y > -2.0 && wb_w > 1.0,
         "PHY-002 story 5: WheelJoint2D suspension and motor must pull wheel toward anchor and spin it"
     );
+}
 
+fn phy_002_story_5_break_joint(world: &mut World2D, anchor_b: BodyId2D) {
     let fragile_b = world.add_body(BodyDesc2D::dynamic(EntityId::new(911), [10.0, 0.0]));
     let fragile_j = world.add_joint(Joint2D::Distance(DistanceJoint2D {
         body_a: anchor_b,

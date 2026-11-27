@@ -22,6 +22,20 @@ struct ExrChannel {
     y_sampling: i32,
 }
 
+struct ExrFrame {
+    y_min: i32,
+    width: usize,
+    height: usize,
+    rows_per_block: usize,
+}
+
+struct ExrHeader {
+    channels: Vec<ExrChannel>,
+    compression: u8,
+    window: (i32, i32, i32, i32),
+    cursor: usize,
+}
+
 impl ExrChannel {
     fn bytes_per_sample(&self) -> usize {
         match self.pixel_type {
@@ -32,6 +46,59 @@ impl ExrChannel {
 }
 
 pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
+    let header = read_exr_header(bytes)?;
+    let rows_per_block = match header.compression {
+        COMPRESSION_NONE | COMPRESSION_ZIPS => 1,
+        COMPRESSION_ZIP => 16,
+        other => {
+            return Err(TextureImportError::UnsupportedFormat(format!(
+                "EXR compression {other} is not supported"
+            )))
+        }
+    };
+
+    let (x_min, y_min, x_max, y_max) = header.window;
+    if x_max < x_min || y_max < y_min {
+        return Err(TextureImportError::CorruptData(
+            "EXR data window is empty".to_string(),
+        ));
+    }
+    let width = (x_max - x_min + 1) as usize;
+    let height = (y_max - y_min + 1) as usize;
+    let block_count = height.div_ceil(rows_per_block);
+
+    let offsets = read_exr_offset_table(bytes, header.cursor, block_count)?;
+
+    let mut values = vec![0.0f32; width * height * 4];
+    for pixel in values.chunks_exact_mut(4) {
+        pixel[3] = 1.0;
+    }
+    decode_exr_blocks(
+        bytes,
+        &header,
+        &offsets,
+        &ExrFrame {
+            y_min,
+            width,
+            height,
+            rows_per_block,
+        },
+        &mut values,
+    )?;
+
+    let mut pixels = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        pixels.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(DecodedTexture {
+        width: width as u32,
+        height: height as u32,
+        format: TextureFormat::Rgba32F,
+        pixels,
+    })
+}
+
+fn read_exr_header(bytes: &[u8]) -> Result<ExrHeader, TextureImportError> {
     if bytes.len() < 8 {
         return Err(TextureImportError::Truncated);
     }
@@ -135,26 +202,19 @@ pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
         }
     }
 
-    let rows_per_block = match compression {
-        COMPRESSION_NONE | COMPRESSION_ZIPS => 1,
-        COMPRESSION_ZIP => 16,
-        other => {
-            return Err(TextureImportError::UnsupportedFormat(format!(
-                "EXR compression {other} is not supported"
-            )))
-        }
-    };
+    Ok(ExrHeader {
+        channels,
+        compression,
+        window,
+        cursor,
+    })
+}
 
-    let (x_min, y_min, x_max, y_max) = window;
-    if x_max < x_min || y_max < y_min {
-        return Err(TextureImportError::CorruptData(
-            "EXR data window is empty".to_string(),
-        ));
-    }
-    let width = (x_max - x_min + 1) as usize;
-    let height = (y_max - y_min + 1) as usize;
-    let block_count = height.div_ceil(rows_per_block);
-
+fn read_exr_offset_table(
+    bytes: &[u8],
+    cursor: usize,
+    block_count: usize,
+) -> Result<Vec<usize>, TextureImportError> {
     let offset_table_start = cursor;
     if cursor + block_count * 8 > bytes.len() {
         return Err(TextureImportError::Truncated);
@@ -174,11 +234,23 @@ pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
         ]);
         offsets.push(offset_table_start + offset as usize);
     }
+    Ok(offsets)
+}
 
-    let mut values = vec![0.0f32; width * height * 4];
-    for pixel in values.chunks_exact_mut(4) {
-        pixel[3] = 1.0;
-    }
+fn decode_exr_blocks(
+    bytes: &[u8],
+    header: &ExrHeader,
+    offsets: &[usize],
+    frame: &ExrFrame,
+    values: &mut [f32],
+) -> Result<(), TextureImportError> {
+    let channels = &header.channels;
+    let ExrFrame {
+        y_min,
+        width,
+        height,
+        rows_per_block,
+    } = *frame;
     for (block, offset) in offsets.iter().enumerate() {
         let start = *offset;
         if start + 8 > bytes.len() {
@@ -207,7 +279,7 @@ pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
             .iter()
             .map(|channel| channel.bytes_per_sample() * width * rows)
             .sum();
-        let raw = match compression {
+        let raw = match header.compression {
             COMPRESSION_NONE => payload.to_vec(),
             _ => unzip(payload, raw_size)?,
         };
@@ -218,7 +290,7 @@ pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
             )));
         }
         let mut raw_cursor = 0usize;
-        for channel in &channels {
+        for channel in channels {
             let samples = width * rows;
             let sample_bytes = channel.bytes_per_sample();
             for row in 0..rows {
@@ -236,17 +308,7 @@ pub fn decode_exr(bytes: &[u8]) -> Result<DecodedTexture, TextureImportError> {
             }
         }
     }
-
-    let mut pixels = Vec::with_capacity(values.len() * 4);
-    for value in values {
-        pixels.extend_from_slice(&value.to_le_bytes());
-    }
-    Ok(DecodedTexture {
-        width: width as u32,
-        height: height as u32,
-        format: TextureFormat::Rgba32F,
-        pixels,
-    })
+    Ok(())
 }
 
 fn apply_channel(target: &mut [f32], channel: &str, value: f32) {

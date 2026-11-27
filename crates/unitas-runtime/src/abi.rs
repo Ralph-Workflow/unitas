@@ -1647,19 +1647,14 @@ pub extern "C" fn unitas_runtime_box_cast2d(
     max_normal_angle: f32,
 ) -> i32 {
     match with_runtime_state(handle, |state| {
-        let mut filter = ContactFilter2D::default();
-        filter.use_triggers = use_triggers != 0;
-        filter.use_layer_mask = true;
-        filter.layer_mask = layer_mask;
+        let mut filter = ContactFilter2D::default()
+            .with_triggers(use_triggers != 0)
+            .with_layer_mask(layer_mask);
         if use_depth != 0 {
-            filter.use_depth = true;
-            filter.min_depth = min_depth;
-            filter.max_depth = max_depth;
+            filter = filter.with_depth(min_depth, max_depth);
         }
         if use_normal_angle != 0 {
-            filter.use_normal_angle = true;
-            filter.min_normal_angle = min_normal_angle;
-            filter.max_normal_angle = max_normal_angle;
+            filter = filter.with_normal_angle(min_normal_angle, max_normal_angle);
         }
         let hits = state.runtime.physics_mut().box_cast_2d(
             [origin_x, origin_y],

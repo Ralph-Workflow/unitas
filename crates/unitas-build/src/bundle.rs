@@ -1945,28 +1945,7 @@ fn build_content_with_optional_baseline(
         .map_err(BundleError::Validation)?;
 
     let player_compatibility_version = derive_player_compatibility_version(&config.version);
-    if let Some(prior) = prior_catalog {
-        if prior.target != config.target {
-            return Err(BundleError::Validation(vec![BuildValidationError::new(
-                "target",
-                format!(
-                    "content update target '{}' does not match prior catalog target '{}'",
-                    config.target, prior.target
-                ),
-                "build the content update for the same target as the baseline content catalog",
-            )]));
-        }
-        if prior.player_compatibility_version != player_compatibility_version {
-            return Err(BundleError::Validation(vec![BuildValidationError::new(
-                "version",
-                format!(
-                    "content update player-compatibility version '{}' does not match prior catalog compatibility version '{}'",
-                    player_compatibility_version, prior.player_compatibility_version
-                ),
-                "keep the same major.minor player-compatibility version for post-release content updates or ship a new full player build",
-            )]));
-        }
-    }
+    validate_content_update_baseline(config, prior_catalog, &player_compatibility_version)?;
 
     let mut prior_hashes = BTreeMap::new();
     if let Some(prior) = prior_catalog {
@@ -1975,124 +1954,11 @@ fn build_content_with_optional_baseline(
         }
     }
 
-    let mut verified_bundles = Vec::new();
-    if let (Some(active_profile), Some(group_list)) = (profile, groups) {
-        if group_list.is_empty() {
-            return Err(BundleError::Validation(vec![BuildValidationError::new(
-                "addressables_groups",
-                "no Addressables groups were provided for content build",
-                "configure at least one AddressablesGroupConfig with one or more scene/asset paths",
-            )]));
-        }
-        for group in group_list {
-            let resolved_build_dir = active_profile
-                .resolve_template(&group.build_path_template, config.target)
-                .trim_end_matches('/')
-                .to_string();
-            let resolved_load_dir = active_profile
-                .resolve_template(&group.load_path_template, config.target)
-                .trim_end_matches('/')
-                .to_string();
-            for (index, scene_path) in group.scenes.iter().enumerate() {
-                if !scene_path.is_file() {
-                    return Err(BundleError::SceneMissing {
-                        path: scene_path.clone(),
-                    });
-                }
-                let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-                    path: scene_path.clone(),
-                    message: error.to_string(),
-                })?;
-                let scene_graph =
-                    unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-                        BundleError::SceneAssembly {
-                            path: scene_path.clone(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                let content_hash = content_hash_hex(&bytes);
-                let size_bytes = bytes.len() as u64;
-                let root_object_count = scene_graph.roots().len();
-                let file_name = scene_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("scene.unity");
-                let stem = scene_path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("scene");
-                let bundle_name = format!("{}_{index:03}_{stem}", group.group_name);
-                let build_path = format!("{resolved_build_dir}/{bundle_name}.bundle");
-                let load_path = format!("{resolved_load_dir}/{bundle_name}.bundle");
-                let staged_path = build_path.clone();
-                let source_path = normalize_scene_source_path(scene_path, file_name);
-
-                verified_bundles.push((
-                    ContentCatalogEntry {
-                        bundle_name,
-                        group_name: group.group_name.clone(),
-                        source_path,
-                        staged_path,
-                        build_path,
-                        load_path,
-                        content_hash,
-                        size_bytes,
-                        root_object_count,
-                        dependencies: group.dependencies.clone(),
-                    },
-                    bytes,
-                ));
-            }
-        }
+    let verified_bundles = if let (Some(active_profile), Some(group_list)) = (profile, groups) {
+        collect_addressables_bundles(config, active_profile, group_list)?
     } else {
-        for (index, scene_path) in config.scenes.iter().enumerate() {
-            if !scene_path.is_file() {
-                return Err(BundleError::SceneMissing {
-                    path: scene_path.clone(),
-                });
-            }
-            let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-                path: scene_path.clone(),
-                message: error.to_string(),
-            })?;
-            let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-                BundleError::SceneAssembly {
-                    path: scene_path.clone(),
-                    message: error.to_string(),
-                }
-            })?;
-            let content_hash = content_hash_hex(&bytes);
-            let size_bytes = bytes.len() as u64;
-            let root_object_count = scene_graph.roots().len();
-            let file_name = scene_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("scene.unity");
-            let stem = scene_path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .unwrap_or("scene");
-            let bundle_name = format!("scene_{index:03}_{stem}");
-            let staged_path = format!("ContentBundles/{bundle_name}.bundle");
-            let source_path = normalize_scene_source_path(scene_path, file_name);
-
-            verified_bundles.push((
-                ContentCatalogEntry {
-                    bundle_name,
-                    group_name: String::from("default"),
-                    source_path,
-                    staged_path: staged_path.clone(),
-                    build_path: staged_path.clone(),
-                    load_path: staged_path,
-                    content_hash,
-                    size_bytes,
-                    root_object_count,
-                    dependencies: Vec::new(),
-                },
-                bytes,
-            ));
-        }
-    }
+        collect_default_bundles(config)?
+    };
 
     fs::create_dir_all(output_dir).map_err(|error| BundleError::Io {
         path: output_dir.to_path_buf(),
@@ -2190,6 +2056,165 @@ fn build_content_with_optional_baseline(
         unchanged_bundles,
         rejected_bundles: Vec::new(),
     })
+}
+
+fn validate_content_update_baseline(
+    config: &BuildConfiguration,
+    prior_catalog: Option<&ContentCatalog>,
+    player_compatibility_version: &str,
+) -> Result<(), BundleError> {
+    if let Some(prior) = prior_catalog {
+        if prior.target != config.target {
+            return Err(BundleError::Validation(vec![BuildValidationError::new(
+                "target",
+                format!(
+                    "content update target '{}' does not match prior catalog target '{}'",
+                    config.target, prior.target
+                ),
+                "build the content update for the same target as the baseline content catalog",
+            )]));
+        }
+        if prior.player_compatibility_version != player_compatibility_version {
+            return Err(BundleError::Validation(vec![BuildValidationError::new(
+                "version",
+                format!(
+                    "content update player-compatibility version '{}' does not match prior catalog compatibility version '{}'",
+                    player_compatibility_version, prior.player_compatibility_version
+                ),
+                "keep the same major.minor player-compatibility version for post-release content updates or ship a new full player build",
+            )]));
+        }
+    }
+    Ok(())
+}
+
+fn collect_addressables_bundles(
+    config: &BuildConfiguration,
+    active_profile: &AddressablesProfile,
+    group_list: &[AddressablesGroupConfig],
+) -> Result<Vec<(ContentCatalogEntry, Vec<u8>)>, BundleError> {
+    if group_list.is_empty() {
+        return Err(BundleError::Validation(vec![BuildValidationError::new(
+            "addressables_groups",
+            "no Addressables groups were provided for content build",
+            "configure at least one AddressablesGroupConfig with one or more scene/asset paths",
+        )]));
+    }
+    let mut verified_bundles = Vec::new();
+    for group in group_list {
+        let resolved_build_dir = active_profile
+            .resolve_template(&group.build_path_template, config.target)
+            .trim_end_matches('/')
+            .to_string();
+        let resolved_load_dir = active_profile
+            .resolve_template(&group.load_path_template, config.target)
+            .trim_end_matches('/')
+            .to_string();
+        for (index, scene_path) in group.scenes.iter().enumerate() {
+            if !scene_path.is_file() {
+                return Err(BundleError::SceneMissing {
+                    path: scene_path.clone(),
+                });
+            }
+            let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+                path: scene_path.clone(),
+                message: error.to_string(),
+            })?;
+            let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+                BundleError::SceneAssembly {
+                    path: scene_path.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let content_hash = content_hash_hex(&bytes);
+            let size_bytes = bytes.len() as u64;
+            let root_object_count = scene_graph.roots().len();
+            let file_name = scene_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("scene.unity");
+            let stem = scene_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("scene");
+            let bundle_name = format!("{}_{index:03}_{stem}", group.group_name);
+            let build_path = format!("{resolved_build_dir}/{bundle_name}.bundle");
+            let load_path = format!("{resolved_load_dir}/{bundle_name}.bundle");
+            let staged_path = build_path.clone();
+            let source_path = normalize_scene_source_path(scene_path, file_name);
+
+            verified_bundles.push((
+                ContentCatalogEntry {
+                    bundle_name,
+                    group_name: group.group_name.clone(),
+                    source_path,
+                    staged_path,
+                    build_path,
+                    load_path,
+                    content_hash,
+                    size_bytes,
+                    root_object_count,
+                    dependencies: group.dependencies.clone(),
+                },
+                bytes,
+            ));
+        }
+    }
+    Ok(verified_bundles)
+}
+
+fn collect_default_bundles(
+    config: &BuildConfiguration,
+) -> Result<Vec<(ContentCatalogEntry, Vec<u8>)>, BundleError> {
+    let mut verified_bundles = Vec::new();
+    for (index, scene_path) in config.scenes.iter().enumerate() {
+        if !scene_path.is_file() {
+            return Err(BundleError::SceneMissing {
+                path: scene_path.clone(),
+            });
+        }
+        let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+            path: scene_path.clone(),
+            message: error.to_string(),
+        })?;
+        let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+            BundleError::SceneAssembly {
+                path: scene_path.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let content_hash = content_hash_hex(&bytes);
+        let size_bytes = bytes.len() as u64;
+        let root_object_count = scene_graph.roots().len();
+        let file_name = scene_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scene.unity");
+        let stem = scene_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scene");
+        let bundle_name = format!("scene_{index:03}_{stem}");
+        let staged_path = format!("ContentBundles/{bundle_name}.bundle");
+        let source_path = normalize_scene_source_path(scene_path, file_name);
+
+        verified_bundles.push((
+            ContentCatalogEntry {
+                bundle_name,
+                group_name: String::from("default"),
+                source_path,
+                staged_path: staged_path.clone(),
+                build_path: staged_path.clone(),
+                load_path: staged_path,
+                content_hash,
+                size_bytes,
+                root_object_count,
+                dependencies: Vec::new(),
+            },
+            bytes,
+        ));
+    }
+    Ok(verified_bundles)
 }
 
 pub fn validate_content_bundle(

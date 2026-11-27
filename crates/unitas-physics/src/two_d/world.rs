@@ -5,21 +5,44 @@ use unitas_core::EntityId;
 use crate::event::Phase;
 use crate::matrix::{CollisionMatrix, LAYER_COUNT};
 use crate::two_d::body::{
-    BodyDesc2D, BodyId2D, BodyType2D, CollisionDetectionMode2D, ConstantForce2D, Joint2D,
-    JointId2D, Rigidbody2D, RigidbodySleepMode2D,
+    BodyDesc2D, BodyId2D, BodyType2D, CollisionDetectionMode2D, ConstantForce2D, DistanceJoint2D,
+    FixedJoint2D, FrictionJoint2D, HingeJoint2D, Joint2D, JointId2D, RelativeJoint2D, Rigidbody2D,
+    RigidbodySleepMode2D, SliderJoint2D, SpringJoint2D, TargetJoint2D, WheelJoint2D,
 };
 use crate::two_d::collider::{
     capsule_half_segment, compute_contact2d, convex_gap, dot2, inverse_transform_point2, length2,
     normal_angle_degrees, normalize2, point_in_shape2d, raycast_shape2d, rotate_vec2,
     shape_convex_polygons, shape_to_local_shapes_in_frame, shape_vertices_world, sub2,
     surface_normal_at_point, transform_point2, Collider2D, ColliderDesc2D, ColliderId2D,
-    PhysicsMaterial2D, Shape2D,
+    PhysicsMaterial2D, RawContact2D, Shape2D,
 };
 use crate::two_d::composite::{
     CompositeCollider2D, CompositeGenerationType2D, TileColliderType2D, TilemapCollider2D,
 };
 use crate::two_d::effector::{Effector2D, PlatformEffector2D, SurfaceEffector2D};
 use crate::two_d::event::{route_pair_messages_2d, ContactPoint2D, Endpoint2D, RoutedMessage2D};
+
+struct ContactImpulseInput<'a> {
+    col_a: &'a Collider2D,
+    col_b: &'a Collider2D,
+    angle_a: f32,
+    angle_b: f32,
+    contact: RawContact2D,
+    relative_velocity: [f32; 2],
+    inverse_mass_a: f32,
+    inverse_mass_b: f32,
+    inverse_mass_sum: f32,
+}
+
+struct PlatformPassThroughQuery<'a> {
+    col_a: &'a Collider2D,
+    col_b: &'a Collider2D,
+    pair_key: (ColliderId2D, ColliderId2D),
+    normal: [f32; 2],
+    relative_velocity: [f32; 2],
+    angle_a: f32,
+    endpoint_b: Endpoint2D,
+}
 
 const DEFAULT_GRAVITY_2D: [f32; 2] = [0.0, -9.81];
 const DEFAULT_FIXED_TIMESTEP_2D: f32 = 0.02;
@@ -1162,275 +1185,19 @@ impl World2D {
         let mut broken = Vec::new();
 
         for (joint_id, joint) in joint_entries {
-            match joint {
-                Joint2D::Distance(dj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(dj.body_a);
-                    let world_a = transform_point2(dj.anchor_a, pos_a, rot_a);
-                    if let Some(bid_b) = dj.body_b {
-                        let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        let world_b = transform_point2(dj.anchor_b, pos_b, rot_b);
-                        let delta = sub2(world_b, world_a);
-                        let dist = length2(delta);
-                        let err = dist - dj.distance.max(0.0);
-                        if dj.max_distance_only && err <= 0.0 {
-                            continue;
-                        }
-                        let reaction_force = (err.abs() / (inv_b * dt * dt)).min(1e9);
-                        if dj.break_force.is_finite() && reaction_force > dj.break_force {
-                            broken.push(joint_id);
-                            continue;
-                        }
-                        let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            b.position[0] -= dir[0] * err;
-                            b.position[1] -= dir[1] * err;
-                            let radial_v = dot2(b.linear_velocity, dir);
-                            b.linear_velocity[0] -= dir[0] * radial_v;
-                            b.linear_velocity[1] -= dir[1] * radial_v;
-                        }
-                    }
-                }
-                Joint2D::Spring(sj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(sj.body_a);
-                    let world_a = transform_point2(sj.anchor_a, pos_a, rot_a);
-                    if let Some(bid_b) = sj.body_b {
-                        let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        let world_b = transform_point2(sj.anchor_b, pos_b, rot_b);
-                        let delta = sub2(world_b, world_a);
-                        let dist = length2(delta);
-                        let stretch = dist - sj.distance.max(0.0);
-                        let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
-                        let k = (sj.frequency.max(0.5) * std::f32::consts::TAU).powi(2) / inv_b;
-                        let force_mag = -k * stretch;
-                        if sj.break_force.is_finite() && force_mag.abs() > sj.break_force {
-                            broken.push(joint_id);
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            let dv = force_mag * inv_b * dt;
-                            b.linear_velocity[0] += dir[0] * dv;
-                            b.linear_velocity[1] += dir[1] * dv;
-                            let damp = (1.0 - sj.damping_ratio.clamp(0.0, 1.0) * dt).max(0.0);
-                            b.linear_velocity[0] *= damp;
-                            b.linear_velocity[1] *= damp;
-                            b.position[0] += b.linear_velocity[0] * dt;
-                            b.position[1] += b.linear_velocity[1] * dt;
-                        }
-                    }
-                }
-                Joint2D::Target(tj) => {
-                    let (pos, rot, inv_m) = self.body_pose_and_inv(tj.body);
-                    if inv_m <= 0.0 {
-                        continue;
-                    }
-                    let world_anchor = transform_point2(tj.anchor, pos, rot);
-                    let to_target = sub2(tj.target, world_anchor);
-                    let dist = length2(to_target);
-                    if dist <= 1e-6 {
-                        continue;
-                    }
-                    let dir = [to_target[0] / dist, to_target[1] / dist];
-                    let k = (tj.frequency.max(0.5) * std::f32::consts::TAU).powi(2) / inv_m;
-                    let force_mag = (k * dist).min(tj.max_force.max(0.0));
-                    if tj.break_force.is_finite() && force_mag > tj.break_force {
-                        broken.push(joint_id);
-                        continue;
-                    }
-                    if let Some(b) = self.bodies.get_mut(&tj.body) {
-                        let dv = force_mag * inv_m * dt;
-                        b.linear_velocity[0] += dir[0] * dv;
-                        b.linear_velocity[1] += dir[1] * dv;
-                        b.position[0] += b.linear_velocity[0] * dt;
-                        b.position[1] += b.linear_velocity[1] * dt;
-                    }
-                }
-                Joint2D::Fixed(fj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(fj.body_a);
-                    if let Some(bid_b) = fj.body_b {
-                        let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        let target_pos = transform_point2(fj.local_offset, pos_a, rot_a);
-                        let target_rot = rot_a + fj.reference_angle;
-                        let pos_err = length2(sub2(target_pos, pos_b));
-                        let rot_err = (target_rot - rot_b).abs();
-                        if (fj.break_force.is_finite()
-                            && pos_err / (inv_b * dt * dt) > fj.break_force)
-                            || (fj.break_torque.is_finite()
-                                && rot_err / (inv_b * dt * dt) > fj.break_torque)
-                        {
-                            broken.push(joint_id);
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            b.position = target_pos;
-                            b.rotation = target_rot;
-                            b.linear_velocity = [0.0, 0.0];
-                            b.angular_velocity = 0.0;
-                        }
-                    }
-                }
-                Joint2D::Relative(rj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(rj.body_a);
-                    if let Some(bid_b) = rj.body_b {
-                        let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        let desired_pos = transform_point2(rj.linear_offset, pos_a, rot_a);
-                        let desired_rot = rot_a + rj.angular_offset;
-                        let scale = rj.correction_scale.clamp(0.0, 1.0);
-                        let delta_p = sub2(desired_pos, pos_b);
-                        let max_disp = rj.max_force.max(0.0) * inv_b * dt * dt;
-                        let disp_len = length2(delta_p);
-                        let step_p = if disp_len > max_disp && disp_len > 1e-6 {
-                            [
-                                delta_p[0] / disp_len * max_disp * scale,
-                                delta_p[1] / disp_len * max_disp * scale,
-                            ]
-                        } else {
-                            [delta_p[0] * scale, delta_p[1] * scale]
-                        };
-                        let delta_r = (desired_rot - rot_b) * scale;
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            b.position[0] += step_p[0];
-                            b.position[1] += step_p[1];
-                            b.rotation += delta_r;
-                        }
-                    }
-                }
-                Joint2D::Friction(frj) => {
-                    if let Some(bid_b) = frj.body_b {
-                        let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        if (frj.break_force.is_finite() && frj.max_force > frj.break_force)
-                            || (frj.break_torque.is_finite() && frj.max_torque > frj.break_torque)
-                        {
-                            broken.push(joint_id);
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            let speed = length2(b.linear_velocity);
-                            let max_dv = frj.max_force.max(0.0) * inv_b * dt;
-                            if speed <= max_dv {
-                                b.linear_velocity = [0.0, 0.0];
-                            } else if speed > 1e-6 {
-                                let factor = (speed - max_dv) / speed;
-                                b.linear_velocity[0] *= factor;
-                                b.linear_velocity[1] *= factor;
-                            }
-                            let ang_speed = b.angular_velocity.abs();
-                            let max_dw = frj.max_torque.max(0.0) * inv_b * dt;
-                            if ang_speed <= max_dw {
-                                b.angular_velocity = 0.0;
-                            } else {
-                                b.angular_velocity -= b.angular_velocity.signum() * max_dw;
-                            }
-                        }
-                    }
-                }
-                Joint2D::Hinge(hj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(hj.body_a);
-                    let world_a = transform_point2(hj.anchor_a, pos_a, rot_a);
-                    if let Some(bid_b) = hj.body_b {
-                        let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            if hj.use_motor {
-                                let max_dw = hj.motor.max_motor_torque.max(0.0) * inv_b * dt;
-                                let diff = (hj.motor.motor_speed - b.angular_velocity)
-                                    .clamp(-max_dw, max_dw);
-                                b.angular_velocity += diff;
-                                b.rotation += b.angular_velocity * dt;
-                            }
-                            if hj.use_limits {
-                                let rel_angle = b.rotation - rot_a;
-                                let clamped = rel_angle.clamp(hj.limits.min, hj.limits.max);
-                                b.rotation = rot_a + clamped;
-                            }
-                            let rotated_anchor_b = rotate_vec2(hj.anchor_b, b.rotation);
-                            b.position = sub2(world_a, rotated_anchor_b);
-                        }
-                    }
-                }
-                Joint2D::Slider(slj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(slj.body_a);
-                    let world_a = transform_point2(slj.anchor_a, pos_a, rot_a);
-                    let axis_angle = rot_a + slj.angle_degrees.to_radians();
-                    let axis = rotate_vec2([1.0, 0.0], axis_angle);
-                    if let Some(bid_b) = slj.body_b {
-                        let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            let rel = sub2(b.position, world_a);
-                            let mut coord = dot2(rel, axis);
-                            if slj.use_motor {
-                                let max_dv = slj.motor.max_motor_torque.max(0.0) * inv_b * dt;
-                                let v_along = dot2(b.linear_velocity, axis);
-                                let dv = (slj.motor.motor_speed - v_along).clamp(-max_dv, max_dv);
-                                let new_v = v_along + dv;
-                                b.linear_velocity = [axis[0] * new_v, axis[1] * new_v];
-                                coord += new_v * dt;
-                            }
-                            if slj.use_limits {
-                                coord = coord.clamp(slj.limits.min, slj.limits.max);
-                            }
-                            b.position =
-                                [world_a[0] + axis[0] * coord, world_a[1] + axis[1] * coord];
-                        }
-                    }
-                }
-                Joint2D::Wheel(wj) => {
-                    let (pos_a, rot_a, _) = self.body_pose_and_inv(wj.body_a);
-                    let world_a = transform_point2(wj.anchor_a, pos_a, rot_a);
-                    let susp_angle = rot_a + wj.suspension_angle_degrees.to_radians();
-                    let susp_axis = rotate_vec2([1.0, 0.0], susp_angle);
-                    if let Some(bid_b) = wj.body_b {
-                        let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
-                        if inv_b <= 0.0 {
-                            continue;
-                        }
-                        if let Some(b) = self.bodies.get_mut(&bid_b) {
-                            let rel = sub2(b.position, world_a);
-                            let offset_along = dot2(rel, susp_axis);
-                            let k = (wj.suspension_frequency.max(0.5) * std::f32::consts::TAU)
-                                .powi(2)
-                                / inv_b;
-                            let spring_acc = -k * offset_along * inv_b;
-                            let v_along = dot2(b.linear_velocity, susp_axis) + spring_acc * dt;
-                            let damp =
-                                (1.0 - wj.suspension_damping_ratio.clamp(0.0, 1.0) * dt).max(0.0);
-                            let new_v_along = v_along * damp;
-                            let new_coord = offset_along + new_v_along * dt;
-                            b.linear_velocity =
-                                [susp_axis[0] * new_v_along, susp_axis[1] * new_v_along];
-                            b.position = [
-                                world_a[0] + susp_axis[0] * new_coord,
-                                world_a[1] + susp_axis[1] * new_coord,
-                            ];
-                            if wj.use_motor {
-                                let max_dw = wj.motor.max_motor_torque.max(0.0) * inv_b * dt;
-                                let dw = (wj.motor.motor_speed - b.angular_velocity)
-                                    .clamp(-max_dw, max_dw);
-                                b.angular_velocity += dw;
-                                b.rotation += b.angular_velocity * dt;
-                            }
-                        }
-                    }
-                }
+            let broke = match joint {
+                Joint2D::Distance(dj) => self.solve_distance_joint(dj, dt),
+                Joint2D::Spring(sj) => self.solve_spring_joint(sj, dt),
+                Joint2D::Target(tj) => self.solve_target_joint(tj, dt),
+                Joint2D::Fixed(fj) => self.solve_fixed_joint(fj, dt),
+                Joint2D::Relative(rj) => self.solve_relative_joint(rj, dt),
+                Joint2D::Friction(frj) => self.solve_friction_joint(frj, dt),
+                Joint2D::Hinge(hj) => self.solve_hinge_joint(hj, dt),
+                Joint2D::Slider(slj) => self.solve_slider_joint(slj, dt),
+                Joint2D::Wheel(wj) => self.solve_wheel_joint(wj, dt),
+            };
+            if broke {
+                broken.push(joint_id);
             }
         }
 
@@ -1438,6 +1205,278 @@ impl World2D {
             self.joints.remove(&id);
             self.broken_joints.push(id);
         }
+    }
+
+    fn solve_distance_joint(&mut self, dj: DistanceJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(dj.body_a);
+        let world_a = transform_point2(dj.anchor_a, pos_a, rot_a);
+        if let Some(bid_b) = dj.body_b {
+            let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            let world_b = transform_point2(dj.anchor_b, pos_b, rot_b);
+            let delta = sub2(world_b, world_a);
+            let dist = length2(delta);
+            let err = dist - dj.distance.max(0.0);
+            if dj.max_distance_only && err <= 0.0 {
+                return false;
+            }
+            let reaction_force = (err.abs() / (inv_b * dt * dt)).min(1e9);
+            if dj.break_force.is_finite() && reaction_force > dj.break_force {
+                return true;
+            }
+            let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                b.position[0] -= dir[0] * err;
+                b.position[1] -= dir[1] * err;
+                let radial_v = dot2(b.linear_velocity, dir);
+                b.linear_velocity[0] -= dir[0] * radial_v;
+                b.linear_velocity[1] -= dir[1] * radial_v;
+            }
+        }
+        false
+    }
+
+    fn solve_spring_joint(&mut self, sj: SpringJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(sj.body_a);
+        let world_a = transform_point2(sj.anchor_a, pos_a, rot_a);
+        if let Some(bid_b) = sj.body_b {
+            let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            let world_b = transform_point2(sj.anchor_b, pos_b, rot_b);
+            let delta = sub2(world_b, world_a);
+            let dist = length2(delta);
+            let stretch = dist - sj.distance.max(0.0);
+            let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
+            let k = (sj.frequency.max(0.5) * std::f32::consts::TAU).powi(2) / inv_b;
+            let force_mag = -k * stretch;
+            if sj.break_force.is_finite() && force_mag.abs() > sj.break_force {
+                return true;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                let dv = force_mag * inv_b * dt;
+                b.linear_velocity[0] += dir[0] * dv;
+                b.linear_velocity[1] += dir[1] * dv;
+                let damp = (1.0 - sj.damping_ratio.clamp(0.0, 1.0) * dt).max(0.0);
+                b.linear_velocity[0] *= damp;
+                b.linear_velocity[1] *= damp;
+                b.position[0] += b.linear_velocity[0] * dt;
+                b.position[1] += b.linear_velocity[1] * dt;
+            }
+        }
+        false
+    }
+
+    fn solve_target_joint(&mut self, tj: TargetJoint2D, dt: f32) -> bool {
+        let (pos, rot, inv_m) = self.body_pose_and_inv(tj.body);
+        if inv_m <= 0.0 {
+            return false;
+        }
+        let world_anchor = transform_point2(tj.anchor, pos, rot);
+        let to_target = sub2(tj.target, world_anchor);
+        let dist = length2(to_target);
+        if dist <= 1e-6 {
+            return false;
+        }
+        let dir = [to_target[0] / dist, to_target[1] / dist];
+        let k = (tj.frequency.max(0.5) * std::f32::consts::TAU).powi(2) / inv_m;
+        let force_mag = (k * dist).min(tj.max_force.max(0.0));
+        if tj.break_force.is_finite() && force_mag > tj.break_force {
+            return true;
+        }
+        if let Some(b) = self.bodies.get_mut(&tj.body) {
+            let dv = force_mag * inv_m * dt;
+            b.linear_velocity[0] += dir[0] * dv;
+            b.linear_velocity[1] += dir[1] * dv;
+            b.position[0] += b.linear_velocity[0] * dt;
+            b.position[1] += b.linear_velocity[1] * dt;
+        }
+        false
+    }
+
+    fn solve_fixed_joint(&mut self, fj: FixedJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(fj.body_a);
+        if let Some(bid_b) = fj.body_b {
+            let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            let target_pos = transform_point2(fj.local_offset, pos_a, rot_a);
+            let target_rot = rot_a + fj.reference_angle;
+            let pos_err = length2(sub2(target_pos, pos_b));
+            let rot_err = (target_rot - rot_b).abs();
+            if (fj.break_force.is_finite() && pos_err / (inv_b * dt * dt) > fj.break_force)
+                || (fj.break_torque.is_finite() && rot_err / (inv_b * dt * dt) > fj.break_torque)
+            {
+                return true;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                b.position = target_pos;
+                b.rotation = target_rot;
+                b.linear_velocity = [0.0, 0.0];
+                b.angular_velocity = 0.0;
+            }
+        }
+        false
+    }
+
+    fn solve_relative_joint(&mut self, rj: RelativeJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(rj.body_a);
+        if let Some(bid_b) = rj.body_b {
+            let (pos_b, rot_b, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            let desired_pos = transform_point2(rj.linear_offset, pos_a, rot_a);
+            let desired_rot = rot_a + rj.angular_offset;
+            let scale = rj.correction_scale.clamp(0.0, 1.0);
+            let delta_p = sub2(desired_pos, pos_b);
+            let max_disp = rj.max_force.max(0.0) * inv_b * dt * dt;
+            let disp_len = length2(delta_p);
+            let step_p = if disp_len > max_disp && disp_len > 1e-6 {
+                [
+                    delta_p[0] / disp_len * max_disp * scale,
+                    delta_p[1] / disp_len * max_disp * scale,
+                ]
+            } else {
+                [delta_p[0] * scale, delta_p[1] * scale]
+            };
+            let delta_r = (desired_rot - rot_b) * scale;
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                b.position[0] += step_p[0];
+                b.position[1] += step_p[1];
+                b.rotation += delta_r;
+            }
+        }
+        false
+    }
+
+    fn solve_friction_joint(&mut self, frj: FrictionJoint2D, dt: f32) -> bool {
+        if let Some(bid_b) = frj.body_b {
+            let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            if (frj.break_force.is_finite() && frj.max_force > frj.break_force)
+                || (frj.break_torque.is_finite() && frj.max_torque > frj.break_torque)
+            {
+                return true;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                let speed = length2(b.linear_velocity);
+                let max_dv = frj.max_force.max(0.0) * inv_b * dt;
+                if speed <= max_dv {
+                    b.linear_velocity = [0.0, 0.0];
+                } else if speed > 1e-6 {
+                    let factor = (speed - max_dv) / speed;
+                    b.linear_velocity[0] *= factor;
+                    b.linear_velocity[1] *= factor;
+                }
+                let ang_speed = b.angular_velocity.abs();
+                let max_dw = frj.max_torque.max(0.0) * inv_b * dt;
+                if ang_speed <= max_dw {
+                    b.angular_velocity = 0.0;
+                } else {
+                    b.angular_velocity -= b.angular_velocity.signum() * max_dw;
+                }
+            }
+        }
+        false
+    }
+
+    fn solve_hinge_joint(&mut self, hj: HingeJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(hj.body_a);
+        let world_a = transform_point2(hj.anchor_a, pos_a, rot_a);
+        if let Some(bid_b) = hj.body_b {
+            let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                if hj.use_motor {
+                    let max_dw = hj.motor.max_motor_torque.max(0.0) * inv_b * dt;
+                    let diff = (hj.motor.motor_speed - b.angular_velocity).clamp(-max_dw, max_dw);
+                    b.angular_velocity += diff;
+                    b.rotation += b.angular_velocity * dt;
+                }
+                if hj.use_limits {
+                    let rel_angle = b.rotation - rot_a;
+                    let clamped = rel_angle.clamp(hj.limits.min, hj.limits.max);
+                    b.rotation = rot_a + clamped;
+                }
+                let rotated_anchor_b = rotate_vec2(hj.anchor_b, b.rotation);
+                b.position = sub2(world_a, rotated_anchor_b);
+            }
+        }
+        false
+    }
+
+    fn solve_slider_joint(&mut self, slj: SliderJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(slj.body_a);
+        let world_a = transform_point2(slj.anchor_a, pos_a, rot_a);
+        let axis_angle = rot_a + slj.angle_degrees.to_radians();
+        let axis = rotate_vec2([1.0, 0.0], axis_angle);
+        if let Some(bid_b) = slj.body_b {
+            let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                let rel = sub2(b.position, world_a);
+                let mut coord = dot2(rel, axis);
+                if slj.use_motor {
+                    let max_dv = slj.motor.max_motor_torque.max(0.0) * inv_b * dt;
+                    let v_along = dot2(b.linear_velocity, axis);
+                    let dv = (slj.motor.motor_speed - v_along).clamp(-max_dv, max_dv);
+                    let new_v = v_along + dv;
+                    b.linear_velocity = [axis[0] * new_v, axis[1] * new_v];
+                    coord += new_v * dt;
+                }
+                if slj.use_limits {
+                    coord = coord.clamp(slj.limits.min, slj.limits.max);
+                }
+                b.position = [world_a[0] + axis[0] * coord, world_a[1] + axis[1] * coord];
+            }
+        }
+        false
+    }
+
+    fn solve_wheel_joint(&mut self, wj: WheelJoint2D, dt: f32) -> bool {
+        let (pos_a, rot_a, _) = self.body_pose_and_inv(wj.body_a);
+        let world_a = transform_point2(wj.anchor_a, pos_a, rot_a);
+        let susp_angle = rot_a + wj.suspension_angle_degrees.to_radians();
+        let susp_axis = rotate_vec2([1.0, 0.0], susp_angle);
+        if let Some(bid_b) = wj.body_b {
+            let (_, _, inv_b) = self.body_pose_and_inv(bid_b);
+            if inv_b <= 0.0 {
+                return false;
+            }
+            if let Some(b) = self.bodies.get_mut(&bid_b) {
+                let rel = sub2(b.position, world_a);
+                let offset_along = dot2(rel, susp_axis);
+                let k = (wj.suspension_frequency.max(0.5) * std::f32::consts::TAU).powi(2) / inv_b;
+                let spring_acc = -k * offset_along * inv_b;
+                let v_along = dot2(b.linear_velocity, susp_axis) + spring_acc * dt;
+                let damp = (1.0 - wj.suspension_damping_ratio.clamp(0.0, 1.0) * dt).max(0.0);
+                let new_v_along = v_along * damp;
+                let new_coord = offset_along + new_v_along * dt;
+                b.linear_velocity = [susp_axis[0] * new_v_along, susp_axis[1] * new_v_along];
+                b.position = [
+                    world_a[0] + susp_axis[0] * new_coord,
+                    world_a[1] + susp_axis[1] * new_coord,
+                ];
+                if wj.use_motor {
+                    let max_dw = wj.motor.max_motor_torque.max(0.0) * inv_b * dt;
+                    let dw = (wj.motor.motor_speed - b.angular_velocity).clamp(-max_dw, max_dw);
+                    b.angular_velocity += dw;
+                    b.rotation += b.angular_velocity * dt;
+                }
+            }
+        }
+        false
     }
 
     fn body_pose_and_inv(&self, id: BodyId2D) -> ([f32; 2], f32, f32) {
@@ -1897,6 +1936,327 @@ impl World2D {
         None
     }
 
+    fn apply_contact_impulse(&mut self, input: ContactImpulseInput<'_>) -> f32 {
+        let mut normal_impulse = 0.0f32;
+        let normal_speed = dot2(input.relative_velocity, input.contact.normal);
+        if normal_speed < 0.0 {
+            let mut restitution =
+                0.5 * (input.col_a.material.bounciness + input.col_b.material.bounciness);
+            let mut friction =
+                (input.col_a.material.friction * input.col_b.material.friction).sqrt();
+            if let Some((use_side_friction, use_side_bounce)) = self.platform_side_rules(
+                input.col_a,
+                input.angle_a,
+                input.col_b,
+                input.angle_b,
+                input.contact.normal,
+            ) {
+                if !use_side_friction {
+                    friction = 0.0;
+                }
+                if !use_side_bounce {
+                    restitution = 0.0;
+                }
+            }
+            normal_impulse = -(1.0 + restitution) * normal_speed / input.inverse_mass_sum;
+
+            if let Some(bid_a) = input.col_a.attached_body {
+                if let Some(body_a) = self.bodies.get_mut(&bid_a) {
+                    if body_a.is_dynamic() {
+                        if body_a.is_sleeping() && normal_impulse > 1e-4 {
+                            body_a.wake_up();
+                        }
+                        body_a.linear_velocity[0] -=
+                            input.contact.normal[0] * normal_impulse * input.inverse_mass_a;
+                        body_a.linear_velocity[1] -=
+                            input.contact.normal[1] * normal_impulse * input.inverse_mass_a;
+                    }
+                }
+            }
+            if let Some(bid_b) = input.col_b.attached_body {
+                if let Some(body_b) = self.bodies.get_mut(&bid_b) {
+                    if body_b.is_dynamic() {
+                        if body_b.is_sleeping() && normal_impulse > 1e-4 {
+                            body_b.wake_up();
+                        }
+                        body_b.linear_velocity[0] +=
+                            input.contact.normal[0] * normal_impulse * input.inverse_mass_b;
+                        body_b.linear_velocity[1] +=
+                            input.contact.normal[1] * normal_impulse * input.inverse_mass_b;
+                    }
+                }
+            }
+
+            let tangent_vel = [
+                input.relative_velocity[0] - input.contact.normal[0] * normal_speed,
+                input.relative_velocity[1] - input.contact.normal[1] * normal_speed,
+            ];
+            let tangent_speed = length2(tangent_vel);
+            if tangent_speed > 1e-6 {
+                let friction_impulse =
+                    (tangent_speed / input.inverse_mass_sum).min(friction * normal_impulse);
+                let t_dir = [
+                    tangent_vel[0] / tangent_speed,
+                    tangent_vel[1] / tangent_speed,
+                ];
+                if let Some(bid_a) = input.col_a.attached_body {
+                    if let Some(body_a) = self.bodies.get_mut(&bid_a) {
+                        if body_a.is_dynamic() {
+                            body_a.linear_velocity[0] +=
+                                t_dir[0] * friction_impulse * input.inverse_mass_a;
+                            body_a.linear_velocity[1] +=
+                                t_dir[1] * friction_impulse * input.inverse_mass_a;
+                        }
+                    }
+                }
+                if let Some(bid_b) = input.col_b.attached_body {
+                    if let Some(body_b) = self.bodies.get_mut(&bid_b) {
+                        if body_b.is_dynamic() {
+                            body_b.linear_velocity[0] -=
+                                t_dir[0] * friction_impulse * input.inverse_mass_b;
+                            body_b.linear_velocity[1] -=
+                                t_dir[1] * friction_impulse * input.inverse_mass_b;
+                        }
+                    }
+                }
+            }
+        }
+        normal_impulse
+    }
+
+    fn platform_a_passes_through(&mut self, query: PlatformPassThroughQuery<'_>) -> bool {
+        let Some(plat_a) = self.platform_effector_for(query.col_a) else {
+            return false;
+        };
+        if !plat_a.allows_layer(query.endpoint_b.layer) {
+            self.pass_through_pairs.insert(query.pair_key);
+            return true;
+        }
+        if !self.touching_pairs.contains_key(&query.pair_key) {
+            let (center_a, _) = self.collider_world_pose(query.col_a);
+            let (center_b, _) = self.collider_world_pose(query.col_b);
+            let prev_pos_b = query
+                .col_b
+                .attached_body
+                .and_then(|bid| self.bodies.get(&bid))
+                .map_or(center_b, |b| {
+                    transform_point2(query.col_b.offset, b.previous_position, b.rotation)
+                });
+            let up_a = plat_a.surface_up(query.angle_a);
+            let rel_prev = sub2(prev_pos_b, center_a);
+            let from_below = dot2(rel_prev, up_a) < 0.0;
+            if from_below
+                || plat_a.should_pass_through(query.angle_a, query.normal, query.relative_velocity)
+            {
+                self.pass_through_pairs.insert(query.pair_key);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn solve_collect_pair_iterations(
+        &mut self,
+        ids: &[ColliderId2D],
+        iter: usize,
+        active_pairs: &mut BTreeMap<(ColliderId2D, ColliderId2D), PairState2D>,
+        still_overlapping_all: &mut BTreeSet<(ColliderId2D, ColliderId2D)>,
+    ) {
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let id_a = ids[i];
+                let id_b = ids[j];
+                let pair_key = ordered_pair(id_a, id_b);
+                if self.ignored_pairs.contains(&pair_key) {
+                    continue;
+                }
+                let (Some(col_a), Some(col_b)) = (
+                    self.colliders.get(&id_a).cloned(),
+                    self.colliders.get(&id_b).cloned(),
+                ) else {
+                    continue;
+                };
+                if !self.is_collider_simulated(&col_a) || !self.is_collider_simulated(&col_b) {
+                    continue;
+                }
+                if col_a.attached_body.is_some() && col_a.attached_body == col_b.attached_body {
+                    continue;
+                }
+                let ep_a = self.endpoint_for(&col_a);
+                let ep_b = self.endpoint_for(&col_b);
+                if !self
+                    .collision_matrix
+                    .is_enabled(ep_a.layer as usize, ep_b.layer as usize)
+                {
+                    continue;
+                }
+
+                let (center_a, angle_a) = self.collider_world_pose(&col_a);
+                let (center_b, angle_b) = self.collider_world_pose(&col_b);
+                let Some(raw_contact) = compute_contact2d(
+                    &col_a.shape,
+                    center_a,
+                    angle_a,
+                    &col_b.shape,
+                    center_b,
+                    angle_b,
+                ) else {
+                    continue;
+                };
+
+                still_overlapping_all.insert(pair_key);
+
+                if self.pass_through_pairs.contains(&pair_key) {
+                    continue;
+                }
+
+                let vel_a = self.collider_velocity(&col_a);
+                let vel_b = self.collider_velocity(&col_b);
+                let rel_vel_b_minus_a = sub2(vel_b, vel_a);
+
+                if self.platform_a_passes_through(PlatformPassThroughQuery {
+                    col_a: &col_a,
+                    col_b: &col_b,
+                    pair_key,
+                    normal: raw_contact.normal,
+                    relative_velocity: rel_vel_b_minus_a,
+                    angle_a,
+                    endpoint_b: ep_b,
+                }) {
+                    continue;
+                }
+
+                if let Some(plat_b) = self.platform_effector_for(&col_b) {
+                    if !plat_b.allows_layer(ep_a.layer) {
+                        self.pass_through_pairs.insert(pair_key);
+                        continue;
+                    }
+                    if !self.touching_pairs.contains_key(&pair_key) {
+                        let prev_pos_a = col_a
+                            .attached_body
+                            .and_then(|bid| self.bodies.get(&bid))
+                            .map_or(center_a, |b| {
+                                transform_point2(col_a.offset, b.previous_position, b.rotation)
+                            });
+                        let up_b = plat_b.surface_up(angle_b);
+                        let rel_prev = sub2(prev_pos_a, center_b);
+                        let from_below = dot2(rel_prev, up_b) < 0.0;
+                        let normal_from_b_to_a = [-raw_contact.normal[0], -raw_contact.normal[1]];
+                        let rel_vel_a_minus_b = [-rel_vel_b_minus_a[0], -rel_vel_b_minus_a[1]];
+                        if from_below
+                            || plat_b.should_pass_through(
+                                angle_b,
+                                normal_from_b_to_a,
+                                rel_vel_a_minus_b,
+                            )
+                        {
+                            self.pass_through_pairs.insert(pair_key);
+                            continue;
+                        }
+                    }
+                }
+
+                let is_trigger = col_a.is_trigger || col_b.is_trigger;
+                if is_trigger {
+                    if iter == 0 {
+                        active_pairs.insert(
+                            pair_key,
+                            PairState2D {
+                                is_trigger: true,
+                                endpoint_a: ep_a,
+                                endpoint_b: ep_b,
+                                contacts_for_a: Vec::new(),
+                                rel_vel_for_a: rel_vel_b_minus_a,
+                            },
+                        );
+                    }
+                    continue;
+                }
+
+                let inv_a = col_a
+                    .attached_body
+                    .and_then(|bid| self.bodies.get(&bid))
+                    .map_or(0.0, |b| b.inverse_mass());
+                let inv_b = col_b
+                    .attached_body
+                    .and_then(|bid| self.bodies.get(&bid))
+                    .map_or(0.0, |b| b.inverse_mass());
+                let inv_sum = inv_a + inv_b;
+
+                let mut normal_impulse = 0.0f32;
+                if inv_sum > 0.0 {
+                    let move_a = raw_contact.depth * (inv_a / inv_sum);
+                    let move_b = raw_contact.depth * (inv_b / inv_sum);
+                    if let Some(bid_a) = col_a.attached_body {
+                        if let Some(body_a) = self.bodies.get_mut(&bid_a) {
+                            if body_a.is_dynamic() {
+                                body_a.position[0] -= raw_contact.normal[0] * move_a;
+                                body_a.position[1] -= raw_contact.normal[1] * move_a;
+                            }
+                        }
+                    }
+                    if let Some(bid_b) = col_b.attached_body {
+                        if let Some(body_b) = self.bodies.get_mut(&bid_b) {
+                            if body_b.is_dynamic() {
+                                body_b.position[0] += raw_contact.normal[0] * move_b;
+                                body_b.position[1] += raw_contact.normal[1] * move_b;
+                            }
+                        }
+                    }
+
+                    normal_impulse = self.apply_contact_impulse(ContactImpulseInput {
+                        col_a: &col_a,
+                        col_b: &col_b,
+                        angle_a,
+                        angle_b,
+                        contact: raw_contact,
+                        relative_velocity: rel_vel_b_minus_a,
+                        inverse_mass_a: inv_a,
+                        inverse_mass_b: inv_b,
+                        inverse_mass_sum: inv_sum,
+                    });
+
+                    self.apply_surface_effector_on_pair(
+                        &col_a,
+                        angle_a,
+                        &col_b,
+                        ep_b.layer,
+                        raw_contact.normal,
+                    );
+                    self.apply_surface_effector_on_pair(
+                        &col_b,
+                        angle_b,
+                        &col_a,
+                        ep_a.layer,
+                        [-raw_contact.normal[0], -raw_contact.normal[1]],
+                    );
+                }
+
+                let contact_pt = ContactPoint2D {
+                    point: raw_contact.point,
+                    normal: [-raw_contact.normal[0], -raw_contact.normal[1]],
+                    separation: -raw_contact.depth,
+                    normal_impulse,
+                };
+
+                active_pairs
+                    .entry(pair_key)
+                    .and_modify(|state| {
+                        if normal_impulse > 0.0 && !state.contacts_for_a.is_empty() {
+                            state.contacts_for_a[0].normal_impulse += normal_impulse;
+                        }
+                    })
+                    .or_insert_with(|| PairState2D {
+                        is_trigger: false,
+                        endpoint_a: ep_a,
+                        endpoint_b: ep_b,
+                        contacts_for_a: vec![contact_pt],
+                        rel_vel_for_a: rel_vel_b_minus_a,
+                    });
+            }
+        }
+    }
+
     fn solve_and_collect_contacts(
         &mut self,
         _dt: f32,
@@ -1906,290 +2266,12 @@ impl World2D {
         let mut still_overlapping_all: BTreeSet<(ColliderId2D, ColliderId2D)> = BTreeSet::new();
 
         for iter in 0..DEFAULT_SOLVER_ITERATIONS_2D {
-            for i in 0..ids.len() {
-                for j in (i + 1)..ids.len() {
-                    let id_a = ids[i];
-                    let id_b = ids[j];
-                    let pair_key = ordered_pair(id_a, id_b);
-                    if self.ignored_pairs.contains(&pair_key) {
-                        continue;
-                    }
-                    let (Some(col_a), Some(col_b)) = (
-                        self.colliders.get(&id_a).cloned(),
-                        self.colliders.get(&id_b).cloned(),
-                    ) else {
-                        continue;
-                    };
-                    if !self.is_collider_simulated(&col_a) || !self.is_collider_simulated(&col_b) {
-                        continue;
-                    }
-                    if col_a.attached_body.is_some() && col_a.attached_body == col_b.attached_body {
-                        continue;
-                    }
-                    let ep_a = self.endpoint_for(&col_a);
-                    let ep_b = self.endpoint_for(&col_b);
-                    if !self
-                        .collision_matrix
-                        .is_enabled(ep_a.layer as usize, ep_b.layer as usize)
-                    {
-                        continue;
-                    }
-
-                    let (center_a, angle_a) = self.collider_world_pose(&col_a);
-                    let (center_b, angle_b) = self.collider_world_pose(&col_b);
-                    let Some(raw_contact) = compute_contact2d(
-                        &col_a.shape,
-                        center_a,
-                        angle_a,
-                        &col_b.shape,
-                        center_b,
-                        angle_b,
-                    ) else {
-                        continue;
-                    };
-
-                    still_overlapping_all.insert(pair_key);
-
-                    if self.pass_through_pairs.contains(&pair_key) {
-                        continue;
-                    }
-
-                    let vel_a = self.collider_velocity(&col_a);
-                    let vel_b = self.collider_velocity(&col_b);
-                    let rel_vel_b_minus_a = sub2(vel_b, vel_a);
-
-                    if let Some(plat_a) = self.platform_effector_for(&col_a) {
-                        if !plat_a.allows_layer(ep_b.layer) {
-                            self.pass_through_pairs.insert(pair_key);
-                            continue;
-                        }
-                        if !self.touching_pairs.contains_key(&pair_key) {
-                            let prev_pos_b = col_b
-                                .attached_body
-                                .and_then(|bid| self.bodies.get(&bid))
-                                .map_or(center_b, |b| {
-                                    transform_point2(col_b.offset, b.previous_position, b.rotation)
-                                });
-                            let up_a = plat_a.surface_up(angle_a);
-                            let rel_prev = sub2(prev_pos_b, center_a);
-                            let from_below = dot2(rel_prev, up_a) < 0.0;
-                            if from_below
-                                || plat_a.should_pass_through(
-                                    angle_a,
-                                    raw_contact.normal,
-                                    rel_vel_b_minus_a,
-                                )
-                            {
-                                self.pass_through_pairs.insert(pair_key);
-                                continue;
-                            }
-                        }
-                    }
-
-                    if let Some(plat_b) = self.platform_effector_for(&col_b) {
-                        if !plat_b.allows_layer(ep_a.layer) {
-                            self.pass_through_pairs.insert(pair_key);
-                            continue;
-                        }
-                        if !self.touching_pairs.contains_key(&pair_key) {
-                            let prev_pos_a = col_a
-                                .attached_body
-                                .and_then(|bid| self.bodies.get(&bid))
-                                .map_or(center_a, |b| {
-                                    transform_point2(col_a.offset, b.previous_position, b.rotation)
-                                });
-                            let up_b = plat_b.surface_up(angle_b);
-                            let rel_prev = sub2(prev_pos_a, center_b);
-                            let from_below = dot2(rel_prev, up_b) < 0.0;
-                            let normal_from_b_to_a =
-                                [-raw_contact.normal[0], -raw_contact.normal[1]];
-                            let rel_vel_a_minus_b = [-rel_vel_b_minus_a[0], -rel_vel_b_minus_a[1]];
-                            if from_below
-                                || plat_b.should_pass_through(
-                                    angle_b,
-                                    normal_from_b_to_a,
-                                    rel_vel_a_minus_b,
-                                )
-                            {
-                                self.pass_through_pairs.insert(pair_key);
-                                continue;
-                            }
-                        }
-                    }
-
-                    let is_trigger = col_a.is_trigger || col_b.is_trigger;
-                    if is_trigger {
-                        if iter == 0 {
-                            active_pairs.insert(
-                                pair_key,
-                                PairState2D {
-                                    is_trigger: true,
-                                    endpoint_a: ep_a,
-                                    endpoint_b: ep_b,
-                                    contacts_for_a: Vec::new(),
-                                    rel_vel_for_a: rel_vel_b_minus_a,
-                                },
-                            );
-                        }
-                        continue;
-                    }
-
-                    let inv_a = col_a
-                        .attached_body
-                        .and_then(|bid| self.bodies.get(&bid))
-                        .map_or(0.0, |b| b.inverse_mass());
-                    let inv_b = col_b
-                        .attached_body
-                        .and_then(|bid| self.bodies.get(&bid))
-                        .map_or(0.0, |b| b.inverse_mass());
-                    let inv_sum = inv_a + inv_b;
-
-                    let mut normal_impulse = 0.0f32;
-                    if inv_sum > 0.0 {
-                        let move_a = raw_contact.depth * (inv_a / inv_sum);
-                        let move_b = raw_contact.depth * (inv_b / inv_sum);
-                        if let Some(bid_a) = col_a.attached_body {
-                            if let Some(body_a) = self.bodies.get_mut(&bid_a) {
-                                if body_a.is_dynamic() {
-                                    body_a.position[0] -= raw_contact.normal[0] * move_a;
-                                    body_a.position[1] -= raw_contact.normal[1] * move_a;
-                                }
-                            }
-                        }
-                        if let Some(bid_b) = col_b.attached_body {
-                            if let Some(body_b) = self.bodies.get_mut(&bid_b) {
-                                if body_b.is_dynamic() {
-                                    body_b.position[0] += raw_contact.normal[0] * move_b;
-                                    body_b.position[1] += raw_contact.normal[1] * move_b;
-                                }
-                            }
-                        }
-
-                        let normal_speed = dot2(rel_vel_b_minus_a, raw_contact.normal);
-                        if normal_speed < 0.0 {
-                            let mut restitution =
-                                0.5 * (col_a.material.bounciness + col_b.material.bounciness);
-                            let mut friction =
-                                (col_a.material.friction * col_b.material.friction).sqrt();
-                            if let Some((use_side_friction, use_side_bounce)) = self
-                                .platform_side_rules(
-                                    &col_a,
-                                    angle_a,
-                                    &col_b,
-                                    angle_b,
-                                    raw_contact.normal,
-                                )
-                            {
-                                if !use_side_friction {
-                                    friction = 0.0;
-                                }
-                                if !use_side_bounce {
-                                    restitution = 0.0;
-                                }
-                            }
-                            normal_impulse = -(1.0 + restitution) * normal_speed / inv_sum;
-
-                            if let Some(bid_a) = col_a.attached_body {
-                                if let Some(body_a) = self.bodies.get_mut(&bid_a) {
-                                    if body_a.is_dynamic() {
-                                        if body_a.is_sleeping() && normal_impulse > 1e-4 {
-                                            body_a.wake_up();
-                                        }
-                                        body_a.linear_velocity[0] -=
-                                            raw_contact.normal[0] * normal_impulse * inv_a;
-                                        body_a.linear_velocity[1] -=
-                                            raw_contact.normal[1] * normal_impulse * inv_a;
-                                    }
-                                }
-                            }
-                            if let Some(bid_b) = col_b.attached_body {
-                                if let Some(body_b) = self.bodies.get_mut(&bid_b) {
-                                    if body_b.is_dynamic() {
-                                        if body_b.is_sleeping() && normal_impulse > 1e-4 {
-                                            body_b.wake_up();
-                                        }
-                                        body_b.linear_velocity[0] +=
-                                            raw_contact.normal[0] * normal_impulse * inv_b;
-                                        body_b.linear_velocity[1] +=
-                                            raw_contact.normal[1] * normal_impulse * inv_b;
-                                    }
-                                }
-                            }
-
-                            let tangent_vel = [
-                                rel_vel_b_minus_a[0] - raw_contact.normal[0] * normal_speed,
-                                rel_vel_b_minus_a[1] - raw_contact.normal[1] * normal_speed,
-                            ];
-                            let tangent_speed = length2(tangent_vel);
-                            if tangent_speed > 1e-6 {
-                                let friction_impulse =
-                                    (tangent_speed / inv_sum).min(friction * normal_impulse);
-                                let t_dir = [
-                                    tangent_vel[0] / tangent_speed,
-                                    tangent_vel[1] / tangent_speed,
-                                ];
-                                if let Some(bid_a) = col_a.attached_body {
-                                    if let Some(body_a) = self.bodies.get_mut(&bid_a) {
-                                        if body_a.is_dynamic() {
-                                            body_a.linear_velocity[0] +=
-                                                t_dir[0] * friction_impulse * inv_a;
-                                            body_a.linear_velocity[1] +=
-                                                t_dir[1] * friction_impulse * inv_a;
-                                        }
-                                    }
-                                }
-                                if let Some(bid_b) = col_b.attached_body {
-                                    if let Some(body_b) = self.bodies.get_mut(&bid_b) {
-                                        if body_b.is_dynamic() {
-                                            body_b.linear_velocity[0] -=
-                                                t_dir[0] * friction_impulse * inv_b;
-                                            body_b.linear_velocity[1] -=
-                                                t_dir[1] * friction_impulse * inv_b;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        self.apply_surface_effector_on_pair(
-                            &col_a,
-                            angle_a,
-                            &col_b,
-                            ep_b.layer,
-                            raw_contact.normal,
-                        );
-                        self.apply_surface_effector_on_pair(
-                            &col_b,
-                            angle_b,
-                            &col_a,
-                            ep_a.layer,
-                            [-raw_contact.normal[0], -raw_contact.normal[1]],
-                        );
-                    }
-
-                    let contact_pt = ContactPoint2D {
-                        point: raw_contact.point,
-                        normal: [-raw_contact.normal[0], -raw_contact.normal[1]],
-                        separation: -raw_contact.depth,
-                        normal_impulse,
-                    };
-
-                    active_pairs
-                        .entry(pair_key)
-                        .and_modify(|state| {
-                            if normal_impulse > 0.0 && !state.contacts_for_a.is_empty() {
-                                state.contacts_for_a[0].normal_impulse += normal_impulse;
-                            }
-                        })
-                        .or_insert_with(|| PairState2D {
-                            is_trigger: false,
-                            endpoint_a: ep_a,
-                            endpoint_b: ep_b,
-                            contacts_for_a: vec![contact_pt],
-                            rel_vel_for_a: rel_vel_b_minus_a,
-                        });
-                }
-            }
+            self.solve_collect_pair_iterations(
+                &ids,
+                iter,
+                &mut active_pairs,
+                &mut still_overlapping_all,
+            );
         }
 
         self.pass_through_pairs

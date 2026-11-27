@@ -1662,8 +1662,8 @@ fn runtime_audio_unsupported_or_invalid_clip_emits_diagnostic_and_fails_source()
     Ok(())
 }
 
-#[test]
-fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
+fn write_abi_audio_fixture()
+-> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), Box<dyn Error>> {
     let temp_dir =
         std::env::temp_dir().join(format!("unitas_runtime_abi_audio_{}", std::process::id()));
     let assets_dir = temp_dir.join("Assets");
@@ -1681,19 +1681,10 @@ fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: AbiSpeaker\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 1, y: 2, z: 3}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!82 &102\nAudioSource:\n  m_GameObject: {{fileID: 100}}\n  m_Enabled: 1\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n  m_PlayOnAwake: 0\n  m_Volume: 0.5\n  m_Pitch: 1.25\n  m_Loop: 1\n  m_Mute: 0\n  m_SpatialBlend: 0.5\n  m_MinDistance: 2.0\n  m_MaxDistance: 20.0\n  m_Priority: 100\n"
     );
     std::fs::write(&scene_path, yaml)?;
+    Ok((temp_dir, wav_path, scene_path))
+}
 
-    let handle = unitas_runtime_new();
-    assert_ne!(handle, 0);
-    let buf_addr = unitas_runtime_path_buffer(handle, 512);
-    assert_ne!(buf_addr, 0);
-    let scene_path_str = scene_path.to_string_lossy();
-    let scene_bytes = scene_path_str.as_bytes();
-    test_write_path_buffer(handle, scene_bytes)?;
-    assert_eq!(
-        unitas_runtime_load_scene(handle, buf_addr, scene_bytes.len() as u64),
-        0
-    );
-
+fn assert_abi_audio_source_config(handle: u64, buf_addr: u64) -> Result<(), Box<dyn Error>> {
     let rc_cfg = unitas_runtime::unitas_runtime_audio_source_config(handle, 1, buf_addr);
     assert_eq!(rc_cfg, 0);
     let mut cfg_bytes = [0u8; 44];
@@ -1717,18 +1708,14 @@ fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
     assert_eq!(cfg_bytes[38], 0);
     assert_eq!(cfg_bytes[39], 0);
     assert_eq!(cfg_bytes[40], 1);
+    Ok(())
+}
 
-    let wav_path_str = wav_path.to_string_lossy();
-    let wav_path_bytes = wav_path_str.as_bytes();
-    test_write_path_buffer(handle, wav_path_bytes)?;
-    let loaded_clip = unitas_runtime::unitas_runtime_audio_load_clip(
-        handle,
-        buf_addr,
-        wav_path_bytes.len() as u64,
-    );
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    assert_ne!(loaded_clip, 0);
-
+fn assert_abi_audio_clip_info(
+    handle: u64,
+    loaded_clip: u64,
+    buf_addr: u64,
+) -> Result<(), Box<dyn Error>> {
     assert_eq!(
         unitas_runtime::unitas_runtime_audio_clip_info(handle, loaded_clip, buf_addr),
         0
@@ -1741,6 +1728,39 @@ fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
     assert!((info_dur - 0.4).abs() < 1e-6);
     assert_eq!(info_rate, 10);
     assert_eq!(info_ch, 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_abi_audio_exports_round_trip() -> Result<(), Box<dyn Error>> {
+    let (temp_dir, wav_path, scene_path) = write_abi_audio_fixture()?;
+
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    let buf_addr = unitas_runtime_path_buffer(handle, 512);
+    assert_ne!(buf_addr, 0);
+    let scene_path_str = scene_path.to_string_lossy();
+    let scene_bytes = scene_path_str.as_bytes();
+    test_write_path_buffer(handle, scene_bytes)?;
+    assert_eq!(
+        unitas_runtime_load_scene(handle, buf_addr, scene_bytes.len() as u64),
+        0
+    );
+
+    assert_abi_audio_source_config(handle, buf_addr)?;
+
+    let wav_path_str = wav_path.to_string_lossy();
+    let wav_path_bytes = wav_path_str.as_bytes();
+    test_write_path_buffer(handle, wav_path_bytes)?;
+    let loaded_clip = unitas_runtime::unitas_runtime_audio_load_clip(
+        handle,
+        buf_addr,
+        wav_path_bytes.len() as u64,
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert_ne!(loaded_clip, 0);
+
+    assert_abi_audio_clip_info(handle, loaded_clip, buf_addr)?;
 
     let dyn_entity = unitas_runtime::unitas_runtime_audio_create(handle, 0);
     assert!(dyn_entity > 1);

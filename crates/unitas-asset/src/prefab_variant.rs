@@ -1257,78 +1257,13 @@ impl PrefabRegistry {
         let mut nodes: BTreeMap<SourceObjectId, ResolvedNode> = BTreeMap::new();
         let mut file_id_to_source: HashMap<i64, SourceObjectId> = HashMap::new();
 
-        for node_rec in &base_def.nodes {
-            let identity = SourceObjectId::new(&base_guid, node_rec.file_id);
-            file_id_to_source.insert(node_rec.file_id, identity.clone());
-            let parent = node_rec
-                .parent_file_id
-                .map(|pid| SourceObjectId::new(&base_guid, pid));
-            let children = node_rec
-                .children
-                .iter()
-                .map(|cid| SourceObjectId::new(&base_guid, *cid))
-                .collect();
-
-            let mut provenance: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
-            for (k, v) in &node_rec.properties {
-                let value = match v.as_str() {
-                    Some(text) => text.to_string(),
-                    None => continue,
-                };
-                provenance.insert(
-                    k.clone(),
-                    vec![ValueProvenanceEntry {
-                        level: base_level.clone(),
-                        value,
-                        is_effective: true,
-                    }],
-                );
-            }
-
-            let mut components = Vec::new();
-            for comp_rec in &node_rec.components {
-                let comp_id = SourceObjectId::new(&base_guid, comp_rec.file_id);
-                file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
-                let mut comp_prov: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
-                for (k, v) in &comp_rec.properties {
-                    let value = match v.as_str() {
-                        Some(text) => text.to_string(),
-                        None => continue,
-                    };
-                    comp_prov.insert(
-                        k.clone(),
-                        vec![ValueProvenanceEntry {
-                            level: base_level.clone(),
-                            value,
-                            is_effective: true,
-                        }],
-                    );
-                }
-                components.push(ResolvedComponent {
-                    identity: comp_id,
-                    defined_at: base_level.clone(),
-                    class_name: comp_rec.class_name.clone(),
-                    properties: comp_rec.properties.clone(),
-                    object_references: BTreeMap::new(),
-                    provenance: comp_prov,
-                });
-            }
-
-            nodes.insert(
-                identity.clone(),
-                ResolvedNode {
-                    identity,
-                    defined_at: base_level.clone(),
-                    name: node_rec.name.clone(),
-                    parent,
-                    children,
-                    properties: node_rec.properties.clone(),
-                    object_references: BTreeMap::new(),
-                    provenance,
-                    components,
-                },
-            );
-        }
+        build_base_nodes(
+            &base_guid,
+            base_def,
+            &base_level,
+            &mut nodes,
+            &mut file_id_to_source,
+        );
 
         let mut orphaned_overrides = Vec::new();
 
@@ -1446,115 +1381,14 @@ impl PrefabRegistry {
             instance_file_id,
         } = from_level
         {
-            let nested_source_guid = {
-                let owner_def = match self.prefabs.get(owner) {
-                    Some(def) => def,
-                    None => {
-                        return Err(PrefabVariantError::MissingBasePrefab {
-                            missing_guid: owner.clone(),
-                            dependent_guid: owner.clone(),
-                        })
-                    }
-                };
-                let nested_ref = match owner_def
-                    .nested_prefabs
-                    .iter()
-                    .find(|n| n.instance_file_id == *instance_file_id)
-                {
-                    Some(n) => n,
-                    None => {
-                        return Err(PrefabVariantError::OverrideNotFound {
-                            level: from_level.as_id(),
-                            target_file_id,
-                            property_path: property_path.to_string(),
-                        })
-                    }
-                };
-                nested_ref.source.guid.clone()
-            };
-            let nested_chain = self.inheritance_chain(&nested_source_guid)?;
-            let target_guid = match target_level {
-                OverrideLevel::Prefab(g) if nested_chain.contains(g) => g.clone(),
-                _ => {
-                    return Err(PrefabVariantError::InvalidTargetLevel {
-                        from_level: from_level.as_id(),
-                        target_level: target_level.as_id(),
-                        reason: String::from(
-                            "nested prefab override target must be in the nested prefab inheritance chain",
-                        ),
-                    })
-                }
-            };
-            let removed_mod = {
-                let owner_def = match self.prefabs.get_mut(owner) {
-                    Some(def) => def,
-                    None => {
-                        return Err(PrefabVariantError::MissingBasePrefab {
-                            missing_guid: owner.clone(),
-                            dependent_guid: owner.clone(),
-                        })
-                    }
-                };
-                let nested_ref = match owner_def
-                    .nested_prefabs
-                    .iter_mut()
-                    .find(|n| n.instance_file_id == *instance_file_id)
-                {
-                    Some(n) => n,
-                    None => {
-                        return Err(PrefabVariantError::OverrideNotFound {
-                            level: from_level.as_id(),
-                            target_file_id,
-                            property_path: property_path.to_string(),
-                        })
-                    }
-                };
-                let mut found: Option<Modification> = None;
-                nested_ref.modifications.retain(|m| {
-                    let matches =
-                        m.target_file_id == target_file_id && m.property_path == property_path;
-                    if matches {
-                        found = Some(m.clone());
-                    }
-                    !matches
-                });
-                match found {
-                    Some(m) => m,
-                    None => {
-                        return Err(PrefabVariantError::OverrideNotFound {
-                            level: from_level.as_id(),
-                            target_file_id,
-                            property_path: property_path.to_string(),
-                        })
-                    }
-                }
-            };
-            if let Some(target_idx) = nested_chain.iter().position(|g| g == &target_guid) {
-                for inter_guid in nested_chain.iter().skip(target_idx + 1) {
-                    if let Some(inter_def) = self.prefabs.get_mut(inter_guid) {
-                        let _ = inter_def.remove_modification(target_file_id, property_path);
-                    }
-                }
-            }
-            let target_def = match self.prefabs.get_mut(&target_guid) {
-                Some(def) => def,
-                None => {
-                    return Err(PrefabVariantError::MissingBasePrefab {
-                        missing_guid: target_guid.clone(),
-                        dependent_guid: nested_source_guid,
-                    })
-                }
-            };
-            if target_def.base.is_none() {
-                let val = match &removed_mod.object_reference {
-                    Some(r) if removed_mod.value.is_empty() => r.to_encoded_string(),
-                    _ => removed_mod.value,
-                };
-                target_def.set_base_property(target_file_id, property_path, val)?;
-            } else {
-                target_def.record_override(removed_mod)?;
-            }
-            return Ok(());
+            return self.apply_nested_override(
+                owner,
+                *instance_file_id,
+                from_level,
+                target_level,
+                target_file_id,
+                property_path,
+            );
         }
 
         let leaf_guid = match &scene_instance {
@@ -1718,6 +1552,124 @@ impl PrefabRegistry {
             }
         }
 
+        Ok(())
+    }
+
+    fn apply_nested_override(
+        &mut self,
+        owner: &str,
+        instance_file_id: i64,
+        from_level: &OverrideLevel,
+        target_level: &OverrideLevel,
+        target_file_id: i64,
+        property_path: &str,
+    ) -> Result<(), PrefabVariantError> {
+        let nested_source_guid = {
+            let owner_def = match self.prefabs.get(owner) {
+                Some(def) => def,
+                None => {
+                    return Err(PrefabVariantError::MissingBasePrefab {
+                        missing_guid: owner.to_string(),
+                        dependent_guid: owner.to_string(),
+                    })
+                }
+            };
+            let nested_ref = match owner_def
+                .nested_prefabs
+                .iter()
+                .find(|n| n.instance_file_id == instance_file_id)
+            {
+                Some(n) => n,
+                None => {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: from_level.as_id(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    })
+                }
+            };
+            nested_ref.source.guid.clone()
+        };
+        let nested_chain = self.inheritance_chain(&nested_source_guid)?;
+        let target_guid = match target_level {
+            OverrideLevel::Prefab(g) if nested_chain.contains(g) => g.clone(),
+            _ => return Err(PrefabVariantError::InvalidTargetLevel {
+                from_level: from_level.as_id(),
+                target_level: target_level.as_id(),
+                reason: String::from(
+                    "nested prefab override target must be in the nested prefab inheritance chain",
+                ),
+            }),
+        };
+        let removed_mod = {
+            let owner_def = match self.prefabs.get_mut(owner) {
+                Some(def) => def,
+                None => {
+                    return Err(PrefabVariantError::MissingBasePrefab {
+                        missing_guid: owner.to_string(),
+                        dependent_guid: owner.to_string(),
+                    })
+                }
+            };
+            let nested_ref = match owner_def
+                .nested_prefabs
+                .iter_mut()
+                .find(|n| n.instance_file_id == instance_file_id)
+            {
+                Some(n) => n,
+                None => {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: from_level.as_id(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    })
+                }
+            };
+            let mut found: Option<Modification> = None;
+            nested_ref.modifications.retain(|m| {
+                let matches =
+                    m.target_file_id == target_file_id && m.property_path == property_path;
+                if matches {
+                    found = Some(m.clone());
+                }
+                !matches
+            });
+            match found {
+                Some(m) => m,
+                None => {
+                    return Err(PrefabVariantError::OverrideNotFound {
+                        level: from_level.as_id(),
+                        target_file_id,
+                        property_path: property_path.to_string(),
+                    })
+                }
+            }
+        };
+        if let Some(target_idx) = nested_chain.iter().position(|g| g == &target_guid) {
+            for inter_guid in nested_chain.iter().skip(target_idx + 1) {
+                if let Some(inter_def) = self.prefabs.get_mut(inter_guid) {
+                    let _ = inter_def.remove_modification(target_file_id, property_path);
+                }
+            }
+        }
+        let target_def = match self.prefabs.get_mut(&target_guid) {
+            Some(def) => def,
+            None => {
+                return Err(PrefabVariantError::MissingBasePrefab {
+                    missing_guid: target_guid.clone(),
+                    dependent_guid: nested_source_guid,
+                })
+            }
+        };
+        if target_def.base.is_none() {
+            let val = match &removed_mod.object_reference {
+                Some(r) if removed_mod.value.is_empty() => r.to_encoded_string(),
+                _ => removed_mod.value,
+            };
+            target_def.set_base_property(target_file_id, property_path, val)?;
+        } else {
+            target_def.record_override(removed_mod)?;
+        }
         Ok(())
     }
 
@@ -1976,6 +1928,87 @@ impl PrefabRegistry {
     }
 }
 
+fn build_base_nodes(
+    base_guid: &str,
+    base_def: &PrefabVariantDefinition,
+    base_level: &OverrideLevel,
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
+    for node_rec in &base_def.nodes {
+        let identity = SourceObjectId::new(base_guid, node_rec.file_id);
+        file_id_to_source.insert(node_rec.file_id, identity.clone());
+        let parent = node_rec
+            .parent_file_id
+            .map(|pid| SourceObjectId::new(base_guid, pid));
+        let children = node_rec
+            .children
+            .iter()
+            .map(|cid| SourceObjectId::new(base_guid, *cid))
+            .collect();
+
+        let mut provenance: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
+        for (k, v) in &node_rec.properties {
+            let value = match v.as_str() {
+                Some(text) => text.to_string(),
+                None => continue,
+            };
+            provenance.insert(
+                k.clone(),
+                vec![ValueProvenanceEntry {
+                    level: base_level.clone(),
+                    value,
+                    is_effective: true,
+                }],
+            );
+        }
+
+        let mut components = Vec::new();
+        for comp_rec in &node_rec.components {
+            let comp_id = SourceObjectId::new(base_guid, comp_rec.file_id);
+            file_id_to_source.insert(comp_rec.file_id, comp_id.clone());
+            let mut comp_prov: BTreeMap<String, Vec<ValueProvenanceEntry>> = BTreeMap::new();
+            for (k, v) in &comp_rec.properties {
+                let value = match v.as_str() {
+                    Some(text) => text.to_string(),
+                    None => continue,
+                };
+                comp_prov.insert(
+                    k.clone(),
+                    vec![ValueProvenanceEntry {
+                        level: base_level.clone(),
+                        value,
+                        is_effective: true,
+                    }],
+                );
+            }
+            components.push(ResolvedComponent {
+                identity: comp_id,
+                defined_at: base_level.clone(),
+                class_name: comp_rec.class_name.clone(),
+                properties: comp_rec.properties.clone(),
+                object_references: BTreeMap::new(),
+                provenance: comp_prov,
+            });
+        }
+
+        nodes.insert(
+            identity.clone(),
+            ResolvedNode {
+                identity,
+                defined_at: base_level.clone(),
+                name: node_rec.name.clone(),
+                parent,
+                children,
+                properties: node_rec.properties.clone(),
+                object_references: BTreeMap::new(),
+                provenance,
+                components,
+            },
+        );
+    }
+}
+
 fn flatten_resolved_hierarchy(
     hierarchy: &ResolvedHierarchy,
     mode: UnpackMode,
@@ -2099,6 +2132,36 @@ fn apply_level_overrides(
     file_id_to_source: &mut HashMap<i64, SourceObjectId>,
     orphaned_overrides: &mut Vec<OrphanedOverride>,
 ) {
+    apply_structural_removals(structural, nodes, file_id_to_source);
+    apply_added_children(
+        level,
+        level_source_id,
+        &structural.added_children,
+        nodes,
+        file_id_to_source,
+    );
+    apply_added_sibling_order(structural, nodes, file_id_to_source);
+    apply_added_components(
+        level,
+        level_source_id,
+        &structural.added_components,
+        nodes,
+        file_id_to_source,
+    );
+    apply_modification_overrides(
+        level,
+        modifications,
+        nodes,
+        file_id_to_source,
+        orphaned_overrides,
+    );
+}
+
+fn apply_structural_removals(
+    structural: &StructuralOverrides,
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
     for removed_child in &structural.removed_children {
         let resolved_id = file_id_to_source
             .get(&removed_child.target_file_id)
@@ -2114,8 +2177,16 @@ fn apply_level_overrides(
                 .retain(|c| c.identity.target_file_id != removed_comp.target_file_id);
         }
     }
+}
 
-    for added_child in &structural.added_children {
+fn apply_added_children(
+    level: &OverrideLevel,
+    level_source_id: &str,
+    added_children: &[AddedChildOverride],
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
+    for added_child in added_children {
         let parent_id = file_id_to_source
             .get(&added_child.parent_target.target_file_id)
             .cloned()
@@ -2195,7 +2266,13 @@ fn apply_level_overrides(
             }
         }
     }
+}
 
+fn apply_added_sibling_order(
+    structural: &StructuralOverrides,
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
     for (parent_target, ordered_added_ids) in &structural.added_sibling_order {
         let parent_id = file_id_to_source
             .get(&parent_target.target_file_id)
@@ -2219,8 +2296,16 @@ fn apply_level_overrides(
             parent_node.children = reordered;
         }
     }
+}
 
-    for added_comp in &structural.added_components {
+fn apply_added_components(
+    level: &OverrideLevel,
+    level_source_id: &str,
+    added_components: &[AddedComponentOverride],
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+) {
+    for added_comp in added_components {
         let owner_id = file_id_to_source
             .get(&added_comp.owner_target.target_file_id)
             .cloned()
@@ -2253,7 +2338,15 @@ fn apply_level_overrides(
             });
         }
     }
+}
 
+fn apply_modification_overrides(
+    level: &OverrideLevel,
+    modifications: &[Modification],
+    nodes: &mut BTreeMap<SourceObjectId, ResolvedNode>,
+    file_id_to_source: &mut HashMap<i64, SourceObjectId>,
+    orphaned_overrides: &mut Vec<OrphanedOverride>,
+) {
     for modification in modifications {
         let mut matched = false;
         let effective_display_value = match &modification.object_reference {
@@ -2893,187 +2986,11 @@ fn upsert_prefab_instance_in_stream(
     raw_modifications: &[Modification],
     structural: &StructuralOverrides,
 ) {
-    let mod_items: Vec<Node> = if !targeted_modifications.is_empty() || raw_modifications.is_empty()
-    {
-        targeted_modifications
-            .iter()
-            .map(|tm| {
-                let obj_ref_node = match &tm.object_reference {
-                    Some(reference) => reference.to_node(),
-                    None => Node::Mapping(vec![(
-                        String::from("fileID"),
-                        Node::Scalar(String::from("0")),
-                    )]),
-                };
-                Node::Mapping(vec![
-                    (
-                        String::from("target"),
-                        Node::Mapping(vec![
-                            (
-                                String::from("fileID"),
-                                Node::Scalar(tm.target.target_file_id.to_string()),
-                            ),
-                            (
-                                String::from("guid"),
-                                Node::Scalar(tm.target.source_guid.clone()),
-                            ),
-                            (String::from("type"), Node::Scalar(String::from("3"))),
-                        ]),
-                    ),
-                    (
-                        String::from("propertyPath"),
-                        Node::Scalar(tm.property_path.clone()),
-                    ),
-                    (String::from("value"), Node::Scalar(tm.value.clone())),
-                    (String::from("objectReference"), obj_ref_node),
-                ])
-            })
-            .collect()
-    } else {
-        raw_modifications
-            .iter()
-            .map(|m| {
-                let obj_ref_node = match &m.object_reference {
-                    Some(reference) => reference.to_node(),
-                    None => Node::Mapping(vec![(
-                        String::from("fileID"),
-                        Node::Scalar(String::from("0")),
-                    )]),
-                };
-                Node::Mapping(vec![
-                    (
-                        String::from("target"),
-                        Node::Mapping(vec![
-                            (
-                                String::from("fileID"),
-                                Node::Scalar(m.target_file_id.to_string()),
-                            ),
-                            (String::from("guid"), Node::Scalar(source.guid.clone())),
-                            (String::from("type"), Node::Scalar(String::from("3"))),
-                        ]),
-                    ),
-                    (
-                        String::from("propertyPath"),
-                        Node::Scalar(m.property_path.clone()),
-                    ),
-                    (String::from("value"), Node::Scalar(m.value.clone())),
-                    (String::from("objectReference"), obj_ref_node),
-                ])
-            })
-            .collect()
-    };
-
-    let removed_components: Vec<Node> = structural
-        .removed_components
-        .iter()
-        .map(|rc| {
-            Node::Mapping(vec![
-                (
-                    String::from("fileID"),
-                    Node::Scalar(rc.target_file_id.to_string()),
-                ),
-                (String::from("guid"), Node::Scalar(rc.source_guid.clone())),
-                (String::from("type"), Node::Scalar(String::from("3"))),
-            ])
-        })
-        .collect();
-
-    let removed_game_objects: Vec<Node> = structural
-        .removed_children
-        .iter()
-        .map(|rg| {
-            Node::Mapping(vec![
-                (
-                    String::from("fileID"),
-                    Node::Scalar(rg.target_file_id.to_string()),
-                ),
-                (String::from("guid"), Node::Scalar(rg.source_guid.clone())),
-                (String::from("type"), Node::Scalar(String::from("3"))),
-            ])
-        })
-        .collect();
-
-    let added_game_objects: Vec<Node> = structural
-        .added_children
-        .iter()
-        .map(|ac| {
-            let mut entries = vec![
-                (
-                    String::from("targetCorrespondingSourceObject"),
-                    Node::Mapping(vec![
-                        (
-                            String::from("fileID"),
-                            Node::Scalar(ac.parent_target.target_file_id.to_string()),
-                        ),
-                        (
-                            String::from("guid"),
-                            Node::Scalar(ac.parent_target.source_guid.clone()),
-                        ),
-                        (String::from("type"), Node::Scalar(String::from("3"))),
-                    ]),
-                ),
-                (
-                    String::from("insertIndex"),
-                    Node::Scalar(
-                        ac.sibling_index
-                            .map(|idx| idx as i64)
-                            .unwrap_or(-1)
-                            .to_string(),
-                    ),
-                ),
-                (
-                    String::from("addedObject"),
-                    Node::Mapping(vec![(
-                        String::from("fileID"),
-                        Node::Scalar(ac.child.file_id.to_string()),
-                    )]),
-                ),
-            ];
-            if let Some(order) = structural.added_sibling_order.get(&ac.parent_target) {
-                let order_str = order
-                    .iter()
-                    .map(i64::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                entries.push((String::from("siblingOrder"), Node::Scalar(order_str)));
-            }
-            Node::Mapping(entries)
-        })
-        .collect();
-
-    let added_components: Vec<Node> = structural
-        .added_components
-        .iter()
-        .map(|ac| {
-            Node::Mapping(vec![
-                (
-                    String::from("targetCorrespondingSourceObject"),
-                    Node::Mapping(vec![
-                        (
-                            String::from("fileID"),
-                            Node::Scalar(ac.owner_target.target_file_id.to_string()),
-                        ),
-                        (
-                            String::from("guid"),
-                            Node::Scalar(ac.owner_target.source_guid.clone()),
-                        ),
-                        (String::from("type"), Node::Scalar(String::from("3"))),
-                    ]),
-                ),
-                (
-                    String::from("insertIndex"),
-                    Node::Scalar(String::from("-1")),
-                ),
-                (
-                    String::from("addedObject"),
-                    Node::Mapping(vec![(
-                        String::from("fileID"),
-                        Node::Scalar(ac.component.file_id.to_string()),
-                    )]),
-                ),
-            ])
-        })
-        .collect();
+    let mod_items = build_modification_nodes(source, targeted_modifications, raw_modifications);
+    let removed_components = build_removed_object_nodes(&structural.removed_components);
+    let removed_game_objects = build_removed_object_nodes(&structural.removed_children);
+    let added_game_objects = build_added_game_object_nodes(structural);
+    let added_components = build_added_component_nodes(structural);
 
     let prefab_root = Node::Mapping(vec![(
         String::from("PrefabInstance"),
@@ -3178,6 +3095,183 @@ fn upsert_prefab_instance_in_stream(
         });
     }
     stream.documents.extend(companion_docs);
+}
+
+fn build_modification_nodes(
+    source: &PrefabSource,
+    targeted_modifications: &[TargetedModification],
+    raw_modifications: &[Modification],
+) -> Vec<Node> {
+    if !targeted_modifications.is_empty() || raw_modifications.is_empty() {
+        targeted_modifications
+            .iter()
+            .map(|tm| {
+                let obj_ref_node = match &tm.object_reference {
+                    Some(reference) => reference.to_node(),
+                    None => Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(String::from("0")),
+                    )]),
+                };
+                Node::Mapping(vec![
+                    (
+                        String::from("target"),
+                        Node::Mapping(vec![
+                            (
+                                String::from("fileID"),
+                                Node::Scalar(tm.target.target_file_id.to_string()),
+                            ),
+                            (
+                                String::from("guid"),
+                                Node::Scalar(tm.target.source_guid.clone()),
+                            ),
+                            (String::from("type"), Node::Scalar(String::from("3"))),
+                        ]),
+                    ),
+                    (
+                        String::from("propertyPath"),
+                        Node::Scalar(tm.property_path.clone()),
+                    ),
+                    (String::from("value"), Node::Scalar(tm.value.clone())),
+                    (String::from("objectReference"), obj_ref_node),
+                ])
+            })
+            .collect()
+    } else {
+        raw_modifications
+            .iter()
+            .map(|m| {
+                let obj_ref_node = match &m.object_reference {
+                    Some(reference) => reference.to_node(),
+                    None => Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(String::from("0")),
+                    )]),
+                };
+                Node::Mapping(vec![
+                    (
+                        String::from("target"),
+                        Node::Mapping(vec![
+                            (
+                                String::from("fileID"),
+                                Node::Scalar(m.target_file_id.to_string()),
+                            ),
+                            (String::from("guid"), Node::Scalar(source.guid.clone())),
+                            (String::from("type"), Node::Scalar(String::from("3"))),
+                        ]),
+                    ),
+                    (
+                        String::from("propertyPath"),
+                        Node::Scalar(m.property_path.clone()),
+                    ),
+                    (String::from("value"), Node::Scalar(m.value.clone())),
+                    (String::from("objectReference"), obj_ref_node),
+                ])
+            })
+            .collect()
+    }
+}
+
+fn build_removed_object_nodes(removed: &[SourceObjectId]) -> Vec<Node> {
+    removed
+        .iter()
+        .map(|rc| {
+            Node::Mapping(vec![
+                (
+                    String::from("fileID"),
+                    Node::Scalar(rc.target_file_id.to_string()),
+                ),
+                (String::from("guid"), Node::Scalar(rc.source_guid.clone())),
+                (String::from("type"), Node::Scalar(String::from("3"))),
+            ])
+        })
+        .collect()
+}
+
+fn build_added_game_object_nodes(structural: &StructuralOverrides) -> Vec<Node> {
+    structural
+        .added_children
+        .iter()
+        .map(|ac| {
+            let mut entries = vec![
+                (
+                    String::from("targetCorrespondingSourceObject"),
+                    Node::Mapping(vec![
+                        (
+                            String::from("fileID"),
+                            Node::Scalar(ac.parent_target.target_file_id.to_string()),
+                        ),
+                        (
+                            String::from("guid"),
+                            Node::Scalar(ac.parent_target.source_guid.clone()),
+                        ),
+                        (String::from("type"), Node::Scalar(String::from("3"))),
+                    ]),
+                ),
+                (
+                    String::from("insertIndex"),
+                    Node::Scalar(
+                        ac.sibling_index
+                            .map(|idx| idx as i64)
+                            .unwrap_or(-1)
+                            .to_string(),
+                    ),
+                ),
+                (
+                    String::from("addedObject"),
+                    Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(ac.child.file_id.to_string()),
+                    )]),
+                ),
+            ];
+            if let Some(order) = structural.added_sibling_order.get(&ac.parent_target) {
+                let order_str = order
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                entries.push((String::from("siblingOrder"), Node::Scalar(order_str)));
+            }
+            Node::Mapping(entries)
+        })
+        .collect()
+}
+
+fn build_added_component_nodes(structural: &StructuralOverrides) -> Vec<Node> {
+    structural
+        .added_components
+        .iter()
+        .map(|ac| {
+            Node::Mapping(vec![
+                (
+                    String::from("targetCorrespondingSourceObject"),
+                    Node::Mapping(vec![
+                        (
+                            String::from("fileID"),
+                            Node::Scalar(ac.owner_target.target_file_id.to_string()),
+                        ),
+                        (
+                            String::from("guid"),
+                            Node::Scalar(ac.owner_target.source_guid.clone()),
+                        ),
+                        (String::from("type"), Node::Scalar(String::from("3"))),
+                    ]),
+                ),
+                (
+                    String::from("insertIndex"),
+                    Node::Scalar(String::from("-1")),
+                ),
+                (
+                    String::from("addedObject"),
+                    Node::Mapping(vec![(
+                        String::from("fileID"),
+                        Node::Scalar(ac.component.file_id.to_string()),
+                    )]),
+                ),
+            ])
+        })
+        .collect()
 }
 
 fn parse_prefab_instance_from_stream(

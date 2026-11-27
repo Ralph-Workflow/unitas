@@ -12,8 +12,7 @@ pub const ROLL_A_BALL_COMPANY_NAME: &str = "Unitas";
 pub const ROLL_A_BALL_APPLICATION_ID: &str = "com.unitas.rollaball";
 pub const ROLL_A_BALL_VERSION: &str = "1.0.0";
 
-pub fn roll_a_ball_scene_yaml() -> &'static str {
-    r"%YAML 1.1
+const ROLL_A_BALL_SCENE_YAML: &str = r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1000
 GameObject:
@@ -264,7 +263,10 @@ SphereCollider:
   m_IsTrigger: 1
   m_Radius: 0.45
   m_Center: {x: 0, y: 0, z: 0}
-"
+";
+
+pub fn roll_a_ball_scene_yaml() -> &'static str {
+    ROLL_A_BALL_SCENE_YAML
 }
 
 pub fn stage_roll_a_ball_bundle(output_dir: &Path) -> Result<StagedBundle, BundleError> {

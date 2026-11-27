@@ -47,7 +47,6 @@ cast_lossless = "allow"
 # Fires on domain coordinate/math names, state flags, and cohesive parsers/builders on common safe use
 similar_names = "allow"
 many_single_char_names = "allow"
-too_many_lines = "allow"
 struct_excessive_bools = "allow"
 unreadable_literal = "allow"
 float_cmp = "allow"

@@ -913,6 +913,71 @@ fn assemble_documents(
     };
     let mut instance_roots = prefab_instance_roots(stream);
     instance_roots.extend(added_game_object_ids(stream));
+    collect_game_objects(stream, graph, &instance_roots, &mut set);
+    let records = collect_transforms(stream, graph, &instance_roots, &mut set)?;
+    finalize_transform_hierarchy(graph, &set, &records)?;
+    set.root = records
+        .iter()
+        .find(|record| record.father.is_none())
+        .map(|record| record.entity);
+    collect_scripts(stream, &mut set, &instance_roots)?;
+    set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
+    let index = context.index;
+    let material_properties = &mut context.material_properties;
+    set.render = collect_render(
+        stream,
+        &set.game_objects,
+        &instance_roots,
+        index,
+        material_properties,
+    )?;
+    set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
+    let (particles, trails) =
+        collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
+    set.particles = particles;
+    set.trails = trails;
+    set.unsupported_classes =
+        collect_unsupported_components(stream, &set.game_objects, &instance_roots);
+    if expand {
+        for document in &stream.documents {
+            if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
+                continue;
+            }
+            let body = match document.root.get("PrefabInstance") {
+                Some(body) => body,
+                None => continue,
+            };
+            let instance = match prefab::parse_instance(body) {
+                Some(instance) => instance,
+                None => {
+                    return Err(SceneError::MissingPrefabSource {
+                        file_id: document.file_id,
+                    })
+                }
+            };
+            let expanded_root = expand_instance(
+                &instance,
+                document.file_id,
+                stream,
+                &mut set,
+                graph,
+                context,
+            )?;
+            if set.root.is_none() && instance.transform_parent == ROOT_FILE_ID {
+                set.root = Some(expanded_root);
+            }
+        }
+    }
+    Ok(set)
+}
+
+fn collect_game_objects(
+    stream: &Stream,
+    graph: &mut SceneGraph,
+    instance_roots: &HashSet<i64>,
+    set: &mut DocumentSet,
+) {
     for document in &stream.documents {
         if document.class_id != GAME_OBJECT_CLASS || document.stripped {
             continue;
@@ -939,6 +1004,14 @@ fn assemble_documents(
             },
         );
     }
+}
+
+fn collect_transforms(
+    stream: &Stream,
+    graph: &mut SceneGraph,
+    instance_roots: &HashSet<i64>,
+    set: &mut DocumentSet,
+) -> Result<Vec<TransformRecord>, SceneError> {
     let mut owners: HashMap<i64, i64> = HashMap::new();
     let mut records: Vec<TransformRecord> = Vec::new();
     for document in &stream.documents {
@@ -990,7 +1063,15 @@ fn assemble_documents(
             children,
         });
     }
-    for record in &records {
+    Ok(records)
+}
+
+fn finalize_transform_hierarchy(
+    graph: &mut SceneGraph,
+    set: &DocumentSet,
+    records: &[TransformRecord],
+) -> Result<(), SceneError> {
+    for record in records {
         if let Some(father_file_id) = record.father {
             let parent = match set.transforms.get(&father_file_id) {
                 Some(parent) => *parent,
@@ -1012,7 +1093,7 @@ fn assemble_documents(
             }
         }
     }
-    for record in &records {
+    for record in records {
         let ordered: Vec<EntityId> = record
             .children
             .iter()
@@ -1020,10 +1101,14 @@ fn assemble_documents(
             .collect();
         order_children(graph, record.entity, &ordered);
     }
-    set.root = records
-        .iter()
-        .find(|record| record.father.is_none())
-        .map(|record| record.entity);
+    Ok(())
+}
+
+fn collect_scripts(
+    stream: &Stream,
+    set: &mut DocumentSet,
+    instance_roots: &HashSet<i64>,
+) -> Result<(), SceneError> {
     for document in &stream.documents {
         if document.class_id != MONO_BEHAVIOUR_CLASS || document.stripped {
             continue;
@@ -1067,55 +1152,7 @@ fn assemble_documents(
             fields: serialized_fields(body),
         });
     }
-    set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
-    set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
-    let index = context.index;
-    let material_properties = &mut context.material_properties;
-    set.render = collect_render(
-        stream,
-        &set.game_objects,
-        &instance_roots,
-        index,
-        material_properties,
-    )?;
-    set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
-    let (particles, trails) =
-        collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
-    set.particles = particles;
-    set.trails = trails;
-    set.unsupported_classes =
-        collect_unsupported_components(stream, &set.game_objects, &instance_roots);
-    if expand {
-        for document in &stream.documents {
-            if document.class_id != PREFAB_INSTANCE_CLASS || document.stripped {
-                continue;
-            }
-            let body = match document.root.get("PrefabInstance") {
-                Some(body) => body,
-                None => continue,
-            };
-            let instance = match prefab::parse_instance(body) {
-                Some(instance) => instance,
-                None => {
-                    return Err(SceneError::MissingPrefabSource {
-                        file_id: document.file_id,
-                    })
-                }
-            };
-            let expanded_root = expand_instance(
-                &instance,
-                document.file_id,
-                stream,
-                &mut set,
-                graph,
-                context,
-            )?;
-            if set.root.is_none() && instance.transform_parent == ROOT_FILE_ID {
-                set.root = Some(expanded_root);
-            }
-        }
-    }
-    Ok(set)
+    Ok(())
 }
 
 fn expand_instance(

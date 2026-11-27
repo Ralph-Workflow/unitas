@@ -261,103 +261,51 @@ pub fn identify_asset_family(
         });
     }
 
-    match ext.as_str() {
-        "mask" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AvatarMask,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "mixer" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AudioMixer,
-                outcome: ImportOutcome::limited(
-                    ImportDiagnostic::new(
-                        &asset_label,
-                        "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
-                        "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
-                    )
-                    .partially_usable(),
-                ),
-            });
-        }
-        "spriteatlasv2" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::SpriteAtlasV2,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "spriteatlas" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::SpriteAtlasV1,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "unity" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Scene,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "prefab" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Prefab,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "mat" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Material,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "shader" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Shader,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "compute" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::ComputeShader,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "hlsl" | "cginc" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::ShaderInclude,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "shadervariants" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::ShaderVariantCollection,
-                outcome: ImportOutcome::ready(),
-            });
-        }
+    if let Some(found) = identify_by_extension(&ext, &asset_label, bytes, meta_text) {
+        return Some(found);
+    }
+
+    if let Some(found) = identify_by_meta(meta_text) {
+        return Some(found);
+    }
+
+    identify_by_yaml(bytes, &asset_label)
+}
+
+fn identify_by_extension(
+    ext: &str,
+    asset_label: &str,
+    bytes: &[u8],
+    meta_text: Option<&str>,
+) -> Option<IdentifiedAssetFamily> {
+    if let Some(family) = extension_ready_family(ext) {
+        return Some(IdentifiedAssetFamily {
+            family,
+            outcome: ImportOutcome::ready(),
+        });
+    }
+
+    match ext {
+        "mixer" => Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::AudioMixer,
+            outcome: ImportOutcome::limited(
+                ImportDiagnostic::new(
+                    asset_label,
+                    "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
+                    "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
+                )
+                .partially_usable(),
+            ),
+        }),
         "anim" => {
-            let outcome = match crate::anim_import::import_animation_clip(bytes, &asset_label) {
-                Ok(imported) => {
-                    crate::anim_import::anim_import_outcome(&asset_label, Ok(&imported))
-                }
-                Err(error) => crate::anim_import::anim_import_outcome(&asset_label, Err(&error)),
+            let outcome = match crate::anim_import::import_animation_clip(bytes, asset_label) {
+                Ok(imported) => crate::anim_import::anim_import_outcome(asset_label, Ok(&imported)),
+                Err(error) => crate::anim_import::anim_import_outcome(asset_label, Err(&error)),
             };
-            return Some(IdentifiedAssetFamily {
+            Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::AnimationClip,
                 outcome,
-            });
-        }
-        "controller" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AnimatorController,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "overridecontroller" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AnimatorOverrideController,
-                outcome: ImportOutcome::ready(),
-            });
+            })
         }
         "ttf" | "otf" => {
             let settings = match meta_text {
@@ -367,7 +315,7 @@ pub fn identify_asset_family(
                         return Some(IdentifiedAssetFamily {
                             family: RecognizedAssetFamily::Font,
                             outcome: ImportOutcome::failed(ImportDiagnostic::new(
-                                &asset_label,
+                                asset_label,
                                 error.to_string(),
                                 "the font cannot be imported; the asset stays failed and no glyph data is available",
                             )),
@@ -376,259 +324,166 @@ pub fn identify_asset_family(
                 },
                 None => FontImportSettings::default(),
             };
-            let outcome = match font::import_font(bytes, &asset_label, &settings) {
-                Ok(imported) => font::font_import_outcome(&asset_label, Ok(&imported)),
-                Err(error) => font::font_import_outcome(&asset_label, Err(&error)),
+            let outcome = match font::import_font(bytes, asset_label, &settings) {
+                Ok(imported) => font::font_import_outcome(asset_label, Ok(&imported)),
+                Err(error) => font::font_import_outcome(asset_label, Err(&error)),
             };
-            return Some(IdentifiedAssetFamily {
+            Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::Font,
                 outcome,
-            });
+            })
         }
-        "fontsettings" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Font,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "guiskin" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::GuiSkin,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "mp4" | "webm" | "mov" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Video,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "cs" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Script,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "physicmaterial" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::PhysicMaterial,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "physicsmaterial2d" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::PhysicsMaterial2D,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "inputactions" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::InputActions,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "terrainlayer" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::TerrainLayer,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "lighting" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::LightingSettings,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "cubemap" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Cubemap,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "flare" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Flare,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "rendertexture" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::RenderTexture,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "preset" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Preset,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "playable" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Timeline,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "signal" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Signal,
-                outcome: ImportOutcome::ready(),
-            });
-        }
+        "gif" => Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::Texture2D,
+            outcome: ImportOutcome::limited(
+                ImportDiagnostic::new(
+                    asset_label,
+                    "GIF imports first frame only; later animation frames are excluded",
+                    "the asset imports with the first frame; later frames stay unavailable",
+                )
+                .partially_usable(),
+            ),
+        }),
+        "pict" | "pct" | "pic" | "iff" => Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::Texture2D,
+            outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                asset_label,
+                format!("{ext} texture format is Unsupported"),
+                "the asset cannot be imported; its content stays unavailable",
+            )),
+        }),
+        "xm" | "mod" | "it" | "s3m" => Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::AudioClip,
+            outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                asset_label,
+                format!("{ext} tracker module format is Unsupported"),
+                "the audio clip cannot be imported; the asset stays failed",
+            )),
+        }),
+        "blend" | "max" | "ma" | "mb" | "c4d" | "lxo" | "3ds" => Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::Model,
+            outcome: ImportOutcome::failed(ImportDiagnostic::new(
+                asset_label,
+                format!("{ext} format is Unsupported without launching external applications"),
+                "the model cannot be imported; content-creation application files are not converted",
+            )),
+        }),
+        _ => None,
+    }
+}
+
+fn extension_ready_family(ext: &str) -> Option<RecognizedAssetFamily> {
+    let family = match ext {
+        "mask" => RecognizedAssetFamily::AvatarMask,
+        "spriteatlasv2" => RecognizedAssetFamily::SpriteAtlasV2,
+        "spriteatlas" => RecognizedAssetFamily::SpriteAtlasV1,
+        "unity" => RecognizedAssetFamily::Scene,
+        "prefab" => RecognizedAssetFamily::Prefab,
+        "mat" => RecognizedAssetFamily::Material,
+        "shader" => RecognizedAssetFamily::Shader,
+        "compute" => RecognizedAssetFamily::ComputeShader,
+        "hlsl" | "cginc" => RecognizedAssetFamily::ShaderInclude,
+        "shadervariants" => RecognizedAssetFamily::ShaderVariantCollection,
+        "controller" => RecognizedAssetFamily::AnimatorController,
+        "overridecontroller" => RecognizedAssetFamily::AnimatorOverrideController,
+        "fontsettings" => RecognizedAssetFamily::Font,
+        "guiskin" => RecognizedAssetFamily::GuiSkin,
+        "mp4" | "webm" | "mov" => RecognizedAssetFamily::Video,
+        "cs" => RecognizedAssetFamily::Script,
+        "physicmaterial" => RecognizedAssetFamily::PhysicMaterial,
+        "physicsmaterial2d" => RecognizedAssetFamily::PhysicsMaterial2D,
+        "inputactions" => RecognizedAssetFamily::InputActions,
+        "terrainlayer" => RecognizedAssetFamily::TerrainLayer,
+        "lighting" => RecognizedAssetFamily::LightingSettings,
+        "cubemap" => RecognizedAssetFamily::Cubemap,
+        "flare" => RecognizedAssetFamily::Flare,
+        "rendertexture" => RecognizedAssetFamily::RenderTexture,
+        "preset" => RecognizedAssetFamily::Preset,
+        "playable" => RecognizedAssetFamily::Timeline,
+        "signal" => RecognizedAssetFamily::Signal,
         "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" | "psd" | "psb" | "hdr" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Texture2D,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "gif" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Texture2D,
-                outcome: ImportOutcome::limited(
-                    ImportDiagnostic::new(
-                        &asset_label,
-                        "GIF imports first frame only; later animation frames are excluded",
-                        "the asset imports with the first frame; later frames stay unavailable",
-                    )
-                    .partially_usable(),
-                ),
-            });
-        }
-        "pict" | "pct" | "pic" | "iff" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Texture2D,
-                outcome: ImportOutcome::failed(ImportDiagnostic::new(
-                    &asset_label,
-                    format!("{ext} texture format is Unsupported"),
-                    "the asset cannot be imported; its content stays unavailable",
-                )),
-            });
+            RecognizedAssetFamily::Texture2D
         }
         "wav" | "wave" | "aif" | "aiff" | "aifc" | "ogg" | "mp3" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AudioClip,
-                outcome: ImportOutcome::ready(),
-            });
+            RecognizedAssetFamily::AudioClip
         }
-        "xm" | "mod" | "it" | "s3m" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::AudioClip,
-                outcome: ImportOutcome::failed(ImportDiagnostic::new(
-                    &asset_label,
-                    format!("{ext} tracker module format is Unsupported"),
-                    "the audio clip cannot be imported; the asset stays failed",
-                )),
-            });
-        }
-        "fbx" | "gltf" | "glb" | "obj" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Model,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        "blend" | "max" | "ma" | "mb" | "c4d" | "lxo" | "3ds" => {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::Model,
-                outcome: ImportOutcome::failed(ImportDiagnostic::new(
-                    &asset_label,
-                    format!("{ext} format is Unsupported without launching external applications"),
-                    "the model cannot be imported; content-creation application files are not converted",
-                )),
-            });
-        }
-        _ => {}
-    }
+        "fbx" | "gltf" | "glb" | "obj" => RecognizedAssetFamily::Model,
+        _ => return None,
+    };
+    Some(family)
+}
 
-    if let Some(meta) = meta_text {
-        if meta.contains("SpriteAtlasImporter:") {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::SpriteAtlasV2,
-                outcome: ImportOutcome::ready(),
-            });
-        }
-        if meta.contains("TextScriptImporter:") {
-            return Some(IdentifiedAssetFamily {
-                family: RecognizedAssetFamily::TextAsset,
-                outcome: ImportOutcome::ready(),
-            });
-        }
+fn identify_by_meta(meta_text: Option<&str>) -> Option<IdentifiedAssetFamily> {
+    let meta = meta_text?;
+    if meta.contains("SpriteAtlasImporter:") {
+        return Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::SpriteAtlasV2,
+            outcome: ImportOutcome::ready(),
+        });
     }
+    if meta.contains("TextScriptImporter:") {
+        return Some(IdentifiedAssetFamily {
+            family: RecognizedAssetFamily::TextAsset,
+            outcome: ImportOutcome::ready(),
+        });
+    }
+    None
+}
 
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        if let Ok(stream) = unity_yaml::parse(text) {
-            if let Some(doc) = stream.documents.iter().find(|doc| !doc.stripped) {
-                if let Node::Mapping(entries) = &doc.root {
-                    if let Some((key, body)) = entries.first() {
-                        let family = match key.as_str() {
-                            "AvatarMask" => Some((
-                                RecognizedAssetFamily::AvatarMask,
-                                ImportOutcome::ready(),
-                            )),
-                            "AudioMixerController" | "AudioMixer" => Some((
-                                RecognizedAssetFamily::AudioMixer,
-                                ImportOutcome::limited(
-                                    ImportDiagnostic::new(
-                                        &asset_label,
-                                        "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
-                                        "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
-                                    )
-                                    .partially_usable(),
-                                ),
-                            )),
-                            "SpriteAtlasAsset" => Some((
-                                RecognizedAssetFamily::SpriteAtlasV2,
-                                ImportOutcome::ready(),
-                            )),
-                            "SpriteAtlas" => Some((
-                                RecognizedAssetFamily::SpriteAtlasV1,
-                                ImportOutcome::ready(),
-                            )),
-                            "TerrainData" => Some((
-                                RecognizedAssetFamily::TerrainData,
-                                ImportOutcome::ready(),
-                            )),
-                            "Tilemap" => Some((
-                                RecognizedAssetFamily::Tilemap,
-                                tilemap_outcome(bytes, &asset_label),
-                            )),
-                            "Grid" => Some((
-                                RecognizedAssetFamily::Grid,
-                                tilemap_outcome(bytes, &asset_label),
-                            )),
-                            "Tile" | "TileBase" | "RuleTile" | "ScriptableRuleTile"
-                            | "IsometricRuleTile" => Some((
-                                RecognizedAssetFamily::Tile,
-                                tilemap_outcome(bytes, &asset_label),
-                            )),
-                            "MonoBehaviour" => match self::tilemap::classify_body(body) {
-                                Some(TilemapKind::Tile | TilemapKind::RuleTile) => Some((
-                                    RecognizedAssetFamily::Tile,
-                                    tilemap_outcome(bytes, &asset_label),
-                                )),
-                                Some(TilemapKind::Tilemap) => Some((
-                                    RecognizedAssetFamily::Tilemap,
-                                    tilemap_outcome(bytes, &asset_label),
-                                )),
-                                Some(TilemapKind::Grid) => Some((
-                                    RecognizedAssetFamily::Grid,
-                                    tilemap_outcome(bytes, &asset_label),
-                                )),
-                                None => Some((
-                                    RecognizedAssetFamily::ScriptableObject,
-                                    ImportOutcome::ready(),
-                                )),
-                            },
-                            _ => None,
-                        };
-                        if let Some((family, outcome)) = family {
-                            return Some(IdentifiedAssetFamily { family, outcome });
-                        }
-                    }
+fn identify_by_yaml(bytes: &[u8], asset_label: &str) -> Option<IdentifiedAssetFamily> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let stream = unity_yaml::parse(text).ok()?;
+    let doc = stream.documents.iter().find(|doc| !doc.stripped)?;
+    if let Node::Mapping(entries) = &doc.root {
+        if let Some((key, body)) = entries.first() {
+            let family = match key.as_str() {
+                "AvatarMask" => Some((RecognizedAssetFamily::AvatarMask, ImportOutcome::ready())),
+                "AudioMixerController" | "AudioMixer" => Some((
+                    RecognizedAssetFamily::AudioMixer,
+                    ImportOutcome::limited(
+                        ImportDiagnostic::new(
+                            asset_label,
+                            "AudioMixer routing and snapshot graph are recognized; advanced custom DSP effect plugins are not evaluated",
+                            "the mixer asset is identified with its family; unsupported custom DSP effects remain inactive",
+                        )
+                        .partially_usable(),
+                    ),
+                )),
+                "SpriteAtlasAsset" => {
+                    Some((RecognizedAssetFamily::SpriteAtlasV2, ImportOutcome::ready()))
                 }
+                "SpriteAtlas" => Some((RecognizedAssetFamily::SpriteAtlasV1, ImportOutcome::ready())),
+                "TerrainData" => Some((RecognizedAssetFamily::TerrainData, ImportOutcome::ready())),
+                "Tilemap" => Some((
+                    RecognizedAssetFamily::Tilemap,
+                    tilemap_outcome(bytes, asset_label),
+                )),
+                "Grid" => Some((RecognizedAssetFamily::Grid, tilemap_outcome(bytes, asset_label))),
+                "Tile" | "TileBase" | "RuleTile" | "ScriptableRuleTile" | "IsometricRuleTile" => {
+                    Some((RecognizedAssetFamily::Tile, tilemap_outcome(bytes, asset_label)))
+                }
+                "MonoBehaviour" => match self::tilemap::classify_body(body) {
+                    Some(TilemapKind::Tile | TilemapKind::RuleTile) => Some((
+                        RecognizedAssetFamily::Tile,
+                        tilemap_outcome(bytes, asset_label),
+                    )),
+                    Some(TilemapKind::Tilemap) => Some((
+                        RecognizedAssetFamily::Tilemap,
+                        tilemap_outcome(bytes, asset_label),
+                    )),
+                    Some(TilemapKind::Grid) => Some((
+                        RecognizedAssetFamily::Grid,
+                        tilemap_outcome(bytes, asset_label),
+                    )),
+                    None => Some((RecognizedAssetFamily::ScriptableObject, ImportOutcome::ready())),
+                },
+                _ => None,
+            };
+            if let Some((family, outcome)) = family {
+                return Some(IdentifiedAssetFamily { family, outcome });
             }
         }
     }
-
     None
 }
 
