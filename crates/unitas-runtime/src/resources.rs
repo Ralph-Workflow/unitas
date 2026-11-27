@@ -170,7 +170,7 @@ pub fn classify_resource_extension(extension: &str) -> ResourceKind {
         "prefab" => ResourceKind::Prefab,
         "unity" => ResourceKind::Scene,
         "mat" | "physicmaterial" => ResourceKind::Material,
-        "wav" | "ogg" | "mp3" => ResourceKind::AudioClip,
+        "wav" | "ogg" | "mp3" | "aiff" | "aif" => ResourceKind::AudioClip,
         _ => ResourceKind::Binary,
     }
 }

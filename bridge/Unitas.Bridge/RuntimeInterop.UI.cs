@@ -26,6 +26,24 @@ namespace Unitas.Bridge
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_poll_clicks")]
         public static extern int unitas_runtime_ui_poll_clicks(ulong runtime, ulong clicksPointer, ulong capacity);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_layout_group_set")]
+        public static extern int unitas_runtime_ui_layout_group_set(
+            ulong runtime,
+            ulong objectId,
+            uint axis,
+            ulong paddingPacked,
+            float spacing,
+            uint childAlignment,
+            uint flags);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_content_size_fitter_set")]
+        public static extern int unitas_runtime_ui_content_size_fitter_set(
+            ulong runtime,
+            ulong objectId,
+            uint horizontalFit,
+            uint verticalFit,
+            uint enabled);
     }
 
     internal sealed class RuntimeUiProvider : UnityEngine.UI.IUiProvider
@@ -80,6 +98,38 @@ namespace Unitas.Bridge
                 (uint)horizontalOverflow,
                 (uint)verticalOverflow,
                 lineSpacing);
+        }
+
+        public int SetLayoutGroup(
+            ulong objectId,
+            uint axis,
+            ulong paddingPacked,
+            float spacing,
+            UnityEngine.TextAnchor childAlignment,
+            uint flags)
+        {
+            return RuntimeInterop.unitas_runtime_ui_layout_group_set(
+                _runtimeHandle,
+                objectId,
+                axis,
+                paddingPacked,
+                spacing,
+                (uint)childAlignment,
+                flags);
+        }
+
+        public int SetContentSizeFitter(
+            ulong objectId,
+            UnityEngine.UI.ContentSizeFitter.FitMode horizontalFit,
+            UnityEngine.UI.ContentSizeFitter.FitMode verticalFit,
+            bool enabled)
+        {
+            return RuntimeInterop.unitas_runtime_ui_content_size_fitter_set(
+                _runtimeHandle,
+                objectId,
+                (uint)horizontalFit,
+                (uint)verticalFit,
+                enabled ? 1U : 0U);
         }
 
         public bool IsPointerOver()

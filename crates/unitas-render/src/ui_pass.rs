@@ -1,7 +1,30 @@
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 pub use crate::glyphs::{HorizontalAlign, Rect, TextLayoutBox, VerticalAlign};
 use crate::image::Rgba8;
+
+static UI_SPRITE_REGISTRY: OnceLock<Mutex<HashMap<String, Rgba8>>> = OnceLock::new();
+
+fn ui_sprite_registry() -> &'static Mutex<HashMap<String, Rgba8>> {
+    UI_SPRITE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn register_ui_sprite_image(guid: impl Into<String>, image: Rgba8) {
+    let mut guard = match ui_sprite_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.insert(guid.into(), image);
+}
+
+pub fn ui_sprite_image(guid: &str) -> Option<Rgba8> {
+    let guard = match ui_sprite_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.get(guid).cloned()
+}
 
 pub const FOCUS_INDICATOR_COLOR: [f32; 4] = [1.0, 0.9, 0.0, 1.0];
 
@@ -59,6 +82,9 @@ pub trait UiElement {
     fn color(&self) -> [f32; 4];
     fn sprite(&self) -> Option<&SpriteRef>;
     fn text(&self) -> Option<UiText<'_>>;
+    fn clip_rect(&self) -> Option<[f32; 4]> {
+        None
+    }
 }
 
 pub trait UiTextPainter {
@@ -112,7 +138,45 @@ pub fn composite_ui<T: UiElement>(
                     painter.paint_text(target, item.rect(), text);
                 }
             }
-            None => fill_rect(target, bounds, item.color()),
+            None => {
+                let draw_bounds = match item.clip_rect() {
+                    Some(clip) => match intersect_bounds(
+                        bounds,
+                        pixel_bounds(clip, target.image.width, target.image.height),
+                    ) {
+                        Some(clipped) => clipped,
+                        None => continue,
+                    },
+                    None => bounds,
+                };
+                if let Some((sprite, image)) = item.sprite().and_then(|s| {
+                    ui_sprite_image(&s.texture_guid)
+                        .filter(|img| img.width > 0 && img.height > 0)
+                        .map(|img| (s, img))
+                }) {
+                    let quad = crate::glyphs::TexturedQuad {
+                        x: bounds.0 as f32,
+                        y: bounds.1 as f32,
+                        width: (bounds.2 - bounds.0) as f32,
+                        height: (bounds.3 - bounds.1) as f32,
+                        uv: sprite.uv_rect,
+                        color: item.color(),
+                    };
+                    crate::glyphs::draw_image_quads(
+                        &mut *target.image,
+                        &image,
+                        &[quad],
+                        Rect {
+                            x: draw_bounds.0 as f32,
+                            y: draw_bounds.1 as f32,
+                            width: (draw_bounds.2 - draw_bounds.0) as f32,
+                            height: (draw_bounds.3 - draw_bounds.1) as f32,
+                        },
+                    );
+                } else {
+                    fill_rect(target, draw_bounds, item.color());
+                }
+            }
         }
         write_ids(target, bounds, id);
         coverages.push(UiCoverage {
@@ -135,6 +199,18 @@ fn pixel_bounds(rect: [f32; 4], width: u32, height: u32) -> Option<(u32, u32, u3
         return None;
     }
     Some((x0 as u32, y0 as u32, x1 as u32, y1 as u32))
+}
+
+fn intersect_bounds(
+    a: (u32, u32, u32, u32),
+    b: Option<(u32, u32, u32, u32)>,
+) -> Option<(u32, u32, u32, u32)> {
+    let b = b?;
+    let x0 = a.0.max(b.0);
+    let y0 = a.1.max(b.1);
+    let x1 = a.2.min(b.2);
+    let y1 = a.3.min(b.3);
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
 }
 
 fn fill_rect(target: &mut UiTarget<'_>, bounds: (u32, u32, u32, u32), color: [f32; 4]) {

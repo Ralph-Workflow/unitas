@@ -30,7 +30,6 @@ fn target(renderer: &Renderer, format: wgpu::TextureFormat) -> (wgpu::Texture, w
     (texture, view)
 }
 
-/// The pixels of a render target, row by row.
 fn read_back(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<u8> {
     let row_bytes = u64::from(SIZE.0) * 4;
     let aligned = row_bytes.div_ceil(256) * 256;
@@ -95,7 +94,6 @@ fn read_back(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<u8> {
     pixels
 }
 
-/// The largest difference of one channel between two images of the same size.
 fn largest_difference(left: &[u8], right: &[u8]) -> u8 {
     left.iter()
         .zip(right.iter())
@@ -275,6 +273,7 @@ fn the_surface_path_draws_the_canvas_over_the_frame() {
     let rects = [CanvasRect {
         rect: [10.0, 10.0, 40.0, 40.0],
         color: [1.0, 0.0, 0.0, 1.0],
+        ..CanvasRect::default()
     }];
     let (canvas_texture, canvas_view) = target(&renderer, format);
     let canvas_frame = SurfaceFrame {
@@ -303,5 +302,226 @@ fn the_surface_path_draws_the_canvas_over_the_frame() {
         &canvas[outside..outside + 4],
         &plain[outside..outside + 4],
         "the canvas element changed the frame outside its bounds"
+    );
+}
+
+struct ParityUiItem {
+    rect: [f32; 4],
+    color: [f32; 4],
+    sprite: Option<unitas_render::ui_pass::SpriteRef>,
+    clip_rect: Option<[f32; 4]>,
+    text: Option<unitas_render::ui_pass::UiText<'static>>,
+}
+
+impl unitas_render::ui_pass::UiElement for ParityUiItem {
+    fn rect(&self) -> [f32; 4] {
+        self.rect
+    }
+
+    fn color(&self) -> [f32; 4] {
+        self.color
+    }
+
+    fn sprite(&self) -> Option<&unitas_render::ui_pass::SpriteRef> {
+        self.sprite.as_ref()
+    }
+
+    fn clip_rect(&self) -> Option<[f32; 4]> {
+        self.clip_rect
+    }
+
+    fn text(&self) -> Option<unitas_render::ui_pass::UiText<'_>> {
+        self.text
+    }
+}
+
+fn mean_channel_error(left: &[u8], right: &[u8]) -> f32 {
+    if left.is_empty() || left.len() != right.len() {
+        return f32::MAX;
+    }
+    let total: u64 = left
+        .iter()
+        .zip(right.iter())
+        .map(|(a, b)| u64::from(a.abs_diff(*b)))
+        .sum();
+    total as f32 / left.len() as f32
+}
+
+#[test]
+fn surface_ui_sprites_aligned_wrapped_clipped_text_and_clip_rects_match_cpu_composite_ui() {
+    use unitas_render::glyphs::{HorizontalAlign, VerticalAlign};
+    use unitas_render::gpu::{TextOverlayItem, GPU_CPU_MEAN_ERROR_TOLERANCE};
+    use unitas_render::ui_pass::{
+        composite_ui, register_ui_sprite_image, GlyphTextPainter, SpriteRef, UiTarget, UiText,
+    };
+    use unitas_render::Rgba8;
+
+    let Ok(renderer) = shared_renderer() else {
+        return;
+    };
+    let mesh = cube(1.0);
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let light = DirectionalLight {
+        direction: Vec3::new(0.4, 0.8, 0.5),
+        color: [1.0, 1.0, 1.0],
+        intensity: 0.85,
+    };
+    let (instances, scene) = scene(&mesh, &camera, &light);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let Ok(mut cpu_rgba) =
+        renderer.render_offscreen_materials_rgba_with_overlay(&instances, scene, SIZE, &[])
+    else {
+        return;
+    };
+
+    let mut sprite_img = Rgba8::new(2, 2);
+    sprite_img.pixels.copy_from_slice(&[
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ]);
+    register_ui_sprite_image("parity-sprite-1", sprite_img.clone());
+    let sprite_rect = [6.0, 6.0, 24.0, 24.0];
+    let sprite_tint = [1.0, 0.5, 0.5, 0.8];
+    let sprite_clip = [6.0, 6.0, 12.0, 24.0];
+    let solid_rect = [36.0, 6.0, 24.0, 24.0];
+    let solid_color = [0.2, 0.8, 0.4, 0.75];
+    let solid_clip = [36.0, 6.0, 24.0, 12.0];
+    let text_rect = [8.0, 36.0, 80.0, 26.0];
+    let text_clip = [8.0, 36.0, 80.0, 20.0];
+    let text_color = [1.0, 0.95, 0.2, 1.0];
+
+    let cpu_items = [
+        ParityUiItem {
+            rect: sprite_rect,
+            color: sprite_tint,
+            sprite: Some(SpriteRef {
+                texture_guid: "parity-sprite-1".to_string(),
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
+            }),
+            clip_rect: Some(sprite_clip),
+            text: None,
+        },
+        ParityUiItem {
+            rect: solid_rect,
+            color: solid_color,
+            sprite: None,
+            clip_rect: Some(solid_clip),
+            text: None,
+        },
+        ParityUiItem {
+            rect: text_rect,
+            color: text_color,
+            sprite: None,
+            clip_rect: None,
+            text: Some(UiText {
+                text: "HELLO WORLD\nCLIPPED LINE THREE",
+                x: text_rect[0],
+                y: text_rect[1],
+                size_px: 14.0,
+                color: text_color,
+                horizontal_align: HorizontalAlign::Center,
+                vertical_align: VerticalAlign::Top,
+                wrap: true,
+                max_width: Some(text_rect[2]),
+                line_spacing: 1.1,
+                clip_rect: Some(text_clip),
+            }),
+        },
+    ];
+    let mut painter = GlyphTextPainter::new();
+    let mut cpu_target = UiTarget {
+        image: &mut cpu_rgba,
+        ids: None,
+    };
+    composite_ui(&mut cpu_target, &cpu_items, 1, Some(&mut painter));
+
+    let gpu_rects = [
+        CanvasRect {
+            rect: sprite_rect,
+            color: sprite_tint,
+            sprite: Some(sprite_img),
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            clip_rect: Some(sprite_clip),
+        },
+        CanvasRect {
+            rect: solid_rect,
+            color: solid_color,
+            sprite: None,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            clip_rect: Some(solid_clip),
+        },
+    ];
+    let gpu_texts = [TextOverlayItem {
+        text: "HELLO WORLD\nCLIPPED LINE THREE".to_string(),
+        x: text_rect[0],
+        y: text_rect[1],
+        size_px: 14.0,
+        color: text_color,
+        rect: text_rect,
+        horizontal_align: HorizontalAlign::Center,
+        vertical_align: VerticalAlign::Top,
+        wrap: true,
+        max_width: Some(text_rect[2]),
+        line_spacing: 1.1,
+        clip_rect: Some(text_clip),
+    }];
+    let (surface_texture, surface_view) = target(&renderer, format);
+    let frame = SurfaceFrame {
+        instances: &instances,
+        scene,
+        size: SIZE,
+        overlay: &[],
+        canvas_rects: &gpu_rects,
+        canvas_texts: &gpu_texts,
+    };
+    if renderer
+        .render_frame_to_view(&surface_view, format, &frame)
+        .is_err()
+    {
+        return;
+    }
+    let gpu_pixels = read_back(&renderer, &surface_texture);
+    assert_eq!(gpu_pixels.len(), cpu_rgba.pixels.len());
+
+    let unclipped_sprite_px = ((10 * SIZE.0 + 10) * 4) as usize;
+    let clipped_sprite_px = ((10 * SIZE.0 + 24) * 4) as usize;
+    assert_eq!(
+        &gpu_pixels[unclipped_sprite_px..unclipped_sprite_px + 3],
+        &cpu_rgba.pixels[unclipped_sprite_px..unclipped_sprite_px + 3]
+    );
+    assert_eq!(
+        &gpu_pixels[clipped_sprite_px..clipped_sprite_px + 3],
+        &cpu_rgba.pixels[clipped_sprite_px..clipped_sprite_px + 3]
+    );
+    assert_ne!(
+        &gpu_pixels[unclipped_sprite_px..unclipped_sprite_px + 3],
+        &gpu_pixels[clipped_sprite_px..clipped_sprite_px + 3]
+    );
+
+    let unclipped_solid_px = ((10 * SIZE.0 + 44) * 4) as usize;
+    let clipped_solid_px = ((24 * SIZE.0 + 44) * 4) as usize;
+    assert_eq!(
+        &gpu_pixels[unclipped_solid_px..unclipped_solid_px + 3],
+        &cpu_rgba.pixels[unclipped_solid_px..unclipped_solid_px + 3]
+    );
+    assert_eq!(
+        &gpu_pixels[clipped_solid_px..clipped_solid_px + 3],
+        &cpu_rgba.pixels[clipped_solid_px..clipped_solid_px + 3]
+    );
+
+    for y in 57..SIZE.1 {
+        for x in 8..88 {
+            let idx = ((y * SIZE.0 + x) * 4) as usize;
+            assert_eq!(
+                &gpu_pixels[idx..idx + 3],
+                &cpu_rgba.pixels[idx..idx + 3],
+                "overflowing text ink escaped clip_rect at ({x}, {y})"
+            );
+        }
+    }
+
+    let mean_error = mean_channel_error(&cpu_rgba.pixels, &gpu_pixels);
+    assert!(
+        mean_error <= GPU_CPU_MEAN_ERROR_TOLERANCE,
+        "GPU surface UI mean error {mean_error} exceeds tolerance {GPU_CPU_MEAN_ERROR_TOLERANCE}"
     );
 }

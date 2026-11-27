@@ -1419,11 +1419,19 @@ fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_uns
         format!("fileFormatVersion: 2\nguid: {ogg_guid}\n"),
     )?;
 
+    let flac_guid = "44444444444444444444444444444444";
+    let flac_path = assets.join("Lossless.flac");
+    std::fs::write(&flac_path, b"fLaC")?;
+    std::fs::write(
+        assets.join("Lossless.flac.meta"),
+        format!("fileFormatVersion: 2\nguid: {flac_guid}\n"),
+    )?;
+
     let scene_path = assets.join("AudioScene.unity");
     std::fs::write(
         &scene_path,
         format!(
-            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: WavEmitter\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n--- !u!1 &20\nGameObject:\n  m_Name: OggEmitter\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &22\nAudioSource:\n  m_GameObject: {{fileID: 20}}\n  m_audioClip: {{fileID: 8300000, guid: {ogg_guid}, type: 3}}\n--- !u!1 &30\nGameObject:\n  m_Name: MissingEmitter\n--- !u!4 &31\nTransform:\n  m_GameObject: {{fileID: 30}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &32\nAudioSource:\n  m_GameObject: {{fileID: 30}}\n  m_audioClip: {{fileID: 8300000, guid: {missing_guid}, type: 3}}\n"
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: WavEmitter\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {wav_guid}, type: 3}}\n--- !u!1 &20\nGameObject:\n  m_Name: OggEmitter\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &22\nAudioSource:\n  m_GameObject: {{fileID: 20}}\n  m_audioClip: {{fileID: 8300000, guid: {ogg_guid}, type: 3}}\n--- !u!1 &30\nGameObject:\n  m_Name: MissingEmitter\n--- !u!4 &31\nTransform:\n  m_GameObject: {{fileID: 30}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &32\nAudioSource:\n  m_GameObject: {{fileID: 30}}\n  m_audioClip: {{fileID: 8300000, guid: {missing_guid}, type: 3}}\n--- !u!1 &40\nGameObject:\n  m_Name: FlacEmitter\n--- !u!4 &41\nTransform:\n  m_GameObject: {{fileID: 40}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &42\nAudioSource:\n  m_GameObject: {{fileID: 40}}\n  m_audioClip: {{fileID: 8300000, guid: {flac_guid}, type: 3}}\n"
         ),
     )?;
 
@@ -1446,6 +1454,7 @@ fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_uns
     let wav_entity = entity_named(&assembled.graph, "WavEmitter")?;
     let ogg_entity = entity_named(&assembled.graph, "OggEmitter")?;
     let missing_entity = entity_named(&assembled.graph, "MissingEmitter")?;
+    let flac_entity = entity_named(&assembled.graph, "FlacEmitter")?;
 
     let (_, wav_audio) = assembled
         .audio_bindings
@@ -1463,13 +1472,22 @@ fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_uns
         .ok_or("missing OggEmitter binding")?;
     assert_eq!(ogg_audio.clip_guid.as_deref(), Some(ogg_guid));
     assert_eq!(ogg_audio.clip_path.as_deref(), Some(ogg_path.as_path()));
-    let ogg_diag = ogg_audio
+    assert_eq!(ogg_audio.clip_diagnostic, None);
+
+    let (_, flac_audio) = assembled
+        .audio_bindings
+        .iter()
+        .find(|(e, _)| *e == flac_entity)
+        .ok_or("missing FlacEmitter binding")?;
+    assert_eq!(flac_audio.clip_guid.as_deref(), Some(flac_guid));
+    assert_eq!(flac_audio.clip_path.as_deref(), Some(flac_path.as_path()));
+    let flac_diag = flac_audio
         .clip_diagnostic
         .as_ref()
-        .ok_or("expected diagnostic for unsupported .ogg AudioClip")?;
-    assert!(ogg_diag.contains("AudioSource"));
-    assert!(ogg_diag.contains("OggEmitter"));
-    assert!(ogg_diag.contains(ogg_guid));
+        .ok_or("expected diagnostic for unsupported .flac AudioClip")?;
+    assert!(flac_diag.contains("AudioSource"));
+    assert!(flac_diag.contains("FlacEmitter"));
+    assert!(flac_diag.contains(flac_guid));
 
     let (_, missing_audio) = assembled
         .audio_bindings
@@ -1489,7 +1507,7 @@ fn audio_source_resolves_clip_from_project_meta_index_and_reports_missing_or_uns
     assert!(assembled
         .diagnostics
         .iter()
-        .any(|(entity, msg)| *entity == ogg_entity && msg.contains(ogg_guid)));
+        .any(|(entity, msg)| *entity == flac_entity && msg.contains(flac_guid)));
     assert!(assembled
         .diagnostics
         .iter()

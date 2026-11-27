@@ -1,4 +1,9 @@
 use crate::camera::Camera;
+use crate::glyphs::{
+    layout_text_in_box, shape_glyph_quads, Rect, TextFrame, TextLayoutBox, TextPipeline, TextStyle,
+    TexturedQuad,
+};
+use crate::image::Rgba8;
 use crate::math::Mat4;
 use crate::model::{DirectionalLight, MeshInstance};
 use crate::render_graph::{RenderGraph, RenderPassKind};
@@ -6,8 +11,8 @@ use crate::render_graph::{RenderGraph, RenderPassKind};
 use super::gpu_pipelines::create_pipelines;
 use super::{
     background_color, lock, material_draw_items, opaque_order, plain_draw_items, transparent_order,
-    CanvasRect, DrawItem, GpuInstance, GpuMaterialInstance, Pipelines, RenderError, RenderScene,
-    Renderer, SurfaceState, TextOverlayItem,
+    CanvasRect, DrawItem, GpuInstance, GpuMaterialInstance, ImageTarget, Pipelines, RenderError,
+    RenderScene, Renderer, SurfaceState, TextOverlayItem, TextState, TextTarget,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -452,5 +457,228 @@ impl Renderer {
         self.draw_ui_rects(encoder, color_view, format, size, canvas_rects);
         self.draw_text_overlay(encoder, color_view, format, size, 1.0, canvas_texts);
         Ok(())
+    }
+
+    pub(super) fn draw_text_overlay(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        scale: f32,
+        overlay: &[TextOverlayItem],
+    ) {
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        let mut text = lock(&self.text);
+        let TextState {
+            fonts,
+            cache,
+            atlas,
+            targets,
+            ..
+        } = &mut *text;
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        };
+        let mut batches: Vec<(Rect, Vec<TexturedQuad>)> = Vec::new();
+        for item in overlay {
+            if item.text.is_empty() || item.size_px <= 0.0 {
+                continue;
+            }
+            let scaled = item.size_px * scale;
+            let style = TextStyle::new(scaled, scaled, item.color);
+            let layout_box = TextLayoutBox {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: item.rect[2] * scale,
+                    height: item.rect[3] * scale,
+                },
+                horizontal_align: item.horizontal_align,
+                vertical_align: item.vertical_align,
+                wrap: item.wrap,
+                max_width: item.max_width.map(|w| w * scale),
+                line_spacing: item.line_spacing,
+            };
+            let layout = layout_text_in_box(fonts, &item.text, &layout_box, &style);
+            let mut item_quads = shape_glyph_quads(fonts, cache, atlas, &layout);
+            if item_quads.is_empty() {
+                continue;
+            }
+            let dx = item.x * scale;
+            let dy = item.y * scale;
+            for quad in &mut item_quads {
+                quad.x += dx;
+                quad.y += dy;
+            }
+            let clip = resolve_ui_clip_rect(
+                size.0,
+                size.1,
+                item.clip_rect
+                    .map(|c| [c[0] * scale, c[1] * scale, c[2] * scale, c[3] * scale]),
+            );
+            if let Some((last_clip, last_quads)) = batches.last_mut() {
+                if *last_clip == clip {
+                    last_quads.extend(item_quads);
+                    continue;
+                }
+            }
+            batches.push((clip, item_quads));
+        }
+        let target = targets.entry(format).or_insert_with(|| {
+            let pipeline = TextPipeline::new(&self.device, format);
+            let resources = pipeline.upload_atlas(&self.device, &self.queue, atlas);
+            TextTarget {
+                pipeline,
+                resources,
+                uploaded: atlas.region_count(),
+            }
+        });
+        if target.uploaded != atlas.region_count() {
+            target.resources = target
+                .pipeline
+                .upload_atlas(&self.device, &self.queue, atlas);
+            target.uploaded = atlas.region_count();
+        }
+        for (clip, quads) in &batches {
+            let mut target_frame = TextFrame {
+                encoder,
+                view,
+                frame,
+                clip: *clip,
+            };
+            target.pipeline.draw(
+                &self.device,
+                &self.queue,
+                &target.resources,
+                &mut target_frame,
+                quads,
+            );
+        }
+    }
+
+    pub(super) fn draw_ui_rects(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        rects: &[CanvasRect],
+    ) {
+        if rects.is_empty() || size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        let mut text = lock(&self.text);
+        let target = text.solid_targets.entry(format).or_insert_with(|| {
+            let pipeline = TextPipeline::new(&self.device, format);
+            let white = Rgba8 {
+                width: 1,
+                height: 1,
+                pixels: vec![255, 255, 255, 255],
+            };
+            let resources = pipeline.upload_image(&self.device, &self.queue, &white);
+            ImageTarget {
+                pipeline,
+                resources: Some(resources),
+                size: (1, 1),
+            }
+        });
+        let Some(solid_resources) = &target.resources else {
+            return;
+        };
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        };
+        for rect in rects {
+            let Some(bounds) = ui_rect_bounds(rect.rect, size.0, size.1) else {
+                continue;
+            };
+            let uv = if rect.sprite.is_some() {
+                rect.uv_rect
+            } else {
+                [0.0, 0.0, 1.0, 1.0]
+            };
+            let quad = TexturedQuad {
+                x: bounds.0 as f32,
+                y: bounds.1 as f32,
+                width: (bounds.2 - bounds.0) as f32,
+                height: (bounds.3 - bounds.1) as f32,
+                uv,
+                color: rect.color,
+            };
+            let clip = resolve_ui_clip_rect(size.0, size.1, rect.clip_rect);
+            let mut target_frame = TextFrame {
+                encoder,
+                view,
+                frame,
+                clip,
+            };
+            if let Some(sprite) = rect
+                .sprite
+                .as_ref()
+                .filter(|img| img.width > 0 && img.height > 0)
+            {
+                let sprite_resources =
+                    target
+                        .pipeline
+                        .upload_image(&self.device, &self.queue, sprite);
+                target.pipeline.draw(
+                    &self.device,
+                    &self.queue,
+                    &sprite_resources,
+                    &mut target_frame,
+                    std::slice::from_ref(&quad),
+                );
+            } else {
+                target.pipeline.draw(
+                    &self.device,
+                    &self.queue,
+                    solid_resources,
+                    &mut target_frame,
+                    std::slice::from_ref(&quad),
+                );
+            }
+        }
+    }
+}
+
+fn ui_rect_bounds(rect: [f32; 4], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    let x0 = rect[0].floor().max(0.0);
+    let y0 = rect[1].floor().max(0.0);
+    let x1 = (rect[0] + rect[2]).ceil().max(0.0).min(width as f32);
+    let y1 = (rect[1] + rect[3]).ceil().max(0.0).min(height as f32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0 as u32, y0 as u32, x1 as u32, y1 as u32))
+}
+
+fn resolve_ui_clip_rect(width: u32, height: u32, clip_rect: Option<[f32; 4]>) -> Rect {
+    let screen = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+    };
+    let Some(clip) = clip_rect else {
+        return screen;
+    };
+    let x0 = clip[0].floor().max(0.0);
+    let y0 = clip[1].floor().max(0.0);
+    let x1 = (clip[0] + clip[2]).ceil().min(screen.width).max(x0);
+    let y1 = (clip[1] + clip[3]).ceil().min(screen.height).max(y0);
+    Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
     }
 }

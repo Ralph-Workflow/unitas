@@ -25,6 +25,76 @@ pub struct DirectionalLight {
     pub intensity: f32,
 }
 
+pub const MAX_GPU_LIGHTS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuLightKind {
+    Directional,
+    Point,
+    Spot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuLight {
+    pub kind: GpuLightKind,
+    pub position: Vec3,
+    pub direction: Vec3,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+    pub inner_spot_angle_deg: f32,
+    pub spot_angle_deg: f32,
+}
+
+impl GpuLight {
+    pub fn directional(direction: Vec3, color: [f32; 3], intensity: f32) -> Self {
+        Self {
+            kind: GpuLightKind::Directional,
+            position: Vec3::ZERO,
+            direction,
+            color,
+            intensity,
+            range: 0.0,
+            inner_spot_angle_deg: 0.0,
+            spot_angle_deg: 0.0,
+        }
+    }
+
+    pub fn point(position: Vec3, color: [f32; 3], intensity: f32, range: f32) -> Self {
+        Self {
+            kind: GpuLightKind::Point,
+            position,
+            direction: Vec3::new(0.0, 1.0, 0.0),
+            color,
+            intensity,
+            range,
+            inner_spot_angle_deg: 0.0,
+            spot_angle_deg: 0.0,
+        }
+    }
+
+    pub fn spot(
+        position: Vec3,
+        direction: Vec3,
+        color: [f32; 3],
+        intensity: f32,
+        range: f32,
+        inner_spot_angle_deg: f32,
+        spot_angle_deg: f32,
+    ) -> Self {
+        Self {
+            kind: GpuLightKind::Spot,
+            position,
+            direction,
+            color,
+            intensity,
+            range,
+            inner_spot_angle_deg,
+            spot_angle_deg,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlendMode {
     #[default]

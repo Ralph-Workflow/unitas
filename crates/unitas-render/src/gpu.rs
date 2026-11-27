@@ -5,8 +5,8 @@ use std::sync::{Mutex, MutexGuard};
 use crate::camera::Camera;
 use crate::capture::CaptureInstance;
 use crate::glyphs::{
-    layout_text, shape_glyph_quads, FontLibrary, GlyphAtlas, GlyphResources, Rect, SwashCache,
-    TextFrame, TextPipeline, TextStyle, TexturedQuad,
+    FontLibrary, GlyphAtlas, GlyphResources, HorizontalAlign, Rect, SwashCache, TextFrame,
+    TextPipeline, TexturedQuad, VerticalAlign,
 };
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
@@ -34,12 +34,14 @@ mod gpu_shader;
 #[path = "gpu_surface.rs"]
 mod gpu_surface;
 
+pub use crate::model::{GpuLight, GpuLightKind, MAX_GPU_LIGHTS};
 pub use gpu_surface::{present_mode_for_v_sync_count, SurfaceFrame};
 
 const VERTEX_FLOATS: usize = 11;
 const VERTEX_STRIDE: u64 = 44;
 const UNIFORM_SLOT: u64 = 256;
-const GLOBAL_FLOATS: usize = 48;
+const GLOBAL_SLOT: u64 = 1024;
+const GLOBAL_FLOATS: usize = 180;
 const INSTANCE_FLOATS: usize = 24;
 const SLOT_FLOATS: usize = (UNIFORM_SLOT / 4) as usize;
 const COPY_ROW_ALIGNMENT: u64 = 256;
@@ -153,13 +155,53 @@ pub struct TextOverlayItem {
     pub y: f32,
     pub size_px: f32,
     pub color: [f32; 4],
+    pub rect: [f32; 4],
+    pub horizontal_align: HorizontalAlign,
+    pub vertical_align: VerticalAlign,
+    pub wrap: bool,
+    pub max_width: Option<f32>,
+    pub line_spacing: f32,
+    pub clip_rect: Option<[f32; 4]>,
 }
 
-/// One filled element of the interface of the windowed player.
-#[derive(Debug, Clone, Copy, PartialEq)]
+impl Default for TextOverlayItem {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            x: 0.0,
+            y: 0.0,
+            size_px: 0.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            rect: [0.0; 4],
+            horizontal_align: HorizontalAlign::Left,
+            vertical_align: VerticalAlign::Top,
+            wrap: false,
+            max_width: None,
+            line_spacing: 1.0,
+            clip_rect: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CanvasRect {
     pub rect: [f32; 4],
     pub color: [f32; 4],
+    pub sprite: Option<Rgba8>,
+    pub uv_rect: [f32; 4],
+    pub clip_rect: Option<[f32; 4]>,
+}
+
+impl Default for CanvasRect {
+    fn default() -> Self {
+        Self {
+            rect: [0.0; 4],
+            color: [1.0, 1.0, 1.0, 1.0],
+            sprite: None,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            clip_rect: None,
+        }
+    }
 }
 
 impl<'a, 'b> From<&'a MeshInstance<'b>> for GpuInstance<'b>
@@ -215,7 +257,6 @@ struct TextState {
     solid_targets: HashMap<wgpu::TextureFormat, ImageTarget>,
 }
 
-/// The textured quad that draws a composed frame over a render target.
 struct ImageTarget {
     pipeline: TextPipeline,
     resources: Option<GlyphResources>,
@@ -228,6 +269,11 @@ struct ShadowState {
     texture_size: u32,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+}
+
+struct SceneLightingState {
+    lights: Vec<GpuLight>,
+    ambient: [f32; 3],
 }
 
 pub struct Renderer {
@@ -253,6 +299,7 @@ pub struct Renderer {
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
     sprites: Mutex<Vec<Sprite>>,
+    lighting: Mutex<SceneLightingState>,
     sprite_quad: (Mesh, MeshAttributes),
     v_sync_count: AtomicU32,
 }
@@ -425,7 +472,7 @@ impl Renderer {
         let material_sampler = create_material_sampler(&device);
         let material_bind =
             create_default_material_bind(&device, &queue, &material_layout, &material_sampler);
-        let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
+        let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 1);
         let mut fonts = FontLibrary::new();
         fonts.load_bundled_font();
         fonts.load_system_fonts();
@@ -460,6 +507,10 @@ impl Renderer {
             surface: Mutex::new(None),
             text: Mutex::new(text),
             sprites: Mutex::new(Vec::new()),
+            lighting: Mutex::new(SceneLightingState {
+                lights: Vec::new(),
+                ambient: [0.0, 0.0, 0.0],
+            }),
             sprite_quad: sprite_quad(),
             v_sync_count: AtomicU32::new(1),
         })
@@ -494,8 +545,6 @@ impl Renderer {
         }
     }
 
-    /// Drops the cached mesh buffers and material bind groups; call it when
-    /// the scene is reloaded.
     pub fn invalidate_resource_cache(&self) {
         let mut cache = lock(&self.cache);
         cache.meshes.clear();
@@ -503,8 +552,6 @@ impl Renderer {
         cache.sprite_textures.clear();
     }
 
-    /// The sprites the next frame draws, in the order the sprite pass draws
-    /// them: the sorting layer first, the order in the layer second.
     pub fn set_sprites(&self, sprites: Vec<Sprite>) {
         let mut state = lock(&self.sprites);
         *state = sprites;
@@ -514,12 +561,25 @@ impl Renderer {
         lock(&self.sprites).clone()
     }
 
-    /// The mesh buffers uploaded into the cache since the renderer was created.
+    pub fn set_scene_lighting(&self, lights: &[GpuLight], ambient: [f32; 3]) {
+        let mut state = lock(&self.lighting);
+        state.lights.clear();
+        state.lights.extend_from_slice(lights);
+        state.ambient = ambient;
+    }
+
+    pub fn scene_lights(&self) -> Vec<GpuLight> {
+        lock(&self.lighting).lights.clone()
+    }
+
+    pub fn scene_ambient(&self) -> [f32; 3] {
+        lock(&self.lighting).ambient
+    }
+
     pub fn mesh_upload_count(&self) -> u32 {
         lock(&self.cache).mesh_uploads
     }
 
-    /// The material bind groups created since the renderer was created.
     pub fn material_bind_group_count(&self) -> u32 {
         lock(&self.cache).material_uploads
     }
@@ -591,14 +651,23 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<Image, RenderError> {
-        self.render_offscreen(
-            instances,
-            scene.camera,
-            scene.view,
-            scene.light,
-            scene.background,
-            (width, height),
-        )
+        let converted: Vec<GpuInstance<'_>> = instances.iter().map(GpuInstance::from).collect();
+        self.render_offscreen_with_overlay(&converted, scene, (width, height), &[])
+    }
+
+    pub fn render_offscreen_scene_lights(
+        &self,
+        instances: &[MeshInstance<'_>],
+        scene: RenderScene<'_>,
+        lights: &[GpuLight],
+        ambient: [f32; 3],
+        width: u32,
+        height: u32,
+    ) -> Result<Image, RenderError> {
+        self.set_scene_lighting(lights, ambient);
+        let converted: Vec<GpuInstance<'_>> = instances.iter().map(GpuInstance::from).collect();
+        self.render_offscreen_items(plain_draw_items(&converted), scene, (width, height), &[])
+            .map(Image::from_rgba8)
     }
 
     pub fn render_offscreen_with(
@@ -630,8 +699,6 @@ impl Renderer {
         Ok(Image::from_rgba8(rgba))
     }
 
-    /// The frame of the same render pass in RGBA, so a caller that composes
-    /// the interface onto it does not pay a colour format round trip.
     pub fn render_offscreen_rgba_with_overlay(
         &self,
         instances: &[GpuInstance<'_>],
@@ -860,7 +927,6 @@ impl Renderer {
         Ok(rgba_from_readback(&data, width, height, bytes_per_row))
     }
 
-    /// Draws a composed frame over a render target of the given size.
     pub fn draw_rgba_to_view(
         &self,
         view: &wgpu::TextureView,
@@ -878,7 +944,6 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draws a composed frame over a render target inside an open encoder.
     fn draw_rgba_overlay(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -942,150 +1007,6 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_text_overlay(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        size: (u32, u32),
-        scale: f32,
-        overlay: &[TextOverlayItem],
-    ) {
-        if size.0 == 0 || size.1 == 0 {
-            return;
-        }
-        let mut text = lock(&self.text);
-        let TextState {
-            fonts,
-            cache,
-            atlas,
-            targets,
-            ..
-        } = &mut *text;
-        let mut quads = Vec::new();
-        for item in overlay {
-            if item.text.is_empty() || item.size_px <= 0.0 {
-                continue;
-            }
-            let scaled = item.size_px * scale;
-            let style = TextStyle::new(scaled, scaled, item.color);
-            let layout = layout_text(fonts, &item.text, None, &style);
-            let mut item_quads = shape_glyph_quads(fonts, cache, atlas, &layout);
-            let dx = item.x * scale;
-            let dy = item.y * scale;
-            for quad in &mut item_quads {
-                quad.x += dx;
-                quad.y += dy;
-            }
-            quads.extend(item_quads);
-        }
-        let target = targets.entry(format).or_insert_with(|| {
-            let pipeline = TextPipeline::new(&self.device, format);
-            let resources = pipeline.upload_atlas(&self.device, &self.queue, atlas);
-            TextTarget {
-                pipeline,
-                resources,
-                uploaded: atlas.region_count(),
-            }
-        });
-        if target.uploaded != atlas.region_count() {
-            target.resources = target
-                .pipeline
-                .upload_atlas(&self.device, &self.queue, atlas);
-            target.uploaded = atlas.region_count();
-        }
-        if quads.is_empty() {
-            return;
-        }
-        let frame = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: size.0 as f32,
-            height: size.1 as f32,
-        };
-        let mut target_frame = TextFrame {
-            encoder,
-            view,
-            frame,
-            clip: frame,
-        };
-        target.pipeline.draw(
-            &self.device,
-            &self.queue,
-            &target.resources,
-            &mut target_frame,
-            &quads,
-        );
-    }
-
-    /// Draws the filled elements of the interface over a render target, with
-    /// the same blending the interface is composed with on the host.
-    fn draw_ui_rects(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        size: (u32, u32),
-        rects: &[CanvasRect],
-    ) {
-        if rects.is_empty() || size.0 == 0 || size.1 == 0 {
-            return;
-        }
-        let mut text = lock(&self.text);
-        let target = text.solid_targets.entry(format).or_insert_with(|| {
-            let pipeline = TextPipeline::new(&self.device, format);
-            let white = Rgba8 {
-                width: 1,
-                height: 1,
-                pixels: vec![255, 255, 255, 255],
-            };
-            let resources = pipeline.upload_image(&self.device, &self.queue, &white);
-            ImageTarget {
-                pipeline,
-                resources: Some(resources),
-                size: (1, 1),
-            }
-        });
-        let Some(resources) = &target.resources else {
-            return;
-        };
-        let quads: Vec<TexturedQuad> = rects
-            .iter()
-            .filter_map(|rect| {
-                ui_rect_bounds(rect.rect, size.0, size.1).map(|bounds| TexturedQuad {
-                    x: bounds.0 as f32,
-                    y: bounds.1 as f32,
-                    width: (bounds.2 - bounds.0) as f32,
-                    height: (bounds.3 - bounds.1) as f32,
-                    uv: [0.0, 0.0, 1.0, 1.0],
-                    color: rect.color,
-                })
-            })
-            .collect();
-        if quads.is_empty() {
-            return;
-        }
-        let frame = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: size.0 as f32,
-            height: size.1 as f32,
-        };
-        let mut target_frame = TextFrame {
-            encoder,
-            view,
-            frame,
-            clip: frame,
-        };
-        target.pipeline.draw(
-            &self.device,
-            &self.queue,
-            resources,
-            &mut target_frame,
-            &quads,
-        );
-    }
-
     fn create_depth_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -1147,8 +1068,6 @@ impl Renderer {
         })
     }
 
-    /// The uploaded buffers for a mesh, taken from the resource cache so a mesh
-    /// drawn by many instances is uploaded once.
     fn cached_mesh(
         &self,
         mesh: &Mesh,
@@ -1177,8 +1096,6 @@ impl Renderer {
         Ok(Some(buffers))
     }
 
-    /// The bind group for a material, taken from the resource cache so a
-    /// material shared by many instances is uploaded once.
     fn cached_material_bind_group(&self, material: &Material) -> wgpu::BindGroup {
         let key = material_key(material);
         let mut cache = lock(&self.cache);
@@ -1341,36 +1258,23 @@ impl Renderer {
             );
         }
 
-        let mut globals = [0.0f32; GLOBAL_FLOATS];
-        globals[0..16].copy_from_slice(view_proj.as_array());
-        let direction = light.direction.normalize();
         let (shadow_settings, shadow_size) = {
             let shadow = lock(&self.shadow);
             (shadow.settings, shadow.current_size)
         };
-        let light_vp = light_view_projection(
-            direction,
-            camera_world_position(view),
-            shadow_settings.distance,
-        );
-        globals[16..32].copy_from_slice(light_vp.as_array());
-        globals[32] = direction.x;
-        globals[33] = direction.y;
-        globals[34] = direction.z;
-        globals[35] = light.intensity.clamp(0.0, 1.0);
-        globals[36] = light.color[0];
-        globals[37] = light.color[1];
-        globals[38] = light.color[2];
-        globals[39] = 1.0 - globals[35];
-        let shadow_active = shadow_settings.enabled && shadow_size > 0 && globals[35] > 0.0;
-        globals[44] = if shadow_active { 1.0 } else { 0.0 };
-        globals[45] = if shadow_settings.soft { 1.0 } else { 0.0 };
-        globals[46] = if shadow_size > 0 {
-            1.0 / (shadow_size as f32)
-        } else {
-            0.0
+        let (lights, ambient) = {
+            let lighting = lock(&self.lighting);
+            (lighting.lights.clone(), lighting.ambient)
         };
-        globals[47] = 0.0015;
+        let globals = pack_globals_uniform(
+            view_proj,
+            camera_world_position(view),
+            light,
+            &lights,
+            ambient,
+            shadow_settings,
+            shadow_size,
+        );
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
@@ -1395,7 +1299,7 @@ impl Renderer {
         if !instance_data.is_empty() {
             self.queue.write_buffer(
                 &state.buffer,
-                UNIFORM_SLOT,
+                GLOBAL_SLOT,
                 bytemuck::cast_slice::<f32, u8>(&instance_data),
             );
         }
@@ -1435,7 +1339,7 @@ impl Renderer {
             pass.set_bind_group(
                 1,
                 &state.instance_bind_group,
-                &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
+                &[((GLOBAL_SLOT + UNIFORM_SLOT * index as u64) as u32)],
             );
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1464,7 +1368,7 @@ impl Renderer {
             pass.set_bind_group(
                 1,
                 &state.instance_bind_group,
-                &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
+                &[((GLOBAL_SLOT + UNIFORM_SLOT * index as u64) as u32)],
             );
             let material_bind = prepared[index]
                 .material_bind
@@ -1535,7 +1439,7 @@ impl Renderer {
                 Some(mesh) => mesh,
                 None => continue,
             };
-            let slot = UNIFORM_SLOT * (instance_base + index + 1) as u64;
+            let slot = GLOBAL_SLOT + UNIFORM_SLOT * (instance_base + index) as u64;
             pass.set_bind_group(1, &state.instance_bind_group, &[slot as u32]);
             pass.set_bind_group(2, &sprite.bind, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -1574,8 +1478,6 @@ struct MeshBuffers {
     index_count: u32,
 }
 
-/// The identity of a cached mesh upload: its allocation plus a probe of its
-/// contents, so a recycled allocation never serves a stale buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct MeshKey {
     mesh: usize,
@@ -1585,7 +1487,6 @@ struct MeshKey {
     probe: u64,
 }
 
-/// The identity of a cached texture: the allocation the image owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageKey {
     width: u32,
@@ -1594,7 +1495,6 @@ struct ImageKey {
     len: usize,
 }
 
-/// The identity of a cached material: its textures and its scalar parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct MaterialKey {
     albedo: Option<ImageKey>,
@@ -1616,7 +1516,6 @@ struct PreparedSprite {
     bind: wgpu::BindGroup,
 }
 
-/// The mesh buffers and material bind groups a scene reuses across frames.
 #[derive(Default)]
 struct ResourceCache {
     meshes: HashMap<MeshKey, MeshBuffers>,
@@ -1770,6 +1669,78 @@ fn transparent_order(items: &[DrawItem<'_>], view: Mat4) -> Vec<usize> {
     translucent
 }
 
+fn pack_globals_uniform(
+    view_proj: Mat4,
+    camera_pos: Vec3,
+    light: &DirectionalLight,
+    lights: &[GpuLight],
+    ambient: [f32; 3],
+    shadow_settings: ShadowSettings,
+    shadow_size: u32,
+) -> [f32; GLOBAL_FLOATS] {
+    let mut globals = [0.0f32; GLOBAL_FLOATS];
+    globals[0..16].copy_from_slice(view_proj.as_array());
+    let direction = light.direction.normalize();
+    let light_vp = light_view_projection(direction, camera_pos, shadow_settings.distance);
+    globals[16..32].copy_from_slice(light_vp.as_array());
+    globals[32] = direction.x;
+    globals[33] = direction.y;
+    globals[34] = direction.z;
+    globals[35] = light.intensity.clamp(0.0, 1.0);
+    globals[36] = light.color[0];
+    globals[37] = light.color[1];
+    globals[38] = light.color[2];
+    globals[39] = 1.0 - globals[35];
+    globals[40] = camera_pos.x;
+    globals[41] = camera_pos.y;
+    globals[42] = camera_pos.z;
+    let shadow_active = shadow_settings.enabled && shadow_size > 0 && globals[35] > 0.0;
+    globals[44] = if shadow_active { 1.0 } else { 0.0 };
+    globals[45] = if shadow_settings.soft { 1.0 } else { 0.0 };
+    globals[46] = if shadow_size > 0 {
+        1.0 / (shadow_size as f32)
+    } else {
+        0.0
+    };
+    globals[47] = 0.0015;
+    let count = lights.len().min(MAX_GPU_LIGHTS);
+    globals[48] = ambient[0].max(0.0);
+    globals[49] = ambient[1].max(0.0);
+    globals[50] = ambient[2].max(0.0);
+    globals[51] = count as f32;
+    for (index, item) in lights.iter().take(MAX_GPU_LIGHTS).enumerate() {
+        let base = 52 + index * 16;
+        globals[base] = item.position.x;
+        globals[base + 1] = item.position.y;
+        globals[base + 2] = item.position.z;
+        globals[base + 3] = item.range.max(0.0);
+        let dir = item.direction.normalize();
+        globals[base + 4] = dir.x;
+        globals[base + 5] = dir.y;
+        globals[base + 6] = dir.z;
+        globals[base + 7] = match item.kind {
+            GpuLightKind::Directional => 0.0,
+            GpuLightKind::Point => 1.0,
+            GpuLightKind::Spot => 2.0,
+        };
+        globals[base + 8] = item.color[0];
+        globals[base + 9] = item.color[1];
+        globals[base + 10] = item.color[2];
+        globals[base + 11] = item.intensity.max(0.0);
+        let outer_half = (item.spot_angle_deg.clamp(1.0, 179.0) * 0.5).to_radians();
+        let inner_half = (item
+            .inner_spot_angle_deg
+            .clamp(0.0, item.spot_angle_deg.clamp(1.0, 179.0))
+            * 0.5)
+            .to_radians();
+        let cos_outer = outer_half.cos();
+        let cos_inner = inner_half.cos().max(cos_outer + 1e-4);
+        globals[base + 12] = cos_outer;
+        globals[base + 13] = cos_inner;
+    }
+    globals
+}
+
 fn create_uniforms(
     device: &wgpu::Device,
     global_layout: &wgpu::BindGroupLayout,
@@ -1778,7 +1749,7 @@ fn create_uniforms(
 ) -> UniformState {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("scene-uniforms"),
-        size: UNIFORM_SLOT * (capacity as u64 + 1),
+        size: GLOBAL_SLOT + UNIFORM_SLOT * (capacity as u64).max(1),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -1821,19 +1792,6 @@ fn background_color(background: [f32; 3]) -> wgpu::Color {
         b: f64::from(background[2]),
         a: 1.0,
     }
-}
-
-/// The pixel bounds a filled element of the interface covers, the same bounds
-/// the interface is composed with on the host.
-fn ui_rect_bounds(rect: [f32; 4], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-    let x0 = rect[0].floor().max(0.0);
-    let y0 = rect[1].floor().max(0.0);
-    let x1 = (rect[0] + rect[2]).ceil().max(0.0).min(width as f32);
-    let y1 = (rect[1] + rect[3]).ceil().max(0.0).min(height as f32);
-    if x1 <= x0 || y1 <= y0 {
-        return None;
-    }
-    Some((x0 as u32, y0 as u32, x1 as u32, y1 as u32))
 }
 
 fn rgba_from_readback(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> Rgba8 {
@@ -2114,6 +2072,7 @@ mod tests {
             y: 10.0,
             size_px: 24.0,
             color: [1.0, 1.0, 1.0, 1.0],
+            ..TextOverlayItem::default()
         }];
         let without = renderer.render_offscreen(
             &[],
@@ -2183,6 +2142,7 @@ mod tests {
             y: 16.0,
             size_px: 28.0,
             color: [1.0, 1.0, 1.0, 1.0],
+            ..TextOverlayItem::default()
         }];
         let without =
             renderer.render_offscreen(&[], &camera(), view(), &light(), BACKGROUND, size)?;
@@ -2692,5 +2652,158 @@ mod tests {
         assert_eq!(renderer.v_sync_count(), 0);
         renderer.set_v_sync_count(2);
         assert_eq!(renderer.v_sync_count(), 2);
+    }
+
+    #[test]
+    fn pack_globals_uniform_fits_slot_budget_and_caps_lights_at_max() {
+        assert!((GLOBAL_FLOATS * 4) as u64 <= GLOBAL_SLOT);
+        assert_eq!(GLOBAL_SLOT % UNIFORM_SLOT, 0);
+        let dir_light = light();
+        let many_lights =
+            [GpuLight::point(Vec3::new(1.0, 2.0, 3.0), [0.5, 0.6, 0.7], 2.0, 10.0); 10];
+        let packed = pack_globals_uniform(
+            Mat4::identity(),
+            Vec3::new(0.0, 1.0, -5.0),
+            &dir_light,
+            &many_lights,
+            [0.1, 0.2, 0.3],
+            ShadowSettings::disabled(),
+            0,
+        );
+        assert!((packed[48] - 0.1).abs() < 1e-6);
+        assert!((packed[49] - 0.2).abs() < 1e-6);
+        assert!((packed[50] - 0.3).abs() < 1e-6);
+        assert!((packed[51] - MAX_GPU_LIGHTS as f32).abs() < 1e-6);
+        assert!((packed[52] - 1.0).abs() < 1e-6);
+        assert!((packed[53] - 2.0).abs() < 1e-6);
+        assert!((packed[54] - 3.0).abs() < 1e-6);
+        assert!((packed[55] - 10.0).abs() < 1e-6);
+        assert!((packed[59] - 1.0).abs() < 1e-6);
+        assert!((packed[60] - 0.5).abs() < 1e-6);
+        assert!((packed[61] - 0.6).abs() < 1e-6);
+        assert!((packed[62] - 0.7).abs() < 1e-6);
+        assert!((packed[63] - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn point_spot_and_ambient_lights_accumulate_and_empty_matches_single_directional(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return Ok(()),
+        };
+        let cube_mesh = cube(2.0);
+        let instances = [MeshInstance {
+            mesh: &cube_mesh,
+            model: Mat4::identity(),
+            color: [1.0, 1.0, 1.0],
+        }];
+        let cam = camera();
+        let cam_view = view();
+        let dir_light = DirectionalLight {
+            direction: Vec3::new(0.0, 1.0, 0.0),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.4,
+        };
+        let single_legacy = renderer.render_offscreen(
+            &instances,
+            &cam,
+            cam_view,
+            &dir_light,
+            [0.0, 0.0, 0.0],
+            (64, 64),
+        )?;
+        let single_scene = renderer.render_offscreen_scene(
+            &instances,
+            RenderScene {
+                camera: &cam,
+                view: cam_view,
+                light: &dir_light,
+                background: [0.0, 0.0, 0.0],
+            },
+            64,
+            64,
+        )?;
+        assert_eq!(single_legacy.pixels, single_scene.pixels);
+
+        let zero_dir = DirectionalLight {
+            direction: Vec3::new(0.0, 1.0, 0.0),
+            color: [0.0, 0.0, 0.0],
+            intensity: 1.0,
+        };
+        let dark = renderer.render_offscreen_scene_lights(
+            &instances,
+            RenderScene {
+                camera: &cam,
+                view: cam_view,
+                light: &zero_dir,
+                background: [0.0, 0.0, 0.0],
+            },
+            &[],
+            [0.0, 0.0, 0.0],
+            64,
+            64,
+        )?;
+        assert_eq!(dark.get_pixel(32, 32), [0, 0, 0]);
+
+        let with_ambient = renderer.render_offscreen_scene_lights(
+            &instances,
+            RenderScene {
+                camera: &cam,
+                view: cam_view,
+                light: &zero_dir,
+                background: [0.0, 0.0, 0.0],
+            },
+            &[],
+            [0.2, 0.0, 0.0],
+            64,
+            64,
+        )?;
+        let ambient_px = with_ambient.get_pixel(32, 32);
+        assert!(ambient_px[0] >= 48 && ambient_px[1] == 0 && ambient_px[2] == 0);
+
+        let point_light = GpuLight::point(Vec3::new(0.0, 0.0, -3.0), [0.0, 1.0, 0.0], 0.8, 10.0);
+        let with_point = renderer.render_offscreen_scene_lights(
+            &instances,
+            RenderScene {
+                camera: &cam,
+                view: cam_view,
+                light: &zero_dir,
+                background: [0.0, 0.0, 0.0],
+            },
+            &[point_light],
+            [0.2, 0.0, 0.0],
+            64,
+            64,
+        )?;
+        let point_px = with_point.get_pixel(32, 32);
+        assert!(point_px[0] >= 48 && point_px[1] > 100 && point_px[2] == 0);
+
+        let spot_light = GpuLight::spot(
+            Vec3::new(0.0, 0.0, -3.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            [0.0, 0.0, 1.0],
+            0.8,
+            10.0,
+            20.0,
+            45.0,
+        );
+        let with_all = renderer.render_offscreen_scene_lights(
+            &instances,
+            RenderScene {
+                camera: &cam,
+                view: cam_view,
+                light: &zero_dir,
+                background: [0.0, 0.0, 0.0],
+            },
+            &[point_light, spot_light],
+            [0.2, 0.0, 0.0],
+            64,
+            64,
+        )?;
+        let all_px = with_all.get_pixel(32, 32);
+        assert!(all_px[0] >= 48 && all_px[1] > 100 && all_px[2] > 100);
+        renderer.set_scene_lighting(&[], [0.0, 0.0, 0.0]);
+        Ok(())
     }
 }

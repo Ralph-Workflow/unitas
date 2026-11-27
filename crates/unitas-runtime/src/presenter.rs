@@ -20,7 +20,7 @@ use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
     BlendMode, Camera, CanvasRect, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image,
     Mat4, Material, Mesh, MeshAttributes, RenderError, RenderScene, Renderer, ShadowSettings,
-    SurfaceFrame, TextOverlayItem, Vec3, look_at,
+    SurfaceFrame, TextOverlayItem, Vec3, gpu::GpuLight, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -28,8 +28,7 @@ use winit::window::Window;
 use crate::Runtime;
 #[cfg(feature = "device")]
 use crate::input::InputState;
-use crate::runtime::RenderCameraParams;
-use crate::runtime::RenderMaterial;
+use crate::runtime::{RenderCameraParams, RenderLight, RenderMaterial};
 
 #[cfg(feature = "device")]
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 44_100;
@@ -725,6 +724,8 @@ pub struct GpuFramePresenter<'a> {
     meshes: Vec<GpuMeshBinding>,
     camera_binding: GpuCameraBinding,
     light: DirectionalLight,
+    lights: Vec<GpuLight>,
+    ambient: [f32; 3],
     #[cfg(feature = "device")]
     audio_output: Option<DeviceOutput>,
     update_callback: Option<FrameUpdateCallback<'a>>,
@@ -752,6 +753,8 @@ impl<'a> GpuFramePresenter<'a> {
                 color: [1.0, 1.0, 1.0],
                 intensity: 0.85,
             },
+            lights: Vec::new(),
+            ambient: [0.0, 0.0, 0.0],
             #[cfg(feature = "device")]
             audio_output: None,
             update_callback: None,
@@ -794,6 +797,8 @@ impl<'a> GpuFramePresenter<'a> {
             });
         }
         self.set_light(runtime.directional_light());
+        self.set_lights(runtime.lights());
+        self.set_ambient(runtime.ambient());
         self.set_shadow_settings(shadow_settings_for_runtime(runtime));
         let vsync = v_sync_count_for_runtime(runtime);
         self.set_v_sync_count(vsync);
@@ -838,6 +843,22 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn light(&self) -> &DirectionalLight {
         &self.light
+    }
+
+    pub fn set_lights(&mut self, lights: Vec<GpuLight>) {
+        self.lights = lights;
+    }
+
+    pub fn lights(&self) -> &[GpuLight] {
+        &self.lights
+    }
+
+    pub fn set_ambient(&mut self, ambient: [f32; 3]) {
+        self.ambient = ambient;
+    }
+
+    pub fn ambient(&self) -> [f32; 3] {
+        self.ambient
     }
 
     pub fn set_shadow_settings(&mut self, settings: ShadowSettings) {
@@ -991,6 +1012,17 @@ impl<'a> GpuFramePresenter<'a> {
     ) -> Result<Image, WindowError> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
         let instances = self.collect_gpu_material_instances(runtime);
+        let lights = if self.lights.is_empty() {
+            runtime.lights()
+        } else {
+            self.lights.clone()
+        };
+        let ambient = if self.ambient == [0.0, 0.0, 0.0] {
+            runtime.ambient()
+        } else {
+            self.ambient
+        };
+        self.renderer.set_scene_lighting(&lights, ambient);
         let scene = RenderScene {
             camera: &camera,
             view,
@@ -1080,8 +1112,6 @@ impl<'a> GpuFramePresenter<'a> {
         Ok(())
     }
 
-    /// The elements of the interface of the loaded scenes, as the surface pass
-    /// draws them over the frame: the filled elements and the texts.
     fn canvas_elements(
         &self,
         runtime: &Runtime,
@@ -1092,23 +1122,45 @@ impl<'a> GpuFramePresenter<'a> {
         let mut texts = Vec::new();
         for item in runtime.ui_draw_items_for([width as f32, height as f32]) {
             match item.text {
-                Some(text) => texts.push(TextOverlayItem {
-                    text: text.text,
-                    x: text.x,
-                    y: text.y,
-                    size_px: text.size_px,
-                    color: text.color,
-                }),
-                None => rects.push(CanvasRect {
-                    rect: item.rect_px,
-                    color: item.color,
-                }),
+                Some(text) => {
+                    let wrap = item.text_layout.horizontal_overflow
+                        == crate::canvas::HorizontalWrapMode::Wrap;
+                    texts.push(TextOverlayItem {
+                        text: text.text,
+                        x: text.x,
+                        y: text.y,
+                        size_px: text.size_px,
+                        color: text.color,
+                        rect: item.rect_px,
+                        horizontal_align: item.text_layout.alignment.horizontal(),
+                        vertical_align: item.text_layout.alignment.vertical(),
+                        wrap,
+                        max_width: wrap.then_some(item.rect_px[2]),
+                        line_spacing: item.text_layout.line_spacing,
+                        clip_rect: item.text_clip_rect,
+                    });
+                }
+                None => {
+                    let (sprite, uv_rect) = match item.sprite.as_ref() {
+                        Some(sprite_ref) => (
+                            unitas_render::ui_pass::ui_sprite_image(&sprite_ref.texture_guid),
+                            sprite_ref.uv_rect,
+                        ),
+                        None => (None, [0.0, 0.0, 1.0, 1.0]),
+                    };
+                    rects.push(CanvasRect {
+                        rect: item.rect_px,
+                        color: item.color,
+                        sprite,
+                        uv_rect,
+                        clip_rect: item.text_clip_rect,
+                    });
+                }
             }
         }
         (rects, texts)
     }
 
-    /// Presents the frame of the windowed player on the window surface.
     pub fn present_window_frame(&mut self, runtime: &Runtime, frame: &FrameInfo) {
         let width = frame.width.max(1);
         let height = frame.height.max(1);
@@ -1122,7 +1174,18 @@ impl<'a> GpuFramePresenter<'a> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
         let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
         let light = self.light;
+        let lights = if self.lights.is_empty() {
+            runtime.lights()
+        } else {
+            self.lights.clone()
+        };
+        let ambient = if self.ambient == [0.0, 0.0, 0.0] {
+            runtime.ambient()
+        } else {
+            self.ambient
+        };
         let (canvas_rects, canvas_texts) = self.canvas_elements(runtime, width, height);
+        self.renderer.set_scene_lighting(&lights, ambient);
         let scene = RenderScene {
             camera: &camera,
             view,
@@ -1155,6 +1218,7 @@ impl<'a> GpuFramePresenter<'a> {
             let (camera, view, background) =
                 resolve_camera_and_view(&self.camera_binding, runtime, width, height);
             let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
+            self.renderer.set_scene_lighting(&lights, ambient);
             match self.renderer.render_offscreen_materials_rgba_with_overlay(
                 &instances,
                 RenderScene {
@@ -1289,6 +1353,10 @@ impl Runtime {
         self.update_render_light(handle, direction, color, intensity)
     }
 
+    pub fn set_render_light_full(&mut self, handle: u64, light: RenderLight) -> bool {
+        self.update_render_light_full(handle, light)
+    }
+
     pub fn render_cpu_frame_bmp(
         &mut self,
         camera: u64,
@@ -1334,7 +1402,6 @@ mod tests {
         }
     }
 
-    /// The canvas the windowed frame carried to the surface.
     #[derive(Clone)]
     struct PresentedCanvas {
         texts: Vec<String>,
@@ -1342,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn windowed_present_carries_the_canvas_the_capture_path_composes() {
+    fn windowed_present_shows_the_canvas_the_capture_path_composes() {
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };
@@ -1707,5 +1774,82 @@ mod tests {
         assert_eq!(super::unitas_runtime_display_quit_requested(), 1);
         super::unitas_runtime_display_reset();
         assert_eq!(super::unitas_runtime_display_quit_requested(), 0);
+    }
+
+    #[test]
+    fn canvas_elements_maps_sprites_alignment_wrap_and_clip_rect_one_to_one() {
+        use std::fs;
+        use unitas_render::glyphs::{HorizontalAlign, VerticalAlign};
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_presenter_canvas_elements_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let assets_dir = dir.join("Assets");
+        let scenes_dir = assets_dir.join("Scenes");
+        let settings_dir = dir.join("ProjectSettings");
+        if fs::create_dir_all(&scenes_dir).is_err() || fs::create_dir_all(&settings_dir).is_err() {
+            return;
+        }
+        let sprite_guid = "22222222222222222222222222222222";
+        let mut sprite_rgba = unitas_render::Rgba8::new(2, 2);
+        sprite_rgba.pixels.copy_from_slice(&[
+            255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255,
+        ]);
+        unitas_render::ui_pass::register_ui_sprite_image(sprite_guid, sprite_rgba);
+        let scene_yaml = format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: HudCanvas\n--- !u!224 &2\nRectTransform:\n  m_GameObject: {{fileID: 1}}\n  m_Father: {{fileID: 0}}\n  m_AnchorMin: {{x: 0, y: 0}}\n  m_AnchorMax: {{x: 1, y: 1}}\n  m_AnchoredPosition: {{x: 0, y: 0}}\n  m_SizeDelta: {{x: 0, y: 0}}\n  m_Pivot: {{x: 0.5, y: 0.5}}\n--- !u!223 &3\nCanvas:\n  m_GameObject: {{fileID: 1}}\n  m_Enabled: 1\n  m_RenderMode: 0\n  m_SortingOrder: 0\n--- !u!1 &5\nGameObject:\n  m_Name: BadgeImage\n--- !u!224 &6\nRectTransform:\n  m_GameObject: {{fileID: 5}}\n  m_Father: {{fileID: 2}}\n  m_AnchorMin: {{x: 0, y: 1}}\n  m_AnchorMax: {{x: 0, y: 1}}\n  m_AnchoredPosition: {{x: 20, y: -20}}\n  m_SizeDelta: {{x: 40, y: 40}}\n  m_Pivot: {{x: 0, y: 1}}\n--- !u!114 &7\nMonoBehaviour:\n  m_GameObject: {{fileID: 5}}\n  m_Enabled: 1\n  m_Script: {{fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}}\n  m_Color: {{r: 1, g: 0.5, b: 0.25, a: 0.75}}\n  m_Sprite: {{fileID: 21300000, guid: {sprite_guid}, type: 3}}\n--- !u!1 &8\nGameObject:\n  m_Name: HeaderLabel\n--- !u!224 &9\nRectTransform:\n  m_GameObject: {{fileID: 8}}\n  m_Father: {{fileID: 2}}\n  m_AnchorMin: {{x: 0, y: 1}}\n  m_AnchorMax: {{x: 0, y: 1}}\n  m_AnchoredPosition: {{x: 80, y: -20}}\n  m_SizeDelta: {{x: 120, y: 24}}\n  m_Pivot: {{x: 0, y: 1}}\n--- !u!114 &10\nMonoBehaviour:\n  m_GameObject: {{fileID: 8}}\n  m_Enabled: 1\n  m_Script: {{fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}}\n  m_Text: \"Line 1\\nLine 2\"\n  m_FontSize: 18\n  m_Color: {{r: 1, g: 1, b: 1, a: 1}}\n"
+        );
+        let scene_path = scenes_dir.join("Hud.unity");
+        if fs::write(&scene_path, scene_yaml).is_err() {
+            return;
+        }
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        if runtime.load_scene(&scene_path).is_err() {
+            return;
+        }
+        let label_id = runtime
+            .find_entity_by_name("HeaderLabel")
+            .map_or(0, |entity| entity.as_u64());
+        assert!(runtime.set_ui_text_layout(
+            label_id,
+            crate::canvas::TextLayoutConfig {
+                alignment: crate::canvas::TextAnchor::MiddleCenter,
+                horizontal_overflow: crate::canvas::HorizontalWrapMode::Wrap,
+                vertical_overflow: crate::canvas::VerticalWrapMode::Truncate,
+                line_spacing: 1.5,
+            },
+        ));
+        let Ok(renderer) = Renderer::new() else {
+            return;
+        };
+        let presenter = GpuFramePresenter::new(Arc::new(renderer));
+        let (rects, texts) = presenter.canvas_elements(&runtime, 800, 600);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].rect, [20.0, 20.0, 40.0, 40.0]);
+        assert_eq!(rects[0].color, [1.0, 0.5, 0.25, 0.75]);
+        assert!(
+            rects[0].sprite.is_some(),
+            "canvas_elements dropped the UI sprite texture"
+        );
+        if let Some(sprite) = &rects[0].sprite {
+            assert_eq!(sprite.width, 2);
+            assert_eq!(sprite.height, 2);
+        }
+
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].text, "Line 1\nLine 2");
+        assert_eq!(texts[0].rect, [80.0, 20.0, 120.0, 24.0]);
+        assert_eq!(texts[0].horizontal_align, HorizontalAlign::Center);
+        assert_eq!(texts[0].vertical_align, VerticalAlign::Middle);
+        assert!(texts[0].wrap);
+        assert_eq!(texts[0].max_width, Some(120.0));
+        assert_eq!(texts[0].line_spacing, 1.5);
+        assert_eq!(texts[0].clip_rect, Some([80.0, 20.0, 120.0, 24.0]));
     }
 }

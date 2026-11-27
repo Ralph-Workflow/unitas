@@ -1,4 +1,8 @@
-use super::{AudioClip, AudioMixerGroup, EntityId, Path, read_path_buffer, with_runtime_state};
+use unitas_audio::RolloffMode;
+
+use super::{
+    AudioClip, AudioMixerGroup, EntityId, Path, RuntimeState, read_path_buffer, with_runtime_state,
+};
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_audio_create(handle: u64, entity: u64) -> u64 {
@@ -405,6 +409,139 @@ pub extern "C" fn unitas_runtime_audio_set_min_max_distance(
 }
 }
 
+fn apply_rolloff_mode(handle: u64, entity: u64, mode: u32) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    let Some(parsed) = RolloffMode::from_u32(mode) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .audio_mut()
+            .set_rolloff_mode(EntityId::new(entity), parsed);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+fn read_custom_rolloff_points(
+    state: &mut RuntimeState,
+    point_count: u32,
+    in_buffer: u64,
+) -> Option<Vec<(f32, f32)>> {
+    let Ok(count) = usize::try_from(point_count) else {
+        return None;
+    };
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    let byte_len = count.checked_mul(8)?;
+    if in_buffer == 0
+        || in_buffer != state.path_buffer.as_ptr() as usize as u64
+        || state.path_buffer.len() < byte_len
+    {
+        state.set_error("buffer address mismatch");
+        return None;
+    }
+    let mut points = Vec::with_capacity(count);
+    for idx in 0..count {
+        let start = idx * 8;
+        let dist_bytes: [u8; 4] = state.path_buffer[start..start + 4].try_into().ok()?;
+        let gain_bytes: [u8; 4] = state.path_buffer[start + 4..start + 8].try_into().ok()?;
+        let dist = f32::from_le_bytes(dist_bytes);
+        let gain = f32::from_le_bytes(gain_bytes);
+        if !dist.is_finite() || !gain.is_finite() {
+            return None;
+        }
+        points.push((dist, gain));
+    }
+    Some(points)
+}
+
+fn apply_custom_rolloff(handle: u64, entity: u64, point_count: u32, in_buffer: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let Some(points) = read_custom_rolloff_points(state, point_count, in_buffer) else {
+            return -2;
+        };
+        state
+            .runtime
+            .audio_mut()
+            .set_custom_rolloff(EntityId::new(entity), points);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_source_set_rolloff_mode(
+    handle: u64,
+    entity: u64,
+    mode: u32,
+) -> i32 {
+    apply_rolloff_mode(handle, entity, mode)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_rolloff_mode(
+    handle: u64,
+    entity: u64,
+    mode: u32,
+) -> i32 {
+    apply_rolloff_mode(handle, entity, mode)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_rolloff_mode(handle: u64, entity: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state
+            .runtime
+            .audio()
+            .rolloff_mode(EntityId::new(entity))
+            .as_i32()
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_source_set_custom_rolloff(
+    handle: u64,
+    entity: u64,
+    point_count: u32,
+    in_buffer: u64,
+) -> i32 {
+    apply_custom_rolloff(handle, entity, point_count, in_buffer)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_custom_rolloff(
+    handle: u64,
+    entity: u64,
+    point_count: u32,
+    in_buffer: u64,
+) -> i32 {
+    apply_custom_rolloff(handle, entity, point_count, in_buffer)
+}
+}
+
 ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_time(handle: u64, entity: u64, time: f64) -> i32 {
     if entity == 0 || !time.is_finite() {
@@ -642,7 +779,7 @@ pub extern "C" fn unitas_runtime_audio_load_clip(handle: u64, address: u64, leng
         match state
             .runtime
             .audio_mut()
-            .load_wav_file(Path::new(&path_str))
+            .load_audio_file(Path::new(&path_str))
         {
             Ok(clip_id) => {
                 state.clear_error();

@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use unitas_asset::scene::{MeshRendererComponent, RenderBinding, SpriteDrawMode};
+use unitas_asset::scene::{LightComponent, MeshRendererComponent, RenderBinding, SpriteDrawMode};
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_render::{
-    Camera, DirectionalLight, Mat4, Mesh, MeshAttributes, Renderer, Vec3, cube, look_at,
+    Camera, DirectionalLight, Mat4, Mesh, MeshAttributes, Renderer, Vec3, cube,
+    gpu::{GpuLight, GpuLightKind, MAX_GPU_LIGHTS},
+    look_at,
 };
 
 use super::{LoadedScene, Runtime};
@@ -81,8 +83,6 @@ pub struct RenderRenderer {
     pub enabled: bool,
 }
 
-/// One scene renderer a presenter can draw: the mesh it draws, the material
-/// it draws it with and the entity it belongs to.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneRenderable<'a> {
     pub entity: EntityId,
@@ -92,16 +92,12 @@ pub struct SceneRenderable<'a> {
     pub color: [f32; 3],
 }
 
-/// A render mesh with the texture coordinates and tangents the shader reads
-/// beside its positions.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderMesh {
     pub mesh: Mesh,
     pub attributes: MeshAttributes,
 }
 
-/// The scene camera a presenter can draw with: the entity it follows and the
-/// projection and background parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneCamera {
     pub entity: Option<EntityId>,
@@ -111,13 +107,16 @@ pub struct SceneCamera {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderLight {
     pub entity: Option<EntityId>,
+    pub kind: GpuLightKind,
+    pub position: [f32; 3],
     pub direction: [f32; 3],
     pub color: [f32; 3],
     pub intensity: f32,
+    pub range: f32,
+    pub inner_spot_angle_deg: f32,
+    pub spot_angle_deg: f32,
 }
 
-/// A sprite a loaded scene draws: the texture it samples, the tint it
-/// multiplies the texture with and the keys that order it in the sprite pass.
 #[derive(Clone, Debug)]
 pub struct RenderSprite {
     pub entity: EntityId,
@@ -148,6 +147,7 @@ pub struct RenderWorld {
     cameras: HashMap<u64, RenderCamera>,
     renderers: HashMap<u64, RenderRenderer>,
     lights: HashMap<u64, RenderLight>,
+    ambient: [f32; 3],
     sprites: Vec<RenderSprite>,
     camera_defaults: HashMap<EntityId, RenderCameraParams>,
     light_defaults: HashMap<EntityId, RenderLight>,
@@ -164,6 +164,7 @@ impl Default for RenderWorld {
             cameras: HashMap::new(),
             renderers: HashMap::new(),
             lights: HashMap::new(),
+            ambient: [0.0; 3],
             sprites: Vec::new(),
             camera_defaults: HashMap::new(),
             light_defaults: HashMap::new(),
@@ -325,9 +326,14 @@ impl Runtime {
             .and_then(|entity| self.render.light_defaults.get(&entity).copied())
             .unwrap_or(RenderLight {
                 entity,
+                kind: GpuLightKind::Directional,
+                position: [0.0, 0.0, 0.0],
                 direction: [0.0, 1.0, 0.0],
                 color: [1.0, 1.0, 1.0],
                 intensity: 1.0,
+                range: 10.0,
+                inner_spot_angle_deg: 21.80208,
+                spot_angle_deg: 30.0,
             });
         light.entity = entity;
         self.render.lights.insert(handle, light);
@@ -350,6 +356,30 @@ impl Runtime {
             }
             None => false,
         }
+    }
+
+    pub(crate) fn update_render_light_full(&mut self, handle: u64, updated: RenderLight) -> bool {
+        match self.render.lights.get_mut(&handle) {
+            Some(light) => {
+                let entity = light.entity;
+                *light = updated;
+                light.entity = entity;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_ambient_light(&mut self, ambient: [f32; 3]) {
+        self.render.ambient = [
+            ambient[0].max(0.0),
+            ambient[1].max(0.0),
+            ambient[2].max(0.0),
+        ];
+    }
+
+    pub fn ambient(&self) -> [f32; 3] {
+        self.render.ambient
     }
 
     pub(super) fn populate_render_world(
@@ -396,7 +426,10 @@ impl Runtime {
             }
             if let Some(diagnostic) = &renderer.material_diagnostic {
                 diagnostics.push((entity, diagnostic.clone()));
-            } else if let Some(guid) = &renderer.material_guid {
+            } else if renderer.material_path.is_none()
+                && let Some(guid) = &renderer.material_guid
+                && !is_builtin_material_reference(guid, None)
+            {
                 diagnostics.push((
                     entity,
                     format!(
@@ -444,35 +477,39 @@ impl Runtime {
         }
         for light in &binding.lights {
             let entity = EntityId::new(entity_base + light.entity.as_u64());
-            if !light.directional {
+            let Some(kind) = scene_light_kind(light) else {
                 if let Some(diagnostic) = &light.unsupported_diagnostic {
                     diagnostics.push((entity, diagnostic.clone()));
                 }
                 continue;
-            }
-            let rotation = graph
+            };
+            let (position, rotation) = graph
                 .world_transform(entity)
-                .map(|transform| transform.rotation)
-                .unwrap_or(IDENTITY_ROTATION);
-            let direction = toward_light_direction(rotation, light.direction);
-            self.render.light_defaults.insert(
-                entity,
-                RenderLight {
-                    entity: Some(entity),
-                    direction,
-                    color: light.color,
-                    intensity: light.intensity,
-                },
-            );
+                .map(|transform| (transform.translation, transform.rotation))
+                .unwrap_or(([0.0, 0.0, 0.0], IDENTITY_ROTATION));
+            let travel = match kind {
+                GpuLightKind::Directional => light.direction,
+                GpuLightKind::Point | GpuLightKind::Spot => [0.0, 0.0, 1.0],
+            };
+            let direction = toward_light_direction(rotation, travel);
+            let render_light = RenderLight {
+                entity: Some(entity),
+                kind,
+                position,
+                direction,
+                color: light.color,
+                intensity: light.intensity,
+                range: 10.0,
+                inner_spot_angle_deg: 21.80208,
+                spot_angle_deg: 30.0,
+            };
+            self.render.light_defaults.insert(entity, render_light);
             let handle = self.create_render_light(Some(entity));
-            self.update_render_light(handle, direction, light.color, light.intensity);
+            self.update_render_light_full(handle, render_light);
         }
         diagnostics
     }
 
-    // Resolve a scene-declared MeshFilter reference into a render mesh:
-    // Unity built-in primitives by (fileID, guid), otherwise an imported
-    // model file. Returns None when the mesh cannot be resolved.
     fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
         let mesh_data = if let (Some(file_id), Some(guid)) =
             (renderer.mesh_file_id, renderer.mesh_guid.as_deref())
@@ -480,7 +517,6 @@ impl Runtime {
             let primitive = unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)?;
             let mut data = unitas_asset::primitive::primitive_mesh(primitive);
             if primitive == unitas_asset::primitive::BuiltinPrimitive::Sphere {
-                // Unity's built-in sphere is radius 0.5; unitas generates radius 1.
                 for position in &mut data.positions {
                     *position = [position[0] * 0.5, position[1] * 0.5, position[2] * 0.5];
                 }
@@ -571,11 +607,12 @@ impl Runtime {
         })
     }
 
-    /// The scene's directional light, or a default one when the scene has
-    /// none.
-    pub fn directional_light(&self) -> DirectionalLight {
+    fn primary_directional_handle(&self) -> Option<(u64, RenderLight)> {
         let mut selected: Option<(u64, RenderLight)> = None;
         for (handle, light) in &self.render.lights {
+            if light.kind != GpuLightKind::Directional {
+                continue;
+            }
             let replace = match selected {
                 Some((best, _)) => *handle > best,
                 None => true,
@@ -584,11 +621,20 @@ impl Runtime {
                 selected = Some((*handle, *light));
             }
         }
-        match selected {
+        selected
+    }
+
+    pub fn directional_light(&self) -> DirectionalLight {
+        match self.primary_directional_handle() {
             Some((_, light)) => DirectionalLight {
                 direction: Vec3::new(light.direction[0], light.direction[1], light.direction[2]),
                 color: light.color,
                 intensity: light.intensity,
+            },
+            None if !self.render.lights.is_empty() => DirectionalLight {
+                direction: Vec3::new(0.0, 1.0, 0.0),
+                color: [0.0, 0.0, 0.0],
+                intensity: 1.0,
             },
             None => DirectionalLight {
                 direction: Vec3::new(0.0, 1.0, 0.0),
@@ -598,13 +644,52 @@ impl Runtime {
         }
     }
 
-    /// The loaded scene's enabled renderers with the mesh and material colour
-    /// each one draws, in the deterministic order the renderer draws them.
+    pub fn lights(&self) -> Vec<GpuLight> {
+        let primary_handle = self.primary_directional_handle().map(|(handle, _)| handle);
+        let mut handles: Vec<u64> = self.render.lights.keys().copied().collect();
+        handles.sort_unstable();
+        let mut collected = Vec::new();
+        for handle in handles {
+            if Some(handle) == primary_handle {
+                continue;
+            }
+            let Some(light) = self.render.lights.get(&handle) else {
+                continue;
+            };
+            let (position, direction) = match light.entity.and_then(|e| self.world_transform_of(e))
+            {
+                Some(transform) => {
+                    let pos = Vec3::new(
+                        transform.translation[0],
+                        transform.translation[1],
+                        transform.translation[2],
+                    );
+                    let dir = Vec3::new(light.direction[0], light.direction[1], light.direction[2]);
+                    (pos, dir)
+                }
+                None => (
+                    Vec3::new(light.position[0], light.position[1], light.position[2]),
+                    Vec3::new(light.direction[0], light.direction[1], light.direction[2]),
+                ),
+            };
+            collected.push(GpuLight {
+                kind: light.kind,
+                position,
+                direction,
+                color: light.color,
+                intensity: light.intensity,
+                range: light.range,
+                inner_spot_angle_deg: light.inner_spot_angle_deg,
+                spot_angle_deg: light.spot_angle_deg,
+            });
+            if collected.len() >= MAX_GPU_LIGHTS {
+                break;
+            }
+        }
+        collected
+    }
+
     pub fn scene_renderables(&self) -> Vec<SceneRenderable<'_>> {
-        // Renderer handles are sorted so the instance order, and therefore the
-        // rendered image, is the same in every process: a HashMap's iteration
-        // order is seeded per process, so consecutive captures of one scene
-        // otherwise disagree on which coincident surface wins the depth test.
         let mut handles: Vec<u64> = self.render.renderers.keys().copied().collect();
         handles.sort_unstable();
         handles
@@ -634,8 +719,6 @@ impl Runtime {
             .collect()
     }
 
-    /// The scene camera with the highest handle, so the choice does not depend
-    /// on map iteration order.
     pub fn scene_camera(&self) -> Option<SceneCamera> {
         let mut selected: Option<(u64, RenderCamera)> = None;
         for (handle, camera) in &self.render.cameras {
@@ -653,8 +736,6 @@ impl Runtime {
         })
     }
 
-    /// The scene's enabled sprites, in the order the sprite pass draws them:
-    /// the sorting layer first, the order in the layer second.
     pub fn sprite_instances(&self) -> Vec<unitas_render::Sprite> {
         let mut sprites: Vec<unitas_render::Sprite> = self
             .render
@@ -677,7 +758,6 @@ impl Runtime {
         sprites
     }
 
-    /// The index of the sprite an entity draws, when it draws one.
     fn runtime_sprite_index(&self, entity: EntityId) -> Option<usize> {
         self.render
             .sprites
@@ -685,9 +765,6 @@ impl Runtime {
             .position(|sprite| sprite.entity == entity)
     }
 
-    /// Gives an entity the sprite a script asked for. The sprite joins the list
-    /// the scene sprites live in, so a script sprite and a scene sprite sort
-    /// into the same draw pass.
     pub fn create_runtime_sprite(&mut self, entity: EntityId, texture_path: Option<&Path>) -> bool {
         if entity.as_u64() == 0 {
             return false;
@@ -733,7 +810,6 @@ impl Runtime {
         true
     }
 
-    /// Tints the sprite an entity draws.
     pub fn set_runtime_sprite_color(&mut self, entity: EntityId, color: [f32; 4]) -> bool {
         let Some(index) = self.runtime_sprite_index(entity) else {
             return false;
@@ -742,7 +818,6 @@ impl Runtime {
         true
     }
 
-    /// Moves the sprite an entity draws in the sorting order.
     pub fn set_runtime_sprite_sorting(
         &mut self,
         entity: EntityId,
@@ -758,7 +833,6 @@ impl Runtime {
         true
     }
 
-    /// Flips the sprite an entity draws.
     pub fn set_runtime_sprite_flip(
         &mut self,
         entity: EntityId,
@@ -774,7 +848,6 @@ impl Runtime {
         true
     }
 
-    /// Draws or hides the sprite an entity owns.
     pub fn set_runtime_sprite_enabled(&mut self, entity: EntityId, enabled: bool) -> bool {
         let Some(index) = self.runtime_sprite_index(entity) else {
             return false;
@@ -783,9 +856,6 @@ impl Runtime {
         true
     }
 
-    /// Records the draw mode a script asked for. The modes the renderer does
-    /// not draw are reported as a diagnostic, worded like the diagnostic a
-    /// scene sprite in the same mode reports.
     pub fn set_runtime_sprite_draw_mode(&mut self, entity: EntityId, mode: SpriteDrawMode) -> bool {
         if entity.as_u64() == 0 {
             return false;
@@ -801,9 +871,6 @@ impl Runtime {
         true
     }
 
-    /// The sprite state of an entity: its colour, its sorting layer and order,
-    /// its flips, whether it draws, whether it has a texture and the size of
-    /// that texture in pixels.
     pub fn runtime_sprite_state(&self, entity: EntityId) -> Option<[f32; 12]> {
         let sprite = self
             .render
@@ -826,7 +893,6 @@ impl Runtime {
         ])
     }
 
-    /// Records a diagnostic for an entity, keeping the message once.
     fn push_runtime_diagnostic(&mut self, entity: EntityId, message: String) {
         let Some(index) = self.active_scene else {
             return;
@@ -844,7 +910,6 @@ impl Runtime {
         scene.diagnostics.push((entity, message));
     }
 
-    /// Drops the diagnostic an entity carries with the given message.
     fn clear_runtime_diagnostic(&mut self, entity: EntityId, message: &str) {
         let Some(index) = self.active_scene else {
             return;
@@ -881,6 +946,7 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
         let default = GpuCameraBinding::default();
@@ -927,6 +993,7 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
         let default = GpuCameraBinding::default();
@@ -962,14 +1029,13 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.bind_scene(self);
         crate::capture::capture_offscreen(&mut presenter, self, width, height)
             .map_err(|error| RenderError::DeviceFailed(error.to_string()))
     }
 
-    /// Draws the canvas content of the loaded scenes onto a rendered frame, so
-    /// the interface is part of the picture instead of only its state.
     pub(crate) fn composite_canvas_image(&self, image: Image, width: u32, height: u32) -> Image {
         let items = self.ui_draw_items_for([width as f32, height as f32]);
         if items.is_empty() {
@@ -980,9 +1046,6 @@ impl Runtime {
         Image::from_rgba8(rgba)
     }
 
-    /// The same composition as `composite_canvas_image` for a frame that is
-    /// already in RGBA, so the windowed path does not convert the frame
-    /// between colour formats.
     pub(crate) fn composite_canvas_rgba(&self, mut rgba: Rgba8, width: u32, height: u32) -> Rgba8 {
         let items = self.ui_draw_items_for([width as f32, height as f32]);
         if items.is_empty() {
@@ -992,8 +1055,6 @@ impl Runtime {
         rgba
     }
 
-    /// The one canvas composition both the capture path and the windowed path
-    /// draw the interface with.
     pub(crate) fn composite_canvas_into(&self, rgba: &mut Rgba8, items: &[UiDrawItem]) {
         let mut target = UiTarget {
             image: rgba,
@@ -1011,7 +1072,6 @@ impl Runtime {
         }
     }
 
-    /// The renderer every frame of this runtime is rendered by.
     pub(crate) fn gpu_renderer(&mut self) -> Result<Arc<Renderer>, RenderError> {
         if let Some(renderer) = &self.gpu_renderer {
             return Ok(Arc::clone(renderer));
@@ -1023,12 +1083,10 @@ impl Runtime {
         Ok(renderer)
     }
 
-    /// The mesh the particle and trail effects are drawn with.
     pub(crate) fn effect_mesh(&self) -> &Mesh {
         &self.render.effect_mesh
     }
 
-    /// The name of an entity of the loaded scenes.
     pub(crate) fn entity_name(&self, entity: EntityId) -> Option<&str> {
         self.scene_graph()
             .and_then(|graph| graph.entity(entity))
@@ -1126,7 +1184,39 @@ impl Runtime {
     }
 }
 
+fn scene_light_kind(light: &LightComponent) -> Option<GpuLightKind> {
+    if light.directional {
+        return Some(GpuLightKind::Directional);
+    }
+    let diagnostic = light.unsupported_diagnostic.as_deref().unwrap_or("");
+    if diagnostic.starts_with("point light") {
+        Some(GpuLightKind::Point)
+    } else if diagnostic.starts_with("spot light") {
+        Some(GpuLightKind::Spot)
+    } else {
+        None
+    }
+}
+
+fn is_builtin_material_reference(guid: &str, file_id: Option<i64>) -> bool {
+    let _ = file_id;
+    guid.eq_ignore_ascii_case(unitas_asset::primitive::BUILTIN_EXTRA_GUID)
+}
+
 fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
+    if let Some(path) = renderer.material_path.as_deref()
+        && let Ok(material) = unitas_asset::material::parse_material(path)
+    {
+        return RenderMaterial {
+            color: material.color,
+            albedo: load_texture_image(renderer.albedo_tex_path.as_deref()),
+            normal: load_texture_image(renderer.normal_tex_path.as_deref()),
+            emissive: load_texture_image(renderer.emission_tex_path.as_deref()),
+            metallic: material.metallic.or(renderer.metallic).unwrap_or(0.0),
+            smoothness: material.glossiness.or(renderer.smoothness).unwrap_or(0.0),
+            emission_color: material.emission_color.or(renderer.emission_color),
+        };
+    }
     RenderMaterial {
         color: [
             renderer.material_color[0],
@@ -1143,9 +1233,6 @@ fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
     }
 }
 
-/// The diagnostic the renderer reports for a sprite it does not draw in the
-/// requested mode, worded like the diagnostic a scene sprite in that mode
-/// reports.
 fn draw_mode_diagnostic(entity: EntityId, mode: SpriteDrawMode) -> String {
     format!(
         "SpriteRenderer on entity {} draws in the {mode:?} mode, which the renderer does not draw yet",
@@ -1153,8 +1240,6 @@ fn draw_mode_diagnostic(entity: EntityId, mode: SpriteDrawMode) -> String {
     )
 }
 
-/// The model matrix a sprite draws with: the transform of its entity with
-/// the sprite's own size and flips applied to it.
 fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
     let flip_x = if sprite.flip_x { -1.0 } else { 1.0 };
     let flip_y = if sprite.flip_y { -1.0 } else { 1.0 };
@@ -1382,6 +1467,246 @@ SpriteRenderer:
         assert!(load_texture_image(Some(&unindexed_bundle_tex)).is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn point_and_spot_lights_are_collected_without_runtime_unsupported_diagnostics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_multilight_extract_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let scene_path = dir.join("MultiLightScene.unity");
+        let scene_yaml = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &10
+GameObject:
+  m_Name: Sun
+  m_Layer: 0
+--- !u!4 &11
+Transform:
+  m_GameObject: {fileID: 10}
+  m_LocalPosition: {x: 0, y: 10, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!108 &12
+Light:
+  m_GameObject: {fileID: 10}
+  m_Enabled: 1
+  m_Type: 1
+  m_Color: {r: 1, g: 0.9, b: 0.8, a: 1}
+  m_Intensity: 0.8
+--- !u!1 &20
+GameObject:
+  m_Name: PointLamp
+  m_Layer: 0
+--- !u!4 &21
+Transform:
+  m_GameObject: {fileID: 20}
+  m_LocalPosition: {x: 1, y: 2, z: 3}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!108 &22
+Light:
+  m_GameObject: {fileID: 20}
+  m_Enabled: 1
+  m_Type: 2
+  m_Color: {r: 1, g: 0, b: 0, a: 1}
+  m_Intensity: 2.5
+--- !u!1 &30
+GameObject:
+  m_Name: SpotLamp
+  m_Layer: 0
+--- !u!4 &31
+Transform:
+  m_GameObject: {fileID: 30}
+  m_LocalPosition: {x: 4, y: 5, z: 6}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!108 &32
+Light:
+  m_GameObject: {fileID: 30}
+  m_Enabled: 1
+  m_Type: 0
+  m_Color: {r: 0, g: 1, b: 0, a: 1}
+  m_Intensity: 3.0
+";
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(runtime.diagnostics().is_empty());
+        assert_eq!(runtime.ambient(), [0.0, 0.0, 0.0]);
+        runtime.set_ambient_light([0.1, 0.2, 0.3]);
+        assert_eq!(runtime.ambient(), [0.1, 0.2, 0.3]);
+
+        let dir_light = runtime.directional_light();
+        assert!((dir_light.intensity - 0.8).abs() < 1e-6);
+        assert_eq!(dir_light.color, [1.0, 0.9, 0.8]);
+
+        let lights = runtime.lights();
+        assert_eq!(lights.len(), 2);
+        assert_eq!(lights[0].kind, GpuLightKind::Point);
+        assert_eq!(lights[0].position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(lights[0].color, [1.0, 0.0, 0.0]);
+        assert!((lights[0].intensity - 2.5).abs() < 1e-6);
+
+        assert_eq!(lights[1].kind, GpuLightKind::Spot);
+        assert_eq!(lights[1].position, Vec3::new(4.0, 5.0, 6.0));
+        assert_eq!(lights[1].color, [0.0, 1.0, 0.0]);
+        assert!((lights[1].intensity - 3.0).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn urp_lit_material_in_scene_binds_base_map_base_color_normal_emission_and_pbr_into_render_material()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_urp_material_bind_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let assets_dir = dir.join("Assets");
+        std::fs::create_dir_all(&assets_dir)?;
+        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
+
+        let base_tex = assets_dir.join("Base.tga");
+        write_test_tga(&base_tex, 4, 4, [255, 0, 255])?;
+        std::fs::write(
+            assets_dir.join("Base.tga.meta"),
+            "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 0\n",
+        )?;
+
+        let normal_tex = assets_dir.join("Normal.tga");
+        write_test_tga(&normal_tex, 4, 4, [0, 0, 255])?;
+        std::fs::write(
+            assets_dir.join("Normal.tga.meta"),
+            "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 1\n",
+        )?;
+
+        let emissive_tex = assets_dir.join("Emissive.tga");
+        write_test_tga(&emissive_tex, 4, 4, [255, 255, 0])?;
+        std::fs::write(
+            assets_dir.join("Emissive.tga.meta"),
+            "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 0\n",
+        )?;
+
+        let mat_yaml = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  m_Name: UrpLitMat
+  m_Shader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _BaseMap:
+        m_Texture: {fileID: 2800000, guid: 11111111111111111111111111111111, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 2800000, guid: 22222222222222222222222222222222, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 2800000, guid: 33333333333333333333333333333333, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Floats:
+    - _Smoothness: 0.7
+    - _Metallic: 0.35
+    m_Colors:
+    - _BaseColor: {r: 0.25, g: 0.5, b: 0.75, a: 0.8}
+    - _EmissionColor: {r: 0.4, g: 0.2, b: 0.1, a: 1}
+";
+        std::fs::write(assets_dir.join("UrpLitMat.mat"), mat_yaml)?;
+        std::fs::write(
+            assets_dir.join("UrpLitMat.mat.meta"),
+            "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
+        )?;
+
+        let scene_path = assets_dir.join("UrpScene.unity");
+        let scene_yaml = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &10
+GameObject:
+  m_Name: UrpCube
+  m_Layer: 0
+--- !u!4 &11
+Transform:
+  m_GameObject: {fileID: 10}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!33 &12
+MeshFilter:
+  m_GameObject: {fileID: 10}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &13
+MeshRenderer:
+  m_GameObject: {fileID: 10}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: 44444444444444444444444444444444, type: 2}
+";
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            runtime.diagnostics().is_empty(),
+            "expected no material diagnostics for valid project URP material, got {:?}",
+            runtime.diagnostics()
+        );
+        let renderables = runtime.scene_renderables();
+        assert_eq!(renderables.len(), 1);
+        let renderable = &renderables[0];
+        assert_eq!(renderable.color, [0.25, 0.5, 0.75]);
+        assert_eq!(renderable.material.color, [0.25, 0.5, 0.75, 0.8]);
+        assert!((renderable.material.metallic - 0.35).abs() < 1e-6);
+        assert!((renderable.material.smoothness - 0.7).abs() < 1e-6);
+        assert_eq!(
+            renderable.material.emission_color,
+            Some([0.4, 0.2, 0.1, 1.0])
+        );
+        let albedo = renderable
+            .material
+            .albedo
+            .as_ref()
+            .ok_or("expected URP _BaseMap albedo texture")?;
+        assert_eq!((albedo.width, albedo.height), (4, 4));
+        assert_eq!(albedo.pixels[0], [255, 0, 255]);
+        let normal = renderable
+            .material
+            .normal
+            .as_ref()
+            .ok_or("expected URP _BumpMap normal texture")?;
+        assert_eq!(normal.pixels[0], [0, 0, 255]);
+        let emissive = renderable
+            .material
+            .emissive
+            .as_ref()
+            .ok_or("expected URP _EmissionMap emissive texture")?;
+        assert_eq!(emissive.pixels[0], [255, 255, 0]);
         Ok(())
     }
 }

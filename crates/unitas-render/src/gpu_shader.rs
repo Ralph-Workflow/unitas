@@ -1,6 +1,13 @@
 use super::VERTEX_STRIDE;
 
 pub(super) const SHADER_SOURCE: &str = r"
+struct GpuLightUniform {
+    pos_range: vec4<f32>,
+    dir_kind: vec4<f32>,
+    color_intensity: vec4<f32>,
+    spot_params: vec4<f32>,
+};
+
 struct Globals {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
@@ -8,6 +15,8 @@ struct Globals {
     light_color: vec4<f32>,
     camera_pos: vec4<f32>,
     shadow_params: vec4<f32>,
+    ambient: vec4<f32>,
+    lights: array<GpuLightUniform, 8>,
 };
 
 struct InstanceData {
@@ -123,8 +132,44 @@ fn surface_color(vs_out: VertexOut) -> vec3<f32> {
     let specular = pow(max(dot(n, half_dir), 0.0), shininess) * metallic * smoothness;
     let diffuse = albedo * (1.0 - metallic);
     let shadow = shadow_visibility(vs_out.world_pos, n);
-    let shade = globals.light_color.w * albedo
+    var shade = (globals.light_color.w + globals.ambient.rgb) * albedo
         + globals.light_color.rgb * (lambert * diffuse + specular) * globals.light_dir.w * shadow;
+    let light_count = u32(round(globals.ambient.w));
+    for (var i: u32 = 0u; i < 8u; i = i + 1u) {
+        if (i >= light_count) {
+            break;
+        }
+        let gl = globals.lights[i];
+        let kind = gl.dir_kind.w;
+        var l_dir = gl.dir_kind.xyz;
+        var atten = 1.0;
+        if (kind >= 0.5) {
+            let to_light = gl.pos_range.xyz - vs_out.world_pos;
+            let dist = length(to_light);
+            let range = gl.pos_range.w;
+            if (range <= 0.0 || dist >= range) {
+                atten = 0.0;
+            } else {
+                l_dir = select(vec3<f32>(0.0, 1.0, 0.0), to_light / dist, dist > 1e-8);
+                let norm_dist = clamp(dist / range, 0.0, 1.0);
+                let falloff = 1.0 - norm_dist * norm_dist;
+                atten = falloff * falloff;
+                if (kind >= 1.5) {
+                    let cos_theta = dot(l_dir, gl.dir_kind.xyz);
+                    let cos_outer = gl.spot_params.x;
+                    let cos_inner = max(gl.spot_params.y, cos_outer + 1e-5);
+                    let spot_t = clamp((cos_theta - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0);
+                    atten = atten * spot_t * spot_t;
+                }
+            }
+        }
+        if (atten > 0.0 && gl.color_intensity.w > 0.0) {
+            let l_lambert = max(dot(n, l_dir), 0.0);
+            let l_half = normalize(l_dir + view_dir);
+            let l_spec = pow(max(dot(n, l_half), 0.0), shininess) * metallic * smoothness;
+            shade = shade + gl.color_intensity.rgb * (l_lambert * diffuse + l_spec) * gl.color_intensity.w * atten;
+        }
+    }
     return shade + emissive;
 }
 

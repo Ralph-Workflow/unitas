@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io::Cursor;
+use std::path::Path;
 
 use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use lewton::header::HeaderReadError;
@@ -887,6 +888,49 @@ fn float_to_i16(value: f64) -> i16 {
     }
 }
 
+pub fn is_supported_audio_extension(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("wav")
+        || extension.eq_ignore_ascii_case("aiff")
+        || extension.eq_ignore_ascii_case("aif")
+        || extension.eq_ignore_ascii_case("ogg")
+        || extension.eq_ignore_ascii_case("mp3")
+}
+
+pub fn is_supported_audio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(is_supported_audio_extension)
+}
+
+pub fn decode_audio(bytes: &[u8], file_name: &str) -> Result<PcmClip, AudioImportError> {
+    let extension = extension_of(file_name);
+    if is_aiff(bytes)
+        || extension.eq_ignore_ascii_case("aif")
+        || extension.eq_ignore_ascii_case("aiff")
+        || extension.eq_ignore_ascii_case("aifc")
+    {
+        return decode_aiff(bytes);
+    }
+    if is_wav(bytes)
+        || extension.eq_ignore_ascii_case("wav")
+        || extension.eq_ignore_ascii_case("wave")
+    {
+        return decode_wav(bytes);
+    }
+    if is_ogg(bytes) || extension.eq_ignore_ascii_case("ogg") {
+        return decode_ogg_vorbis(bytes);
+    }
+    if is_mp3(bytes) || extension.eq_ignore_ascii_case("mp3") {
+        return decode_mp3(bytes);
+    }
+    Err(AudioImportError::NotAiff)
+}
+
+pub fn decode_audio_for_path(bytes: &[u8], path: &Path) -> Result<PcmClip, AudioImportError> {
+    let file_name = path.to_str().unwrap_or_default();
+    decode_audio(bytes, file_name)
+}
+
 pub fn detect_audio_state(bytes: &[u8], file_name: &str) -> AudioImportState {
     if recognized_unsupported(bytes, file_name).is_some() {
         return AudioImportState::NotYetSupported;
@@ -959,18 +1003,7 @@ pub fn import_audio_for_target(
         return Err(AudioImportError::NotAiff);
     }
 
-    let extension = extension_of(file_name).to_ascii_lowercase();
-    let mut clip = if is_aiff(bytes) || matches!(extension.as_str(), "aif" | "aiff" | "aifc") {
-        decode_aiff(bytes)?
-    } else if is_wav(bytes) || matches!(extension.as_str(), "wav" | "wave") {
-        decode_wav(bytes)?
-    } else if is_ogg(bytes) || extension == "ogg" {
-        decode_ogg_vorbis(bytes)?
-    } else if is_mp3(bytes) || extension == "mp3" {
-        decode_mp3(bytes)?
-    } else {
-        return Err(AudioImportError::NotAiff);
-    };
+    let mut clip = decode_audio(bytes, file_name)?;
     let mut notes = Vec::new();
     apply_import_transforms(
         &mut clip,

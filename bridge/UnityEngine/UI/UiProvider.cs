@@ -15,6 +15,20 @@ namespace UnityEngine.UI
             VerticalWrapMode verticalOverflow,
             float lineSpacing);
 
+        int SetLayoutGroup(
+            ulong objectId,
+            uint axis,
+            ulong paddingPacked,
+            float spacing,
+            TextAnchor childAlignment,
+            uint flags) => 0;
+
+        int SetContentSizeFitter(
+            ulong objectId,
+            ContentSizeFitter.FitMode horizontalFit,
+            ContentSizeFitter.FitMode verticalFit,
+            bool enabled) => 0;
+
         bool IsPointerOver();
 
         int PollClicks(ulong[] clicks);

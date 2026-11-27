@@ -1,3 +1,5 @@
+use unitas_asset::scene::{ContentSizeFitMode, LayoutGroupAxis, UiPadding};
+
 use crate::canvas::{HorizontalWrapMode, TextAnchor, TextLayoutConfig, VerticalWrapMode};
 
 use super::{read_path_buffer, with_runtime_state};
@@ -140,6 +142,82 @@ pub extern "C" fn unitas_runtime_ui_poll_clicks(
         }
         state.clear_error();
         i32::try_from(count).unwrap_or(-4)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_ui_layout_group_set(
+    handle: u64,
+    object_id: u64,
+    axis: u32,
+    padding_packed: u64,
+    spacing: f32,
+    child_alignment: u32,
+    flags: u32,
+) -> i32 {
+    let axis = match axis {
+        0 => LayoutGroupAxis::Horizontal,
+        1 => LayoutGroupAxis::Vertical,
+        _ => return -2,
+    };
+    if !spacing.is_finite() || child_alignment > 8 {
+        return -2;
+    }
+    let padding = UiPadding {
+        left: (padding_packed & 0xFFFF) as i16 as i32,
+        right: ((padding_packed >> 16) & 0xFFFF) as i16 as i32,
+        top: ((padding_packed >> 32) & 0xFFFF) as i16 as i32,
+        bottom: ((padding_packed >> 48) & 0xFFFF) as i16 as i32,
+    };
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_ui_layout_group(object_id, axis, padding, spacing, child_alignment, flags)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("no ui target for layout group");
+            -4
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_ui_content_size_fitter_set(
+    handle: u64,
+    object_id: u64,
+    horizontal_fit: u32,
+    vertical_fit: u32,
+    enabled: u32,
+) -> i32 {
+    let Some(horizontal_fit) = ContentSizeFitMode::from_u32(horizontal_fit) else {
+        return -2;
+    };
+    let Some(vertical_fit) = ContentSizeFitMode::from_u32(vertical_fit) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_ui_content_size_fitter(
+            object_id,
+            horizontal_fit,
+            vertical_fit,
+            enabled != 0,
+        ) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("no ui target for content size fitter");
+            -4
+        }
     }) {
         Ok(code) => code,
         Err(code) => code,

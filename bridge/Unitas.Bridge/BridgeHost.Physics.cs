@@ -136,8 +136,6 @@ namespace Unitas.Bridge
 
         public bool TrySetBodyRotation(ulong entity, Quaternion rotation)
         {
-            // A dynamic body refuses the gentle rotation write, so fall back to the
-            // teleport path the same way a position write does.
             return TryWriteBodyQuaternion(entity, RuntimeInterop.unitas_runtime_set_body_rotation, rotation)
                 || TryWriteBodyQuaternion(entity, RuntimeInterop.unitas_runtime_teleport_body_rotation, rotation);
         }

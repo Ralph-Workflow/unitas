@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::audio_import::is_supported_audio_path;
 use crate::meta::GuidIndex;
 use crate::unity_yaml::{Node, Stream};
 
@@ -170,13 +171,7 @@ fn resolve_audio_clip(
         }
     };
 
-    let supported = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("wav"))
-        .unwrap_or(false);
-
-    if !supported {
+    if !is_supported_audio_path(&path) {
         let ext = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -185,11 +180,174 @@ fn resolve_audio_clip(
             Some(guid.clone()),
             Some(path.clone()),
             Some(format!(
-                "AudioSource on '{game_object_name}' AudioClip guid {guid} ({}): unsupported audio format .{ext} (only .wav is supported)",
+                "AudioSource on '{game_object_name}' AudioClip guid {guid} ({}): unsupported audio format .{ext} (supported: .wav, .aiff, .aif, .ogg, .mp3)",
                 path.display()
             )),
         );
     }
 
     (Some(guid), Some(path), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::audio_import::{decode_audio_for_path, PcmClip};
+    use crate::meta::GuidIndex;
+    use crate::scene::{assemble_scene_bundle_with_guids, AudioSourceComponent};
+    use crate::unity_yaml;
+
+    const OGG_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.ogg");
+    const MP3_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.mp3");
+
+    fn build_aiff_16(samples: &[i16]) -> Vec<u8> {
+        let mut comm = Vec::with_capacity(18);
+        comm.extend_from_slice(&1u16.to_be_bytes());
+        comm.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+        comm.extend_from_slice(&16u16.to_be_bytes());
+        comm.extend_from_slice(&[0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0]);
+        let mut ssnd = Vec::with_capacity(8 + samples.len() * 2);
+        ssnd.extend_from_slice(&[0u8; 8]);
+        for sample in samples {
+            ssnd.extend_from_slice(&sample.to_be_bytes());
+        }
+        let mut form = Vec::new();
+        form.extend_from_slice(b"AIFFCOMM");
+        form.extend_from_slice(&(comm.len() as u32).to_be_bytes());
+        form.extend_from_slice(&comm);
+        form.extend_from_slice(b"SSND");
+        form.extend_from_slice(&(ssnd.len() as u32).to_be_bytes());
+        form.extend_from_slice(&ssnd);
+        let mut out = Vec::with_capacity(8 + form.len());
+        out.extend_from_slice(b"FORM");
+        out.extend_from_slice(&(form.len() as u32).to_be_bytes());
+        out.extend_from_slice(&form);
+        out
+    }
+
+    fn build_wav_16(samples: &[i16]) -> Vec<u8> {
+        let data_len = (samples.len() * 2) as u32;
+        let riff_len = 4 + 24 + 8 + data_len;
+        let mut out = Vec::with_capacity(8 + riff_len as usize);
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&riff_len.to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&44100u32.to_le_bytes());
+        out.extend_from_slice(&88200u32.to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            out.extend_from_slice(&sample.to_le_bytes());
+        }
+        out
+    }
+
+    fn single_source_scene(guid: &str) -> String {
+        format!(
+            "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: Emitter\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {guid}, type: 3}}\n"
+        )
+    }
+
+    fn resolve_single_clip(guid: &str, path: &str) -> Result<AudioSourceComponent, String> {
+        let mut index = GuidIndex::default();
+        index
+            .insert(guid.to_string(), PathBuf::from(path))
+            .map_err(|err| err.to_string())?;
+        let stream =
+            unity_yaml::parse(&single_source_scene(guid)).map_err(|err| err.to_string())?;
+        let assembled =
+            assemble_scene_bundle_with_guids(&stream, &index).map_err(|err| err.to_string())?;
+        assembled
+            .audio_bindings
+            .into_iter()
+            .next()
+            .map(|(_, comp)| comp)
+            .ok_or_else(|| "missing audio binding".to_string())
+    }
+
+    fn decode_clip(bytes: &[u8], path: &str) -> Result<PcmClip, String> {
+        decode_audio_for_path(bytes, Path::new(path)).map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn scene_audio_accepts_ogg_mp3_aiff_and_wav_and_decodes_each() -> Result<(), String> {
+        let cases: &[(&str, &str, Vec<u8>)] = &[
+            (
+                "11111111111111111111111111111111",
+                "Assets/Audio/theme.ogg",
+                OGG_FIXTURE.to_vec(),
+            ),
+            (
+                "22222222222222222222222222222222",
+                "Assets/Audio/voice.MP3",
+                MP3_FIXTURE.to_vec(),
+            ),
+            (
+                "33333333333333333333333333333333",
+                "Assets/Audio/chime.aiff",
+                build_aiff_16(&[0, 1200, -1200, 2400]),
+            ),
+            (
+                "44444444444444444444444444444444",
+                "Assets/Audio/short.AIF",
+                build_aiff_16(&[500, -500]),
+            ),
+            (
+                "55555555555555555555555555555555",
+                "Assets/Audio/beep.wav",
+                build_wav_16(&[1000, -1000]),
+            ),
+        ];
+        for (guid, path, bytes) in cases {
+            let component = resolve_single_clip(guid, path)?;
+            assert_eq!(component.clip_guid.as_deref(), Some(*guid));
+            assert_eq!(component.clip_path.as_deref(), Some(Path::new(*path)));
+            assert_eq!(component.clip_diagnostic, None);
+            let resolved = component
+                .clip_path
+                .as_deref()
+                .ok_or_else(|| "missing clip_path".to_string())?;
+            let decoded = decode_clip(bytes, &resolved.to_string_lossy())?;
+            assert!(decoded.channels >= 1);
+            assert!(decoded.sample_rate > 0);
+            assert!(!decoded.samples.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn scene_audio_diagnoses_unknown_extensions_with_name_and_asset() -> Result<(), String> {
+        for (guid, path, expected_ext) in [
+            (
+                "66666666666666666666666666666666",
+                "Assets/Audio/lossless.flac",
+                ".flac",
+            ),
+            (
+                "77777777777777777777777777777777",
+                "Assets/Audio/mystery.xyz",
+                ".xyz",
+            ),
+        ] {
+            let component = resolve_single_clip(guid, path)?;
+            assert_eq!(component.clip_guid.as_deref(), Some(guid));
+            assert_eq!(component.clip_path.as_deref(), Some(Path::new(path)));
+            let diagnostic = component
+                .clip_diagnostic
+                .as_deref()
+                .ok_or_else(|| "expected diagnostic for unsupported extension".to_string())?;
+            assert!(diagnostic.contains("Emitter"));
+            assert!(diagnostic.contains(guid));
+            assert!(diagnostic.contains(path));
+            assert!(diagnostic.contains(expected_ext));
+            assert!(decode_clip(b"not-audio", path).is_err());
+        }
+        Ok(())
+    }
 }

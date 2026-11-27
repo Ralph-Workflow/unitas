@@ -238,6 +238,8 @@ fn canvas_binding_without_a_canvas_yields_no_items() {
             sprite_guid: None,
             enabled: true,
         })],
+        layout_groups: Vec::new(),
+        content_size_fitters: Vec::new(),
     };
     let items: Vec<UiDrawItem> = CanvasState::new(binding).draw_items([800.0, 600.0]);
     assert!(items.is_empty());

@@ -1,7 +1,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::path::Path;
-use unitas_asset::audio_import::{decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav};
+use unitas_asset::audio_import::{
+    decode_aiff, decode_audio_for_path, decode_mp3, decode_ogg_vorbis, decode_wav,
+};
 use unitas_core::EntityId;
 
 #[cfg(feature = "device")]
@@ -460,6 +462,30 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     Ok(AudioClip::new(channels, sample_rate, samples))
 }
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RolloffMode {
+    #[default]
+    Logarithmic = 0,
+    Linear = 1,
+    Custom = 2,
+}
+
+impl RolloffMode {
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Logarithmic),
+            1 => Some(Self::Linear),
+            2 => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ListenerPose {
     pub position: [f32; 3],
@@ -492,6 +518,8 @@ pub struct AudioSource {
     pub music: Option<MusicStreamId>,
     pub velocity: [f32; 3],
     pub scheduled_sample: Option<u64>,
+    pub rolloff_mode: RolloffMode,
+    pub custom_rolloff: Vec<(f32, f32)>,
 }
 
 impl Default for AudioSource {
@@ -520,6 +548,8 @@ impl Default for AudioSource {
             music: None,
             velocity: [0.0; 3],
             scheduled_sample: None,
+            rolloff_mode: RolloffMode::Logarithmic,
+            custom_rolloff: Vec::new(),
         }
     }
 }
@@ -603,6 +633,12 @@ impl AudioWorld {
     pub fn load_wav_file(&mut self, path: &Path) -> Result<AudioClipId, AudioError> {
         let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
         self.load_wav_bytes(&bytes)
+    }
+
+    pub fn load_audio_file(&mut self, path: &Path) -> Result<AudioClipId, AudioError> {
+        let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
+        let clip = decode_shared(decode_audio_for_path(&bytes, path))?;
+        Ok(self.register_clip(clip))
     }
 
     pub fn clip(&self, clip_id: AudioClipId) -> Option<&AudioClip> {
@@ -1145,6 +1181,36 @@ impl AudioWorld {
             .unwrap_or(500.0)
     }
 
+    pub fn set_rolloff_mode(&mut self, entity: EntityId, mode: RolloffMode) {
+        let source = self.ensure_source(entity);
+        source.rolloff_mode = mode;
+    }
+
+    pub fn rolloff_mode(&self, entity: EntityId) -> RolloffMode {
+        self.sources
+            .get(&entity)
+            .map(|s| s.rolloff_mode)
+            .unwrap_or_default()
+    }
+
+    pub fn set_custom_rolloff(&mut self, entity: EntityId, points: Vec<(f32, f32)>) {
+        let mut sanitized: Vec<(f32, f32)> = points
+            .into_iter()
+            .filter(|(d, g)| d.is_finite() && g.is_finite())
+            .map(|(d, g)| (d.max(0.0), g.clamp(0.0, 1.0)))
+            .collect();
+        sanitized.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let source = self.ensure_source(entity);
+        source.custom_rolloff = sanitized;
+        source.rolloff_mode = RolloffMode::Custom;
+    }
+
+    pub fn custom_rolloff(&self, entity: EntityId) -> &[(f32, f32)] {
+        self.sources
+            .get(&entity)
+            .map_or(&[], |s| s.custom_rolloff.as_slice())
+    }
+
     pub fn set_source_time(&mut self, entity: EntityId, time: f64) {
         let sample_rate = self.source_sample_rate(entity);
         let duration = self.effective_duration(entity);
@@ -1243,13 +1309,7 @@ impl AudioWorld {
         }
         let b = source.spatial_blend.clamp(0.0, 1.0);
         let dist = self.distance_to_listener(source.position);
-        let attenuation_3d = if dist <= source.min_distance {
-            1.0
-        } else if dist >= source.max_distance || source.max_distance <= source.min_distance {
-            0.0
-        } else {
-            (source.max_distance - dist) / (source.max_distance - source.min_distance)
-        };
+        let attenuation_3d = compute_distance_attenuation(source, dist);
         let distance_gain = (1.0 - b) + b * attenuation_3d;
         let pan_3d = self.compute_pan_3d(source.position);
         let pan_left = (1.0 - b) + b * (0.5 * (1.0 - pan_3d));
@@ -1567,6 +1627,68 @@ impl AudioWorld {
             }
         }
     }
+}
+
+fn compute_distance_attenuation(source: &AudioSource, dist: f32) -> f32 {
+    if dist >= source.max_distance || source.max_distance <= 0.0 {
+        return 0.0;
+    }
+    match source.rolloff_mode {
+        RolloffMode::Logarithmic => {
+            let min_d = source.min_distance.max(1e-6);
+            if dist <= min_d {
+                1.0
+            } else {
+                (min_d / dist).clamp(0.0, 1.0)
+            }
+        }
+        RolloffMode::Linear => {
+            if dist <= source.min_distance {
+                1.0
+            } else if source.max_distance <= source.min_distance {
+                0.0
+            } else {
+                ((source.max_distance - dist) / (source.max_distance - source.min_distance))
+                    .clamp(0.0, 1.0)
+            }
+        }
+        RolloffMode::Custom => {
+            sample_custom_rolloff(&source.custom_rolloff, dist, source.max_distance)
+        }
+    }
+}
+
+fn sample_custom_rolloff(points: &[(f32, f32)], dist: f32, max_distance: f32) -> f32 {
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    let Some(last) = points.last() else {
+        return 0.0;
+    };
+    let query = if last.0 <= 1.0 + 1e-6 && max_distance > 1.0 + 1e-6 {
+        (dist / max_distance).clamp(0.0, 1.0)
+    } else {
+        dist
+    };
+    if query <= first.0 {
+        return first.1.clamp(0.0, 1.0);
+    }
+    if query >= last.0 {
+        return last.1.clamp(0.0, 1.0);
+    }
+    for window in points.windows(2) {
+        let (x0, y0) = window[0];
+        let (x1, y1) = window[1];
+        if query >= x0 && query <= x1 {
+            let span = x1 - x0;
+            if span <= 1e-6 {
+                return y1.clamp(0.0, 1.0);
+            }
+            let t = (query - x0) / span;
+            return (y0 + t * (y1 - y0)).clamp(0.0, 1.0);
+        }
+    }
+    last.1.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -2340,5 +2462,73 @@ mod tests {
         let mixed = world.mix(1024);
         assert!(mixed.iter().any(|sample| sample.abs() > 0.01));
         Ok(())
+    }
+
+    #[test]
+    fn logarithmic_linear_and_custom_rolloff_curves_follow_unity_distance_attenuation() {
+        let mut world = AudioWorld::new();
+        world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+        let log_src = EntityId::new(80);
+        world.ensure_source(log_src);
+        assert_eq!(world.rolloff_mode(log_src), RolloffMode::Logarithmic);
+        world.set_spatial_blend(log_src, 1.0);
+        world.set_min_distance(log_src, 2.0);
+        world.set_max_distance(log_src, 20.0);
+        world.play(log_src, false);
+
+        let lin_src = EntityId::new(81);
+        world.ensure_source(lin_src);
+        world.set_rolloff_mode(lin_src, RolloffMode::Linear);
+        assert_eq!(world.rolloff_mode(lin_src), RolloffMode::Linear);
+        world.set_spatial_blend(lin_src, 1.0);
+        world.set_min_distance(lin_src, 2.0);
+        world.set_max_distance(lin_src, 20.0);
+        world.play(lin_src, false);
+
+        for entity in [log_src, lin_src] {
+            world.set_source_position(entity, [0.0, 0.0, 2.0]);
+            let (l, r) = world.source_gains(entity).unwrap_or((0.0, 0.0));
+            assert!((l - 0.5).abs() < 1e-6);
+            assert!((r - 0.5).abs() < 1e-6);
+        }
+
+        world.set_source_position(log_src, [0.0, 0.0, 4.0]);
+        world.set_source_position(lin_src, [0.0, 0.0, 4.0]);
+        let (log_l, log_r) = world.source_gains(log_src).unwrap_or((0.0, 0.0));
+        let (lin_l, lin_r) = world.source_gains(lin_src).unwrap_or((0.0, 0.0));
+        let log_total = log_l + log_r;
+        let lin_total = lin_l + lin_r;
+        assert!((log_total - 0.5).abs() < 1e-6);
+        assert!((lin_total - (16.0 / 18.0)).abs() < 1e-6);
+        assert!(log_total < lin_total);
+
+        world.set_source_position(log_src, [0.0, 0.0, 8.0]);
+        let (log8_l, log8_r) = world.source_gains(log_src).unwrap_or((0.0, 0.0));
+        assert!(((log8_l + log8_r) - 0.25).abs() < 1e-6);
+
+        let custom_src = EntityId::new(82);
+        world.ensure_source(custom_src);
+        world.set_spatial_blend(custom_src, 1.0);
+        world.set_min_distance(custom_src, 1.0);
+        world.set_max_distance(custom_src, 10.0);
+        world.set_custom_rolloff(
+            custom_src,
+            vec![(0.0, 1.0), (0.2, 0.8), (0.5, 0.2), (1.0, 0.0)],
+        );
+        assert_eq!(world.rolloff_mode(custom_src), RolloffMode::Custom);
+        assert_eq!(
+            world.custom_rolloff(custom_src),
+            &[(0.0, 1.0), (0.2, 0.8), (0.5, 0.2), (1.0, 0.0)]
+        );
+        world.play(custom_src, false);
+
+        world.set_source_position(custom_src, [0.0, 0.0, 3.5]);
+        let (c_l, c_r) = world.source_gains(custom_src).unwrap_or((0.0, 0.0));
+        assert!(((c_l + c_r) - 0.5).abs() < 1e-6);
+
+        world.set_source_position(custom_src, [0.0, 0.0, 10.0]);
+        let (c_end_l, c_end_r) = world.source_gains(custom_src).unwrap_or((0.0, 0.0));
+        assert!((c_end_l + c_end_r).abs() < 1e-6);
     }
 }

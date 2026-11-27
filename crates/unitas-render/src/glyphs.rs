@@ -436,7 +436,11 @@ pub fn shape_glyph_quads(
 }
 
 pub fn draw_text(frame: &mut Rgba8, atlas: &GlyphAtlas, quads: &[TexturedQuad], clip: Rect) {
-    if frame.width == 0 || frame.height == 0 {
+    draw_image_quads(frame, &atlas.image, quads, clip);
+}
+
+pub fn draw_image_quads(frame: &mut Rgba8, image: &Rgba8, quads: &[TexturedQuad], clip: Rect) {
+    if frame.width == 0 || frame.height == 0 || image.width == 0 || image.height == 0 {
         return;
     }
     let clip_right = clip.x + clip.width;
@@ -458,13 +462,13 @@ pub fn draw_text(frame: &mut Rgba8, atlas: &GlyphAtlas, quads: &[TexturedQuad], 
         let end_y = y1.min(frame.height as f32).floor() as u32;
         for py in start_y..end_y {
             let v = (py as f32 + 0.5 - quad.y) / quad.height;
-            let src_y =
-                ((quad.uv[1] + v * (quad.uv[3] - quad.uv[1])) * atlas.image.height as f32) as u32;
+            let src_y = ((quad.uv[1] + v * (quad.uv[3] - quad.uv[1])) * image.height as f32)
+                .clamp(0.0, (image.height - 1) as f32) as u32;
             for px in start_x..end_x {
                 let u = (px as f32 + 0.5 - quad.x) / quad.width;
-                let src_x = ((quad.uv[0] + u * (quad.uv[2] - quad.uv[0]))
-                    * atlas.image.width as f32) as u32;
-                let src = atlas.image.get_pixel(src_x, src_y);
+                let src_x = ((quad.uv[0] + u * (quad.uv[2] - quad.uv[0])) * image.width as f32)
+                    .clamp(0.0, (image.width - 1) as f32) as u32;
+                let src = image.get_pixel(src_x, src_y);
                 let alpha = (f32::from(src[3]) / 255.0) * quad.color[3];
                 if alpha <= 0.0 {
                     continue;
@@ -711,8 +715,8 @@ impl TextPipeline {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some(label),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -873,6 +877,9 @@ impl TextPipeline {
             .min(frame_h)
             .max(scissor_y as f32) as u32
             - scissor_y;
+        if scissor_w == 0 || scissor_h == 0 {
+            return;
+        }
         let mut pass = target
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -893,7 +900,7 @@ impl TextPipeline {
             });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &resources.bind_group, &[]);
-        pass.set_scissor_rect(scissor_x, scissor_y, scissor_w.max(1), scissor_h.max(1));
+        pass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
         if !indices.is_empty() {
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);

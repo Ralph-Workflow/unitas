@@ -1,3 +1,7 @@
+use unitas_asset::scene::{
+    ContentSizeFitMode, LayoutGroupAxis, UiContentSizeFitterComponent, UiLayoutGroupComponent,
+    UiPadding,
+};
 use unitas_core::EntityId;
 
 use super::{DEFAULT_UI_REFERENCE_RESOLUTION, Runtime};
@@ -60,6 +64,92 @@ impl Runtime {
         self.scenes
             .iter_mut()
             .any(|scene| scene.ui.set_layout(entity, layout))
+    }
+
+    pub fn set_ui_layout_group(
+        &mut self,
+        object_id: u64,
+        axis: LayoutGroupAxis,
+        padding: UiPadding,
+        spacing: f32,
+        child_alignment: u32,
+        flags: u32,
+    ) -> bool {
+        if object_id == 0 || !spacing.is_finite() || child_alignment > 8 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        let group = UiLayoutGroupComponent {
+            entity,
+            axis,
+            padding,
+            spacing,
+            child_alignment,
+            child_control_width: (flags & 1) != 0,
+            child_control_height: (flags & 2) != 0,
+            child_force_expand_width: (flags & 4) != 0,
+            child_force_expand_height: (flags & 8) != 0,
+            enabled: (flags & 16) != 0,
+        };
+        let scene_idx = self
+            .scenes
+            .iter()
+            .position(|s| {
+                s.graph.contains(entity)
+                    || s.ui
+                        .canvas()
+                        .binding()
+                        .rect_transforms
+                        .iter()
+                        .any(|r| r.entity == entity)
+            })
+            .or(self.active_scene);
+        let Some(idx) = scene_idx else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.canvas().set_layout_group(group)
+    }
+
+    pub fn set_ui_content_size_fitter(
+        &mut self,
+        object_id: u64,
+        horizontal_fit: ContentSizeFitMode,
+        vertical_fit: ContentSizeFitMode,
+        enabled: bool,
+    ) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        let fitter = UiContentSizeFitterComponent {
+            entity,
+            horizontal_fit,
+            vertical_fit,
+            enabled,
+        };
+        let scene_idx = self
+            .scenes
+            .iter()
+            .position(|s| {
+                s.graph.contains(entity)
+                    || s.ui
+                        .canvas()
+                        .binding()
+                        .rect_transforms
+                        .iter()
+                        .any(|r| r.entity == entity)
+            })
+            .or(self.active_scene);
+        let Some(idx) = scene_idx else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.canvas().set_content_size_fitter(fitter)
     }
 
     pub fn take_ui_clicks(&mut self) -> Vec<u64> {

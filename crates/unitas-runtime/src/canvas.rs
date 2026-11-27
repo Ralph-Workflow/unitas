@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock, RwLock};
 
 use unitas_asset::scene::{
-    CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, RectTransformComponent,
-    UiBinding, UiButtonComponent, UiElementComponent,
+    CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, ContentSizeFitMode,
+    LayoutGroupAxis, RectTransformComponent, UiBinding, UiButtonComponent,
+    UiContentSizeFitterComponent, UiElementComponent, UiLayoutGroupComponent,
 };
 use unitas_core::EntityId;
+use unitas_render::glyphs::{FontLibrary, TextStyle, layout_text};
 use unitas_render::ui_pass::{
     FOCUS_INDICATOR_COLOR, HorizontalAlign, VerticalAlign, focus_border_rects,
 };
@@ -243,6 +246,8 @@ pub struct CanvasState {
     pending_clicks: Vec<u64>,
     element_enabled: HashMap<EntityId, bool>,
     button_interactable: HashMap<EntityId, bool>,
+    layout_group_overrides: RwLock<HashMap<EntityId, UiLayoutGroupComponent>>,
+    fitter_overrides: RwLock<HashMap<EntityId, UiContentSizeFitterComponent>>,
 }
 
 impl CanvasState {
@@ -260,6 +265,8 @@ impl CanvasState {
             pending_clicks: Vec::new(),
             element_enabled: HashMap::new(),
             button_interactable: HashMap::new(),
+            layout_group_overrides: RwLock::new(HashMap::new()),
+            fitter_overrides: RwLock::new(HashMap::new()),
         }
     }
 
@@ -277,6 +284,22 @@ impl CanvasState {
 
     pub fn set_focused_button(&mut self, entity: Option<EntityId>) {
         self.focused = entity;
+    }
+
+    pub fn set_layout_group(&self, group: UiLayoutGroupComponent) -> bool {
+        let Ok(mut guard) = self.layout_group_overrides.write() else {
+            return false;
+        };
+        guard.insert(group.entity, group);
+        true
+    }
+
+    pub fn set_content_size_fitter(&self, fitter: UiContentSizeFitterComponent) -> bool {
+        let Ok(mut guard) = self.fitter_overrides.write() else {
+            return false;
+        };
+        guard.insert(fitter.entity, fitter);
+        true
     }
 
     pub fn focusable_buttons(&self, screen_size: [f32; 2]) -> Vec<EntityId> {
@@ -378,8 +401,9 @@ impl CanvasState {
         if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
             return items;
         }
+        let resolved_rects = self.resolve_all_element_rects(screen_size, texts);
         for element in &self.binding.elements {
-            let (rect_px, scale) = match self.element_rect(element.entity(), screen_size) {
+            let (rect_px, scale) = match resolved_rects.get(&element.entity()).copied() {
                 Some(resolved) => resolved,
                 None => continue,
             };
@@ -434,7 +458,7 @@ impl CanvasState {
             }
         }
         if let Some(focused_id) = self.focused_button(screen_size)
-            && let Some((rect_px, scale)) = self.element_rect(focused_id, screen_size)
+            && let Some((rect_px, scale)) = resolved_rects.get(&focused_id).copied()
         {
             let thickness = (FOCUS_BORDER_THICKNESS * scale).round().max(1.0);
             for edge_rect in focus_border_rects(rect_px, thickness) {
@@ -567,35 +591,227 @@ impl CanvasState {
     }
 
     pub fn element_rect(&self, entity: EntityId, screen_size: [f32; 2]) -> Option<([f32; 4], f32)> {
+        self.element_rect_with(entity, screen_size, &HashMap::new())
+    }
+
+    pub fn element_rect_with(
+        &self,
+        entity: EntityId,
+        screen_size: [f32; 2],
+        texts: &HashMap<EntityId, TextOverride>,
+    ) -> Option<([f32; 4], f32)> {
         if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
             return None;
         }
-        let chain = self.chain_to_canvas(entity)?;
-        let canvas = self
-            .binding
-            .canvases
-            .iter()
-            .find(|canvas| canvas.entity == chain[0])?;
-        if canvas.render_mode != CanvasRenderMode::ScreenSpaceOverlay {
-            return None;
+        let resolved = self.resolve_all_element_rects(screen_size, texts);
+        resolved.get(&entity).copied()
+    }
+
+    fn resolve_all_element_rects(
+        &self,
+        screen_size: [f32; 2],
+        texts: &HashMap<EntityId, TextOverride>,
+    ) -> HashMap<EntityId, ([f32; 4], f32)> {
+        let mut results = HashMap::new();
+        if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
+            return results;
         }
-        let scale = canvas_scale_factor(canvas, screen_size);
-        if scale <= 0.0 {
-            return None;
-        }
-        let canvas_size = [screen_size[0] / scale, screen_size[1] / scale];
-        let mut rect = CanvasRect {
-            min: [0.0, 0.0],
-            size: canvas_size,
-        };
-        for node in chain.iter().skip(1) {
-            let transform = match self.rects.get(node) {
-                Some(transform) => transform,
-                None => continue,
+        let pref_sizes = self.compute_preferred_sizes(texts);
+        for canvas in &self.binding.canvases {
+            if canvas.render_mode != CanvasRenderMode::ScreenSpaceOverlay {
+                continue;
+            }
+            let scale = canvas_scale_factor(canvas, screen_size);
+            if scale <= 0.0 {
+                continue;
+            }
+            let canvas_size = [screen_size[0] / scale, screen_size[1] / scale];
+            let root_rect = CanvasRect {
+                min: [0.0, 0.0],
+                size: canvas_size,
             };
-            rect = resolve_canvas_rect(transform, rect);
+            let ctx = SubtreeLayoutContext {
+                canvas_size,
+                scale,
+                pref_sizes: &pref_sizes,
+            };
+            self.resolve_subtree_rects(canvas.entity, root_rect, &ctx, &mut results, 0);
         }
-        Some((canvas_rect_to_pixels(rect, canvas_size, scale), scale))
+        results
+    }
+
+    fn resolve_subtree_rects(
+        &self,
+        entity: EntityId,
+        current_rect: CanvasRect,
+        ctx: &SubtreeLayoutContext<'_>,
+        results: &mut HashMap<EntityId, ([f32; 4], f32)>,
+        depth: usize,
+    ) {
+        if depth >= MAX_HIERARCHY_DEPTH {
+            return;
+        }
+        results.insert(
+            entity,
+            (
+                canvas_rect_to_pixels(current_rect, ctx.canvas_size, ctx.scale),
+                ctx.scale,
+            ),
+        );
+        let children = self.active_children_of(entity);
+        if children.is_empty() {
+            return;
+        }
+        if let Some(group) = self.active_layout_group(entity) {
+            let child_rects = resolve_layout_group_children(
+                &group,
+                current_rect,
+                &children,
+                &self.rects,
+                ctx.pref_sizes,
+            );
+            for (child, child_rect) in children.into_iter().zip(child_rects) {
+                self.resolve_subtree_rects(child, child_rect, ctx, results, depth + 1);
+            }
+            return;
+        }
+        for child in children {
+            let Some(transform) = self.rects.get(&child) else {
+                continue;
+            };
+            let mut child_rect = resolve_canvas_rect(transform, current_rect);
+            if let Some(fitter) = self.active_content_size_fitter(child) {
+                let pref = ctx
+                    .pref_sizes
+                    .get(&child)
+                    .copied()
+                    .unwrap_or(transform.size_delta);
+                child_rect = apply_content_size_fitter(&fitter, transform, child_rect, pref);
+            }
+            self.resolve_subtree_rects(child, child_rect, ctx, results, depth + 1);
+        }
+    }
+
+    fn compute_preferred_sizes(
+        &self,
+        texts: &HashMap<EntityId, TextOverride>,
+    ) -> HashMap<EntityId, [f32; 2]> {
+        let mut sizes = HashMap::new();
+        for canvas in &self.binding.canvases {
+            self.compute_node_preferred_size(canvas.entity, texts, &mut sizes, 0);
+        }
+        for rect in &self.binding.rect_transforms {
+            if !sizes.contains_key(&rect.entity) {
+                self.compute_node_preferred_size(rect.entity, texts, &mut sizes, 0);
+            }
+        }
+        sizes
+    }
+
+    fn compute_node_preferred_size(
+        &self,
+        entity: EntityId,
+        texts: &HashMap<EntityId, TextOverride>,
+        sizes: &mut HashMap<EntityId, [f32; 2]>,
+        depth: usize,
+    ) -> [f32; 2] {
+        if let Some(&cached) = sizes.get(&entity) {
+            return cached;
+        }
+        if depth >= MAX_HIERARCHY_DEPTH {
+            return [0.0, 0.0];
+        }
+        let children = self.active_children_of(entity);
+        let mut child_prefs = Vec::with_capacity(children.len());
+        for &child in &children {
+            child_prefs.push(self.compute_node_preferred_size(child, texts, sizes, depth + 1));
+        }
+        let size = if let Some(group) = self.active_layout_group(entity) {
+            layout_group_preferred_size(&group, &child_prefs)
+        } else if let Some(text_pref) = self.text_preferred_size(entity, texts) {
+            text_pref
+        } else {
+            self.rects.get(&entity).map_or([0.0, 0.0], |r| {
+                [r.size_delta[0].max(0.0), r.size_delta[1].max(0.0)]
+            })
+        };
+        sizes.insert(entity, size);
+        size
+    }
+
+    fn text_preferred_size(
+        &self,
+        entity: EntityId,
+        texts: &HashMap<EntityId, TextOverride>,
+    ) -> Option<[f32; 2]> {
+        for element in &self.binding.elements {
+            let UiElementComponent::Text(text) = element else {
+                continue;
+            };
+            if text.entity != entity || !self.is_element_enabled(text.entity, text.enabled) {
+                continue;
+            }
+            let state = texts.get(&text.entity);
+            let content = state.map_or(text.text.as_str(), |s| s.text.as_str());
+            let font_size = state.map_or(text.font_size, |s| s.font_size);
+            let color = state.map_or(text.color, |s| s.color);
+            return Some(measure_text_preferred(content, font_size, color));
+        }
+        None
+    }
+
+    fn active_children_of(&self, parent: EntityId) -> Vec<EntityId> {
+        let mut children = Vec::new();
+        for rect in &self.binding.rect_transforms {
+            if rect.parent == Some(parent) && self.is_node_active(rect.entity) {
+                children.push(rect.entity);
+            }
+        }
+        children
+    }
+
+    fn is_node_active(&self, entity: EntityId) -> bool {
+        if let Some(&enabled) = self.element_enabled.get(&entity) {
+            return enabled;
+        }
+        for element in &self.binding.elements {
+            match element {
+                UiElementComponent::Image(img) if img.entity == entity => return img.enabled,
+                UiElementComponent::Text(txt) if txt.entity == entity => return txt.enabled,
+                _ => {}
+            }
+        }
+        true
+    }
+
+    fn active_layout_group(&self, entity: EntityId) -> Option<UiLayoutGroupComponent> {
+        if let Ok(guard) = self.layout_group_overrides.read()
+            && let Some(group) = guard.get(&entity)
+        {
+            return self
+                .is_element_enabled(group.entity, group.enabled)
+                .then(|| group.clone());
+        }
+        self.binding
+            .layout_groups
+            .iter()
+            .find(|g| g.entity == entity && self.is_element_enabled(g.entity, g.enabled))
+            .cloned()
+    }
+
+    fn active_content_size_fitter(&self, entity: EntityId) -> Option<UiContentSizeFitterComponent> {
+        if let Ok(guard) = self.fitter_overrides.read()
+            && let Some(fitter) = guard.get(&entity)
+        {
+            return self
+                .is_element_enabled(fitter.entity, fitter.enabled)
+                .then(|| fitter.clone());
+        }
+        self.binding
+            .content_size_fitters
+            .iter()
+            .find(|f| f.entity == entity && self.is_element_enabled(f.entity, f.enabled))
+            .cloned()
     }
 
     fn chain_to_canvas(&self, entity: EntityId) -> Option<Vec<EntityId>> {
@@ -669,6 +885,256 @@ fn canvas_rect_to_pixels(rect: CanvasRect, canvas_size: [f32; 2], scale: f32) ->
     [x, top, width, height]
 }
 
+struct SubtreeLayoutContext<'a> {
+    canvas_size: [f32; 2],
+    scale: f32,
+    pref_sizes: &'a HashMap<EntityId, [f32; 2]>,
+}
+
+fn measure_text_preferred(content: &str, font_size: f32, color: [f32; 4]) -> [f32; 2] {
+    static FONTS: OnceLock<Mutex<FontLibrary>> = OnceLock::new();
+    if content.is_empty() || font_size <= 0.0 {
+        return [0.0, 0.0];
+    }
+    let mutex = FONTS.get_or_init(|| {
+        let mut lib = FontLibrary::new();
+        lib.load_bundled_font();
+        Mutex::new(lib)
+    });
+    let Ok(mut fonts) = mutex.lock() else {
+        return [content.len() as f32 * font_size * 0.6, font_size];
+    };
+    let style = TextStyle::new(font_size, font_size, color);
+    let layout = layout_text(&mut fonts, content, None, &style);
+    [layout.width, layout.height.max(font_size)]
+}
+
+fn layout_group_preferred_size(
+    group: &UiLayoutGroupComponent,
+    child_prefs: &[[f32; 2]],
+) -> [f32; 2] {
+    let pad_h = (group.padding.left + group.padding.right) as f32;
+    let pad_v = (group.padding.top + group.padding.bottom) as f32;
+    if child_prefs.is_empty() {
+        return [pad_h.max(0.0), pad_v.max(0.0)];
+    }
+    let total_spacing = group.spacing * (child_prefs.len().saturating_sub(1) as f32);
+    match group.axis {
+        LayoutGroupAxis::Horizontal => {
+            let sum_w: f32 = child_prefs.iter().map(|p| p[0]).sum();
+            let max_h: f32 = child_prefs.iter().map(|p| p[1]).fold(0.0, f32::max);
+            [
+                (pad_h + sum_w + total_spacing).max(0.0),
+                (pad_v + max_h).max(0.0),
+            ]
+        }
+        LayoutGroupAxis::Vertical => {
+            let max_w: f32 = child_prefs.iter().map(|p| p[0]).fold(0.0, f32::max);
+            let sum_h: f32 = child_prefs.iter().map(|p| p[1]).sum();
+            [
+                (pad_h + max_w).max(0.0),
+                (pad_v + sum_h + total_spacing).max(0.0),
+            ]
+        }
+    }
+}
+
+fn apply_content_size_fitter(
+    fitter: &UiContentSizeFitterComponent,
+    transform: &RectTransformComponent,
+    mut rect: CanvasRect,
+    pref: [f32; 2],
+) -> CanvasRect {
+    if matches!(
+        fitter.horizontal_fit,
+        ContentSizeFitMode::MinSize | ContentSizeFitMode::PreferredSize
+    ) {
+        let old_w = rect.size[0];
+        let new_w = pref[0].max(0.0);
+        rect.min[0] += (old_w - new_w) * transform.pivot[0];
+        rect.size[0] = new_w;
+    }
+    if matches!(
+        fitter.vertical_fit,
+        ContentSizeFitMode::MinSize | ContentSizeFitMode::PreferredSize
+    ) {
+        let old_h = rect.size[1];
+        let new_h = pref[1].max(0.0);
+        rect.min[1] += (old_h - new_h) * transform.pivot[1];
+        rect.size[1] = new_h;
+    }
+    rect
+}
+
+fn alignment_fractions(alignment: u32) -> (f32, f32) {
+    let anchor = TextAnchor::from_u32(alignment).unwrap_or(TextAnchor::UpperLeft);
+    let h = match anchor.horizontal() {
+        HorizontalAlign::Left => 0.0,
+        HorizontalAlign::Center => 0.5,
+        HorizontalAlign::Right => 1.0,
+    };
+    let v = match anchor.vertical() {
+        VerticalAlign::Top => 0.0,
+        VerticalAlign::Middle => 0.5,
+        VerticalAlign::Bottom => 1.0,
+    };
+    (h, v)
+}
+
+fn resolve_layout_group_children(
+    group: &UiLayoutGroupComponent,
+    parent_rect: CanvasRect,
+    children: &[EntityId],
+    rects: &HashMap<EntityId, RectTransformComponent>,
+    pref_sizes: &HashMap<EntityId, [f32; 2]>,
+) -> Vec<CanvasRect> {
+    let count = children.len();
+    if count == 0 {
+        return Vec::new();
+    }
+    let pad_l = group.padding.left as f32;
+    let pad_r = group.padding.right as f32;
+    let pad_t = group.padding.top as f32;
+    let pad_b = group.padding.bottom as f32;
+    let inner_w = (parent_rect.size[0] - pad_l - pad_r).max(0.0);
+    let inner_h = (parent_rect.size[1] - pad_t - pad_b).max(0.0);
+    let base_sizes: Vec<[f32; 2]> = children
+        .iter()
+        .map(|id| {
+            let raw = rects.get(id).map_or([0.0, 0.0], |r| r.size_delta);
+            let pref = pref_sizes.get(id).copied().unwrap_or(raw);
+            [
+                if group.child_control_width {
+                    pref[0]
+                } else {
+                    raw[0]
+                }
+                .max(0.0),
+                if group.child_control_height {
+                    pref[1]
+                } else {
+                    raw[1]
+                }
+                .max(0.0),
+            ]
+        })
+        .collect();
+    let (align_x, align_y) = alignment_fractions(group.child_alignment);
+    match group.axis {
+        LayoutGroupAxis::Horizontal => layout_horizontal_children(
+            group,
+            parent_rect,
+            inner_w,
+            inner_h,
+            &base_sizes,
+            (align_x, align_y),
+        ),
+        LayoutGroupAxis::Vertical => layout_vertical_children(
+            group,
+            parent_rect,
+            inner_w,
+            inner_h,
+            &base_sizes,
+            (align_x, align_y),
+        ),
+    }
+}
+
+fn layout_horizontal_children(
+    group: &UiLayoutGroupComponent,
+    parent_rect: CanvasRect,
+    inner_w: f32,
+    inner_h: f32,
+    base_sizes: &[[f32; 2]],
+    align: (f32, f32),
+) -> Vec<CanvasRect> {
+    let count = base_sizes.len();
+    let total_spacing = group.spacing * (count.saturating_sub(1) as f32);
+    let sum_w: f32 = base_sizes.iter().map(|s| s[0]).sum();
+    let extra_w = (inner_w - (sum_w + total_spacing)).max(0.0);
+    let expand_add = if group.child_force_expand_width {
+        extra_w / (count as f32)
+    } else {
+        0.0
+    };
+    let start_offset_x = if group.child_force_expand_width {
+        0.0
+    } else {
+        extra_w * align.0
+    };
+    let mut cursor_x = parent_rect.min[0] + (group.padding.left as f32) + start_offset_x;
+    let top_y = parent_rect.min[1] + parent_rect.size[1] - (group.padding.top as f32);
+    let mut out = Vec::with_capacity(count);
+    for base in base_sizes {
+        let w = if group.child_control_width {
+            base[0] + expand_add
+        } else {
+            base[0]
+        };
+        let h = if group.child_control_height && group.child_force_expand_height {
+            inner_h
+        } else {
+            base[1]
+        };
+        let slack_y = (inner_h - h).max(0.0);
+        let child_top_y = top_y - slack_y * align.1;
+        out.push(CanvasRect {
+            min: [cursor_x, child_top_y - h],
+            size: [w, h],
+        });
+        cursor_x += w + group.spacing;
+    }
+    out
+}
+
+fn layout_vertical_children(
+    group: &UiLayoutGroupComponent,
+    parent_rect: CanvasRect,
+    inner_w: f32,
+    inner_h: f32,
+    base_sizes: &[[f32; 2]],
+    align: (f32, f32),
+) -> Vec<CanvasRect> {
+    let count = base_sizes.len();
+    let total_spacing = group.spacing * (count.saturating_sub(1) as f32);
+    let sum_h: f32 = base_sizes.iter().map(|s| s[1]).sum();
+    let extra_h = (inner_h - (sum_h + total_spacing)).max(0.0);
+    let expand_add = if group.child_force_expand_height {
+        extra_h / (count as f32)
+    } else {
+        0.0
+    };
+    let start_offset_y = if group.child_force_expand_height {
+        0.0
+    } else {
+        extra_h * align.1
+    };
+    let left_x = parent_rect.min[0] + (group.padding.left as f32);
+    let mut cursor_top_y =
+        parent_rect.min[1] + parent_rect.size[1] - (group.padding.top as f32) - start_offset_y;
+    let mut out = Vec::with_capacity(count);
+    for base in base_sizes {
+        let h = if group.child_control_height {
+            base[1] + expand_add
+        } else {
+            base[1]
+        };
+        let w = if group.child_control_width && group.child_force_expand_width {
+            inner_w
+        } else {
+            base[0]
+        };
+        let slack_x = (inner_w - w).max(0.0);
+        let child_min_x = left_x + slack_x * align.0;
+        out.push(CanvasRect {
+            min: [child_min_x, cursor_top_y - h],
+            size: [w, h],
+        });
+        cursor_top_y -= h + group.spacing;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,7 +1145,7 @@ mod tests {
         KEY_TAB, KEY_UP_ARROW,
     };
     use unitas_asset::scene::{
-        CanvasScalerComponent, UiButtonComponent, UiImageComponent, UiTextComponent,
+        CanvasScalerComponent, UiButtonComponent, UiImageComponent, UiPadding, UiTextComponent,
     };
     use unitas_render::image::Rgba8;
     use unitas_render::ui_pass::{FOCUS_INDICATOR_COLOR, UiTarget, composite_ui};
@@ -840,6 +1306,8 @@ mod tests {
                     interactable: true,
                 }),
             ],
+            layout_groups: Vec::new(),
+            content_size_fitters: Vec::new(),
         };
         CanvasState::new(binding)
     }
@@ -1096,5 +1564,256 @@ mod tests {
             ids: None,
         };
         composite_ui(&mut target, &overridden_items, 1, Some(&mut painter));
+    }
+
+    #[test]
+    fn vertical_and_horizontal_layout_groups_with_content_size_fitter_resolve_unity_child_rects() {
+        let panel_id = EntityId::new(200);
+        let row_id = EntityId::new(210);
+        let icon_id = EntityId::new(211);
+        let label_id = EntityId::new(212);
+        let footer_id = EntityId::new(220);
+
+        let binding = UiBinding {
+            canvases: vec![CanvasComponent {
+                entity: CANVAS_ID,
+                render_mode: CanvasRenderMode::ScreenSpaceOverlay,
+                sorting_order: 0,
+                scaler: None,
+            }],
+            rect_transforms: vec![
+                centered_rect(CANVAS_ID, None, [0.0, 0.0], SCREEN),
+                RectTransformComponent {
+                    entity: panel_id,
+                    parent: Some(CANVAS_ID),
+                    anchor_min: [0.0, 1.0],
+                    anchor_max: [0.0, 1.0],
+                    anchored_position: [50.0, -40.0],
+                    size_delta: [10.0, 10.0],
+                    pivot: [0.0, 1.0],
+                },
+                centered_rect(row_id, Some(panel_id), [0.0, 0.0], [10.0, 10.0]),
+                centered_rect(icon_id, Some(row_id), [0.0, 0.0], [32.0, 32.0]),
+                centered_rect(label_id, Some(row_id), [0.0, 0.0], [80.0, 20.0]),
+                centered_rect(footer_id, Some(panel_id), [0.0, 0.0], [100.0, 24.0]),
+            ],
+            elements: vec![
+                UiElementComponent::Image(UiImageComponent {
+                    entity: panel_id,
+                    enabled: true,
+                    color: [0.1, 0.1, 0.1, 1.0],
+                    sprite_guid: None,
+                }),
+                UiElementComponent::Image(UiImageComponent {
+                    entity: icon_id,
+                    enabled: true,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    sprite_guid: None,
+                }),
+                UiElementComponent::Text(UiTextComponent {
+                    entity: label_id,
+                    enabled: true,
+                    text: "PLAY GAME".to_string(),
+                    font_size: 20.0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                }),
+                UiElementComponent::Image(UiImageComponent {
+                    entity: footer_id,
+                    enabled: true,
+                    color: [0.0, 0.5, 1.0, 1.0],
+                    sprite_guid: None,
+                }),
+            ],
+            layout_groups: vec![
+                UiLayoutGroupComponent {
+                    entity: panel_id,
+                    axis: LayoutGroupAxis::Vertical,
+                    padding: UiPadding {
+                        left: 10,
+                        right: 14,
+                        top: 8,
+                        bottom: 12,
+                    },
+                    spacing: 6.0,
+                    child_alignment: 1,
+                    child_control_width: true,
+                    child_control_height: true,
+                    child_force_expand_width: true,
+                    child_force_expand_height: false,
+                    enabled: true,
+                },
+                UiLayoutGroupComponent {
+                    entity: row_id,
+                    axis: LayoutGroupAxis::Horizontal,
+                    padding: UiPadding {
+                        left: 4,
+                        right: 4,
+                        top: 2,
+                        bottom: 2,
+                    },
+                    spacing: 8.0,
+                    child_alignment: 3,
+                    child_control_width: true,
+                    child_control_height: false,
+                    child_force_expand_width: false,
+                    child_force_expand_height: false,
+                    enabled: true,
+                },
+            ],
+            content_size_fitters: vec![UiContentSizeFitterComponent {
+                entity: panel_id,
+                horizontal_fit: ContentSizeFitMode::PreferredSize,
+                vertical_fit: ContentSizeFitMode::PreferredSize,
+                enabled: true,
+            }],
+        };
+
+        let canvas = CanvasState::new(binding);
+        let (label_rect, _) = canvas
+            .element_rect(label_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!(label_rect[2] > 50.0);
+        let expected_row_pref_w = 4.0 + 32.0 + 8.0 + label_rect[2] + 4.0;
+        let expected_row_pref_h = 2.0 + 32.0_f32.max(label_rect[3]) + 2.0;
+        let expected_panel_w = 10.0 + expected_row_pref_w.max(100.0) + 14.0;
+        let expected_panel_h = 8.0 + expected_row_pref_h + 6.0 + 24.0 + 12.0;
+
+        let (panel_rect, _) = canvas
+            .element_rect(panel_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((panel_rect[0] - 50.0).abs() < 0.01);
+        assert!((panel_rect[1] - 40.0).abs() < 0.01);
+        assert!((panel_rect[2] - expected_panel_w).abs() < 0.01);
+        assert!((panel_rect[3] - expected_panel_h).abs() < 0.01);
+
+        let (row_rect, _) = canvas
+            .element_rect(row_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((row_rect[0] - 60.0).abs() < 0.01);
+        assert!((row_rect[1] - 48.0).abs() < 0.01);
+        assert!((row_rect[2] - (expected_panel_w - 24.0)).abs() < 0.01);
+        assert!((row_rect[3] - expected_row_pref_h).abs() < 0.01);
+
+        let (icon_rect, _) = canvas
+            .element_rect(icon_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((icon_rect[0] - 64.0).abs() < 0.01);
+        assert!((icon_rect[2] - 32.0).abs() < 0.01);
+        assert!((icon_rect[3] - 32.0).abs() < 0.01);
+        assert!((label_rect[0] - (64.0 + 32.0 + 8.0)).abs() < 0.01);
+
+        let (footer_rect, _) = canvas
+            .element_rect(footer_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((footer_rect[0] - 60.0).abs() < 0.01);
+        assert!((footer_rect[1] - (48.0 + expected_row_pref_h + 6.0)).abs() < 0.01);
+        assert!((footer_rect[2] - (expected_panel_w - 24.0)).abs() < 0.01);
+        assert!((footer_rect[3] - 24.0).abs() < 0.01);
+
+        canvas.set_layout_group(UiLayoutGroupComponent {
+            entity: panel_id,
+            axis: LayoutGroupAxis::Vertical,
+            padding: UiPadding {
+                left: 10,
+                right: 14,
+                top: 8,
+                bottom: 12,
+            },
+            spacing: 20.0,
+            child_alignment: 1,
+            child_control_width: false,
+            child_control_height: true,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
+            enabled: true,
+        });
+        let (updated_panel, _) = canvas
+            .element_rect(panel_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((updated_panel[3] - (expected_panel_h + 14.0)).abs() < 0.01);
+
+        canvas.set_content_size_fitter(UiContentSizeFitterComponent {
+            entity: panel_id,
+            horizontal_fit: ContentSizeFitMode::Unconstrained,
+            vertical_fit: ContentSizeFitMode::Unconstrained,
+            enabled: true,
+        });
+        let (unconstrained_panel, _) = canvas
+            .element_rect(panel_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((unconstrained_panel[2] - 10.0).abs() < 0.01);
+        assert!((unconstrained_panel[3] - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn runtime_ui_and_abi_configure_layout_groups_and_content_size_fitter() {
+        let mut runtime = crate::Runtime::new().unwrap_or_else(|_| std::process::abort());
+        let canvas_id = runtime
+            .create_runtime_object("HudCanvas")
+            .unwrap_or(EntityId::new(1));
+        assert!(runtime.set_ui_layout_group(
+            canvas_id.as_u64(),
+            LayoutGroupAxis::Vertical,
+            UiPadding {
+                left: 6,
+                right: 8,
+                top: 10,
+                bottom: 12,
+            },
+            4.0,
+            1,
+            1 | 2 | 4 | 16,
+        ));
+        assert!(runtime.set_ui_content_size_fitter(
+            canvas_id.as_u64(),
+            ContentSizeFitMode::PreferredSize,
+            ContentSizeFitMode::MinSize,
+            true,
+        ));
+        assert!(!runtime.set_ui_layout_group(
+            0,
+            LayoutGroupAxis::Horizontal,
+            UiPadding::default(),
+            0.0,
+            0,
+            0,
+        ));
+        assert!(!runtime.set_ui_content_size_fitter(
+            0,
+            ContentSizeFitMode::Unconstrained,
+            ContentSizeFitMode::Unconstrained,
+            false,
+        ));
+
+        let handle = crate::unitas_runtime_new();
+        assert_ne!(handle, 0);
+        let packed_padding = 6u64 | (8u64 << 16) | (10u64 << 32) | (12u64 << 48);
+        let obj_id = crate::unitas_runtime_object_create(handle, 0, 0);
+        assert_ne!(obj_id, 0);
+        assert_eq!(
+            crate::unitas_runtime_ui_layout_group_set(
+                handle,
+                obj_id,
+                1,
+                packed_padding,
+                4.0,
+                1,
+                1 | 2 | 4 | 16,
+            ),
+            0
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_layout_group_set(handle, obj_id, 9, packed_padding, 4.0, 1, 0),
+            -2
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 2, 1, 1),
+            0
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 9, 1, 1),
+            -2
+        );
+        assert_eq!(crate::unitas_runtime_destroy(handle), 0);
     }
 }

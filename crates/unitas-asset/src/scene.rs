@@ -40,6 +40,9 @@ pub const IMAGE_SCRIPT_GUID: &str = "fe87c0e1cc204ed48ad3b37840f39efc";
 pub const TEXT_SCRIPT_GUID: &str = "5f7201a12d95ffc409449d95f23cf332";
 pub const BUTTON_SCRIPT_GUID: &str = "4e29b1a8efbd4b44bb3f3716e73f07ff";
 pub const CANVAS_SCALER_SCRIPT_GUID: &str = "0cd44c1031e13a943bb63640046fad76";
+pub const HORIZONTAL_LAYOUT_GROUP_SCRIPT_GUID: &str = "306cc8c2b49d7114eaa3623786fc2126";
+pub const VERTICAL_LAYOUT_GROUP_SCRIPT_GUID: &str = "59f8146938fff824cb5fd77236b75775";
+pub const CONTENT_SIZE_FITTER_SCRIPT_GUID: &str = "3245ec927659c4140ac4f8d17403cc18";
 pub type AssetGuid = String;
 
 const GAME_OBJECT_CLASS: u32 = 1;
@@ -476,7 +479,6 @@ pub struct LightComponent {
     pub unsupported_diagnostic: Option<String>,
 }
 
-/// The way a SpriteRenderer draws its sprite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteDrawMode {
     Simple,
@@ -573,13 +575,67 @@ pub struct UiTextComponent {
     pub enabled: bool,
 }
 
-/// The legacy uGUI `Button` component: the object it lives on, the graphic it
-/// drives and whether it accepts pointer input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiButtonComponent {
     pub entity: EntityId,
     pub target_graphic: Option<EntityId>,
     pub interactable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UiPadding {
+    pub left: i32,
+    pub right: i32,
+    pub top: i32,
+    pub bottom: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutGroupAxis {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiLayoutGroupComponent {
+    pub entity: EntityId,
+    pub axis: LayoutGroupAxis,
+    pub padding: UiPadding,
+    pub spacing: f32,
+    pub child_alignment: u32,
+    pub child_control_width: bool,
+    pub child_control_height: bool,
+    pub child_force_expand_width: bool,
+    pub child_force_expand_height: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentSizeFitMode {
+    #[default]
+    Unconstrained = 0,
+    MinSize = 1,
+    PreferredSize = 2,
+}
+
+impl ContentSizeFitMode {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Unconstrained),
+            1 => Some(Self::MinSize),
+            2 => Some(Self::PreferredSize),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiContentSizeFitterComponent {
+    pub entity: EntityId,
+    pub horizontal_fit: ContentSizeFitMode,
+    pub vertical_fit: ContentSizeFitMode,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -604,12 +660,11 @@ pub struct UiBinding {
     pub canvases: Vec<CanvasComponent>,
     pub rect_transforms: Vec<RectTransformComponent>,
     pub elements: Vec<UiElementComponent>,
+    pub layout_groups: Vec<UiLayoutGroupComponent>,
+    pub content_size_fitters: Vec<UiContentSizeFitterComponent>,
 }
 
 impl UiBinding {
-    /// Rewrites every object id in the binding by `base`, the way the runtime
-    /// shifts a loaded scene: a scene loaded after another one starts its
-    /// object ids above the ones already in use.
     pub fn shift_entity_ids(&mut self, base: u64) {
         for canvas in &mut self.canvases {
             canvas.entity = EntityId::new(base + canvas.entity.as_u64());
@@ -635,6 +690,12 @@ impl UiBinding {
                         .map(|target| EntityId::new(base + target.as_u64()));
                 }
             }
+        }
+        for group in &mut self.layout_groups {
+            group.entity = EntityId::new(base + group.entity.as_u64());
+        }
+        for fitter in &mut self.content_size_fitters {
+            fitter.entity = EntityId::new(base + fitter.entity.as_u64());
         }
     }
 }
@@ -1753,128 +1814,147 @@ fn collect_ui(
     let mut rect_entities: HashMap<i64, EntityId> = HashMap::new();
     let mut rect_fathers: HashMap<i64, i64> = HashMap::new();
     let mut rects: Vec<(i64, RectTransformComponent)> = Vec::new();
-    for document in &stream.documents {
-        if document.stripped || document.class_id != RECT_TRANSFORM_CLASS {
+    for doc in &stream.documents {
+        if doc.stripped {
             continue;
         }
-        let body = match document.root.get("RectTransform") {
-            Some(body) => body,
-            None => continue,
-        };
-        let entity = match component_entity(body, game_objects, instance_roots) {
-            Some(entity) => entity,
-            None => continue,
-        };
-        rect_entities.insert(document.file_id, entity);
-        if let Ok(Some(father)) = reference_id(body.get("m_Father")) {
-            rect_fathers.insert(document.file_id, father);
-        }
-        rects.push((
-            document.file_id,
-            RectTransformComponent {
+        if doc.class_id == RECT_TRANSFORM_CLASS {
+            let Some(body) = doc.root.get("RectTransform") else {
+                continue;
+            };
+            let Some(entity) = component_entity(body, game_objects, instance_roots) else {
+                continue;
+            };
+            rect_entities.insert(doc.file_id, entity);
+            if let Ok(Some(father)) = reference_id(body.get("m_Father")) {
+                rect_fathers.insert(doc.file_id, father);
+            }
+            rects.push((doc.file_id, parse_rect_transform(entity, body)));
+        } else if doc.class_id == CANVAS_CLASS {
+            let Some(body) = doc.root.get("Canvas") else {
+                continue;
+            };
+            let Some(entity) = component_entity(body, game_objects, instance_roots) else {
+                continue;
+            };
+            binding.canvases.push(CanvasComponent {
                 entity,
-                parent: None,
-                anchor_min: vector2_or(body.get("m_AnchorMin"), [0.0, 0.0]),
-                anchor_max: vector2_or(body.get("m_AnchorMax"), [1.0, 1.0]),
-                anchored_position: vector2_or(body.get("m_AnchoredPosition"), [0.0, 0.0]),
-                size_delta: vector2_or(body.get("m_SizeDelta"), [0.0, 0.0]),
-                pivot: vector2_or(body.get("m_Pivot"), [0.5, 0.5]),
-            },
-        ));
+                render_mode: canvas_render_mode(body.get("m_RenderMode")),
+                sorting_order: body
+                    .get("m_SortingOrder")
+                    .and_then(Node::as_i64)
+                    .unwrap_or(0),
+                scaler: None,
+            });
+        }
     }
     for (file_id, rect) in &mut rects {
         rect.parent = rect_fathers
             .get(file_id)
-            .and_then(|father| rect_entities.get(father))
+            .and_then(|f| rect_entities.get(f))
             .copied();
     }
     binding.rect_transforms = rects.into_iter().map(|(_, rect)| rect).collect();
-    for document in &stream.documents {
-        if document.stripped || document.class_id != CANVAS_CLASS {
+    for doc in &stream.documents {
+        if doc.stripped || doc.class_id != MONO_BEHAVIOUR_CLASS {
             continue;
         }
-        let body = match document.root.get("Canvas") {
-            Some(body) => body,
-            None => continue,
-        };
-        let entity = match component_entity(body, game_objects, instance_roots) {
-            Some(entity) => entity,
-            None => continue,
-        };
-        binding.canvases.push(CanvasComponent {
-            entity,
-            render_mode: canvas_render_mode(body.get("m_RenderMode")),
-            sorting_order: body
-                .get("m_SortingOrder")
-                .and_then(Node::as_i64)
-                .unwrap_or(0),
-            scaler: None,
-        });
-    }
-    for document in &stream.documents {
-        if document.stripped || document.class_id != MONO_BEHAVIOUR_CLASS {
+        let Some(body) = doc.root.get("MonoBehaviour") else {
             continue;
-        }
-        let body = match document.root.get("MonoBehaviour") {
-            Some(body) => body,
-            None => continue,
         };
-        let guid = match body
+        let Some(guid) = body
             .get("m_Script")
-            .and_then(|node| node.get("guid"))
+            .and_then(|n| n.get("guid"))
             .and_then(Node::as_str)
-        {
-            Some(guid) => guid.trim(),
-            None => continue,
+            .map(str::trim)
+        else {
+            continue;
         };
-        let entity = match component_entity(body, game_objects, instance_roots) {
-            Some(entity) => entity,
-            None => continue,
+        let Some(entity) = component_entity(body, game_objects, instance_roots) else {
+            continue;
         };
-        match guid {
-            IMAGE_SCRIPT_GUID => {
-                graphics.insert(document.file_id, entity);
-                binding
-                    .elements
-                    .push(UiElementComponent::Image(UiImageComponent {
-                        entity,
-                        color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
-                        sprite_guid: sprite_guid(body.get("m_Sprite")),
-                        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-                    }));
+        collect_ui_mono_behaviour(
+            doc.file_id,
+            entity,
+            guid,
+            body,
+            &mut binding,
+            &mut graphics,
+            &mut button_targets,
+        );
+    }
+    for (index, target) in button_targets {
+        if let Some(entity) = graphics.get(&target).copied() {
+            if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(index) {
+                button.target_graphic = Some(entity);
             }
-            TEXT_SCRIPT_GUID => binding
+        }
+    }
+    binding
+}
+
+fn parse_rect_transform(entity: EntityId, body: &Node) -> RectTransformComponent {
+    RectTransformComponent {
+        entity,
+        parent: None,
+        anchor_min: vector2_or(body.get("m_AnchorMin"), [0.0, 0.0]),
+        anchor_max: vector2_or(body.get("m_AnchorMax"), [1.0, 1.0]),
+        anchored_position: vector2_or(body.get("m_AnchoredPosition"), [0.0, 0.0]),
+        size_delta: vector2_or(body.get("m_SizeDelta"), [0.0, 0.0]),
+        pivot: vector2_or(body.get("m_Pivot"), [0.5, 0.5]),
+    }
+}
+
+fn collect_ui_mono_behaviour(
+    file_id: i64,
+    entity: EntityId,
+    guid: &str,
+    body: &Node,
+    binding: &mut UiBinding,
+    graphics: &mut HashMap<i64, EntityId>,
+    button_targets: &mut Vec<(usize, i64)>,
+) {
+    match guid {
+        IMAGE_SCRIPT_GUID => {
+            graphics.insert(file_id, entity);
+            binding
                 .elements
-                .push(UiElementComponent::Text(UiTextComponent {
+                .push(UiElementComponent::Image(UiImageComponent {
                     entity,
-                    text: body
-                        .get("m_Text")
-                        .and_then(Node::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
                     color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
-                    font_size: yaml_f32(body.get("m_FontSize"), DEFAULT_UI_FONT_SIZE, |value| {
-                        value > 0.0
-                    }),
+                    sprite_guid: sprite_guid(body.get("m_Sprite")),
                     enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-                })),
-            BUTTON_SCRIPT_GUID => {
-                let index = binding.elements.len();
-                binding
-                    .elements
-                    .push(UiElementComponent::Button(UiButtonComponent {
-                        entity,
-                        target_graphic: None,
-                        interactable: yaml_bool(body.get("m_Interactable"), DEFAULT_UI_ENABLED),
-                    }));
-                // The target graphic is a reference to another component, so it
-                // is resolved once every graphic of the scene is known.
-                if let Ok(Some(target)) = reference_id(body.get("m_TargetGraphic")) {
-                    button_targets.push((index, target));
-                }
+                }));
+        }
+        TEXT_SCRIPT_GUID => binding
+            .elements
+            .push(UiElementComponent::Text(UiTextComponent {
+                entity,
+                text: body
+                    .get("m_Text")
+                    .and_then(Node::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
+                font_size: yaml_f32(body.get("m_FontSize"), DEFAULT_UI_FONT_SIZE, |v| v > 0.0),
+                enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+            })),
+        BUTTON_SCRIPT_GUID => {
+            let index = binding.elements.len();
+            binding
+                .elements
+                .push(UiElementComponent::Button(UiButtonComponent {
+                    entity,
+                    target_graphic: None,
+                    interactable: yaml_bool(body.get("m_Interactable"), DEFAULT_UI_ENABLED),
+                }));
+            if let Ok(Some(target)) = reference_id(body.get("m_TargetGraphic")) {
+                button_targets.push((index, target));
             }
-            CANVAS_SCALER_SCRIPT_GUID => {
-                let scaler = CanvasScalerComponent {
+        }
+        CANVAS_SCALER_SCRIPT_GUID => {
+            if let Some(canvas) = binding.canvases.iter_mut().find(|c| c.entity == entity) {
+                canvas.scaler = Some(CanvasScalerComponent {
                     ui_scale_mode: canvas_scale_mode(body.get("m_UiScaleMode")),
                     reference_resolution: vector2_or(
                         body.get("m_ReferenceResolution"),
@@ -1884,29 +1964,70 @@ fn collect_ui(
                     match_width_or_height: yaml_f32(
                         body.get("m_MatchWidthOrHeight"),
                         DEFAULT_MATCH_WIDTH_OR_HEIGHT,
-                        |value| (0.0..=1.0).contains(&value),
+                        |v| (0.0..=1.0).contains(&v),
                     ),
-                };
-                if let Some(canvas) = binding
-                    .canvases
-                    .iter_mut()
-                    .find(|canvas| canvas.entity == entity)
-                {
-                    canvas.scaler = Some(scaler);
-                }
+                });
             }
-            _ => {}
         }
-    }
-    for (index, target) in button_targets {
-        let Some(entity) = graphics.get(&target).copied() else {
-            continue;
-        };
-        if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(index) {
-            button.target_graphic = Some(entity);
+        HORIZONTAL_LAYOUT_GROUP_SCRIPT_GUID => binding.layout_groups.push(parse_layout_group(
+            entity,
+            LayoutGroupAxis::Horizontal,
+            body,
+        )),
+        VERTICAL_LAYOUT_GROUP_SCRIPT_GUID => {
+            binding
+                .layout_groups
+                .push(parse_layout_group(entity, LayoutGroupAxis::Vertical, body));
         }
+        CONTENT_SIZE_FITTER_SCRIPT_GUID => binding
+            .content_size_fitters
+            .push(parse_content_size_fitter(entity, body)),
+        _ => {}
     }
-    binding
+}
+
+fn parse_layout_group(
+    entity: EntityId,
+    axis: LayoutGroupAxis,
+    body: &Node,
+) -> UiLayoutGroupComponent {
+    let padding = body
+        .get("m_Padding")
+        .map_or_else(UiPadding::default, |n| UiPadding {
+            left: yaml_i32(n.get("m_Left"), 0),
+            right: yaml_i32(n.get("m_Right"), 0),
+            top: yaml_i32(n.get("m_Top"), 0),
+            bottom: yaml_i32(n.get("m_Bottom"), 0),
+        });
+    UiLayoutGroupComponent {
+        entity,
+        axis,
+        padding,
+        spacing: yaml_f32(body.get("m_Spacing"), 0.0, f32::is_finite),
+        child_alignment: yaml_u32(body.get("m_ChildAlignment"), 0).min(8),
+        child_control_width: yaml_bool(body.get("m_ChildControlWidth"), true),
+        child_control_height: yaml_bool(body.get("m_ChildControlHeight"), true),
+        child_force_expand_width: yaml_bool(body.get("m_ChildForceExpandWidth"), true),
+        child_force_expand_height: yaml_bool(body.get("m_ChildForceExpandHeight"), true),
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+    }
+}
+
+fn parse_content_size_fitter(entity: EntityId, body: &Node) -> UiContentSizeFitterComponent {
+    UiContentSizeFitterComponent {
+        entity,
+        horizontal_fit: ContentSizeFitMode::from_u32(yaml_u32(body.get("m_HorizontalFit"), 0))
+            .unwrap_or(ContentSizeFitMode::Unconstrained),
+        vertical_fit: ContentSizeFitMode::from_u32(yaml_u32(body.get("m_VerticalFit"), 0))
+            .unwrap_or(ContentSizeFitMode::Unconstrained),
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
+    }
+}
+
+fn yaml_i32(node: Option<&Node>, default: i32) -> i32 {
+    node.and_then(Node::as_i64)
+        .and_then(|v| i32::try_from(v).ok())
+        .unwrap_or(default)
 }
 
 fn canvas_render_mode(node: Option<&Node>) -> CanvasRenderMode {
@@ -2423,30 +2544,30 @@ fn collect_scene_diagnostics(
     for binding in physics {
         for collider in &binding.colliders {
             match collider {
-                ColliderComponent::Box(collider) => {
-                    if let Some(diag) = &collider.material_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
+                ColliderComponent::Box(c) => {
+                    if let Some(d) = &c.material_diagnostic {
+                        diagnostics.push((binding.entity, d.clone()));
                     }
                 }
-                ColliderComponent::Sphere(collider) => {
-                    if let Some(diag) = &collider.material_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
+                ColliderComponent::Sphere(c) => {
+                    if let Some(d) = &c.material_diagnostic {
+                        diagnostics.push((binding.entity, d.clone()));
                     }
                 }
-                ColliderComponent::Capsule(collider) => {
-                    if let Some(diag) = &collider.material_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
-                    }
-                    if let Some(diag) = &collider.geometry_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
+                ColliderComponent::Capsule(c) => {
+                    for d in [&c.material_diagnostic, &c.geometry_diagnostic]
+                        .into_iter()
+                        .flatten()
+                    {
+                        diagnostics.push((binding.entity, d.clone()));
                     }
                 }
-                ColliderComponent::Mesh(collider) => {
-                    if let Some(diag) = &collider.material_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
-                    }
-                    if let Some(diag) = &collider.mesh_diagnostic {
-                        diagnostics.push((binding.entity, diag.clone()));
+                ColliderComponent::Mesh(c) => {
+                    for d in [&c.material_diagnostic, &c.mesh_diagnostic]
+                        .into_iter()
+                        .flatten()
+                    {
+                        diagnostics.push((binding.entity, d.clone()));
                     }
                 }
             }
@@ -2667,118 +2788,41 @@ mod tests {
     const UI_SCENE: &str = "%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1
-GameObject:
-  m_Name: HudCanvas
-  m_Layer: 5
+GameObject: {m_Name: HudCanvas, m_Layer: 5}
 --- !u!224 &2
-RectTransform:
-  m_GameObject: {fileID: 1}
-  m_Father: {fileID: 0}
-  m_AnchorMin: {x: 0, y: 0}
-  m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 0, y: 0}
-  m_Pivot: {x: 0.5, y: 0.5}
+RectTransform: {m_GameObject: {fileID: 1}, m_Father: {fileID: 0}, m_AnchorMin: {x: 0, y: 0}, m_AnchorMax: {x: 1, y: 1}, m_AnchoredPosition: {x: 0, y: 0}, m_SizeDelta: {x: 0, y: 0}, m_Pivot: {x: 0.5, y: 0.5}}
 --- !u!223 &3
-Canvas:
-  m_GameObject: {fileID: 1}
-  m_Enabled: 1
-  m_RenderMode: 0
-  m_SortingOrder: 7
+Canvas: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_RenderMode: 0, m_SortingOrder: 7}
 --- !u!114 &4
-MonoBehaviour:
-  m_GameObject: {fileID: 1}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
-  m_UiScaleMode: 1
-  m_ReferenceResolution: {x: 800, y: 600}
-  m_ScreenMatchMode: 0
-  m_MatchWidthOrHeight: 0.5
+MonoBehaviour: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}, m_UiScaleMode: 1, m_ReferenceResolution: {x: 800, y: 600}, m_ScreenMatchMode: 0, m_MatchWidthOrHeight: 0.5}
 --- !u!1 &5
-GameObject:
-  m_Name: HealthBar
-  m_Layer: 5
+GameObject: {m_Name: HealthBar, m_Layer: 5}
 --- !u!224 &6
-RectTransform:
-  m_GameObject: {fileID: 5}
-  m_Father: {fileID: 2}
-  m_AnchorMin: {x: 0.5, y: 0.5}
-  m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -120, y: 30}
-  m_SizeDelta: {x: 200, y: 40}
-  m_Pivot: {x: 0.5, y: 0.5}
+RectTransform: {m_GameObject: {fileID: 5}, m_Father: {fileID: 2}, m_AnchorMin: {x: 0.5, y: 0.5}, m_AnchorMax: {x: 0.5, y: 0.5}, m_AnchoredPosition: {x: -120, y: 30}, m_SizeDelta: {x: 200, y: 40}, m_Pivot: {x: 0.5, y: 0.5}}
 --- !u!114 &7
-MonoBehaviour:
-  m_GameObject: {fileID: 5}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
-  m_Color: {r: 1, g: 0.5, b: 0.25, a: 0.75}
-  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}
-  m_UnknownFutureField: 12
+MonoBehaviour: {m_GameObject: {fileID: 5}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}, m_Color: {r: 1, g: 0.5, b: 0.25, a: 0.75}, m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}, m_UnknownFutureField: 12}
 --- !u!1 &8
-GameObject:
-  m_Name: ScoreLabel
-  m_Layer: 5
+GameObject: {m_Name: ScoreLabel, m_Layer: 5}
 --- !u!224 &9
-RectTransform:
-  m_GameObject: {fileID: 8}
-  m_Father: {fileID: 2}
-  m_AnchorMin: {x: 0, y: 1}
-  m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 16, y: -12}
-  m_SizeDelta: {x: 320, y: 28}
-  m_Pivot: {x: 0, y: 1}
+RectTransform: {m_GameObject: {fileID: 8}, m_Father: {fileID: 2}, m_AnchorMin: {x: 0, y: 1}, m_AnchorMax: {x: 0, y: 1}, m_AnchoredPosition: {x: 16, y: -12}, m_SizeDelta: {x: 320, y: 28}, m_Pivot: {x: 0, y: 1}}
 --- !u!114 &10
-MonoBehaviour:
-  m_GameObject: {fileID: 8}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}
-  m_Text: \"Score 0\"
-  m_FontSize: 18
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+MonoBehaviour: {m_GameObject: {fileID: 8}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}, m_Text: \"Score 0\", m_FontSize: 18, m_Color: {r: 1, g: 1, b: 1, a: 1}}
 ";
 
     const BUTTON_SCENE: &str = "%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1
-GameObject:
-  m_Name: PlayButton
-  m_Layer: 5
+GameObject: {m_Name: PlayButton, m_Layer: 5}
 --- !u!224 &2
-RectTransform:
-  m_GameObject: {fileID: 1}
-  m_Father: {fileID: 0}
-  m_AnchorMin: {x: 0.5, y: 0.5}
-  m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 160, y: 40}
-  m_Pivot: {x: 0.5, y: 0.5}
+RectTransform: {m_GameObject: {fileID: 1}, m_Father: {fileID: 0}, m_AnchorMin: {x: 0.5, y: 0.5}, m_AnchorMax: {x: 0.5, y: 0.5}, m_AnchoredPosition: {x: 0, y: 0}, m_SizeDelta: {x: 160, y: 40}, m_Pivot: {x: 0.5, y: 0.5}}
 --- !u!1 &5
-GameObject:
-  m_Name: ButtonFace
-  m_Layer: 5
+GameObject: {m_Name: ButtonFace, m_Layer: 5}
 --- !u!224 &6
-RectTransform:
-  m_GameObject: {fileID: 5}
-  m_Father: {fileID: 2}
-  m_AnchorMin: {x: 0, y: 0}
-  m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 0, y: 0}
-  m_Pivot: {x: 0.5, y: 0.5}
+RectTransform: {m_GameObject: {fileID: 5}, m_Father: {fileID: 2}, m_AnchorMin: {x: 0, y: 0}, m_AnchorMax: {x: 1, y: 1}, m_AnchoredPosition: {x: 0, y: 0}, m_SizeDelta: {x: 0, y: 0}, m_Pivot: {x: 0.5, y: 0.5}}
 --- !u!114 &7
-MonoBehaviour:
-  m_GameObject: {fileID: 5}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+MonoBehaviour: {m_GameObject: {fileID: 5}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}, m_Color: {r: 1, g: 1, b: 1, a: 1}}
 --- !u!114 &8
-MonoBehaviour:
-  m_GameObject: {fileID: 1}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
-  m_TargetGraphic: {fileID: 7}
-  m_Interactable: 1
+MonoBehaviour: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}, m_TargetGraphic: {fileID: 7}, m_Interactable: 1}
 ";
 
     #[test]
@@ -2823,6 +2867,8 @@ MonoBehaviour:
                 target_graphic: Some(EntityId::new(2)),
                 interactable: true,
             })],
+            layout_groups: Vec::new(),
+            content_size_fitters: Vec::new(),
         };
         binding.shift_entity_ids(100);
         assert_eq!(binding.canvases[0].entity, EntityId::new(100));
@@ -2892,6 +2938,51 @@ MonoBehaviour:
         assert_eq!(text.font_size, 18.0);
         assert_eq!(text.color, [1.0, 1.0, 1.0, 1.0]);
         assert!(text.enabled);
+        Ok(())
+    }
+
+    const LAYOUT_GROUP_SCENE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject: {m_Name: MenuPanel, m_Layer: 5}
+--- !u!224 &2
+RectTransform: {m_GameObject: {fileID: 1}, m_Father: {fileID: 0}, m_SizeDelta: {x: 300, y: 200}}
+--- !u!114 &3
+MonoBehaviour: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 59f8146938fff824cb5fd77236b75775, type: 3}, m_Padding: {m_Left: 10, m_Right: 12, m_Top: 8, m_Bottom: 16}, m_ChildAlignment: 4, m_Spacing: 6, m_ChildForceExpandWidth: 1, m_ChildForceExpandHeight: 0, m_ChildControlWidth: 1, m_ChildControlHeight: 0}
+--- !u!114 &4
+MonoBehaviour: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 3245ec927659c4140ac4f8d17403cc18, type: 3}, m_HorizontalFit: 1, m_VerticalFit: 2}
+--- !u!1 &5
+GameObject: {m_Name: ToolbarRow, m_Layer: 5}
+--- !u!224 &6
+RectTransform: {m_GameObject: {fileID: 5}, m_Father: {fileID: 2}, m_SizeDelta: {x: 0, y: 40}}
+--- !u!114 &7
+MonoBehaviour: {m_GameObject: {fileID: 5}, m_Enabled: 1, m_Script: {fileID: 11500000, guid: 306cc8c2b49d7114eaa3623786fc2126, type: 3}, m_Padding: {m_Left: 4, m_Right: 4, m_Top: 2, m_Bottom: 2}, m_ChildAlignment: 3, m_Spacing: 8, m_ChildForceExpandWidth: 0, m_ChildForceExpandHeight: 1, m_ChildControlWidth: 1, m_ChildControlHeight: 1}
+";
+
+    #[test]
+    fn ui_scene_exposes_layout_groups_and_content_size_fitter() -> Result<(), Box<dyn Error>> {
+        let assembled = assemble_scene_bundle(&unity_yaml::parse(LAYOUT_GROUP_SCENE)?)?;
+        assert_eq!(assembled.ui.layout_groups.len(), 2);
+        let v = &assembled.ui.layout_groups[0];
+        assert_eq!(v.entity, EntityId::new(0));
+        assert_eq!(v.axis, LayoutGroupAxis::Vertical);
+        assert_eq!((v.padding.left, v.padding.right), (10, 12));
+        assert_eq!((v.padding.top, v.padding.bottom), (8, 16));
+        assert_eq!((v.child_alignment, v.spacing, v.enabled), (4, 6.0, true));
+        assert!(v.child_control_width && !v.child_control_height);
+        assert!(v.child_force_expand_width && !v.child_force_expand_height);
+        let h = &assembled.ui.layout_groups[1];
+        assert_eq!(h.entity, EntityId::new(1));
+        assert_eq!(h.axis, LayoutGroupAxis::Horizontal);
+        assert_eq!((h.padding.left, h.padding.right), (4, 4));
+        assert_eq!((h.padding.top, h.padding.bottom), (2, 2));
+        assert_eq!((h.child_alignment, h.spacing), (3, 8.0));
+        assert!(h.child_control_width && h.child_control_height);
+        assert!(!h.child_force_expand_width && h.child_force_expand_height);
+        let f = &assembled.ui.content_size_fitters[0];
+        assert_eq!((f.entity, f.enabled), (EntityId::new(0), true));
+        assert_eq!(f.horizontal_fit, ContentSizeFitMode::MinSize);
+        assert_eq!(f.vertical_fit, ContentSizeFitMode::PreferredSize);
         Ok(())
     }
 }

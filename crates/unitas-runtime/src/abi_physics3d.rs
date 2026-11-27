@@ -237,11 +237,7 @@ pub extern "C" fn unitas_runtime_teleport_body_rotation(handle: u64, entity: u64
             state.set_error("buffer address mismatch");
             return -2;
         };
-        let res = state
-            .runtime
-            .physics_mut()
-            .world_3d_mut()
-            .teleport_rotation(EntityId::new(entity), rot);
+        let res = state.runtime.teleport_body_rotation(EntityId::new(entity), rot);
         finish_res(state, res)
     })
     .unwrap_or_else(|code| code)
