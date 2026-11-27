@@ -40,6 +40,43 @@ the project maintains and can lint them.
   banned rule, no `extend-ignore` that re-enables a banned rule, and no inline
   suppression marker.
 
+## Size limits
+
+Every maintained first-party language, including every language the project
+adds later, MUST enforce a function-length limit and a file-length limit. A
+language is not admitted to the project until both limits are wired for it.
+
+* **Function length.** A function, method, or closure body MUST NOT exceed
+  200 lines. Where the language's linter counts statements or complexity
+  instead of lines, the linter's own strict limit applies in addition.
+* **File length.** A tracked first-party source file, meaning every file the
+  lint gate covers once the `excluded_paths` fact below is applied, MUST NOT
+  exceed 3,000 lines, counting every physical line, test modules and data
+  tables included.
+  The limit drops to 1,500 lines once the tree satisfies 3,000; lowering it is
+  tightening, raising it is weakening.
+* **Linter first.** Each limit is enforced by the language's linter wherever
+  the linter offers a rule for it, configured in the language's root
+  configuration file. Where the linter offers no such rule, the repository gate
+  in `tools/verify.py` enforces it. A missing linter rule never exempts a
+  language from a limit.
+* **No exemptions.** There is no per-file, per-function, or per-language
+  exemption, allowlist, or baseline, and no inline suppression of a size rule.
+  Generated code is governed at its source boundary as `clean-code-policy.md`
+  requires. A file or function over a limit is split along its
+  responsibilities: a data table moves to its own module, a class that
+  implements several provider interfaces splits into one type per interface,
+  and a long function splits into named steps.
+
+Per-language wiring:
+
+| Language | Function length | File length |
+|---|---|---|
+| Rust | `clippy::too_many_lines` denied through `clippy.pedantic`, with `too-many-lines-threshold = 200` in the root `clippy.toml` | no Clippy rule exists; enforced by the repository gate |
+| Python | ruff `PLR0915` (`max-statements = 50`), `PLR0912` (`max-branches = 12`), and `C901` (`max-complexity = 10`) in `pyproject.toml`; the 200-line limit by the repository gate | no ruff rule exists; enforced by the repository gate |
+| C# | Roslyn `CA1502`, `CA1505`, and `CA1506` bound complexity, maintainability, and coupling at their default thresholds; no Roslyn rule counts lines, so the 200-line limit is enforced by the repository gate | no Roslyn rule exists; enforced by the repository gate |
+| A language added later | its linter's function-length rule, configured at the limit | its linter's file-length rule, or the repository gate |
+
 ## Dead code — zero tolerance
 
 Dead code is prohibited. It is better to delete obsolete code and implement it
@@ -72,6 +109,10 @@ again if demonstrated need returns than to retain unowned paths indefinitely.
 | Strictest lint configuration | Lint owner | the lint configuration selects the project rule set and carries only reasoned rule disables | the bypass audit reports that the lint configuration selects the project rule set and carries only reasoned rule disables | the bypass audit reports that the lint configuration selects the project rule set | deterministic: make bypass-audit | when the linter can prove the configuration is the strictest available |
 | Lint run coverage | Lint owner | the lint run checks every tracked source file | the lint gate exits 0 over the tracked tree | the lint gate exits 0 | deterministic: make lint | when the lint run reports the files it checked |
 | Public / wrapper syntax-proxy | Lint owner | no banned construct reaches the tree through a wrapper | the ban gate reports zero findings over the tracked tree | the ban gate reports zero findings | deterministic: make banned-constructs | when the ban catalog is enforced by the linter itself |
+| Rust function length | Lint owner | no Rust function, method, or closure body exceeds 200 lines | cargo clippy reports zero clippy::too_many_lines findings at too-many-lines-threshold = 200 | the clippy gate exits 0 | deterministic: make lint | when Clippy no longer offers clippy::too_many_lines |
+| Python function size | Lint owner | no Python function exceeds 50 statements, 12 branches, or cyclomatic complexity 10 | ruff check reports zero PLR0915, PLR0912, and C901 findings | the ruff gate exits 0 | deterministic: make lint | when ruff no longer offers PLR0915, PLR0912, or C901 |
+| Line-counted function length for Python and C# | Lint owner | no Python or C# function or method body exceeds 200 lines | the repository size gate reports zero over-limit functions | the repository size gate reports zero findings | advisory: neither ruff nor the Roslyn analyzers count function lines and the repository size gate is not wired yet; review: at every change that adds lines to a Python or C# function already over 150 lines, and when the repository size gate lands | when the repository size gate runs in make verify |
+| File length | Lint owner | no tracked first-party source file in any maintained language exceeds 3,000 lines | the repository size gate reports zero over-limit files | the repository size gate reports zero findings | advisory: no linter in use offers a file-length rule and the repository size gate is not wired yet; review: at every change that adds lines to a file already over 1,500 lines, and when the repository size gate lands | when the repository size gate runs in make verify |
 
 ## Project facts to resolve
 
@@ -80,7 +121,7 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: linter_per_language: ruff check and ruff format for Python, cargo clippy and rustfmt (cargo fmt) for Rust, and the .NET Roslyn analyzers (dotnet build) and dotnet format for C#
-RALPH-FACT: rule_set_baseline: Python selects ALL in pyproject.toml ([tool.ruff.lint] select = ["ALL"]) with only reasoned disables for formatter conflicts, mutually exclusive pydocstyle pairs, clean-code docstring rules, pytest assertions, and gate subprocess execution (COM812, D100-D107, D203, D213, ISC001, S101, S603) and no per-file-ignores; Rust declares [workspace.lints] in the root Cargo.toml with rust.warnings = "deny", rust.unsafe_code = "forbid", rust.unnecessary_transmutes = "deny", rust.static_mut_refs = "deny", clippy.all = "deny" (priority = -1), clippy.pedantic = "deny" (priority = -1), and the clean-code ban-catalog lints (unwrap_used, expect_used, panic, todo, unimplemented, dbg_macro) set to "deny", with every non-zone workspace crate setting lints.workspace = true and only reasoned workspace-level pedantic allows; a crate registered as an unsafe zone in tools/unsafe-zones.toml carries its own [lints] table instead, as required by clean-code-policy.md "Unsafe code zones"; C# declares Nullable=enable, TreatWarningsAsErrors=true, AnalysisMode=All, AnalysisLevel=latest-all, and EnforceCodeStyleInBuild=true in the root Directory.Build.props with formatting and reasoned diagnostic severities in the root .editorconfig
+RALPH-FACT: rule_set_baseline: Python selects ALL in pyproject.toml ([tool.ruff.lint] select = ["ALL"]) with only reasoned disables for formatter conflicts, mutually exclusive pydocstyle pairs, clean-code docstring rules, pytest assertions, and gate subprocess execution (COM812, D100-D107, D203, D213, ISC001, S101, S603), no per-file-ignores, and the size thresholds pinned explicitly ([tool.ruff.lint.pylint] max-statements = 50 and max-branches = 12, [tool.ruff.lint.mccabe] max-complexity = 10); Rust declares [workspace.lints] in the root Cargo.toml with rust.warnings = "deny", rust.unsafe_code = "forbid", rust.unnecessary_transmutes = "deny", rust.static_mut_refs = "deny", clippy.all = "deny" (priority = -1), clippy.pedantic = "deny" (priority = -1), and the clean-code ban-catalog lints (unwrap_used, expect_used, panic, todo, unimplemented, dbg_macro) set to "deny", with every non-zone workspace crate setting lints.workspace = true and only reasoned workspace-level pedantic allows, clippy::too_many_lines left denied through clippy.pedantic, and the root clippy.toml setting too-many-lines-threshold = 200; a crate registered as an unsafe zone in tools/unsafe-zones.toml carries its own [lints] table instead, as required by clean-code-policy.md "Unsafe code zones"; C# declares Nullable=enable, TreatWarningsAsErrors=true, AnalysisMode=All, AnalysisLevel=latest-all, and EnforceCodeStyleInBuild=true in the root Directory.Build.props with formatting and reasoned diagnostic severities in the root .editorconfig
 RALPH-FACT: formatter_responsibility: ruff format --check . owns Python formatting (pyproject.toml); cargo fmt --all -- --check owns Rust formatting (rustfmt.toml); dotnet format bridge/Unitas.sln --verify-no-changes --no-restore owns C# formatting (.editorconfig), including whitespace, style, and analyzer diagnostics
 RALPH-FACT: excluded_paths: Python: none — every tracked .py file under tools/ is linted and formatted; Rust: none — every workspace crate and tracked .rs file is linted and formatted; C#: bridge/Unitas.Bridge.Tests/Fixtures/** (excluded via Compile Remove in bridge/Unitas.Bridge.Tests/Unitas.Bridge.Tests.csproj because those files are test-input C# fixtures compiled dynamically by test cases rather than maintained project source); build output directories target/, bin/, and obj/ are skipped
 RALPH-FACT: suppression_rationale_policy: inline suppressions, per-file ignores, allowlists, and baselines are forbidden; every disabled rule or downgraded analyzer severity lives in the language's root configuration file (pyproject.toml, Cargo.toml, or .editorconfig) with an adjacent written reason comment enforced by make bypass-audit
@@ -91,6 +132,7 @@ RALPH-FACT: excluded_language_evidence: none — no language is excluded from th
 RALPH-FACT: dead_code_detection_per_language: ruff check (with select = ["ALL"], including F401, F841, ERA, and PIE) reports unused imports, unused locals, and dead code for Python; rustc and cargo clippy (with rust.warnings = "deny", clippy.all = "deny", and clippy.pedantic = "deny") report dead_code and unused items as errors for Rust; the .NET compiler and Roslyn analyzers (with AnalysisMode=All, AnalysisLevel=latest-all, EnforceCodeStyleInBuild=true, and TreatWarningsAsErrors=true) report unused members, unread private state, and unreachable code as errors for C#
 RALPH-FACT: retained_compatibility_inventory: none — the repository retains no compatibility layer
 RALPH-FACT: live_entry_point_annotation_inventory: none — the repository has no speculative entry point
+RALPH-FACT: size_limit_status: measured on 2026-11-26 at commit 90f6316 with this policy's limits applied. Rust function length: cargo clippy --workspace --all-targets reports 19 functions over 200 lines (unitas-animation 2, unitas-asset 10 of which 3 are in tests, unitas-core 1, unitas-physics 4 of which 2 are in tests, unitas-render 2), so the Rust lint gate is red until they are split; unitas-build and unitas-editor-abi were not reached because unitas-build fails to compile under the gate's feature set (E0433: crates/unitas-build/src/player.rs uses unitas_audio::output, which exists only with the device feature). Python: ruff check reports 4 findings in tools/verify_device.py (PLR2004 once, RUF046 twice, and the size rule C901 once on run_device_lane at complexity 12), and the committed configuration before this policy's thresholds were pinned reports the same 4, so the Python lint gate is red independently of this policy. File length: 9 files exceed 3,000 lines (bridge/Unitas.Bridge/BridgeHost.cs 6,891, crates/unitas-runtime/src/abi.rs 5,430, crates/unitas-core/src/compat.rs 5,400, crates/unitas-runtime/src/runtime.rs 4,162, crates/unitas-render/src/gpu.rs 3,661, crates/unitas-asset/src/prefab_variant.rs 3,536, crates/unitas-asset/src/scene.rs 3,525, crates/unitas-physics/src/world.rs 3,121, crates/unitas-build/src/report.rs 3,044) and 37 exceed 1,500. The repository size gate for file length and for Python and C# function lines is not wired. Review trigger: every over-limit function or file is split and the repository size gate runs in make verify
 
 For each language, `maintenance_evidence` records tool and version range,
 official maintenance source, compatibility and first-party coverage evidence,
@@ -121,8 +163,16 @@ To follow this policy, an agent making any change MUST:
 * UPDATE this policy (facts, commands, requirements) in the same
   workflow that changes the linter, rule set, formatter, or
   suppression policy.
+* WIRE both size limits (see Size limits) for a new language in the same
+  change that admits it, in its linter configuration where a rule exists and
+  in the repository gate where none does.
+* SPLIT a function or file that a change pushes over a size limit in that
+  same change, along its responsibilities.
 
 An agent MUST NOT:
+
+* Raise a size threshold, allow `clippy::too_many_lines`, or exempt a file,
+  function, or language from a size limit.
 
 * Add `per-file-ignores`, `extend-per-file-ignores`, or any other
   global rule silencing without a per-file reason.
@@ -166,6 +216,7 @@ This policy MUST be reviewed in the same workflow as any of:
 * The linter, version, or rule set changes.
 * A new lint dependency is added.
 * The suppression policy changes.
+* A size limit, its threshold, or its enforcer changes.
 * The dead-code detector, compatibility inventory, or generated-code boundary changes.
 
 ## Research basis

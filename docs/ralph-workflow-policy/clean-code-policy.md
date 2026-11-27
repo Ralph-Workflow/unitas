@@ -25,7 +25,11 @@ code.
   unused imports MUST be removed. The "we might need it later"
   reason does not override the no-dead-code rule.
 * Functions, classes, modules, and files MUST remain cohesive, expose
-  understandable interfaces, and have bounded reasons to change.
+  understandable interfaces, and have bounded reasons to change. They also
+  stay within the function-length and file-length limits that
+  `linting-policy.md` sets in its Size limits section for every language; a
+  function or file over a limit is split along its responsibilities, never
+  exempted.
 * Error handling MUST surface actionable context. Bare `except: pass` is
   forbidden. Handle or propagate errors according to project convention;
   log once at the owning handling boundary and redact sensitive context.
