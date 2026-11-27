@@ -34,14 +34,7 @@ namespace Unitas.Bridge.Tests
             {
                 WriteProbeSource(projectRoot, "v1");
 
-                ScriptDomainReload.Result first = ScriptDomainReload.Reload(NewRequest(projectRoot, Array.Empty<MonoBehaviour>()));
-                Check.Equal("Reload compiles the project and loads the game assembly", true, first.Succeeded);
-                Check.That("Reload reports the current assembly state", first.ActiveState == ActiveAssemblyState.Current);
-                Check.That("Reload created a collectible load context", first.Context != null);
-                Check.That("The first reload has no replaced load context", first.ReplacedContext == null);
-
-                (ulong guidHi, ulong guidLo) = ScriptGlueRegistry.ParseGuid(ProbeGuid);
-                WeakReference? replacedContext = RunFirstToSecondReload(projectRoot, guidHi, guidLo, out WeakReference? secondContextRef);
+                WeakReference? replacedContext = RunFirstAndSecondReload(projectRoot, out ulong guidHi, out ulong guidLo, out WeakReference? secondContextRef);
 
                 CollectGarbage();
 
@@ -78,12 +71,19 @@ namespace Unitas.Bridge.Tests
         }
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static WeakReference? RunFirstToSecondReload(
+        private static WeakReference? RunFirstAndSecondReload(
             string projectRoot,
-            ulong guidHi,
-            ulong guidLo,
+            out ulong guidHi,
+            out ulong guidLo,
             out WeakReference? secondContextRef)
         {
+            ScriptDomainReload.Result first = ScriptDomainReload.Reload(NewRequest(projectRoot, Array.Empty<MonoBehaviour>()));
+            Check.Equal("Reload compiles the project and loads the game assembly", true, first.Succeeded);
+            Check.That("Reload reports the current assembly state", first.ActiveState == ActiveAssemblyState.Current);
+            Check.That("Reload created a collectible load context", first.Context != null);
+            Check.That("The first reload has no replaced load context", first.ReplacedContext == null);
+
+            (guidHi, guidLo) = ScriptGlueRegistry.ParseGuid(ProbeGuid);
             secondContextRef = null;
             bool created = ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? probe, out IUnitasMessageHandler? handler);
             Check.Equal("The compiled script is creatable through the glue registry", true, created);

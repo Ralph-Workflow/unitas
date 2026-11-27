@@ -147,6 +147,8 @@ namespace Unitas.Bridge.Tests
                 () => Effector2DTests.Run(),
                 () => PhysicsSimulationTests.Run(),
                 () => JointTests.Run(),
+                () => ScriptDomainReloadTests.Run(),
+                () => ProfilerTests.Run(),
             };
 
             int shard = 1;

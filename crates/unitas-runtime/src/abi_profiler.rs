@@ -112,10 +112,9 @@ impl Capture {
     fn end_top(&mut self) {
         let closed = STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
-            match stack.pop() {
-                Some(open) => Some((open.index, open.start.elapsed().as_nanos())),
-                None => None,
-            }
+            stack
+                .pop()
+                .map(|open| (open.index, open.start.elapsed().as_nanos()))
         });
         if let Some((index, elapsed)) = closed
             && let Some(node) = self.nodes.get_mut(index)
@@ -230,10 +229,7 @@ pub fn stop_capture() {
 
 /// The captured marker tree in the byte form the managed bridge reads.
 pub fn capture_bytes() -> Vec<u8> {
-    match with_capture(|capture| capture.serialize()) {
-        Some(bytes) => bytes,
-        None => Vec::new(),
-    }
+    with_capture(|capture| capture.serialize()).unwrap_or_default()
 }
 
 fn read_scratch(address: u64, length: u64) -> Option<String> {
@@ -365,9 +361,13 @@ mod tests {
             PRE_LATE_UPDATE,
             POST_LATE_UPDATE,
         ];
-        let recorded = frames
-            .iter()
-            .any(|frame| frame.len() == expected.len() && frame.iter().zip(expected).all(|(name, phase)| name == phase));
+        let recorded = frames.iter().any(|frame| {
+            frame.len() == expected.len()
+                && frame
+                    .iter()
+                    .zip(expected)
+                    .all(|(name, phase)| name == phase)
+        });
         assert!(recorded, "the tick recorded the Unity phases in order");
         Ok(())
     }

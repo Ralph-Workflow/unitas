@@ -909,6 +909,14 @@ namespace UnityEngine
             TypeStorage<T>.IsRegistered = true;
         }
 
+        public static void UnregisterType<T>()
+        {
+            TypeStorage<T>.Factory = null;
+            TypeStorage<T>.Writer = null;
+            TypeStorage<T>.Reader = null;
+            TypeStorage<T>.IsRegistered = false;
+        }
+
         public static bool IsTypeRegistered<T>() => TypeStorage<T>.IsRegistered;
 
         public static string ToJson<T>(T obj) => ToJson(obj, false);

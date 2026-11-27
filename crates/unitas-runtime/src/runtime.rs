@@ -152,22 +152,18 @@ impl LoadedScene {
     pub fn bodies(&self) -> &[EntityId] {
         &self.bodies
     }
-
     pub fn body_colliders(&self, entity: EntityId) -> &[ColliderDesc] {
         self.body_colliders
             .iter()
             .find(|(body, _)| *body == entity)
             .map_or(&[], |(_, colliders)| colliders.as_slice())
     }
-
     pub fn character_controllers(&self) -> &[(EntityId, CharacterControllerComponent)] {
         &self.character_controllers
     }
-
     pub fn audio_sources(&self) -> &[(EntityId, AudioSourceComponent)] {
         &self.audio_sources
     }
-
     pub fn animators(&self) -> &[EntityId] {
         &self.animators
     }

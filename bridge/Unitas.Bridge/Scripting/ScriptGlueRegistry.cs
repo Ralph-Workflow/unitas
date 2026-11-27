@@ -163,19 +163,7 @@ namespace Unitas.Bridge.Scripting
 
         private static void ClearJsonTypeStorage<T>()
         {
-            string storageAssemblyQualifiedName =
-                typeof(JsonUtility).FullName
-                + "+TypeStorage`1[["
-                + typeof(T).AssemblyQualifiedName
-                + "]], "
-                + typeof(JsonUtility).Assembly.FullName;
-            Type? closedType = Type.GetType(storageAssemblyQualifiedName, throwOnError: false);
-            if (closedType == null)
-            {
-                return;
-            }
-
-            closedType.TypeInitializer?.Invoke(null, null);
+            JsonUtility.UnregisterType<T>();
         }
 
         public static void RegisterTypeFactory(Type scriptType, Func<MonoBehaviour> factory)
