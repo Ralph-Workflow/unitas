@@ -280,14 +280,10 @@ impl ControlSession {
     }
 
     fn state_payload(&self) -> Value {
-        let (score, total, won, script_host) = match self.player.as_ref() {
-            Some(player) => (
-                player.score(),
-                player.total(),
-                player.won(),
-                ScriptHost::CoreClr.as_str(),
-            ),
-            None => (0, 0, false, ScriptHost::None.as_str()),
+        let script_host = if self.player.is_some() {
+            ScriptHost::CoreClr.as_str()
+        } else {
+            ScriptHost::None.as_str()
         };
         json!({
             "ok": true,
@@ -295,9 +291,6 @@ impl ControlSession {
             "frames": self.frames,
             "delta_seconds": self.delta_seconds,
             "random_seed": self.random_seed,
-            "score": score,
-            "total": total,
-            "won": won,
             "script_host": script_host,
         })
     }
@@ -800,16 +793,13 @@ mod tests {
     }
 
     #[test]
-    fn the_state_payload_reports_the_script_host_and_the_game_state(
+    fn the_state_payload_reports_the_script_host_and_the_session_state(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut session = session(41)?;
         let payload = session
             .dispatch(&Request::State)
             .map_err(|error| error.outcome())?;
         assert_eq!(payload["ok"], json!(true));
-        assert_eq!(payload["score"], json!(0));
-        assert_eq!(payload["total"], json!(0));
-        assert_eq!(payload["won"], json!(false));
         assert_eq!(payload["script_host"], json!("none"));
 
         session

@@ -35,7 +35,11 @@ CONTROL_STDIO_CHUNK_FRAMES = 30
 CONTROL_STDIO_MAX_FRAMES = 300
 CONTROL_STDIO_BUDGET_SECONDS = 90.0
 CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
-CONTROL_STATE_FIELDS = ("score", "total", "won")
+CONTROL_STATE_FIELDS = ("frames", "script_host")
+CANVAS_TEXT_SEPARATOR = " | "
+# The sample game's own progress marker. The engine reports no game state,
+# so the lane reads the game's log output and interprets it here.
+GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
@@ -61,11 +65,8 @@ DEVICE_REPORT_FIELDS: tuple[tuple[str, str], ...] = (
     ("tolerance", r"tolerance=([0-9.]+)"),
     ("audio_active", r"audio_active=(true|false)"),
     ("audio_frames", r"audio_frames=(\d+)"),
-    ("ball_moved", r"ball_moved=(true|false)"),
-    ("score", r"score=(\d+/\d+)"),
-    ("won", r"won=(true|false)"),
-    ("hud", r"hud=(true|false)"),
     ("canvas", r"canvas=(true|false)"),
+    ("canvas_texts", r'canvas_texts="([^"]*)"'),
     ("shadow", r"shadow=(true|false)"),
 )
 
@@ -258,7 +259,8 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
         names = ", ".join(missing)
         return (
             f"the device verification line lacks fields: {names}; "
-            "contract C3 requires score=<n>/<total>, won, hud, canvas, and shadow"
+            "contract C3 requires size, frames_presented, mean_error, tolerance, "
+            "audio_active, audio_frames, canvas, canvas_texts, and shadow"
         )
     frames = int(report["frames_presented"])
     tolerance = float(report["tolerance"])
@@ -284,18 +286,14 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
             f"the tone pushed {audio_frames} frames to the audio device; at least 1 is required",
         ),
         (
-            report["ball_moved"] != "true",
-            "the synthetic input events did not move the sample scene ball",
-        ),
-        (
-            report["hud"] != "true",
-            "the HUD overlay did not render on screen (hud=false); "
-            "the score HUD must be visible per contract C3",
-        ),
-        (
             report["canvas"] != "true",
             "the uGUI canvas did not render on the windowed surface (canvas=false); "
             "the canvas content must be part of the presented frame, not only of the capture",
+        ),
+        (
+            not report["canvas_texts"].strip(),
+            "the uGUI canvas carried no text (canvas_texts is empty); "
+            "the game's readout must be part of the presented frame per contract C3",
         ),
         (
             report["shadow"] != "true",
@@ -306,6 +304,37 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
     for failed, reason in checks:
         if failed:
             return reason
+    return None
+
+
+def canvas_texts(report: dict[str, str] | None) -> list[str]:
+    if report is None:
+        return []
+    return [text for text in report.get("canvas_texts", "").split(CANVAS_TEXT_SEPARATOR) if text]
+
+
+def game_score(lines: Sequence[str]) -> int | None:
+    """Read the sample game's own progress marker from the player's log output."""
+    score: int | None = None
+    for line in lines:
+        match = GAME_SCORE_PATTERN.search(line)
+        if match is None:
+            continue
+        value = int(match.group(1))
+        if score is None or value > score:
+            score = value
+    return score
+
+
+def game_progress_reason(lines: Sequence[str]) -> str | None:
+    score = game_score(lines)
+    if score is None:
+        return (
+            "the player's log output carries no collected pickup; "
+            "the synthetic input events did not reach the sample game"
+        )
+    if score < 1:
+        return f"the sample game reports a score of {score}; at least 1 is required"
     return None
 
 
@@ -328,6 +357,11 @@ def pump_control_responses(
         for line in process.stdout:
             responses.put(line)
     responses.put(None)
+
+
+def pump_control_errors(process: subprocess.Popen[str], errors: list[str]) -> None:
+    if process.stderr is not None:
+        errors.extend(process.stderr)
 
 
 def stop_control_process(process: subprocess.Popen[str]) -> None:
@@ -383,26 +417,34 @@ def control_request(
     return payload
 
 
-def control_state_score(payload: dict[str, object]) -> int:
+def control_state(payload: dict[str, object]) -> int:
     missing = [field for field in CONTROL_STATE_FIELDS if field not in payload]
     if missing:
         names = ", ".join(missing)
         message = f"control-stdio state response lacks contract C3 fields: {names}"
         raise ControlCheckError(message)
-    score = payload["score"]
-    if not isinstance(score, int) or isinstance(score, bool):
-        message = "control-stdio state response score is not an integer"
+    frames = payload["frames"]
+    if not isinstance(frames, int) or isinstance(frames, bool):
+        message = "control-stdio state response frames is not an integer"
         raise ControlCheckError(message)
-    return score
+    script_host = payload["script_host"]
+    if script_host != "coreclr":
+        message = (
+            "control-stdio state response did not host the game's scripts on CoreCLR "
+            f"(script_host={script_host!r})"
+        )
+        raise ControlCheckError(message)
+    return frames
 
 
 def drive_control_session(
     process: subprocess.Popen[str],
     responses: queue.Queue[str | None],
     deadline: float,
+    errors: list[str],
 ) -> int:
     control_request(process, responses, deadline, {"cmd": "play"})
-    baseline = control_state_score(control_request(process, responses, deadline, {"cmd": "state"}))
+    control_state(control_request(process, responses, deadline, {"cmd": "state"}))
     control_request(
         process,
         responses,
@@ -416,36 +458,37 @@ def drive_control_session(
         },
     )
     frames = 0
-    score = baseline
-    while frames < CONTROL_STDIO_MAX_FRAMES and score <= baseline:
-        payload = control_request(
+    while frames < CONTROL_STDIO_MAX_FRAMES:
+        control_request(
             process,
             responses,
             deadline,
             {"cmd": "step", "frames": CONTROL_STDIO_CHUNK_FRAMES},
         )
-        score = control_state_score(payload)
         frames += CONTROL_STDIO_CHUNK_FRAMES
-    if score <= baseline:
-        message = (
-            f"drove the ball forward for {frames} frames but the state score "
-            f"stayed at {score}; no pickup was collected"
-        )
-        raise ControlCheckError(message)
-    return score
+        if game_progress_reason(errors) is None:
+            return game_score(errors) or 0
+    message = f"drove the ball forward for {frames} frames but the player logged no collected pickup"
+    raise ControlCheckError(message)
 
 
 def control_stdio_check(budget_seconds: float) -> str | None:
     deadline = time.monotonic() + min(budget_seconds, CONTROL_STDIO_BUDGET_SECONDS)
     responses: queue.Queue[str | None] = queue.Queue()
+    errors: list[str] = []
     process = start_control_process()
     threading.Thread(
         target=pump_control_responses,
         args=(process, responses),
         daemon=True,
     ).start()
+    threading.Thread(
+        target=pump_control_errors,
+        args=(process, errors),
+        daemon=True,
+    ).start()
     try:
-        drive_control_session(process, responses, deadline)
+        drive_control_session(process, responses, deadline, errors)
     except ControlCheckError as error:
         return str(error)
     except OSError as error:
@@ -555,7 +598,7 @@ def run_device_lane(
     if rc != 0:
         return rc
     report = parse_device_report(output)
-    reason = device_failure_reason(report)
+    reason = device_failure_reason(report) or game_progress_reason(output.splitlines())
     sustained_fps_text, fps_reason = sustained_fps_measurement(output)
     stage = "device-verify"
     if reason is None:
@@ -566,10 +609,10 @@ def run_device_lane(
     if reason is not None:
         sys.stderr.write(f"FAIL verify-device ({stage}): {reason} ({POLICY_CITATION})\n")
         return 1
-    score_summary = ""
+    canvas_summary = ""
     if report is not None:
-        score_summary = (
-            f" Score: {report['score']}, won={report['won']}, hud on screen, "
+        canvas_summary = (
+            f" Canvas text: {'; '.join(canvas_texts(report))}, "
             f"canvas on screen={report['canvas']}, shadows on screen={report['shadow']}."
         )
     sys.stdout.write(
@@ -577,9 +620,9 @@ def run_device_lane(
         "the approved reference within tolerance, the default audio device played the tone, "
         "the uGUI canvas and the project shadows were part of the presented frame, "
         "and the synthetic input events moved the sample scene. Sustained frame rate: "
-        f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f}){score_summary}\n"
-        "OK verify-device control-stdio: scripted input drove the ball into a pickup "
-        "and the state payload score incremented per contract C3\n"
+        f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f}){canvas_summary}\n"
+        "OK verify-device control-stdio: the packaged player hosted the game's scripts on "
+        "CoreCLR and the scripted input drove the ball into a pickup\n"
     )
 
     rc = run_package_device_gates(budget_seconds)

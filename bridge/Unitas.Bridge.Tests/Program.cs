@@ -79,8 +79,6 @@ namespace Unitas.Bridge.Tests
                 () => LoggingTests.Run(),
                 () => RenderTests.Run(),
                 () => PlaytestTests.Run(),
-                () => RollABallScenarioTests.CollectAllPickupsScenario(),
-                () => RollABallScenarioTests.RestartRecoveryScenario(),
                 () => SceneCameraTests.Run(),
                 () => UiClickPumpTests.Run(),
                 () => TestCharacterControllerDefaultsAndNullProvider(),

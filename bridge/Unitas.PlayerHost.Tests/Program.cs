@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Unitas.Bridge;
@@ -96,6 +97,13 @@ namespace Unitas.PlayerHost.Tests
             PlayerInitDelegate init = GetEntry<PlayerInitDelegate>(entry, "UnitasPlayerInit");
             PlayerTickDelegate tick = GetEntry<PlayerTickDelegate>(entry, "UnitasPlayerTick");
             PlayerShutdownDelegate shutdown = GetEntry<PlayerShutdownDelegate>(entry, "UnitasPlayerShutdown");
+
+            MethodInfo tickMethod = entry.GetMethod("UnitasPlayerTick")
+                ?? throw new InvalidOperationException("Entry point not found: UnitasPlayerTick");
+            Check.Equal(
+                "the tick entry carries only the frame delta",
+                1,
+                tickMethod.GetParameters().Length);
 
             int invalidInit = init(0UL, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 

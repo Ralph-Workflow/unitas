@@ -47,7 +47,10 @@ RUN_BUDGET_SECONDS = 300.0
 CONTROL_STDIO_CHUNK_FRAMES = 30
 CONTROL_STDIO_MAX_FRAMES = 300
 CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
-CONTROL_STATE_FIELDS = ("score", "total", "won", "script_host")
+CONTROL_STATE_FIELDS = ("frames", "script_host")
+# The sample game's own progress marker. The engine reports no game state, so
+# the lane reads the game's log output and interprets it here.
+GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
 
 
 class PackagedProofError(Exception):
@@ -327,6 +330,11 @@ def pump_control_responses(
     responses.put(None)
 
 
+def pump_control_errors(process: subprocess.Popen[str], errors: list[str]) -> None:
+    if process.stderr is not None:
+        errors.extend(process.stderr)
+
+
 def stop_control_process(process: subprocess.Popen[str]) -> None:
     if process.stdin is not None:
         with contextlib.suppress(OSError):
@@ -380,7 +388,7 @@ def control_request(
     return payload
 
 
-def control_state_score(payload: dict[str, object]) -> int:
+def control_state(payload: dict[str, object]) -> int:
     missing = [field for field in CONTROL_STATE_FIELDS if field not in payload]
     if missing:
         names = ", ".join(missing)
@@ -393,10 +401,23 @@ def control_state_score(payload: dict[str, object]) -> int:
             "the packaged player did not host the game's scripts on CoreCLR"
         )
         raise PackagedProofError(message)
-    score = payload["score"]
-    if not isinstance(score, int) or isinstance(score, bool):
-        message = "control-stdio state response score is not an integer"
+    frames = payload["frames"]
+    if not isinstance(frames, int) or isinstance(frames, bool):
+        message = "control-stdio state response frames is not an integer"
         raise PackagedProofError(message)
+    return frames
+
+
+def game_score(lines: Sequence[str]) -> int | None:
+    """Read the sample game's own progress marker from the player's log output."""
+    score: int | None = None
+    for line in lines:
+        match = GAME_SCORE_PATTERN.search(line)
+        if match is None:
+            continue
+        value = int(match.group(1))
+        if score is None or value > score:
+            score = value
     return score
 
 
@@ -404,9 +425,10 @@ def drive_packaged_replay(
     process: subprocess.Popen[str],
     responses: queue.Queue[str | None],
     deadline: float,
+    errors: list[str],
 ) -> int:
     control_request(process, responses, deadline, {"cmd": "play"})
-    baseline = control_state_score(control_request(process, responses, deadline, {"cmd": "state"}))
+    control_state(control_request(process, responses, deadline, {"cmd": "state"}))
     control_request(
         process,
         responses,
@@ -420,23 +442,22 @@ def drive_packaged_replay(
         },
     )
     frames = 0
-    score = baseline
-    while frames < CONTROL_STDIO_MAX_FRAMES and score <= baseline:
-        payload = control_request(
+    while frames < CONTROL_STDIO_MAX_FRAMES:
+        control_request(
             process,
             responses,
             deadline,
             {"cmd": "step", "frames": CONTROL_STDIO_CHUNK_FRAMES},
         )
-        score = control_state_score(payload)
         frames += CONTROL_STDIO_CHUNK_FRAMES
-    if score <= baseline:
-        message = (
-            f"replayed input for {frames} frames but the packaged player score "
-            f"stayed at {score}; no pickup was collected"
-        )
-        raise PackagedProofError(message)
-    return score
+        score = game_score(errors)
+        if score is not None:
+            return score
+    message = (
+        f"replayed input for {frames} frames but the packaged player logged no "
+        "collected pickup"
+    )
+    raise PackagedProofError(message)
 
 
 def packaged_player_replay(executable: Path, env: dict[str, str]) -> int:
@@ -459,8 +480,14 @@ def packaged_player_replay(executable: Path, env: dict[str, str]) -> int:
         args=(process, responses),
         daemon=True,
     ).start()
+    errors: list[str] = []
+    threading.Thread(
+        target=pump_control_errors,
+        args=(process, errors),
+        daemon=True,
+    ).start()
     try:
-        score = drive_packaged_replay(process, responses, deadline)
+        score = drive_packaged_replay(process, responses, deadline, errors)
     except RuntimeError as error:
         emit(f"step {name}: {error}")
         stop_control_process(process)

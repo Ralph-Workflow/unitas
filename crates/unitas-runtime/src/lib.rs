@@ -12,6 +12,7 @@ pub mod navigation;
 pub mod particles;
 pub mod physics;
 pub mod physics_settings;
+pub mod player_loop;
 pub mod presenter;
 pub mod resources;
 mod runtime;
@@ -31,6 +32,10 @@ pub use dylib::{RuntimeDylib, RuntimeDylibError};
 pub use error::RuntimeError;
 pub use input::*;
 pub use jobs::job_system;
+pub use player_loop::{
+    BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
+    PlayerLoopSystem,
+};
 pub use presenter::{
     FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding, GpuWindowPresenter,
     WindowError, scene_gpu_meshes, transform_to_mat4, view_matrix_from_transform,

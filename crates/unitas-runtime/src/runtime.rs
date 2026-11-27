@@ -29,8 +29,8 @@ use unitas_physics::particles::ParticleSystem;
 use unitas_physics::trails::Trail;
 use unitas_physics::{
     BodyDesc, BodyRole, CharacterController, ColliderDesc, ColliderShape, CollisionDetectionMode3D,
-    CollisionPayload, ForceMode, MoveResult, Phase, PhysicsMaterial3D, QueryHit, Shape, SolverType,
-    World,
+    CollisionEvent, CollisionPayload, ForceMode, MoveResult, Phase, PhysicsMaterial3D, QueryHit,
+    Shape, SolverType, TriggerEvent, World,
 };
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
@@ -43,7 +43,11 @@ use crate::error::{RenderError, RuntimeError};
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
-use crate::physics::{PhysicsRuntimeWorld, layer_bits};
+use crate::physics::{ContactEvent2D, PhysicsRuntimeWorld, layer_bits};
+use crate::player_loop::{
+    BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
+    PlayerLoopSystem, PlayerLoopStep,
+};
 use crate::physics_settings::{
     collision_detection_of, interpolation_of, layer_matrix_of, material_of, solver_settings_of,
 };
@@ -175,6 +179,15 @@ pub struct Callbacks {
     pub destroy: extern "C" fn(u64),
     pub collision: extern "C" fn(u64, u64, u32),
     pub trigger: extern "C" fn(u64, u64, u32),
+}
+
+/// The physics messages one fixed step produced. They are dispatched after the
+/// step's script callbacks, the way the engine dispatched them before the player
+/// loop tree existed.
+pub(crate) struct PhysicsMessages {
+    events: Vec<CollisionEvent>,
+    trigger_events: Vec<TriggerEvent>,
+    contacts_2d: Vec<ContactEvent2D>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -377,6 +390,8 @@ pub struct Runtime {
     pub(crate) is_shutdown: bool,
     pub(crate) destroy_handle: Option<u64>,
     pub(crate) destroy_channel: Option<DestroyChannel>,
+    pub(crate) player_loop: PlayerLoop,
+    pub(crate) pending_physics_messages: Option<PhysicsMessages>,
 }
 
 impl Runtime {
@@ -423,6 +438,8 @@ impl Runtime {
             is_shutdown: false,
             destroy_handle: None,
             destroy_channel: None,
+            player_loop: PlayerLoop::new(),
+            pending_physics_messages: None,
         })
     }
 
@@ -1397,6 +1414,48 @@ impl Runtime {
         self.callbacks = Some(callbacks);
     }
 
+    /// The player loop the runtime walks every frame.
+    pub fn player_loop(&self) -> &PlayerLoop {
+        &self.player_loop
+    }
+
+    /// The current player loop tree.
+    pub fn player_loop_tree(&self) -> &PlayerLoopSystem {
+        self.player_loop.root()
+    }
+
+    /// Replaces the player loop tree. A tree that drops a subsystem drops the
+    /// work that subsystem carried.
+    pub fn set_player_loop_tree(&mut self, tree: PlayerLoopSystem) -> Result<(), PlayerLoopError> {
+        self.player_loop.set_root(tree)
+    }
+
+    /// Registers a custom player loop system next to the system it is
+    /// anchored to. It runs every frame at that position.
+    pub fn register_player_loop_custom_system(
+        &mut self,
+        name: &str,
+        type_name: &str,
+        anchor_type: &str,
+        position: CustomSystemPosition,
+        callback: PlayerLoopCallback,
+        user_data: u64,
+    ) -> Result<(), PlayerLoopError> {
+        self.player_loop.register_custom_system(
+            name,
+            type_name,
+            anchor_type,
+            position,
+            callback,
+            user_data,
+        )
+    }
+
+    /// Removes a custom player loop system and the node it runs in.
+    pub fn unregister_player_loop_custom_system(&mut self, type_name: &str) -> bool {
+        self.player_loop.unregister_custom_system(type_name)
+    }
+
     pub fn tick(&mut self, delta_seconds: f64) -> Result<(), RuntimeError> {
         self.tick_with_hook(delta_seconds, |_, f| f())
     }
@@ -1420,7 +1479,6 @@ impl Runtime {
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
-        const EPSILON: f64 = 1e-9;
         if self.first_tick {
             self.first_tick = false;
             if let Some(callbacks) = self.callbacks {
@@ -1440,121 +1498,234 @@ impl Runtime {
             self.drain_pending_play_on_awake();
         }
         let scaled_delta = delta_seconds * self.time_scale;
-        self.input.begin_frame(scaled_delta);
-        self.accumulator += scaled_delta;
-        if self.accumulator > self.maximum_delta_time {
-            self.accumulator = self.maximum_delta_time;
-        }
-        let fixed_step = self.fixed_timestep;
-        while self.accumulator >= fixed_step - EPSILON {
-            self.sync_kinematic_transforms();
-            self.physics.world_3d_mut().step(fixed_step)?;
-            self.write_back_dynamic_transforms();
-            let contacts_2d = self.physics.step_2d_contacts(fixed_step as f32);
-            let events = self.physics.world_3d_mut().drain_events();
-            let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
-            if let Some(callbacks) = self.callbacks {
-                let handles = self.all_script_handles();
-                for handle in handles {
+        self.run_player_loop(scaled_delta, delta_seconds, &mut hook)?;
+        Ok(())
+    }
+
+    fn run_player_loop<H>(
+        &mut self,
+        scaled_delta: f64,
+        delta_seconds: f64,
+        hook: &mut H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let plan = self.player_loop.plan();
+        self.run_player_loop_steps(&plan, scaled_delta, delta_seconds, hook)
+    }
+
+    fn run_player_loop_steps<H>(
+        &mut self,
+        steps: &[PlayerLoopStep],
+        scaled_delta: f64,
+        delta_seconds: f64,
+        hook: &mut H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        for step in steps {
+            match step {
+                PlayerLoopStep::Builtin(work) => {
+                    self.run_player_loop_work(*work, scaled_delta, delta_seconds, hook)?;
+                }
+                PlayerLoopStep::Custom {
+                    callback,
+                    user_data,
+                } => {
+                    let callback = *callback;
+                    let user_data = *user_data;
                     hook(self, &mut || {
-                        (callbacks.fixed_update)(handle, fixed_step);
+                        callback(user_data, scaled_delta);
                     });
                 }
-                // A step's physics messages are dispatched before the next step
-                // runs, so the message order does not depend on how many fixed
-                // steps a rendered frame happens to batch.
-                for event in events {
-                    let a = event.a;
-                    let b = event.b;
-                    let payload = self.physics.world_3d().collision_payload(a, b).cloned();
-                    if let Some(payload) = payload {
-                        self.collision_payloads
-                            .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
-                    }
-                    let a = a.as_u64();
-                    let b = b.as_u64();
-                    let phase = phase_code(event.phase);
-                    hook(self, &mut || {
-                        (callbacks.collision)(a, b, phase);
-                    });
-                }
-                for event in trigger_events {
-                    let has_rigidbody = self.entity_belongs_to_rigid_body(event.a)
-                        || self.entity_belongs_to_rigid_body(event.b);
-                    if !has_rigidbody {
-                        continue;
-                    }
-                    let a = event.a.as_u64();
-                    let b = event.b.as_u64();
-                    let phase = phase_code(event.phase);
-                    hook(self, &mut || {
-                        (callbacks.trigger)(a, b, phase);
-                    });
-                }
-                for contact in contacts_2d {
-                    let a = contact.a.as_u64();
-                    let b = contact.b.as_u64();
-                    let phase = phase_code(contact.phase);
-                    if contact.trigger {
-                        hook(self, &mut || {
-                            (callbacks.trigger)(a, b, phase);
-                        });
-                    } else {
-                        hook(self, &mut || {
-                            (callbacks.collision)(a, b, phase);
-                        });
-                    }
+                PlayerLoopStep::FixedPhase { steps } => {
+                    self.run_fixed_update_phase(steps, scaled_delta, delta_seconds, hook)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn run_fixed_update_phase<H>(
+        &mut self,
+        steps: &[PlayerLoopStep],
+        scaled_delta: f64,
+        delta_seconds: f64,
+        hook: &mut H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        const EPSILON: f64 = 1e-9;
+        let fixed_step = self.fixed_timestep;
+        while self.accumulator >= fixed_step - EPSILON {
+            self.run_player_loop_steps(steps, scaled_delta, delta_seconds, hook)?;
+            self.dispatch_physics_messages(hook);
             self.accumulator -= fixed_step;
             if self.accumulator < 0.0 {
                 self.accumulator = 0.0;
             }
         }
-        if self.pending_scripts {
-            if let Some(callbacks) = self.callbacks {
-                self.init_pending_scripts(callbacks, &mut hook);
+        Ok(())
+    }
+
+    fn run_player_loop_work<H>(
+        &mut self,
+        work: BuiltinWork,
+        scaled_delta: f64,
+        delta_seconds: f64,
+        hook: &mut H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        match work {
+            BuiltinWork::PlayerUpdateTime => {
+                self.accumulator += scaled_delta;
+                if self.accumulator > self.maximum_delta_time {
+                    self.accumulator = self.maximum_delta_time;
+                }
             }
-            self.refresh_script_view();
-        }
-        let handles = self.all_script_handles();
-        if let Some(callbacks) = self.callbacks {
-            for handle in &handles {
-                let h = *handle;
-                hook(self, &mut || {
-                    (callbacks.update)(h, scaled_delta);
+            BuiltinWork::SynchronizeInputs => {
+                self.input.begin_frame(scaled_delta);
+            }
+            BuiltinWork::PhysicsFixedUpdate => {
+                let fixed_step = self.fixed_timestep;
+                self.sync_kinematic_transforms();
+                self.physics.world_3d_mut().step(fixed_step)?;
+                self.write_back_dynamic_transforms();
+                let events = self.physics.world_3d_mut().drain_events();
+                let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
+                self.pending_physics_messages = Some(PhysicsMessages {
+                    events,
+                    trigger_events,
+                    contacts_2d: Vec::new(),
                 });
             }
-        }
-        self.step_animators(scaled_delta);
-        self.particles
-            .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
-        self.particles_2d
-            .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
-        self.step_trails(scaled_delta as f32);
-        if scaled_delta >= 0.0 {
-            let _ = self.navigation.step(scaled_delta);
-        }
-        self.terrain.apply_heightfields(self.physics.world_3d_mut());
-        self.sync_audio_source_positions();
-        self.audio.tick(delta_seconds, self.time_scale);
-        self.route_ui_pointer();
-        if let Some(callbacks) = self.callbacks {
-            let late_handles = self.all_script_handles();
-            for handle in &late_handles {
-                let h = *handle;
-                hook(self, &mut || {
-                    (callbacks.late_update)(h, scaled_delta);
-                });
+            BuiltinWork::Physics2DFixedUpdate => {
+                let contacts_2d = self.physics.step_2d_contacts(self.fixed_timestep as f32);
+                if let Some(messages) = &mut self.pending_physics_messages {
+                    messages.contacts_2d = contacts_2d;
+                }
             }
-        }
-        if self.pending_scripts {
-            if let Some(callbacks) = self.callbacks {
-                self.init_pending_scripts(callbacks, &mut hook);
+            BuiltinWork::ScriptRunBehaviourFixedUpdate => {
+                let fixed_step = self.fixed_timestep;
+                if let Some(callbacks) = self.callbacks {
+                    let handles = self.all_script_handles();
+                    for handle in handles {
+                        hook(self, &mut || {
+                            (callbacks.fixed_update)(handle, fixed_step);
+                        });
+                    }
+                }
             }
-            self.refresh_script_view();
+            BuiltinWork::ScriptRunBehaviourUpdate => {
+                if let Some(callbacks) = self.callbacks {
+                    let handles = self.all_script_handles();
+                    for handle in handles {
+                        hook(self, &mut || {
+                            (callbacks.update)(handle, scaled_delta);
+                        });
+                    }
+                }
+            }
+            BuiltinWork::LegacyAnimationUpdate => {
+                self.step_animators(scaled_delta);
+            }
+            BuiltinWork::VFXUpdate => {
+                self.particles
+                    .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
+                self.particles_2d
+                    .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
+                self.step_trails(scaled_delta as f32);
+                if scaled_delta >= 0.0 {
+                    let _ = self.navigation.step(scaled_delta);
+                }
+                self.terrain.apply_heightfields(self.physics.world_3d_mut());
+            }
+            BuiltinWork::UpdateAudio => {
+                self.sync_audio_source_positions();
+                self.audio.tick(delta_seconds, self.time_scale);
+            }
+            BuiltinWork::UpdateCanvas => {
+                self.route_ui_pointer();
+            }
+            BuiltinWork::ScriptLateUpdate => {
+                if let Some(callbacks) = self.callbacks {
+                    let late_handles = self.all_script_handles();
+                    for handle in late_handles {
+                        hook(self, &mut || {
+                            (callbacks.late_update)(handle, scaled_delta);
+                        });
+                    }
+                }
+            }
+            BuiltinWork::InitPendingScripts => {
+                if self.pending_scripts {
+                    if let Some(callbacks) = self.callbacks {
+                        self.init_pending_scripts(callbacks, hook);
+                    }
+                    self.refresh_script_view();
+                }
+            }
         }
         Ok(())
+    }
+
+    fn dispatch_physics_messages<H>(&mut self, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let Some(messages) = self.pending_physics_messages.take() else {
+            return;
+        };
+        let Some(callbacks) = self.callbacks else {
+            return;
+        };
+        for event in messages.events {
+            let a = event.a;
+            let b = event.b;
+            let payload = self.physics.world_3d().collision_payload(a, b).cloned();
+            if let Some(payload) = payload {
+                self.collision_payloads
+                    .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
+            }
+            let a = a.as_u64();
+            let b = b.as_u64();
+            let phase = phase_code(event.phase);
+            hook(self, &mut || {
+                (callbacks.collision)(a, b, phase);
+            });
+        }
+        for event in messages.trigger_events {
+            let has_rigidbody = self.entity_belongs_to_rigid_body(event.a)
+                || self.entity_belongs_to_rigid_body(event.b);
+            if !has_rigidbody {
+                continue;
+            }
+            let a = event.a.as_u64();
+            let b = event.b.as_u64();
+            let phase = phase_code(event.phase);
+            hook(self, &mut || {
+                (callbacks.trigger)(a, b, phase);
+            });
+        }
+        for contact in messages.contacts_2d {
+            let a = contact.a.as_u64();
+            let b = contact.b.as_u64();
+            let phase = phase_code(contact.phase);
+            if contact.trigger {
+                hook(self, &mut || {
+                    (callbacks.trigger)(a, b, phase);
+                });
+            } else {
+                hook(self, &mut || {
+                    (callbacks.collision)(a, b, phase);
+                });
+            }
+        }
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {

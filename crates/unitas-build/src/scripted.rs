@@ -14,10 +14,8 @@ use crate::player::PlayerStartupError;
 const PLAYER_HOST_ENTRY_TYPE: &str = "Unitas.PlayerHost.PlayerHostEntry";
 const RUNTIME_LIBRARY_ENVIRONMENT_VARIABLE: &str = "UNITAS_RUNTIME_LIBRARY";
 
-pub const HUD_BUFFER_CAPACITY: usize = 4096;
-
 type InitEntry = extern "C" fn(u64, *const u8, *const u8, *const u8) -> i32;
-type TickEntry = extern "C" fn(f64, *mut u8, u64, *mut u32, *mut u32, *mut u32) -> i32;
+type TickEntry = extern "C" fn(f64) -> i32;
 type ShutdownEntry = extern "C" fn() -> i32;
 type InjectInputEntry = extern "C" fn(u64, u64, u8, f64, f64) -> i32;
 
@@ -28,10 +26,6 @@ pub struct ScriptedPlayer {
     shutdown: ShutdownEntry,
     inject_input: InjectInputEntry,
     persist_root: PathBuf,
-    hud_buffer: Vec<u8>,
-    score: u32,
-    total: u32,
-    won: bool,
 }
 
 pub struct ScriptedLaunch {
@@ -132,31 +126,14 @@ impl ScriptedPlayer {
             shutdown,
             inject_input,
             persist_root,
-            hud_buffer: vec![0u8; HUD_BUFFER_CAPACITY],
-            score: 0,
-            total: 0,
-            won: false,
         }))
     }
 
     pub fn tick(&mut self, delta_seconds: f64) -> Result<(), PlayerStartupError> {
-        let mut score = 0u32;
-        let mut total = 0u32;
-        let mut won = 0u32;
-        let stage = (self.tick)(
-            delta_seconds,
-            self.hud_buffer.as_mut_ptr(),
-            HUD_BUFFER_CAPACITY as u64,
-            &raw mut score,
-            &raw mut total,
-            &raw mut won,
-        );
+        let stage = (self.tick)(delta_seconds);
         if stage != 0 {
             return Err(PlayerStartupError::ScriptHostTickFailed { frame: 0, stage });
         }
-        self.score = score;
-        self.total = total;
-        self.won = won != 0;
         Ok(())
     }
 
@@ -164,29 +141,8 @@ impl ScriptedPlayer {
         let _ = (self.inject_input)(kind, code, u8::from(pressed), x, y);
     }
 
-    pub fn hud_text(&self) -> String {
-        let end = self
-            .hud_buffer
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(self.hud_buffer.len());
-        String::from_utf8_lossy(&self.hud_buffer[..end]).to_string()
-    }
-
     pub fn handle(&self) -> u64 {
         self.handle
-    }
-
-    pub fn score(&self) -> u32 {
-        self.score
-    }
-
-    pub fn total(&self) -> u32 {
-        self.total
-    }
-
-    pub fn won(&self) -> bool {
-        self.won
     }
 
     pub fn loaded_scene_count(&self) -> Result<usize, PlayerStartupError> {

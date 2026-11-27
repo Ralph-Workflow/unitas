@@ -88,7 +88,7 @@ namespace Unitas.Scripting
                 double finalTime = FinalTime(retimed);
                 finalTimes.Add(finalTime);
                 eventOrders.Add(GameplayEventOrder(retimed, result));
-                // S3 asks for every pickup to be collected exactly once.
+                // Every declared gameplay event must fire exactly once per run.
                 foreach (string failure in EventCountFailures(retimed, result))
                 {
                     ratePassed = false;
@@ -109,15 +109,14 @@ namespace Unitas.Scripting
 
             // The cross-rate verdict compares the gameplay events the scenario
             // declares (its log checkpoints) and their order, not the whole ordered
-            // log. The product specification (docs/product-specification/
-            // sample-games/01-roll-a-ball.md, S3) asks for three things: every
-            // pickup collected exactly once, the marble inside the arena, and a
-            // final time within one fixed step. A byte-identical log is stricter
-            // than that and cannot hold here: a per-frame Update log (the combo
-            // timer reads Time.time) may legitimately differ between rates, and
-            // the bridge's own scene loader leaves the prefab-instance pickups at
-            // the world origin, so the first scenario run of a process logs three
-            // collection messages that the later runs of the same process do not.
+            // log. The product specification asks for the declared events to fire
+            // exactly once, the player to stay inside the arena, and a final time
+            // within one fixed step. A byte-identical log is stricter than that and
+            // cannot hold here: a per-frame Update log may legitimately differ
+            // between rates, and the bridge's own scene loader leaves the
+            // prefab-instance objects at the world origin, so the first scenario
+            // run of a process logs collection messages that the later runs of the
+            // same process do not.
             for (int i = 1; i < eventOrders.Count; i++)
             {
                 if (!SameOrder(eventOrders[0], eventOrders[i]))
@@ -255,9 +254,9 @@ namespace Unitas.Scripting
             return declared;
         }
 
-        // A message belongs to the most specific declaration it matches, so
-        // "Pickup collected score 12" counts for the declaration of pickup 12 and
-        // not for the declaration of pickup 1.
+        // A message belongs to the most specific declaration it matches, so the
+        // message that names the later event counts for the declaration of that
+        // event and not for the declaration of the earlier one.
         private static ScenarioCheckpoint? MatchEvent(
             List<ScenarioCheckpoint> declared,
             ScenarioMessage message)

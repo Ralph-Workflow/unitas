@@ -18,15 +18,9 @@ namespace Unitas.PlayerHost
             return PlayerHostCore.Init(runtimeHandle, bundle, persist, scene);
         }
 
-        public static int Tick(
-            double deltaSeconds,
-            IntPtr hudBuffer = default,
-            int hudCapacity = 0,
-            IntPtr scoreOut = default,
-            IntPtr totalOut = default,
-            IntPtr wonOut = default)
+        public static int Tick(double deltaSeconds)
         {
-            return PlayerHostCore.Tick(deltaSeconds, hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
+            return PlayerHostCore.Tick(deltaSeconds);
         }
 
         public static int Shutdown()
@@ -69,15 +63,9 @@ namespace Unitas.PlayerHost
         }
 
         [UnmanagedCallersOnly]
-        public static int UnitasPlayerTick(
-            double deltaSeconds,
-            IntPtr hudBuffer,
-            int hudCapacity,
-            IntPtr scoreOut,
-            IntPtr totalOut,
-            IntPtr wonOut)
+        public static int UnitasPlayerTick(double deltaSeconds)
         {
-            return Tick(deltaSeconds, hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
+            return Tick(deltaSeconds);
         }
 
         [UnmanagedCallersOnly]

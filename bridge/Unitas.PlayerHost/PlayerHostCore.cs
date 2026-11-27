@@ -131,13 +131,7 @@ namespace Unitas.PlayerHost
             }
         }
 
-        public static int Tick(
-            double deltaSeconds,
-            IntPtr hudBuffer,
-            int hudCapacity,
-            IntPtr scoreOut,
-            IntPtr totalOut,
-            IntPtr wonOut)
+        public static int Tick(double deltaSeconds)
         {
             lock (Gate)
             {
@@ -151,7 +145,6 @@ namespace Unitas.PlayerHost
                 {
                     host.Tick(deltaSeconds);
                     UnityEngine.UI.Ui.PumpClicks();
-                    PublishHud(hudBuffer, hudCapacity, scoreOut, totalOut, wonOut);
                     return (int)PlayerHostStage.Ok;
                 }
                 catch (Exception)
@@ -182,44 +175,6 @@ namespace Unitas.PlayerHost
                     return (int)PlayerHostStage.ShutdownFailed;
                 }
             }
-        }
-
-        private static void PublishHud(
-            IntPtr hudBuffer,
-            int hudCapacity,
-            IntPtr scoreOut,
-            IntPtr totalOut,
-            IntPtr wonOut)
-        {
-            PlayerHostHud.Read(out int score, out int total, out bool won, out string text);
-            if (scoreOut != IntPtr.Zero)
-            {
-                Marshal.WriteInt32(scoreOut, score);
-            }
-
-            if (totalOut != IntPtr.Zero)
-            {
-                Marshal.WriteInt32(totalOut, total);
-            }
-
-            if (wonOut != IntPtr.Zero)
-            {
-                Marshal.WriteInt32(wonOut, won ? 1 : 0);
-            }
-
-            if (hudBuffer == IntPtr.Zero || hudCapacity <= 1)
-            {
-                return;
-            }
-
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
-            int length = Math.Min(bytes.Length, hudCapacity - 1);
-            if (length > 0)
-            {
-                Marshal.Copy(bytes, 0, hudBuffer, length);
-            }
-
-            Marshal.WriteByte(hudBuffer, (byte)length);
         }
 
         private static void BindRuntimeLibrary(string bundleRoot)

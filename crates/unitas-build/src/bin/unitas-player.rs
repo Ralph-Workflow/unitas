@@ -9,6 +9,8 @@ use unitas_build::control;
 use unitas_build::package::package_desktop_targets;
 use unitas_build::player::{install_project_trust, STARTUP_FAILURE_EXIT_CODE};
 #[cfg(feature = "device")]
+use unitas_build::player::CANVAS_TEXT_SEPARATOR;
+#[cfg(feature = "device")]
 use unitas_build::{
     capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification,
     DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
@@ -314,7 +316,7 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
     match launch_bundle_windowed(bundle_dir, options) {
         Ok(result) => {
             println!(
-                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} score={}/{} won={} hud={} hud_text=\"{}\"",
+                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} mode=windowed frames_presented={} audio_status=\"{}\" audio_frames={} canvas_texts=\"{}\"",
                 result.launch.manifest.product_name,
                 result.launch.startup_scene_path.display(),
                 result.launch.loaded_scene_count,
@@ -325,11 +327,7 @@ fn run_windowed(bundle_dir: &Path, options: &WindowedLaunchOptions) -> ExitCode 
                 result.frames_presented,
                 result.audio_device_status,
                 result.audio_frames_pushed,
-                result.score,
-                result.total_pickups,
-                result.won,
-                result.hud,
-                result.hud_text
+                result.canvas_texts.join(CANVAS_TEXT_SEPARATOR)
             );
             ExitCode::SUCCESS
         }
@@ -390,7 +388,7 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
     match run_device_verification(reference_path, frames) {
         Ok(report) => {
             println!(
-                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} ball_moved={} final_pos=({:.3},{:.3},{:.3}) score={}/{} won={} hud={} canvas={} shadow={}",
+                "device_verify=ok reference={} size={}x{} frames_presented={} mean_error={:.4} tolerance={:.4} audio_active={} audio_status=\"{}\" audio_frames={} final_pos=({:.3},{:.3},{:.3}) canvas={} canvas_texts=\"{}\" shadow={}",
                 report.reference_path.display(),
                 report.width,
                 report.height,
@@ -400,15 +398,11 @@ fn run_verify_device(reference_path: &Path, frames: u64) -> ExitCode {
                 report.audio_device_active,
                 report.audio_device_status,
                 report.audio_frames_pushed,
-                report.ball_moved,
                 report.final_ball_position[0],
                 report.final_ball_position[1],
                 report.final_ball_position[2],
-                report.score,
-                report.total,
-                report.won,
-                report.hud,
                 report.canvas,
+                report.canvas_texts.join(CANVAS_TEXT_SEPARATOR),
                 report.shadow
             );
             ExitCode::SUCCESS

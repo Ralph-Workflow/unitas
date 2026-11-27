@@ -16,8 +16,6 @@ use unitas_asset::trust::{
 use unitas_dotnet::install_code_execution_capabilities;
 use unitas_render::Image;
 #[cfg(feature = "device")]
-use unitas_render::TextOverlayItem;
-#[cfg(feature = "device")]
 use unitas_render::GPU_CPU_MEAN_ERROR_TOLERANCE;
 #[cfg(feature = "device")]
 use unitas_runtime::window::{run_windowed_gpu, GpuFramePresenter, WindowConfig};
@@ -47,6 +45,8 @@ pub const DEFAULT_DEVICE_VERIFY_WIDTH: u32 = 320;
 pub const DEFAULT_DEVICE_VERIFY_HEIGHT: u32 = 240;
 pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
+/// The separator the player's one-line report joins the canvas texts with.
+pub const CANVAS_TEXT_SEPARATOR: &str = " | ";
 
 /// The code-execution capabilities the trust store grants this project.
 pub fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
@@ -281,12 +281,8 @@ pub struct WindowedPlayerResult {
     pub audio_device_status: String,
     pub audio_frames_pushed: u64,
     pub final_ball_position: [f64; 3],
-    pub score: u32,
-    pub total_pickups: u32,
-    pub won: bool,
-    pub hud: bool,
-    pub hud_text: String,
     pub canvas: bool,
+    pub canvas_texts: Vec<String>,
     pub shadow: bool,
     pub captured_frame: Option<Image>,
 }
@@ -301,14 +297,10 @@ pub struct DeviceVerifyReport {
     pub audio_device_active: bool,
     pub audio_device_status: String,
     pub audio_frames_pushed: u64,
-    pub ball_moved: bool,
     pub initial_ball_position: [f64; 3],
     pub final_ball_position: [f64; 3],
-    pub score: u32,
-    pub total: u32,
-    pub won: bool,
-    pub hud: bool,
     pub canvas: bool,
+    pub canvas_texts: Vec<String>,
     pub shadow: bool,
     pub reference_path: PathBuf,
 }
@@ -602,19 +594,9 @@ pub fn launch_bundle_windowed(
         None
     };
 
-    let (score, total_pickups, won, hud_text) =
-        match scripted.as_ref().and_then(|player| player.lock().ok()) {
-            Some(player) => (
-                player.score(),
-                player.total(),
-                player.won(),
-                player.hud_text(),
-            ),
-            None => (0, 0, false, String::new()),
-        };
-
-    let hud = presenter.overlay_drawn();
-    let canvas = !runtime.ui_draw_items().is_empty();
+    let canvas_items = runtime.ui_draw_items();
+    let canvas = !canvas_items.is_empty();
+    let canvas_texts = canvas_texts(&canvas_items);
     let shadow = unitas_runtime::presenter::shadow_settings_for_runtime(&runtime).enabled;
     let final_ball_position = player_ball_position(&runtime);
     let loaded_scene_count = runtime.scene_count();
@@ -649,15 +631,21 @@ pub fn launch_bundle_windowed(
         audio_device_status,
         audio_frames_pushed,
         final_ball_position,
-        score,
-        total_pickups,
-        won,
-        hud,
-        hud_text,
         canvas,
+        canvas_texts,
         shadow,
         captured_frame,
     })
+}
+
+/// The text the uGUI canvas carries: the generic fact that replaces the
+/// game's scraped HUD state.
+#[cfg(feature = "device")]
+fn canvas_texts(items: &[unitas_runtime::UiDrawItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| item.text.as_ref().map(|text| text.text.clone()))
+        .collect()
 }
 
 /// The player ball's world position: the scene transform the renderer and the
@@ -684,35 +672,6 @@ fn player_ball_position(runtime: &Runtime) -> [f64; 3] {
 }
 
 #[cfg(feature = "device")]
-fn script_hud_overlay_items(
-    hud_text: &str,
-    won: bool,
-    width: u32,
-    height: u32,
-) -> Vec<TextOverlayItem> {
-    let mut items = Vec::new();
-    if !hud_text.is_empty() {
-        items.push(TextOverlayItem {
-            text: hud_text.to_string(),
-            x: 16.0,
-            y: 16.0,
-            size_px: 28.0,
-            color: [1.0, 1.0, 1.0, 1.0],
-        });
-    }
-    if won {
-        items.push(TextOverlayItem {
-            text: String::from("You win!"),
-            x: (width as f32) * 0.5 - 90.0,
-            y: (height as f32) * 0.5 - 24.0,
-            size_px: 48.0,
-            color: [1.0, 0.85, 0.2, 1.0],
-        });
-    }
-    items
-}
-
-#[cfg(feature = "device")]
 fn run_windowed_scripted(
     runtime: &mut unitas_runtime::Runtime,
     window_config: &WindowConfig,
@@ -720,15 +679,11 @@ fn run_windowed_scripted(
     scripted: Option<Arc<Mutex<crate::scripted::ScriptedPlayer>>>,
     inject_demo_input: bool,
 ) -> Result<u64, unitas_runtime::window::WindowError> {
-    let shared_overlay = Arc::new(Mutex::new(Vec::new()));
     let forwarded_keys: Vec<u32> = (0u32..=127).chain(273u32..=276).collect();
     let mut key_down = vec![false; forwarded_keys.len()];
     let mut mouse_down = [false; 3];
 
-    presenter.set_overlay_source(Arc::clone(&shared_overlay));
-
     {
-        let overlay = Arc::clone(&shared_overlay);
         let cb_player = scripted.clone();
         presenter.set_update_callback(move |rt, frame| {
             if inject_demo_input {
@@ -767,13 +722,6 @@ fn run_windowed_scripted(
             player
                 .tick(frame.delta_seconds)
                 .map_err(|error| unitas_runtime::window::WindowError::Runtime(error.to_string()))?;
-
-            let hud_text = player.hud_text();
-            let won = player.won();
-            let published = publish_script_hud(player.handle(), &hud_text);
-            if let Ok(mut items) = overlay.lock() {
-                *items = script_hud_overlay_items(&published, won, frame.width, frame.height);
-            }
             Ok(())
         });
     }
@@ -781,18 +729,6 @@ fn run_windowed_scripted(
     let result = run_windowed_gpu(runtime, window_config, presenter);
     presenter.set_update_callback(|_, _| Ok(()));
     result.map(|()| presenter.frames_presented())
-}
-
-#[cfg(feature = "device")]
-fn publish_script_hud(handle: u64, hud_text: &str) -> String {
-    if let Some(address) = unitas_runtime::abi_player::write_player_hud_buffer(handle, hud_text) {
-        let _ = unitas_runtime::abi_player::unitas_runtime_player_publish_hud(
-            handle,
-            address,
-            hud_text.len() as u64,
-        );
-    }
-    unitas_runtime::abi_player::player_hud_text(handle).unwrap_or_default()
 }
 
 pub fn decode_bmp_bytes(bytes: &[u8]) -> Result<Image, String> {
@@ -1023,24 +959,6 @@ pub fn run_device_verification(
     let windowed_result = launch_bundle_windowed(&temp_bundle_dir, &options)?;
     let _ = fs::remove_dir_all(&temp_bundle_dir);
 
-    let dx = windowed_result.final_ball_position[0] - initial_ball_position[0];
-    let dz = windowed_result.final_ball_position[2] - initial_ball_position[2];
-    let native_distance = (dx * dx + dz * dz).sqrt();
-    // The scripted player simulates the ball in the managed layer, so the
-    // native physics body keeps its position; the score the managed game
-    // reports is the observable that proves the injected input moved the
-    // ball across the arena and reached a pickup.
-    let ball_moved = windowed_result.score > 0;
-    if !ball_moved {
-        return Err(PlayerStartupError::VerificationFailed {
-            message: format!(
-                "synthetic keyboard/mouse input did not move PlayerBall (score={}, native distance={native_distance:.4}, initial={initial_ball_position:?}, final={:?})",
-                windowed_result.score,
-                windowed_result.final_ball_position
-            ),
-        });
-    }
-
     Ok(DeviceVerifyReport {
         width,
         height,
@@ -1050,14 +968,10 @@ pub fn run_device_verification(
         audio_device_active: windowed_result.audio_device_active,
         audio_device_status: windowed_result.audio_device_status,
         audio_frames_pushed: windowed_result.audio_frames_pushed,
-        ball_moved,
         initial_ball_position,
         final_ball_position: windowed_result.final_ball_position,
-        score: windowed_result.score,
-        total: windowed_result.total_pickups,
-        won: windowed_result.won,
-        hud: windowed_result.hud,
         canvas: windowed_result.canvas,
+        canvas_texts: windowed_result.canvas_texts,
         shadow: windowed_result.shadow,
         reference_path: reference_bmp_path.to_path_buf(),
     })

@@ -15,6 +15,8 @@ namespace Unitas.Editor.Tests
             WriteOutsideTheProjectIsRefused();
             WriteRequiresTheEditScopes();
             CompileReportsScriptDiagnostics();
+            DiagnoseReportsStructuredDiagnostics();
+            DiagnoseReportsASoundProject();
             TestRunReturnsAPassFailSummary();
             HeadlessCliRunTestsIsSupported();
             TheCommandPaletteListsTheRegisteredCommands();
@@ -31,8 +33,8 @@ namespace Unitas.Editor.Tests
             TestTools.Register(host);
 
             Check.Equal(
-                "authoring: three project tools and two pipeline tools are registered",
-                5,
+                "authoring: three project tools and three pipeline tools are registered",
+                6,
                 host.ListTools().Count);
             Check.That(
                 "authoring: project.list requires read-project",
@@ -46,6 +48,9 @@ namespace Unitas.Editor.Tests
             Check.That(
                 "authoring: scripts.compile requires edit-scripts",
                 Scope.EditScripts == ScopeOf(host, "scripts.compile"));
+            Check.That(
+                "authoring: scripts.diagnose requires edit-scripts",
+                Scope.EditScripts == ScopeOf(host, "scripts.diagnose"));
             Check.That(
                 "authoring: tests.run requires execute-project-code",
                 Scope.ExecuteProjectCode == ScopeOf(host, "tests.run"));
@@ -289,6 +294,124 @@ namespace Unitas.Editor.Tests
                 Check.That(
                     "authoring: the diagnostic carries a compiler identifier",
                     identifier.StartsWith("CS", StringComparison.Ordinal));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void DiagnoseReportsStructuredDiagnostics()
+        {
+            string project = CreateProject("diagnose", false);
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(project, "Assets", "Scripts", "Missing.cs"),
+                    "namespace Fixture\n{\n    public class Missing\n    {\n        public int Value => MissingMember;\n    }\n}\n");
+
+                using McpHost host = NewHost();
+                ScriptTools.Register(host);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.EditScripts, GrantAuthority.Person);
+
+                JsonNode envelope = host.CallTool(
+                    session,
+                    "scripts.diagnose",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                    });
+                Check.That(
+                    "authoring: the diagnose returns an untrusted envelope",
+                    UntrustedContent.IsEnvelope(envelope));
+                Check.Equal(
+                    "authoring: the diagnose origin",
+                    "unitas://scripts/diagnose",
+                    envelope["origin"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "authoring: the diagnose reports failure",
+                    false,
+                    envelope["content"]?["succeeded"]?.GetValue<bool>() ?? true);
+                Check.That(
+                    "authoring: the diagnose counts the error",
+                    (envelope["content"]?["errorCount"]?.GetValue<int>() ?? 0) > 0);
+
+                JsonArray? diagnostics = envelope["content"]?["diagnostics"] as JsonArray;
+                Check.That(
+                    "authoring: the diagnose reports a diagnostic",
+                    (diagnostics?.Count ?? 0) > 0);
+
+                string file = string.Empty;
+                string message = string.Empty;
+                string identifier = string.Empty;
+                string severity = string.Empty;
+                int line = 0;
+                foreach (JsonNode? entry in diagnostics ?? new JsonArray())
+                {
+                    string candidate = entry?["file"]?.GetValue<string>() ?? string.Empty;
+                    if (!candidate.EndsWith("Assets/Scripts/Missing.cs", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    file = candidate;
+                    message = entry?["message"]?.GetValue<string>() ?? string.Empty;
+                    identifier = entry?["identifier"]?.GetValue<string>() ?? string.Empty;
+                    severity = entry?["severity"]?.GetValue<string>() ?? string.Empty;
+                    line = entry?["line"]?.GetValue<int>() ?? 0;
+                    break;
+                }
+
+                Check.Equal(
+                    "authoring: the diagnose names the broken file",
+                    "Assets/Scripts/Missing.cs",
+                    file);
+                Check.That(
+                    "authoring: the diagnose names the broken member",
+                    message.Contains("MissingMember", StringComparison.Ordinal));
+                Check.That(
+                    "authoring: the diagnose carries a compiler identifier",
+                    identifier.StartsWith("CS", StringComparison.Ordinal));
+                Check.Equal(
+                    "authoring: the diagnose reports the diagnostic as an error",
+                    "error",
+                    severity);
+                Check.That(
+                    "authoring: the diagnose reports the diagnostic line",
+                    line > 0);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void DiagnoseReportsASoundProject()
+        {
+            string project = CreateProject("diagnose-sound", false);
+            try
+            {
+                using McpHost host = NewHost();
+                ScriptTools.Register(host);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.EditScripts, GrantAuthority.Person);
+
+                JsonNode envelope = host.CallTool(
+                    session,
+                    "scripts.diagnose",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                    });
+                Check.Equal(
+                    "authoring: the diagnose reports success",
+                    true,
+                    envelope["content"]?["succeeded"]?.GetValue<bool>() ?? false);
+                Check.Equal(
+                    "authoring: the diagnose counts no error",
+                    0,
+                    envelope["content"]?["errorCount"]?.GetValue<int>() ?? -1);
             }
             finally
             {
