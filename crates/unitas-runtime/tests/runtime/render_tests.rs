@@ -1,10 +1,11 @@
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use unitas_render::cube;
+use unitas_render::{Renderer, cube};
 use unitas_runtime::{
-    Runtime, test_read_error_message, test_read_path_buffer, test_read_render_buffer,
-    test_write_path_buffer, unitas_runtime_load_scene, unitas_runtime_new,
+    GpuFramePresenter, Runtime, test_read_error_message, test_read_path_buffer,
+    test_read_render_buffer, test_write_path_buffer, unitas_runtime_load_scene, unitas_runtime_new,
     unitas_runtime_path_buffer, unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
     unitas_runtime_render_camera_screen_point_to_ray, unitas_runtime_render_camera_update,
     unitas_runtime_render_camera_world_to_screen_point, unitas_runtime_render_frame,
@@ -513,5 +514,234 @@ fn renderer_without_mesh_reports_diagnostic() -> Result<(), Box<dyn Error>> {
         "the unimportable mesh reference must produce a diagnostic: {diagnostics:?}"
     );
     let _ = std::fs::remove_dir_all(scene.parent().unwrap_or(&scene));
+    Ok(())
+}
+
+fn sample_asset(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../samples/roll-a-ball/Assets")
+        .join(relative)
+}
+
+fn png_size(path: &Path) -> Result<(u32, u32), Box<dyn Error>> {
+    let bytes = std::fs::read(path)?;
+    if bytes.len() < 24 {
+        return Err(String::from("the png file holds no image header").into());
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into()?);
+    Ok((width, height))
+}
+
+fn material_float(text: &str, key: &str) -> Option<f32> {
+    text.lines().find_map(|line| {
+        let trimmed = line.trim().trim_start_matches("- ").trim();
+        let value = trimmed.strip_prefix(key)?.strip_prefix(':')?.trim();
+        value.parse::<f32>().ok()
+    })
+}
+
+fn local_contrast(pixels: &[[u8; 3]], mask: &[bool], width: usize) -> f64 {
+    let mut total = 0i64;
+    let mut count = 0i64;
+    for row in 0..pixels.len() / width {
+        for column in 0..width - 1 {
+            let index = row * width + column;
+            if !mask[index] || !mask[index + 1] {
+                continue;
+            }
+            total += i64::from(channel_difference(pixels[index], pixels[index + 1]));
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return 0.0;
+    }
+    total as f64 / count as f64
+}
+
+fn channel_difference(left: [u8; 3], right: [u8; 3]) -> i32 {
+    let mut difference = 0;
+    for channel in 0..3 {
+        let value = i32::from(left[channel]) - i32::from(right[channel]);
+        difference = difference.max(value.abs());
+    }
+    difference
+}
+
+#[test]
+fn scene_renderables_carry_the_authored_material_maps_and_floats() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&sample_asset("Scenes/RollABall.unity"))?;
+    let (albedo_width, albedo_height) = png_size(&sample_asset("Textures/Pickup.png"))?;
+    let (normal_width, normal_height) = png_size(&sample_asset("Textures/PickupNormal.png"))?;
+    let material_text = std::fs::read_to_string(sample_asset("Materials/Pickup.mat"))?;
+    let smoothness = material_float(&material_text, "_Glossiness")
+        .ok_or("the pickup material declares no glossiness")?;
+    let metallic = material_float(&material_text, "_Metallic")
+        .ok_or("the pickup material declares no metallic value")?;
+
+    let renderables = runtime.scene_renderables();
+    let textured: Vec<_> = renderables
+        .iter()
+        .filter(|renderable| renderable.material.albedo.is_some())
+        .collect();
+    assert!(
+        !textured.is_empty(),
+        "no scene renderer of the scene carries an albedo map"
+    );
+    let mut matched = 0;
+    for renderable in &textured {
+        let albedo = renderable
+            .material
+            .albedo
+            .as_ref()
+            .ok_or("the renderable lost its albedo map")?;
+        if albedo.width != albedo_width || albedo.height != albedo_height {
+            continue;
+        }
+        matched += 1;
+        let normal = renderable
+            .material
+            .normal
+            .as_ref()
+            .ok_or("the renderable lost its normal map")?;
+        assert_eq!(
+            (normal.width, normal.height),
+            (normal_width, normal_height),
+            "the normal map must be decoded at the size the asset holds"
+        );
+        assert!(
+            (renderable.material.smoothness - smoothness).abs() < 1e-6,
+            "the glossiness of the material must reach the renderable: {}",
+            renderable.material.smoothness
+        );
+        assert!(
+            (renderable.material.metallic - metallic).abs() < 1e-6,
+            "the metallic value of the material must reach the renderable: {}",
+            renderable.material.metallic
+        );
+        assert!(
+            !renderable.attributes.uvs.is_empty(),
+            "the mesh of the renderable must carry texture coordinates"
+        );
+        assert!(
+            !renderable.attributes.tangents.is_empty(),
+            "the mesh of the renderable must carry tangents"
+        );
+    }
+    assert!(
+        matched > 0,
+        "no scene renderer of the scene carries the pickup albedo map"
+    );
+    Ok(())
+}
+
+#[test]
+fn roll_a_ball_capture_draws_the_pickup_with_its_material_maps() -> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&sample_asset("Scenes/RollABall.unity"))?;
+    let Ok(renderer) = Renderer::new() else {
+        return Ok(());
+    };
+    let mut pickups: Vec<u64> = Vec::new();
+    if let Some(graph) = runtime.scene_graph() {
+        for id in graph.breadth_first_order() {
+            if let Some(entity) = graph.entity(id)
+                && entity.name.starts_with("Pickup_")
+            {
+                pickups.push(id.as_u64());
+            }
+        }
+    }
+    assert!(!pickups.is_empty(), "the scene holds no pickup to draw");
+    let renderer = Arc::new(renderer);
+    let mut presenter = GpuFramePresenter::new(Arc::clone(&renderer));
+    presenter.bind_scene(&runtime);
+    let width = 480u32;
+    let height = 360u32;
+    let mut drawn = 0;
+    for binding in presenter.meshes_mut() {
+        let is_pickup = binding
+            .entity
+            .is_some_and(|entity| pickups.contains(&entity.as_u64()));
+        binding.enabled = is_pickup;
+        if is_pickup {
+            drawn += 1;
+        }
+    }
+    assert_eq!(drawn, pickups.len(), "every pickup must be drawn");
+    let textured = presenter.render_offscreen(&runtime, width, height)?;
+    for binding in presenter.meshes_mut() {
+        if let Some(material) = binding.material.as_mut() {
+            material.albedo = None;
+            material.normal = None;
+            material.emissive = None;
+        }
+    }
+    let plain = presenter.render_offscreen(&runtime, width, height)?;
+
+    let columns = width as usize;
+    let mut mask = vec![false; textured.pixels.len()];
+    let mut differing = 0usize;
+    let mut strongest = 0i32;
+    let mut strongest_pixel = [0u8; 3];
+    let mut plain_pixel = [0u8; 3];
+    let mut brightest_pixel = [0u8; 3];
+    let mut brightest_plain = [0u8; 3];
+    let mut tones: Vec<[u8; 3]> = Vec::new();
+    for (index, (textured_pixel, plain_pixel_value)) in
+        textured.pixels.iter().zip(plain.pixels.iter()).enumerate()
+    {
+        let difference = channel_difference(*textured_pixel, *plain_pixel_value);
+        if difference == 0 {
+            continue;
+        }
+        mask[index] = true;
+        differing += 1;
+        if difference > strongest {
+            strongest = difference;
+            strongest_pixel = *textured_pixel;
+            plain_pixel = *plain_pixel_value;
+        }
+        if !tones.contains(textured_pixel) {
+            tones.push(*textured_pixel);
+        }
+        if textured_pixel[1] > brightest_pixel[1] && plain_pixel_value[1] < 200 {
+            brightest_pixel = *textured_pixel;
+            brightest_plain = *plain_pixel_value;
+        }
+    }
+    let plain_contrast = local_contrast(&plain.pixels, &mask, columns);
+    let textured_contrast = local_contrast(&textured.pixels, &mask, columns);
+    println!(
+        "differing={differing} strongest={strongest} tones={} frame={} \
+         plain_contrast={plain_contrast:.3} textured_contrast={textured_contrast:.3} \
+         plain={plain_pixel:?} textured={strongest_pixel:?} \
+         brightest plain={brightest_plain:?} textured={brightest_pixel:?}",
+        tones.len(),
+        usize::try_from(width * height)?
+    );
+    assert!(
+        differing > 0,
+        "the material maps of the pickup did not reach the draw call"
+    );
+    assert!(
+        differing < usize::try_from(width * height)? / 8,
+        "only the pickups may change, but {differing} pixels changed"
+    );
+    assert!(
+        strongest > 16,
+        "the pickup texture must change the colour it is drawn in: {strongest}"
+    );
+    assert!(
+        tones.len() > 1,
+        "the pickup pixels must not be one flat colour: {tones:?}"
+    );
+    assert!(
+        textured_contrast > plain_contrast * 1.5,
+        "the pickup pixels must carry the texture, not only the light: \
+         textured contrast {textured_contrast:.3} against plain contrast {plain_contrast:.3}"
+    );
     Ok(())
 }

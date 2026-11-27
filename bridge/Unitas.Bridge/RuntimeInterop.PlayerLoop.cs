@@ -19,6 +19,18 @@ namespace Unitas.Bridge
         // with the native tree instead of the empty default.
         private static readonly PlayerLoopHostImpl PlayerLoopHostInstance = new PlayerLoopHostImpl();
 
+        // The interop install runs before a runtime attaches, so the host joins the
+        // player loop slot only once there is a runtime to serve it.
+        internal static void InstallPlayerLoopHost()
+        {
+            if (_playerLoopRuntime == 0)
+            {
+                return;
+            }
+
+            UnityEngine.LowLevel.PlayerLoop.PlayerLoopHost = PlayerLoopHostInstance;
+        }
+
         // The runtime the player loop surface answers for. The bridge attaches the
         // runtime it drives, the same way the time scale host is attached.
         private static ulong _playerLoopRuntime;
@@ -27,7 +39,7 @@ namespace Unitas.Bridge
         public static void AttachPlayerLoopHost(ulong runtime)
         {
             _playerLoopRuntime = runtime;
-            UnityEngine.LowLevel.PlayerLoop.PlayerLoopHost = PlayerLoopHostInstance;
+            InstallPlayerLoopHost();
         }
 
         /// <summary>Detaches the runtime the player loop surface talks to.</summary>
@@ -78,6 +90,11 @@ namespace Unitas.Bridge
         private delegate void PlayerLoopCustomCallback(ulong userData, double deltaSeconds);
 
         private static readonly PlayerLoopCustomCallback CustomCallback = InvokeCustomSystem;
+
+        // The update a tree node without a custom system carries. Unity calls the
+        // delegate of every node it walks, so a node without one gets this no-op.
+        private static readonly UnityEngine.LowLevel.PlayerLoopSystem.PlayerLoopSystemUpdateFunction NoUpdate =
+            () => { };
 
         // The managed custom systems the native loop calls back into. The native side
         // holds the function pointer, so the managed delegate stays rooted here.
@@ -206,7 +223,7 @@ namespace Unitas.Bridge
 
             Marshal.Copy(nameBytes, 0, buffer, nameBytes.Length);
             Marshal.Copy(typeBytes, 0, IntPtr.Add(buffer, nameBytes.Length), typeBytes.Length);
-            Marshal.Copy(anchorBytes, 0, IntPtr.Add(buffer, nameBytes.Length + typeBytes.Length), anchorBytes.Length);
+            Marshal.Copy(anchorBytes, 0, IntPtr.Add(buffer, checked(nameBytes.Length + typeBytes.Length)), anchorBytes.Length);
 
             int code = unitas_runtime_player_loop_register_custom_system(
                 runtime,
@@ -399,7 +416,7 @@ namespace Unitas.Bridge
                 return default;
             }
 
-            IntPtr buffer = unitas_runtime_player_loop_buffer(runtime, length);
+            IntPtr buffer = new IntPtr(unchecked((long)unitas_runtime_player_loop_buffer(runtime, length)));
             if (buffer == IntPtr.Zero)
             {
                 return default;
@@ -488,7 +505,7 @@ namespace Unitas.Bridge
             {
                 type = type,
                 subSystemList = children,
-                updateDelegate = FindCustomSystem(type),
+                updateDelegate = FindCustomSystem(type) ?? NoUpdate,
             };
         }
 

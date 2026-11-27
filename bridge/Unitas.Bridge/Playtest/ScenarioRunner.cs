@@ -163,6 +163,12 @@ namespace Unitas.Bridge.Playtest
                 return null;
             }
 
+            if (step is SetQualityStep qualityStep)
+            {
+                RuntimeInterop.ApplyDisplayQualityLevel(qualityStep.Level);
+                return null;
+            }
+
             if (step is InjectGamepadAxisStep gamepadAxisStep)
             {
                 host.InjectAxis(gamepadAxisStep.Axis, gamepadAxisStep.Value);
@@ -296,6 +302,8 @@ namespace Unitas.Bridge.Playtest
                     return "inject_scroll";
                 case ScenarioStepKind.SetTimeScale:
                     return "set_time_scale";
+                case ScenarioStepKind.SetQuality:
+                    return "set_quality";
                 case ScenarioStepKind.InjectGamepadAxis:
                     return "inject_gamepad_axis";
                 default:

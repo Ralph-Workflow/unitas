@@ -97,6 +97,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("s8_arena_countdown", "s8_arena_countdown.scenario.json", (), False),
     ("s8_arena_x5_checkpoint", "s8_arena_x5_checkpoint.scenario.json", (), False),
     ("s8_results_gold_checkpoint", "s8_results_gold_checkpoint.scenario.json", (), False),
+    ("s8_quality_sweep", "s8_quality_sweep.scenario.json", (), False),
 )
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (

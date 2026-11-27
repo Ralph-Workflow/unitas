@@ -180,6 +180,9 @@ const SHAPED_TEXT_LIMIT: usize = 256;
 impl GlyphTextPainter {
     pub fn new() -> Self {
         let mut fonts = crate::glyphs::FontLibrary::new();
+        // The bundled font comes first so it shapes the glyphs it has; the
+        // system fonts loaded after it stay the fallback for the rest.
+        fonts.load_bundled_font();
         fonts.load_system_fonts();
         Self {
             fonts,

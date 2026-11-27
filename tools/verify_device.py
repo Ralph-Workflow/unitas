@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import queue
 import re
 import struct
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,7 +40,13 @@ CONTROL_STDIO_STOP_TIMEOUT_SECONDS = 5.0
 CONTROL_STATE_FIELDS = ("frames", "script_host")
 CANVAS_TEXT_SEPARATOR = " | "
 GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
+GAME_CHIME_PATTERN = re.compile(r"collect chime played pickup_frame=(\d+)")
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
+DEVICE_AUDIO_WAV = REPO_ROOT / "target" / "device-lane" / "device_audio.wav"
+GAME_FRAME_RATE = 60
+CHIME_FREQUENCY_HZ = 875.0
+CHIME_WINDOW_SECONDS = 0.2
+CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 TIMEOUT_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Default requirements"
@@ -281,7 +289,8 @@ def device_failure_reason(report: dict[str, str] | None) -> str | None:
         ),
         (
             audio_frames < 1,
-            f"the tone pushed {audio_frames} frames to the audio device; at least 1 is required",
+            f"the mixed audio pushed {audio_frames} frames to the audio device; "
+            "at least 1 is required",
         ),
         (
             report["canvas"] != "true",
@@ -333,6 +342,83 @@ def game_progress_reason(lines: Sequence[str]) -> str | None:
     if score < 1:
         return f"the sample game reports a score of {score}; at least 1 is required"
     return None
+
+
+def pickup_frames(lines: Sequence[str]) -> list[int]:
+    frames: list[int] = []
+    for line in lines:
+        match = GAME_CHIME_PATTERN.search(line)
+        if match is not None:
+            frames.append(int(match.group(1)))
+    return frames
+
+
+def read_wav_mono(path: Path) -> tuple[int, list[float]]:
+    with wave.open(str(path), "rb") as handle:
+        channels = handle.getnchannels()
+        sample_rate = handle.getframerate()
+        width = handle.getsampwidth()
+        raw = handle.readframes(handle.getnframes())
+    if width != 2:
+        message = f"unsupported sample width {width} bytes"
+        raise ValueError(message)
+    count = len(raw) // 2
+    values = struct.unpack(f"<{count}h", raw[: count * 2])
+    if channels == 1:
+        return sample_rate, [value / 32768.0 for value in values]
+    mono: list[float] = []
+    for index in range(count // channels):
+        start = index * channels
+        mono.append(sum(values[start : start + channels]) / (channels * 32768.0))
+    return sample_rate, mono
+
+
+def band_amplitude(samples: Sequence[float], sample_rate: int, frequency: float) -> float:
+    if not samples:
+        return 0.0
+    omega = 2.0 * math.pi * frequency / sample_rate
+    coefficient = 2.0 * math.cos(omega)
+    previous = 0.0
+    before_previous = 0.0
+    for sample in samples:
+        current = sample + coefficient * previous - before_previous
+        before_previous = previous
+        previous = current
+    power = (
+        previous * previous
+        + before_previous * before_previous
+        - coefficient * previous * before_previous
+    )
+    return 2.0 * math.sqrt(max(power, 0.0)) / len(samples)
+
+
+def chime_capture_reason(wav_path: Path, pickup_frame: int) -> tuple[str | None, str]:
+    if not wav_path.is_file():
+        return (f"the device lane wrote no audio capture at '{wav_path}'", "")
+    try:
+        sample_rate, samples = read_wav_mono(wav_path)
+    except (OSError, ValueError, wave.Error) as error:
+        return (f"the device audio capture '{wav_path}' is unreadable: {error}", "")
+    if sample_rate <= 0 or not samples:
+        return (f"the device audio capture '{wav_path}' carries no samples", "")
+    offset = int(round(pickup_frame * sample_rate / GAME_FRAME_RATE))
+    window = int(round(CHIME_WINDOW_SECONDS * sample_rate))
+    if offset + window > len(samples):
+        return (
+            f"the device audio capture holds {len(samples)} samples at {sample_rate} Hz; "
+            f"the pickup window [{offset}, {offset + window}) lies outside the capture",
+            "",
+        )
+    amplitude = band_amplitude(
+        samples[offset : offset + window], sample_rate, CHIME_FREQUENCY_HZ
+    )
+    summary = (
+        f"the {CHIME_FREQUENCY_HZ:.0f} Hz band amplitude in the window after the pickup "
+        f"is {amplitude:.5f} against the silence floor {CHIME_FLOOR_AMPLITUDE:.5f}"
+    )
+    if amplitude <= CHIME_FLOOR_AMPLITUDE:
+        return (f"the mixed audio after the pickup carries no collect chime: {summary}", "")
+    return (None, summary)
 
 
 def start_control_process() -> subprocess.Popen[str]:
@@ -602,6 +688,14 @@ def run_device_lane(
     stage = "device-verify"
     if reason is None:
         reason = fps_reason
+    chime_frames = pickup_frames(output.splitlines())
+    chime_reason = "the player's log output carries no collected pickup chime frame"
+    chime_summary = ""
+    if chime_frames:
+        chime_reason, chime_summary = chime_capture_reason(DEVICE_AUDIO_WAV, chime_frames[0])
+    if reason is None:
+        stage = "device-audio"
+        reason = chime_reason
     if reason is None:
         stage = "control-stdio"
         reason = control_stdio_check(budget_seconds)
@@ -616,12 +710,14 @@ def run_device_lane(
         )
     sys.stdout.write(
         "OK verify-device device-verify: the window presented frames, the GPU frame matched "
-        "the approved reference within tolerance, the default audio device played the tone, "
+        "the approved reference within tolerance, the default audio device played the mixed audio, "
         "the uGUI canvas and the project shadows were part of the presented frame, "
         "and the synthetic input events moved the sample scene. Sustained frame rate: "
         f"{sustained_fps_text} FPS (interactive floor {MIN_SUSTAINED_FPS:.1f}){canvas_summary}\n"
         "OK verify-device control-stdio: the packaged player hosted the game's scripts on "
         "CoreCLR and the scripted input drove the ball into a pickup\n"
+        f"OK verify-device device-audio: the captured device stream carries the collect "
+        f"chime: {chime_summary}\n"
     )
 
     rc = run_package_device_gates(budget_seconds)

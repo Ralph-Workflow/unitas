@@ -34,7 +34,9 @@ use unitas_physics::{
 };
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
-use unitas_render::{Camera, DirectionalLight, Mat4, Mesh, Renderer, Vec3, cube, look_at};
+use unitas_render::{
+    Camera, DirectionalLight, Mat4, Mesh, MeshAttributes, Renderer, Vec3, cube, look_at,
+};
 
 use self::ui_components::UiComponents;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
@@ -266,9 +268,29 @@ impl Default for RenderCameraParams {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderMaterial {
     pub color: [f32; 4],
+    pub albedo: Option<Image>,
+    pub normal: Option<Image>,
+    pub emissive: Option<Image>,
+    pub metallic: f32,
+    pub smoothness: f32,
+    pub emission_color: Option<[f32; 4]>,
+}
+
+impl RenderMaterial {
+    pub fn plain() -> Self {
+        Self {
+            color: DEFAULT_MATERIAL_COLOR,
+            albedo: None,
+            normal: None,
+            emissive: None,
+            metallic: 0.0,
+            smoothness: 0.0,
+            emission_color: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -287,12 +309,22 @@ pub struct RenderRenderer {
 }
 
 /// One scene renderer a presenter can draw: the mesh it draws, the material
-/// colour it uses and the entity it belongs to.
+/// it draws it with and the entity it belongs to.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneRenderable<'a> {
     pub entity: EntityId,
     pub mesh: &'a Mesh,
+    pub attributes: &'a MeshAttributes,
+    pub material: &'a RenderMaterial,
     pub color: [f32; 3],
+}
+
+/// A render mesh with the texture coordinates and tangents the shader reads
+/// beside its positions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderMesh {
+    pub mesh: Mesh,
+    pub attributes: MeshAttributes,
 }
 
 /// The scene camera a presenter can draw with: the entity it follows and the
@@ -322,8 +354,9 @@ struct CameraBasis {
 
 #[derive(Debug)]
 pub struct RenderWorld {
-    meshes: HashMap<u64, Mesh>,
+    meshes: HashMap<u64, RenderMesh>,
     materials: HashMap<u64, RenderMaterial>,
+    plain_material: RenderMaterial,
     cameras: HashMap<u64, RenderCamera>,
     renderers: HashMap<u64, RenderRenderer>,
     lights: HashMap<u64, RenderLight>,
@@ -338,6 +371,7 @@ impl Default for RenderWorld {
         Self {
             meshes: HashMap::new(),
             materials: HashMap::new(),
+            plain_material: RenderMaterial::plain(),
             cameras: HashMap::new(),
             renderers: HashMap::new(),
             lights: HashMap::new(),
@@ -3273,15 +3307,26 @@ impl Runtime {
         normals: Vec<Vec3>,
         indices: Vec<u32>,
     ) -> u64 {
+        self.create_render_mesh_with_uvs(positions, normals, indices, Vec::new())
+    }
+
+    pub(crate) fn create_render_mesh_with_uvs(
+        &mut self,
+        positions: Vec<Vec3>,
+        normals: Vec<Vec3>,
+        indices: Vec<u32>,
+        uvs: Vec<[f32; 2]>,
+    ) -> u64 {
         let handle = self.render.allocate();
-        self.render.meshes.insert(
-            handle,
-            Mesh {
-                positions,
-                normals,
-                indices,
-            },
-        );
+        let mesh = Mesh {
+            positions,
+            normals,
+            indices,
+        };
+        let attributes = MeshAttributes::compute(&mesh, uvs);
+        self.render
+            .meshes
+            .insert(handle, RenderMesh { mesh, attributes });
         handle
     }
 
@@ -3291,13 +3336,20 @@ impl Runtime {
 
     pub(crate) fn create_render_material(&mut self) -> u64 {
         let handle = self.render.allocate();
-        self.render.materials.insert(
-            handle,
-            RenderMaterial {
-                color: DEFAULT_MATERIAL_COLOR,
-            },
-        );
+        self.render
+            .materials
+            .insert(handle, RenderMaterial::plain());
         handle
+    }
+
+    pub(crate) fn set_render_material(&mut self, handle: u64, material: RenderMaterial) -> bool {
+        match self.render.materials.get_mut(&handle) {
+            Some(slot) => {
+                *slot = material;
+                true
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn set_render_material_color(&mut self, handle: u64, color: [f32; 4]) -> bool {
@@ -3431,15 +3483,7 @@ impl Runtime {
         for renderer in &binding.renderers {
             let entity = EntityId::new(entity_base + renderer.entity.as_u64());
             let material = self.create_render_material();
-            self.set_render_material_color(
-                material,
-                [
-                    renderer.material_color[0],
-                    renderer.material_color[1],
-                    renderer.material_color[2],
-                    1.0,
-                ],
-            );
+            self.set_render_material(material, render_material_for(renderer));
             let mesh = self.import_scene_mesh(renderer);
             let handle = self.create_render_renderer(Some(entity), mesh, Some(material));
             self.set_render_renderer_enabled(handle, renderer.enabled);
@@ -3531,7 +3575,12 @@ impl Runtime {
             .iter()
             .map(|n| Vec3::new(n[0], n[1], n[2]))
             .collect();
-        Some(self.create_render_mesh(positions, normals, mesh_data.indices.clone()))
+        Some(self.create_render_mesh_with_uvs(
+            positions,
+            normals,
+            mesh_data.indices.clone(),
+            mesh_data.uvs.clone(),
+        ))
     }
 
     fn remove_scene_render_handles(&mut self, scene: &LoadedScene) {
@@ -3635,21 +3684,19 @@ impl Runtime {
                     return None;
                 }
                 let entity = renderer.entity?;
-                let mesh = renderer
+                let render_mesh = renderer
                     .mesh
                     .and_then(|mesh| self.render.meshes.get(&mesh))?;
-                let color = renderer
+                let material = renderer
                     .material
                     .and_then(|material| self.render.materials.get(&material))
-                    .map(|material| [material.color[0], material.color[1], material.color[2]])
-                    .unwrap_or([
-                        DEFAULT_MATERIAL_COLOR[0],
-                        DEFAULT_MATERIAL_COLOR[1],
-                        DEFAULT_MATERIAL_COLOR[2],
-                    ]);
+                    .unwrap_or(&self.render.plain_material);
+                let color = [material.color[0], material.color[1], material.color[2]];
                 Some(SceneRenderable {
                     entity,
-                    mesh,
+                    mesh: &render_mesh.mesh,
+                    attributes: &render_mesh.attributes,
+                    material,
                     color,
                 })
             })
@@ -3937,6 +3984,74 @@ impl Runtime {
             direction.y,
             direction.z,
         ])
+    }
+}
+
+/// The material a scene renderer draws with: its colour, the maps its
+/// material declares and the surface floats the shader reads.
+fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
+    RenderMaterial {
+        color: [
+            renderer.material_color[0],
+            renderer.material_color[1],
+            renderer.material_color[2],
+            1.0,
+        ],
+        albedo: load_texture_image(renderer.albedo_tex_path.as_deref()),
+        normal: load_texture_image(renderer.normal_tex_path.as_deref()),
+        emissive: load_texture_image(renderer.emission_tex_path.as_deref()),
+        metallic: renderer.metallic.unwrap_or(0.0),
+        smoothness: renderer.smoothness.unwrap_or(0.0),
+        emission_color: renderer.emission_color,
+    }
+}
+
+/// The texture at a path as the shader reads it, decoded with the asset
+/// import path and linearised when the importer says it holds colour.
+fn load_texture_image(path: Option<&Path>) -> Option<Image> {
+    let path = path?;
+    let bytes = std::fs::read(path).ok()?;
+    let name = path.file_name().and_then(|name| name.to_str())?;
+    let settings = texture_import_settings(path);
+    let imported = unitas_asset::texture::import::import_texture(&bytes, name, &settings).ok()?;
+    let mut image = image_from_decoded(&imported.texture);
+    if !settings.is_linear() {
+        linearize_image(&mut image);
+    }
+    Some(image)
+}
+
+/// The importer settings of the texture beside its path, which say whether it
+/// holds colour or a normal map.
+fn texture_import_settings(path: &Path) -> unitas_asset::texture::import::TextureImportSettings {
+    let mut meta = path.as_os_str().to_os_string();
+    meta.push(".meta");
+    let text = std::fs::read_to_string(PathBuf::from(meta)).ok();
+    match text {
+        Some(text) => unitas_asset::texture::import::TextureImportSettings::from_meta_text(&text)
+            .unwrap_or_default(),
+        None => unitas_asset::texture::import::TextureImportSettings::default(),
+    }
+}
+
+fn image_from_decoded(texture: &unitas_asset::texture::import::DecodedTexture) -> Image {
+    let rgba = unitas_asset::texture::import::texture_to_rgba8(texture);
+    let mut image = Image::new(texture.width, texture.height);
+    for (index, pixel) in image.pixels.iter_mut().enumerate() {
+        let offset = index * 4;
+        pixel[0] = rgba.get(offset).copied().unwrap_or(0);
+        pixel[1] = rgba.get(offset + 1).copied().unwrap_or(0);
+        pixel[2] = rgba.get(offset + 2).copied().unwrap_or(0);
+    }
+    image
+}
+
+fn linearize_image(image: &mut Image) {
+    for pixel in &mut image.pixels {
+        for channel in pixel.iter_mut() {
+            let linear = unitas_asset::texture::import::srgb_to_linear(*channel);
+            *channel = (linear * 255.0).round() as u8;
+        }
     }
 }
 

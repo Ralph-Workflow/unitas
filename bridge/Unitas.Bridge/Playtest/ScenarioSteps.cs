@@ -12,6 +12,7 @@ namespace Unitas.Bridge.Playtest
         InjectPointer,
         InjectScroll,
         SetTimeScale,
+        SetQuality,
         InjectGamepadAxis,
     }
 
@@ -120,6 +121,18 @@ namespace Unitas.Bridge.Playtest
         public double Value { get; }
 
         public override ScenarioStepKind Kind => ScenarioStepKind.SetTimeScale;
+    }
+
+    public sealed class SetQualityStep : ScenarioStep
+    {
+        public SetQualityStep(int level)
+        {
+            Level = level;
+        }
+
+        public int Level { get; }
+
+        public override ScenarioStepKind Kind => ScenarioStepKind.SetQuality;
     }
 
     public sealed class InjectGamepadAxisStep : ScenarioStep

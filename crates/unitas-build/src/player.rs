@@ -963,6 +963,48 @@ pub fn run_device_verification(
     let windowed_result = launch_bundle_windowed(&temp_bundle_dir, &options)?;
     let _ = fs::remove_dir_all(&temp_bundle_dir);
 
+    let mut audio_runtime =
+        unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
+            message: error.to_string(),
+        })?;
+    audio_runtime
+        .load_scene(&startup_scene_path)
+        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+            scene_path: startup_scene_path.clone(),
+            message: error.to_string(),
+        })?;
+    let chime_entity = audio_runtime
+        .find_entity_by_name("CollectChime")
+        .ok_or_else(|| PlayerStartupError::VerificationFailed {
+            message: String::from("the staged scene carries no CollectChime audio source"),
+        })?;
+
+    let audio_capture = unitas_audio::output::arm_capture(8);
+    let mut audio_output = unitas_audio::output::DeviceOutput::start().map_err(|error| {
+        PlayerStartupError::VerificationFailed {
+            message: error.to_string(),
+        }
+    })?;
+    let sample_rate = f64::from(audio_output.sample_rate());
+    // the lane injects the collect chime after 0.5 s of silence and lets it ring
+    // for 0.25 s; tools/verify_device.py measures the window after that point.
+    let lead_in_frames = (sample_rate * 0.5).round() as usize;
+    let chime_frames = (sample_rate * 0.25).round() as usize;
+    audio_output.pump_world(audio_runtime.audio_mut(), lead_in_frames);
+    audio_runtime.audio_mut().play(chime_entity, true);
+    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
+    drop(audio_output);
+
+    let audio_capture_path = Path::new("target/device-lane/device_audio.wav");
+    audio_capture
+        .write_wav(audio_capture_path)
+        .map_err(|error| PlayerStartupError::VerificationFailed {
+            message: format!(
+                "failed to write the device audio capture '{}': {error}",
+                audio_capture_path.display()
+            ),
+        })?;
+
     Ok(DeviceVerifyReport {
         width,
         height,

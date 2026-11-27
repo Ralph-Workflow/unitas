@@ -2,11 +2,11 @@ use std::ops::{Add, Sub};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use unitas_render::camera::{look_at, Camera};
-use unitas_render::gpu::{RenderScene, Renderer};
+use unitas_render::gpu::{GpuMaterialInstance, RenderScene, Renderer};
 use unitas_render::image::Image;
 use unitas_render::math::{Mat4, Vec3, Vec4};
-use unitas_render::mesh::{cube, uv_sphere, Mesh};
-use unitas_render::model::{DirectionalLight, MeshInstance};
+use unitas_render::mesh::{cube, uv_sphere, Mesh, MeshAttributes};
+use unitas_render::model::{DirectionalLight, Material, MeshInstance};
 
 pub(crate) fn shared_renderer() -> Result<MutexGuard<'static, Renderer>, String> {
     static RENDERER: OnceLock<Result<Mutex<Renderer>, String>> = OnceLock::new();
@@ -48,6 +48,21 @@ fn scaled_translated_model(scale: f32, translation: Vec3) -> Mat4 {
         translation.z,
         1.0,
     ])
+}
+
+fn uv_quad(extent: f32) -> (Mesh, MeshAttributes) {
+    let positions = [
+        [-extent, -extent, 0.0],
+        [-extent, extent, 0.0],
+        [extent, extent, 0.0],
+        [extent, -extent, 0.0],
+    ];
+    let normals = [[0.0, 0.0, -1.0]; 4];
+    let indices = [0u32, 1, 2, 0, 2, 3];
+    let mesh = Mesh::from_buffers(&positions, &normals, &indices);
+    let uvs = vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+    let attributes = mesh.attributes_with_uvs(uvs);
+    (mesh, attributes)
 }
 
 #[test]
@@ -506,5 +521,121 @@ fn nearer_instance_occludes_farther_instance() -> Result<(), Box<dyn std::error:
     let image =
         renderer.render_offscreen(&instances, &camera, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
     assert_eq!(image.get_pixel(32, 32), [255, 0, 0]);
+    Ok(())
+}
+
+#[test]
+fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
+    let (mesh, attributes) = uv_quad(0.5);
+    let mut albedo = Image::new(2, 2);
+    for pixel in &mut albedo.pixels {
+        *pixel = [255, 0, 0];
+    }
+    let flat = Material {
+        metallic: 0.25,
+        smoothness: 0.5,
+        ..Material::plain()
+    };
+    let textured = Material {
+        albedo: Some(albedo),
+        metallic: 0.25,
+        smoothness: 0.5,
+        ..Material::plain()
+    };
+    let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 0.0,
+    };
+    let instances = [
+        GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: Some(&attributes),
+            model: scaled_translated_model(1.0, Vec3::new(-2.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: &flat,
+        },
+        GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: Some(&attributes),
+            model: scaled_translated_model(1.0, Vec3::new(0.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: &flat,
+        },
+        GpuMaterialInstance {
+            mesh: &mesh,
+            attributes: Some(&attributes),
+            model: scaled_translated_model(1.0, Vec3::new(2.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: &textured,
+        },
+    ];
+
+    renderer.invalidate_resource_cache();
+    let meshes_before = renderer.mesh_upload_count();
+    let materials_before = renderer.material_bind_group_count();
+    let image = renderer.render_offscreen_materials(
+        &instances,
+        &camera,
+        view,
+        &light,
+        [0.0, 0.0, 0.0],
+        (96, 96),
+    )?;
+    assert_eq!(renderer.mesh_upload_count(), meshes_before + 1);
+    assert_eq!(renderer.material_bind_group_count(), materials_before + 2);
+
+    let row = 48;
+    let textured_pixel = (0..96)
+        .map(|x| (x, image.get_pixel(x, row)))
+        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60);
+    let flat_pixel = (0..96)
+        .map(|x| (x, image.get_pixel(x, row)))
+        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200);
+    let (textured_x, textured_pixel) = match textured_pixel {
+        Some(found) => found,
+        None => return Err("the textured instance drew no red pixel".into()),
+    };
+    let (flat_x, flat_pixel) = match flat_pixel {
+        Some(found) => found,
+        None => return Err("the flat instances drew no white pixel".into()),
+    };
+    assert_ne!(textured_x, flat_x);
+    assert_ne!(textured_pixel, flat_pixel);
+
+    let meshes_before = renderer.mesh_upload_count();
+    let materials_before = renderer.material_bind_group_count();
+    renderer.render_offscreen_materials(
+        &instances,
+        &camera,
+        view,
+        &light,
+        [0.0, 0.0, 0.0],
+        (96, 96),
+    )?;
+    assert_eq!(renderer.mesh_upload_count(), meshes_before);
+    assert_eq!(renderer.material_bind_group_count(), materials_before);
+
+    renderer.invalidate_resource_cache();
+    let meshes_before = renderer.mesh_upload_count();
+    let materials_before = renderer.material_bind_group_count();
+    renderer.render_offscreen_materials(
+        &instances,
+        &camera,
+        view,
+        &light,
+        [0.0, 0.0, 0.0],
+        (96, 96),
+    )?;
+    assert_eq!(renderer.mesh_upload_count(), meshes_before + 1);
+    assert_eq!(renderer.material_bind_group_count(), materials_before + 2);
     Ok(())
 }

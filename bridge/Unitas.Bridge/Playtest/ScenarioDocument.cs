@@ -25,6 +25,7 @@ namespace Unitas.Bridge.Playtest
             "inject_pointer",
             "inject_scroll",
             "set_time_scale",
+            "set_quality",
             "inject_gamepad_axis",
         };
 
@@ -173,6 +174,8 @@ namespace Unitas.Bridge.Playtest
                     return ParseInjectScrollStep(body, kindPath);
                 case "set_time_scale":
                     return ParseSetTimeScaleStep(body, kindPath);
+                case "set_quality":
+                    return ParseSetQualityStep(body, kindPath);
                 case "inject_gamepad_axis":
                     return ParseInjectGamepadAxisStep(body, kindPath);
                 default:
@@ -280,6 +283,13 @@ namespace Unitas.Bridge.Playtest
             }
 
             return new SetTimeScaleStep(value);
+        }
+
+        private static SetQualityStep ParseSetQualityStep(JsonElement body, string path)
+        {
+            RejectUnknownProperties(body, path, "level");
+            int level = ReadRequiredInt(body, "level", path + ".level");
+            return new SetQualityStep(level);
         }
 
         private static InjectGamepadAxisStep ParseInjectGamepadAxisStep(JsonElement body, string path)

@@ -11,7 +11,9 @@ use crate::glyphs::{
 use crate::image::{Image, Rgba8};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, MeshAttributes};
-use crate::model::{effective_alpha, DirectionalLight, Material, MaterialInstance, MeshInstance};
+use crate::model::{
+    effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
+};
 use crate::render_graph::{RenderGraph, RenderPassKind};
 use crate::shadow::{light_view_projection, shadow_map_size, ShadowSettings};
 
@@ -26,6 +28,7 @@ const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const INITIAL_SHADOW_TEXTURE_SIZE: u32 = 64;
+const MAX_CACHED_RESOURCES: usize = 4096;
 
 pub const GPU_CPU_MEAN_ERROR_TOLERANCE: f32 = 4.0;
 
@@ -404,6 +407,7 @@ pub struct Renderer {
     shadow_sampler: wgpu::Sampler,
     shadow: Mutex<ShadowState>,
     uniforms: Mutex<UniformState>,
+    cache: Mutex<ResourceCache>,
     material_sampler: wgpu::Sampler,
     material_bind: wgpu::BindGroup,
     surface: Mutex<Option<SurfaceState>>,
@@ -492,6 +496,7 @@ fn image_texture(
     queue: &wgpu::Queue,
     image: &Image,
     fallback: [u8; 4],
+    format: wgpu::TextureFormat,
 ) -> wgpu::TextureView {
     let width = image.width;
     let height = image.height;
@@ -508,7 +513,7 @@ fn image_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -1034,6 +1039,7 @@ impl Renderer {
             shadow_sampler,
             shadow: Mutex::new(shadow),
             uniforms: Mutex::new(uniforms),
+            cache: Mutex::new(ResourceCache::default()),
             material_sampler,
             material_bind,
             surface: Mutex::new(None),
@@ -1069,6 +1075,24 @@ impl Renderer {
         } else {
             0
         }
+    }
+
+    /// Drops the cached mesh buffers and material bind groups; call it when
+    /// the scene is reloaded.
+    pub fn invalidate_resource_cache(&self) {
+        let mut cache = lock(&self.cache);
+        cache.meshes.clear();
+        cache.materials.clear();
+    }
+
+    /// The mesh buffers uploaded into the cache since the renderer was created.
+    pub fn mesh_upload_count(&self) -> u32 {
+        lock(&self.cache).mesh_uploads
+    }
+
+    /// The material bind groups created since the renderer was created.
+    pub fn material_bind_group_count(&self) -> u32 {
+        lock(&self.cache).material_uploads
     }
 
     fn prepare_shadow_map(&self, pixel_size: u32) -> bool {
@@ -1206,6 +1230,28 @@ impl Renderer {
         };
         let rgba = self.render_offscreen_items(material_draw_items(instances), scene, size, &[])?;
         Ok(Image::from_rgba8(rgba))
+    }
+
+    pub fn render_offscreen_materials_with_overlay(
+        &self,
+        instances: &[GpuMaterialInstance<'_>],
+        scene: RenderScene<'_>,
+        size: (u32, u32),
+        overlay: &[TextOverlayItem],
+    ) -> Result<Image, RenderError> {
+        let rgba =
+            self.render_offscreen_materials_rgba_with_overlay(instances, scene, size, overlay)?;
+        Ok(Image::from_rgba8(rgba))
+    }
+
+    pub fn render_offscreen_materials_rgba_with_overlay(
+        &self,
+        instances: &[GpuMaterialInstance<'_>],
+        scene: RenderScene<'_>,
+        size: (u32, u32),
+        overlay: &[TextOverlayItem],
+    ) -> Result<Rgba8, RenderError> {
+        self.render_offscreen_items(material_draw_items(instances), scene, size, overlay)
     }
 
     fn render_offscreen_items(
@@ -1705,6 +1751,44 @@ impl Renderer {
         scene: RenderScene<'_>,
         overlay: &[TextOverlayItem],
     ) -> Result<(), RenderError> {
+        self.render_to_surface_items(surface, plain_draw_items(instances), scene, overlay)
+    }
+
+    pub fn render_to_surface_materials(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[GpuMaterialInstance<'_>],
+        camera: &Camera,
+        view: Mat4,
+        light: &DirectionalLight,
+        background: [f32; 3],
+    ) -> Result<(), RenderError> {
+        let scene = RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        };
+        self.render_to_surface_materials_with_overlay(surface, instances, scene, &[])
+    }
+
+    pub fn render_to_surface_materials_with_overlay(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        instances: &[GpuMaterialInstance<'_>],
+        scene: RenderScene<'_>,
+        overlay: &[TextOverlayItem],
+    ) -> Result<(), RenderError> {
+        self.render_to_surface_items(surface, material_draw_items(instances), scene, overlay)
+    }
+
+    fn render_to_surface_items(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        items: Vec<DrawItem<'_>>,
+        scene: RenderScene<'_>,
+        overlay: &[TextOverlayItem],
+    ) -> Result<(), RenderError> {
         let RenderScene {
             camera,
             view,
@@ -1737,7 +1821,6 @@ impl Renderer {
         let depth_view = surface_state
             .depth
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let items = plain_draw_items(instances);
         let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));
         let prepared = self.prepare_draw_items(&items, &camera, view, light)?;
         let graph = RenderGraph::surface(!overlay.is_empty(), shadows_enabled);
@@ -2031,11 +2114,7 @@ impl Renderer {
         &self,
         mesh: &Mesh,
         attributes: Option<&MeshAttributes>,
-        material: Option<&Material>,
-    ) -> Result<Option<MeshBuffers>, RenderError> {
-        if mesh.positions.is_empty() || mesh.indices.is_empty() {
-            return Ok(None);
-        }
+    ) -> Result<MeshBuffers, RenderError> {
         let mut vertex_data: Vec<f32> = Vec::with_capacity(mesh.positions.len() * VERTEX_FLOATS);
         for (index, position) in mesh.positions.iter().enumerate() {
             vertex_data.extend_from_slice(&[position.x, position.y, position.z]);
@@ -2068,26 +2147,90 @@ impl Renderer {
             mapped_at_creation: false,
         });
         self.queue.write_buffer(&index_buffer, 0, index_bytes);
-        let material_bind = material.map(|mat| self.create_material_bind_group(mat));
-        Ok(Some(MeshBuffers {
+        Ok(MeshBuffers {
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: mesh.indices.len() as u32,
-            material_bind,
-        }))
+        })
+    }
+
+    /// The uploaded buffers for a mesh, taken from the resource cache so a mesh
+    /// drawn by many instances is uploaded once.
+    fn cached_mesh(
+        &self,
+        mesh: &Mesh,
+        attributes: Option<&MeshAttributes>,
+    ) -> Result<Option<MeshBuffers>, RenderError> {
+        if mesh.positions.is_empty() || mesh.indices.is_empty() {
+            return Ok(None);
+        }
+        let key = MeshKey {
+            mesh: std::ptr::from_ref(mesh) as usize,
+            attributes: attributes.map_or(0, |attrs| std::ptr::from_ref(attrs) as usize),
+            vertex_count: mesh.positions.len(),
+            index_count: mesh.indices.len(),
+            probe: mesh_probe(mesh, attributes),
+        };
+        let mut cache = lock(&self.cache);
+        if let Some(cached) = cache.meshes.get(&key) {
+            return Ok(Some(cached.clone()));
+        }
+        if cache.meshes.len() >= MAX_CACHED_RESOURCES {
+            cache.meshes.clear();
+        }
+        let buffers = self.upload_mesh(mesh, attributes)?;
+        cache.meshes.insert(key, buffers.clone());
+        cache.mesh_uploads += 1;
+        Ok(Some(buffers))
+    }
+
+    /// The bind group for a material, taken from the resource cache so a
+    /// material shared by many instances is uploaded once.
+    fn cached_material_bind_group(&self, material: &Material) -> wgpu::BindGroup {
+        let key = material_key(material);
+        let mut cache = lock(&self.cache);
+        if let Some(cached) = cache.materials.get(&key) {
+            return cached.clone();
+        }
+        if cache.materials.len() >= MAX_CACHED_RESOURCES {
+            cache.materials.clear();
+        }
+        let bind_group = self.create_material_bind_group(material);
+        cache.materials.insert(key, bind_group.clone());
+        cache.material_uploads += 1;
+        bind_group
     }
 
     fn create_material_bind_group(&self, material: &Material) -> wgpu::BindGroup {
         let albedo = match &material.albedo {
-            Some(image) => image_texture(&self.device, &self.queue, image, [255, 255, 255, 255]),
+            Some(image) => image_texture(
+                &self.device,
+                &self.queue,
+                image,
+                [255, 255, 255, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            ),
             None => solid_texture(&self.device, &self.queue, [255, 255, 255, 255]),
         };
+        // Normal maps stay linear; sRGB-correct albedo sampling is deferred.
         let normal = match &material.normal {
-            Some(image) => image_texture(&self.device, &self.queue, image, [128, 128, 255, 255]),
+            Some(image) => image_texture(
+                &self.device,
+                &self.queue,
+                image,
+                [128, 128, 255, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            ),
             None => solid_texture(&self.device, &self.queue, [128, 128, 255, 255]),
         };
         let emissive = match &material.emissive {
-            Some(image) => image_texture(&self.device, &self.queue, image, [0, 0, 0, 255]),
+            Some(image) => image_texture(
+                &self.device,
+                &self.queue,
+                image,
+                [0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            ),
             None => solid_texture(&self.device, &self.queue, [0, 0, 0, 255]),
         };
         let params = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2138,11 +2281,18 @@ impl Renderer {
         camera: &Camera,
         view: Mat4,
         light: &DirectionalLight,
-    ) -> Result<Vec<Option<MeshBuffers>>, RenderError> {
+    ) -> Result<Vec<PreparedDraw>, RenderError> {
         let view_proj = camera.projection_matrix() * view;
-        let mut meshes: Vec<Option<MeshBuffers>> = Vec::with_capacity(items.len());
+        let mut prepared = Vec::with_capacity(items.len());
         for item in items {
-            meshes.push(self.upload_mesh(item.instance.mesh, item.attributes, item.material)?);
+            let mesh = self.cached_mesh(item.instance.mesh, item.attributes)?;
+            let material_bind = item
+                .material
+                .map(|material| self.cached_material_bind_group(material));
+            prepared.push(PreparedDraw {
+                mesh,
+                material_bind,
+            });
         }
 
         let mut state = lock(&self.uniforms);
@@ -2208,14 +2358,14 @@ impl Renderer {
                 bytemuck::cast_slice::<f32, u8>(&instance_data),
             );
         }
-        Ok(meshes)
+        Ok(prepared)
     }
 
     fn encode_shadow_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         items: &[DrawItem<'_>],
-        meshes: &[Option<MeshBuffers>],
+        prepared: &[PreparedDraw],
     ) {
         let shadow = lock(&self.shadow);
         let state = lock(&self.uniforms);
@@ -2237,7 +2387,7 @@ impl Renderer {
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, &state.global_bind_group, &[]);
         for index in opaque_order(items) {
-            let mesh = match &meshes[index] {
+            let mesh = match &prepared[index].mesh {
                 Some(mesh) => mesh,
                 None => continue,
             };
@@ -2257,7 +2407,7 @@ impl Renderer {
         pass: &mut wgpu::RenderPass<'_>,
         pipelines: &Pipelines,
         items: &[DrawItem<'_>],
-        meshes: &[Option<MeshBuffers>],
+        prepared: &[PreparedDraw],
         indices: &[usize],
     ) {
         let state = lock(&self.uniforms);
@@ -2266,7 +2416,7 @@ impl Renderer {
         pass.set_bind_group(3, &shadow.bind_group, &[]);
         for &index in indices {
             let item = &items[index];
-            let mesh = match &meshes[index] {
+            let mesh = match &prepared[index].mesh {
                 Some(mesh) => mesh,
                 None => continue,
             };
@@ -2275,7 +2425,10 @@ impl Renderer {
                 &state.instance_bind_group,
                 &[((UNIFORM_SLOT * (index as u64 + 1)) as u32)],
             );
-            let material_bind = mesh.material_bind.as_ref().unwrap_or(&self.material_bind);
+            let material_bind = prepared[index]
+                .material_bind
+                .as_ref()
+                .unwrap_or(&self.material_bind);
             pass.set_bind_group(2, material_bind, &[]);
             let pipeline = match (item.instance.lit, item.alpha < 1.0) {
                 (true, true) => &pipelines.lit_blend,
@@ -2313,11 +2466,113 @@ impl Renderer {
     }
 }
 
+#[derive(Clone)]
 struct MeshBuffers {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+}
+
+/// The identity of a cached mesh upload: its allocation plus a probe of its
+/// contents, so a recycled allocation never serves a stale buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MeshKey {
+    mesh: usize,
+    attributes: usize,
+    vertex_count: usize,
+    index_count: usize,
+    probe: u64,
+}
+
+/// The identity of a cached texture: the allocation the image owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ImageKey {
+    width: u32,
+    height: u32,
+    pixels: usize,
+    len: usize,
+}
+
+/// The identity of a cached material: its textures and its scalar parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MaterialKey {
+    albedo: Option<ImageKey>,
+    normal: Option<ImageKey>,
+    emissive: Option<ImageKey>,
+    metallic: u32,
+    smoothness: u32,
+    alpha: u32,
+    blend: u8,
+}
+
+struct PreparedDraw {
+    mesh: Option<MeshBuffers>,
     material_bind: Option<wgpu::BindGroup>,
+}
+
+/// The mesh buffers and material bind groups a scene reuses across frames.
+#[derive(Default)]
+struct ResourceCache {
+    meshes: HashMap<MeshKey, MeshBuffers>,
+    materials: HashMap<MaterialKey, wgpu::BindGroup>,
+    mesh_uploads: u32,
+    material_uploads: u32,
+}
+
+fn image_key(image: &Image) -> ImageKey {
+    ImageKey {
+        width: image.width,
+        height: image.height,
+        pixels: image.pixels.as_ptr() as usize,
+        len: image.pixels.len(),
+    }
+}
+
+fn material_key(material: &Material) -> MaterialKey {
+    MaterialKey {
+        albedo: material.albedo.as_ref().map(image_key),
+        normal: material.normal.as_ref().map(image_key),
+        emissive: material.emissive.as_ref().map(image_key),
+        metallic: material.metallic.clamp(0.0, 1.0).to_bits(),
+        smoothness: material.smoothness.clamp(0.0, 1.0).to_bits(),
+        alpha: effective_alpha(material).to_bits(),
+        blend: match &material.blend {
+            BlendMode::Opaque => 0,
+            BlendMode::Blend => 1,
+        },
+    }
+}
+
+fn hash_probe(hash: u64, values: &[f32]) -> u64 {
+    let mut hash = hash;
+    for value in values {
+        hash ^= u64::from(value.to_bits());
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn mesh_probe(mesh: &Mesh, attributes: Option<&MeshAttributes>) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    if let Some(position) = mesh.positions.first() {
+        hash = hash_probe(hash, &[position.x, position.y, position.z]);
+    }
+    if let Some(position) = mesh.positions.last() {
+        hash = hash_probe(hash, &[position.x, position.y, position.z]);
+    }
+    hash ^= u64::from(mesh.indices.first().copied().unwrap_or(0));
+    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    hash ^= u64::from(mesh.indices.last().copied().unwrap_or(0));
+    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    if let Some(attributes) = attributes {
+        if let Some(uv) = attributes.uvs.first() {
+            hash = hash_probe(hash, uv);
+        }
+        if let Some(uv) = attributes.uvs.last() {
+            hash = hash_probe(hash, uv);
+        }
+    }
+    hash
 }
 
 struct DrawItem<'a> {

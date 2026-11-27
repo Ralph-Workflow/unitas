@@ -45,6 +45,7 @@ namespace Unitas.Bridge
 
         static RuntimeInterop()
         {
+            InstallPlayerLoopHost();
             NativeLibrary.SetDllImportResolver(
                 typeof(RuntimeInterop).Assembly,
                 (libraryName, assembly, searchPath) =>

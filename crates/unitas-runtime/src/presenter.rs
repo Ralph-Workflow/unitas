@@ -18,8 +18,9 @@ use unitas_asset::project_settings::QualityLevel;
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
-    Camera, DirectionalLight, GpuInstance, Image, Mat4, Mesh, RenderError, RenderScene, Renderer,
-    Rgba8, ShadowSettings, TextOverlayItem, Vec3, look_at,
+    BlendMode, Camera, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image, Mat4,
+    Material, Mesh, MeshAttributes, RenderError, RenderScene, Renderer, Rgba8, ShadowSettings,
+    TextOverlayItem, Vec3, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -28,6 +29,7 @@ use crate::Runtime;
 #[cfg(feature = "device")]
 use crate::input::InputState;
 use crate::runtime::RenderCameraParams;
+use crate::runtime::RenderMaterial;
 
 #[cfg(feature = "device")]
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 44_100;
@@ -461,8 +463,10 @@ impl From<RenderError> for WindowError {
 pub struct GpuMeshBinding {
     pub entity: Option<EntityId>,
     pub mesh: Mesh,
+    pub attributes: Option<MeshAttributes>,
     pub model: Mat4,
     pub color: [f32; 3],
+    pub material: Option<Material>,
     pub lit: bool,
     pub enabled: bool,
 }
@@ -472,8 +476,10 @@ impl GpuMeshBinding {
         Self {
             entity: Some(entity),
             mesh,
+            attributes: None,
             model: Mat4::identity(),
             color,
+            material: None,
             lit,
             enabled: true,
         }
@@ -483,9 +489,32 @@ impl GpuMeshBinding {
         Self {
             entity: None,
             mesh,
+            attributes: None,
             model,
             color,
+            material: None,
             lit,
+            enabled: true,
+        }
+    }
+
+    /// The binding of a scene renderer: the mesh it draws, the texture
+    /// coordinates it draws it with and the material it draws it in.
+    pub fn for_scene(
+        entity: EntityId,
+        mesh: Mesh,
+        attributes: MeshAttributes,
+        color: [f32; 3],
+        material: Material,
+    ) -> Self {
+        Self {
+            entity: Some(entity),
+            mesh,
+            attributes: Some(attributes),
+            model: Mat4::identity(),
+            color,
+            material: Some(material),
+            lit: true,
             enabled: true,
         }
     }
@@ -543,10 +572,10 @@ pub fn resolve_camera_and_view(
     (camera, view, binding.background)
 }
 
-pub fn collect_gpu_instances_from<'b>(
+pub fn collect_gpu_material_instances_from<'b>(
     meshes: &'b [GpuMeshBinding],
     runtime: &'b Runtime,
-) -> Vec<GpuInstance<'b>> {
+) -> Vec<GpuMaterialInstance<'b>> {
     let mut instances = Vec::with_capacity(meshes.len());
     for entry in meshes {
         if !entry.enabled {
@@ -559,31 +588,82 @@ pub fn collect_gpu_instances_from<'b>(
             },
             None => entry.model,
         };
-        instances.push(GpuInstance {
+        instances.push(GpuMaterialInstance {
             mesh: &entry.mesh,
+            attributes: entry.attributes.as_ref(),
             model,
             color: entry.color,
-            lit: entry.lit,
+            material: entry.material.as_ref().unwrap_or(&DEFAULT_MATERIAL),
         });
     }
     let effect_mesh = runtime.effect_mesh();
     for item in runtime.particle_draw_list() {
-        instances.push(GpuInstance {
+        instances.push(GpuMaterialInstance {
             mesh: effect_mesh,
+            attributes: None,
             model: effect_model_mat4(item.position, item.size),
             color: [item.color[0], item.color[1], item.color[2]],
-            lit: true,
+            material: &DEFAULT_MATERIAL,
         });
     }
     for item in runtime.trail_draw_list() {
-        instances.push(GpuInstance {
+        instances.push(GpuMaterialInstance {
             mesh: effect_mesh,
+            attributes: None,
             model: effect_model_mat4(item.position, item.width),
             color: [item.color[0], item.color[1], item.color[2]],
-            lit: true,
+            material: &DEFAULT_MATERIAL,
         });
     }
     instances
+}
+
+/// The material the draw call binds: the maps the scene material decoded and
+/// the surface floats the shader reads.
+pub fn gpu_material_for(material: &RenderMaterial) -> Material {
+    Material {
+        albedo: material.albedo.clone(),
+        normal: material.normal.clone(),
+        emissive: emissive_for(material),
+        metallic: material.metallic,
+        smoothness: material.smoothness,
+        alpha: material.color[3],
+        blend: if material.color[3] < 1.0 {
+            BlendMode::Blend
+        } else {
+            BlendMode::Opaque
+        },
+    }
+}
+
+/// The emission the shader adds: the emission map tinted with the emission
+/// colour of the material, or that colour alone when it has no map.
+fn emissive_for(material: &RenderMaterial) -> Option<Image> {
+    let color = material.emission_color?;
+    match &material.emissive {
+        Some(image) => {
+            let mut tinted = image.clone();
+            for pixel in &mut tinted.pixels {
+                for channel in 0..3 {
+                    let value = f32::from(pixel[channel]) / 255.0 * color[channel];
+                    pixel[channel] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            }
+            Some(tinted)
+        }
+        None => {
+            if color[0] <= 0.0 && color[1] <= 0.0 && color[2] <= 0.0 {
+                return None;
+            }
+            let mut image = Image::new(1, 1);
+            image.pixels[0] = [
+                (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (color[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            ];
+            Some(image)
+        }
+    }
 }
 
 pub fn effect_model_mat4(position: [f32; 3], size: f32) -> Mat4 {
@@ -602,11 +682,12 @@ pub fn scene_gpu_meshes(runtime: &Runtime) -> Vec<GpuMeshBinding> {
         .scene_renderables()
         .iter()
         .map(|renderable| {
-            GpuMeshBinding::for_entity(
+            GpuMeshBinding::for_scene(
                 renderable.entity,
                 renderable.mesh.clone(),
+                renderable.attributes.clone(),
                 renderable.color,
-                true,
+                gpu_material_for(renderable.material),
             )
         })
         .collect()
@@ -885,8 +966,11 @@ impl<'a> GpuFramePresenter<'a> {
         resolve_camera_and_view(&self.camera_binding, runtime, width, height)
     }
 
-    pub fn collect_gpu_instances<'b>(&'b self, runtime: &'b Runtime) -> Vec<GpuInstance<'b>> {
-        collect_gpu_instances_from(&self.meshes, runtime)
+    pub fn collect_gpu_material_instances<'b>(
+        &'b self,
+        runtime: &'b Runtime,
+    ) -> Vec<GpuMaterialInstance<'b>> {
+        collect_gpu_material_instances_from(&self.meshes, runtime)
     }
 
     pub fn render_offscreen(
@@ -896,14 +980,14 @@ impl<'a> GpuFramePresenter<'a> {
         height: u32,
     ) -> Result<Image, WindowError> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
-        let instances = self.collect_gpu_instances(runtime);
+        let instances = self.collect_gpu_material_instances(runtime);
         let scene = RenderScene {
             camera: &camera,
             view,
             light: &self.light,
             background,
         };
-        let image = self.renderer.render_offscreen_with_overlay(
+        let image = self.renderer.render_offscreen_materials_with_overlay(
             &instances,
             scene,
             (width, height),
@@ -996,14 +1080,14 @@ impl<'a> GpuFramePresenter<'a> {
         overlay: &[TextOverlayItem],
     ) -> Result<Rgba8, WindowError> {
         let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
-        let instances = self.collect_gpu_instances(runtime);
+        let instances = self.collect_gpu_material_instances(runtime);
         let scene = RenderScene {
             camera: &camera,
             view,
             light: &self.light,
             background,
         };
-        let image = self.renderer.render_offscreen_rgba_with_overlay(
+        let image = self.renderer.render_offscreen_materials_rgba_with_overlay(
             &instances,
             scene,
             (width, height),
@@ -1047,8 +1131,8 @@ impl<'a> GpuFramePresenter<'a> {
         if self.capture_every_frame {
             let (camera, view, background) =
                 resolve_camera_and_view(&self.camera_binding, runtime, width, height);
-            let instances = collect_gpu_instances_from(&self.meshes, runtime);
-            match self.renderer.render_offscreen_with(
+            let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
+            match self.renderer.render_offscreen_materials(
                 &instances,
                 &camera,
                 view,
@@ -1268,16 +1352,19 @@ mod tests {
         assert_eq!(presented.height, height);
         let (camera, view, background) =
             presenter.resolved_camera_and_view(&runtime, width, height);
-        let instances = presenter.collect_gpu_instances(&runtime);
+        let instances = presenter.collect_gpu_material_instances(&runtime);
         let scene = RenderScene {
             camera: &camera,
             view,
             light: presenter.light(),
             background,
         };
-        let Ok(scene_frame) =
-            renderer.render_offscreen_with_overlay(&instances, scene, (width, height), &[])
-        else {
+        let Ok(scene_frame) = renderer.render_offscreen_materials_with_overlay(
+            &instances,
+            scene,
+            (width, height),
+            &[],
+        ) else {
             return;
         };
         let scene_rgba = scene_frame.to_rgba8();

@@ -70,6 +70,36 @@ within 0.005. The arena pixels stay reproducible everywhere; the HUD text does
 not. A reference-free approval, an embedded font, or a per-platform approved
 reference is what removes that dependence.
 
+## What the 2026-11-27 re-approval changed
+
+The four references were re-approved on 2026-11-27 when the scene path started
+carrying the **authored material** to the draw call. Before this, the engine
+drew every renderer with its flat `_Color` only, so the sample's own textures
+(`Pickup.png`, `PickupNormal.png`) were silently dropped on the way from the
+`.mat` file to the pixel. The asset crate now parses `_BumpMap`,
+`_EmissionMap`, `_Metallic`, `_Glossiness` and `_EmissionColor`, the scene
+assembly resolves those texture guids to paths, the runtime decodes them into
+the renderer's material maps (keeping the meshes' UVs and tangents), and the
+presenter draws through the render crate's material path with cached mesh
+buffers and cached material bind groups. The same re-approval picked up the
+sample's new authored content (`Marble.mat` with a normal map, `Floor.mat`
+with a tiled albedo, and `Pickup.mat`'s emission map and emission colour) and
+the **engine-bundled** Noto Sans face the HUD text is rasterized from, so the
+letterforms no longer depend on the fonts of the machine that produced the
+capture — the machine dependence the 2026-11-26 re-approval gave up is closed.
+
+Three more references joined the set: `s8_quality_low.bmp`,
+`s8_quality_medium.bmp` and `s8_quality_high.bmp`, the captures of
+`Scenarios/s8_quality_sweep.scenario.json` at the three quality levels the
+sample's `QualitySettings.asset` declares. The Low capture is the arena with
+the shadows off, the High capture the arena with the directional shadow map,
+so the set now shows the quality level changing the picture.
+
+The re-approval keeps the declared tolerance of 0.005 unchanged. It widens
+nothing: the approved files are the exact captures the lane produces today,
+and the lane still fails when a capture differs from them by more than 0.5 %
+of its pixels.
+
 ## Why the tolerance is 0.005
 
 `tolerance` is the fraction of pixels allowed to differ. The references are
@@ -105,3 +135,14 @@ arena casters' shadows darken the arena floor in all four captures (`5970/65536`
 (`9.52 %`) for `s8_arena_x5_checkpoint`, and `5974/65536` (`9.12 %`) for
 `s8_results_gold_checkpoint` against the prior unshadowed references). The
 tolerance `0.005` is unchanged.
+
+Re-approved on 2026-11-27 by the development session that wired the scene's
+authored materials into the render path and made the HUD text
+machine-independent, against the same requirements: the four files are the
+material captures the lane produces now on the `wgpu` render graph, with the
+textured and normal-mapped pickups, the normal-mapped marble, the tiled floor
+and the bundled-font HUD in the picture, and three new files
+(`s8_quality_low.bmp`, `s8_quality_medium.bmp`, `s8_quality_high.bmp`) join
+the set for the quality sweep. The tolerance `0.005` is unchanged, and the
+approved files are byte-identical across three consecutive runs of every
+scenario on the machine that produced them.

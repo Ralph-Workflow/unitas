@@ -8,6 +8,14 @@ use crate::image::Rgba8;
 
 const ATLAS_PADDING: u32 = 1;
 
+/// The Noto Sans Regular face the engine bundles, so text rasterizes the same
+/// on every machine. The licence text ships beside it as assets/OFL.txt.
+pub const BUNDLED_FONT: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
+
+/// The family name the bundled font carries, which the library makes the
+/// sans-serif default so that the bundled face wins the glyphs it has.
+const BUNDLED_FONT_FAMILY: &str = "Noto Sans";
+
 #[derive(Debug)]
 pub struct FontLibrary {
     system: FontSystem,
@@ -27,6 +35,16 @@ impl FontLibrary {
         let had_fonts = !self.system.db().is_empty();
         self.system.db_mut().load_font_data(bytes);
         had_fonts || !self.system.db().is_empty()
+    }
+
+    /// Loads the bundled font and makes it the sans-serif default, so that the
+    /// shaped text is the same on every machine. The fonts loaded afterwards
+    /// stay the fallback for the glyphs the bundled font lacks.
+    pub fn load_bundled_font(&mut self) -> bool {
+        self.system
+            .db_mut()
+            .set_sans_serif_family(BUNDLED_FONT_FAMILY);
+        self.add_font(BUNDLED_FONT.to_vec())
     }
 
     pub fn load_system_fonts(&mut self) -> bool {
@@ -1096,6 +1114,75 @@ mod tests {
         assert!(
             inked_columns.iter().any(|column| !*column),
             "every text column carries ink, which means solid blocks"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bundled_font_shapes_text_without_system_fonts() -> Result<(), Box<dyn std::error::Error>> {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        assert_eq!(
+            fonts.system.db().faces().count(),
+            1,
+            "the library must hold the bundled font alone"
+        );
+        let bundled_id = fonts
+            .system
+            .db()
+            .faces()
+            .next()
+            .ok_or("the bundled font is missing from the library")?
+            .id;
+        let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
+        let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
+        assert!(
+            !layout.glyphs.is_empty(),
+            "the phrase shaped into no glyphs"
+        );
+        assert!(
+            layout
+                .glyphs
+                .iter()
+                .all(|glyph| glyph.cache_key.font_id == bundled_id),
+            "the phrase was not shaped with the bundled font"
+        );
+        let mut cache = SwashCache::new();
+        let mut atlas = GlyphAtlas::new(1024, 1024);
+        let quads = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
+        assert!(!quads.is_empty(), "the phrase produced no glyph quads");
+        assert!(atlas.image.pixels.chunks_exact(4).any(|px| px[3] > 0));
+        Ok(())
+    }
+
+    #[test]
+    fn bundled_font_wins_over_the_system_fonts() -> Result<(), Box<dyn std::error::Error>> {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        let bundled_id = fonts
+            .system
+            .db()
+            .faces()
+            .next()
+            .ok_or("the bundled font is missing from the library")?
+            .id;
+        let faces_before = fonts.system.db().faces().count();
+        fonts.load_system_fonts();
+        if fonts.system.db().faces().count() == faces_before {
+            return Ok(());
+        }
+        let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
+        let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
+        assert!(
+            !layout.glyphs.is_empty(),
+            "the phrase shaped into no glyphs"
+        );
+        assert!(
+            layout
+                .glyphs
+                .iter()
+                .all(|glyph| glyph.cache_key.font_id == bundled_id),
+            "a system font won the glyphs the bundled font has"
         );
         Ok(())
     }

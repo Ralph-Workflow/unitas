@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use unitas_core::{CoreError, EntityId, SceneGraph};
 
+use crate::material::Material;
 use crate::meta::{GuidIndex, MetaError};
 use crate::particle::{parse_particle_system, ParticleSystemBinding};
 use crate::prefab;
@@ -445,6 +446,12 @@ pub struct MeshRendererComponent {
     pub material_path: Option<PathBuf>,
     pub material_diagnostic: Option<String>,
     pub material_color: [f32; 3],
+    pub albedo_tex_path: Option<PathBuf>,
+    pub normal_tex_path: Option<PathBuf>,
+    pub emission_tex_path: Option<PathBuf>,
+    pub metallic: Option<f32>,
+    pub smoothness: Option<f32>,
+    pub emission_color: Option<[f32; 4]>,
     pub enabled: bool,
 }
 
@@ -641,7 +648,7 @@ struct PrefabContext<'a> {
     composed_modifications: Vec<(String, TargetedModification)>,
     composed_structural: Vec<(String, StructuralOverrides)>,
     prefab_streams: HashMap<PathBuf, Stream>,
-    material_colors: HashMap<PathBuf, [f32; 3]>,
+    material_properties: HashMap<PathBuf, MaterialProperties>,
 }
 
 pub fn assemble_scene(stream: &Stream) -> Result<SceneGraph, SceneError> {
@@ -742,7 +749,7 @@ fn assemble_stream(
         composed_modifications: Vec::new(),
         composed_structural: Vec::new(),
         prefab_streams: HashMap::new(),
-        material_colors: HashMap::new(),
+        material_properties: HashMap::new(),
     };
     let set = assemble_documents(stream, &mut graph, &mut context, expand)?;
     let mut diagnostics = collect_scene_diagnostics(&set.physics, &set.audio_bindings, &set.render);
@@ -1063,13 +1070,13 @@ fn assemble_documents(
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     let index = context.index;
-    let material_colors = &mut context.material_colors;
+    let material_properties = &mut context.material_properties;
     set.render = collect_render(
         stream,
         &set.game_objects,
         &instance_roots,
         index,
-        material_colors,
+        material_properties,
     )?;
     set.ui = collect_ui(stream, &set.game_objects, &instance_roots);
     let (particles, trails) =
@@ -1246,7 +1253,7 @@ fn expand_instance(
         &stream,
         &mut prefab_set,
         context.index,
-        &mut context.material_colors,
+        &mut context.material_properties,
     );
     if instance.transform_parent != ROOT_FILE_ID {
         let parent = match set.transforms.get(&instance.transform_parent) {
@@ -1453,7 +1460,7 @@ fn apply_overridden_bindings(
     stream: &Stream,
     set: &mut DocumentSet,
     index: Option<&GuidIndex>,
-    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
+    material_properties: &mut HashMap<PathBuf, MaterialProperties>,
 ) {
     for modification in modifications {
         let document =
@@ -1481,7 +1488,7 @@ fn apply_overridden_bindings(
             None => continue,
         };
         if document.class_id == MESH_RENDERER_CLASS {
-            apply_material_override(modification, entity, set, index, material_colors);
+            apply_material_override(modification, entity, set, index, material_properties);
         } else {
             apply_script_field_override(modification, entity, set);
         }
@@ -1499,7 +1506,7 @@ fn apply_material_override(
     entity: EntityId,
     set: &mut DocumentSet,
     index: Option<&GuidIndex>,
-    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
+    material_properties: &mut HashMap<PathBuf, MaterialProperties>,
 ) {
     if material_slot(&modification.property_path) != Some(0) {
         return;
@@ -1526,7 +1533,8 @@ fn apply_material_override(
         .and_then(|guids| guids.get(&guid))
         .map(Path::to_path_buf);
     if let (Some(path), Some(index)) = (&path, index) {
-        renderer.material_color = resolve_material_color(path, index, material_colors);
+        let properties = resolve_material_properties(path, index, material_properties);
+        apply_material_properties(renderer, &properties);
     }
     renderer.material_guid = Some(guid);
     renderer.material_path = path;
@@ -2307,7 +2315,7 @@ fn collect_render(
     game_objects: &GameObjectRecords,
     instance_roots: &HashSet<i64>,
     index: Option<&GuidIndex>,
-    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
+    material_properties: &mut HashMap<PathBuf, MaterialProperties>,
 ) -> Result<RenderBinding, SceneError> {
     let mut binding = RenderBinding::default();
     let mut mesh_filters: HashMap<EntityId, &Node> = HashMap::new();
@@ -2364,7 +2372,7 @@ fn collect_render(
                     body,
                     mesh_filter,
                     index,
-                    material_colors,
+                    material_properties,
                 ));
             }
             LIGHT_CLASS => binding.lights.push(light_component(entity, body)),
@@ -2765,12 +2773,68 @@ fn camera_component(entity: EntityId, body: &Node) -> CameraComponent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct MaterialProperties {
+    color: [f32; 3],
+    albedo_tex_path: Option<PathBuf>,
+    normal_tex_path: Option<PathBuf>,
+    emission_tex_path: Option<PathBuf>,
+    metallic: Option<f32>,
+    smoothness: Option<f32>,
+    emission_color: Option<[f32; 4]>,
+}
+
+impl Default for MaterialProperties {
+    fn default() -> Self {
+        MaterialProperties {
+            color: DEFAULT_MATERIAL_COLOR,
+            albedo_tex_path: None,
+            normal_tex_path: None,
+            emission_tex_path: None,
+            metallic: None,
+            smoothness: None,
+            emission_color: None,
+        }
+    }
+}
+
+impl MaterialProperties {
+    fn from_material(material: &Material, index: &GuidIndex) -> MaterialProperties {
+        MaterialProperties {
+            color: [material.color[0], material.color[1], material.color[2]],
+            albedo_tex_path: texture_path(material.main_tex_guid.as_deref(), index),
+            normal_tex_path: texture_path(material.bump_tex_guid.as_deref(), index),
+            emission_tex_path: texture_path(material.emission_tex_guid.as_deref(), index),
+            metallic: material.metallic,
+            smoothness: material.glossiness,
+            emission_color: material.emission_color,
+        }
+    }
+}
+
+fn texture_path(guid: Option<&str>, index: &GuidIndex) -> Option<PathBuf> {
+    guid.and_then(|guid| index.get(guid)).map(Path::to_path_buf)
+}
+
+fn apply_material_properties(
+    renderer: &mut MeshRendererComponent,
+    properties: &MaterialProperties,
+) {
+    renderer.material_color = properties.color;
+    renderer.albedo_tex_path = properties.albedo_tex_path.clone();
+    renderer.normal_tex_path = properties.normal_tex_path.clone();
+    renderer.emission_tex_path = properties.emission_tex_path.clone();
+    renderer.metallic = properties.metallic;
+    renderer.smoothness = properties.smoothness;
+    renderer.emission_color = properties.emission_color;
+}
+
 fn mesh_renderer_component(
     entity: EntityId,
     body: &Node,
     mesh_filter: Option<&Node>,
     index: Option<&GuidIndex>,
-    material_colors: &mut HashMap<PathBuf, [f32; 3]>,
+    material_properties: &mut HashMap<PathBuf, MaterialProperties>,
 ) -> MeshRendererComponent {
     let (mesh_guid, mesh_file_id, mesh_path, mesh_diagnostic) = match mesh_filter {
         Some(filter) => resolve_mesh_reference(entity, filter, index),
@@ -2786,9 +2850,9 @@ fn mesh_renderer_component(
     };
     let (material_guid, material_path, material_diagnostic) =
         resolve_material_reference(entity, body, index);
-    let material_color = match (&material_path, index) {
-        (Some(path), Some(index)) => resolve_material_color(path, index, material_colors),
-        _ => DEFAULT_MATERIAL_COLOR,
+    let properties = match (&material_path, index) {
+        (Some(path), Some(index)) => resolve_material_properties(path, index, material_properties),
+        _ => MaterialProperties::default(),
     };
     MeshRendererComponent {
         entity,
@@ -2799,7 +2863,13 @@ fn mesh_renderer_component(
         material_guid,
         material_path,
         material_diagnostic,
-        material_color,
+        material_color: properties.color,
+        albedo_tex_path: properties.albedo_tex_path,
+        normal_tex_path: properties.normal_tex_path,
+        emission_tex_path: properties.emission_tex_path,
+        metallic: properties.metallic,
+        smoothness: properties.smoothness,
+        emission_color: properties.emission_color,
         enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_RENDERER_ENABLED),
     }
 }
@@ -2907,20 +2977,20 @@ fn resolve_material_reference(
     (Some(guid), path, None)
 }
 
-fn resolve_material_color(
+fn resolve_material_properties(
     path: &Path,
     index: &GuidIndex,
-    cache: &mut HashMap<PathBuf, [f32; 3]>,
-) -> [f32; 3] {
-    if let Some(color) = cache.get(path) {
-        return *color;
+    cache: &mut HashMap<PathBuf, MaterialProperties>,
+) -> MaterialProperties {
+    if let Some(properties) = cache.get(path) {
+        return properties.clone();
     }
-    let color = match crate::material::parse_material_with_guids(path, index) {
-        Ok(material) => [material.color[0], material.color[1], material.color[2]],
-        Err(_) => DEFAULT_MATERIAL_COLOR,
+    let properties = match crate::material::parse_material_with_guids(path, index) {
+        Ok(material) => MaterialProperties::from_material(&material, index),
+        Err(_) => MaterialProperties::default(),
     };
-    cache.insert(path.to_path_buf(), color);
-    color
+    cache.insert(path.to_path_buf(), properties.clone());
+    properties
 }
 
 fn light_component(entity: EntityId, body: &Node) -> LightComponent {

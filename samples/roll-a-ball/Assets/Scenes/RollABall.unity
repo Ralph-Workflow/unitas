@@ -208,7 +208,7 @@ MeshRenderer:
   m_CastShadows: 1
   m_ReceiveShadows: 1
   m_Materials:
-  - {fileID: 2100000, guid: c3d4e5f60718293a4b5c6d7e8f90a1b2, type: 2}
+  - {fileID: 2100000, guid: 6f7081926f7081926f7081926f708192, type: 2}
 --- !u!1 &1000000041
 GameObject:
   m_ObjectHideFlags: 0
@@ -972,7 +972,7 @@ MeshRenderer:
   m_CastShadows: 1
   m_ReceiveShadows: 1
   m_Materials:
-  - {fileID: 2100000, guid: a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c, type: 2}
+  - {fileID: 2100000, guid: 5e6f70815e6f70815e6f70815e6f7081, type: 2}
 --- !u!114 &1000000135
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::io;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -18,12 +20,109 @@ pub struct PushReport {
     pub dropped_frames: u64,
 }
 
+/// The samples the device output accepted, kept for the device lane's audio proof.
+#[derive(Clone, Debug)]
+pub struct DeviceCapture {
+    state: Arc<Mutex<CaptureState>>,
+}
+
+#[derive(Debug, Default)]
+struct CaptureState {
+    seconds: u32,
+    sample_rate: u32,
+    capacity_samples: usize,
+    samples: VecDeque<f32>,
+}
+
+/// The capture the device lane arms before the player starts the device.
+static ARMED_CAPTURE: Mutex<Option<DeviceCapture>> = Mutex::new(None);
+
+/// Arms a capture of the samples the device output accepts; the device lane
+/// reads the captured audio after the run.
+pub fn arm_capture(seconds: u32) -> DeviceCapture {
+    let capture = DeviceCapture {
+        state: Arc::new(Mutex::new(CaptureState {
+            seconds,
+            ..CaptureState::default()
+        })),
+    };
+    let mut armed = match ARMED_CAPTURE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *armed = Some(capture.clone());
+    capture
+}
+
+fn take_armed_capture() -> Option<DeviceCapture> {
+    let mut armed = match ARMED_CAPTURE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    armed.take()
+}
+
+impl DeviceCapture {
+    /// The mix sample rate the capture recorded at.
+    pub fn sample_rate(&self) -> u32 {
+        self.lock().sample_rate
+    }
+
+    /// The captured samples as mono, the interleaved pairs averaged.
+    pub fn mono_samples(&self) -> Vec<f32> {
+        let captured = self.lock();
+        let samples: Vec<f32> = captured.samples.iter().copied().collect();
+        drop(captured);
+        samples
+            .chunks_exact(OUTPUT_CHANNELS)
+            .map(|frame| (frame[0] + frame[1]) * 0.5)
+            .collect()
+    }
+
+    /// Writes the captured audio as a 16-bit PCM mono WAV file.
+    pub fn write_wav(&self, path: &Path) -> Result<(), io::Error> {
+        let mono = self.mono_samples();
+        let sample_rate = self.sample_rate();
+        let data_bytes = mono.len() * 2;
+        let mut bytes: Vec<u8> = Vec::with_capacity(44 + data_bytes);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&((36 + data_bytes) as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(data_bytes as u32).to_le_bytes());
+        for sample in mono {
+            let scaled = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            bytes.extend_from_slice(&scaled.to_le_bytes());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, CaptureState> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct HandoffState {
     samples: VecDeque<f32>,
     accepted_frames: u64,
     dropped_frames: u64,
     drained_frames: u64,
+    capture: Option<DeviceCapture>,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +142,19 @@ impl FrameHandoff {
 
     pub fn capacity_frames(&self) -> usize {
         self.capacity_frames
+    }
+
+    /// Records the accepted samples into the capture, bounded to the last
+    /// seconds of audio the capture asked for.
+    pub fn enable_capture(&self, capture: DeviceCapture, sample_rate: u32) {
+        let capacity_samples =
+            capture.lock().seconds as usize * sample_rate as usize * OUTPUT_CHANNELS;
+        {
+            let mut captured = capture.lock();
+            captured.sample_rate = sample_rate;
+            captured.capacity_samples = capacity_samples;
+        }
+        self.lock().capture = Some(capture);
     }
 
     pub fn push(&self, interleaved: &[f32]) -> PushReport {
@@ -69,6 +181,15 @@ impl FrameHandoff {
         state
             .samples
             .extend(interleaved[start..end].iter().copied());
+        if let Some(capture) = &state.capture {
+            let mut captured = capture.lock();
+            captured
+                .samples
+                .extend(interleaved[start..end].iter().copied());
+            while captured.samples.len() > captured.capacity_samples {
+                captured.samples.pop_front();
+            }
+        }
         state.accepted_frames += kept_frames as u64;
         state.dropped_frames += dropped_frames;
         PushReport {
@@ -149,6 +270,9 @@ impl DeviceOutput {
         let channels = supported.channels();
         let config = supported.config();
         let handoff = FrameHandoff::new(capacity_frames);
+        if let Some(capture) = take_armed_capture() {
+            handoff.enable_capture(capture, sample_rate);
+        }
         let stream = match supported.sample_format() {
             SampleFormat::F32 => build_stream::<f32>(&device, config, handoff.clone())?,
             SampleFormat::I16 => build_stream::<i16>(&device, config, handoff.clone())?,
@@ -378,6 +502,65 @@ mod tests {
         let mut device_samples = vec![0.0f32; 1];
         write_output(&mut device_samples, &[0.25, -0.75], 1);
         assert_eq!(device_samples, vec![-0.25]);
+    }
+
+    #[test]
+    fn capture_records_the_accepted_samples_as_mono() {
+        let handoff = FrameHandoff::new(8);
+        let capture = DeviceCapture {
+            state: Arc::new(Mutex::new(CaptureState {
+                seconds: 1,
+                ..CaptureState::default()
+            })),
+        };
+        handoff.enable_capture(capture.clone(), 48000);
+        handoff.push(&[0.5, -0.5, 1.0, 1.0]);
+        assert_eq!(capture.sample_rate(), 48000);
+        assert_eq!(capture.mono_samples(), vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn capture_keeps_the_newest_samples_within_its_bound() {
+        let handoff = FrameHandoff::new(8);
+        let capture = DeviceCapture {
+            state: Arc::new(Mutex::new(CaptureState {
+                seconds: 1,
+                ..CaptureState::default()
+            })),
+        };
+        handoff.enable_capture(capture.clone(), 1);
+        handoff.push(&[0.1, 0.1, 0.2, 0.2]);
+        handoff.push(&[0.3, 0.3, 0.4, 0.4]);
+        assert_eq!(capture.mono_samples(), vec![0.3, 0.4]);
+    }
+
+    #[test]
+    fn capture_writes_a_16_bit_mono_wav() -> Result<(), Box<dyn std::error::Error>> {
+        let handoff = FrameHandoff::new(8);
+        let capture = DeviceCapture {
+            state: Arc::new(Mutex::new(CaptureState {
+                seconds: 1,
+                ..CaptureState::default()
+            })),
+        };
+        handoff.enable_capture(capture.clone(), 48000);
+        handoff.push(&[0.5, 0.5]);
+        let path =
+            std::env::temp_dir().join(format!("unitas_capture_test_{}.wav", std::process::id()));
+        capture.write_wav(&path)?;
+        let bytes = std::fs::read(&path)?;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 1);
+        assert_eq!(u16::from_le_bytes([bytes[22], bytes[23]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+            48000
+        );
+        assert_eq!(u16::from_le_bytes([bytes[34], bytes[35]]), 16);
+        assert_eq!(bytes.len(), 46);
+        Ok(())
     }
 
     #[test]

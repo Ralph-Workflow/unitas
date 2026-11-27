@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 use unitas_render::{CaptureFrame, CaptureObject};
-use unitas_runtime::Runtime;
+use unitas_runtime::{
+    set_runtime_quality_level, unitas_runtime_display_set_quality_level, Runtime,
+};
 
 use crate::player::ScriptHost;
 use crate::scripted::ScriptedPlayer;
@@ -64,6 +66,9 @@ enum Request {
         height: u32,
         id_map: bool,
     },
+    Quality {
+        level: i32,
+    },
     ToolsDescribe,
     ToolInvoke {
         name: String,
@@ -78,6 +83,7 @@ pub enum ProtocolError {
     InvalidStep,
     InvalidInputEvent,
     InvalidCapture,
+    InvalidQualityLevel,
     UnknownTool(String),
     NotPlaying,
     CaptureWithoutIdMap,
@@ -94,6 +100,7 @@ impl ProtocolError {
             ProtocolError::InvalidStep => String::from("invalid step request"),
             ProtocolError::InvalidInputEvent => String::from("invalid input event"),
             ProtocolError::InvalidCapture => String::from("invalid capture request"),
+            ProtocolError::InvalidQualityLevel => String::from("invalid quality level"),
             ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
             ProtocolError::CaptureWithoutIdMap => String::from("capture requires an id map"),
@@ -172,6 +179,10 @@ impl ControlSession {
                 height,
                 id_map,
             } => self.capture(*width, *height, *id_map),
+            Request::Quality { level } => {
+                self.set_quality(*level)?;
+                Ok(json!({ "ok": true, "quality_level": *level }))
+            }
             Request::ToolsDescribe => Ok(json!({ "ok": true, "tools": [] })),
             Request::ToolInvoke { name, .. } => Err(ProtocolError::UnknownTool(name.clone())),
         }
@@ -277,6 +288,18 @@ impl ControlSession {
             return Err(ProtocolError::NotPlaying);
         };
         Ok(capture_frame_json(&frame))
+    }
+
+    fn set_quality(&mut self, level: i32) -> Result<(), ProtocolError> {
+        let index = usize::try_from(level).map_err(|_| ProtocolError::InvalidQualityLevel)?;
+        if let Some(runtime) = self.fallback_runtime.as_mut() {
+            if set_runtime_quality_level(runtime, index).is_none() {
+                return Err(ProtocolError::InvalidQualityLevel);
+            }
+        }
+        let pending = u32::try_from(index).map_err(|_| ProtocolError::InvalidQualityLevel)?;
+        unitas_runtime_display_set_quality_level(pending);
+        Ok(())
     }
 
     fn state_payload(&self) -> Value {
@@ -408,6 +431,14 @@ fn parse_request(line: &str) -> Result<Request, ProtocolError> {
                 id_map,
             })
         }
+        "quality" => {
+            let level = object
+                .get("level")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or(ProtocolError::InvalidQualityLevel)?;
+            Ok(Request::Quality { level })
+        }
         "tools_describe" => Ok(Request::ToolsDescribe),
         "tool_invoke" => {
             let name = object
@@ -494,6 +525,11 @@ mod tests {
             .join("scene_alpha.unity")
     }
 
+    fn sample_scene() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity")
+    }
+
     fn session(random_seed: u64) -> Result<ControlSession, String> {
         ControlSession::start(&fixture_scene(), &fixture_scene(), 1.0 / 60.0, random_seed)
             .map_err(|error| error.outcome())
@@ -525,6 +561,10 @@ mod tests {
                 height: 8,
                 id_map: true
             })
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"quality\",\"level\":1}"),
+            Ok(Request::Quality { level: 1 })
         );
     }
 
@@ -766,6 +806,33 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn the_quality_request_switches_the_runtime_quality_level(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let scene = sample_scene();
+        let mut session = ControlSession::start(&scene, &scene, 1.0 / 60.0, 43)
+            .map_err(|error| std::io::Error::other(error.outcome()))?;
+        let runtime = session
+            .fallback_runtime
+            .as_ref()
+            .ok_or("the session has no fallback runtime")?;
+        assert_eq!(runtime.quality_settings().current_quality, 2);
+        let payload = session
+            .dispatch(&Request::Quality { level: 0 })
+            .map_err(|error| std::io::Error::other(error.outcome()))?;
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["quality_level"], json!(0));
+        let runtime = session
+            .fallback_runtime
+            .as_ref()
+            .ok_or("the session has no fallback runtime")?;
+        assert_eq!(runtime.quality_settings().current_quality, 0);
+        assert_eq!(
+            session.dispatch(&Request::Quality { level: -1 }),
+            Err(ProtocolError::InvalidQualityLevel)
+        );
+        Ok(())
+    }
     #[test]
     fn two_sessions_do_not_share_frame_counts_or_random_state() -> Result<(), String> {
         let mut first = session(101)?;

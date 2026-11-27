@@ -36,7 +36,49 @@ GameObject:
   m_Name: NotAMaterial
 ";
 
+const EMISSION_MATERIAL: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  m_Name: Emissive
+  m_Shader: {fileID: 46, guid: 0000000000000000f000000000000000, type: 0}
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 2800000, guid: 22222222222222222222222222222222, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 2800000, guid: 33333333333333333333333333333333, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Floats:
+    - _Glossiness: 0.25
+    - _Smoothness: 0.75
+    - _Metallic: 0.5
+    m_Colors:
+    - _Color: {r: 0.1, g: 0.2, b: 0.3, a: 1}
+    - _EmissionColor: {r: 0.9, g: 0.8, b: 0.7, a: 1}
+";
+
+const SAMPLE_ROOT: &str = "../../samples/roll-a-ball";
+const SAMPLE_PICKUP_MATERIAL: &str = "Assets/Materials/Pickup.mat";
+const SAMPLE_GOLD_MATERIAL: &str = "Assets/Materials/Gold.mat";
+const SAMPLE_PICKUP_TEXTURE_META: &str = "Assets/Textures/Pickup.png.meta";
+const SAMPLE_PICKUP_NORMAL_META: &str = "Assets/Textures/PickupNormal.png.meta";
+const SAMPLE_PICKUP_TEXTURE: &str = "Assets/Textures/Pickup.png";
+const SAMPLE_PICKUP_NORMAL_TEXTURE: &str = "Assets/Textures/PickupNormal.png";
+
 type TestResult = Result<(), Box<dyn Error>>;
+
+fn sample_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SAMPLE_ROOT)
+}
 
 #[test]
 fn material_fixture_parses_shader_color_and_main_texture() -> TestResult {
@@ -49,8 +91,76 @@ fn material_fixture_parses_shader_color_and_main_texture() -> TestResult {
             shader_guid: String::from(STANDARD_SHADER_GUID),
             color: [1.0, 0.5, 0.25, 1.0],
             main_tex_guid: Some(wood_guid),
+            bump_tex_guid: None,
+            emission_tex_guid: None,
+            glossiness: Some(0.5),
+            metallic: Some(0.0),
+            emission_color: None,
         }
     );
+    Ok(())
+}
+
+#[test]
+fn sample_pickup_material_carries_albedo_bump_and_surface_properties() -> TestResult {
+    let root = sample_root();
+    let material = parse_material(&root.join(SAMPLE_PICKUP_MATERIAL))?;
+    let albedo_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_TEXTURE_META))?;
+    let bump_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_NORMAL_META))?;
+
+    assert_eq!(
+        material.main_tex_guid.as_deref(),
+        Some(albedo_guid.as_str())
+    );
+    assert_eq!(material.bump_tex_guid.as_deref(), Some(bump_guid.as_str()));
+    assert_eq!(material.emission_tex_guid, None);
+    assert_eq!(material.glossiness, Some(0.6));
+    assert_eq!(material.metallic, Some(0.0));
+    assert_eq!(material.emission_color, None);
+    assert_eq!(material.color, [0.18, 0.77, 0.71, 1.0]);
+
+    let index = GuidIndex::build(&root)?;
+    assert_eq!(
+        index.get(&albedo_guid),
+        Some(root.join(SAMPLE_PICKUP_TEXTURE).as_path())
+    );
+    assert_eq!(
+        index.get(&bump_guid),
+        Some(root.join(SAMPLE_PICKUP_NORMAL_TEXTURE).as_path())
+    );
+    Ok(())
+}
+
+#[test]
+fn sample_gold_material_reports_no_bump_or_emission_properties() -> TestResult {
+    let root = sample_root();
+    let material = parse_material(&root.join(SAMPLE_GOLD_MATERIAL))?;
+    assert_eq!(material.main_tex_guid, None);
+    assert_eq!(material.bump_tex_guid, None);
+    assert_eq!(material.emission_tex_guid, None);
+    assert_eq!(material.glossiness, Some(0.8));
+    assert_eq!(material.metallic, Some(1.0));
+    assert_eq!(material.emission_color, None);
+    assert_eq!(material.color, [1.0, 0.84, 0.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn material_parses_bump_emission_and_smoothness_properties() -> TestResult {
+    let stream = unity_yaml::parse(EMISSION_MATERIAL)?;
+    let material = parse_material_stream(&stream)?;
+    assert_eq!(
+        material.bump_tex_guid.as_deref(),
+        Some("22222222222222222222222222222222")
+    );
+    assert_eq!(
+        material.emission_tex_guid.as_deref(),
+        Some("33333333333333333333333333333333")
+    );
+    assert_eq!(material.glossiness, Some(0.75));
+    assert_eq!(material.metallic, Some(0.5));
+    assert_eq!(material.emission_color, Some([0.9, 0.8, 0.7, 1.0]));
+    assert_eq!(material.color, [0.1, 0.2, 0.3, 1.0]);
     Ok(())
 }
 

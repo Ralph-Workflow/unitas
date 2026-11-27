@@ -50,7 +50,7 @@ reported with its real state, never hidden.
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-26 with the HUD and the title panel in the picture |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
@@ -82,9 +82,12 @@ cannot show).
 
 - The specification asks for a capture of **every** visual checkpoint on
   **both** pipelines at **every** quality level. The sample has one pipeline
-  (Built-in) and never sweeps the three levels its `QualitySettings.asset`
-  declares (Low, Medium, High), so no pipeline or quality sweep is possible
-  yet.
+  (Built-in), so a pipeline sweep is still impossible; the **quality** sweep is
+  possible now: `Scenarios/s8_quality_sweep.scenario.json` drives the three
+  levels its `QualitySettings.asset` declares (Low, Medium, High) through the
+  new `set_quality` scenario step and captures the arena at each of them
+  (`References/s8_quality_low.bmp`, `s8_quality_medium.bmp`,
+  `s8_quality_high.bmp`), and the lane runs it beside the other four.
 - The specification's checkpoints are a title screen with an attract ghost,
   every arena at its countdown, Arena 1 at x5 with its speed trail, and a
   results panel with the gold medal. This sample has **no** title screen, **no**
@@ -107,9 +110,14 @@ cannot show).
   `crates/unitas-runtime/src/runtime.rs`), so the `render_capture` checkpoints
   show the HUD labels and the panels over the arena. The four approved
   references were re-approved on 2026-11-26 with the HUD in the picture; see
-  `References/README.md` for what that re-approval changed and for the one
-  property it gives up (the canvas text is rasterized through the system font
-  stack, so a machine with other fonts draws other letterforms).
+  `References/README.md` for what that re-approval changed. The machine
+  dependence the earlier references gave up is closed: the canvas text is
+  rasterized from the **engine-bundled** Noto Sans face
+  (`crates/unitas-render/assets/NotoSans-Regular.ttf`, OFL-1.1, byte-identical
+  to the sample's licensed copy), which `FontLibrary::load_bundled_font`
+  loads before the system fonts; the system fonts stay the fallback for the
+  glyphs the bundled face lacks, so the HUD letterforms are the same on every
+  machine.
 - The managed side of the interface is bound now: the bridge installs the
   `UnityEngine.UI.IUiProvider`, binds the scene's uGUI `Text` and `Button`
   components to their managed `UnityEngine.UI.Text` and
@@ -151,6 +159,24 @@ cannot show).
   specification's title screen, attract ghost, speed trail and results panel:
   this sample has no such scene content, so the references record the arena,
   not the specification's screens.
+
+- **The captures now show the arena's authored materials, through the real
+  scene path.** The material contract carries the whole material: the asset
+  crate parses `_BumpMap`, `_EmissionMap`, `_Metallic`, `_Glossiness` and
+  `_EmissionColor` beside `_Color` and `_MainTex`
+  (`crates/unitas-asset/src/material.rs`), the scene assembly resolves the
+  texture guids to paths (`crates/unitas-asset/src/scene.rs`), the runtime
+  decodes them into the renderer's material maps and keeps the meshes' UVs and
+  tangents (`crates/unitas-runtime/src/runtime.rs`), and the presenter draws
+  the scene through the render crate's material path with cached mesh buffers
+  and cached material bind groups (`crates/unitas-render/src/gpu.rs`,
+  `crates/unitas-runtime/src/presenter.rs`) — the windowed and the headless
+  capture paths share it. The sample's own content exercises it: `Pickup.mat`
+  carries its albedo and normal map and now an emission map with an emission
+  colour, and `Marble.mat` and `Floor.mat` carry a normal-mapped marble and a
+  tiled floor over four procedurally generated, original PNGs in
+  `Assets/Textures/`. The captures are the evidence that the materials reach
+  the pixels.
 
 The specification text is not weakened by this note. The gap above is what
 remains before S8 can be claimed complete.

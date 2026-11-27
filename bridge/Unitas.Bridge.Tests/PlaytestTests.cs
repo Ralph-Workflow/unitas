@@ -153,6 +153,7 @@ namespace Unitas.Bridge.Tests
                 SetupFailureScenario();
                 RepeatabilityScenario();
                 ReloadedSceneKeepsCameraRenderable();
+                SetQualityStepParsesRequestedLevel();
                 VisualReferenceTests.Run();
             }
             finally
@@ -247,6 +248,22 @@ namespace Unitas.Bridge.Tests
                 + " \"width\": 64, \"height\": 64, \"expected_non_background_pixels\": 4096 }"
                 + "]"
                 + "}";
+        }
+
+        private static void SetQualityStepParsesRequestedLevel()
+        {
+            ScenarioDocument document = ScenarioDocument.Parse(
+                "{"
+                + "\"name\": \"quality-step\","
+                + "\"scene\": \"Assets/Scenes/playtest_scene.unity\","
+                + "\"steps\": [ { \"set_quality\": { \"level\": 2 } } ]"
+                + "}");
+            Check.Equal("Set quality scenario parses one step", 1, document.Steps.Count);
+
+            SetQualityStep? step = document.Steps[0] as SetQualityStep;
+            Check.That("Set quality step parses as a SetQualityStep", step != null);
+            Check.Equal("Set quality step carries the requested level", 2, step?.Level ?? -1);
+            Check.That("Set quality step kind is set_quality", document.Steps[0].Kind == ScenarioStepKind.SetQuality);
         }
 
         private static void FailingCheckpointScenario()
