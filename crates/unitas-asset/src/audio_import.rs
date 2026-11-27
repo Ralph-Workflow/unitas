@@ -4,6 +4,8 @@ use std::fs;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Mutex, OnceLock};
 
 use crate::dependencies::{ImportCandidate, ImportDiagnostic, ImportOutcome};
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,6 +36,16 @@ pub const AUDIO_IMPORTER_VERSION: &str = "unitas-audio-cook-v1";
 const COOKED_AUDIO_HEADER_BYTES: usize = 20;
 const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 static AUDIO_COOK_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(not(target_arch = "wasm32"))]
+static AUDIO_COOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn lock_audio_cook() -> std::sync::MutexGuard<'static, ()> {
+    AUDIO_COOK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 const SAMPLE_RATE_OVERRIDE: u32 = 2;
 
@@ -1615,6 +1627,7 @@ pub fn cook_audio_candidates(
     cache_dir: &Path,
     cooked_out_dir: Option<&Path>,
 ) -> Result<(CookedAudioManifest, ImportSessionReport), ImportCacheError> {
+    let _cook_guard = lock_audio_cook();
     let cache_cooked_dir = cache_dir.join(COOKED_DIR_NAME);
     fs::create_dir_all(&cache_cooked_dir).map_err(|error| ImportCacheError {
         path: cache_cooked_dir.clone(),
@@ -1761,6 +1774,20 @@ fn cook_single_audio_candidate(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn copy_file_atomic(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let seq = AUDIO_COOK_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp = dst.file_name().unwrap_or_default().to_os_string();
+    temp.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let temp_path = dst.with_file_name(temp);
+    fs::copy(src, &temp_path)?;
+    if let Err(error) = fs::rename(&temp_path, dst) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn stage_cooked_audio_outputs(
     cache_cooked_dir: &Path,
     cooked_out_dir: &Path,
@@ -1777,7 +1804,7 @@ fn stage_cooked_audio_outputs(
         let src = cache_cooked_dir.join(&entry.cooked_path);
         let dst = cooked_out_dir.join(&entry.cooked_path);
         if src != dst {
-            fs::copy(&src, &dst).map_err(|error| ImportCacheError {
+            copy_file_atomic(&src, &dst).map_err(|error| ImportCacheError {
                 path: dst,
                 message: error.to_string(),
             })?;
@@ -1871,7 +1898,7 @@ pub fn default_audio_cache_dir(project_root: &Path) -> PathBuf {
     let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
     std::env::temp_dir()
         .join("unitas_audio_import_cache")
-        .join(format!("{hash:016x}"))
+        .join(format!("{}_{hash:016x}", std::process::id()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1886,7 +1913,7 @@ fn default_audio_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint
     let hash = fnv1a_hash(parent_key.as_bytes());
     std::env::temp_dir()
         .join("unitas_audio_import_cache")
-        .join(format!("{hash:016x}"))
+        .join(format!("{}_{hash:016x}", std::process::id()))
 }
 
 fn find_ancestor_cooked_audio_manifest(

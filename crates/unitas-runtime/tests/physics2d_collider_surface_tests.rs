@@ -48,8 +48,7 @@ fn step_world_2d(handle: u64, steps: usize) {
 }
 
 #[test]
-fn physics2d_polygon_and_edge_colliders_created_via_abi_participate_in_2d_simulation_contact_and_queries()
- {
+fn polygon_and_edge_colliders_created_via_abi_participate_in_2d_simulation_contact_and_queries() {
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
 
@@ -226,7 +225,7 @@ fn physics2d_polygon_and_edge_colliders_created_via_abi_participate_in_2d_simula
 }
 
 #[test]
-fn physics2d_composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam() {
+fn composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam() {
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
 
@@ -368,7 +367,7 @@ fn physics2d_composite_outline_merges_two_abutting_box_colliders_and_slides_smoo
 }
 
 #[test]
-fn physics2d_tilemap_collider_build_from_fixture_feeds_composite_and_collides_with_dynamic_body() {
+fn tilemap_collider_build_from_fixture_feeds_composite_and_collides_with_dynamic_body() {
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
 
@@ -469,8 +468,7 @@ fn physics2d_tilemap_collider_build_from_fixture_feeds_composite_and_collides_wi
 }
 
 #[test]
-fn physics2d_collider2d_set_material_updates_friction_and_bounciness_and_changes_rebound_velocity()
-{
+fn collider2d_set_material_updates_friction_and_bounciness_and_changes_rebound_velocity() {
     let run_drop = |bounciness: f32, friction: f32| -> (f32, f32) {
         let handle = unitas_runtime_new();
         assert_ne!(handle, 0);

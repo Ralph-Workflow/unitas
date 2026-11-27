@@ -1200,14 +1200,6 @@ fn with_active_state<T>(handle: u64, action: impl FnOnce(&mut RuntimeState) -> T
     })
 }
 
-fn take_top_active_state() -> Option<(u64, RuntimeState)> {
-    ACTIVE_STATES.with(|cell| cell.borrow_mut().pop())
-}
-
-fn restore_top_active_state(handle: u64, state: RuntimeState) {
-    ACTIVE_STATES.with(|cell| cell.borrow_mut().push((handle, state)));
-}
-
 fn take_active_state(handle: u64) -> Option<(usize, RuntimeState)> {
     ACTIVE_STATES.with(|cell| {
         let mut stack = cell.borrow_mut();

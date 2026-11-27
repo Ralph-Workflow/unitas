@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use crate::dependencies::{
     ImportCandidate, ImportDiagnostic, ImportFingerprint, ImportOutcome, ImportSession,
@@ -26,6 +27,14 @@ const HEADER_BYTES: usize = 20;
 const RGBA8_CHANNELS: u8 = 4;
 const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 static COOK_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TEXTURE_COOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_texture_cook() -> std::sync::MutexGuard<'static, ()> {
+    TEXTURE_COOK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let seq = COOK_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -405,6 +414,7 @@ pub fn cook_texture_candidates(
     cache_dir: &Path,
     cooked_out_dir: Option<&Path>,
 ) -> Result<(CookedTextureManifest, ImportSessionReport), ImportCacheError> {
+    let _cook_guard = lock_texture_cook();
     let cache_cooked_dir = cache_dir.join(COOKED_DIR_NAME);
     fs::create_dir_all(&cache_cooked_dir).map_err(|error| ImportCacheError {
         path: cache_cooked_dir.clone(),
@@ -628,7 +638,7 @@ pub fn default_texture_cache_dir(project_root: &Path) -> PathBuf {
     let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
     std::env::temp_dir()
         .join("unitas_texture_import_cache")
-        .join(format!("{hash:016x}"))
+        .join(format!("{}_{hash:016x}", std::process::id()))
 }
 
 fn default_texture_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint) -> PathBuf {
@@ -642,7 +652,7 @@ fn default_texture_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerpri
     let hash = fnv1a_hash(parent_key.as_bytes());
     std::env::temp_dir()
         .join("unitas_texture_import_cache")
-        .join(format!("{hash:016x}"))
+        .join(format!("{}_{hash:016x}", std::process::id()))
 }
 
 fn find_ancestor_cooked_manifest(path: &Path) -> Option<(PathBuf, PathBuf, CookedTextureManifest)> {

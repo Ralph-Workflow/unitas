@@ -535,13 +535,11 @@ impl Runtime {
     }
 
     fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
-        let mesh_data = if let Some(path) = &renderer.mesh_path {
-            unitas_asset::model::load_or_cook_mesh(path)
-                .map(unitas_asset::model::CookedMesh::into_mesh)
-        } else if let (Some(file_id), Some(guid)) =
+        let mesh_data = if let (Some(file_id), Some(guid)) =
             (renderer.mesh_file_id, renderer.mesh_guid.as_deref())
+            && let Some(primitive) =
+                unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)
         {
-            let primitive = unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)?;
             let mut data = unitas_asset::primitive::primitive_mesh(primitive);
             if primitive == unitas_asset::primitive::BuiltinPrimitive::Sphere {
                 for position in &mut data.positions {
@@ -549,6 +547,9 @@ impl Runtime {
                 }
             }
             Some(data)
+        } else if let Some(path) = &renderer.mesh_path {
+            unitas_asset::model::load_or_cook_mesh(path)
+                .map(unitas_asset::model::CookedMesh::into_mesh)
         } else {
             None
         }?;

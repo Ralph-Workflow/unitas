@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use crate::dependencies::{
     ImportCandidate, ImportDiagnostic, ImportFingerprint, ImportOutcome, ImportSession,
@@ -23,6 +24,14 @@ pub const COOKED_MESH_MANIFEST_FORMAT_VERSION: u32 = 1;
 pub const MESH_IMPORTER_VERSION: &str = COOKED_MESH_IMPORTER;
 const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 static COOK_MESH_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MESH_COOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_mesh_cook() -> std::sync::MutexGuard<'static, ()> {
+    MESH_COOK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CookedMesh {
@@ -481,6 +490,7 @@ pub fn cook_mesh_candidates(
     cache_dir: &Path,
     cooked_out_dir: Option<&Path>,
 ) -> Result<(CookedMeshManifest, ImportSessionReport), ImportCacheError> {
+    let _cook_guard = lock_mesh_cook();
     let cache_cooked_dir = cache_dir.join(COOKED_MESH_DIR_NAME);
     fs::create_dir_all(&cache_cooked_dir).map_err(|e| ImportCacheError {
         path: cache_cooked_dir.clone(),
@@ -586,6 +596,19 @@ fn cook_single(
     ImportOutcome::ready()
 }
 
+fn copy_file_atomic(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let seq = COOK_MESH_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp = dst.file_name().unwrap_or_default().to_os_string();
+    temp.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let temp_path = dst.with_file_name(temp);
+    fs::copy(src, &temp_path)?;
+    if let Err(error) = fs::rename(&temp_path, dst) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn stage_outputs(
     src_dir: &Path,
     dst_dir: &Path,
@@ -604,7 +627,7 @@ fn stage_outputs(
             dst_dir.join(&entry.cooked_path),
         );
         if src != dst {
-            fs::copy(&src, &dst).map_err(|e| ImportCacheError {
+            copy_file_atomic(&src, &dst).map_err(|e| ImportCacheError {
                 path: dst,
                 message: e.to_string(),
             })?;
@@ -667,7 +690,7 @@ pub fn default_mesh_cache_dir(project_root: &Path) -> PathBuf {
     let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
     std::env::temp_dir()
         .join("unitas_mesh_import_cache")
-        .join(format!("{hash:016x}"))
+        .join(format!("{}_{hash:016x}", std::process::id()))
 }
 
 pub fn default_mesh_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint) -> PathBuf {
@@ -684,7 +707,11 @@ pub fn default_mesh_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerpr
         .unwrap_or_else(|| format!("{:016x}", fingerprint.source));
     std::env::temp_dir()
         .join("unitas_mesh_import_cache")
-        .join(format!("{:016x}", fnv1a_hash(key.as_bytes())))
+        .join(format!(
+            "{}_{:016x}",
+            std::process::id(),
+            fnv1a_hash(key.as_bytes())
+        ))
 }
 
 fn find_ancestor_manifest(path: &Path) -> Option<(PathBuf, PathBuf, CookedMeshManifest)> {

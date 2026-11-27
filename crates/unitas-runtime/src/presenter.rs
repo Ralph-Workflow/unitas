@@ -1409,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn windowed_present_shows_the_canvas_the_capture_path_composes() {
+    fn windowed_present_carries_the_canvas_the_capture_path_composes() {
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };
