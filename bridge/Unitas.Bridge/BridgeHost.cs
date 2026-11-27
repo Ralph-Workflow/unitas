@@ -15,6 +15,7 @@ namespace Unitas.Bridge
         private const uint CollisionPhaseEnter = 0;
         private const int GAME_OBJECT_CLASS = 1;
         private const int TRANSFORM_CLASS = 4;
+        private const int AUDIO_SOURCE_CLASS = 82;
         private const int MONO_BEHAVIOUR_CLASS = 114;
         private const int MESH_COLLIDER_CLASS = 64;
         private const int PREFAB_INSTANCE_CLASS = 1001;
@@ -45,6 +46,7 @@ namespace Unitas.Bridge
         private readonly Dictionary<string, Mesh> _sceneMeshes = new Dictionary<string, Mesh>(StringComparer.Ordinal);
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
+        private readonly Dictionary<ulong, SceneAudioSourceMetadata> _sceneAudioSources = new Dictionary<ulong, SceneAudioSourceMetadata>();
         private readonly Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord> _sceneUiComponents = new Dictionary<(ulong, ScriptGlueRegistry.BuiltInUiComponent), ParsedUiComponentRecord>();
         private readonly Dictionary<(ulong, ulong), List<ulong>> _sceneScriptOwners = new Dictionary<(ulong, ulong), List<ulong>>();
         private bool _alignSceneEntityBase;
@@ -337,10 +339,8 @@ namespace Unitas.Bridge
                 Time.SetFixedDeltaTime((float)fixedTimestep);
             }
 
-            Console.Error.WriteLine("DIAG LoadScene(1) path=" + path + " afterNativeLoad scripts=" + _scripts.Count);
             DropReplacedScripts();
             DestroyReplacedSceneObjects();
-            Console.Error.WriteLine("DIAG LoadScene(1) afterTeardown scripts=" + _scripts.Count);
             ParseLoadedSceneRigidbodies(path, LoadSceneMode.Single);
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
@@ -349,7 +349,6 @@ namespace Unitas.Bridge
             DeregisterReplacedSceneObjects(loaded, LoadSceneMode.Single);
             SceneManager.RaiseSceneLoaded(loaded, LoadSceneMode.Single);
             MaterializeLoadedSceneObjects(loaded);
-            Console.Error.WriteLine("DIAG LoadScene(1) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
                 _pendingAfterSceneLoadRuntimeInit = true;
@@ -382,7 +381,6 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
-            Console.Error.WriteLine("DIAG LoadScene(1) afterTick scripts=" + _scripts.Count + " gameObjects=" + _entityGameObjects.Count);
             FlushDestroyedObjects();
         }
 
@@ -406,14 +404,12 @@ namespace Unitas.Bridge
                 throw new SceneManagementException("Failed to load scene '" + scenePath + "': " + ex.Message, ex);
             }
 
-            Console.Error.WriteLine("DIAG LoadScene(2) path=" + scenePath + " mode=" + mode + " afterNativeLoad scripts=" + _scripts.Count);
             if (mode == LoadSceneMode.Single)
             {
                 DropReplacedScripts();
                 DestroyReplacedSceneObjects();
             }
 
-            Console.Error.WriteLine("DIAG LoadScene(2) afterTeardown scripts=" + _scripts.Count);
             ParseLoadedSceneRigidbodies(scenePath, mode);
             _defaultSceneProvider.SetSceneRoot(scenePath);
             UpdateProjectMetadata(scenePath);
@@ -425,7 +421,6 @@ namespace Unitas.Bridge
             {
                 MaterializeLoadedSceneObjects(loaded);
             }
-            Console.Error.WriteLine("DIAG LoadScene(2) hasAfterSceneLoad=" + RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad));
             if (RuntimeInitializeOnLoadMethodAttribute.HasRegisteredCallbacks(RuntimeInitializeLoadType.AfterSceneLoad))
             {
                 _pendingAfterSceneLoadRuntimeInit = true;
@@ -458,7 +453,6 @@ namespace Unitas.Bridge
             {
                 RunRuntimeInitializeLoadTypeOnce(RuntimeInitializeLoadType.AfterSceneLoad);
             }
-            Console.Error.WriteLine("DIAG LoadScene(2) afterTick scripts=" + _scripts.Count + " gameObjects=" + _entityGameObjects.Count);
             FlushDestroyedObjects();
             return loaded;
         }
@@ -973,6 +967,8 @@ namespace Unitas.Bridge
                 _sceneCapsuleColliders.Clear();
                 _sceneMeshColliders.Clear();
                 _sceneTransforms.Clear();
+                _sceneCameras.Clear();
+                _sceneAudioSources.Clear();
                 _sceneUiComponents.Clear();
                 StopAllSafely();
                 if (ReferenceEquals(Physics.Provider, this))
@@ -1840,6 +1836,24 @@ namespace Unitas.Bridge
             RuntimeInterop.unitas_runtime_audio_set_position(_runtimeHandle, entityId, position.x, position.y, position.z);
         }
 
+        public bool SetAudioGroup(ulong entityId, uint group)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_audio_set_group(_runtimeHandle, entityId, group) == 0;
+        }
+
+        public int GetAudioGroup(ulong entityId)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return -1;
+            }
+            return RuntimeInterop.unitas_runtime_audio_group(_runtimeHandle, entityId);
+        }
+
         public AudioSourceState GetState(ulong entityId)
         {
             return GetAudioState(entityId);
@@ -2459,6 +2473,7 @@ namespace Unitas.Bridge
                 if (IsSceneEntity(entity))
                 {
                     ApplyScenePhysicsComponents(entity, existing);
+                    ApplySceneAudioSourceComponent(entity, existing);
                 }
                 return existing;
             }
@@ -2470,6 +2485,7 @@ namespace Unitas.Bridge
 
             GameObject created = EnsureSceneGameObject(entity);
             ApplyScenePhysicsComponents(entity, created);
+            ApplySceneAudioSourceComponent(entity, created);
             return created;
         }
 
@@ -2485,7 +2501,8 @@ namespace Unitas.Bridge
                 || _sceneSphereColliders.ContainsKey(entity)
                 || _sceneBoxColliders.ContainsKey(entity)
                 || _sceneCapsuleColliders.ContainsKey(entity)
-                || _sceneMeshColliders.ContainsKey(entity);
+                || _sceneMeshColliders.ContainsKey(entity)
+                || _sceneAudioSources.ContainsKey(entity);
         }
 
         private void ApplyScenePhysicsComponents(ulong entity, GameObject owner)
@@ -2672,6 +2689,7 @@ namespace Unitas.Bridge
             ShiftEntityKeys(_sceneCapsuleColliders, delta);
             ShiftEntityKeys(_sceneMeshColliders, delta);
             ShiftEntityKeys(_sceneCameras, delta);
+            ShiftEntityKeys(_sceneAudioSources, delta);
             ShiftParentEntities(delta);
             ShiftUiComponents(delta);
             ShiftMaterializedSceneEntities(delta);
@@ -2737,6 +2755,7 @@ namespace Unitas.Bridge
                     _entityGameObjects.Remove(previous);
                     _entityGameObjects[shifted] = owner;
                     owner.AssignNativeEntityId(shifted);
+                    ApplySceneAudioSourceComponent(shifted, owner);
                 }
             }
         }
@@ -2764,11 +2783,9 @@ namespace Unitas.Bridge
 
         private ulong OnCreateScript(ulong entity, ulong guidHi, ulong guidLo)
         {
-            Console.Error.WriteLine("DIAG OnCreateScript entity=" + entity + " hi=" + guidHi + " lo=" + guidLo);
             AlignSceneEntityBase(entity, guidHi, guidLo);
             if (!ScriptGlueRegistry.TryCreate(guidHi, guidLo, out MonoBehaviour? script, out IUnitasMessageHandler? _) || script is null)
             {
-                Console.Error.WriteLine("DIAG OnCreateScript FAILED to create for entity=" + entity);
                 return 0;
             }
             _lastCreatedScript = script;
@@ -2799,7 +2816,6 @@ namespace Unitas.Bridge
                 owner.AttachComponent(script, script.AttachedRuntimeType ?? typeof(MonoBehaviour));
             }
             _entityGameObjects[entity] = owner;
-            Console.Error.WriteLine("DIAG OnCreateScript entity=" + entity + " ownerName=" + owner.name + " ownerIsDestroyed=" + owner.IsDestroyed + " scriptName=" + script.name);
             owner.AssignNativeEntityId(entity);
             if (IsSceneEntity(entity) && !_materializedSceneEntities.Contains(entity))
             {
@@ -2820,30 +2836,75 @@ namespace Unitas.Bridge
                 controller.minMoveDistance = ccConfig.MinMoveDistance;
                 controller.enabled = ccConfig.Enabled;
             }
-            if (TryGetAudioSourceConfig(entity, out AudioSourceConfig audioConfig))
-            {
-                AudioSource audioSource = owner.GetComponent<AudioSource>() ?? owner.AddComponent<AudioSource>();
-                AudioClip? loadedClip = null;
-                if (audioConfig.ClipId != 0UL)
-                {
-                    if (TryGetAudioClipInfo(audioConfig.ClipId, out uint channels, out uint sampleRate, out ulong _, out double durationSeconds))
-                    {
-                        loadedClip = new AudioClip("SceneAudioClip", (float)durationSeconds, (int)channels, (int)sampleRate, audioConfig.ClipId);
-                    }
-                    else
-                    {
-                        loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, audioConfig.ClipId);
-                    }
-                }
-                else if (audioConfig.ClipDuration > 0.0)
-                {
-                    loadedClip = new AudioClip("SceneAudioClip", (float)audioConfig.ClipDuration, 1, 44100, 0UL);
-                }
-                audioSource.ApplyNativeConfig(entity, audioConfig, loadedClip);
-            }
+            ApplySceneAudioSourceComponent(entity, owner);
             SyncSimulatedTransform(owner);
             ApplySceneUiComponent(entity, guidHi, guidLo, script);
             return handle;
+        }
+
+        private void ApplySceneAudioSourceComponent(ulong entity, GameObject owner)
+        {
+            ulong nativeEntity = entity;
+            bool hasParsed = _sceneAudioSources.TryGetValue(entity, out SceneAudioSourceMetadata parsed);
+            if (!TryGetAudioSourceConfig(nativeEntity, out AudioSourceConfig audioConfig))
+            {
+                if (!hasParsed)
+                {
+                    return;
+                }
+
+                if (_alignSceneEntityBase && TryGetAudioSourceConfig(entity + 1UL, out audioConfig))
+                {
+                    nativeEntity = entity + 1UL;
+                }
+                else
+                {
+                    audioConfig = parsed.ToAudioSourceConfig();
+                }
+            }
+
+            AudioSource audioSource = owner.GetComponent<AudioSource>() ?? owner.AddComponent<AudioSource>();
+            string clipName = hasParsed && !string.IsNullOrEmpty(parsed.ClipName)
+                ? parsed.ClipName
+                : "SceneAudioClip";
+            AudioClip? loadedClip = null;
+            if (audioConfig.ClipId != 0UL)
+            {
+                if (TryGetAudioClipInfo(audioConfig.ClipId, out uint channels, out uint sampleRate, out ulong _, out double durationSeconds))
+                {
+                    loadedClip = new AudioClip(clipName, (float)durationSeconds, (int)channels, (int)sampleRate, audioConfig.ClipId);
+                }
+                else
+                {
+                    loadedClip = new AudioClip(clipName, (float)audioConfig.ClipDuration, 1, 44100, audioConfig.ClipId);
+                }
+            }
+            else if (hasParsed && !string.IsNullOrEmpty(parsed.ClipPath))
+            {
+                loadedClip = LoadClip(parsed.ClipPath);
+                if (loadedClip != null && loadedClip.NativeClipId != 0UL)
+                {
+                    audioConfig = new AudioSourceConfig(
+                        audioConfig.Volume,
+                        audioConfig.Pitch,
+                        audioConfig.SpatialBlend,
+                        audioConfig.MinDistance,
+                        audioConfig.MaxDistance,
+                        loadedClip.NativeClipId,
+                        loadedClip.length,
+                        audioConfig.Priority,
+                        audioConfig.Looping,
+                        audioConfig.PlayOnAwake,
+                        audioConfig.Mute,
+                        audioConfig.Enabled);
+                }
+            }
+            else if (audioConfig.ClipDuration > 0.0)
+            {
+                loadedClip = new AudioClip(clipName, (float)audioConfig.ClipDuration, 1, 44100, 0UL);
+            }
+
+            audioSource.ApplyNativeConfig(nativeEntity, audioConfig, loadedClip);
         }
 
         /// <summary>
@@ -3213,6 +3274,7 @@ namespace Unitas.Bridge
                 _sceneMeshColliders.Clear();
                 _sceneTransforms.Clear();
                 _sceneCameras.Clear();
+                _sceneAudioSources.Clear();
                 _sceneUiComponents.Clear();
                 _sceneScriptOwners.Clear();
                 _sceneEntityKeyShift = 0;
@@ -3262,6 +3324,19 @@ namespace Unitas.Bridge
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
             List<ParsedMeshColliderRecord> meshColliders = new List<ParsedMeshColliderRecord>();
             List<KeyValuePair<string, SceneCameraSettings>> cameras = new List<KeyValuePair<string, SceneCameraSettings>>();
+            List<ParsedAudioSourceRecord> audioSources = new List<ParsedAudioSourceRecord>();
+            string currentAudioGameObjectFileId = string.Empty;
+            string currentAudioClipGuid = string.Empty;
+            bool currentAudioEnabled = true;
+            float currentAudioVolume = 1f;
+            float currentAudioPitch = 1f;
+            bool currentAudioLoop = false;
+            bool currentAudioPlayOnAwake = true;
+            bool currentAudioMute = false;
+            int currentAudioPriority = 128;
+            float currentAudioSpatialBlend = 0f;
+            float currentAudioMinDistance = 1f;
+            float currentAudioMaxDistance = 500f;
             List<ParsedUiComponentRecord> uiComponents = new List<ParsedUiComponentRecord>();
             string currentUiGuid = string.Empty;
             string currentUiGameObjectFileId = string.Empty;
@@ -3305,6 +3380,22 @@ namespace Unitas.Bridge
                             currentLocalPosition,
                             currentLocalRotation,
                             currentLocalScale));
+                    }
+                    if (currentClassId == AUDIO_SOURCE_CLASS && currentAudioGameObjectFileId.Length > 0)
+                    {
+                        audioSources.Add(new ParsedAudioSourceRecord(
+                            currentAudioGameObjectFileId,
+                            currentAudioClipGuid,
+                            currentAudioVolume,
+                            currentAudioPitch,
+                            currentAudioSpatialBlend,
+                            currentAudioMinDistance,
+                            currentAudioMaxDistance,
+                            currentAudioPriority,
+                            currentAudioLoop,
+                            currentAudioPlayOnAwake,
+                            currentAudioMute,
+                            currentAudioEnabled));
                     }
                     if (currentClassId == MONO_BEHAVIOUR_CLASS
                         && !string.IsNullOrEmpty(currentUiGuid)
@@ -3383,6 +3474,18 @@ namespace Unitas.Bridge
                     currentCameraFarClipPlane = 1000f;
                     currentCameraOrthographic = false;
                     currentCameraOrthographicSize = 5f;
+                    currentAudioGameObjectFileId = string.Empty;
+                    currentAudioClipGuid = string.Empty;
+                    currentAudioEnabled = true;
+                    currentAudioVolume = 1f;
+                    currentAudioPitch = 1f;
+                    currentAudioLoop = false;
+                    currentAudioPlayOnAwake = true;
+                    currentAudioMute = false;
+                    currentAudioPriority = 128;
+                    currentAudioSpatialBlend = 0f;
+                    currentAudioMinDistance = 1f;
+                    currentAudioMaxDistance = 500f;
                     currentUiGuid = string.Empty;
                     currentUiGameObjectFileId = string.Empty;
                     currentUiEnabled = true;
@@ -3541,6 +3644,57 @@ namespace Unitas.Bridge
                         currentCameraOrthographicSize = ParseFloatValue(line, currentCameraOrthographicSize);
                     }
                 }
+                else if (currentClassId == AUDIO_SOURCE_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentAudioGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_audioClip:", StringComparison.Ordinal) || line.StartsWith("m_AudioClip:", StringComparison.Ordinal))
+                    {
+                        currentAudioClipGuid = ExtractGuidValue(line);
+                    }
+                    else if (line.StartsWith("m_Enabled:", StringComparison.Ordinal))
+                    {
+                        currentAudioEnabled = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_Volume:", StringComparison.Ordinal))
+                    {
+                        currentAudioVolume = Math.Clamp(ParseFloatValue(line, 1f), 0f, 1f);
+                    }
+                    else if (line.StartsWith("m_Pitch:", StringComparison.Ordinal))
+                    {
+                        currentAudioPitch = ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("Loop:", StringComparison.Ordinal) || line.StartsWith("m_Loop:", StringComparison.Ordinal))
+                    {
+                        currentAudioLoop = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_PlayOnAwake:", StringComparison.Ordinal))
+                    {
+                        currentAudioPlayOnAwake = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("Mute:", StringComparison.Ordinal) || line.StartsWith("m_Mute:", StringComparison.Ordinal))
+                    {
+                        currentAudioMute = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("Priority:", StringComparison.Ordinal) || line.StartsWith("m_Priority:", StringComparison.Ordinal))
+                    {
+                        currentAudioPriority = Math.Clamp((int)ParseFloatValue(line, 128f), 0, 255);
+                    }
+                    else if (line.StartsWith("m_SpatialBlend:", StringComparison.Ordinal))
+                    {
+                        currentAudioSpatialBlend = Math.Clamp(ParseFloatValue(line, 0f), 0f, 1f);
+                    }
+                    else if (line.StartsWith("MinDistance:", StringComparison.Ordinal) || line.StartsWith("m_MinDistance:", StringComparison.Ordinal))
+                    {
+                        currentAudioMinDistance = Math.Max(0f, ParseFloatValue(line, 1f));
+                    }
+                    else if (line.StartsWith("MaxDistance:", StringComparison.Ordinal) || line.StartsWith("m_MaxDistance:", StringComparison.Ordinal))
+                    {
+                        currentAudioMaxDistance = Math.Max(0f, ParseFloatValue(line, 500f));
+                    }
+                }
                 else if (currentClassId == MONO_BEHAVIOUR_CLASS)
                 {
                     if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
@@ -3641,6 +3795,22 @@ namespace Unitas.Bridge
                     currentLocalPosition,
                     currentLocalRotation,
                     currentLocalScale));
+            }
+            if (currentClassId == AUDIO_SOURCE_CLASS && currentAudioGameObjectFileId.Length > 0)
+            {
+                audioSources.Add(new ParsedAudioSourceRecord(
+                    currentAudioGameObjectFileId,
+                    currentAudioClipGuid,
+                    currentAudioVolume,
+                    currentAudioPitch,
+                    currentAudioSpatialBlend,
+                    currentAudioMinDistance,
+                    currentAudioMaxDistance,
+                    currentAudioPriority,
+                    currentAudioLoop,
+                    currentAudioPlayOnAwake,
+                    currentAudioMute,
+                    currentAudioEnabled));
             }
             if (currentClassId == MONO_BEHAVIOUR_CLASS
                 && !string.IsNullOrEmpty(currentUiGuid)
@@ -3841,21 +4011,42 @@ namespace Unitas.Bridge
                 }
             }
 
+            if (audioSources.Count > 0)
+            {
+                PrefabGuidIndex guidIndex = PrefabGuidIndex.Build(scenePath);
+                for (int index = 0; index < audioSources.Count; index++)
+                {
+                    ParsedAudioSourceRecord record = audioSources[index];
+                    if (!gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong audioLocalEntity))
+                    {
+                        continue;
+                    }
+
+                    string clipPath = !string.IsNullOrEmpty(record.ClipGuid)
+                        ? (guidIndex.Resolve(record.ClipGuid) ?? string.Empty)
+                        : string.Empty;
+                    string clipName = !string.IsNullOrEmpty(clipPath)
+                        ? Path.GetFileNameWithoutExtension(clipPath)
+                        : "SceneAudioClip";
+                    ulong audioEntity = _nextSceneEntityBase + audioLocalEntity;
+                    _sceneAudioSources[audioEntity] = new SceneAudioSourceMetadata(
+                        record.ClipGuid,
+                        clipPath,
+                        clipName,
+                        record.Volume,
+                        record.Pitch,
+                        record.SpatialBlend,
+                        record.MinDistance,
+                        Math.Max(record.MaxDistance, record.MinDistance),
+                        record.Priority,
+                        record.Looping,
+                        record.PlayOnAwake,
+                        record.Mute,
+                        record.Enabled);
+                }
+            }
+
             _nextSceneEntityBase += localEntityIndex;
-            ulong minKey = ulong.MaxValue;
-            ulong maxKey = 0;
-            foreach (KeyValuePair<ulong, string> entry in _sceneObjectNames)
-            {
-                if (entry.Key < minKey) { minKey = entry.Key; }
-                if (entry.Key > maxKey) { maxKey = entry.Key; }
-            }
-            Console.Error.WriteLine("DIAG ParseLoadedSceneRigidbodies base=" + _nextSceneEntityBase + " names=" + _sceneObjectNames.Count + " min=" + minKey + " max=" + maxKey);
-            List<ulong> bridgeKeys = new List<ulong>(_sceneObjectNames.Keys);
-            bridgeKeys.Sort();
-            foreach (ulong key in bridgeKeys)
-            {
-                Console.Error.WriteLine("DIAG bridge key=" + key + " name=" + _sceneObjectNames[key]);
-            }
         }
 
         private void SeedPrefabInstanceTransforms(
@@ -4965,6 +5156,137 @@ namespace Unitas.Bridge
             public bool IsTrigger { get; }
 
             public Vector3 Center { get; }
+        }
+
+        private readonly struct ParsedAudioSourceRecord
+        {
+            public ParsedAudioSourceRecord(
+                string gameObjectFileId,
+                string clipGuid,
+                float volume,
+                float pitch,
+                float spatialBlend,
+                float minDistance,
+                float maxDistance,
+                int priority,
+                bool looping,
+                bool playOnAwake,
+                bool mute,
+                bool enabled)
+            {
+                GameObjectFileId = gameObjectFileId;
+                ClipGuid = clipGuid;
+                Volume = volume;
+                Pitch = pitch;
+                SpatialBlend = spatialBlend;
+                MinDistance = minDistance;
+                MaxDistance = maxDistance;
+                Priority = priority;
+                Looping = looping;
+                PlayOnAwake = playOnAwake;
+                Mute = mute;
+                Enabled = enabled;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public string ClipGuid { get; }
+
+            public float Volume { get; }
+
+            public float Pitch { get; }
+
+            public float SpatialBlend { get; }
+
+            public float MinDistance { get; }
+
+            public float MaxDistance { get; }
+
+            public int Priority { get; }
+
+            public bool Looping { get; }
+
+            public bool PlayOnAwake { get; }
+
+            public bool Mute { get; }
+
+            public bool Enabled { get; }
+        }
+
+        private readonly struct SceneAudioSourceMetadata
+        {
+            public SceneAudioSourceMetadata(
+                string clipGuid,
+                string clipPath,
+                string clipName,
+                float volume,
+                float pitch,
+                float spatialBlend,
+                float minDistance,
+                float maxDistance,
+                int priority,
+                bool looping,
+                bool playOnAwake,
+                bool mute,
+                bool enabled)
+            {
+                ClipGuid = clipGuid;
+                ClipPath = clipPath;
+                ClipName = clipName;
+                Volume = volume;
+                Pitch = pitch;
+                SpatialBlend = spatialBlend;
+                MinDistance = minDistance;
+                MaxDistance = maxDistance;
+                Priority = priority;
+                Looping = looping;
+                PlayOnAwake = playOnAwake;
+                Mute = mute;
+                Enabled = enabled;
+            }
+
+            public string ClipGuid { get; }
+
+            public string ClipPath { get; }
+
+            public string ClipName { get; }
+
+            public float Volume { get; }
+
+            public float Pitch { get; }
+
+            public float SpatialBlend { get; }
+
+            public float MinDistance { get; }
+
+            public float MaxDistance { get; }
+
+            public int Priority { get; }
+
+            public bool Looping { get; }
+
+            public bool PlayOnAwake { get; }
+
+            public bool Mute { get; }
+
+            public bool Enabled { get; }
+
+            public AudioSourceConfig ToAudioSourceConfig()
+            {
+                return new AudioSourceConfig(
+                    Volume,
+                    Pitch,
+                    SpatialBlend,
+                    MinDistance,
+                    MaxDistance,
+                    0UL,
+                    0.0,
+                    Priority,
+                    Looping,
+                    PlayOnAwake,
+                    Mute,
+                    Enabled);
+            }
         }
 
         private MonoBehaviour? FindScriptByEntity(ulong entity)

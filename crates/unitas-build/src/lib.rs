@@ -24,6 +24,11 @@ pub use bundle::{
     DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE,
 };
 pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIdentity};
+pub use package::{
+    attempt_desktop_target, attempt_desktop_targets, desktop_package_targets,
+    package_desktop_target, package_desktop_targets, package_linux_app, package_macos_app,
+    package_windows_app, PackageError, PackagedApp, PackagedPlayer, PackagedTarget,
+};
 pub use player::{
     apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,
     diagnostics_from_bundle_error, execute_build, execute_build_for_host, launch_bundle,
@@ -37,8 +42,9 @@ pub use player::{
 pub use player::{capture_sample_reference_bmp, launch_bundle_windowed, run_device_verification};
 pub use report::{
     BuildDiagnostic, BuildOutcome, BuildReport, ContentBuildReport, ContentBundleReportEntry,
-    RejectedBundleReportEntry, ReportParseError, SizeCategoryEntry, SizeContributor,
-    StartupMeasurement, StartupStatus, STARTUP_BASIS,
+    DesktopPackageOutcome, RejectedBundleReportEntry, ReportParseError, SizeCategoryEntry,
+    SizeContributor, StartupMeasurement, StartupStatus,
+    DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE, DESKTOP_PACKAGE_STATE_PACKAGED, STARTUP_BASIS,
 };
 pub use sample::{
     imported_gem_mesh, roll_a_ball_build_configuration, roll_a_ball_scene_yaml,

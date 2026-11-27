@@ -1,8 +1,11 @@
 use unitas_render::{Camera, Mat4, Mesh, Vec3, look_at};
 
 use crate::input::{
-    InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_RETURN, KEY_RIGHT_ARROW,
-    KEY_UP_ARROW, STATE_PRESSED,
+    GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT,
+    GAMEPAD_BUTTON_DPAD_RIGHT, GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_SOUTH,
+    GAMEPAD_STICK_DEAD_ZONE, InputState, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW,
+    KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ARROW, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW,
+    STATE_PRESSED,
 };
 
 /// Color of the always-visible focus border drawn around the focused widget.
@@ -263,27 +266,42 @@ impl Ui {
             .collect()
     }
 
-    /// Applies keyboard/gamepad focus navigation for one frame: arrow keys and
-    /// the named `Horizontal`/`Vertical` axes move focus (wrapping), the named
-    /// `Submit` button (or Return) clicks the focused button, and the named
-    /// `Cancel` button (or Escape) emits [`UiEvent::Cancel`].
     pub fn handle_focus(&mut self, input: &InputState) -> Vec<UiEvent> {
-        let horizontal = input.axis_raw("Horizontal").unwrap_or(0.0);
-        let vertical = input.axis_raw("Vertical").unwrap_or(0.0);
+        let stick_x = input.gamepad_axis(GAMEPAD_AXIS_LEFT_X);
+        let stick_y = input.gamepad_axis(GAMEPAD_AXIS_LEFT_Y);
+        let raw_x = if stick_x.abs() > GAMEPAD_STICK_DEAD_ZONE {
+            stick_x
+        } else {
+            0.0
+        };
+        let raw_y = if stick_y.abs() > GAMEPAD_STICK_DEAD_ZONE {
+            stick_y
+        } else {
+            0.0
+        };
+        let horizontal = input.axis_raw("Horizontal").unwrap_or(raw_x);
+        let vertical = input.axis_raw("Vertical").unwrap_or(raw_y);
+        let shift_down = input.is_key_down(KEY_LEFT_SHIFT) || input.is_key_down(KEY_RIGHT_SHIFT);
         let mut step = 0i32;
-        if input.is_key_pressed(KEY_RIGHT_ARROW)
+        if input.is_key_pressed(KEY_TAB) {
+            step = if shift_down { -1 } else { 1 };
+        } else if input.is_key_pressed(KEY_RIGHT_ARROW)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_DPAD_RIGHT)
             || (self.focus_axis_prev[0] <= 0.0 && horizontal > 0.0)
         {
             step = 1;
         } else if input.is_key_pressed(KEY_LEFT_ARROW)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_DPAD_LEFT)
             || (self.focus_axis_prev[0] >= 0.0 && horizontal < 0.0)
         {
             step = -1;
         } else if input.is_key_pressed(KEY_DOWN_ARROW)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_DPAD_DOWN)
             || (self.focus_axis_prev[1] <= 0.0 && vertical > 0.0)
         {
             step = 1;
         } else if input.is_key_pressed(KEY_UP_ARROW)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_DPAD_UP)
             || (self.focus_axis_prev[1] >= 0.0 && vertical < 0.0)
         {
             step = -1;
@@ -304,7 +322,10 @@ impl Ui {
             }
         }
         let mut events = Vec::new();
-        let submit = named_button_pressed(input, "Submit") || input.is_key_pressed(KEY_RETURN);
+        let submit = named_button_pressed(input, "Submit")
+            || input.is_key_pressed(KEY_RETURN)
+            || input.is_key_pressed(KEY_SPACE)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH);
         let cancel = named_button_pressed(input, "Cancel") || input.is_key_pressed(KEY_ESCAPE);
         if submit && let Some(id) = self.focused() {
             events.push(UiEvent::Clicked(id.to_string()));
@@ -982,6 +1003,69 @@ mod tests {
         let center = view_projection.project_point(Vec3::new(400.0, 300.0, 0.0));
         assert!(center.x.abs() < 1e-5);
         assert!(center.y.abs() < 1e-5);
+    }
+
+    #[test]
+    fn tab_and_shift_tab_cycle_focus_forward_and_backward() {
+        use crate::input::{KEY_LEFT_SHIFT, KEY_TAB};
+
+        let mut ui = three_button_ui();
+        let mut input = InputState::new();
+
+        press_key(&mut input, KEY_TAB);
+        assert!(ui.handle_focus(&input).is_empty());
+        assert_eq!(ui.focused(), Some("bravo"));
+        release_key(&mut input, KEY_TAB);
+
+        press_key(&mut input, KEY_TAB);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("charlie"));
+        release_key(&mut input, KEY_TAB);
+
+        input.queue_key_event(KEY_LEFT_SHIFT, true);
+        input.queue_key_event(KEY_TAB, true);
+        input.begin_frame(1.0 / 60.0);
+        ui.handle_focus(&input);
+        assert_eq!(ui.focused(), Some("bravo"));
+    }
+
+    #[test]
+    fn space_and_gamepad_dpad_and_south_navigate_and_submit_without_custom_axes() {
+        use crate::input::{
+            GAMEPAD_BUTTON_DPAD_LEFT, GAMEPAD_BUTTON_DPAD_RIGHT, GAMEPAD_BUTTON_SOUTH,
+        };
+
+        let mut ui = three_button_ui();
+        let mut input = InputState::new();
+        input.connect_gamepad(1);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, true);
+        input.begin_frame(1.0 / 60.0);
+        assert!(ui.handle_focus(&input).is_empty());
+        assert_eq!(ui.focused(), Some("bravo"));
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, false);
+        input.begin_frame(1.0 / 60.0);
+
+        press_key(&mut input, KEY_SPACE);
+        assert_eq!(
+            ui.handle_focus(&input),
+            vec![UiEvent::Clicked("bravo".to_string())]
+        );
+        release_key(&mut input, KEY_SPACE);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_LEFT, true);
+        input.begin_frame(1.0 / 60.0);
+        assert!(ui.handle_focus(&input).is_empty());
+        assert_eq!(ui.focused(), Some("alpha"));
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_LEFT, false);
+        input.begin_frame(1.0 / 60.0);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, true);
+        input.begin_frame(1.0 / 60.0);
+        assert_eq!(
+            ui.handle_focus(&input),
+            vec![UiEvent::Clicked("alpha".to_string())]
+        );
     }
 }
 

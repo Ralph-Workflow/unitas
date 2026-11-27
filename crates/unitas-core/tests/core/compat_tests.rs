@@ -1545,7 +1545,7 @@ fn cmp_002_story_17_and_rendering_outcome_34_semantic_cites_cmp_001_and_familiar
         ("ENV-001", "physics-navigation-terrain.md", 2usize),
     ];
 
-    assert_eq!(FAMILIAR_BEHAVIOR_DIFFERENCES.len(), 7);
+    assert_eq!(FAMILIAR_BEHAVIOR_DIFFERENCES.len(), 16);
 
     for (feature_id, expected_spec, expected_count) in expected_counts {
         let entry = lookup_familiar_behavior_differences(feature_id);
@@ -2078,13 +2078,16 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
     }
 }
 
-const OWNED_FEATURE_IDS: [&str; 45] = [
+const OWNED_FEATURE_IDS: [&str; 65] = [
     "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
     "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
-    "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-003", "REN-004",
-    "EDT-004", "EDT-005", "EDT-006", "EDT-007", "EDT-008", "AUT-001", "AUT-002", "AUT-007",
-    "AUT-008", "CMP-002", "CMP-004", "BLD-005", "RUN-001", "RUN-003", "RUN-004", "RUN-005",
-    "RUN-009", "DIA-001", "PRF-001", "ACC-001", "SAV-001",
+    "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-001", "REN-002",
+    "REN-003", "REN-004", "REN-005", "REN-006", "REN-007", "UI-001", "UI-002", "TXT-001",
+    "INP-001", "INP-002", "AUD-001", "MED-001", "BLD-001", "BLD-004", "BLD-005", "PLT-001",
+    "LIC-001", "PRD-001", "XR-001", "NET-001", "DIA-003", "EDT-004", "EDT-005", "EDT-006",
+    "EDT-007", "EDT-008", "AUT-001", "AUT-002", "AUT-007", "AUT-008", "CMP-002", "CMP-004",
+    "RUN-001", "RUN-003", "RUN-004", "RUN-005", "RUN-009", "DIA-001", "PRF-001", "ACC-001",
+    "SAV-001",
 ];
 
 fn workspace_file(relative: &str) -> std::path::PathBuf {
@@ -2543,7 +2546,7 @@ fn is_feature_id(cell: &str) -> bool {
     let prefix = parts.next().unwrap_or_default();
     let number = parts.next().unwrap_or_default();
     parts.next().is_none()
-        && prefix.len() == 3
+        && (2..=3).contains(&prefix.len())
         && prefix
             .chars()
             .all(|character| character.is_ascii_uppercase())
@@ -2562,12 +2565,24 @@ fn feature_catalog_rows() -> Vec<(String, String, String)> {
         if cells.len() < 6 || !is_feature_id(cells[1]) {
             continue;
         }
-        let spec_cell = cells[4];
+        let tier = cells
+            .iter()
+            .copied()
+            .find(|cell| matches!(*cell, "Exact" | "Semantic" | "Familiar" | "Native"))
+            .unwrap_or(cells[3]);
+        let spec_cell = cells
+            .iter()
+            .copied()
+            .find(|cell| cell.contains(".md"))
+            .unwrap_or(cells[4]);
         let spec = spec_cell
             .split_once('(')
             .and_then(|(_, rest)| rest.split_once(')'))
-            .map_or_else(|| spec_cell.to_string(), |(path, _)| path.to_string());
-        rows.push((cells[1].to_string(), cells[3].to_string(), spec));
+            .map_or_else(
+                || spec_cell.trim_matches('`').to_string(),
+                |(path, _)| path.trim_matches('`').to_string(),
+            );
+        rows.push((cells[1].to_string(), tier.to_string(), spec));
     }
     rows
 }

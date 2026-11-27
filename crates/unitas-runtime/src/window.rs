@@ -13,7 +13,7 @@ macro_rules! ffi_export {
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gilrs::ff::{
     BaseEffect, BaseEffectType, Effect, EffectBuilder, Envelope, Repeat, Replay, Ticks,
@@ -25,7 +25,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::Runtime;
 use crate::input::{
@@ -40,8 +40,17 @@ use crate::input::{
     KEY_SPACE, KEY_TAB, KEY_UP_ARROW, RumbleHandler,
 };
 pub use crate::presenter::{
-    FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding, GpuWindowPresenter,
-    WindowError, scene_gpu_meshes, transform_to_mat4, view_matrix_from_transform,
+    DisplaySettingsState, FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding,
+    GpuWindowPresenter, WindowError, frame_pacing_interval, scene_gpu_meshes,
+    set_runtime_quality_level, shadow_settings_for_quality, shadow_settings_for_runtime,
+    transform_to_mat4, unitas_runtime_display_full_screen, unitas_runtime_display_height,
+    unitas_runtime_display_quality_level, unitas_runtime_display_quit_requested,
+    unitas_runtime_display_request_quit, unitas_runtime_display_reset,
+    unitas_runtime_display_set_full_screen, unitas_runtime_display_set_quality_level,
+    unitas_runtime_display_set_resolution, unitas_runtime_display_set_target_frame_rate,
+    unitas_runtime_display_set_v_sync_count, unitas_runtime_display_target_frame_rate,
+    unitas_runtime_display_v_sync_count, unitas_runtime_display_width, v_sync_count_for_runtime,
+    view_matrix_from_transform, with_display_settings,
 };
 
 pub const DEFAULT_WINDOW_TITLE: &str = "unitas";
@@ -139,6 +148,49 @@ pub fn sustained_frames_per_second(frames: u64, elapsed_seconds: f64) -> f64 {
 pub fn sustained_fps_report_line(frames: u64, elapsed_seconds: f64) -> String {
     let fps = sustained_frames_per_second(frames, elapsed_seconds);
     format!("sustained_fps={fps:.1} frames={frames} elapsed_seconds={elapsed_seconds:.3}")
+}
+
+pub fn frame_pacing_wait_duration(
+    target_frame_rate: i32,
+    v_sync_count: u32,
+    elapsed: Duration,
+) -> Option<Duration> {
+    let interval = frame_pacing_interval(target_frame_rate, v_sync_count)?;
+    interval.checked_sub(elapsed).filter(|wait| !wait.is_zero())
+}
+
+pub fn should_exit_window_loop(runtime: &Runtime, config: &WindowConfig, frame_index: u64) -> bool {
+    if runtime.is_shutdown() {
+        return true;
+    }
+    if with_display_settings(|display| display.quit_requested()) {
+        return true;
+    }
+    if let Some(limit) = config.effective_max_frames()
+        && frame_index >= limit
+    {
+        return true;
+    }
+    false
+}
+
+pub fn apply_window_resolution(
+    window: &Window,
+    presenter: &mut dyn FramePresenter,
+    width: u32,
+    height: u32,
+    full_screen: bool,
+) {
+    let fullscreen_mode = if full_screen {
+        Some(Fullscreen::Borderless(None))
+    } else {
+        None
+    };
+    window.set_fullscreen(fullscreen_mode);
+    if !full_screen {
+        let _ = window.request_inner_size(LogicalSize::new(width.max(1), height.max(1)));
+    }
+    presenter.resize(width.max(1), height.max(1));
 }
 
 pub fn run_windowed(
@@ -358,6 +410,9 @@ impl<'a> WindowApp<'a> {
                     },
                 )));
         }
+        with_display_settings(|display| {
+            display.sync_from_runtime(runtime, config.width, config.height, false);
+        });
         Self {
             runtime,
             presenter,
@@ -402,6 +457,12 @@ impl<'a> WindowApp<'a> {
         if event_loop.exiting() {
             return;
         }
+        if should_exit_window_loop(self.runtime, &self.config, self.frame_index) {
+            with_display_settings(|display| display.clear_quit_request());
+            event_loop.exit();
+            return;
+        }
+        let frame_started = Instant::now();
         self.poll_gamepad();
         let now = Instant::now();
         let delta_seconds = match self.config.fixed_frame_delta_seconds {
@@ -418,6 +479,12 @@ impl<'a> WindowApp<'a> {
             return;
         }
         self.frame_index += 1;
+        let pending_window =
+            with_display_settings(|display| display.take_pending_window_reconfigure());
+        if let (Some((req_w, req_h, req_fs)), Some(window)) = (pending_window, &self.window) {
+            let window = Arc::clone(window);
+            apply_window_resolution(&window, self.presenter, req_w, req_h, req_fs);
+        }
         let (width, height) = match &self.window {
             Some(window) => {
                 let size = window.inner_size();
@@ -436,6 +503,17 @@ impl<'a> WindowApp<'a> {
             event_loop.exit();
             return;
         }
+        let post_update_window =
+            with_display_settings(|display| display.take_pending_window_reconfigure());
+        if let (Some((req_w, req_h, req_fs)), Some(window)) = (post_update_window, &self.window) {
+            let window = Arc::clone(window);
+            apply_window_resolution(&window, self.presenter, req_w, req_h, req_fs);
+        }
+        if should_exit_window_loop(self.runtime, &self.config, 0) {
+            with_display_settings(|display| display.clear_quit_request());
+            event_loop.exit();
+            return;
+        }
         let Some(window) = &self.window else {
             return;
         };
@@ -445,10 +523,14 @@ impl<'a> WindowApp<'a> {
         self.presenter.present(window, self.runtime, &frame);
         self.presented_frames += 1;
         self.presenting_finished = Some(Instant::now());
+        let (target_fps, vsync) =
+            with_display_settings(|display| (display.target_frame_rate(), display.v_sync_count()));
+        if let Some(wait) = frame_pacing_wait_duration(target_fps, vsync, frame_started.elapsed()) {
+            std::thread::sleep(wait);
+        }
         window.request_redraw();
-        if let Some(limit) = self.config.effective_max_frames()
-            && self.frame_index >= limit
-        {
+        if should_exit_window_loop(self.runtime, &self.config, self.frame_index) {
+            with_display_settings(|display| display.clear_quit_request());
             event_loop.exit();
         }
     }
@@ -487,10 +569,18 @@ impl ApplicationHandler for WindowApp<'_> {
     ) {
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => event_loop.exit(),
-            WindowEvent::Resized(size) => self.presenter.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                with_display_settings(|display| {
+                    display.record_observed_size(size.width, size.height);
+                });
+                self.presenter.resize(size.width, size.height);
+            }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(window) = &self.window {
                     let size = window.inner_size();
+                    with_display_settings(|display| {
+                        display.record_observed_size(size.width, size.height);
+                    });
                     self.presenter.resize(size.width, size.height);
                 }
             }
@@ -1007,6 +1097,41 @@ mod tests {
         assert!(binding.enabled);
         assert_eq!(binding.entity, None);
         assert_eq!(runtime.world_transform_of(EntityId::new(999)), None);
+        Ok(())
+    }
+
+    #[test]
+    fn frame_pacing_wait_duration_respects_target_frame_rate_only_when_vsync_is_zero() {
+        let one_ms = std::time::Duration::from_millis(1);
+        assert_eq!(frame_pacing_wait_duration(60, 1, one_ms), None);
+        assert_eq!(frame_pacing_wait_duration(-1, 0, one_ms), None);
+        assert_eq!(frame_pacing_wait_duration(0, 0, one_ms), None);
+        let wait = frame_pacing_wait_duration(50, 0, std::time::Duration::from_millis(5));
+        assert_eq!(wait, Some(std::time::Duration::from_millis(15)));
+        let no_wait = frame_pacing_wait_duration(50, 0, std::time::Duration::from_millis(25));
+        assert_eq!(no_wait, None);
+    }
+
+    #[test]
+    fn window_loop_should_exit_on_runtime_shutdown_display_quit_or_frame_limit()
+    -> Result<(), RuntimeError> {
+        unitas_runtime_display_reset();
+        let mut runtime = Runtime::new()?;
+        let config = WindowConfig::default();
+        assert!(!should_exit_window_loop(&runtime, &config, 1));
+
+        unitas_runtime_display_request_quit();
+        assert!(should_exit_window_loop(&runtime, &config, 1));
+        unitas_runtime_display_reset();
+        assert!(!should_exit_window_loop(&runtime, &config, 1));
+
+        let mut limited = WindowConfig::default();
+        limited.max_frames = Some(3);
+        assert!(!should_exit_window_loop(&runtime, &limited, 2));
+        assert!(should_exit_window_loop(&runtime, &limited, 3));
+
+        let _ = runtime.shutdown();
+        assert!(should_exit_window_loop(&runtime, &config, 1));
         Ok(())
     }
 }

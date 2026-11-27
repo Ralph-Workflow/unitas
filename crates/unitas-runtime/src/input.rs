@@ -589,6 +589,22 @@ impl InputState {
         self.mouse_released.contains(&button)
     }
 
+    pub fn is_gamepad_button_down(&self, button: u32) -> bool {
+        self.gamepad_buttons_down.contains(&button)
+    }
+
+    pub fn is_gamepad_button_pressed(&self, button: u32) -> bool {
+        self.gamepad_buttons_pressed.contains(&button)
+    }
+
+    pub fn is_gamepad_button_released(&self, button: u32) -> bool {
+        self.gamepad_buttons_released.contains(&button)
+    }
+
+    pub fn gamepad_axis(&self, axis: u32) -> f64 {
+        self.gamepad_axes.get(axis as usize).copied().unwrap_or(0.0)
+    }
+
     pub fn begin_frame(&mut self, delta_seconds: f64) {
         let dt = if delta_seconds.is_finite() && delta_seconds > 0.0 {
             delta_seconds
@@ -682,7 +698,7 @@ impl InputState {
             if gamepad_button.is_some_and(|button| gamepad_released.contains(&button)) {
                 any_button_source_released = true;
             }
-            let analog = gamepad_axis_value(&gamepad_axes, name);
+            let analog = gamepad_axis_value(&gamepad_axes, gamepad_down, name);
 
             for entry in entries.iter_mut() {
                 for src in entry
@@ -944,7 +960,33 @@ fn gamepad_button_for_name(name: &str) -> Option<u32> {
     }
 }
 
-fn gamepad_axis_value(axes: &[f64; GAMEPAD_AXIS_COUNT], name: &str) -> f64 {
+fn gamepad_axis_value(
+    axes: &[f64; GAMEPAD_AXIS_COUNT],
+    buttons_down: &HashSet<u32>,
+    name: &str,
+) -> f64 {
+    let dpad: f64 = match name {
+        "Horizontal" => match (
+            buttons_down.contains(&GAMEPAD_BUTTON_DPAD_RIGHT),
+            buttons_down.contains(&GAMEPAD_BUTTON_DPAD_LEFT),
+        ) {
+            (true, false) => 1.0,
+            (false, true) => -1.0,
+            _ => 0.0,
+        },
+        "Vertical" => match (
+            buttons_down.contains(&GAMEPAD_BUTTON_DPAD_UP),
+            buttons_down.contains(&GAMEPAD_BUTTON_DPAD_DOWN),
+        ) {
+            (true, false) => 1.0,
+            (false, true) => -1.0,
+            _ => 0.0,
+        },
+        _ => 0.0,
+    };
+    if dpad != 0.0 {
+        return dpad;
+    }
     let Some(index) = gamepad_axis_for_name(name) else {
         return 0.0;
     };
@@ -1205,5 +1247,35 @@ mod tests {
         input.inject_axis("Horizontal", 0.0);
         assert_eq!(input.injected_axis("Horizontal"), Some(0.0));
         assert_eq!(input.injected_axis("Unknown"), None);
+    }
+
+    #[test]
+    fn gamepad_button_and_axis_queries_track_press_hold_release_and_dpad_axes() {
+        let mut input = InputState::with_default_axes();
+        input.connect_gamepad(1);
+        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, true);
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, true);
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_DOWN, true);
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 0.75);
+        input.begin_frame(0.5);
+
+        assert!(input.is_gamepad_button_down(GAMEPAD_BUTTON_SOUTH));
+        assert!(input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH));
+        assert!(!input.is_gamepad_button_released(GAMEPAD_BUTTON_SOUTH));
+        assert!((input.gamepad_axis(GAMEPAD_AXIS_LEFT_X) - 0.75).abs() < 1e-9);
+        assert_eq!(input.axis_raw("Horizontal"), Some(1.0));
+        assert_eq!(input.axis_raw("Vertical"), Some(-1.0));
+
+        input.begin_frame(0.5);
+        assert!(input.is_gamepad_button_down(GAMEPAD_BUTTON_SOUTH));
+        assert!(!input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH));
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, false);
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, false);
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_DOWN, false);
+        input.begin_frame(0.5);
+        assert!(!input.is_gamepad_button_down(GAMEPAD_BUTTON_SOUTH));
+        assert!(!input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH));
+        assert!(input.is_gamepad_button_released(GAMEPAD_BUTTON_SOUTH));
     }
 }

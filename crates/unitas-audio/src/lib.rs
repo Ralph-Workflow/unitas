@@ -1176,7 +1176,10 @@ impl AudioWorld {
             {
                 continue;
             }
-            let dt = if source.ignore_time_scale {
+            if self.gameplay_paused && source.group != AudioMixerGroup::Menu {
+                continue;
+            }
+            let dt = if source.ignore_time_scale || source.group == AudioMixerGroup::Menu {
                 scaled_dt
             } else {
                 scaled_dt * scale
@@ -1955,6 +1958,43 @@ mod tests {
             let expected = 2.0 * [0.3f32, 0.4][frame];
             assert!((resumed[frame * 2] - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn gameplay_pause_tick_freezes_sfx_and_music_while_advancing_menu() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 100,
+            samples: vec![0.25; 10],
+            duration: 0.10,
+        });
+        let sfx_entity = EntityId::new(30);
+        let music_entity = EntityId::new(31);
+        let menu_entity = EntityId::new(32);
+        for entity in [sfx_entity, music_entity, menu_entity] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+        }
+        world.set_source_group(music_entity, AudioMixerGroup::Music);
+        world.set_source_group(menu_entity, AudioMixerGroup::Menu);
+        for entity in [sfx_entity, music_entity, menu_entity] {
+            world.play(entity, false);
+        }
+
+        world.set_gameplay_paused(true);
+        world.tick(0.05, 0.0);
+        assert_eq!(world.source(sfx_entity).map(|s| s.time), Some(0.0));
+        assert_eq!(world.source(music_entity).map(|s| s.time), Some(0.0));
+        assert_eq!(world.source(menu_entity).map(|s| s.time), Some(0.05));
+
+        world.tick(0.05, 1.0);
+        assert_eq!(world.source(sfx_entity).map(|s| s.time), Some(0.0));
+        assert_eq!(world.source(music_entity).map(|s| s.time), Some(0.0));
+        assert_eq!(
+            world.source(menu_entity).map(|s| s.state),
+            Some(AudioSourceState::Completed)
+        );
     }
 
     #[test]

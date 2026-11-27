@@ -3285,6 +3285,470 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             },
         ],
     },
+    OwnedFeatureCapability {
+        feature_id: "REN-001",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Cameras, viewports, displays, and render targets",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "perspective and orthographic camera projection matrices and view transforms render offscreen and to window surfaces",
+                location: "crates/unitas-render/src/camera.rs",
+                evidence: &[
+                    "crates/unitas-render/tests/render/render_tests.rs::perspective_projection_matrix_matches_unity_formulas",
+                    "crates/unitas-render/tests/render/render_tests.rs::orthographic_projection_matrix_matches_formulas",
+                    "crates/unitas-render/tests/render/render_tests.rs::perspective_camera_renders_cube_center_and_background",
+                    "crates/unitas-render/tests/render/render_tests.rs::orthographic_camera_renders_cube_center_and_background",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "scene cameras materialize with field of view, clip planes, orthographic flag, and background color, and WorldToScreenPoint, ViewportToWorldPoint, and ScreenPointToRay agree with rendered geometry and object ID capture",
+                location: "crates/unitas-runtime/src/runtime.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/render_tests.rs::render_frame_produces_bmp_for_scene_with_camera_and_renderer",
+                    "crates/unitas-runtime/tests/runtime/render_tests.rs::world_to_screen_point_agrees_with_rendered_geometry",
+                    "bridge/Unitas.Bridge.Tests/SceneCameraTests.cs::SceneCameraIsMaterialized",
+                    "bridge/Unitas.Bridge.Tests/RenderTests.cs::TestEndToEndRender",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "multi-camera depth and stack ordering, culling masks, viewport rectangles, clear flags, RenderTexture targets, multi-display routing, camera callbacks, and depth textures are rendered",
+                location: "crates/unitas-render/src/camera.rs",
+                evidence: &[],
+                missing: Some("multi-camera depth and stack ordering, culling masks, viewport rectangles, clear flags, RenderTexture assets and Camera.targetTexture, multi-display routing (Display.displays), camera callbacks (OnPreCull, OnPreRender, OnPostRender, OnRenderImage), and _CameraDepthTexture are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "REN-002",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Meshes, skinning, blend shapes, materials, textures, and shaders",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "cube, UV sphere, and buffer-backed triangle meshes with normals, UVs, and tangents are constructed and rendered",
+                location: "crates/unitas-render/src/mesh.rs",
+                evidence: &[
+                    "crates/unitas-render/tests/render/render_tests.rs::cube_mesh_has_expected_counts_bounds_and_unit_normals",
+                    "crates/unitas-render/tests/render/render_tests.rs::uv_sphere_mesh_has_exact_vertex_and_index_counts_and_unit_normals",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Unity YAML .mat material assets parse shader GUIDs, colors, and main texture GUIDs and render through offscreen and translucent material passes",
+                location: "crates/unitas-asset/src/material.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/material_tests.rs::material_fixture_parses_shader_color_and_main_texture",
+                    "crates/unitas-render/tests/render/integration_tests.rs::material_to_pixel_end_to_end_pipeline",
+                    "crates/unitas-render/tests/translucency.rs::translucent_quad_blends_over_opaque_background",
+                    "crates/unitas-render/tests/translucency.rs::translucent_quads_are_drawn_back_to_front",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "skinned mesh bone deformation and blend shapes, ShaderLab/HLSL compilation and keyword variants, MaterialPropertyBlock, runtime Texture2D pixel mutation and GPU readback, and non-triangle mesh topologies are supported",
+                location: "crates/unitas-render/src/model.rs",
+                evidence: &[],
+                missing: Some("skinned mesh bone deformation and blend shapes, ShaderLab/HLSL compilation and keyword variants, MaterialPropertyBlock, runtime Texture2D pixel mutation and readback (SetPixels, Apply, ReadPixels, AsyncGPUReadback), and non-triangle mesh topologies are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "REN-005",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Sprites, atlases, sorting, masks, and tilemaps",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Sprite Atlas v1 and v2 assets and sprite sub-assets in texture metadata are recognized during project indexing, and object-reference animation curves bind SpriteRenderer.m_Sprite across clip evaluation and binary wire round-trips",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/asset_import/database_tests.rs::prj002_prj004_outcome17_json_and_bytes_import_as_text_asset_and_avatar_mask_audio_mixer_and_sprite_atlas_v2_are_identified_by_family",
+                    "crates/unitas-animation/tests/animation/clip_tests.rs::clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary",
+                    "crates/unitas-animation/tests/animation/clip_tests.rs::clip_object_reference_curve_is_sampled_for_every_binding_in_the_clip",
+                    "crates/unitas-animation/tests/animation/wire_tests.rs::wire_v2_round_trips_an_object_reference_curve",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "SpriteRenderer Simple/Sliced/Tiled drawing, SpriteAtlas packing and runtime atlas binding, SortingGroup, SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are rendered",
+                location: "crates/unitas-render/src/ui_pass.rs",
+                evidence: &[],
+                missing: Some("SpriteRenderer Simple, Sliced, and Tiled drawing, SpriteAtlas packing and runtime atlas binding, SortingGroup and SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "REN-006",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Render pipelines, shader graphs, and scripted rendering",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "the default render graph orders shadow, opaque, transparent, UI overlay, and object-ID capture passes, and Shader Graph compatibility assessment classifies Built-in, URP, HDRP, and unrepresentable nodes",
+                location: "crates/unitas-render/src/render_graph.rs",
+                evidence: &[
+                    "crates/unitas-render/src/render_graph.rs::offscreen_pass_order_with_and_without_shadows",
+                    "crates/unitas-render/src/render_graph.rs::surface_pass_order_with_and_without_shadows",
+                    "crates/unitas-render/src/render_graph.rs::capture_pass_order_with_and_without_shadows",
+                    "crates/unitas-core/tests/core/compat_tests.rs::cmp_002_story_22_shader_graph_unrepresentable_node_reports_graph_and_node_and_hdrp_target_is_unsupported",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "URP 14.x and HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are executed",
+                location: "crates/unitas-render/src/render_graph.rs",
+                evidence: &[],
+                missing: Some("URP 14.x and HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and visual or MCP graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "REN-007",
+        owning_spec: "rendering-and-animation.md",
+        capability: "Frame presentation, frame rate, and display output",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "windowed wgpu presentation renders scene geometry, directional shadows, and canvas UI overlays to a window surface and reports sustained frame-rate metrics while headless sessions render offscreen",
+                location: "crates/unitas-runtime/src/window.rs",
+                evidence: &[
+                    "crates/unitas-runtime/src/presenter.rs::windowed_present_shows_the_canvas_the_capture_path_composes",
+                    "crates/unitas-runtime/src/window.rs::bound_scene_renders_non_flat_frame_on_gpu",
+                    "crates/unitas-runtime/src/window.rs::sustained_frames_per_second_divides_presented_frames_by_elapsed_time",
+                    "crates/unitas-runtime/src/window.rs::sustained_fps_report_line_uses_the_device_lane_greppable_format",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Application.targetFrameRate and QualitySettings.vSyncCount runtime pacing, Screen.SetResolution and FullScreenMode switching, multi-display output, and HDR display output are enforced",
+                location: "crates/unitas-runtime/src/window.rs",
+                evidence: &[],
+                missing: Some("Application.targetFrameRate and QualitySettings.vSyncCount runtime frame pacing enforcement, Screen.SetResolution and FullScreenMode switching, multi-display output (Display.displays), and HDR display output are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "UI-001",
+        owning_spec: "ui-audio-input.md",
+        capability: "Canvas, layout, controls, events, focus, and navigation",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Canvas, CanvasScaler, and RectTransform anchor and pivot layout resolve screen-space overlay rectangles and composite UI quads, text, and object IDs onto rendered frames",
+                location: "crates/unitas-runtime/src/canvas.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/canvas_tests.rs::canvas_anchor_math_matches_unity_layout",
+                    "crates/unitas-runtime/tests/canvas_tests.rs::canvas_scale_factor_follows_the_unity_match_rule",
+                    "crates/unitas-runtime/tests/canvas_tests.rs::canvas_draw_items_follow_the_scaler_and_the_anchors",
+                    "crates/unitas-runtime/tests/canvas_tests.rs::canvas_fixture_composites_ui_pixels_and_object_ids",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "buttons, labels, pointer hit-testing, keyboard and gamepad focus navigation, and Button.onClick dispatch work across the runtime and C# bridge",
+                location: "crates/unitas-runtime/src/ui_components.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/pointer_ui.rs::pointer_click_activates_a_button_headless",
+                    "crates/unitas-runtime/tests/pointer_ui.rs::keyboard_focus_still_cycles_and_enter_submits",
+                    "crates/unitas-runtime/tests/ui_components.rs::a_pointer_click_on_a_button_is_dispatched",
+                    "crates/unitas-runtime/tests/ui_components.rs::the_ui_abi_sets_the_text_and_reports_the_click",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "screen-space camera and world-space canvases, layout groups, masks, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, input fields, raycasters, and UI Toolkit runtime documents are supported",
+                location: "crates/unitas-runtime/src/canvas.rs",
+                evidence: &[],
+                missing: Some("screen-space camera and world-space canvases, layout groups (HorizontalLayoutGroup, VerticalLayoutGroup, GridLayoutGroup, ContentSizeFitter, AspectRatioFitter), Mask and RectMask2D, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, input fields, GraphicRaycaster and PhysicsRaycaster, and UI Toolkit runtime (UIDocument, UXML, USS) are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "UI-002",
+        owning_spec: "ui-audio-input.md",
+        capability: "Immediate-mode runtime GUI",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "MonoBehaviour.OnGUI layout and repaint events, Event.current, GUI and GUILayout controls, GUISkin and GUIStyle, and GUI.depth ordering are dispatched and rendered",
+                location: "crates/unitas-runtime/src/ui.rs",
+                evidence: &[],
+                missing: Some("MonoBehaviour.OnGUI dispatch, Event.current, GUI and GUILayout controls, GUISkin and GUIStyle rendering, and GUI.depth ordering are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "TXT-001",
+        owning_spec: "ui-audio-input.md",
+        capability: "Fonts, Unicode text, fallback, and rich presentation",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "TrueType and OpenType fonts import with TrueTypeFontImporter meta settings, glyph metrics, kerning, and packed font atlases, reporting diagnostics on malformed fonts or unsupported containers",
+                location: "crates/unitas-asset/src/font/mod.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/font_import_tests.rs::imports_the_shipped_font_with_the_known_metrics",
+                    "crates/unitas-asset/tests/font_import_tests.rs::imports_the_kerning_the_font_carries",
+                    "crates/unitas-asset/tests/font_import_tests.rs::honors_the_import_settings_of_the_meta_file",
+                    "crates/unitas-asset/tests/font_import_tests.rs::reports_a_named_diagnostic_for_a_malformed_font",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "runtime text layout shapes glyphs into a GlyphAtlas and renders alpha-blended text overlays",
+                location: "crates/unitas-render/src/glyphs.rs",
+                evidence: &[
+                    "crates/unitas-render/src/glyphs.rs::shaping_layout_and_atlas_are_deterministic",
+                    "crates/unitas-render/src/glyphs.rs::draw_text_alpha_blends_over_background",
+                    "crates/unitas-runtime/src/ui.rs::label_text_layout_produces_glyph_quads_at_multiple_resolutions",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "TextMeshPro assets, SDF shaders, rich-text tags, missing-glyph fallback diagnostics naming the fallback chain and locale, complex script and bidirectional text layout, and IME text entry are supported",
+                location: "crates/unitas-render/src/glyphs.rs",
+                evidence: &[],
+                missing: Some("TextMeshPro (TextMeshProUGUI, TMP_FontAsset, SDF shaders, rich-text tags, textInfo), explicit missing-glyph diagnostics naming the fallback chain and locale, Arabic/Indic/CJK complex script and UAX #9 bidirectional text layout mode selection, and IME/clipboard/on-screen keyboard input fields are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "INP-001",
+        owning_spec: "ui-audio-input.md",
+        capability: "Legacy input behavior",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "frame-exact keyboard and mouse button transitions (GetKey, GetKeyDown, GetKeyUp, GetMouseButton*), pointer position and delta, scroll delta, and named axes (GetAxis, GetAxisRaw, GetButton*) with sensitivity, gravity, dead zone, snap, inversion, and InputManager.asset discovery work across Rust and the C# UnityEngine.Input bridge",
+                location: "crates/unitas-runtime/src/input.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/runtime/input_tests.rs::input_key_and_mouse_transitions_hold_for_one_frame_and_ignore_redundant_events",
+                    "crates/unitas-runtime/tests/runtime/input_tests.rs::input_key_axis_ramps_with_sensitivity_decays_with_gravity_and_respects_snap_invert_and_deadzone",
+                    "crates/unitas-runtime/tests/runtime/input_tests.rs::runtime_discovers_input_manager_asset_on_load_scene_and_resets_input_on_reload",
+                    "bridge/Unitas.Bridge.Tests/InputTests.cs::TestFrameExactKeyTransitionsAndStringOverloads",
+                    "bridge/Unitas.Bridge.Tests/InputTests.cs::TestAxisRampSnapGravityInversionAndProjectSettingsDiscovery",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "multi-touch Input.touches, Input.inputString text entry, Cursor.lockState and visibility, mobile device sensors, and InvalidOperationException enforcement when active input handling is Input System only are provided",
+                location: "crates/unitas-runtime/src/input.rs",
+                evidence: &[],
+                missing: Some("multi-touch (Input.touches), Input.inputString text entry, Cursor.lockState and visibility, accelerometer/gyroscope/compass/location sensors, and throwing InvalidOperationException when active input handling is set to Input System only are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "INP-002",
+        owning_spec: "ui-audio-input.md",
+        capability: "Action-based input, devices, players, and rebinding",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "gamepad connection, disconnection, stick dead zones, button transitions, and force-feedback rumble handlers drive runtime input state",
+                location: "crates/unitas-runtime/src/input.rs",
+                evidence: &[
+                    "crates/unitas-runtime/src/input.rs::gamepad_stick_and_buttons_drive_the_named_axes_and_buttons",
+                    "crates/unitas-runtime/src/input.rs::gamepad_stick_dead_zone_zeroes_small_deflections",
+                    "crates/unitas-runtime/src/input.rs::gamepad_hot_plug_leaves_the_keyboard_state_untouched",
+                    "crates/unitas-runtime/src/input.rs::rumble_without_a_device_is_a_silent_no_op",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Input System 1.x .inputactions asset import, InputAction phases, composites, interactions, processors, PlayerInput and PlayerInputManager, Keyboard.current and Gamepad.current C# APIs, and interactive rebinding are provided",
+                location: "crates/unitas-runtime/src/input.rs",
+                evidence: &[],
+                missing: Some("Input System 1.x .inputactions asset import, InputAction phases (Waiting, Started, Performed, Canceled), composites, interactions, processors, PlayerInput and PlayerInputManager, Keyboard.current/Gamepad.current C# APIs, and interactive rebinding (PerformInteractiveRebinding, SaveBindingOverridesAsJson) are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "AUD-001",
+        owning_spec: "ui-audio-input.md",
+        capability: "Clips, sources, listeners, spatial audio, filters, and mixing",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "WAV, AIFF, Ogg Vorbis, and MP3 decoding, streamed Ogg music playback, AudioSource playback states and SilenceReason diagnostics, 3D distance attenuation, stereo panning, Doppler pitch shift, sample-accurate play_scheduled, and Sfx/Music/Menu mixer group buses and device handoff are executed",
+                location: "crates/unitas-audio/src/lib.rs",
+                evidence: &[
+                    "crates/unitas-audio/tests/audio_decode_tests.rs::decoded_clip_mixes_through_audio_world",
+                    "crates/unitas-audio/src/lib.rs::group_gains_apply_only_to_their_own_bus",
+                    "crates/unitas-audio/src/lib.rs::doppler_raises_pitch_for_an_approaching_source_and_lowers_it_for_a_receding_one",
+                    "crates/unitas-audio/src/lib.rs::sources_scheduled_at_adjacent_samples_render_without_gap_or_overlap",
+                    "crates/unitas-audio/src/output.rs::handoff_drains_the_exact_frames_that_were_pushed",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "AudioMixer asset import, snapshots, exposed parameters, built-in mixer DSP effects, filter components, AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are supported",
+                location: "crates/unitas-audio/src/lib.rs",
+                evidence: &[],
+                missing: Some("AudioMixer asset import, snapshots (TransitionTo), exposed parameters, and built-in mixer DSP effects, filter components (AudioLowPassFilter, AudioReverbFilter, OnAudioFilterRead), AudioReverbZone, ambisonic decoding, GetOutputData/GetSpectrumData, and Microphone capture are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "MED-001",
+        owning_spec: "ui-audio-input.md",
+        capability: "Video playback and synchronized media state",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "VideoPlayer and VideoClip import, container and codec decoding (H.264, H.265, VP8, VP9, AV1), camera plane/render texture/material override render modes, audio track routing, DSP/game time synchronization, and HTTP/HLS/DASH streaming are executed",
+                location: "crates/unitas-asset/src/database.rs",
+                evidence: &[],
+                missing: Some("VideoPlayer and VideoClip import, container and codec decoding (H.264, H.265, VP8, VP9, AV1), camera plane/render texture/material override render modes, audio track routing, DSP/game time synchronization, and HTTP/HLS/DASH streaming are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "BLD-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Configure, validate, create, and report player builds",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "BuildConfiguration validates scenes, product identity, target, and development diagnostics settings, stages deterministic content-hashed bundles and desktop packages (.app on macOS, executable + <Product>_Data on Windows and Linux), writes build-report.json with size contributors, compatibility findings, licensing, startup measurement, and target availability, and exposes build.player over the editor ABI",
+                location: "crates/unitas-build/src/player.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/build_and_launch.rs::end_to_end_build_report_determinism_and_headless_player_launch",
+                    "crates/unitas-build/tests/build/build_and_launch.rs::failed_build_validation_and_missing_source_scene_produce_failed_build_report",
+                    "crates/unitas-build/src/package.rs::desktop_packaging_stages_three_targets_with_build_reports",
+                    "crates/unitas-editor-abi/src/build_tools.rs::build_player_stages_a_bundle_and_writes_the_licensing_record",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "incremental build cache reuse after cancelled or failed builds, Android Gradle/APK/AAB and iOS Xcode project generation, platform distribution signing and notarization status reporting, and WebGL/WebAssembly browser bundle generation are provided",
+                location: "crates/unitas-build/src/package.rs",
+                evidence: &[],
+                missing: Some("incremental build cache reuse after cancelled or failed builds, Android Gradle/APK/AAB and iOS Xcode project generation, platform distribution signing and notarization status reporting, and WebGL/WebAssembly browser bundle generation are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "BLD-004",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Deployment, device connection, and development-player channels",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "connected device discovery, deploying/installing/launching/removing built players on Android, iOS, XR, handheld, or console devices, and pairing-credential-authenticated remote profiler, debugger, and log-stream connections to development players are provided",
+                location: "crates/unitas-build/src/player.rs",
+                evidence: &[],
+                missing: Some("connected device discovery, deploying/installing/launching/removing built players on Android, iOS, XR, handheld, or console devices, and pairing-credential-authenticated remote profiler, debugger, and log-stream connections to development players are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PLT-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Desktop, mobile, browser, handheld, and console behavior",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "desktop player bundles launch in headless and windowed GPU modes, enforce PRJ-008 project trust before executing code, pause simulation and audio and clear held input on window focus loss and restore on focus gain, and report non-host desktop targets as ExternallyUnavailable with the cause",
+                location: "crates/unitas-build/src/player.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/build_and_launch.rs::startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_scene",
+                    "crates/unitas-build/tests/trust_gate.rs::untrusted_project_cannot_run_its_code",
+                    "crates/unitas-runtime/src/window.rs::focus_loss_clears_input_and_freezes_the_player_until_focus_returns",
+                    "crates/unitas-build/src/targets.rs::marks_non_host_targets_unavailable_on_current_host",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "WebGL/WebGPU browser targets, Android and iOS/tvOS mobile targets, UWP, Dedicated Server (UNITY_SERVER) target, Linux Wayland and Steam Deck handheld integration, and licensed console targets are supported",
+                location: "crates/unitas-build/src/targets.rs",
+                evidence: &[],
+                missing: Some("WebGL/WebGPU browser target, Android and iOS/tvOS mobile targets, UWP, Dedicated Server (UNITY_SERVER) target, Linux Wayland/Steam Deck handheld integration, and licensed console targets are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "LIC-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Dual licensing of the product and license obligations of shipped players",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "every player build generates a LicensingRecord stating the governing GPLv3 license, conveyance and Corresponding Source obligations, no-linking-exception notice, commercial license route, not-legal-advice disclaimer, and third-party Cargo and NuGet notices, embeds LICENSE and THIRD-PARTY-NOTICES.txt in packaged players, and exposes build.licensing in the editor",
+                location: "crates/unitas-build/src/licensing.rs",
+                evidence: &[
+                    "crates/unitas-editor-abi/src/build_tools.rs::build_player_stages_a_bundle_and_writes_the_licensing_record",
+                    "crates/unitas-build/tests/build/target_availability.rs::build_report_carries_build_identifier_licensing_record_and_startup_time",
+                    "editor/Unitas.Editor.Tests/BuildToolsTests.cs::LicensingQueryReturnsTheRecordTheBundleCarries",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "commercial license configuration recognition and pre-build expiry checks, and the per-target GPLv3 conflict table flagging console and restricted-store targets as requiring a commercial license, are enforced",
+                location: "crates/unitas-build/src/licensing.rs",
+                evidence: &[],
+                missing: Some("commercial license configuration recognition and pre-build expiry checks, and the per-target GPLv3 conflict table flagging console and restricted-store targets as requiring a commercial license, are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "PRD-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Installation, updates, and target toolchain acquisition",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "target toolchain discovery probes the host for each desktop target's required C compiler, resource compiler, and Rust standard library target, recording available or externally_unavailable with the cause (current_host or missing_toolchain), tool name, found version, required range, and resolving action",
+                location: "crates/unitas-build/src/toolchain.rs",
+                evidence: &[
+                    "crates/unitas-build/tests/build/target_availability.rs::every_reported_target_carries_a_complete_packaging_record",
+                    "crates/unitas-build/tests/build/target_availability.rs::a_missing_cross_toolchain_is_recorded_with_the_tool_the_range_and_the_fix",
+                    "crates/unitas-build/tests/build/target_availability.rs::windows_and_linux_packaging_name_the_cross_toolchain_each_target_requires",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "side-by-side unitas installation management, recording the last-saved unitas version in project state, stable and preview update channels with signature verification and rollback, offline installation packages, and Android SDK/NDK/JDK, Xcode, browser, and .NET toolchain acquisition are provided",
+                location: "crates/unitas-build/src/toolchain.rs",
+                evidence: &[],
+                missing: Some("side-by-side unitas installation management, recording the last-saved unitas version in project state, stable/preview update channels with signature verification and rollback, offline installation packages, and Android SDK/NDK/JDK, Xcode, browser, and .NET toolchain acquisition are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "XR-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Tracking, views, interaction, haptics, focus, and comfort",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "OpenXR and XR Plugin Management loader lifecycle, stereo HMD pose tracking and view projection, XR Interaction Toolkit controllers/interactors/locomotion, XR Hands joint tracking, and XR haptics are executed",
+                location: "crates/unitas-core/src/compat.rs",
+                evidence: &[],
+                missing: Some("OpenXR and XR Plugin Management loader lifecycle, stereo HMD pose tracking and view projection, XR Interaction Toolkit controllers/interactors/locomotion, XR Hands joint tracking, and XR haptics are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "NET-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        capability: "Sessions, connections, ownership, synchronization, and failure",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Unity Transport (NetworkDriver, pipelines, network simulator), Netcode for GameObjects (NetworkManager, NetworkObject, NetworkBehaviour, NetworkVariable, RPCs, scene synchronization), and Netcode for Entities are executed",
+                location: "crates/unitas-core/src/compat.rs",
+                evidence: &[],
+                missing: Some("Unity Transport (NetworkDriver, pipelines, network simulator), Netcode for GameObjects (NetworkManager, NetworkObject, NetworkBehaviour, NetworkVariable, RPCs, scene synchronization), and Netcode for Entities are not implemented"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "DIA-003",
+        owning_spec: "diagnostics-profiling-playtesting.md",
+        capability: "Player crash reports, symbols, and device logs",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "when a play-mode worker process crashes or exits unexpectedly, the editor play session detects the crash, marks crashed: true and state: session-ended, fails the active operation without taking down sibling sessions or the MCP host, and windowed player startup failures report their stage and exit nonzero",
+                location: "editor/Unitas.Editor/Play/PlaySession.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Play/PlayAndCaptureTests.cs::WorkerCrashEndsOnlyThatPlaySessionAndHostContinues",
+                    "crates/unitas-build/tests/windowed_startup_failure.rs::windowed_startup_failures_name_their_reason_and_exit_nonzero",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "structured player crash reports capturing build identifier, device model, OS, and all managed and native thread stacks, per-build symbol file emission and symbolication, configurable crash report destinations, and live device log streaming are provided",
+                location: "crates/unitas-editor-abi/src/diagnostics_tools.rs",
+                evidence: &[],
+                missing: Some("structured player crash reports capturing build identifier, device model, OS, and all managed and native thread stacks, per-build symbol file emission (PDB, dSYM, Android native symbols, Web source maps) and symbolication, configurable crash report destinations, and live device log streaming (Player.log, logcat, iOS console, browser console) are not implemented"),
+            },
+        ],
+    },
 ];
 pub fn lookup_owned_feature_capability(
     feature_id: &str,
@@ -3418,6 +3882,72 @@ pub const FAMILIAR_BEHAVIOR_DIFFERENCES: &[FamiliarBehaviorDifferenceEntry] = &[
         differences: &[
             "SpeedTree 7 (.spm) and SpeedTree 8 (.st) geometry, materials, and imported mesh LODs are supported (PartiallySupported), whereas SpeedTree wind animation is excluded and reported on each affected prototype (wind_excluded == true) while Tree Creator trees and terrain grass wave with WindZone.",
             "World positions remain 32-bit single-precision without silent origin rebasing; objects at >= 100,000 units report a structured LargeWorldImpact identifying the affected systems (physics, rendering, animation, navigation).",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "UI-001",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "Screen-space overlay Canvas, CanvasScaler, and RectTransform anchor and pivot rectangles are resolved in unitas's deterministic layout pass and composited with a screen-space UI pass rather than Unity's native Canvas batch builder; screen-space camera and world-space canvases, layout groups, masks, ScrollRect, and UI Toolkit runtime documents are not implemented.",
+            "Button and label focus navigation cycles deterministically in ascending entity hierarchy order on Tab/gamepad D-pad and dispatches Button.onClick callbacks across the bridge without full EventSystem raycaster module stacks.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "UI-002",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "MonoBehaviour.OnGUI immediate-mode runtime GUI dispatch, Event.current, GUI and GUILayout controls, GUISkin, and GUIStyle are not implemented and are reported as Unsupported.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "TXT-001",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "TrueType and OpenType fonts are rasterized into a deterministic shelf-packed GlyphAtlas with horizontal advance and kerning pair shaping rather than Unity's native dynamic FontTexture or TextMeshPro SDF atlas generator.",
+            "TextMeshPro assets, SDF shaders, rich-text tag parsing, complex script and bidirectional UAX #9 layout, and IME composition windows are not implemented.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "INP-001",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "Legacy Input axes and key/mouse button transitions are stepped once per frame from deterministic queued InputEvents and InputManager.asset axis definitions without OS-level raw input thread polling; multi-touch Input.touches, Input.inputString, Cursor.lockState, and mobile sensors are not implemented.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "INP-002",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "Gamepad stick dead zones, button transitions, hot-plug events, and rumble commands are routed through the runtime's unified InputState, whereas Input System 1.x .inputactions asset compilation, InputAction phase state machines, PlayerInput, and interactive rebinding are not implemented.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "AUD-001",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "AudioWorld mixes decoded WAV, AIFF, Ogg Vorbis, and MP3 clips in deterministic 32-bit float stereo frames with linear/logarithmic/custom 3D distance attenuation, equal-power stereo panning, Doppler pitch ratio clamping, and Sfx/Music/Menu bus gains rather than FMOD Studio's internal DSP graph.",
+            "AudioMixer asset snapshots, exposed parameters, built-in mixer DSP effects, filter components, AudioReverbZone, ambisonic decoding, spectrum analysis, and Microphone capture are not implemented.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "MED-001",
+        owning_spec: "ui-audio-input.md",
+        differences: &[
+            "VideoPlayer and VideoClip decoding, render-target presentation, audio track routing, and streaming media playback are not implemented and are reported as Unsupported.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "XR-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        differences: &[
+            "OpenXR and XR Plugin Management loader lifecycle, stereo HMD pose tracking and view projection, XR Interaction Toolkit, XR Hands, and XR haptics are not implemented and are reported as Unsupported.",
+        ],
+    },
+    FamiliarBehaviorDifferenceEntry {
+        feature_id: "NET-001",
+        owning_spec: "build-platforms-xr-networking.md",
+        differences: &[
+            "Unity Transport, Netcode for GameObjects, and Netcode for Entities session management, state synchronization, and RPCs are not implemented and are reported as Unsupported.",
         ],
     },
 ];
@@ -4730,4 +5260,141 @@ pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalRepor
     };
 
     Ok(build_canonical_report(&version, findings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    const PRESENTATION_PLAYER_OWNED_IDS: [&str; 23] = [
+        "REN-001", "REN-002", "REN-003", "REN-004", "REN-005", "REN-006", "REN-007", "UI-001",
+        "UI-002", "TXT-001", "INP-001", "INP-002", "AUD-001", "MED-001", "BLD-001", "BLD-004",
+        "BLD-005", "PLT-001", "LIC-001", "PRD-001", "XR-001", "NET-001", "DIA-003",
+    ];
+
+    #[test]
+    fn presentation_player_catalog_ids_are_present_in_owned_capabilities_and_reported() {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(PathBuf::from);
+        assert!(workspace_root.is_some());
+        let Some(root) = workspace_root else {
+            return;
+        };
+
+        let probed = probe_owned_features();
+        let assessment = assess_project(&ProjectContent {
+            unitas_version: "0.1.0".to_string(),
+            declared_unity_version: Some("2022.3.20f1".to_string()),
+            packages: Vec::new(),
+            assets: Vec::new(),
+            settings: Vec::new(),
+            additional_findings: Vec::new(),
+            track_absent_catalog_features: Vec::new(),
+        });
+
+        for feature_id in PRESENTATION_PLAYER_OWNED_IDS {
+            let catalog_entry = lookup_catalog_feature(feature_id);
+            assert!(
+                catalog_entry.is_some(),
+                "catalog entry missing for {feature_id}"
+            );
+            let Some(catalog) = catalog_entry else {
+                continue;
+            };
+
+            let capability_entry = lookup_owned_feature_capability(feature_id);
+            assert!(
+                capability_entry.is_some(),
+                "owned feature capability missing for {feature_id}"
+            );
+            let Some(capability) = capability_entry else {
+                continue;
+            };
+
+            assert_eq!(capability.owning_spec, catalog.owning_spec);
+            assert!(!capability.capability.trim().is_empty());
+            assert!(!capability.parts.is_empty());
+
+            let derived_state = capability.state();
+            assert!(
+                matches!(
+                    derived_state,
+                    CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
+                ),
+                "feature {feature_id} derived unexpected state {derived_state:?}"
+            );
+            assert!(capability.gap().is_some());
+
+            if catalog.tier == Tier::Familiar {
+                assert!(
+                    lookup_familiar_behavior_differences(feature_id).is_some(),
+                    "Familiar owned feature {feature_id} must list differences"
+                );
+            }
+
+            for part in capability.parts {
+                assert!(!part.behavior.trim().is_empty());
+                assert!(
+                    root.join(part.location).is_file(),
+                    "location {} does not exist for {feature_id}",
+                    part.location
+                );
+                if part.evidence.is_empty() {
+                    assert!(
+                        part.missing.is_some_and(|m| !m.trim().is_empty()),
+                        "missing text required for undemonstrated part in {feature_id}"
+                    );
+                } else {
+                    for item in part.evidence {
+                        let split = item.split_once("::");
+                        assert!(
+                            split.is_some(),
+                            "invalid evidence format {item} in {feature_id}"
+                        );
+                        let Some((file_rel, test_name)) = split else {
+                            continue;
+                        };
+                        let file_path = root.join(file_rel);
+                        assert!(
+                            file_path.is_file(),
+                            "evidence file {file_rel} does not exist for {feature_id}"
+                        );
+                        let text = fs::read_to_string(&file_path).unwrap_or_default();
+                        let found = if file_rel.ends_with(".rs") {
+                            text.contains(&format!("fn {test_name}("))
+                        } else if file_rel.ends_with(".cs") {
+                            text.contains(&format!("void {test_name}("))
+                                || text.contains(&format!("Task {test_name}("))
+                        } else if file_rel.ends_with(".json") {
+                            text.contains(&format!("\"{test_name}\""))
+                        } else {
+                            false
+                        };
+                        assert!(
+                            found,
+                            "evidence test {test_name} not found in {file_rel} for {feature_id}"
+                        );
+                    }
+                }
+            }
+
+            assert!(
+                probed
+                    .iter()
+                    .any(|entry| entry.feature_id == feature_id && entry.state == derived_state),
+                "probe_owned_features missing {feature_id}"
+            );
+            assert!(
+                assessment
+                    .owned_feature_states
+                    .iter()
+                    .any(|entry| entry.feature_id == feature_id && entry.state == derived_state),
+                "assess_project.owned_feature_states missing {feature_id}"
+            );
+        }
+    }
 }

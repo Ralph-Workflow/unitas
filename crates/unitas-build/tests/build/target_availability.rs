@@ -186,6 +186,9 @@ fn windows_and_linux_packaging_name_the_cross_toolchain_each_target_requires() -
         .collect();
     assert!(windows_tools.contains(&"x86_64-w64-mingw32-gcc"));
     assert!(windows_tools.contains(&"x86_64-w64-mingw32-windres"));
+    assert!(windows_tools.contains(&"dotnet-runtime-pack-win-x64"));
+    assert_eq!(windows.target.rust_triple(), "x86_64-pc-windows-gnu");
+    assert_eq!(windows.target.dotnet_runtime_identifier(), "win-x64");
     assert!(windows
         .resolving_action
         .contains("rustup target add x86_64-pc-windows-gnu"));
@@ -197,6 +200,9 @@ fn windows_and_linux_packaging_name_the_cross_toolchain_each_target_requires() -
         .map(|requirement| requirement.tool.as_str())
         .collect();
     assert!(linux_tools.contains(&"x86_64-linux-gnu-gcc"));
+    assert!(linux_tools.contains(&"dotnet-runtime-pack-linux-x64"));
+    assert_eq!(linux.target.rust_triple(), "x86_64-unknown-linux-gnu");
+    assert_eq!(linux.target.dotnet_runtime_identifier(), "linux-x64");
     assert!(linux
         .resolving_action
         .contains("rustup target add x86_64-unknown-linux-gnu"));
@@ -207,5 +213,64 @@ fn windows_and_linux_packaging_name_the_cross_toolchain_each_target_requires() -
     if let Some(host) = BuildTarget::current_host() {
         assert!(targets.contains(&host));
     }
+    Ok(())
+}
+
+#[test]
+fn desktop_packaging_outcome_builds_supported_target_and_records_externally_unavailable_cross_targets(
+) -> TestResult {
+    let workspace = std::env::temp_dir().join(format!(
+        "unitas_build_multi_target_outcome_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workspace);
+    std::fs::create_dir_all(&workspace)?;
+    let config = host_config();
+    let results = unitas_build::package::attempt_desktop_targets(&config, &workspace)?;
+    assert_eq!(results.len(), 3);
+
+    for outcome in &results {
+        if outcome.is_packaged() {
+            assert_eq!(outcome.state, "packaged");
+            assert!(outcome.app_path.as_ref().is_some_and(|p| p.is_dir()));
+            assert!(outcome
+                .launch_artifact
+                .as_ref()
+                .is_some_and(|p| p.is_file()));
+            assert!(outcome.unavailable.is_none());
+        } else {
+            assert_eq!(outcome.state, "externally_unavailable");
+            let unavailable = outcome
+                .unavailable
+                .as_ref()
+                .ok_or("externally unavailable target must record precise cause")?;
+            assert!(!unavailable.tool.is_empty());
+            assert!(!unavailable.required_range.is_empty());
+            assert!(!unavailable.resolving_action.is_empty());
+            assert!(outcome.app_path.is_none());
+            assert!(outcome.launch_artifact.is_none());
+        }
+        assert!(outcome.build_report_path.is_file());
+        let target_report = BuildReport::read_from_file(&outcome.build_report_path)?;
+        assert_eq!(target_report.target, outcome.target);
+        assert_eq!(target_report.desktop_packaging.len(), 3);
+    }
+
+    let (_, host_report) = match unitas_build::build_project_for_host(
+        &config,
+        &workspace.join("host_build"),
+        10,
+        None,
+    ) {
+        Ok(pair) => pair,
+        Err(boxed) => return Err(Box::new(boxed.0)),
+    };
+    assert_eq!(host_report.desktop_packaging.len(), 3);
+    let json = host_report.to_json();
+    assert!(json.contains("\"desktop_packaging\""));
+    let round_trip = BuildReport::from_json(&json)?;
+    assert_eq!(round_trip.desktop_packaging, host_report.desktop_packaging);
+
+    std::fs::remove_dir_all(&workspace)?;
     Ok(())
 }

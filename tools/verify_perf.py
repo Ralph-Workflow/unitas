@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,6 +16,7 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
+PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 STEP_BUDGET_SECONDS = 300.0
 LANE_BUDGET_SECONDS = 600.0
@@ -20,6 +24,22 @@ IMPORT_MEASUREMENT = "import_throughput"
 IMPORT_REIMPORT_CEILING_MS = 8.4
 SCRIPTING_CALL_COST = "scripting_call_cost"
 PLAYERLOOP_FRAME_ALLOCATIONS = "playerloop_frame_allocations"
+PLAYER_STARTUP = "player_startup"
+PLAYER_STARTUP_CEILING_MS = 3000.0
+PLAYER_STARTUP_WIDTH = 320
+PLAYER_STARTUP_HEIGHT = 240
+AUDIO_CALLBACK_HEADROOM = "audio_callback_headroom"
+AUDIO_CALLBACK_SAMPLE_RATE = 48_000
+AUDIO_CALLBACK_BUFFER_FRAMES = 512
+AUDIO_CALLBACK_CHANNELS = 2
+AUDIO_CALLBACK_BYTES_PER_FRAME = 8
+AUDIO_CALLBACK_VOICE_COUNT = 8
+AUDIO_CALLBACK_WARMUP_PASSES = 10
+AUDIO_CALLBACK_MEASURED_PASSES = 100
+AUDIO_CALLBACK_CEILING_MS = round(
+    (AUDIO_CALLBACK_BUFFER_FRAMES * 1000.0) / AUDIO_CALLBACK_SAMPLE_RATE,
+    3,
+)
 BRIDGE_TESTS = "bridge/Unitas.Bridge.Tests/bin/Release/net8.0/Unitas.Bridge.Tests"
 EDITOR_TESTS = "editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Editor.Tests.dll"
 EDITOR_MEASUREMENT_CEILINGS_MS: dict[str, float] = {
@@ -142,6 +162,22 @@ MEASUREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        PLAYER_STARTUP,
+        (
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--measure-player-startup",
+        ),
+    ),
+    (
+        AUDIO_CALLBACK_HEADROOM,
+        (
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--measure-audio-callback-headroom",
+        ),
+    ),
+    (
         "editor_startup",
         (
             "dotnet",
@@ -203,6 +239,10 @@ DURATION_FACTOR_MS: dict[str, float] = {"ns": 1e-6, "µs": 1e-3, "ms": 1.0, "s":
 
 BUILD_STEPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("runtime-build", ("cargo", "build", "-p", "unitas-runtime")),
+    (
+        "player-build",
+        ("cargo", "build", "-p", "unitas-build", "--bin", "unitas-player", "--features", "device"),
+    ),
     ("bridge-build", ("dotnet", "build", "bridge/Unitas.sln", "--configuration", "Release")),
 )
 
@@ -212,11 +252,12 @@ def help_text() -> str:
     return "\n".join(
         [
             "usage: verify_perf.py [--help] [--metadata]",
-            "Runs the thirteen perf measurements (import throughput, scene load, physics",
+            "Runs the fifteen perf measurements (import throughput, scene load, physics",
             "step, particle eval, animation eval, 100k GameObject frame loop, scripting",
-            "call cost, PlayerLoop frame allocations, editor startup, editor project open,",
-            "editor hierarchy search at the scale floor, editor property edit and undo, and",
-            "editor MCP round trip) and fails hard when any value breaches its ceiling.",
+            "call cost, PlayerLoop frame allocations, player startup, audio callback",
+            "headroom, editor startup, editor project open, editor hierarchy search at the",
+            "scale floor, editor property edit and undo, and editor MCP round trip) and",
+            "fails hard when any value breaches its ceiling.",
             "lane metadata:",
             *metadata_lines,
         ]
@@ -343,12 +384,192 @@ def run_measurement(
     return measurement
 
 
+def resolve_dotnet_root() -> Path | None:
+    dotnet_executable = shutil.which("dotnet")
+    if dotnet_executable is not None:
+        resolved_parent = Path(dotnet_executable).resolve().parent
+        if (resolved_parent / "host" / "fxr").is_dir():
+            return resolved_parent
+    home_dotnet = Path.home() / ".dotnet"
+    if home_dotnet.is_dir():
+        return home_dotnet
+    return None
+
+
+def measure_player_startup_command() -> int:
+    with tempfile.TemporaryDirectory(prefix="unitas_perf_player_startup_") as temp_dir:
+        bundle_dir = Path(temp_dir) / "bundle"
+        stage_completed = subprocess.run(
+            [str(PLAYER_BINARY), "--sample", str(bundle_dir), "--frames", "1"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        if stage_completed.returncode != 0:
+            sys.stderr.write(stage_completed.stdout + stage_completed.stderr)
+            return 1
+        started = time.monotonic()
+        launch_completed = subprocess.run(
+            [
+                str(PLAYER_BINARY),
+                str(bundle_dir),
+                "--windowed",
+                "--width",
+                str(PLAYER_STARTUP_WIDTH),
+                "--height",
+                str(PLAYER_STARTUP_HEIGHT),
+                "--frames",
+                "1",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        output = launch_completed.stdout + launch_completed.stderr
+        if launch_completed.returncode != 0 or "frames_presented=1" not in output:
+            sys.stderr.write(output if output.endswith("\n") else output + "\n")
+            return 1
+        sys.stdout.write(
+            f"measurement={PLAYER_STARTUP} "
+            f"value_ms={elapsed_ms:.3f} "
+            f"ceiling_ms={PLAYER_STARTUP_CEILING_MS:.3f}\n"
+        )
+        return 0
+
+
+def configure_audio_abi(library: ctypes.CDLL) -> None:
+    library.unitas_runtime_new.restype = ctypes.c_uint64
+    library.unitas_runtime_destroy.argtypes = [ctypes.c_uint64]
+    library.unitas_runtime_destroy.restype = ctypes.c_int32
+    library.unitas_runtime_audio_create.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+    library.unitas_runtime_audio_create.restype = ctypes.c_uint64
+    library.unitas_runtime_audio_register_clip_samples.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+    ]
+    library.unitas_runtime_audio_register_clip_samples.restype = ctypes.c_uint64
+    library.unitas_runtime_audio_set_clip.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+    ]
+    library.unitas_runtime_audio_set_clip.restype = ctypes.c_int32
+    library.unitas_runtime_audio_set_loop.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+    ]
+    library.unitas_runtime_audio_set_loop.restype = ctypes.c_int32
+    library.unitas_runtime_audio_play.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+    ]
+    library.unitas_runtime_audio_play.restype = ctypes.c_int32
+    library.unitas_runtime_path_buffer.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+    library.unitas_runtime_path_buffer.restype = ctypes.c_uint64
+    library.unitas_runtime_audio_mix.argtypes = [
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+    ]
+    library.unitas_runtime_audio_mix.restype = ctypes.c_uint64
+
+
+def seed_audio_callback_voices(library: ctypes.CDLL, handle: int, clip_id: int) -> bool:
+    for index in range(1, AUDIO_CALLBACK_VOICE_COUNT + 1):
+        entity = int(library.unitas_runtime_audio_create(handle, index))
+        if entity == 0:
+            return False
+        if int(library.unitas_runtime_audio_set_clip(handle, entity, clip_id)) != 0:
+            return False
+        if int(library.unitas_runtime_audio_set_loop(handle, entity, 1)) != 0:
+            return False
+        if int(library.unitas_runtime_audio_play(handle, entity, 0)) != 0:
+            return False
+    return True
+
+
+def run_audio_callback_passes(
+    library: ctypes.CDLL,
+    handle: int,
+    out_buffer: int,
+    passes: int,
+) -> bool:
+    for _ in range(passes):
+        mixed = int(
+            library.unitas_runtime_audio_mix(
+                handle,
+                AUDIO_CALLBACK_BUFFER_FRAMES,
+                out_buffer,
+            )
+        )
+        if mixed != AUDIO_CALLBACK_BUFFER_FRAMES:
+            return False
+    return True
+
+
+def measure_audio_callback_ms(library: ctypes.CDLL, handle: int) -> float | None:
+    clip_id = int(
+        library.unitas_runtime_audio_register_clip_samples(
+            handle,
+            AUDIO_CALLBACK_CHANNELS,
+            AUDIO_CALLBACK_SAMPLE_RATE,
+            AUDIO_CALLBACK_SAMPLE_RATE,
+            0,
+        )
+    )
+    if clip_id == 0 or not seed_audio_callback_voices(library, handle, clip_id):
+        return None
+    byte_len = AUDIO_CALLBACK_BUFFER_FRAMES * AUDIO_CALLBACK_BYTES_PER_FRAME
+    out_buffer = int(library.unitas_runtime_path_buffer(handle, byte_len))
+    if out_buffer == 0:
+        return None
+    if not run_audio_callback_passes(library, handle, out_buffer, AUDIO_CALLBACK_WARMUP_PASSES):
+        return None
+    started = time.monotonic()
+    if not run_audio_callback_passes(library, handle, out_buffer, AUDIO_CALLBACK_MEASURED_PASSES):
+        return None
+    return ((time.monotonic() - started) * 1000.0) / AUDIO_CALLBACK_MEASURED_PASSES
+
+
+def measure_audio_callback_headroom_command() -> int:
+    if not RUNTIME_LIBRARY.is_file():
+        sys.stderr.write(f"runtime library missing at {RUNTIME_LIBRARY}\n")
+        return 1
+    library = ctypes.CDLL(str(RUNTIME_LIBRARY))
+    configure_audio_abi(library)
+    handle = int(library.unitas_runtime_new())
+    if handle == 0:
+        return 1
+    try:
+        elapsed_ms = measure_audio_callback_ms(library, handle)
+    finally:
+        library.unitas_runtime_destroy(handle)
+    if elapsed_ms is None:
+        return 1
+    sys.stdout.write(
+        f"measurement={AUDIO_CALLBACK_HEADROOM} "
+        f"value_ms={elapsed_ms:.3f} "
+        f"ceiling_ms={AUDIO_CALLBACK_CEILING_MS:.3f}\n"
+    )
+    return 0
+
+
 def run_perf_lane() -> int:
     sys.stdout.write(metadata_text() + "\n")
     env = dict(os.environ)
     env["UNITAS_RUNTIME_LIBRARY"] = str(RUNTIME_LIBRARY)
-    dotnet_root = Path.home() / ".dotnet"
-    if dotnet_root.is_dir():
+    dotnet_root = resolve_dotnet_root()
+    if dotnet_root is not None:
         env["DOTNET_ROOT"] = str(dotnet_root)
     lane_started = time.monotonic()
     for name, command in BUILD_STEPS:
@@ -405,6 +626,10 @@ def main(argv: Sequence[str]) -> int:
     if args == ["--metadata"]:
         sys.stdout.write(metadata_text() + "\n")
         return 0
+    if args == ["--measure-player-startup"]:
+        return measure_player_startup_command()
+    if args == ["--measure-audio-callback-headroom"]:
+        return measure_audio_callback_headroom_command()
     sys.stderr.write(help_text() + "\n")
     return 2
 

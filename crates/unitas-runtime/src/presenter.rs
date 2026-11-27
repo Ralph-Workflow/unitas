@@ -1,5 +1,17 @@
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+macro_rules! ffi_export {
+    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        #[unsafe(export_name = stringify!($name))]
+        pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
+            #[used]
+            static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
+            $body
+        }
+    };
+}
 
 use unitas_asset::project_settings::QualityLevel;
 #[cfg(feature = "device")]
@@ -22,6 +34,320 @@ const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 44_100;
 
 pub const DESKTOP_QUALITY_TARGET_GROUP: &str = "Standalone";
 pub const WEB_QUALITY_TARGET_GROUP: &str = "WebGL";
+pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
+pub const DEFAULT_DISPLAY_HEIGHT: u32 = 720;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplaySettingsState {
+    width: u32,
+    height: u32,
+    full_screen: bool,
+    v_sync_count: u32,
+    target_frame_rate: i32,
+    quality_level: usize,
+    quit_requested: bool,
+    pending_window_reconfigure: Option<(u32, u32, bool)>,
+    pending_v_sync_count: Option<u32>,
+    pending_quality_level: Option<usize>,
+}
+
+impl Default for DisplaySettingsState {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_DISPLAY_WIDTH,
+            DEFAULT_DISPLAY_HEIGHT,
+            false,
+            1,
+            -1,
+            0,
+        )
+    }
+}
+
+impl DisplaySettingsState {
+    pub fn new(
+        width: u32,
+        height: u32,
+        full_screen: bool,
+        v_sync_count: u32,
+        target_frame_rate: i32,
+        quality_level: usize,
+    ) -> Self {
+        Self {
+            width: width.max(1),
+            height: height.max(1),
+            full_screen,
+            v_sync_count,
+            target_frame_rate,
+            quality_level,
+            quit_requested: false,
+            pending_window_reconfigure: None,
+            pending_v_sync_count: None,
+            pending_quality_level: None,
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn full_screen(&self) -> bool {
+        self.full_screen
+    }
+
+    pub fn v_sync_count(&self) -> u32 {
+        self.v_sync_count
+    }
+
+    pub fn target_frame_rate(&self) -> i32 {
+        self.target_frame_rate
+    }
+
+    pub fn quality_level(&self) -> usize {
+        self.quality_level
+    }
+
+    pub fn quit_requested(&self) -> bool {
+        self.quit_requested
+    }
+
+    pub fn set_resolution(&mut self, width: u32, height: u32, full_screen: bool) -> bool {
+        if width == 0 || height == 0 {
+            return false;
+        }
+        self.width = width;
+        self.height = height;
+        self.full_screen = full_screen;
+        self.pending_window_reconfigure = Some((width, height, full_screen));
+        true
+    }
+
+    pub fn record_observed_size(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.width = width;
+            self.height = height;
+        }
+    }
+
+    pub fn set_full_screen(&mut self, full_screen: bool) {
+        self.full_screen = full_screen;
+        self.pending_window_reconfigure = Some((self.width, self.height, full_screen));
+    }
+
+    pub fn set_v_sync_count(&mut self, v_sync_count: u32) {
+        self.v_sync_count = v_sync_count;
+        self.pending_v_sync_count = Some(v_sync_count);
+    }
+
+    pub fn set_target_frame_rate(&mut self, target_frame_rate: i32) {
+        self.target_frame_rate = target_frame_rate;
+    }
+
+    pub fn set_quality_level(&mut self, quality_level: usize) {
+        self.quality_level = quality_level;
+        self.pending_quality_level = Some(quality_level);
+    }
+
+    pub fn sync_from_runtime(
+        &mut self,
+        runtime: &Runtime,
+        width: u32,
+        height: u32,
+        full_screen: bool,
+    ) {
+        if width > 0 && height > 0 {
+            self.width = width;
+            self.height = height;
+        }
+        self.full_screen = full_screen;
+        self.v_sync_count = v_sync_count_for_runtime(runtime);
+        if let Some(index) = quality_level_index_for_runtime(runtime) {
+            self.quality_level = index;
+        }
+        self.pending_window_reconfigure = None;
+        self.pending_v_sync_count = None;
+        self.pending_quality_level = None;
+        self.quit_requested = false;
+    }
+
+    pub fn request_quit(&mut self) {
+        self.quit_requested = true;
+    }
+
+    pub fn clear_quit_request(&mut self) {
+        self.quit_requested = false;
+    }
+
+    pub fn take_pending_window_reconfigure(&mut self) -> Option<(u32, u32, bool)> {
+        self.pending_window_reconfigure.take()
+    }
+
+    pub fn take_pending_v_sync_count(&mut self) -> Option<u32> {
+        self.pending_v_sync_count.take()
+    }
+
+    pub fn take_pending_quality_level(&mut self) -> Option<usize> {
+        self.pending_quality_level.take()
+    }
+
+    pub fn frame_interval(&self) -> Option<Duration> {
+        frame_pacing_interval(self.target_frame_rate, self.v_sync_count)
+    }
+}
+
+pub fn frame_pacing_interval(target_frame_rate: i32, v_sync_count: u32) -> Option<Duration> {
+    if v_sync_count == 0 && target_frame_rate > 0 {
+        Some(Duration::from_secs_f64(1.0 / f64::from(target_frame_rate)))
+    } else {
+        None
+    }
+}
+
+pub fn quality_level_index_for_runtime(runtime: &Runtime) -> Option<usize> {
+    if runtime.quality_settings.levels.is_empty() {
+        return None;
+    }
+    let index = runtime
+        .quality_settings
+        .per_platform_default_quality
+        .iter()
+        .find_map(|(platform, level_index)| {
+            (platform == DESKTOP_QUALITY_TARGET_GROUP).then_some(*level_index)
+        })
+        .unwrap_or(runtime.quality_settings.current_quality);
+    (index < runtime.quality_settings.levels.len()).then_some(index)
+}
+
+static GLOBAL_DISPLAY_SETTINGS: OnceLock<Mutex<DisplaySettingsState>> = OnceLock::new();
+
+pub fn global_display_settings() -> &'static Mutex<DisplaySettingsState> {
+    GLOBAL_DISPLAY_SETTINGS.get_or_init(|| Mutex::new(DisplaySettingsState::default()))
+}
+
+pub fn with_display_settings<R>(action: impl FnOnce(&mut DisplaySettingsState) -> R) -> R {
+    let mutex = global_display_settings();
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    action(&mut guard)
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_reset() -> i32 {
+    with_display_settings(|state| {
+        *state = DisplaySettingsState::default();
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_set_resolution(
+    width: u32,
+    height: u32,
+    full_screen: u32,
+) -> i32 {
+    with_display_settings(|state| {
+        if state.set_resolution(width, height, full_screen != 0) {
+            0
+        } else {
+            -2
+        }
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_width() -> u32 {
+    with_display_settings(|state| state.width())
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_height() -> u32 {
+    with_display_settings(|state| state.height())
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_set_full_screen(full_screen: u32) -> i32 {
+    with_display_settings(|state| {
+        state.set_full_screen(full_screen != 0);
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_full_screen() -> u32 {
+    with_display_settings(|state| u32::from(state.full_screen()))
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_set_v_sync_count(v_sync_count: u32) -> i32 {
+    with_display_settings(|state| {
+        state.set_v_sync_count(v_sync_count);
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_v_sync_count() -> u32 {
+    with_display_settings(|state| state.v_sync_count())
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_set_target_frame_rate(target_frame_rate: i32) -> i32 {
+    with_display_settings(|state| {
+        state.set_target_frame_rate(target_frame_rate);
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_target_frame_rate() -> i32 {
+    with_display_settings(|state| state.target_frame_rate())
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_set_quality_level(index: u32) -> i32 {
+    with_display_settings(|state| {
+        state.set_quality_level(index as usize);
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_quality_level() -> u32 {
+    with_display_settings(|state| state.quality_level() as u32)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_request_quit() -> i32 {
+    with_display_settings(|state| {
+        state.request_quit();
+        0
+    })
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_display_quit_requested() -> u32 {
+    with_display_settings(|state| u32::from(state.quit_requested()))
+}
+}
 
 pub fn shadow_settings_for_quality(level: &QualityLevel) -> ShadowSettings {
     ShadowSettings {
@@ -36,6 +362,39 @@ pub fn shadow_settings_for_runtime(runtime: &Runtime) -> ShadowSettings {
     runtime
         .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
         .map_or_else(ShadowSettings::disabled, shadow_settings_for_quality)
+}
+
+pub fn v_sync_count_for_runtime(runtime: &Runtime) -> u32 {
+    runtime
+        .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
+        .map_or(1, |level| level.v_sync_count)
+}
+
+pub fn set_runtime_quality_level(runtime: &mut Runtime, index: usize) -> Option<&QualityLevel> {
+    if index >= runtime.quality_settings.levels.len() {
+        return None;
+    }
+    runtime.quality_settings.current_quality = index;
+    let mut updated = false;
+    for (platform, level_index) in &mut runtime.quality_settings.per_platform_default_quality {
+        if platform == DESKTOP_QUALITY_TARGET_GROUP {
+            *level_index = index;
+            updated = true;
+        }
+    }
+    if !updated {
+        runtime
+            .quality_settings
+            .per_platform_default_quality
+            .push((DESKTOP_QUALITY_TARGET_GROUP.to_string(), index));
+    }
+    if let Some(renderer) = &runtime.gpu_renderer
+        && let Some(level) = runtime.quality_settings.levels.get(index)
+    {
+        renderer.set_shadow_settings(shadow_settings_for_quality(level));
+        renderer.set_v_sync_count(level.v_sync_count);
+    }
+    runtime.quality_settings.levels.get(index)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -345,6 +704,15 @@ impl<'a> GpuFramePresenter<'a> {
         }
         self.set_light(runtime.directional_light());
         self.set_shadow_settings(shadow_settings_for_runtime(runtime));
+        let vsync = v_sync_count_for_runtime(runtime);
+        self.set_v_sync_count(vsync);
+        let quality_index = quality_level_index_for_runtime(runtime).unwrap_or(0);
+        with_display_settings(|display| {
+            display.v_sync_count = vsync;
+            display.quality_level = quality_index;
+            display.pending_v_sync_count = None;
+            display.pending_quality_level = None;
+        });
     }
 
     pub fn add_mesh(&mut self, binding: GpuMeshBinding) -> usize {
@@ -383,6 +751,60 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn set_shadow_settings(&mut self, settings: ShadowSettings) {
         self.renderer.set_shadow_settings(settings);
+    }
+
+    pub fn shadow_settings(&self) -> ShadowSettings {
+        self.renderer.shadow_settings()
+    }
+
+    pub fn set_v_sync_count(&mut self, v_sync_count: u32) {
+        self.renderer.set_v_sync_count(v_sync_count);
+        with_display_settings(|display| {
+            display.v_sync_count = v_sync_count;
+            display.pending_v_sync_count = None;
+        });
+    }
+
+    pub fn v_sync_count(&self) -> u32 {
+        self.renderer.v_sync_count()
+    }
+
+    pub fn apply_quality_level(&mut self, runtime: &mut Runtime, index: usize) -> bool {
+        let Some(level) = set_runtime_quality_level(runtime, index) else {
+            return false;
+        };
+        let shadow = shadow_settings_for_quality(level);
+        let vsync = level.v_sync_count;
+        self.set_shadow_settings(shadow);
+        self.set_v_sync_count(vsync);
+        with_display_settings(|display| {
+            display.quality_level = index;
+            display.v_sync_count = vsync;
+            display.pending_quality_level = None;
+            display.pending_v_sync_count = None;
+        });
+        true
+    }
+
+    pub fn sync_quality_from_runtime(&mut self, runtime: &Runtime) {
+        self.set_shadow_settings(shadow_settings_for_runtime(runtime));
+        let vsync = v_sync_count_for_runtime(runtime);
+        self.set_v_sync_count(vsync);
+    }
+
+    pub fn apply_pending_display_settings(&mut self, runtime: &mut Runtime) {
+        let (pending_quality, pending_vsync) = with_display_settings(|display| {
+            (
+                display.take_pending_quality_level(),
+                display.take_pending_v_sync_count(),
+            )
+        });
+        if let Some(index) = pending_quality {
+            self.apply_quality_level(runtime, index);
+        }
+        if let Some(vsync) = pending_vsync {
+            self.set_v_sync_count(vsync);
+        }
     }
 
     #[cfg(feature = "device")]
@@ -517,12 +939,18 @@ impl<'a> GpuFramePresenter<'a> {
     pub(crate) fn attach_window_surface(&mut self, window: &Arc<Window>) {
         match self.renderer.instance().create_surface(Arc::clone(window)) {
             Ok(surface) => {
-                let mut configured_size: Option<(u32, u32)> = None;
+                let mut configured: Option<(u32, u32, u32)> = None;
                 self.surface_blit = Some(Box::new(
                     move |renderer: &Renderer, image: &Rgba8| -> Result<(), RenderError> {
-                        if configured_size != Some((image.width, image.height)) {
-                            renderer.configure_surface(&surface, image.width, image.height)?;
-                            configured_size = Some((image.width, image.height));
+                        let v_sync_count = renderer.v_sync_count();
+                        if configured != Some((image.width, image.height, v_sync_count)) {
+                            renderer.configure_surface_with_v_sync(
+                                &surface,
+                                image.width,
+                                image.height,
+                                v_sync_count,
+                            )?;
+                            configured = Some((image.width, image.height, v_sync_count));
                         }
                         renderer.present_rgba_to_surface(&surface, image)
                     },
@@ -553,6 +981,7 @@ impl<'a> GpuFramePresenter<'a> {
         if let Some(callback) = &mut self.update_callback {
             callback(runtime, frame)?;
         }
+        self.apply_pending_display_settings(runtime);
         self.mix_and_push_audio(runtime, frame.delta_seconds);
         Ok(())
     }
@@ -982,5 +1411,163 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn switching_quality_level_dynamically_reapplies_shadow_settings_and_v_sync_count() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        let mut low = sample_quality_level("Low", 0, 0, 40.0);
+        low.v_sync_count = 0;
+        let mut medium = sample_quality_level("Medium", 1, 1, 70.0);
+        medium.v_sync_count = 1;
+        let mut high = sample_quality_level("High", 2, 2, 50.0);
+        high.v_sync_count = 2;
+        runtime.quality_settings = QualitySettings {
+            current_quality: 2,
+            levels: vec![low, medium, high],
+            per_platform_default_quality: vec![(DESKTOP_QUALITY_TARGET_GROUP.to_string(), 2)],
+        };
+        let Ok(renderer) = Renderer::new() else {
+            return;
+        };
+        let mut presenter = GpuFramePresenter::new(Arc::new(renderer));
+        presenter.bind_scene(&runtime);
+        assert_eq!(
+            presenter.shadow_settings(),
+            ShadowSettings {
+                enabled: true,
+                soft: true,
+                resolution_index: 2,
+                distance: 50.0,
+            }
+        );
+        assert_eq!(presenter.v_sync_count(), 2);
+
+        assert!(presenter.apply_quality_level(&mut runtime, 0));
+        assert_eq!(runtime.quality_settings().current_quality, 0);
+        assert_eq!(
+            presenter.shadow_settings(),
+            ShadowSettings {
+                enabled: false,
+                soft: false,
+                resolution_index: 0,
+                distance: 40.0,
+            }
+        );
+        assert_eq!(presenter.v_sync_count(), 0);
+
+        assert!(presenter.apply_quality_level(&mut runtime, 1));
+        assert_eq!(runtime.quality_settings().current_quality, 1);
+        assert_eq!(
+            presenter.shadow_settings(),
+            ShadowSettings {
+                enabled: true,
+                soft: false,
+                resolution_index: 1,
+                distance: 70.0,
+            }
+        );
+        assert_eq!(presenter.v_sync_count(), 1);
+
+        presenter.set_v_sync_count(0);
+        assert_eq!(presenter.v_sync_count(), 0);
+        assert_eq!(super::v_sync_count_for_runtime(&runtime), 1);
+
+        assert!(!presenter.apply_quality_level(&mut runtime, 99));
+        assert_eq!(runtime.quality_settings().current_quality, 1);
+    }
+
+    #[test]
+    fn display_settings_state_tracks_resolution_fullscreen_pacing_and_quit() {
+        let mut display = super::DisplaySettingsState::new(1280, 720, false, 1, -1, 0);
+        assert_eq!(display.width(), 1280);
+        assert_eq!(display.height(), 720);
+        assert!(!display.full_screen());
+        assert_eq!(display.v_sync_count(), 1);
+        assert_eq!(display.target_frame_rate(), -1);
+        assert_eq!(display.frame_interval(), None);
+        assert!(!display.quit_requested());
+
+        assert!(display.set_resolution(1920, 1080, true));
+        assert_eq!(display.width(), 1920);
+        assert_eq!(display.height(), 1080);
+        assert!(display.full_screen());
+        assert_eq!(
+            display.take_pending_window_reconfigure(),
+            Some((1920, 1080, true))
+        );
+        assert_eq!(display.take_pending_window_reconfigure(), None);
+
+        assert!(!display.set_resolution(0, 1080, false));
+        assert!(!display.set_resolution(1920, 0, false));
+        assert_eq!(display.width(), 1920);
+        assert_eq!(display.height(), 1080);
+
+        display.set_full_screen(false);
+        assert!(!display.full_screen());
+        assert_eq!(
+            display.take_pending_window_reconfigure(),
+            Some((1920, 1080, false))
+        );
+
+        display.set_target_frame_rate(60);
+        assert_eq!(display.target_frame_rate(), 60);
+        assert_eq!(display.frame_interval(), None);
+
+        display.set_v_sync_count(0);
+        assert_eq!(display.v_sync_count(), 0);
+        let interval = display.frame_interval().unwrap_or_default();
+        assert!((interval.as_secs_f64() - (1.0 / 60.0)).abs() < 1e-6);
+
+        display.set_target_frame_rate(0);
+        assert_eq!(display.frame_interval(), None);
+        display.set_target_frame_rate(-1);
+        assert_eq!(display.frame_interval(), None);
+
+        display.request_quit();
+        assert!(display.quit_requested());
+        display.clear_quit_request();
+        assert!(!display.quit_requested());
+    }
+
+    #[test]
+    fn runtime_display_ffi_controls_resolution_vsync_frame_rate_quality_and_quit() {
+        super::unitas_runtime_display_reset();
+        assert_eq!(super::unitas_runtime_display_width(), 1280);
+        assert_eq!(super::unitas_runtime_display_height(), 720);
+        assert_eq!(super::unitas_runtime_display_full_screen(), 0);
+        assert_eq!(super::unitas_runtime_display_v_sync_count(), 1);
+        assert_eq!(super::unitas_runtime_display_target_frame_rate(), -1);
+        assert_eq!(super::unitas_runtime_display_quit_requested(), 0);
+
+        assert_eq!(
+            super::unitas_runtime_display_set_resolution(1600, 900, 1),
+            0
+        );
+        assert_eq!(super::unitas_runtime_display_width(), 1600);
+        assert_eq!(super::unitas_runtime_display_height(), 900);
+        assert_eq!(super::unitas_runtime_display_full_screen(), 1);
+        assert_eq!(super::unitas_runtime_display_set_resolution(0, 900, 0), -2);
+
+        assert_eq!(super::unitas_runtime_display_set_full_screen(0), 0);
+        assert_eq!(super::unitas_runtime_display_full_screen(), 0);
+
+        assert_eq!(super::unitas_runtime_display_set_v_sync_count(0), 0);
+        assert_eq!(super::unitas_runtime_display_v_sync_count(), 0);
+        assert_eq!(super::unitas_runtime_display_set_v_sync_count(2), 0);
+        assert_eq!(super::unitas_runtime_display_v_sync_count(), 2);
+
+        assert_eq!(super::unitas_runtime_display_set_target_frame_rate(120), 0);
+        assert_eq!(super::unitas_runtime_display_target_frame_rate(), 120);
+
+        assert_eq!(super::unitas_runtime_display_set_quality_level(1), 0);
+        assert_eq!(super::unitas_runtime_display_quality_level(), 1);
+
+        assert_eq!(super::unitas_runtime_display_request_quit(), 0);
+        assert_eq!(super::unitas_runtime_display_quit_requested(), 1);
+        super::unitas_runtime_display_reset();
+        assert_eq!(super::unitas_runtime_display_quit_requested(), 0);
     }
 }

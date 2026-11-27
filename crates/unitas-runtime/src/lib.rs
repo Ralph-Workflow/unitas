@@ -37,8 +37,17 @@ pub use player_loop::{
     PlayerLoopSystem,
 };
 pub use presenter::{
-    FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding, GpuWindowPresenter,
-    WindowError, scene_gpu_meshes, transform_to_mat4, view_matrix_from_transform,
+    DisplaySettingsState, FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding,
+    GpuWindowPresenter, WindowError, frame_pacing_interval, scene_gpu_meshes,
+    set_runtime_quality_level, shadow_settings_for_quality, shadow_settings_for_runtime,
+    transform_to_mat4, unitas_runtime_display_full_screen, unitas_runtime_display_height,
+    unitas_runtime_display_quality_level, unitas_runtime_display_quit_requested,
+    unitas_runtime_display_request_quit, unitas_runtime_display_reset,
+    unitas_runtime_display_set_full_screen, unitas_runtime_display_set_quality_level,
+    unitas_runtime_display_set_resolution, unitas_runtime_display_set_target_frame_rate,
+    unitas_runtime_display_set_v_sync_count, unitas_runtime_display_target_frame_rate,
+    unitas_runtime_display_v_sync_count, unitas_runtime_display_width, v_sync_count_for_runtime,
+    view_matrix_from_transform, with_display_settings,
 };
 pub use runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,

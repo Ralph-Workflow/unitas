@@ -24,7 +24,6 @@ namespace Unitas.Samples.RollABall
         private const float FrozenToleranceSqr = 1e-8f;
         private const string GoldPickupName = "Pickup_Gold";
         private const string CollectChimeObjectName = "CollectChime";
-        private const string CollectChimeAssetPath = "Audio/PickupChime.wav";
 
         private static readonly Vector3 GoldSpawnPosition = new Vector3(5f, 0.75f, 5f);
 
@@ -96,21 +95,23 @@ namespace Unitas.Samples.RollABall
         /// <summary>
         /// Starts the ghost of the previous attempt: the route the arena
         /// persisted is replayed on a ghost object, so the attempt that follows
-        /// runs against the recorded route.
+        /// runs against the recorded route. The ghost object exists in every
+        /// attempt, recorded route or not, so the attempt's scene composition
+        /// does not depend on whether a previous attempt wrote a route.
         /// </summary>
         private void StartGhostReplay()
         {
             Vector3[]? route = SavedState.LoadGhostRoute();
-            if (route == null || route.Length == 0)
-            {
-                return;
-            }
-
             GameObject ghost = new GameObject("GhostBall");
             GhostReplay? replay = ghost.AddComponent<GhostReplay>();
             if (replay == null)
             {
                 Debug.LogWarning("Ghost attempt replay failed the ghost carries no replay component");
+                return;
+            }
+
+            if (route == null || route.Length == 0)
+            {
                 return;
             }
 
@@ -389,21 +390,7 @@ namespace Unitas.Samples.RollABall
                 return source;
             }
 
-            AudioClip? clip = AudioClip.LoadFromFile(Application.dataPath + "/" + CollectChimeAssetPath);
-            if (clip == null)
-            {
-                return null;
-            }
-
-            if (holder == null)
-            {
-                holder = new GameObject(CollectChimeObjectName);
-            }
-            source = source ?? holder.AddComponent<AudioSource>();
-            source.clip = clip;
-            _collectChimeSource = source;
-            _collectChimeClip = clip;
-            return source;
+            return null;
         }
 
         private IEnumerator CountdownRoutine()

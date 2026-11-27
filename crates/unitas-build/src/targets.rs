@@ -163,6 +163,46 @@ impl BuildTarget {
         self.arch.as_str()
     }
 
+    pub const fn rust_triple(self) -> &'static str {
+        match (self.os, self.arch) {
+            (TargetOs::Windows, TargetArch::X86_64) => "x86_64-pc-windows-gnu",
+            (TargetOs::Windows, TargetArch::Arm64) => "aarch64-pc-windows-gnu",
+            (TargetOs::MacOs, TargetArch::X86_64) => "x86_64-apple-darwin",
+            (TargetOs::MacOs, TargetArch::Arm64) => "aarch64-apple-darwin",
+            (TargetOs::Linux, TargetArch::X86_64) => "x86_64-unknown-linux-gnu",
+            (TargetOs::Linux, TargetArch::Arm64) => "aarch64-unknown-linux-gnu",
+        }
+    }
+
+    pub const fn alternate_rust_triples(self) -> &'static [&'static str] {
+        match (self.os, self.arch) {
+            (TargetOs::Windows, TargetArch::X86_64) => &["x86_64-pc-windows-msvc"],
+            (TargetOs::Windows, TargetArch::Arm64) => &["aarch64-pc-windows-msvc"],
+            _ => &[],
+        }
+    }
+
+    pub const fn dotnet_runtime_identifier(self) -> &'static str {
+        match (self.os, self.arch) {
+            (TargetOs::Windows, TargetArch::X86_64) => "win-x64",
+            (TargetOs::Windows, TargetArch::Arm64) => "win-arm64",
+            (TargetOs::MacOs, TargetArch::X86_64) => "osx-x64",
+            (TargetOs::MacOs, TargetArch::Arm64) => "osx-arm64",
+            (TargetOs::Linux, TargetArch::X86_64) => "linux-x64",
+            (TargetOs::Linux, TargetArch::Arm64) => "linux-arm64",
+        }
+    }
+
+    pub const fn primary_linker(self) -> &'static str {
+        match (self.os, self.arch) {
+            (TargetOs::Windows, TargetArch::X86_64) => "x86_64-w64-mingw32-gcc",
+            (TargetOs::Windows, TargetArch::Arm64) => "aarch64-w64-mingw32-gcc",
+            (TargetOs::MacOs, _) => "clang",
+            (TargetOs::Linux, TargetArch::X86_64) => "x86_64-linux-gnu-gcc",
+            (TargetOs::Linux, TargetArch::Arm64) => "aarch64-linux-gnu-gcc",
+        }
+    }
+
     pub fn identifier(self) -> String {
         format!("{}-{}", self.os.as_str(), self.arch.as_str())
     }

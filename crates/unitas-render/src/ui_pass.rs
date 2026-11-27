@@ -2,6 +2,18 @@ use std::collections::HashMap;
 
 use crate::image::Rgba8;
 
+pub const FOCUS_INDICATOR_COLOR: [f32; 4] = [1.0, 0.9, 0.0, 1.0];
+
+pub fn focus_border_rects(rect: [f32; 4], thickness: f32) -> [[f32; 4]; 4] {
+    let clamped = thickness.min(rect[2] * 0.5).min(rect[3] * 0.5).max(1.0);
+    [
+        [rect[0], rect[1], rect[2], clamped],
+        [rect[0], rect[1] + rect[3] - clamped, rect[2], clamped],
+        [rect[0], rect[1], clamped, rect[3]],
+        [rect[0] + rect[2] - clamped, rect[1], clamped, rect[3]],
+    ]
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpriteRef {
     pub texture_guid: String,
@@ -268,4 +280,71 @@ pub fn composite_ui_onto_capture<T: UiElement>(
     }
     frame.objects.extend(objects.iter().cloned());
     objects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FlatItem {
+        rect: [f32; 4],
+        color: [f32; 4],
+    }
+
+    impl UiElement for FlatItem {
+        fn rect(&self) -> [f32; 4] {
+            self.rect
+        }
+
+        fn color(&self) -> [f32; 4] {
+            self.color
+        }
+
+        fn sprite(&self) -> Option<&SpriteRef> {
+            None
+        }
+
+        fn text(&self) -> Option<UiText<'_>> {
+            None
+        }
+    }
+
+    #[test]
+    fn focus_border_rects_composite_visible_outline_around_button_without_covering_interior() {
+        let button_rect = [10.0, 20.0, 40.0, 16.0];
+        let edges = focus_border_rects(button_rect, 2.0);
+        let mut items = vec![FlatItem {
+            rect: button_rect,
+            color: [0.2, 0.5, 0.3, 1.0],
+        }];
+        for edge in edges {
+            items.push(FlatItem {
+                rect: edge,
+                color: FOCUS_INDICATOR_COLOR,
+            });
+        }
+        let mut image = Rgba8::new(64, 64);
+        let mut target = UiTarget {
+            image: &mut image,
+            ids: None,
+        };
+        let coverages = composite_ui(&mut target, &items, 1, None);
+        assert_eq!(coverages.len(), 5);
+
+        let top_edge_px = ((20 * 64) + 25) * 4;
+        assert_eq!(
+            &image.pixels[top_edge_px..top_edge_px + 4],
+            &[255, 230, 0, 255]
+        );
+        let bottom_edge_px = ((35 * 64) + 25) * 4;
+        assert_eq!(
+            &image.pixels[bottom_edge_px..bottom_edge_px + 4],
+            &[255, 230, 0, 255]
+        );
+        let interior_px = ((28 * 64) + 25) * 4;
+        assert_eq!(
+            &image.pixels[interior_px..interior_px + 4],
+            &[51, 128, 77, 255]
+        );
+    }
 }

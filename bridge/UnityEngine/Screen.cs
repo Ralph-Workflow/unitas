@@ -97,6 +97,10 @@ namespace UnityEngine
         private static ScreenOrientation _orientation = ScreenOrientation.LandscapeLeft;
         private static int _sleepTimeout = SleepTimeout.SystemSetting;
 
+        public static Action<int, int, bool>? ResolutionChangeHandler { get; set; }
+
+        public static Action<bool>? FullScreenChangeHandler { get; set; }
+
         public static int width
         {
             get => _width;
@@ -122,6 +126,7 @@ namespace UnityEngine
             {
                 _fullScreen = value;
                 _fullScreenMode = value ? FullScreenMode.FullScreenWindow : FullScreenMode.Windowed;
+                FullScreenChangeHandler?.Invoke(_fullScreen);
             }
         }
 
@@ -132,6 +137,7 @@ namespace UnityEngine
             {
                 _fullScreenMode = value;
                 _fullScreen = value != FullScreenMode.Windowed;
+                FullScreenChangeHandler?.Invoke(_fullScreen);
             }
         }
 
@@ -176,7 +182,9 @@ namespace UnityEngine
             _width = width > 0 ? width : DefaultWidth;
             _height = height > 0 ? height : DefaultHeight;
             _refreshRate = preferredRefreshRate > 0 ? preferredRefreshRate : DefaultRefreshRate;
-            fullScreenMode = fullscreenMode;
+            _fullScreenMode = fullscreenMode;
+            _fullScreen = fullscreenMode != FullScreenMode.Windowed;
+            ResolutionChangeHandler?.Invoke(_width, _height, _fullScreen);
         }
 
         public static void ResetToDefaults()

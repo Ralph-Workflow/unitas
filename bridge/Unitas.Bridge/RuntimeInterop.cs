@@ -59,6 +59,12 @@ namespace Unitas.Bridge
                     return IntPtr.Zero;
                 });
             UnityEngine.Time.TimeScaleHost = TimeScaleHostImpl;
+            UnityEngine.Screen.ResolutionChangeHandler = ApplyDisplayResolution;
+            UnityEngine.Screen.FullScreenChangeHandler = ApplyDisplayFullScreen;
+            UnityEngine.Application.TargetFrameRateChangeHandler = ApplyDisplayTargetFrameRate;
+            UnityEngine.Application.QuitRequestHandler = RequestDisplayQuit;
+            UnityEngine.QualitySettings.VSyncCountChangeHandler = ApplyDisplayVSyncCount;
+            UnityEngine.QualitySettings.QualityLevelChangeHandler = ApplyDisplayQualityLevel;
         }
 
         private sealed class TimeScaleHost : UnityEngine.ITimeScaleHost

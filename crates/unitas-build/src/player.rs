@@ -30,14 +30,18 @@ use crate::bundle::{
     DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
 };
 use crate::config::BuildConfiguration;
+use crate::package::{
+    bundle_name, desktop_package_targets, APP_BUNDLE_EXTENSION, CONTENTS_DIR_NAME, MACOS_DIR_NAME,
+};
 use crate::report::{
-    BuildDiagnostic, BuildReport, CompatibilityFinding, SizeCategoryEntry, SizeContributor,
-    StartupMeasurement, STARTUP_BASIS,
+    BuildDiagnostic, BuildReport, CompatibilityFinding, DesktopPackageOutcome, SizeCategoryEntry,
+    SizeContributor, StartupMeasurement, DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE,
+    DESKTOP_PACKAGE_STATE_PACKAGED, STARTUP_BASIS,
 };
 #[cfg(feature = "device")]
 use crate::sample::stage_roll_a_ball_bundle;
-use crate::targets::BuildTarget;
-use crate::toolchain::target_availability_report;
+use crate::targets::{BuildTarget, TargetOs};
+use crate::toolchain::{probe_target_availability, target_availability_report, TargetAvailability};
 
 pub const BUILD_REPORT_FILENAME: &str = "build-report.json";
 pub const PLAYER_LAUNCH_OPERATION: &str = "player launch";
@@ -1130,6 +1134,12 @@ pub fn build_project_for_host(
                 ));
             }
 
+            let availability = target_availability_report();
+            let desktop_packaging = desktop_packaging_outcomes_from_availability(
+                &availability,
+                output_dir,
+                &config.product_name,
+            );
             let report = BuildReport::succeeded(
                 config,
                 elapsed_ms,
@@ -1141,7 +1151,8 @@ pub fn build_project_for_host(
             )
             .with_compatibility_findings(project_compatibility_findings(config))
             .with_startup_time(measure_packaged_startup(&staged))
-            .with_target_availability(target_availability_report());
+            .with_target_availability(availability)
+            .with_desktop_packaging(desktop_packaging);
 
             let report_path = output_dir.join(BUILD_REPORT_FILENAME);
             if let Err(io_error) = report.write_to_file(&report_path) {
@@ -1193,7 +1204,9 @@ pub fn execute_build_for_host(
     }
 }
 
-fn project_compatibility_findings(config: &BuildConfiguration) -> Vec<CompatibilityFinding> {
+pub(crate) fn project_compatibility_findings(
+    config: &BuildConfiguration,
+) -> Vec<CompatibilityFinding> {
     let Some(scene) = config.scenes.first() else {
         return Vec::new();
     };
@@ -1214,6 +1227,63 @@ fn project_compatibility_findings(config: &BuildConfiguration) -> Vec<Compatibil
         .chain(assessment.setting_findings.iter())
         .filter_map(CompatibilityFinding::from_project_entry)
         .collect()
+}
+
+pub(crate) fn desktop_packaging_outcomes_from_availability(
+    availability: &[TargetAvailability],
+    output_dir: &Path,
+    product_name: &str,
+) -> Vec<DesktopPackageOutcome> {
+    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
+    let base_name = bundle_name(product_name);
+    let mut outcomes = Vec::new();
+    for target in desktop_package_targets() {
+        let entry = availability
+            .iter()
+            .find(|item| item.target == target)
+            .cloned()
+            .unwrap_or_else(|| probe_target_availability(target));
+        let label = target.os_name();
+        let target_dir = output_dir.join(label);
+        let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
+        if entry.is_available() {
+            let (app_path, launch_artifact) = match target.os() {
+                TargetOs::MacOs => {
+                    let app = target_dir.join(format!("{base_name}.{APP_BUNDLE_EXTENSION}"));
+                    let exe = app
+                        .join(CONTENTS_DIR_NAME)
+                        .join(MACOS_DIR_NAME)
+                        .join(&base_name);
+                    (app, exe)
+                }
+                TargetOs::Windows | TargetOs::Linux => {
+                    let app = target_dir.join(&base_name);
+                    let exe = app.join(target.executable_name(product_name));
+                    (app, exe)
+                }
+            };
+            outcomes.push(DesktopPackageOutcome {
+                target,
+                state: String::from(DESKTOP_PACKAGE_STATE_PACKAGED),
+                app_path: Some(app_path),
+                launch_artifact: Some(launch_artifact),
+                build_report_path,
+                launched: target == host,
+                unavailable: None,
+            });
+        } else {
+            outcomes.push(DesktopPackageOutcome {
+                target,
+                state: String::from(DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE),
+                app_path: None,
+                launch_artifact: None,
+                build_report_path,
+                launched: false,
+                unavailable: entry.unavailable,
+            });
+        }
+    }
+    outcomes
 }
 
 pub fn diagnostics_from_bundle_error(error: &BundleError) -> Vec<BuildDiagnostic> {

@@ -200,10 +200,18 @@ namespace UnityEngine
             }
         }
 
+        public static Action<int>? TargetFrameRateChangeHandler { get; set; }
+
+        public static Action? QuitRequestHandler { get; set; }
+
         public static int targetFrameRate
         {
             get => _targetFrameRate;
-            set => _targetFrameRate = value;
+            set
+            {
+                _targetFrameRate = value;
+                TargetFrameRateChangeHandler?.Invoke(value);
+            }
         }
 
         public static bool runInBackground
@@ -494,6 +502,8 @@ namespace UnityEngine
             {
                 RaiseQuitting();
             }
+
+            QuitRequestHandler?.Invoke();
         }
 
         public static void OpenURL(string url)

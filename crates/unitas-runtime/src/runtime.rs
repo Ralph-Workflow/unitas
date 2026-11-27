@@ -490,26 +490,8 @@ impl Runtime {
             }
         }
         let entity_base = self.next_entity_base();
-        eprintln!(
-            "DIAG rust entity_base={} graph_len={}",
-            entity_base,
-            graph.len()
-        );
-        {
-            let mut ids = graph.breadth_first_order();
-            ids.sort();
-            for id in &ids {
-                eprintln!(
-                    "DIAG rust   entity={} name={:?}",
-                    id.as_u64(),
-                    graph.entity(*id).map(|e| e.name.clone())
-                );
-            }
-        }
         let mut graph = graph;
         graph.shift_entity_ids(entity_base);
-        // The UI binding carries the same object ids as the scene graph, so it
-        // is shifted the same way before the canvas is built from it.
         ui.shift_entity_ids(entity_base);
         let ui = UiComponents::new(ui);
         let scripts = scripts
@@ -3899,5 +3881,111 @@ impl Runtime {
             direction.y,
             direction.z,
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unitas_audio::{AudioClip, AudioMixerGroup, SilenceReason};
+
+    #[test]
+    fn roll_a_ball_scene_binds_collect_chime_audio_source_clip()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        let scene_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        runtime.load_scene(&scene_path)?;
+
+        let scene_text = std::fs::read_to_string(&scene_path)?;
+        let expected_guid = scene_text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("m_audioClip: "))
+            .find_map(|value| {
+                value
+                    .split_once("guid: ")
+                    .map(|(_, guid)| guid.split(',').next().unwrap_or_default().trim())
+            })
+            .ok_or("scene audio clip reference not found")?;
+
+        let scene = runtime.scenes.first().ok_or("scene not loaded")?;
+        let chime_entity = scene
+            .graph
+            .breadth_first_order()
+            .into_iter()
+            .find(|entity| runtime.entity_name(*entity) == Some("CollectChime"))
+            .ok_or("CollectChime entity not found")?;
+
+        let (_, config) = scene
+            .audio_sources
+            .iter()
+            .find(|(entity, _)| *entity == chime_entity)
+            .ok_or("CollectChime audio source not bound")?;
+        assert_eq!(config.clip_guid.as_deref(), Some(expected_guid));
+
+        let source = runtime
+            .audio()
+            .source(chime_entity)
+            .ok_or("CollectChime audio source missing")?;
+        let clip_id = source.clip.ok_or("CollectChime clip unresolved")?;
+        assert!(clip_id > 0);
+        let clip = runtime
+            .audio()
+            .clip(clip_id)
+            .ok_or("CollectChime clip not loaded")?;
+        assert!(clip.duration > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_time_scale_pause_routes_sfx_music_and_menu_groups()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        let clip_id = runtime.audio_mut().register_clip(AudioClip {
+            channels: 1,
+            sample_rate: 100,
+            samples: vec![0.4; 10],
+            duration: 0.10,
+        });
+        let sfx = EntityId::new(100);
+        let music = EntityId::new(101);
+        let menu = EntityId::new(102);
+        for entity in [sfx, music, menu] {
+            runtime.audio_mut().ensure_source(entity);
+            runtime.audio_mut().set_source_clip(entity, Some(clip_id));
+        }
+        runtime
+            .audio_mut()
+            .set_source_group(music, AudioMixerGroup::Music);
+        runtime
+            .audio_mut()
+            .set_source_group(menu, AudioMixerGroup::Menu);
+        for entity in [sfx, music, menu] {
+            runtime.audio_mut().play(entity, false);
+        }
+
+        runtime.tick(0.0)?;
+        runtime.set_time_scale(0.0);
+        assert!(runtime.audio().is_gameplay_paused());
+        assert_eq!(
+            runtime.audio().inaudible_reason(sfx),
+            Some(SilenceReason::GameplayPaused)
+        );
+        assert_eq!(
+            runtime.audio().inaudible_reason(music),
+            Some(SilenceReason::GameplayPaused)
+        );
+        assert_eq!(runtime.audio().inaudible_reason(menu), None);
+
+        runtime.tick(0.04)?;
+        assert_eq!(runtime.audio().source(sfx).map(|s| s.time), Some(0.0));
+        assert_eq!(runtime.audio().source(music).map(|s| s.time), Some(0.0));
+        assert_eq!(runtime.audio().source(menu).map(|s| s.time), Some(0.04));
+
+        runtime.set_time_scale(1.0);
+        assert!(!runtime.audio().is_gameplay_paused());
+        assert_eq!(runtime.audio().inaudible_reason(sfx), None);
+        assert_eq!(runtime.audio().inaudible_reason(music), None);
+        Ok(())
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::camera::Camera;
@@ -407,6 +408,35 @@ pub struct Renderer {
     material_bind: wgpu::BindGroup,
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
+    v_sync_count: AtomicU32,
+}
+
+#[must_use]
+pub fn present_mode_for_v_sync_count(
+    v_sync_count: u32,
+    supported: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    if v_sync_count == 0 {
+        for candidate in [
+            wgpu::PresentMode::AutoNoVsync,
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::Mailbox,
+        ] {
+            if supported.contains(&candidate) {
+                return candidate;
+            }
+        }
+    } else {
+        for candidate in [wgpu::PresentMode::Fifo, wgpu::PresentMode::AutoVsync] {
+            if supported.contains(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    supported
+        .first()
+        .copied()
+        .unwrap_or(wgpu::PresentMode::Fifo)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1008,6 +1038,7 @@ impl Renderer {
             material_bind,
             surface: Mutex::new(None),
             text: Mutex::new(text),
+            v_sync_count: AtomicU32::new(1),
         })
     }
 
@@ -1017,6 +1048,18 @@ impl Renderer {
             shadow.current_size = 0;
         }
         shadow.settings = settings;
+    }
+
+    pub fn shadow_settings(&self) -> ShadowSettings {
+        lock(&self.shadow).settings
+    }
+
+    pub fn set_v_sync_count(&self, v_sync_count: u32) {
+        self.v_sync_count.store(v_sync_count, Ordering::Relaxed);
+    }
+
+    pub fn v_sync_count(&self) -> u32 {
+        self.v_sync_count.load(Ordering::Relaxed)
     }
 
     pub fn shadow_map_size(&self) -> u32 {
@@ -1563,6 +1606,16 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<wgpu::SurfaceConfiguration, RenderError> {
+        self.configure_surface_with_v_sync(surface, width, height, self.v_sync_count())
+    }
+
+    pub fn configure_surface_with_v_sync(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        width: u32,
+        height: u32,
+        v_sync_count: u32,
+    ) -> Result<wgpu::SurfaceConfiguration, RenderError> {
         if width == 0 || height == 0 {
             return Err(RenderError::InvalidSize(width, height));
         }
@@ -1574,6 +1627,10 @@ impl Renderer {
                 ))
             }
         };
+        self.set_v_sync_count(v_sync_count);
+        let capabilities = surface.get_capabilities(&self.adapter);
+        configuration.present_mode =
+            present_mode_for_v_sync_count(v_sync_count, &capabilities.present_modes);
         configuration.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         surface.configure(&self.device, &configuration);
         let pipelines = create_pipelines(
@@ -3275,5 +3332,75 @@ mod tests {
             "expected ambient illumination on shadowed pixel, got {shadowed_ground:?}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn present_mode_for_v_sync_count_selects_vsync_or_no_vsync_fallback() {
+        let all_modes = [
+            wgpu::PresentMode::Fifo,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::AutoNoVsync,
+            wgpu::PresentMode::AutoVsync,
+        ];
+        assert_eq!(
+            present_mode_for_v_sync_count(0, &all_modes),
+            wgpu::PresentMode::AutoNoVsync
+        );
+        assert_eq!(
+            present_mode_for_v_sync_count(
+                0,
+                &[
+                    wgpu::PresentMode::Fifo,
+                    wgpu::PresentMode::Immediate,
+                    wgpu::PresentMode::Mailbox
+                ]
+            ),
+            wgpu::PresentMode::Immediate
+        );
+        assert_eq!(
+            present_mode_for_v_sync_count(
+                0,
+                &[wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox]
+            ),
+            wgpu::PresentMode::Mailbox
+        );
+        assert_eq!(
+            present_mode_for_v_sync_count(0, &[wgpu::PresentMode::Fifo]),
+            wgpu::PresentMode::Fifo
+        );
+        assert_eq!(
+            present_mode_for_v_sync_count(1, &all_modes),
+            wgpu::PresentMode::Fifo
+        );
+        assert_eq!(
+            present_mode_for_v_sync_count(
+                2,
+                &[wgpu::PresentMode::AutoVsync, wgpu::PresentMode::Immediate]
+            ),
+            wgpu::PresentMode::AutoVsync
+        );
+    }
+
+    #[test]
+    fn renderer_tracks_shadow_settings_and_v_sync_count() {
+        let renderer = match renderer_or_skip() {
+            Some(renderer) => renderer,
+            None => return,
+        };
+        assert_eq!(renderer.shadow_settings(), ShadowSettings::disabled());
+        assert_eq!(renderer.v_sync_count(), 1);
+        let updated = ShadowSettings {
+            enabled: true,
+            soft: false,
+            resolution_index: 1,
+            distance: 70.0,
+        };
+        renderer.set_shadow_settings(updated);
+        assert_eq!(renderer.shadow_settings(), updated);
+        renderer.set_v_sync_count(0);
+        assert_eq!(renderer.v_sync_count(), 0);
+        renderer.set_v_sync_count(2);
+        assert_eq!(renderer.v_sync_count(), 2);
     }
 }

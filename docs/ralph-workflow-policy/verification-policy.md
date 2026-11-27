@@ -328,7 +328,9 @@ The named non-default profiles, each with the five required fields:
   lane also asserts that the presented window frame carries the scene's uGUI
   canvas and the project shadows (`canvas=true`, `shadow=true` in the
   `device_verify=ok` line), so the windowed frame, not only the capture, is
-  proven; the durable source for the shadow evidence is also the re-approved
+  proven; the window sustained 34.2 FPS under shared-host contention and 38.9 FPS
+  on an idle run against the 30.0 FPS interactive floor (`MIN_SUSTAINED_FPS`);
+  the durable source for the shadow evidence is also the re-approved
   S8 reference set under `samples/roll-a-ball/References/`; staleness horizon
   one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
@@ -337,10 +339,14 @@ The named non-default profiles, each with the five required fields:
   value_ms against ceiling_ms, and value_bytes against ceiling_bytes for the
   PlayerLoop per-frame allocation measurement; fails hard when run; last run
   2026-11-26, recorded in the gate-lane review entry below; staleness horizon
-  one milestone. The lane reports thirteen measurements: import throughput,
+  one milestone. The lane reports fifteen measurements: import throughput,
   scene load, physics step, particle eval, animation eval, the
   100,000-GameObject frame loop, the managed-to-native scripting call cost, the
-  PlayerLoop per-frame managed allocation, and the five editor and MCP
+  PlayerLoop per-frame managed allocation, `player_startup` (windowed player
+  launch to first presented frame against the 3000.0 ms charter ceiling),
+  `audio_callback_headroom` (audio mixer callback duration for a 512-frame
+  buffer at 48 kHz with eight active stereo voices against the 10.667 ms buffer
+  period ceiling), and the five editor and MCP
   measurements `editor_startup` (editor process start to a responsive MCP
   state), `editor_project_open` (opening `samples/roll-a-ball` through the
   editor's MCP surface), `editor_hierarchy_search_100k` (the hierarchy query at

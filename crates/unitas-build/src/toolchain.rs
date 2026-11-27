@@ -1,11 +1,3 @@
-//! Target toolchain discovery for player packaging (BLD-001, PLT-001).
-//!
-//! Every packaging target needs a toolchain on the host that builds it.
-//! This module probes the host for the tools a target requires and records
-//! the state of each target: available, or Externally unavailable with the
-//! tool, the version found, the required range, and the action that resolves
-//! it.
-
 use std::fs;
 use std::process::Command;
 
@@ -14,7 +6,6 @@ use crate::targets::{BuildTarget, TargetArch, TargetOs};
 pub const TOOLCHAIN_AVAILABLE: &str = "available";
 pub const TOOLCHAIN_EXTERNALLY_UNAVAILABLE: &str = "externally_unavailable";
 
-/// Why a target cannot be packaged on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolchainCause {
     CurrentHost,
@@ -38,7 +29,6 @@ impl ToolchainCause {
     }
 }
 
-/// A command that reports the version of an installed tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCommand {
     pub program: String,
@@ -72,11 +62,19 @@ impl ToolCommand {
     }
 }
 
-/// How the presence of a tool is detected on the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolPresence {
-    Command { program: String, args: Vec<String> },
-    RustStandardLibrary { triple: String },
+    Command {
+        program: String,
+        args: Vec<String>,
+    },
+    RustStandardLibrary {
+        triple: String,
+        alternate_triples: Vec<String>,
+    },
+    DotnetRuntimePack {
+        rid: String,
+    },
 }
 
 impl ToolPresence {
@@ -87,9 +85,54 @@ impl ToolPresence {
                 .output()
                 .map(|output| output.status.success())
                 .unwrap_or(false),
-            ToolPresence::RustStandardLibrary { triple } => rust_standard_library_installed(triple),
+            ToolPresence::RustStandardLibrary {
+                triple,
+                alternate_triples,
+            } => {
+                rust_standard_library_installed(triple)
+                    || alternate_triples
+                        .iter()
+                        .any(|alt| rust_standard_library_installed(alt))
+            }
+            ToolPresence::DotnetRuntimePack { rid } => dotnet_runtime_pack_installed(rid),
         }
     }
+}
+
+fn dotnet_root_directories() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(root) = std::env::var_os("DOTNET_ROOT") {
+        dirs.push(std::path::PathBuf::from(root));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(std::path::PathBuf::from(home).join(".dotnet"));
+    }
+    dirs.push(std::path::PathBuf::from("/usr/local/share/dotnet"));
+    dirs.push(std::path::PathBuf::from("/usr/share/dotnet"));
+    dirs
+}
+
+fn dotnet_runtime_pack_installed(rid: &str) -> bool {
+    let host_pack = format!("Microsoft.NETCore.App.Host.{rid}");
+    let runtime_pack = format!("Microsoft.NETCore.App.Runtime.{rid}");
+    let nuget_host = format!("microsoft.netcore.app.host.{rid}");
+    let nuget_runtime = format!("microsoft.netcore.app.runtime.{rid}");
+
+    for root in dotnet_root_directories() {
+        let packs_dir = root.join("packs");
+        if packs_dir.join(&host_pack).is_dir() || packs_dir.join(&runtime_pack).is_dir() {
+            return true;
+        }
+    }
+
+    let nuget_dir = match std::env::var_os("NUGET_PACKAGES") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::var_os("HOME")
+            .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from)
+            .join(".nuget")
+            .join("packages"),
+    };
+    nuget_dir.join(nuget_host).is_dir() || nuget_dir.join(nuget_runtime).is_dir()
 }
 
 fn rust_standard_library_installed(triple: &str) -> bool {
@@ -116,7 +159,6 @@ fn rust_standard_library_installed(triple: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A tool a target's packaging requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolchainRequirement {
     pub tool: String,
@@ -126,7 +168,6 @@ pub struct ToolchainRequirement {
     pub version: Option<ToolCommand>,
 }
 
-/// The result of probing one required tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolchainProbe {
     pub tool: String,
@@ -136,7 +177,6 @@ pub struct ToolchainProbe {
     pub version_found: Option<String>,
 }
 
-/// The record of a target that cannot be packaged on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnavailableToolchain {
     pub cause: ToolchainCause,
@@ -146,7 +186,6 @@ pub struct UnavailableToolchain {
     pub resolving_action: String,
 }
 
-/// The packaging state of one target on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetAvailability {
     pub target: BuildTarget,
@@ -168,10 +207,9 @@ impl TargetAvailability {
     }
 }
 
-/// The tools a target's packaging requires and the action that resolves a
-/// missing one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetToolchain {
+    pub target: BuildTarget,
     pub requirements: Vec<ToolchainRequirement>,
     pub resolving_action: String,
 }
@@ -194,22 +232,50 @@ fn command_requirement(
     }
 }
 
-fn rust_requirement(triple: &str, purpose: &str) -> ToolchainRequirement {
+fn rust_requirement(
+    triple: &str,
+    alternate_triples: &[&str],
+    purpose: &str,
+) -> ToolchainRequirement {
+    let required_range = if alternate_triples.is_empty() {
+        format!("rustc 1.93.0 or newer with the {triple} standard library")
+    } else {
+        let joined = alternate_triples.join(" or ");
+        format!("rustc 1.93.0 or newer with the {triple} (or {joined}) standard library")
+    };
     ToolchainRequirement {
         tool: String::from("rustc"),
-        required_range: format!("rustc 1.93.0 or newer with the {triple} standard library"),
+        required_range,
         purpose: purpose.to_string(),
         presence: ToolPresence::RustStandardLibrary {
             triple: triple.to_string(),
+            alternate_triples: alternate_triples
+                .iter()
+                .map(|alt| (*alt).to_string())
+                .collect(),
         },
         version: Some(ToolCommand::new("rustc", &["--version"])),
     }
 }
 
-/// The toolchain a target's packaging requires on the host that builds it.
+fn dotnet_runtime_pack_requirement(rid: &str, purpose: &str) -> ToolchainRequirement {
+    ToolchainRequirement {
+        tool: format!("dotnet-runtime-pack-{rid}"),
+        required_range: format!(
+            ".NET 8.0 runtime pack Microsoft.NETCore.App.Host.{rid} (8.0.0 or newer)"
+        ),
+        purpose: purpose.to_string(),
+        presence: ToolPresence::DotnetRuntimePack {
+            rid: rid.to_string(),
+        },
+        version: Some(ToolCommand::new("dotnet", &["--version"])),
+    }
+}
+
 pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
     match (target.os(), target.arch()) {
         (TargetOs::Windows, TargetArch::X86_64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "x86_64-w64-mingw32-gcc",
@@ -224,15 +290,21 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "x86_64-pc-windows-gnu",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the Windows x86-64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on Windows x86-64",
                 ),
             ],
             resolving_action: String::from(
-                "install the mingw-w64 cross toolchain with 'brew install mingw-w64' and add the Rust target with 'rustup target add x86_64-pc-windows-gnu', then package the player on a Windows x86-64 host where unitas builds that target",
+                "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add x86_64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-x64', then package the player on a Windows x86-64 host where unitas builds that target",
             ),
         },
         (TargetOs::Windows, TargetArch::Arm64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "aarch64-w64-mingw32-gcc",
@@ -247,15 +319,21 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "aarch64-pc-windows-gnu",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the Windows ARM64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on Windows ARM64",
                 ),
             ],
             resolving_action: String::from(
-                "install the mingw-w64 cross toolchain with 'brew install mingw-w64' and add the Rust target with 'rustup target add aarch64-pc-windows-gnu', then package the player on a Windows ARM64 host where unitas builds that target",
+                "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add aarch64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-arm64', then package the player on a Windows ARM64 host where unitas builds that target",
             ),
         },
         (TargetOs::Linux, TargetArch::X86_64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "x86_64-linux-gnu-gcc",
@@ -264,15 +342,21 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "x86_64-unknown-linux-gnu",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the Linux x86-64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on Linux x86-64",
                 ),
             ],
             resolving_action: String::from(
-                "build the player in a Linux x86-64 environment that provides x86_64-linux-gnu-gcc (the 'rust:1.93' container image provides one) and add the Rust target with 'rustup target add x86_64-unknown-linux-gnu', then package the player on that Linux x86-64 host where unitas builds that target",
+                "build the player in a Linux x86-64 environment that provides x86_64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add x86_64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-x64', then package the player on that Linux x86-64 host where unitas builds that target",
             ),
         },
         (TargetOs::Linux, TargetArch::Arm64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "aarch64-linux-gnu-gcc",
@@ -281,15 +365,21 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "aarch64-unknown-linux-gnu",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the Linux ARM64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on Linux ARM64",
                 ),
             ],
             resolving_action: String::from(
-                "build the player in a Linux ARM64 environment that provides aarch64-linux-gnu-gcc (the 'rust:1.93' container image provides one) and add the Rust target with 'rustup target add aarch64-unknown-linux-gnu', then package the player on that Linux ARM64 host where unitas builds that target",
+                "build the player in a Linux ARM64 environment that provides aarch64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add aarch64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-arm64', then package the player on that Linux ARM64 host where unitas builds that target",
             ),
         },
         (TargetOs::MacOs, TargetArch::Arm64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "clang",
@@ -298,15 +388,21 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "aarch64-apple-darwin",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the macOS ARM64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on macOS ARM64",
                 ),
             ],
             resolving_action: String::from(
-                "install the Xcode command line tools with 'xcode-select --install' and add the Rust target with 'rustup target add aarch64-apple-darwin', then package the player on a macOS ARM64 host where unitas builds that target",
+                "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add aarch64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-arm64', then package the player on a macOS ARM64 host where unitas builds that target",
             ),
         },
         (TargetOs::MacOs, TargetArch::X86_64) => TargetToolchain {
+            target,
             requirements: vec![
                 command_requirement(
                     "clang",
@@ -315,18 +411,22 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                     &["--version"],
                 ),
                 rust_requirement(
-                    "x86_64-apple-darwin",
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
                     "Rust compiler and standard library that builds the macOS x86-64 player",
+                ),
+                dotnet_runtime_pack_requirement(
+                    target.dotnet_runtime_identifier(),
+                    ".NET 8.0 runtime pack that hosts managed game scripts on macOS x86-64",
                 ),
             ],
             resolving_action: String::from(
-                "install the Xcode command line tools with 'xcode-select --install' and add the Rust target with 'rustup target add x86_64-apple-darwin', then package the player on a macOS x86-64 host where unitas builds that target",
+                "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add x86_64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-x64', then package the player on a macOS x86-64 host where unitas builds that target",
             ),
         },
     }
 }
 
-/// Probes one required tool on this host.
 pub fn probe_requirement(requirement: &ToolchainRequirement) -> ToolchainProbe {
     ToolchainProbe {
         tool: requirement.tool.clone(),
@@ -340,8 +440,6 @@ pub fn probe_requirement(requirement: &ToolchainRequirement) -> ToolchainProbe {
     }
 }
 
-/// Evaluates the requirements of a target and records why it cannot be
-/// packaged on this host.
 pub fn evaluate_availability(
     target: BuildTarget,
     requirements: &[ToolchainRequirement],
@@ -382,14 +480,11 @@ pub fn evaluate_availability(
     }
 }
 
-/// The packaging state of a target on this host.
 pub fn probe_target_availability(target: BuildTarget) -> TargetAvailability {
     let toolchain = required_toolchain(target);
     evaluate_availability(target, &toolchain.requirements, &toolchain.resolving_action)
 }
 
-/// The targets the packaging slice reports on: the host that builds a player
-/// and the desktop targets it cannot build here.
 pub fn packaging_targets() -> Vec<BuildTarget> {
     let mut targets = vec![BuildTarget::WINDOWS_X86_64, BuildTarget::LINUX_X86_64];
     if let Some(host) = BuildTarget::current_host() {
@@ -400,7 +495,6 @@ pub fn packaging_targets() -> Vec<BuildTarget> {
     targets
 }
 
-/// The packaging state of every target the packaging slice reports on.
 pub fn target_availability_report() -> Vec<TargetAvailability> {
     packaging_targets()
         .iter()

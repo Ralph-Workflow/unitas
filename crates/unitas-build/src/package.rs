@@ -1,6 +1,3 @@
-//! macOS application bundle and Windows/Linux directory packaging for the
-//! player (BLD-001, BLD-002).
-
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,9 +12,16 @@ use crate::config::BuildConfiguration;
 use crate::licensing::{
     licensing_record, third_party_notices_text, workspace_root, LicensingRecord,
 };
-use crate::player::{execute_build_for_host, BuildOutcomeBundle, BUILD_REPORT_FILENAME};
-use crate::report::{BuildDiagnostic, StartupMeasurement, STARTUP_BASIS};
+use crate::player::{
+    execute_build_for_host, project_compatibility_findings, BuildOutcomeBundle,
+    BUILD_REPORT_FILENAME,
+};
+use crate::report::{
+    BuildDiagnostic, BuildReport, DesktopPackageOutcome, StartupMeasurement,
+    DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE, DESKTOP_PACKAGE_STATE_PACKAGED, STARTUP_BASIS,
+};
 use crate::targets::{BuildTarget, TargetOs};
+use crate::toolchain::{probe_target_availability, target_availability_report};
 
 pub const APP_BUNDLE_EXTENSION: &str = "app";
 pub const CONTENTS_DIR_NAME: &str = "Contents";
@@ -311,10 +315,6 @@ fn package_player_directory(
     })
 }
 
-/// The desktop targets the packaging slice stages: macOS, Windows and Linux.
-///
-/// The macOS target carries the host architecture when the host builds
-/// macOS players, so the packaged player runs on the machine that built it.
 pub fn desktop_package_targets() -> Vec<BuildTarget> {
     let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
     let macos = if host.os() == TargetOs::MacOs {
@@ -329,12 +329,6 @@ pub fn desktop_package_targets() -> Vec<BuildTarget> {
     ]
 }
 
-/// Stages the player package of one desktop target into
-/// `<output_dir>/<target>/`: the player payload and the build report that
-/// names its scenes, assets, sizes and build identifier.
-///
-/// The target this host cannot run is staged but not launched; its report
-/// records that the package was never started here.
 pub fn package_desktop_target(
     config: &BuildConfiguration,
     target: BuildTarget,
@@ -437,6 +431,15 @@ pub fn package_desktop_target(
     }
     report.output_location = Some(target_dir.clone());
     report.launch_artifact = Some(launch_artifact.clone());
+    let availability = target_availability_report();
+    let desktop_packaging = crate::player::desktop_packaging_outcomes_from_availability(
+        &availability,
+        output_dir,
+        &config.product_name,
+    );
+    report = report
+        .with_target_availability(availability)
+        .with_desktop_packaging(desktop_packaging);
 
     let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
     report
@@ -461,8 +464,6 @@ pub fn package_desktop_target(
     })
 }
 
-/// Stages the desktop player packages of a build: one package per desktop
-/// target, each with its own build report.
 pub fn package_desktop_targets(
     config: &BuildConfiguration,
     output_dir: &Path,
@@ -472,6 +473,97 @@ pub fn package_desktop_targets(
         packaged.push(package_desktop_target(config, target, output_dir)?);
     }
     Ok(packaged)
+}
+
+pub fn attempt_desktop_target(
+    config: &BuildConfiguration,
+    target: BuildTarget,
+    output_dir: &Path,
+) -> Result<DesktopPackageOutcome, PackageError> {
+    let availability = probe_target_availability(target);
+    if availability.is_available() {
+        let packaged = package_desktop_target(config, target, output_dir)?;
+        return Ok(DesktopPackageOutcome {
+            target,
+            state: String::from(DESKTOP_PACKAGE_STATE_PACKAGED),
+            app_path: Some(packaged.app_path),
+            launch_artifact: Some(packaged.launch_artifact),
+            build_report_path: packaged.build_report_path,
+            launched: packaged.launched,
+            unavailable: None,
+        });
+    }
+
+    let label = target.os_name().to_string();
+    let target_dir = output_dir.join(&label);
+    create_dir_all(&target_dir)?;
+
+    let mut target_config = config.clone();
+    target_config.target = target;
+
+    let unavailable = availability.unavailable.clone();
+    let diagnostic = match &unavailable {
+        Some(unavail) => BuildDiagnostic::new(
+            format!("toolchain.{}", unavail.cause.as_str()),
+            format!(
+                "target '{}' is externally unavailable on this host ({}): required '{}' ({}), found {:?}",
+                target,
+                unavail.cause.as_str(),
+                unavail.tool,
+                unavail.required_range,
+                unavail.version_found
+            ),
+            Some(unavail.tool.clone()),
+            Some(unavail.resolving_action.clone()),
+        ),
+        None => BuildDiagnostic::new(
+            "toolchain.unavailable",
+            format!("target '{target}' is externally unavailable on this host"),
+            None,
+            None,
+        ),
+    };
+
+    let all_availability = target_availability_report();
+    let desktop_packaging = crate::player::desktop_packaging_outcomes_from_availability(
+        &all_availability,
+        output_dir,
+        &config.product_name,
+    );
+
+    let report = BuildReport::failed(&target_config, 0, vec![diagnostic])
+        .with_compatibility_findings(project_compatibility_findings(&target_config))
+        .with_target_availability(all_availability)
+        .with_desktop_packaging(desktop_packaging);
+
+    let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
+    report
+        .write_to_file(&build_report_path)
+        .map_err(|error| PackageError::Io {
+            path: build_report_path.clone(),
+            message: error.to_string(),
+        })?;
+
+    Ok(DesktopPackageOutcome {
+        target,
+        state: String::from(DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE),
+        app_path: None,
+        launch_artifact: None,
+        build_report_path,
+        launched: false,
+        unavailable,
+    })
+}
+
+pub fn attempt_desktop_targets(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+) -> Result<Vec<DesktopPackageOutcome>, PackageError> {
+    let mut outcomes = Vec::new();
+    for target in desktop_package_targets() {
+        outcomes.push(attempt_desktop_target(config, target, output_dir)?);
+    }
+    Ok(outcomes)
 }
 
 /// Ad-hoc code-signs the app bundle when the host can sign and no signature

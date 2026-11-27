@@ -394,7 +394,21 @@ The steps this note owns are recorded here rather than left implicit:
   write-and-restore cycle. It pins the ghost file, the route comparison, the
   replay within 0.01 m, and - over the engine's object registry - that the
   reloaded scene's marble is the new attempt's marble
-  (`next_attempt_scene_reloaded`).
+  (`next_attempt_scene_reloaded`). All ten of its checkpoints pass against the
+  live run: the write logs `Ghost written version 2 steps 245 bytes 1996 first
+  -3.150 0.500 3.300 last 2.250 0.500 3.300`, the file round trip logs `Ghost
+  replay max deviation 0.000 m over 245 steps` and `Ghost replay within 0.01
+  m`, and the next attempt's replay logs `Ghost attempt replay max deviation
+  0.000 m over 245 steps` and `Ghost attempt replay within 0.01 m`. The lane's
+  `--repeat 2` comparison of the two runs needed the sample to hold the scene
+  composition steady: the second repeat restores the ghost file the first
+  repeat wrote, so it used to run with one more scene object, and the marble's
+  settled height then differed by 7 um (`next_attempt_origin` read `0.499948` m
+  in the first repeat and `0.499955` m in the second). The sample now creates
+  the ghost replay object in every attempt, recorded route or not, so the
+  attempt's scene composition does not depend on whether a previous attempt
+  wrote a route; both repeats then observe the same marble position and the
+  lane's comparison passes.
 - The kinematic push is reported on the staying contact: the engine's contact
   between the kinematic `Pusher` and the dynamic `PushedMarble` starts one
   frame before the solver applies the push impulse, so the sample's probe
