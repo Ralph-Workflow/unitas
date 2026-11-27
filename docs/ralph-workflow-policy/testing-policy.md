@@ -417,14 +417,23 @@ RALPH-FACT: parallel_execution_mechanism: the default suite (`make test` -> `mak
 RALPH-FACT: slow_test_report_command: pytest -q --durations=10
 RALPH-FACT: suite_test_count_command: pytest --collect-only -q
 RALPH-FACT: assertion_quality_check: make banned-constructs
-RALPH-FACT: supported_platform_matrix: macOS on Apple Silicon — the only platform the suite is exercised on
+RALPH-FACT: supported_platform_matrix: macOS on Apple Silicon (the development host where the suite runs locally, with `libunitas_runtime.dylib` wired in the Makefile's `dotnet-test-run`, `bridge-test-shards`, and `editor-test-shards` targets) and Ubuntu 24.04 Linux configured in GitHub Actions (`.github/workflows/verify.yml` runs `make verify` and `.github/workflows/cla.yml` runs `python3 tools/cla.py` on `ubuntu-24.04`, with the first remote execution of `verify.yml` not yet observed as recorded in `verification-policy.md` `ci_integration_workflow`)
 RALPH-FACT: external_dependency_test_approach: none — the suite runs offline against the working tree
 RALPH-FACT: clean_clone_setup_command: python3 -m pip install pytest ruff mypy detect-secrets; the Rust toolchain (cargo, clippy, and rustfmt) comes from rustup; the .NET 8.0 SDK is provisioned via dotnet-install.sh
 RALPH-FACT: flake_policy: a test that fails intermittently is fixed or deleted in the same change; no test is retried to obtain a green run
 RALPH-FACT: quarantine_mechanism_expiry_and_max_size: no test is deselected or quarantined and no pytest test is skipped; seven Rust tests carry an #[ignore] attribute that names the non-default lane covering it — the six performance measurements perf_scene_load, perf_step, perf_particles, perf_eval, perf_frame_loop and perf_world_scale run in the make verify-perf lane through cargo test -- --ignored, and the CoreCLR boot test is covered by the make verify-samples lane, where the packaged player boots CoreCLR in process — so every ignored test names its lane and none is skipped without one
-RALPH-FACT: suite_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers
-RALPH-FACT: regression_test_convention: a bug fix adds a test that fails on the pre-fix revision and names the specification its expected value came from
+RALPH-FACT: suite_review_cadence_and_owner: every policy remediation pass, owned by the repository maintainers (the project maintainers recorded in docs/ralph-workflow-policy/policy-portfolio.toml for the default lane) and evidenced in this file by the dated `### Suite review 2026-11-26` entry below
+RALPH-FACT: regression_test_convention: a bug fix adds a deterministic regression test that fails on the pre-fix revision and encodes the regression or specification identifier in its test name — evidenced in tools/test_verify.py (for example test_timed_gate_reaps_a_descendant_that_forks_during_the_kill_sweep and test_timed_gate_runner_is_killable_when_its_parent_blocks_sigterm), crates/unitas-asset/tests/package_compatibility_tests.rs (cmp_002_* naming specification CMP-002), and bridge/Unitas.Bridge.Tests/SceneTrailRendererTests.cs (SceneTrailRendererIsMaterialized)
 RALPH-FACT: browser_budget_seconds: none — the repository has no browser surface
+
+### Suite review 2026-11-26
+
+| Metric | Recorded observation | Durable source |
+|---|---|---|
+| Python suite count (`pytest --collect-only -q`) | 131 tests collected across `tools/test_verify.py`, `tools/test_cla.py`, and `tools/test_verify_device.py`, each asserting a distinct gate, CLA, or device-verification failure mode | `tools/test_verify.py`, `tools/test_cla.py`, `tools/test_verify_device.py` |
+| Rust workspace test binaries (`python3 tools/verify.py cargo-test`) | 73 test binaries across 11 workspace package shards, 0 failed | `crates/*/tests/`, `crates/*/src/` |
+| C# default-lane runners (`make dotnet-test-run`) | 12 bridge shards (`bridge/Unitas.Bridge.Tests`), `bridge/Unitas.PlayerHost.Tests`, and batched editor shards (`editor/Unitas.Editor.Tests`), 0 failed | `bridge/Unitas.Bridge.Tests/`, `bridge/Unitas.PlayerHost.Tests/`, `editor/Unitas.Editor.Tests/` |
+| Admitted / retired / duplicates / conflicts / quarantine | 4 size-gate tests admitted in `tools/test_verify.py:1686-1783`; 0 tests retired; 0 uncertain duplicates flagged under rule 16; 0 rule conflicts; 0 quarantined or skipped default-lane tests (7 Rust `#[ignore]` tests remain routed to `make verify-perf` and `make verify-samples`) | this suite review entry and `tools/test_verify.py` |
 
 Three prerequisite facts exist and are NOT interchangeable:
 `clean_clone_setup_command` is the one-time bootstrap taking a fresh clone

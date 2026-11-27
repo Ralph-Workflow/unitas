@@ -1,5 +1,5 @@
-export PATH := $(HOME)/.dotnet:$(PATH)
-export DOTNET_ROOT := $(HOME)/.dotnet
+export DOTNET_ROOT := $(dir $(realpath $(shell command -v dotnet)))
+export PATH := $(DOTNET_ROOT):$(PATH)
 
 .PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate
 

@@ -63,9 +63,8 @@ SOURCE_SUFFIXES = (
     ".ts",
     ".tsx",
 )
-SKIP_DIR_NAMES = frozenset(
-    {"__pycache__", "bin", "build", "dist", "node_modules", "obj", "target", "venv"}
-)
+SKIP_DIR_NAMES = frozenset({"__pycache__", "dist", "node_modules", "obj", "target", "venv"})
+SOURCE_PARENT_DIR_NAMES = frozenset({"src"})
 APPLICABILITY_PATH = POLICY_DIR / "applicability.toml"
 CONDITIONAL_DOMAINS = (
     "accessibility",
@@ -106,6 +105,14 @@ PLACEHOLDER_TOKENS = (
     "PROJECT-FACT-UNRESOLVED",
     "<date>",
     "<trigger>",
+)
+PROTECTED_VERIFICATION_CLAUSES = (
+    "time limits are judged on contention-adjusted time:",
+    "is inconclusive, not a defect:",
+    "only an overrun on an uncontended run is a defect to optimize.",
+    "never start a second full gate while one is running for the same worktree.",
+    "no process, temporary directory, browser profile, container, or file watch survives "
+    "a gate run, and the gate fails when one does:",
 )
 APPROVED_GATE_TOOLS = frozenset(
     {
@@ -455,6 +462,16 @@ def check_placeholders(corpus: dict[str, str]) -> list[str]:
     return findings
 
 
+def check_protected_verification_rules(corpus: dict[str, str]) -> list[str]:
+    text = corpus.get("verification-policy.md", "")
+    normalized = " ".join(text.replace("*", "").split()).lower()
+    return [
+        f"verification-policy.md: missing protected rule {clause!r}"
+        for clause in PROTECTED_VERIFICATION_CLAUSES
+        if clause not in normalized
+    ]
+
+
 def check_fact_keys(corpus: dict[str, str]) -> list[str]:
     findings: list[str] = []
     for name, text in corpus.items():
@@ -707,6 +724,7 @@ def check_policy() -> list[str]:
     commands = declared_commands(corpus)
     findings: list[str] = []
     findings.extend(check_placeholders(corpus))
+    findings.extend(check_protected_verification_rules(corpus))
     findings.extend(check_fact_keys(corpus))
     findings.extend(check_commands(corpus))
     findings.extend(check_guard_enforcement(corpus, commands))
@@ -720,13 +738,18 @@ def check_policy() -> list[str]:
     return findings
 
 
+def skip_dir_name(name: str, parent_name: str) -> bool:
+    if name.startswith("."):
+        return True
+    if name in SKIP_DIR_NAMES:
+        return True
+    return name == "bin" and parent_name not in SOURCE_PARENT_DIR_NAMES
+
+
 def iter_source_files(root: Path = REPO_ROOT) -> Iterator[Path]:
     for walk_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name
-            for name in sorted(dirnames)
-            if not name.startswith(".") and name not in SKIP_DIR_NAMES
-        ]
+        parent_name = Path(walk_root).name
+        dirnames[:] = [name for name in sorted(dirnames) if not skip_dir_name(name, parent_name)]
         for filename in sorted(filenames):
             path = Path(walk_root) / filename
             if path.suffix in SOURCE_SUFFIXES:
@@ -744,11 +767,8 @@ def iter_named_files(
     root: Path, names: frozenset[str], suffixes: tuple[str, ...] = ()
 ) -> Iterator[Path]:
     for walk_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name
-            for name in sorted(dirnames)
-            if name not in SKIP_DIR_NAMES and (name in names or not name.startswith("."))
-        ]
+        parent_name = Path(walk_root).name
+        dirnames[:] = [name for name in sorted(dirnames) if not skip_dir_name(name, parent_name)]
         for filename in sorted(filenames):
             path = Path(walk_root) / filename
             if filename in names or (suffixes and path.suffix in suffixes):
@@ -1685,43 +1705,43 @@ def check_comments(root: Path = REPO_ROOT) -> list[str]:
     return findings
 
 
-def local_package_names() -> frozenset[str]:
+def local_package_names(root: Path = REPO_ROOT) -> frozenset[str]:
     names = {
-        path.name
-        for path in REPO_ROOT.iterdir()
-        if path.is_dir() and (path / "__init__.py").exists()
+        path.name for path in root.iterdir() if path.is_dir() and (path / "__init__.py").exists()
     }
     return frozenset(names)
 
 
-def python_import_findings(path: Path, allowed: frozenset[str]) -> list[str]:
+def python_import_findings(
+    path: Path, allowed: frozenset[str], root: Path = REPO_ROOT
+) -> list[str]:
     findings: list[str] = []
-    relative = path.relative_to(REPO_ROOT)
+    relative = display_path(path, root)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                root = alias.name.split(".")[0]
-                if root not in sys.stdlib_module_names and root not in allowed:
+                pkg = alias.name.split(".")[0]
+                if pkg not in sys.stdlib_module_names and pkg not in allowed:
                     findings.append(f"{relative}:{node.lineno}: third-party import {alias.name}")
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            root = node.module.split(".")[0]
-            if root not in sys.stdlib_module_names and root not in allowed:
+            pkg = node.module.split(".")[0]
+            if pkg not in sys.stdlib_module_names and pkg not in allowed:
                 findings.append(f"{relative}:{node.lineno}: third-party import {node.module}")
     return findings
 
 
-def check_dependencies() -> list[str]:
+def check_dependencies(root: Path = REPO_ROOT) -> list[str]:
     findings: list[str] = []
-    allowed = local_package_names()
-    for path in iter_source_files():
+    allowed = local_package_names(root)
+    for path in iter_source_files(root):
         if path.suffix == ".py":
-            findings.extend(python_import_findings(path, allowed))
+            findings.extend(python_import_findings(path, allowed, root))
     for manifest, lock in (("Cargo.toml", "Cargo.lock"), ("package.json", "package-lock.json")):
-        if (REPO_ROOT / manifest).exists() != (REPO_ROOT / lock).exists():
+        if (root / manifest).exists() != (root / lock).exists():
             findings.append(f"{manifest} and {lock} must be committed together")
-    findings.extend(check_dependency_registry())
-    findings.extend(check_nuget_registry())
+    findings.extend(check_dependency_registry(root))
+    findings.extend(check_nuget_registry(root))
     return findings
 
 
@@ -1909,11 +1929,8 @@ def check_dependency_registry(root: Path = REPO_ROOT) -> list[str]:
 
 def iter_nuget_lockfiles(root: Path = REPO_ROOT) -> Iterator[Path]:
     for walk_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name
-            for name in sorted(dirnames)
-            if not name.startswith(".") and name not in SKIP_DIR_NAMES
-        ]
+        parent_name = Path(walk_root).name
+        dirnames[:] = [name for name in sorted(dirnames) if not skip_dir_name(name, parent_name)]
         if NUGET_LOCKFILE_NAME in filenames:
             yield Path(walk_root) / NUGET_LOCKFILE_NAME
 
@@ -2263,18 +2280,10 @@ def run_dotnet_format(root: Path = REPO_ROOT, cache: Path = DOTNET_FORMAT_CACHE)
     return 0
 
 
-def _skip_size_dir(name: str, parent_name: str) -> bool:
-    if name.startswith("."):
-        return True
-    if name == "bin":
-        return parent_name != "src"
-    return name in SKIP_DIR_NAMES
-
-
 def iter_size_source_files(root: Path = REPO_ROOT) -> Iterator[Path]:
     for walk_root, dirnames, filenames in os.walk(root):
         parent_name = Path(walk_root).name
-        dirnames[:] = [name for name in sorted(dirnames) if not _skip_size_dir(name, parent_name)]
+        dirnames[:] = [name for name in sorted(dirnames) if not skip_dir_name(name, parent_name)]
         for filename in sorted(filenames):
             path = Path(walk_root) / filename
             if path.suffix not in SIZE_SOURCE_SUFFIXES:

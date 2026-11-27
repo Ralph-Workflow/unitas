@@ -99,6 +99,21 @@ def test_placeholder_tokens_are_detected() -> None:
     assert findings == ["testing-policy.md: placeholder token 'REPLACE-ME' remains"]
 
 
+def test_protected_verification_rules_are_enforced() -> None:
+    corpus = verify.read_policy_corpus()
+    assert verify.check_protected_verification_rules(corpus) == []
+    weakened = {
+        "verification-policy.md": corpus["verification-policy.md"].replace(
+            "Time limits are judged on contention-adjusted time:",
+            "A timed step gets one re-run:",
+        )
+    }
+    assert verify.check_protected_verification_rules(weakened) == [
+        "verification-policy.md: missing protected rule "
+        "'time limits are judged on contention-adjusted time:'"
+    ]
+
+
 def test_duplicate_fact_keys_are_detected() -> None:
     corpus = {
         "testing-policy.md": "RALPH-FACT: test_command: a\nRALPH-FACT: test_command: b\n",
@@ -940,7 +955,9 @@ def test_banned_object_parameter_allows_unity_engine_object(tmp_path: Path) -> N
 
 
 def test_banned_source_skips_obj_and_bin_directories(tmp_path: Path) -> None:
-    assert {"bin", "obj"}.issubset(verify.SKIP_DIR_NAMES)
+    assert verify.skip_dir_name("obj", "UnityEngine")
+    assert verify.skip_dir_name("bin", "UnityEngine")
+    assert not verify.skip_dir_name("bin", "src")
     bridge_dir = tmp_path / "bridge" / "UnityEngine"
     obj_dir = bridge_dir / "obj"
     bin_dir = bridge_dir / "bin"
@@ -955,6 +972,21 @@ def test_banned_source_skips_obj_and_bin_directories(tmp_path: Path) -> None:
     assert any("Valid.cs" in finding for finding in findings)
     assert not any("Generated.cs" in finding for finding in findings)
     assert not any("Compiled.cs" in finding for finding in findings)
+
+
+def test_banned_source_covers_source_directories_named_build_and_bin(
+    tmp_path: Path,
+) -> None:
+    content = "class C { int x = unchecked(1); }\n"
+    build_dir = tmp_path / "crates" / "unitas-build" / "tests" / "build"
+    src_bin_dir = tmp_path / "crates" / "unitas-build" / "src" / "bin"
+    build_dir.mkdir(parents=True)
+    src_bin_dir.mkdir(parents=True)
+    (build_dir / "Cases.cs").write_text(content, encoding="utf-8")
+    (src_bin_dir / "Player.cs").write_text(content, encoding="utf-8")
+    findings = verify.check_banned(root=tmp_path)
+    assert any("tests/build/Cases.cs" in finding for finding in findings)
+    assert any("src/bin/Player.cs" in finding for finding in findings)
 
 
 def test_banned_unsafe_is_exempt_inside_a_zone_and_reported_outside_one(
@@ -984,6 +1016,28 @@ def test_banned_unsafe_is_exempt_inside_a_zone_and_reported_outside_one(
 
 def test_dependency_gate_allows_stdlib_only() -> None:
     assert verify.check_dependencies() == []
+
+
+def test_dependency_gate_reports_third_party_python_import(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT", "2026-01-01")])
+    pkg = tmp_path / "tools"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    script = pkg / "sample.py"
+    script.write_text(
+        "import json\n"
+        "import requests\n"
+        "from urllib3.poolmanager import PoolManager\n"
+        "from tools import helper\n",
+        encoding="utf-8",
+    )
+    findings = verify.check_dependencies(tmp_path)
+    assert findings == [
+        "tools/sample.py:2: third-party import requests",
+        "tools/sample.py:3: third-party import urllib3.poolmanager",
+    ]
 
 
 def _write_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:

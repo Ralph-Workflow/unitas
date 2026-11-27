@@ -148,7 +148,7 @@ The `RALPH-FACT:` lines below record verified project facts. Agents rely on
 them when enforcing this policy and MUST keep them current as the project
 evolves.
 
-RALPH-FACT: supported_platforms: macOS on Apple Silicon — the only platform the gates are exercised on
+RALPH-FACT: supported_platforms: macOS on Apple Silicon (the development host where the gates run locally) and Ubuntu 24.04 Linux in GitHub Actions (.github/workflows/verify.yml runs make verify and .github/workflows/cla.yml runs python3 tools/cla.py on ubuntu-24.04; as recorded in verification-policy.md ci_integration_workflow, the first remote execution of verify.yml is not yet observed, and Windows is not in supported_platforms)
 RALPH-FACT: shell_dialect: none — the repository holds no shell script; the gate entry point is the Makefile
 RALPH-FACT: script_directory: tools/
 
