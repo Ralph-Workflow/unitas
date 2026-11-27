@@ -485,7 +485,7 @@ def packaged_player_replay(executable: Path, env: dict[str, str]) -> int:
     ).start()
     try:
         score = drive_packaged_replay(process, responses, deadline, errors)
-    except RuntimeError as error:
+    except PackagedProofError as error:
         emit(f"step {name}: {error}")
         stop_control_process(process)
         return 1

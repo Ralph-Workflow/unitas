@@ -263,19 +263,20 @@ impl PlayerLoop {
         if builtin_work_for(type_name).is_some() || self.customs.contains_key(type_name) {
             return Err(PlayerLoopError::DuplicateType(type_name.to_string()));
         }
-        let mut node = Some(PlayerLoopSystem::new(name, type_name));
+        let node = PlayerLoopSystem::new(name, type_name);
         if self.root.type_name == anchor_type {
-            let Some(child) = node.take() else {
-                return Err(PlayerLoopError::InvalidTree(String::from(
-                    "the custom system node was not available",
-                )));
-            };
             match position {
-                CustomSystemPosition::Before => self.root.children.insert(0, child),
-                CustomSystemPosition::After => self.root.children.push(child),
+                CustomSystemPosition::Before => self.root.children.insert(0, node),
+                CustomSystemPosition::After => self.root.children.push(node),
             }
-        } else if !self.root.insert_sibling(anchor_type, &mut node, position) {
-            return Err(PlayerLoopError::AnchorNotFound(anchor_type.to_string()));
+        } else {
+            let mut pending = Some(node);
+            if !self
+                .root
+                .insert_sibling(anchor_type, &mut pending, position)
+            {
+                return Err(PlayerLoopError::AnchorNotFound(anchor_type.to_string()));
+            }
         }
         self.customs.insert(
             type_name.to_string(),

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from tools import verify_device
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 DEVICE_LINE = (
     "device_verify=ok reference=tools/approved_gpu_reference.bmp size=320x240 "
@@ -10,6 +15,16 @@ DEVICE_LINE = (
 )
 GAME_SCORE = 2
 CONTROL_FRAMES = 30
+
+
+def assert_control_check_error(action: Callable[[], object], fragment: str) -> None:
+    caught: str | None = None
+    try:
+        action()
+    except verify_device.ControlCheckError as error:
+        caught = str(error)
+    assert caught is not None
+    assert fragment in caught
 
 
 def test_the_device_report_carries_the_generic_canvas_facts() -> None:
@@ -83,19 +98,9 @@ def test_the_control_state_carries_the_generic_fields() -> None:
 
 def test_the_control_state_requires_the_coreclr_script_host() -> None:
     payload = {"ok": True, "state": "playing", "frames": CONTROL_FRAMES, "script_host": "none"}
-    caught = ""
-    try:
-        verify_device.control_state(payload)
-    except verify_device.ControlCheckError as error:
-        caught = str(error)
-    assert "CoreCLR" in caught
+    assert_control_check_error(lambda: verify_device.control_state(payload), "CoreCLR")
 
 
 def test_the_control_state_requires_its_fields() -> None:
     payload = {"ok": True, "state": "playing"}
-    caught = ""
-    try:
-        verify_device.control_state(payload)
-    except verify_device.ControlCheckError as error:
-        caught = str(error)
-    assert "frames" in caught
+    assert_control_check_error(lambda: verify_device.control_state(payload), "frames")

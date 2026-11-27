@@ -2,8 +2,8 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use unitas_asset::merge::{
-    diff_streams, mcp_merge_asset, mcp_semantic_diff_asset, merge_bytes, merge_files,
-    merge_files_to_path, resolve_conflicts_bytes, resolve_conflicts_to_path, semantic_diff,
+    diff_streams, merge_asset_text, merge_bytes, merge_files, merge_files_to_path,
+    resolve_conflicts_bytes, resolve_conflicts_to_path, semantic_diff, semantic_diff_asset_text,
     semantic_diff_bytes, semantic_diff_files, ConflictKind, ConflictResolution,
     ConflictResolutionChoice, DiffChangeKind, DiffOutcome, FileAccountabilityState,
     FileChangeOrigin, FileResolutionAction, MergeConflict, MergeError, MergeOutcome,
@@ -854,7 +854,7 @@ fn edt_007_outcome_7_workspace_guard_accounts_for_unsaved_human_agent_and_confli
 }
 
 #[test]
-fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_matches_mcp_entry_point(
+fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_matches_text_entry_point(
 ) -> TestResult {
     let base_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 5\n--- !u!1 &200\nGameObject:\n  m_Name: Companion\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 0, z: 0}\n";
     let ours_scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Player\n  m_Layer: 3\n  m_Component:\n  - component: {fileID: 110}\n  - component: {fileID: 120}\n--- !u!4 &110\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Father: {fileID: 0}\n  m_LocalPosition: {x: 10, y: 0, z: 0}\n--- !u!114 &120\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: aaaaaaaa11111111aaaaaaaa11111111, type: 3}\n  m_FollowTarget: {fileID: 210}\n  speed: 8\n--- !u!1 &200\nGameObject:\n  m_Name: Companion\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 210}\n--- !u!4 &210\nTransform:\n  m_GameObject: {fileID: 200}\n  m_Father: {fileID: 110}\n  m_LocalPosition: {x: 1, y: 0, z: 0}\n";
@@ -908,10 +908,10 @@ fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_m
         "EDT-007 outcome 13: merged scene must assemble with its GameObjects intact"
     );
 
-    let mcp_outcome = mcp_merge_asset(base_scene, ours_scene, theirs_scene)?;
+    let text_outcome = merge_asset_text(base_scene, ours_scene, theirs_scene)?;
     assert_eq!(
-        mcp_outcome, direct_outcome,
-        "EDT-007 outcome 13: agent calling MCP merge entry point must obtain the exact same MergeOutcome"
+        text_outcome, direct_outcome,
+        "EDT-007 outcome 13: agent calling the text merge entry point must obtain the exact same MergeOutcome"
     );
 
     let base_prefab = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1000\nGameObject:\n  m_Name: CratePrefab\n  m_Layer: 0\n  m_Component:\n  - component: {fileID: 1010}\n--- !u!4 &1010\nTransform:\n  m_GameObject: {fileID: 1000}\n  m_Father: {fileID: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n";
@@ -923,10 +923,10 @@ fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_m
         ours_prefab.as_bytes(),
         theirs_prefab.as_bytes(),
     )?;
-    let prefab_mcp = mcp_merge_asset(base_prefab, ours_prefab, theirs_prefab)?;
+    let prefab_text = merge_asset_text(base_prefab, ours_prefab, theirs_prefab)?;
     assert_eq!(
-        prefab_mcp, prefab_direct,
-        "EDT-007 outcome 13: prefab merge via MCP must match direct three-way merge"
+        prefab_text, prefab_direct,
+        "EDT-007 outcome 13: prefab merge via the text entry point must match direct three-way merge"
     );
     assert!(prefab_direct.references.is_empty());
     let prefab_stream = unity_yaml::parse(merged_text(&prefab_direct))?;
@@ -939,12 +939,12 @@ fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_m
         ours_scene.as_bytes(),
         theirs_conflict_scene.as_bytes(),
     )?;
-    let conflict_mcp = mcp_merge_asset(base_scene, ours_scene, theirs_conflict_scene)?;
+    let conflict_text = merge_asset_text(base_scene, ours_scene, theirs_conflict_scene)?;
     assert_eq!(
-        conflict_mcp, conflict_direct,
-        "EDT-007 outcome 13: same-property conflict reported through MCP must equal direct merge conflict"
+        conflict_text, conflict_direct,
+        "EDT-007 outcome 13: same-property conflict reported through the text entry point must equal direct merge conflict"
     );
-    let speed_conflict = only_conflict(&conflict_mcp)?;
+    let speed_conflict = only_conflict(&conflict_text)?;
     assert_eq!(speed_conflict.kind, ConflictKind::Property);
     assert_eq!(speed_conflict.object_path, "Player/MonoBehaviour");
     assert_eq!(speed_conflict.property.as_deref(), Some("speed"));
@@ -998,10 +998,10 @@ fn edt_007_outcome_13_three_way_merge_scene_and_prefab_resolves_references_and_m
     );
 
     let diff_direct = semantic_diff(base_scene, ours_scene)?;
-    let diff_mcp = mcp_semantic_diff_asset(base_scene, ours_scene)?;
+    let diff_text = semantic_diff_asset_text(base_scene, ours_scene)?;
     assert_eq!(
-        diff_mcp, diff_direct,
-        "EDT-007 outcome 13: MCP semantic diff entry point must match direct semantic diff"
+        diff_text, diff_direct,
+        "EDT-007 outcome 13: text semantic diff entry point must match direct semantic diff"
     );
     Ok(())
 }

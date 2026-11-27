@@ -90,8 +90,7 @@ namespace Unitas.PlayerHost.Tests
 
             var context = new HostFolderLoadContext(artifactFolder);
             var assembly = context.LoadFromAssemblyPath(assemblyPath);
-            Type entry = assembly.GetType("Unitas.PlayerHost.PlayerHostEntry", throwOnError: true)
-                ?? throw new InvalidOperationException("PlayerHostEntry type not found");
+            Type entry = FindExportedType(assembly.GetExportedTypes(), "Unitas.PlayerHost.PlayerHostEntry");
 
             PlayerInitDelegate init = GetEntry<PlayerInitDelegate>(entry, "UnitasPlayerInit");
             PlayerTickDelegate tick = GetEntry<PlayerTickDelegate>(entry, "UnitasPlayerTick");
@@ -109,6 +108,19 @@ namespace Unitas.PlayerHost.Tests
             Check.Equal("isolated host rejects an invalid runtime handle", 1, invalidInit);
             Check.Equal("isolated host reports NotInitialized before boot", 7, tick(0.02));
             Check.Equal("isolated host reports NotInitialized before boot on shutdown", 7, shutdown());
+        }
+
+        private static Type FindExportedType(Type[] exportedTypes, string fullName)
+        {
+            foreach (Type candidate in exportedTypes)
+            {
+                if (string.Equals(candidate.FullName, fullName, StringComparison.Ordinal))
+                {
+                    return candidate;
+                }
+            }
+
+            throw new InvalidOperationException("Type not found: " + fullName);
         }
 
         private static T GetEntry<T>(Type entryType, string name)

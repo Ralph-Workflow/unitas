@@ -2279,11 +2279,11 @@ fn set_nested_segments(node: &mut Node, segments: &[&str], value: Node) {
     }
 }
 
-pub fn mcp_merge_asset(base: &str, ours: &str, theirs: &str) -> Result<MergeOutcome, MergeError> {
+pub fn merge_asset_text(base: &str, ours: &str, theirs: &str) -> Result<MergeOutcome, MergeError> {
     merge_bytes(base.as_bytes(), ours.as_bytes(), theirs.as_bytes())
 }
 
-pub fn mcp_semantic_diff_asset(old: &str, new: &str) -> Result<DiffOutcome, MergeError> {
+pub fn semantic_diff_asset_text(old: &str, new: &str) -> Result<DiffOutcome, MergeError> {
     semantic_diff_bytes(old.as_bytes(), new.as_bytes())
 }
 
