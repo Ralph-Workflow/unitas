@@ -80,6 +80,7 @@ namespace Unitas.Bridge.Tests
                 () => RenderTests.Run(),
                 () => PlaytestTests.Run(),
                 () => SceneCameraTests.Run(),
+                () => SceneTrailRendererTests.Run(),
                 () => UiClickPumpTests.Run(),
                 () => TestCharacterControllerDefaultsAndNullProvider(),
                 () => TestEndToEndCharacterControllerMoveAndSceneLoad(),
