@@ -1508,6 +1508,12 @@ impl Runtime {
             BuiltinWork::Physics2DFixedUpdate => {
                 self.run_physics_fixed_update_2d();
             }
+            BuiltinWork::PhysicsUpdateStep3D => {
+                self.run_physics_update_3d(scaled_delta, hook)?;
+            }
+            BuiltinWork::Physics2DUpdateStep => {
+                self.run_physics_update_2d(scaled_delta, hook);
+            }
             BuiltinWork::ScriptRunBehaviourFixedUpdate => {
                 let fixed_step = self.fixed_timestep;
                 if let Some(callbacks) = self.callbacks {

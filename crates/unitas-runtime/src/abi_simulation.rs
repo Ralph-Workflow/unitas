@@ -3,7 +3,7 @@ use unitas_physics::simulate::SimulationMode;
 
 use super::{
     Runtime, RuntimeError, restore_to_registry, run_reentrant_operation, take_from_registry,
-    with_active_runtime, with_active_state, with_runtime_state,
+    with_active_state, with_runtime_state,
 };
 use crate::runtime::PhysicsMessages;
 
@@ -32,33 +32,20 @@ fn encode_mode(mode: SimulationMode) -> i32 {
     }
 }
 
-extern "C" fn update_step_3d_callback(_user_data: u64, delta_seconds: f64) {
-    if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
-        return;
+fn insert_update_step(
+    tree: &mut crate::player_loop::PlayerLoopSystem,
+    name: &str,
+    type_name: &str,
+    anchor: &str,
+) {
+    let node = crate::player_loop::PlayerLoopSystem::new(name, type_name);
+    if let Some(update) = tree.find_mut(UPDATE_PHASE_TYPE) {
+        if let Some(pos) = update.children.iter().position(|c| c.type_name == anchor) {
+            update.children.insert(pos + 1, node);
+        } else {
+            update.children.push(node);
+        }
     }
-    let _ = with_active_runtime(|runtime| {
-        if runtime.simulation_mode_3d() != SimulationMode::Update {
-            return None;
-        }
-        if runtime.step_3d_into_pending(delta_seconds).is_ok() {
-            runtime.dispatch_physics_messages(&mut |_, f| f());
-        }
-        Some(())
-    });
-}
-
-extern "C" fn update_step_2d_callback(_user_data: u64, delta_seconds: f64) {
-    if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
-        return;
-    }
-    let _ = with_active_runtime(|runtime| {
-        if runtime.simulation_mode_2d() != SimulationMode::Update {
-            return None;
-        }
-        runtime.step_2d_into_pending(delta_seconds as f32);
-        runtime.dispatch_physics_messages(&mut |_, f| f());
-        Some(())
-    });
 }
 
 impl Runtime {
@@ -91,9 +78,6 @@ impl Runtime {
     }
 
     fn apply_player_loop_mode_3d(&mut self, mode: SimulationMode) {
-        let _ = self
-            .player_loop
-            .unregister_custom_system(UPDATE_STEP_3D_TYPE);
         let mut tree = self.player_loop.root().clone();
         tree.remove(FIXED_STEP_3D_TYPE);
         tree.remove(UPDATE_STEP_3D_TYPE);
@@ -105,28 +89,18 @@ impl Runtime {
                 crate::player_loop::PlayerLoopSystem::new("PhysicsFixedUpdate", FIXED_STEP_3D_TYPE),
             );
         }
-        let _ = self.player_loop.set_root(tree);
         if mode == SimulationMode::Update {
-            let anchor = if self.player_loop.root().contains(SCRIPT_UPDATE_TYPE) {
-                SCRIPT_UPDATE_TYPE
-            } else {
-                UPDATE_PHASE_TYPE
-            };
-            let _ = self.player_loop.register_custom_system(
+            insert_update_step(
+                &mut tree,
                 "PhysicsUpdateStep3D",
                 UPDATE_STEP_3D_TYPE,
-                anchor,
-                crate::player_loop::CustomSystemPosition::After,
-                update_step_3d_callback,
-                0,
+                SCRIPT_UPDATE_TYPE,
             );
         }
+        let _ = self.player_loop.set_root(tree);
     }
 
     fn apply_player_loop_mode_2d(&mut self, mode: SimulationMode) {
-        let _ = self
-            .player_loop
-            .unregister_custom_system(UPDATE_STEP_2D_TYPE);
         let mut tree = self.player_loop.root().clone();
         tree.remove(FIXED_STEP_2D_TYPE);
         tree.remove(UPDATE_STEP_2D_TYPE);
@@ -147,24 +121,20 @@ impl Runtime {
                 ),
             );
         }
-        let _ = self.player_loop.set_root(tree);
         if mode == SimulationMode::Update {
-            let anchor = if self.player_loop.root().contains(UPDATE_STEP_3D_TYPE) {
+            let anchor = if tree.contains(UPDATE_STEP_3D_TYPE) {
                 UPDATE_STEP_3D_TYPE
-            } else if self.player_loop.root().contains(SCRIPT_UPDATE_TYPE) {
-                SCRIPT_UPDATE_TYPE
             } else {
-                UPDATE_PHASE_TYPE
+                SCRIPT_UPDATE_TYPE
             };
-            let _ = self.player_loop.register_custom_system(
+            insert_update_step(
+                &mut tree,
                 "Physics2DUpdateStep",
                 UPDATE_STEP_2D_TYPE,
                 anchor,
-                crate::player_loop::CustomSystemPosition::After,
-                update_step_2d_callback,
-                0,
             );
         }
+        let _ = self.player_loop.set_root(tree);
     }
 
     pub(crate) fn run_physics_fixed_update_3d(&mut self) -> Result<(), RuntimeError> {
@@ -179,6 +149,39 @@ impl Runtime {
             return;
         }
         self.step_2d_into_pending(self.fixed_timestep as f32);
+    }
+
+    pub(crate) fn run_physics_update_3d<H>(
+        &mut self,
+        delta_seconds: f64,
+        hook: &mut H,
+    ) -> Result<(), RuntimeError>
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        if self.simulation_mode_3d() != SimulationMode::Update
+            || !delta_seconds.is_finite()
+            || delta_seconds <= 0.0
+        {
+            return Ok(());
+        }
+        self.step_3d_into_pending(delta_seconds)?;
+        self.dispatch_physics_messages(hook);
+        Ok(())
+    }
+
+    pub(crate) fn run_physics_update_2d<H>(&mut self, delta_seconds: f64, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        if self.simulation_mode_2d() != SimulationMode::Update
+            || !delta_seconds.is_finite()
+            || delta_seconds <= 0.0
+        {
+            return;
+        }
+        self.step_2d_into_pending(delta_seconds as f32);
+        self.dispatch_physics_messages(hook);
     }
 
     pub fn simulate_3d(&mut self, delta_seconds: f64) -> Result<(), RuntimeError> {

@@ -259,7 +259,6 @@ namespace Unitas.Bridge.Tests
 
         private static void VerifyUpdateMode2D(BridgeHost host, SimulationProbe2DScript probe, Rigidbody2D rb2d)
         {
-            rb2d.MovePosition(new Vector2(0f, 5f));
             rb2d.velocity = new Vector2(10f, 0f);
             Physics2D.simulationMode = SimulationMode2D.Update;
             Check.Equal("BridgeHost reflects SimulationMode2D.Update for 2D", (int)SimulationMode2D.Update, (int)Physics2D.simulationMode);

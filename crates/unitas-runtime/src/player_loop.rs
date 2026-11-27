@@ -26,6 +26,8 @@ pub const PLAYER_UPDATE_TIME: &str = "UnityEngine.PlayerLoop.Initialization.Play
 pub const SYNCHRONIZE_INPUTS: &str = "UnityEngine.PlayerLoop.Initialization.SynchronizeInputs";
 pub const PHYSICS_FIXED_UPDATE: &str = "UnityEngine.PlayerLoop.FixedUpdate.PhysicsFixedUpdate";
 pub const PHYSICS_2D_FIXED_UPDATE: &str = "UnityEngine.PlayerLoop.FixedUpdate.Physics2DFixedUpdate";
+pub const PHYSICS_UPDATE_STEP_3D: &str = "UnityEngine.PlayerLoop.Update.PhysicsUpdateStep3D";
+pub const PHYSICS_2D_UPDATE_STEP: &str = "UnityEngine.PlayerLoop.Update.Physics2DUpdateStep";
 pub const SCRIPT_RUN_BEHAVIOUR_FIXED_UPDATE: &str =
     "UnityEngine.PlayerLoop.FixedUpdate.ScriptRunBehaviourFixedUpdate";
 pub const SCRIPT_RUN_BEHAVIOUR_UPDATE: &str =
@@ -172,6 +174,8 @@ pub enum BuiltinWork {
     SynchronizeInputs,
     PhysicsFixedUpdate,
     Physics2DFixedUpdate,
+    PhysicsUpdateStep3D,
+    Physics2DUpdateStep,
     ScriptRunBehaviourFixedUpdate,
     ScriptRunBehaviourUpdate,
     LegacyAnimationUpdate,
@@ -315,6 +319,8 @@ pub fn builtin_work_for(type_name: &str) -> Option<BuiltinWork> {
         SYNCHRONIZE_INPUTS => Some(BuiltinWork::SynchronizeInputs),
         PHYSICS_FIXED_UPDATE => Some(BuiltinWork::PhysicsFixedUpdate),
         PHYSICS_2D_FIXED_UPDATE => Some(BuiltinWork::Physics2DFixedUpdate),
+        PHYSICS_UPDATE_STEP_3D => Some(BuiltinWork::PhysicsUpdateStep3D),
+        PHYSICS_2D_UPDATE_STEP => Some(BuiltinWork::Physics2DUpdateStep),
         SCRIPT_RUN_BEHAVIOUR_FIXED_UPDATE => Some(BuiltinWork::ScriptRunBehaviourFixedUpdate),
         SCRIPT_RUN_BEHAVIOUR_UPDATE => Some(BuiltinWork::ScriptRunBehaviourUpdate),
         LEGACY_ANIMATION_UPDATE => Some(BuiltinWork::LegacyAnimationUpdate),

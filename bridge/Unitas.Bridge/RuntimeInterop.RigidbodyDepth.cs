@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.InteropServices;
 
 namespace Unitas.Bridge
@@ -16,12 +15,6 @@ namespace Unitas.Bridge
             ulong handle,
             ulong entity,
             ulong inBuffer);
-
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int unitas_runtime_teleport_body_rotation(
-            ulong handle,
-            ulong entity,
-            IntPtr inBuffer);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_add_body_torque(
