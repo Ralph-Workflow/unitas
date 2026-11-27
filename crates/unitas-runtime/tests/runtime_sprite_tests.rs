@@ -90,6 +90,7 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let texture = dir.join("sprite.tga");
+    // A white texture, so the tint the script sets is the colour the frame shows.
     write_test_tga(&texture, 100, 50, [255, 255, 255])?;
     write_scene(&dir, &texture)?;
 
@@ -129,55 +130,54 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
 
     assert!(runtime.set_runtime_sprite_enabled(entity, false));
     assert_eq!(runtime.sprite_instances().len(), 1);
+    let scene_only_frame = runtime.capture_scene_frame(64, 64)?;
     assert!(runtime.set_runtime_sprite_enabled(entity, true));
     assert_eq!(runtime.sprite_instances().len(), 2);
+    // Without the script sprite the scene sprite is the one the frame shows.
+    assert_eq!(
+        scene_only_frame.image.get_pixel(27, 31),
+        [255, 255, 255, 255]
+    );
 
     assert!(runtime.set_runtime_sprite_flip(entity, false, true));
     let sprites = runtime.sprite_instances();
     assert!((sprites[1].model.get(1, 1) + 0.5).abs() < 1e-6);
 
-    assert!(runtime
-        .set_runtime_object_transform(
-            entity,
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [4.0, 4.0, 1.0],
-        )
-        .is_ok());
+    assert!(
+        runtime
+            .set_runtime_object_transform(
+                entity,
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [4.0, 4.0, 1.0],
+            )
+            .is_ok()
+    );
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
     assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
     let front_frame = runtime.capture_scene_frame(64, 64)?;
-    let center_idx = ((32 * 64 + 32) * 3) as usize;
-    let front_pixel = &front_frame.image.pixels[center_idx..center_idx + 3];
-    {
-        let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
-        for chunk in front_frame.image.pixels.chunks_exact(4) {
-            *seen.entry(chunk.to_vec()).or_default() += 1;
-        }
-        println!("FRONTCOLORS {seen:?}");
-    }
-    for (index, sprite) in runtime.sprite_instances().iter().enumerate() {
-        println!(
-            "SPRITE{index} tex {}x{} first {:?} last {:?} model {:?}",
-            sprite.texture.width,
-            sprite.texture.height,
-            sprite.texture.pixels.first(),
-            sprite.texture.pixels.last(),
-            sprite.model,
-        );
-    }
+    // The script sprite sits at the world origin, which is where the default
+    // camera looks, so the centre of the frame is the sprite.
+    let front_pixel = front_frame.image.get_pixel(32, 32);
+    assert_eq!(
+        front_pixel,
+        [0, 255, 0, 255],
+        "the script sprite must be drawn into the captured frame"
+    );
+    // The scene sprite and the script sprite share the frame, and the script
+    // sprite sorts in front of it, so it covers the scene sprite where they
+    // overlap.
+    assert_eq!(front_frame.image.get_pixel(27, 31), [0, 255, 0, 255]);
 
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 0.0, 1.0, 1.0]));
     let recolored_frame = runtime.capture_scene_frame(64, 64)?;
-    let recolored_pixel = &recolored_frame.image.pixels[center_idx..center_idx + 3];
-    {
-        let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
-        for chunk in recolored_frame.image.pixels.chunks_exact(4) {
-            *seen.entry(chunk.to_vec()).or_default() += 1;
-        }
-        println!("RECOLOREDCOLORS {seen:?}");
-    }
+    let recolored_pixel = recolored_frame.image.get_pixel(32, 32);
     assert_ne!(front_pixel, recolored_pixel);
+    assert_eq!(
+        recolored_pixel,
+        [0, 0, 255, 255],
+        "recolouring the script sprite must change the captured pixels"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
@@ -221,8 +221,7 @@ fn script_sprite_reports_the_draw_modes_the_renderer_does_not_draw()
     assert!(runtime
         .diagnostics()
         .iter()
-        .any(|(id, message)| *id == missing_entity
-            && message.contains("could not be imported")));
+        .any(|(id, message)| *id == missing_entity && message.contains("could not be imported")));
     assert_eq!(runtime.sprite_instances().len(), 2);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -258,50 +257,4 @@ fn sprite_abi_accepts_the_script_calls_and_refuses_invalid_arguments() {
     );
 
     assert_eq!(unitas_runtime_destroy(handle), 0);
-}
-
-#[test]
-fn probe_sprite_frame_layout() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_script_sprite_probe_{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)?;
-    let texture = dir.join("sprite.tga");
-    write_test_tga(&texture, 100, 50, [255, 0, 0])?;
-    write_scene(&dir, &texture)?;
-
-    let mut runtime = Runtime::new()?;
-    runtime.load_scene(&dir.join("SpriteScene.unity"))?;
-    let entity = runtime.create_runtime_object("ScriptSprite")?;
-    assert!(runtime.create_runtime_sprite(entity, Some(&texture)));
-    assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
-    assert!(runtime.set_runtime_object_transform(
-        entity,
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-        [4.0, 4.0, 1.0],
-    ).is_ok());
-
-    let frame = runtime.capture_scene_frame(64, 64)?;
-    println!("image {}x{} pixels len {}", frame.image.width, frame.image.height, frame.image.pixels.len());
-    let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
-    for chunk in frame.image.pixels.chunks_exact(4) {
-        *seen.entry(chunk.to_vec()).or_default() += 1;
-    }
-    for (color, count) in &seen {
-        println!("color {color:?} count {count}");
-    }
-    for y in 0..64usize {
-        let mut row = String::new();
-        for x in 0..64usize {
-            let i = (y * 64 + x) * 4;
-            let p = &frame.image.pixels[i..i + 4];
-            row.push(if p[0] > p[1] && p[0] > p[2] { 'R' } else if p[1] > p[0] && p[1] > p[2] { 'G' } else if p[2] > p[0] && p[2] > p[1] { 'B' } else { '.' });
-        }
-        println!("{row}");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-    Ok(())
 }

@@ -231,6 +231,24 @@ pub extern "C" fn unitas_runtime_set_body_rotation(handle: u64, entity: u64, in_
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_teleport_body_rotation(handle: u64, entity: u64, in_buffer: u64) -> i32 {
+    with_runtime_state(handle, |state| {
+        let Some(rot) = read_vec4_from_path_buffer(state, in_buffer) else {
+            state.set_error("buffer address mismatch");
+            return -2;
+        };
+        let res = state
+            .runtime
+            .physics_mut()
+            .world_3d_mut()
+            .teleport_rotation(EntityId::new(entity), rot);
+        finish_res(state, res)
+    })
+    .unwrap_or_else(|code| code)
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_body_set_collision_detection_mode(handle: u64, entity: u64, mode: u32) -> i32 {
     let mode = match mode {
         0 => CollisionDetectionMode3D::Discrete,

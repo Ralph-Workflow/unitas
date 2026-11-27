@@ -114,10 +114,14 @@ impl RenderGraph {
             .iter()
             .find(|pass| pass.kind == RenderPassKind::Transparent)
             .map_or(RenderTargetKind::OffscreenColorDepth, |pass| pass.target);
+        // The sprite pass draws into the colour target, so it has to run
+        // before the pass that reads the target back.
         let index = self
             .passes
             .iter()
-            .position(|pass| pass.kind == RenderPassKind::UiOverlay)
+            .position(|pass| {
+                pass.kind == RenderPassKind::UiOverlay || pass.kind == RenderPassKind::CaptureIds
+            })
             .unwrap_or(self.passes.len());
         let mut passes = self.passes;
         passes.insert(
@@ -328,5 +332,20 @@ mod tests {
         );
         let idempotent = with.clone().with_sprites(true);
         assert_eq!(idempotent, with);
+    }
+
+    #[test]
+    fn with_sprites_draws_the_sprite_pass_before_the_capture_readback() {
+        let with = RenderGraph::capture(false).with_sprites(true);
+        assert!(with.has_sprite_pass());
+        assert_eq!(
+            with.pass_order(),
+            vec![
+                RenderPassKind::Opaque,
+                RenderPassKind::Transparent,
+                RenderPassKind::Sprites,
+                RenderPassKind::CaptureIds,
+            ]
+        );
     }
 }
