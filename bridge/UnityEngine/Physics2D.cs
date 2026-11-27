@@ -12,6 +12,21 @@ namespace UnityEngine
 
         Collider2D[] OverlapBox2D(Vector2 position, Vector2 size, float angle, int layerMask);
 
+        RaycastHit2D[] BoxCast2D(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
+        {
+            return Array.Empty<RaycastHit2D>();
+        }
+
+        bool TrySetBodyConstraints2D(ulong entity, RigidbodyConstraints2D constraints)
+        {
+            return false;
+        }
+
+        bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger)
+        {
+            return false;
+        }
+
         bool TryGetBodyVelocity2D(ulong entity, out Vector2 velocity)
         {
             velocity = default;
@@ -106,6 +121,16 @@ namespace UnityEngine
                 return Array.Empty<Collider2D>();
             }
             return provider.OverlapBox2D(position, size, angle, layerMask);
+        }
+
+        public static RaycastHit2D[] BoxCast(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance, ContactFilter2D contactFilter, int layerMask = DefaultRaycastLayers)
+        {
+            IPhysics2DProvider? provider = Provider;
+            if (provider == null)
+            {
+                return Array.Empty<RaycastHit2D>();
+            }
+            return provider.BoxCast2D(origin, size, angle, direction, distance, layerMask, contactFilter);
         }
     }
 }

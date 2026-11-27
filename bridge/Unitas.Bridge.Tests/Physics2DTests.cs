@@ -59,6 +59,9 @@ namespace Unitas.Bridge.Tests
         public static void Run()
         {
             TestTwoDimensionalContactsReachTheTwoDimensionalHandlers();
+            TestBoxCastReachesTheCollidersItSweeps();
+            TestRigidbodyConstraintsReachTheNativeBody();
+            TestCapsuleColliderCreatesANativeCapsuleShape();
         }
 
         private static void TestTwoDimensionalContactsReachTheTwoDimensionalHandlers()
@@ -108,6 +111,210 @@ namespace Unitas.Bridge.Tests
             Check.That(
                 "2D collision contact point sits on the crate surface",
                 Math.Abs(recorded.CollisionContact.point.y - 0.5f) < 0.25f);
+        }
+
+        private static void TestBoxCastReachesTheCollidersItSweeps()
+        {
+            string scenePath = ResolveFixture("bridge/Unitas.Bridge.Tests/Fixtures/scene_physics_2d.unity");
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+
+                RaycastHit2D[] crateHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 0f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    new ContactFilter2D());
+                Check.Equal("the box cast reports the crate it reaches", 1, crateHits.Length);
+                Check.Equal("the box cast hit resolves the crate collider", "Crate2D", HitName(crateHits, 0));
+                Check.That(
+                    "the box cast stops when the box reaches the crate face",
+                    crateHits.Length > 0 && Math.Abs(crateHits[0].distance - 2.75f) < 0.05f);
+                Check.That(
+                    "the box cast normal points back at the caster",
+                    crateHits.Length > 0 && crateHits[0].normal.x < -0.99f && Math.Abs(crateHits[0].normal.y) < 0.01f);
+
+                ContactFilter2D sideFilter = new ContactFilter2D
+                {
+                    useOutsideNormalAngle = true,
+                    minNormalAngle = 90f,
+                    maxNormalAngle = 270f,
+                };
+                RaycastHit2D[] sideHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 0f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    sideFilter);
+                Check.Equal("a normal-angle filter that holds the hit normal keeps the hit", 1, sideHits.Length);
+
+                ContactFilter2D upwardFilter = new ContactFilter2D
+                {
+                    useOutsideNormalAngle = true,
+                    minNormalAngle = 0f,
+                    maxNormalAngle = 90f,
+                };
+                RaycastHit2D[] upwardHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 0f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    upwardFilter);
+                Check.Equal("a normal-angle filter that excludes the hit normal drops the hit", 0, upwardHits.Length);
+
+                RaycastHit2D[] unfilteredHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 0f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    new ContactFilter2D());
+                Check.Equal("a filter without a normal angle keeps the hit", 1, unfilteredHits.Length);
+
+                RaycastHit2D[] maskedHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 0f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    new ContactFilter2D(),
+                    0);
+                Check.Equal("a layer mask that excludes the crate layer drops the hit", 0, maskedHits.Length);
+
+                ContactFilter2D triggerFilter = new ContactFilter2D
+                {
+                    useTriggers = true,
+                };
+                RaycastHit2D[] triggerHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 1.5f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    triggerFilter);
+                Check.Equal("a trigger-inclusive filter reports the trigger collider", 1, triggerHits.Length);
+                Check.Equal("the trigger hit resolves the trigger collider", "Trigger2D", HitName(triggerHits, 0));
+
+                RaycastHit2D[] solidHits = Physics2D.BoxCast(
+                    new Vector2(-5f, 1.5f),
+                    new Vector2(0.5f, 0.5f),
+                    0f,
+                    new Vector2(1f, 0f),
+                    20f,
+                    new ContactFilter2D());
+                Check.Equal("a trigger-exclusive filter drops the trigger collider", 0, solidHits.Length);
+            }
+        }
+
+        private static void TestRigidbodyConstraintsReachTheNativeBody()
+        {
+            string scenePath = ResolveFixture("bridge/Unitas.Bridge.Tests/Fixtures/scene_physics_2d.unity");
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+                Rigidbody2D? body = FindSceneRigidbody2D();
+                Check.That("the scene rigidbody is materialized", body != null);
+                if (body == null)
+                {
+                    return;
+                }
+
+                body.freezeRotation = true;
+                Check.That("freezeRotation reads back as frozen", body.freezeRotation);
+                Check.Equal(
+                    "the freeze-rotation constraint carries the Unity bit",
+                    4,
+                    (int)(body.constraints & RigidbodyConstraints2D.FreezeRotation));
+                Check.That(
+                    "the native body accepts the freeze-rotation constraint",
+                    Physics2D.Provider != null
+                    && Physics2D.Provider.TrySetBodyConstraints2D(
+                        body.gameObject.NativeEntityId,
+                        RigidbodyConstraints2D.FreezeRotation));
+
+                body.constraints = RigidbodyConstraints2D.None;
+                Check.That("clearing the constraints clears freezeRotation", !body.freezeRotation);
+
+                body.constraints = RigidbodyConstraints2D.FreezeAll;
+                Check.That("the freeze-all constraints freeze the rotation", body.freezeRotation);
+                Check.That(
+                    "the freeze-all constraints keep the position bits",
+                    (body.constraints & RigidbodyConstraints2D.FreezePosition) == RigidbodyConstraints2D.FreezePosition);
+                Check.That(
+                    "the freeze-all constraints reach the native body",
+                    Physics2D.Provider != null
+                    && Physics2D.Provider.TrySetBodyConstraints2D(
+                        body.gameObject.NativeEntityId,
+                        RigidbodyConstraints2D.FreezeAll));
+            }
+        }
+
+        private static void TestCapsuleColliderCreatesANativeCapsuleShape()
+        {
+            string scenePath = ResolveFixture("bridge/Unitas.Bridge.Tests/Fixtures/scene_physics_2d.unity");
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+                Rigidbody2D? body = FindSceneRigidbody2D();
+                Check.That("the scene rigidbody is materialized", body != null);
+                if (body == null)
+                {
+                    return;
+                }
+
+                Check.Equal(
+                    "the box collider of the ball does not reach the capsule cap",
+                    0,
+                    Physics2D.OverlapPoint(new Vector2(0f, 3.8f)).Length);
+
+                CapsuleCollider2D? capsule = body.gameObject.AddComponent<CapsuleCollider2D>();
+                Check.That("the capsule collider is attached to the ball", capsule != null);
+                if (capsule == null)
+                {
+                    return;
+                }
+                capsule.size = new Vector2(0.5f, 2f);
+
+                Check.Equal(
+                    "the native capsule collider reaches the capsule cap",
+                    1,
+                    Physics2D.OverlapPoint(new Vector2(0f, 3.8f)).Length);
+                Check.Equal(
+                    "the native capsule collider does not widen the ball",
+                    0,
+                    Physics2D.OverlapPoint(new Vector2(0.4f, 3.8f)).Length);
+            }
+        }
+
+        private static Rigidbody2D? FindSceneRigidbody2D()
+        {
+            Collider2D[] colliders = Physics2D.OverlapPoint(new Vector2(0f, 3f));
+            for (int index = 0; index < colliders.Length; index++)
+            {
+                Rigidbody2D? body = colliders[index].gameObject.GetComponent<Rigidbody2D>();
+                if (body != null)
+                {
+                    return body;
+                }
+            }
+            return null;
+        }
+
+        private static string HitName(RaycastHit2D[] hits, int index)
+        {
+            if (index >= hits.Length)
+            {
+                return string.Empty;
+            }
+            Collider2D? collider = hits[index].collider;
+            return collider == null ? string.Empty : collider.gameObject.name;
         }
 
         private static int IndexOfEvent(IReadOnlyList<string> events, string name)

@@ -10,12 +10,14 @@ use unitas_physics::two_d::effector::BuoyancyEffector2D;
 use unitas_physics::two_d::{
     AreaEffector2D, BodyDesc2D, BodyId2D, BodyType2D, ColliderDesc2D, ColliderId2D,
     ContactFilter2D, ContactPoint2D, Effector2D, PlatformEffector2D, PointEffector2D, RaycastHit2D,
-    RoutedMessage2D, SurfaceEffector2D, World2D,
+    RoutedMessage2D, Shape2D, SurfaceEffector2D, World2D,
 };
 use unitas_physics::{
     BodyDesc, BodyRole, CollisionDetectionMode3D, CollisionEvent, Phase, PhysicsError, QueryHit,
     SolverSettings, TriggerEvent, World,
 };
+
+const FREEZE_ROTATION_CONSTRAINT_2D: u32 = 4;
 
 pub(crate) fn layer_bits(layer: u32) -> u32 {
     if layer >= 32 {
@@ -257,6 +259,29 @@ impl PhysicsRuntimeWorld {
         id
     }
 
+    pub fn set_capsule_collider_2d(&mut self, entity: EntityId, desc: ColliderDesc2D) -> bool {
+        let existing = self.colliders_2d.get(&entity).and_then(|ids| {
+            ids.iter().copied().find(|id| {
+                self.world_2d
+                    .collider(*id)
+                    .is_some_and(|collider| matches!(&collider.shape, Shape2D::Capsule { .. }))
+            })
+        });
+        if let Some(existing) = existing {
+            let Some(collider) = self.world_2d.collider_mut(existing) else {
+                return false;
+            };
+            collider.shape = desc.shape;
+            collider.offset = desc.offset;
+            collider.is_trigger = desc.is_trigger;
+            collider.layer = desc.layer;
+            collider.attached_body = desc.attached_body;
+            return true;
+        }
+        self.add_collider_2d(desc);
+        true
+    }
+
     pub fn body_id_2d(&self, entity: EntityId) -> Option<BodyId2D> {
         self.bodies_2d.get(&entity).copied()
     }
@@ -349,6 +374,17 @@ impl PhysicsRuntimeWorld {
             return false;
         };
         body.collision_detection_mode = mode;
+        true
+    }
+
+    pub fn set_body_constraints_2d(&mut self, entity: EntityId, constraints: u32) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.freeze_rotation = constraints & FREEZE_ROTATION_CONSTRAINT_2D != 0;
         true
     }
 
@@ -463,6 +499,19 @@ impl PhysicsRuntimeWorld {
     ) -> Vec<RaycastHit2D> {
         self.world_2d
             .raycast(origin, direction, max_distance, filter)
+    }
+
+    pub fn box_cast_2d(
+        &self,
+        center: [f32; 2],
+        half_extents: [f32; 2],
+        angle: f32,
+        direction: [f32; 2],
+        distance: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<RaycastHit2D> {
+        self.world_2d
+            .box_cast(center, half_extents, angle, direction, distance, filter)
     }
 
     pub fn overlap_point_2d(&self, point: [f32; 2], filter: ContactFilter2D) -> Vec<ColliderId2D> {

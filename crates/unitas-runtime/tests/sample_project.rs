@@ -221,8 +221,8 @@ fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestRes
     let runtime = loaded_scene()?;
     let index = ProjectScriptIndex::build(&sample_root())?;
     // Eleven sample scripts: the nine the sample shipped with, plus the ghost
-    // replay component the S14 cross-attempt replay needs and the reduced
-    // motion preference helper the trails feature reads.
+    // replay component the S14 cross-attempt replay needs and the reduced-motion
+    // preference component.
     assert_eq!(index.script_count(), 11);
     let root = sample_root();
 

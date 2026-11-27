@@ -15,13 +15,21 @@ namespace UnityEngine
         public bool isTrigger
         {
             get => _isTrigger;
-            set => _isTrigger = value;
+            set
+            {
+                _isTrigger = value;
+                ApplyNativeShape();
+            }
         }
 
         public Vector2 offset
         {
             get => _offset;
-            set => _offset = value;
+            set
+            {
+                _offset = value;
+                ApplyNativeShape();
+            }
         }
 
         public Rigidbody2D? attachedRigidbody
@@ -31,6 +39,10 @@ namespace UnityEngine
                 GameObject? owner = gameObject;
                 return owner == null ? null : owner.GetComponent<Rigidbody2D>();
             }
+        }
+
+        protected virtual void ApplyNativeShape()
+        {
         }
     }
 }

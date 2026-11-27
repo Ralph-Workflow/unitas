@@ -1676,6 +1676,74 @@ namespace Unitas.Bridge
             return RuntimeInterop.unitas_runtime_body2d_set_collision_detection_mode(_runtimeHandle, entity, (int)mode) == 0;
         }
 
+        public bool TrySetBodyConstraints2D(ulong entity, RigidbodyConstraints2D constraints)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_constraints(_runtimeHandle, entity, (uint)constraints) == 0;
+        }
+
+        public bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_collider2d_create_capsule(
+                _runtimeHandle,
+                entity,
+                radius,
+                height,
+                (uint)direction,
+                offset.x,
+                offset.y,
+                isTrigger ? 1 : 0,
+                0u) == 0;
+        }
+
+        public RaycastHit2D[] BoxCast2D(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
+        {
+            int count = RuntimeInterop.unitas_runtime_box_cast2d(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                size.x * 0.5f,
+                size.y * 0.5f,
+                angle,
+                direction.x,
+                direction.y,
+                distance,
+                filter.useTriggers ? 1 : 0,
+                (uint)layerMask,
+                filter.useDepth ? 1 : 0,
+                filter.minDepth,
+                filter.maxDepth,
+                filter.useOutsideNormalAngle ? 1 : 0,
+                filter.minNormalAngle,
+                filter.maxNormalAngle);
+            if (count <= 0)
+            {
+                return Array.Empty<RaycastHit2D>();
+            }
+            QueryHit2D[] hits = ReadQueryHits2D(count);
+            List<RaycastHit2D> results = new List<RaycastHit2D>(hits.Length);
+            for (int index = 0; index < hits.Length; index++)
+            {
+                QueryHit2D hit = hits[index];
+                results.Add(new RaycastHit2D
+                {
+                    collider = ResolveCollider2DByEntity(hit.Entity),
+                    point = new Vector2(hit.X, hit.Y),
+                    normal = new Vector2(hit.NX, hit.NY),
+                    distance = hit.Distance,
+                    fraction = distance > 0f ? hit.Distance / distance : 0f,
+                });
+            }
+            return results.ToArray();
+        }
+
         public bool TryGetCollisionSummary2D(ulong a, ulong b, out CollisionSummary2D summary)
         {
             summary = default;

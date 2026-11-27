@@ -1242,6 +1242,39 @@ pub extern "C" fn unitas_runtime_collider2d_create(
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_create_capsule(
+    handle: u64,
+    entity: u64,
+    radius: f32,
+    height: f32,
+    direction: u32,
+    offset_x: f32,
+    offset_y: f32,
+    is_trigger: u32,
+    layer: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        let mut collider =
+            ColliderDesc2D::capsule_collider(entity, radius, height, u8::from(direction != 0));
+        collider = collider
+            .with_offset([offset_x, offset_y])
+            .with_trigger(is_trigger != 0)
+            .with_layer(layer as u8);
+        if let Some(attached) = state.runtime.physics_mut().body_id_2d(entity) {
+            collider = collider.with_attached_body(attached);
+        }
+        state.runtime.physics_mut().set_capsule_collider_2d(entity, collider);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_body2d_velocity(
     handle: u64,
     entity: u64,
@@ -1462,6 +1495,30 @@ pub extern "C" fn unitas_runtime_body2d_set_collision_detection_mode(
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_constraints(
+    handle: u64,
+    entity: u64,
+    constraints: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_constraints_2d(EntityId::new(entity), constraints)
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_raycast2d(
     handle: u64,
     origin_x: f32,
@@ -1561,6 +1618,66 @@ pub extern "C" fn unitas_runtime_overlap_box2d(
             .physics_mut()
             .overlap_box_2d([x, y], [half_x, half_y], angle, filter);
         let records = collider_records_2d(state, &colliders, [x, y]);
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_box_cast2d(
+    handle: u64,
+    origin_x: f32,
+    origin_y: f32,
+    half_x: f32,
+    half_y: f32,
+    angle: f32,
+    direction_x: f32,
+    direction_y: f32,
+    distance: f32,
+    use_triggers: i32,
+    layer_mask: u32,
+    use_depth: i32,
+    min_depth: f32,
+    max_depth: f32,
+    use_normal_angle: i32,
+    min_normal_angle: f32,
+    max_normal_angle: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let mut filter = ContactFilter2D::default();
+        filter.use_triggers = use_triggers != 0;
+        filter.use_layer_mask = true;
+        filter.layer_mask = layer_mask;
+        if use_depth != 0 {
+            filter.use_depth = true;
+            filter.min_depth = min_depth;
+            filter.max_depth = max_depth;
+        }
+        if use_normal_angle != 0 {
+            filter.use_normal_angle = true;
+            filter.min_normal_angle = min_normal_angle;
+            filter.max_normal_angle = max_normal_angle;
+        }
+        let hits = state.runtime.physics_mut().box_cast_2d(
+            [origin_x, origin_y],
+            [half_x, half_y],
+            angle,
+            [direction_x, direction_y],
+            distance,
+            filter,
+        );
+        let records = hits
+            .iter()
+            .map(|hit| QueryRecord2D {
+                entity: hit.game_object.as_u64(),
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            })
+            .collect();
         store_query_records_2d(state, records)
     }) {
         Ok(count) => count,

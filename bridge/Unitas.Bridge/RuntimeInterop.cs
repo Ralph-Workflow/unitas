@@ -361,6 +361,12 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_body2d_set_collision_detection_mode(ulong runtime, ulong entity, int mode);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_constraints(ulong runtime, ulong entity, uint constraints);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_create_capsule(ulong runtime, ulong entity, float radius, float height, uint direction, float offsetX, float offsetY, int isTrigger, uint layer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_collider2d_set_platform_effector(ulong runtime, ulong entity, int useOneWay, float surfaceArc, float rotationalOffset, float sideArc, int useSideFriction, int useSideBounce);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
@@ -377,6 +383,9 @@ namespace Unitas.Bridge
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_overlap_box2d(ulong runtime, float x, float y, float halfX, float halfY, float angle, uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_box_cast2d(ulong runtime, float originX, float originY, float halfX, float halfY, float angle, float directionX, float directionY, float distance, int useTriggers, uint layerMask, int useDepth, float minDepth, float maxDepth, int useNormalAngle, float minNormalAngle, float maxNormalAngle);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr unitas_runtime_query_buffer_2d(ulong runtime, uint capacity);
