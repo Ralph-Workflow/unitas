@@ -96,6 +96,7 @@ namespace Unitas.Bridge.Tests
                 () => CompilationTests.RunPart3(),
                 () => CompilationTests.RunPart4(),
                 () => CompilationTests.RunPart5(),
+                () => CompilationTests.RunPart6(),
                 () => EventsTests.Run(),
                 () => UnityEventArityTests.Run(),
                 () => UnityWebRequestMethodTests.Run(),

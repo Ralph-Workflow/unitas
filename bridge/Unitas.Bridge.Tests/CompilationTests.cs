@@ -43,28 +43,32 @@ namespace Unitas.Bridge.Tests
         public static void RunPart1()
         {
             TestStory6AssembliesAsmrefDefinesAndVersionDefines();
+        }
+
+        public static void RunPart2()
+        {
             TestStory6ReferenceCycleDiagnostic();
             TestStory6OverrideReferencesHonorsPrecompiledReferences();
         }
 
-        public static void RunPart2()
+        public static void RunPart3()
         {
             TestStory7TargetDefinesEditorAndPlayers();
             TestStory29PlayerBuildRejectsUnguardedUnityEditorReference();
         }
 
-        public static void RunPart3()
+        public static void RunPart4()
         {
             TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile();
         }
 
-        public static void RunPart4()
+        public static void RunPart5()
         {
             TestStory10IncompatibleNativePluginDllImportDiagnostic();
             TestCliCompileEntryPoint();
         }
 
-        public static void RunPart5()
+        public static void RunPart6()
         {
             TestGeneratedGlueAndZeroReflectionMessageDispatch();
         }
