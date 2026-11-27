@@ -184,9 +184,11 @@ pub extern "C" fn unitas_runtime_capsule_cast(
 ) -> i32 {
     match with_runtime_state(handle, |state| {
         let hits = state.runtime.physics_mut().world_3d().capsule_cast(
-            [p1_x, p1_y, p1_z],
-            [p2_x, p2_y, p2_z],
-            radius,
+            unitas_physics::Capsule {
+                point1: [p1_x, p1_y, p1_z],
+                point2: [p2_x, p2_y, p2_z],
+                radius,
+            },
             [dir_x, dir_y, dir_z],
             max_distance,
             layer_mask,

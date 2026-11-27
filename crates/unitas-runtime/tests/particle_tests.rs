@@ -3,9 +3,7 @@ use unitas_asset::unity_yaml;
 use unitas_core::EntityId;
 use unitas_physics::particles::SubEmitterTrigger;
 use unitas_runtime::Runtime;
-use unitas_runtime::particles::{
-    parse_particle_system_modules, serialize_particle_system_modules,
-};
+use unitas_runtime::particles::{parse_particle_system_modules, serialize_particle_system_modules};
 
 const PARTICLE_SCENE: &str = "--- !u!198 &1000\nParticleSystem:\n  m_Duration: 5\n  m_Loop: 0\n  m_MaxParticles: 32\n  m_StartLifetime: 2\n  m_StartSpeed: 0\n  m_StartSize: 0.25\n  m_StartColor:\n    r: 1\n    g: 0.5\n    b: 0\n    a: 1\n  m_EmissionRate: 0\n  m_Bursts:\n  - m_Time: 0\n    m_Count: 5\n    m_Cycles: 1\n";
 
@@ -90,8 +88,8 @@ fn the_draw_list_is_emptied_when_the_particles_expire() -> Result<(), Box<dyn st
 const MODULE_SCENE: &str = "--- !u!198 &1000\nParticleSystem:\n  m_Duration: 5\n  m_Loop: 0\n  m_MaxParticles: 32\n  m_StartLifetime: 1\n  m_StartSpeed: 0\n  m_StartSize: 0.5\n  m_StartColor:\n    r: 1\n    g: 0.5\n    b: 0\n    a: 1\n  m_EmissionRate: 0\n  m_Bursts:\n  - m_Time: 0\n    m_Count: 1\n    m_Cycles: 1\n  SubModule:\n    enabled: 1\n    subEmitters:\n    - subEmitter: {fileID: 2000}\n      type: 0\n      emitProbability: 1\n      emitCount: 2\n    - subEmitter: {fileID: 2001}\n      type: 1\n      emitProbability: 1\n      emitCount: 3\n    - subEmitter: {fileID: 2002}\n      type: 2\n      emitProbability: 1\n      emitCount: 4\n    - subEmitter: {fileID: 2003}\n      type: 3\n      emitProbability: 1\n      emitCount: 5\n  UVModule:\n    enabled: 1\n    tilesX: 4\n    tilesY: 2\n    animationType: 0\n    rowIndex: 0\n    cycles: 1\n    startFrame: 0\n    frameOverTime:\n      start: 0\n      end: 1\n";
 
 #[test]
-fn particle_sub_emitters_and_texture_sheet_round_trip_through_scene_yaml_and_step_in_runtime(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn particle_sub_emitters_and_texture_sheet_round_trip_through_scene_yaml_and_step_in_runtime()
+-> Result<(), Box<dyn std::error::Error>> {
     let stream = unity_yaml::parse(MODULE_SCENE)?;
     let doc = stream
         .documents
@@ -158,7 +156,7 @@ fn particle_sub_emitters_and_texture_sheet_round_trip_through_scene_yaml_and_ste
             collider_shape: unitas_physics::ColliderShape::Primitive(
                 unitas_physics::Shape::Sphere { radius: 1.0 },
             ),
-            layer: 0,
+            layer: 1,
             role: unitas_physics::BodyRole::Static,
             friction: 0.5,
             restitution: 0.0,

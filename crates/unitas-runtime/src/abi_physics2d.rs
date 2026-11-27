@@ -618,9 +618,11 @@ pub extern "C" fn unitas_runtime_capsule_cast2d(
     match with_runtime_state(handle, |state| {
         let hits = state.runtime.physics_mut().world_2d().capsule_cast(
             [origin_x, origin_y],
-            [size_x, size_y],
-            u8::from(capsule_direction != 0),
-            angle_deg.to_radians(),
+            unitas_physics::two_d::Capsule2D {
+                size: [size_x, size_y],
+                direction: u8::from(capsule_direction != 0),
+                angle: angle_deg.to_radians(),
+            },
             [direction_x, direction_y],
             distance,
             filter,
@@ -792,7 +794,6 @@ pub extern "C" fn unitas_runtime_box_cast2d(
     }
 }
 }
-
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_query_buffer_2d(handle: u64, capacity: u32) -> u64 {

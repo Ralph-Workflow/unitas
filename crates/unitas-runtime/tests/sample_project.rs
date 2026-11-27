@@ -138,6 +138,7 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
             "LandingDust",
             "ArenaProp",
             "CollectChime",
+            "BoostPad",
             // The uGUI hierarchy hangs off RectTransforms, not Transforms, so
             // the scene graph carries the canvas objects as roots of their
             // own while the canvas binding keeps their real hierarchy.

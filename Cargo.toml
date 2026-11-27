@@ -67,9 +67,6 @@ trivially_copy_pass_by_ref = "allow"
 unused_self = "allow"
 ref_option = "allow"
 
-[profile.dev.package.rapier2d]
-debug-assertions = false
-
 [profile.dev.package.rapier3d]
 debug-assertions = false
 

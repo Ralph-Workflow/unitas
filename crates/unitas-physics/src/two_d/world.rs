@@ -37,6 +37,14 @@ const SLEEP_LINEAR_THRESHOLD: f32 = 0.01;
 const SLEEP_ANGULAR_THRESHOLD: f32 = 0.01;
 const SLEEP_TIME_THRESHOLD: f32 = 0.5;
 
+/// A 2D capsule described by its size, axis and rotation, as used by shape casts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Capsule2D {
+    pub size: [f32; 2],
+    pub direction: u8,
+    pub angle: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactFilter2D {
     pub use_triggers: bool,
@@ -1115,17 +1123,16 @@ impl World2D {
     pub fn capsule_cast(
         &self,
         origin: [f32; 2],
-        size: [f32; 2],
-        capsule_direction: u8,
-        angle: f32,
+        capsule: Capsule2D,
         direction: [f32; 2],
         distance: f32,
         filter: ContactFilter2D,
     ) -> Vec<RaycastHit2D> {
+        let size = capsule.size;
         if !size[0].is_finite() || !size[1].is_finite() || size[0] <= 0.0 || size[1] <= 0.0 {
             return Vec::new();
         }
-        let (radius, height, shape_dir) = if capsule_direction == 0 {
+        let (radius, height, shape_dir) = if capsule.direction == 0 {
             (size[0] * 0.5, size[1], 1u8)
         } else {
             (size[1] * 0.5, size[0], 0u8)
@@ -1135,7 +1142,7 @@ impl World2D {
             height,
             direction: shape_dir,
         };
-        self.shape_cast_2d(&probe, origin, angle, direction, distance, filter)
+        self.shape_cast_2d(&probe, origin, capsule.angle, direction, distance, filter)
     }
 
     fn shape_cast_2d(
@@ -1159,7 +1166,9 @@ impl World2D {
         let Some(dir) = normalize2(direction) else {
             return Vec::new();
         };
-        let Some(probe_verts) = shape_convex_polygons(probe, center, angle).into_iter().next()
+        let Some(probe_verts) = shape_convex_polygons(probe, center, angle)
+            .into_iter()
+            .next()
         else {
             return Vec::new();
         };
@@ -1201,7 +1210,8 @@ impl World2D {
             if outline.len() < 2 {
                 continue;
             }
-            if let Some((travel, axis)) = box_cast_travel(probe_verts, dir, max_distance, &outline) {
+            if let Some((travel, axis)) = box_cast_travel(probe_verts, dir, max_distance, &outline)
+            {
                 if best.is_none_or(|(best_travel, _)| travel < best_travel) {
                     best = Some((travel, axis));
                 }

@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use unitas_asset::particle::{
-    PARTICLE_SYSTEM_CLASS, ParticleError, ParticleSystemBinding,
-};
+use unitas_asset::particle::{PARTICLE_SYSTEM_CLASS, ParticleError, ParticleSystemBinding};
 use unitas_asset::unity_yaml::{Document, Node};
 use unitas_core::EntityId;
 use unitas_physics::World;
@@ -191,7 +189,10 @@ fn serialize_bursts(out: &mut String, binding: &ParticleSystemBinding) {
 
 fn serialize_sub_module(out: &mut String, sub_emitters: &[SubEmitterConfig]) {
     out.push_str("  SubModule:\n");
-    out.push_str(&format!("    enabled: {}\n", u8::from(!sub_emitters.is_empty())));
+    out.push_str(&format!(
+        "    enabled: {}\n",
+        u8::from(!sub_emitters.is_empty())
+    ));
     if sub_emitters.is_empty() {
         out.push_str("    subEmitters: []\n");
         return;
@@ -209,7 +210,10 @@ fn serialize_sub_module(out: &mut String, sub_emitters: &[SubEmitterConfig]) {
             sub.sub_emitter.as_u64()
         ));
         out.push_str(&format!("      type: {code}\n"));
-        out.push_str(&format!("      emitProbability: {}\n", sub.emit_probability));
+        out.push_str(&format!(
+            "      emitProbability: {}\n",
+            sub.emit_probability
+        ));
         out.push_str(&format!("      emitCount: {}\n", sub.emit_count));
     }
 }
@@ -232,7 +236,10 @@ fn serialize_uv_module(out: &mut String, sheet: Option<TextureSheetAnimation>) {
     out.push_str(&format!("    cycles: {}\n", sheet.cycles));
     out.push_str(&format!("    startFrame: {}\n", sheet.start_frame));
     out.push_str("    frameOverTime:\n");
-    out.push_str(&format!("      start: {}\n", sheet.frame_over_time.start[0]));
+    out.push_str(&format!(
+        "      start: {}\n",
+        sheet.frame_over_time.start[0]
+    ));
     out.push_str(&format!("      end: {}\n", sheet.frame_over_time.end[0]));
 }
 
@@ -494,7 +501,10 @@ impl ParticleRuntimeWorld {
         self.rebuild_draw_list();
     }
 
-    fn dispatch_sub_emitter_events(&mut self, events: &[unitas_physics::particles::SubEmitterEvent]) {
+    fn dispatch_sub_emitter_events(
+        &mut self,
+        events: &[unitas_physics::particles::SubEmitterEvent],
+    ) {
         for event in events {
             let Some(child) = self.systems.get_mut(&event.sub_emitter) else {
                 continue;

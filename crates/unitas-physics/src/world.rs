@@ -246,6 +246,14 @@ pub struct ColliderDesc {
     pub layer: u32,
 }
 
+/// A capsule described by its segment endpoints and radius, as used by shape casts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Capsule {
+    pub point1: [f64; 3],
+    pub point2: [f64; 3],
+    pub radius: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicsDiagnostic {
     pub entity: EntityId,
@@ -1782,15 +1790,15 @@ impl World {
 
     pub fn capsule_cast(
         &self,
-        point1: [f64; 3],
-        point2: [f64; 3],
-        radius: f64,
+        capsule: Capsule,
         direction: [f64; 3],
         max_distance: f64,
         layer_mask: u32,
         include_triggers: bool,
     ) -> Vec<QueryHit> {
-        let Some((probe, center)) = capsule_segment_probe(point1, point2, radius) else {
+        let Some((probe, center)) =
+            capsule_segment_probe(capsule.point1, capsule.point2, capsule.radius)
+        else {
             return Vec::new();
         };
         if max_distance <= 0.0 || max_distance.is_nan() {

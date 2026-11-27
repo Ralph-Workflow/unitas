@@ -2,9 +2,9 @@ use crate::world::World;
 use unitas_core::EntityId;
 
 use super::{
-    EmitParams, Particle, ParticleCollisionEvent, ParticleRuntime, ParticleSystem,
+    sample_shape, EmitParams, Particle, ParticleCollisionEvent, ParticleRuntime, ParticleSystem,
     ParticleSystemState, ParticleTriggerEvent, ParticleUv, SplitMix64, StopAction,
-    SubEmitterTrigger, sample_shape,
+    SubEmitterTrigger,
 };
 
 impl ParticleSystem {

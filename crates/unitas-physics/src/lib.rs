@@ -28,7 +28,7 @@ pub use joint::{
 };
 pub use query::QueryHit;
 pub use world::{
-    combine_materials, BodyInterpolation, BounceCombine, ColliderDesc, CollisionContact,
+    combine_materials, BodyInterpolation, BounceCombine, Capsule, ColliderDesc, CollisionContact,
     CollisionPayload, ForceMode, FrictionCombine, PhysicsMaterial3D, SolverSettings, SolverType,
     World,
 };

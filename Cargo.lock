@@ -1746,33 +1746,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry2d"
-version = "0.31.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1ba500175e957aaa27ddc92290ec8ff503d73331365443660816d6302e2a31"
-dependencies = [
- "approx",
- "arrayvec",
- "bitflags 2.13.2",
- "downcast-rs 2.0.2",
- "either",
- "ena",
- "foldhash",
- "glamx",
- "hashbrown 0.17.2",
- "indexmap",
- "log",
- "num-derive 0.5.1",
- "num-traits",
- "ordered-float",
- "simba",
- "slab",
- "smallvec",
- "spade",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "parry3d"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1958,28 +1931,6 @@ name = "rangemap"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2d43a8c8c74056248124068fde0df374d1ddf9039e747d190f01c36faeaab08"
-
-[[package]]
-name = "rapier2d"
-version = "0.36.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b73d84c8e78f4fbd46fb5c800bbdb15cad6ef2bd517de6a4d31fe60edd838f8d"
-dependencies = [
- "approx",
- "arrayvec",
- "bitflags 2.13.2",
- "glamx",
- "log",
- "nalgebra",
- "num-traits",
- "parry2d",
- "profiling",
- "serde",
- "simba",
- "static_assertions",
- "thiserror 2.0.21",
- "wide",
-]
 
 [[package]]
 name = "rapier3d"
@@ -2754,7 +2705,6 @@ dependencies = [
 name = "unitas-physics"
 version = "0.1.0"
 dependencies = [
- "rapier2d",
  "rapier3d",
  "unitas-core",
 ]

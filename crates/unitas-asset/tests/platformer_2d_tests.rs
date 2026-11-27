@@ -4,13 +4,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use unitas_asset::project::{
-    BASELINE_UNITY_VERSION, MigrationStatus, Project, build_compatibility_report,
+    build_compatibility_report, MigrationStatus, Project, BASELINE_UNITY_VERSION,
 };
 use unitas_asset::project_settings::load_project_settings;
 use unitas_asset::scene;
 use unitas_asset::scene_save::emit_stream;
 use unitas_asset::texture::import::{
-    FilterMode, SpriteMode, TextureImportSettings, TextureImporterType, WrapMode, import_texture,
+    import_texture, FilterMode, SpriteMode, TextureImportSettings, TextureImporterType, WrapMode,
 };
 use unitas_asset::trust::TrustStore;
 use unitas_asset::unity_yaml;
@@ -33,8 +33,8 @@ fn temp_trust_store(name: &str) -> std::io::Result<TrustStore> {
 }
 
 #[test]
-fn platformer_2d_project_opens_current_with_supported_compatibility_and_2d_settings()
--> Result<(), Box<dyn Error>> {
+fn platformer_2d_project_opens_current_with_supported_compatibility_and_2d_settings(
+) -> Result<(), Box<dyn Error>> {
     let root = platformer_2d_root();
     let trust = temp_trust_store("open")?;
     let (_, report) = Project::open(&root, &trust)?;
@@ -118,7 +118,14 @@ fn platformer_2d_project_opens_current_with_supported_compatibility_and_2d_setti
         .tag_manager
         .as_ref()
         .ok_or("TagManager.asset must be loaded")?;
-    for tag in ["MainCamera", "Player", "Ember", "Checkpoint", "Hazard", "GoalBell"] {
+    for tag in [
+        "MainCamera",
+        "Player",
+        "Ember",
+        "Checkpoint",
+        "Hazard",
+        "GoalBell",
+    ] {
         assert!(
             tags_and_layers.tags.iter().any(|entry| entry == tag),
             "TagManager must include tag {tag}"
@@ -152,8 +159,8 @@ fn platformer_2d_project_opens_current_with_supported_compatibility_and_2d_setti
 }
 
 #[test]
-fn platformer_2d_main_scene_assembles_and_round_trips_byte_identically()
--> Result<(), Box<dyn Error>> {
+fn platformer_2d_main_scene_assembles_and_round_trips_byte_identically(
+) -> Result<(), Box<dyn Error>> {
     let root = platformer_2d_root();
     let scene_path = root.join("Assets/Scenes/Rootway.unity");
     let raw = fs::read_to_string(&scene_path)?;
@@ -173,7 +180,12 @@ fn platformer_2d_main_scene_assembles_and_round_trips_byte_identically()
         .graph
         .roots()
         .iter()
-        .filter_map(|id| assembled.graph.entity(*id).map(|entity| entity.name.clone()))
+        .filter_map(|id| {
+            assembled
+                .graph
+                .entity(*id)
+                .map(|entity| entity.name.clone())
+        })
         .collect();
     for expected in [
         "Main Camera",
@@ -234,7 +246,12 @@ fn platformer_2d_main_scene_assembles_and_round_trips_byte_identically()
 #[test]
 fn platformer_2d_sprites_import_with_point_filter_and_no_mipmaps() -> Result<(), Box<dyn Error>> {
     let sprites_dir = platformer_2d_root().join("Assets/Sprites");
-    for sprite_name in ["Wick.png", "GroundTiles.png", "Ember.png", "OneWayPlatform.png"] {
+    for sprite_name in [
+        "Wick.png",
+        "GroundTiles.png",
+        "Ember.png",
+        "OneWayPlatform.png",
+    ] {
         let png_path = sprites_dir.join(sprite_name);
         let meta_path = sprites_dir.join(format!("{sprite_name}.meta"));
         let png_bytes = fs::read(&png_path)?;

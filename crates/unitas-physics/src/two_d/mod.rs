@@ -21,4 +21,4 @@ pub use effector::{
     SurfaceEffector2D,
 };
 pub use event::{ContactPoint2D, MessageKind2D, RoutedMessage2D};
-pub use world::{ContactFilter2D, RaycastHit2D, World2D};
+pub use world::{Capsule2D, ContactFilter2D, RaycastHit2D, World2D};

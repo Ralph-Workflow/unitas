@@ -18,7 +18,7 @@ pub use particles_modules::{
     TextureSheetAnimationType,
 };
 
-use particles_core::{ParticleRuntime, SplitMix64, sample_shape};
+use particles_core::{sample_shape, ParticleRuntime, SplitMix64};
 
 const DEFAULT_DURATION: f32 = 5.0;
 const IDENTITY_ROTATION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
