@@ -15,7 +15,7 @@ from itertools import product
 from typing import TYPE_CHECKING
 from unittest import mock
 
-from tools import verify, verify_perf, verify_samples
+from tools import verify, verify_benchmark, verify_device, verify_perf, verify_samples
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1570,6 +1570,86 @@ def test_samples_lane_lists_s8_visual_scenarios() -> None:
         assert entries[scenario] == ((), False)
         assert (verify_samples.SCENARIO_DIR / scenario).is_file()
     assert not set(s8) & set(verify_samples.EDITOR_SCENARIOS)
+
+
+_BAD_CLI_EXIT_CODE = 2
+
+
+def test_verify_device_entry_point_passes_and_fails(tmp_path: Path) -> None:
+    ref = verify_device.DEFAULT_REFERENCE_BMP
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_device.main(["verify_device.py", "--compare", str(ref), str(ref)]) == 0
+    assert "OK verify-device (compare)" in stdout.getvalue()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert (
+            verify_device.main(
+                ["verify_device.py", "--compare", str(tmp_path / "missing.bmp"), str(ref)]
+            )
+            == 1
+        )
+    assert "FAIL verify-device (compare)" in stderr.getvalue()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert verify_device.main(["verify_device.py", "--bad"]) == _BAD_CLI_EXIT_CODE
+
+
+def test_verify_perf_entry_point_passes_and_fails(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_perf.main(["verify_perf.py", "--metadata"]) == 0
+    assert "lane: make verify-perf" in stdout.getvalue()
+    stderr = io.StringIO()
+    with (
+        mock.patch.object(verify_perf, "DEVICE_PLAYER_BINARY", tmp_path / "missing-player"),
+        contextlib.redirect_stderr(stderr),
+    ):
+        assert verify_perf.main(["verify_perf.py", "--measure-player-startup"]) == 1
+    assert "staged device player is missing" in stderr.getvalue()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert verify_perf.main(["verify_perf.py", "--bad"]) == _BAD_CLI_EXIT_CODE
+
+
+def test_verify_samples_entry_point_passes_and_fails(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_samples.main(["--metadata"]) == 0
+    assert "lane: make verify-samples" in stdout.getvalue()
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_samples.main(["--bad"]) == _BAD_CLI_EXIT_CODE
+    assert "usage: verify_samples.py" in stdout.getvalue()
+    missing_report = tmp_path / "missing_report.json"
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_samples.check_report(missing_report) == 1
+    passed_report = tmp_path / "passed_report.json"
+    passed_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_samples.check_report(passed_report) == 0
+
+
+def test_verify_benchmark_entry_point_passes_and_fails(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_benchmark.main(["--metadata"]) == 0
+    assert "lane: make verify-benchmark" in stdout.getvalue()
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_benchmark.main(["--bad"]) == _BAD_CLI_EXIT_CODE
+    assert "usage: python3 -m tools.verify_benchmark" in stdout.getvalue()
+    stdout = io.StringIO()
+    with (
+        mock.patch.object(verify_benchmark, "REPORT_DIR", tmp_path),
+        mock.patch.object(verify_benchmark, "LANE_REPORT", tmp_path / "report.json"),
+        mock.patch.object(verify_benchmark, "RUNTIME_LIBRARY", tmp_path / "missing.dylib"),
+        contextlib.redirect_stdout(stdout),
+    ):
+        assert verify_benchmark.main([]) == 1
+    assert "verify-benchmark failed: inputs-present" in stdout.getvalue()
 
 
 _TIMED_GATE_CHILD_SOURCE = """import pathlib

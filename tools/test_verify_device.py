@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import math
 import struct
 import wave
@@ -18,6 +20,7 @@ DEVICE_LINE = (
     'canvas=true canvas_texts="Score 0 | Combo x1 | Time 0.0" shadow=true'
 )
 GAME_SCORE = 2
+BAD_CLI_EXIT_CODE = 2
 CONTROL_FRAMES = 30
 CHIME_SAMPLE_RATE = 48_000
 CHIME_LEAD_IN_SECONDS = 0.5
@@ -173,3 +176,30 @@ def test_the_control_state_requires_the_coreclr_script_host() -> None:
 def test_the_control_state_requires_its_fields() -> None:
     payload = {"ok": True, "state": "playing"}
     assert_control_check_error(lambda: verify_device.control_state(payload), "frames")
+
+
+def test_verify_device_main_passes_metadata_and_compare_and_fails_on_mismatch(
+    tmp_path: Path,
+) -> None:
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_device.main(["verify_device.py", "--metadata"]) == 0
+    assert "lane: make verify-device" in stdout.getvalue()
+    ref = verify_device.DEFAULT_REFERENCE_BMP
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        assert verify_device.main(["verify_device.py", "--compare", str(ref), str(ref)]) == 0
+    assert "OK verify-device (compare)" in stdout.getvalue()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert (
+            verify_device.main(
+                ["verify_device.py", "--compare", str(tmp_path / "missing.bmp"), str(ref)]
+            )
+            == 1
+        )
+    assert "FAIL verify-device (compare)" in stderr.getvalue()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert verify_device.main(["verify_device.py", "--unknown-flag"]) == BAD_CLI_EXIT_CODE
+    assert "usage: verify_device.py" in stderr.getvalue()
