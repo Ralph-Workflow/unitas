@@ -33,6 +33,16 @@ namespace UnityEngine
         bool TryGetButtonDown(string buttonName, out bool value);
 
         bool TryGetButtonUp(string buttonName, out bool value);
+
+        bool IsGamepadConnected();
+
+        bool GetGamepadButton(uint button);
+
+        bool GetGamepadButtonDown(uint button);
+
+        bool GetGamepadButtonUp(uint button);
+
+        float GetGamepadAxis(uint axis);
     }
 
     public static class Input

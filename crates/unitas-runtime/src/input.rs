@@ -502,6 +502,21 @@ impl InputState {
         self.clear_gamepad_state();
     }
 
+    pub fn set_gamepad_connected(&mut self, connected: bool) {
+        if connected {
+            if self.gamepad_id.is_none() {
+                self.connect_gamepad(1);
+            }
+        } else if self.gamepad_id.is_some() {
+            self.gamepad_id = None;
+            self.clear_gamepad_state();
+        }
+    }
+
+    pub fn is_gamepad_connected(&self) -> bool {
+        self.gamepad_id.is_some()
+    }
+
     pub fn set_gamepad_axis(&mut self, axis: u32, value: f64) {
         let Some(slot) = self.gamepad_axes.get_mut(axis as usize) else {
             return;
@@ -797,6 +812,20 @@ impl InputState {
             mask |= STATE_PRESSED;
         }
         if self.mouse_released.contains(&button) {
+            mask |= STATE_RELEASED;
+        }
+        mask
+    }
+
+    pub fn gamepad_button_state(&self, button: u32) -> u32 {
+        let mut mask = 0;
+        if self.gamepad_buttons_down.contains(&button) {
+            mask |= STATE_DOWN;
+        }
+        if self.gamepad_buttons_pressed.contains(&button) {
+            mask |= STATE_PRESSED;
+        }
+        if self.gamepad_buttons_released.contains(&button) {
             mask |= STATE_RELEASED;
         }
         mask

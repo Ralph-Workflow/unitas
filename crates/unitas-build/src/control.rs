@@ -6,7 +6,10 @@ use unitas_runtime::{
     set_runtime_quality_level, unitas_runtime_display_set_quality_level, Runtime,
 };
 
-use crate::player::ScriptHost;
+use crate::bundle::{
+    BundleManifest, BUNDLE_MANIFEST_FILENAME, MANAGED_DIR_NAME, PLAYER_HOST_ASSEMBLY_FILENAME,
+};
+use crate::player::{PlayerStartupError, ScriptHost};
 use crate::scripted::ScriptedPlayer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,13 +135,7 @@ impl ControlSession {
         random_seed: u64,
     ) -> Result<Self, ProtocolError> {
         std::env::set_var("UNITAS_MANAGED_LOG_TO_STDERR", "1");
-        let player = ScriptedPlayer::boot(bundle_dir, startup_scene_path)
-            .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-        let fallback_runtime = if player.is_none() {
-            Some(load_fallback_runtime(startup_scene_path)?)
-        } else {
-            None
-        };
+        let (player, fallback_runtime) = boot_session_hosts(bundle_dir, startup_scene_path)?;
         Ok(Self {
             bundle_dir: bundle_dir.to_path_buf(),
             startup_scene_path: startup_scene_path.to_path_buf(),
@@ -217,13 +214,10 @@ impl ControlSession {
     }
 
     fn restart(&mut self) -> Result<(), ProtocolError> {
-        self.player = ScriptedPlayer::boot(&self.bundle_dir, &self.startup_scene_path)
-            .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
-        self.fallback_runtime = if self.player.is_none() {
-            Some(load_fallback_runtime(&self.startup_scene_path)?)
-        } else {
-            None
-        };
+        let (player, fallback_runtime) =
+            boot_session_hosts(&self.bundle_dir, &self.startup_scene_path)?;
+        self.player = player;
+        self.fallback_runtime = fallback_runtime;
         self.frames = 0;
         Ok(())
     }
@@ -316,6 +310,60 @@ impl ControlSession {
             "random_seed": self.random_seed,
             "script_host": script_host,
         })
+    }
+}
+
+fn boot_session_hosts(
+    bundle_dir: &Path,
+    startup_scene_path: &Path,
+) -> Result<(Option<ScriptedPlayer>, Option<Runtime>), ProtocolError> {
+    let manifest_path = bundle_dir.join(BUNDLE_MANIFEST_FILENAME);
+    let required_host = if manifest_path.is_file() {
+        Some(
+            BundleManifest::load_from_file(&manifest_path)
+                .map_err(|source| {
+                    ProtocolError::SessionStartFailed(
+                        PlayerStartupError::ManifestLoad {
+                            bundle_dir: bundle_dir.to_path_buf(),
+                            source,
+                        }
+                        .to_string(),
+                    )
+                })?
+                .script_host,
+        )
+    } else {
+        None
+    };
+
+    match required_host {
+        Some(ScriptHost::CoreClr) => {
+            let player = ScriptedPlayer::boot(bundle_dir, startup_scene_path)
+                .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?
+                .ok_or_else(|| {
+                    ProtocolError::SessionStartFailed(
+                        PlayerStartupError::ScriptPayloadMissing {
+                            bundle_dir: bundle_dir.to_path_buf(),
+                            expected_path: bundle_dir
+                                .join(MANAGED_DIR_NAME)
+                                .join(PLAYER_HOST_ASSEMBLY_FILENAME),
+                        }
+                        .to_string(),
+                    )
+                })?;
+            Ok((Some(player), None))
+        }
+        Some(ScriptHost::None) => Ok((None, Some(load_fallback_runtime(startup_scene_path)?))),
+        None => {
+            let player = ScriptedPlayer::boot(bundle_dir, startup_scene_path)
+                .map_err(|error| ProtocolError::SessionStartFailed(error.to_string()))?;
+            let fallback_runtime = if player.is_none() {
+                Some(load_fallback_runtime(startup_scene_path)?)
+            } else {
+                None
+            };
+            Ok((player, fallback_runtime))
+        }
     }
 }
 
@@ -892,6 +940,65 @@ mod tests {
         let payload: Value = serde_json::from_str(&response)?;
         assert_eq!(payload["ok"], json!(false));
         assert_eq!(payload["error"], json!("unknown command"));
+        Ok(())
+    }
+
+    #[test]
+    fn control_session_refuses_to_start_when_coreclr_bundle_lost_its_managed_payload(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::bundle::stage_bundle_for_host;
+        use crate::config::BuildConfiguration;
+        use crate::targets::BuildTarget;
+        use std::fs;
+
+        let workspace = std::env::temp_dir().join(format!(
+            "unitas_control_missing_managed_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+
+        let project_root = workspace.join("Project");
+        let scenes_dir = project_root.join("Assets").join("Scenes");
+        let scripts_dir = project_root.join("Assets").join("Scripts");
+        fs::create_dir_all(&scenes_dir)?;
+        fs::create_dir_all(&scripts_dir)?;
+        let scene_path = scenes_dir.join("Main.unity");
+        fs::copy(fixture_scene(), &scene_path)?;
+        fs::write(scripts_dir.join("Game.cs"), "public class Game { }\n")?;
+
+        let bundle_dir = workspace.join("bundle");
+        let config = BuildConfiguration::for_host(vec![scene_path], "ControlMissingPayload");
+        let staged = stage_bundle_for_host(&config, &bundle_dir, BuildTarget::current_host())?;
+        assert_eq!(staged.manifest.script_host, ScriptHost::CoreClr);
+
+        let managed_dir = bundle_dir.join(MANAGED_DIR_NAME);
+        if managed_dir.exists() {
+            fs::remove_dir_all(&managed_dir)?;
+        }
+
+        let startup_scene = bundle_dir.join(&staged.manifest.startup_scene_staged_path);
+        let expected_host_dll = managed_dir.join(PLAYER_HOST_ASSEMBLY_FILENAME);
+        let expected_error = PlayerStartupError::ScriptPayloadMissing {
+            bundle_dir: bundle_dir.clone(),
+            expected_path: expected_host_dll.clone(),
+        };
+        let outcome = match ControlSession::start(&bundle_dir, &startup_scene, 1.0 / 60.0, 53) {
+            Ok(_) => return Err("expected ControlSession::start to fail".into()),
+            Err(error) => error,
+        };
+        assert_eq!(
+            outcome,
+            ProtocolError::SessionStartFailed(expected_error.to_string())
+        );
+        assert!(outcome
+            .outcome()
+            .contains(&bundle_dir.display().to_string()));
+        assert!(outcome
+            .outcome()
+            .contains(&expected_host_dll.display().to_string()));
+
+        fs::remove_dir_all(&workspace)?;
         Ok(())
     }
 }

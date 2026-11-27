@@ -46,6 +46,9 @@ fn staged_bundle() -> Option<PathBuf> {
         );
         return None;
     }
+    if BundleManifest::load_from_dir(&bundle).is_err() {
+        let _ = unitas_build::sample::stage_roll_a_ball_bundle(&bundle);
+    }
     Some(bundle)
 }
 

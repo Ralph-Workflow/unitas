@@ -83,6 +83,7 @@ namespace Unitas.Bridge
         private readonly List<ulong> _fixedUpdatePhaseHandles = new List<ulong>();
         private readonly List<ulong> _updatePhaseHandles = new List<ulong>();
         private readonly List<ulong> _lateUpdatePhaseHandles = new List<ulong>();
+        private bool _inputSystemUpdatedThisTick;
         private bool _isDisposed;
         private bool _isQuitting;
         private bool _isFocused = true;
@@ -359,6 +360,7 @@ namespace Unitas.Bridge
             _fixedUpdatePhaseHandles.Clear();
             _updatePhaseHandles.Clear();
             _lateUpdatePhaseHandles.Clear();
+            _inputSystemUpdatedThisTick = false;
             SyncRuntimeObjectsBeforeTick();
             SyncAudioBeforeTick();
             Time.Advance(deltaSeconds);
@@ -374,6 +376,8 @@ namespace Unitas.Bridge
                 }
                 throw new InvalidOperationException("Failed to advance runtime tick (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
+
+            EnsureInputSystemUpdatedForTick();
 
             if (_fixedUpdatePhaseHandles.Count > 0)
             {
@@ -967,6 +971,7 @@ namespace Unitas.Bridge
 
         private void OnFixedUpdate(ulong scriptHandle, double fixedDeltaSeconds)
         {
+            EnsureInputSystemUpdatedForTick();
             SyncSimulatedTransforms();
             _fixedUpdatePhaseHandles.Add(scriptHandle);
             if (_scripts.Count > 0 && _fixedUpdatePhaseHandles.Count >= _scripts.Count)
@@ -979,6 +984,7 @@ namespace Unitas.Bridge
 
         private void OnUpdate(ulong scriptHandle, double deltaSeconds)
         {
+            EnsureInputSystemUpdatedForTick();
             SyncSimulatedTransforms();
             _updatePhaseHandles.Add(scriptHandle);
             if (_scripts.Count > 0 && _updatePhaseHandles.Count >= _scripts.Count)
@@ -990,6 +996,7 @@ namespace Unitas.Bridge
 
         private void OnLateUpdate(ulong scriptHandle, double deltaSeconds)
         {
+            EnsureInputSystemUpdatedForTick();
             SyncSimulatedTransforms();
             _lateUpdatePhaseHandles.Add(scriptHandle);
             if (_scripts.Count > 0 && _lateUpdatePhaseHandles.Count >= _scripts.Count)
@@ -998,6 +1005,16 @@ namespace Unitas.Bridge
                 _lateUpdatePhaseHandles.Clear();
                 PumpFrameSafely();
             }
+        }
+
+        private void EnsureInputSystemUpdatedForTick()
+        {
+            if (_inputSystemUpdatedThisTick)
+            {
+                return;
+            }
+            _inputSystemUpdatedThisTick = true;
+            UnityEngine.InputSystem.InputSystem.Update();
         }
 
         private void DispatchPhaseInExecutionOrder(List<ulong> phaseHandles, Action<MonoBehaviour> callback)

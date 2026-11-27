@@ -8,10 +8,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use unitas_build::bundle::{
-    BundleManifest, BundleManifestEntry, MANAGED_DIR_NAME, MANAGED_GAME_ASSEMBLY_FILENAME,
-    PLAYER_HOST_ASSEMBLY_FILENAME,
+    BundleManifest, BundleManifestEntry, BUNDLE_MANIFEST_FORMAT_VERSION, MANAGED_DIR_NAME,
+    MANAGED_GAME_ASSEMBLY_FILENAME, PLAYER_HOST_ASSEMBLY_FILENAME,
 };
 use unitas_build::config::{BuildConfiguration, BuildMode};
+use unitas_build::player::ScriptHost;
 use unitas_build::report::{BuildReport, SizeCategoryEntry, SizeContributor};
 use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
 use unitas_build::targets::BuildTarget;
@@ -79,7 +80,8 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     let staged = stage_roll_a_ball_bundle_for_host(&output_dir, None)?;
     let manifest = &staged.manifest;
 
-    // The build identifier is content-derived and travels with the manifest.
+    assert_eq!(manifest.format_version, BUNDLE_MANIFEST_FORMAT_VERSION);
+    assert_eq!(manifest.script_host, ScriptHost::CoreClr);
     assert_eq!(manifest.build_identifier.len(), 16);
     assert!(manifest
         .build_identifier
@@ -91,6 +93,7 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     );
     let reparsed = BundleManifest::from_canonical_str(&fs::read_to_string(&staged.manifest_path)?)?;
     assert_eq!(reparsed.build_identifier, manifest.build_identifier);
+    assert_eq!(reparsed.script_host, ScriptHost::CoreClr);
 
     // The game assembly is compiled from the sample's scripts at build time;
     // without the bridge tooling the stage degrades to a clear diagnostic.

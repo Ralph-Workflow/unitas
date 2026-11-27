@@ -27,7 +27,7 @@ use unitas_runtime::KEY_RIGHT_ARROW;
 use crate::bundle::{
     content_hash_hex, stage_bundle_for_host, BundleError, BundleManifest, ContentBuildResult,
     StagedBundle, BUNDLE_MANIFEST_FILENAME, CONTENT_CATALOG_FILENAME,
-    DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
+    DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME, MANAGED_DIR_NAME, PLAYER_HOST_ASSEMBLY_FILENAME,
 };
 use crate::config::BuildConfiguration;
 use crate::package::{
@@ -112,6 +112,10 @@ pub enum PlayerStartupError {
     RuntimeLibraryUnavailable {
         path: PathBuf,
     },
+    ScriptPayloadMissing {
+        bundle_dir: PathBuf,
+        expected_path: PathBuf,
+    },
     ScriptHostBootFailed {
         message: String,
     },
@@ -186,6 +190,17 @@ impl fmt::Display for PlayerStartupError {
                     path.display()
                 )
             }
+            PlayerStartupError::ScriptPayloadMissing {
+                bundle_dir,
+                expected_path,
+            } => {
+                write!(
+                    formatter,
+                    "bundle '{}' declares script_host=coreclr, but the managed payload does not exist at '{}'",
+                    bundle_dir.display(),
+                    expected_path.display()
+                )
+            }
             PlayerStartupError::ScriptHostBootFailed { message } => {
                 write!(formatter, "the script host failed to boot: {message}")
             }
@@ -236,6 +251,14 @@ impl ScriptHost {
         match self {
             Self::CoreClr => "coreclr",
             Self::None => "none",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "coreclr" => Some(Self::CoreClr),
+            "none" => Some(Self::None),
+            _ => None,
         }
     }
 }
@@ -350,30 +373,45 @@ pub fn launch_bundle(
     let (manifest, startup_scene_path) = load_and_validate_bundle_manifest(bundle_dir)?;
     let development_diagnostics_enabled = manifest.development_diagnostics;
 
-    if let Some(scripted) =
-        crate::scripted::launch_scripted(bundle_dir, &startup_scene_path, frames, delta_seconds)?
-    {
-        return Ok(PlayerLaunchResult {
-            manifest,
-            startup_scene_path,
-            loaded_scene_count: scripted.loaded_scene_count,
-            root_object_count: scripted.root_object_count,
-            frames_stepped: scripted.frames_stepped,
-            development_diagnostics_enabled,
-            script_host: ScriptHost::CoreClr,
-        });
+    match manifest.script_host {
+        ScriptHost::CoreClr => {
+            let Some(scripted) = crate::scripted::launch_scripted(
+                bundle_dir,
+                &startup_scene_path,
+                frames,
+                delta_seconds,
+            )?
+            else {
+                return Err(PlayerStartupError::ScriptPayloadMissing {
+                    bundle_dir: bundle_dir.to_path_buf(),
+                    expected_path: bundle_dir
+                        .join(MANAGED_DIR_NAME)
+                        .join(PLAYER_HOST_ASSEMBLY_FILENAME),
+                });
+            };
+            Ok(PlayerLaunchResult {
+                manifest,
+                startup_scene_path,
+                loaded_scene_count: scripted.loaded_scene_count,
+                root_object_count: scripted.root_object_count,
+                frames_stepped: scripted.frames_stepped,
+                development_diagnostics_enabled,
+                script_host: ScriptHost::CoreClr,
+            })
+        }
+        ScriptHost::None => {
+            let native = launch_native_scene(&startup_scene_path, frames, delta_seconds)?;
+            Ok(PlayerLaunchResult {
+                manifest,
+                startup_scene_path,
+                loaded_scene_count: native.loaded_scene_count,
+                root_object_count: native.root_object_count,
+                frames_stepped: native.frames_stepped,
+                development_diagnostics_enabled,
+                script_host: ScriptHost::None,
+            })
+        }
     }
-
-    let native = launch_native_scene(&startup_scene_path, frames, delta_seconds)?;
-    Ok(PlayerLaunchResult {
-        manifest,
-        startup_scene_path,
-        loaded_scene_count: native.loaded_scene_count,
-        root_object_count: native.root_object_count,
-        frames_stepped: native.frames_stepped,
-        development_diagnostics_enabled,
-        script_host: ScriptHost::None,
-    })
 }
 
 struct NativeSceneLaunch {
@@ -530,8 +568,22 @@ pub fn launch_bundle_windowed(
 ) -> Result<WindowedPlayerResult, PlayerStartupError> {
     let (manifest, startup_scene_path) = load_and_validate_bundle_manifest(bundle_dir)?;
 
-    let scripted = crate::scripted::ScriptedPlayer::boot(bundle_dir, &startup_scene_path)?
-        .map(|player| Arc::new(Mutex::new(player)));
+    let scripted = match manifest.script_host {
+        ScriptHost::CoreClr => {
+            let Some(player) =
+                crate::scripted::ScriptedPlayer::boot(bundle_dir, &startup_scene_path)?
+            else {
+                return Err(PlayerStartupError::ScriptPayloadMissing {
+                    bundle_dir: bundle_dir.to_path_buf(),
+                    expected_path: bundle_dir
+                        .join(MANAGED_DIR_NAME)
+                        .join(PLAYER_HOST_ASSEMBLY_FILENAME),
+                });
+            };
+            Some(Arc::new(Mutex::new(player)))
+        }
+        ScriptHost::None => None,
+    };
 
     let mut runtime =
         unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
@@ -1422,13 +1474,67 @@ mod tests {
             .join("fixtures")
             .join("scene_alpha.unity");
         let config = BuildConfiguration::for_host(vec![scene_path], "NativeLoopGame");
-        stage_bundle_for_host(&config, &workspace, BuildTarget::current_host())?;
+        let staged = stage_bundle_for_host(&config, &workspace, BuildTarget::current_host())?;
+        assert_eq!(staged.manifest.script_host, ScriptHost::None);
 
         let result = launch_bundle(&workspace, 4, 1.0 / 60.0)?;
         assert_eq!(result.frames_stepped, 4);
         assert_eq!(result.script_host, ScriptHost::None);
         assert_eq!(result.loaded_scene_count, 1);
         assert!(result.root_object_count >= 1);
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn headless_launch_of_a_coreclr_bundle_without_managed_payload_fails_with_script_payload_missing(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = std::env::temp_dir().join(format!(
+            "unitas_player_missing_managed_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+
+        let project_root = workspace.join("Project");
+        let scenes_dir = project_root.join("Assets").join("Scenes");
+        let scripts_dir = project_root.join("Assets").join("Scripts");
+        fs::create_dir_all(&scenes_dir)?;
+        fs::create_dir_all(&scripts_dir)?;
+        let fixture_scene = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("scene_alpha.unity");
+        let scene_path = scenes_dir.join("Main.unity");
+        fs::copy(fixture_scene, &scene_path)?;
+        fs::write(scripts_dir.join("Game.cs"), "public class Game { }\n")?;
+
+        let bundle_dir = workspace.join("bundle");
+        let config = BuildConfiguration::for_host(vec![scene_path], "ScriptedMissingGame");
+        let staged = stage_bundle_for_host(&config, &bundle_dir, BuildTarget::current_host())?;
+        assert_eq!(staged.manifest.script_host, ScriptHost::CoreClr);
+
+        let managed_dir = bundle_dir.join(MANAGED_DIR_NAME);
+        if managed_dir.exists() {
+            fs::remove_dir_all(&managed_dir)?;
+        }
+
+        let expected_host_dll = managed_dir.join(PLAYER_HOST_ASSEMBLY_FILENAME);
+        let result = launch_bundle(&bundle_dir, 4, 1.0 / 60.0);
+        assert_eq!(
+            result,
+            Err(PlayerStartupError::ScriptPayloadMissing {
+                bundle_dir: bundle_dir.clone(),
+                expected_path: expected_host_dll.clone(),
+            })
+        );
+        if let Err(error) = result {
+            let message = error.to_string();
+            assert!(message.contains(&bundle_dir.display().to_string()));
+            assert!(message.contains(&expected_host_dll.display().to_string()));
+            assert!(message.contains(PLAYER_HOST_ASSEMBLY_FILENAME));
+        }
 
         fs::remove_dir_all(&workspace)?;
         Ok(())

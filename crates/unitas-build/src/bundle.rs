@@ -7,12 +7,13 @@ use std::process::Command;
 use crate::config::{BuildConfiguration, BuildMode, BuildValidationError};
 use crate::licensing;
 use crate::package::{self, PackagedApp};
+use crate::player::ScriptHost;
 use crate::targets::{BuildTarget, TargetOs};
 
 pub const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME: &str = "development_diagnostics.marker";
 pub const DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE: &str = "UNITAS_DEV_DIAGNOSTICS_ENABLED";
-pub const BUNDLE_MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const BUNDLE_MANIFEST_FORMAT_VERSION: u32 = 2;
 pub const MANAGED_DIR_NAME: &str = "Managed";
 pub const PROJECT_SETTINGS_DIR_NAME: &str = "ProjectSettings";
 pub const MANAGED_GAME_ASSEMBLY_FILENAME: &str = "Assembly-CSharp.dll";
@@ -217,6 +218,7 @@ pub struct BundleManifest {
     pub build_identifier: String,
     pub target: BuildTarget,
     pub mode: BuildMode,
+    pub script_host: ScriptHost,
     pub development_diagnostics: bool,
     pub diagnostics_marker: Option<String>,
     pub startup_scene_staged_path: String,
@@ -230,18 +232,13 @@ impl BundleManifest {
         content_hash_hex(self.canonical_body_without_hash().as_bytes())
     }
 
-    /// The identifier stamped on every build: the first 16 hex digits of the
-    /// content hash of the manifest body (scenes, managed payload, metadata),
-    /// so identical inputs always produce the same identifier.
     pub fn compute_build_identifier(&self) -> String {
         let hash = content_hash_hex(self.canonical_body_core().as_bytes());
         hash.chars().take(16).collect()
     }
 
-    /// The canonical manifest body without the build identifier and hash
-    /// lines; the base from which the build identifier is derived.
     fn canonical_body_core(&self) -> String {
-        let mut lines = Vec::with_capacity(13 + self.entries.len() * 6);
+        let mut lines = Vec::with_capacity(14 + self.entries.len() * 6);
         lines.push(format!("format_version={}", self.format_version));
         lines.push(format!("company_name={}", self.company_name));
         lines.push(format!("product_name={}", self.product_name));
@@ -253,6 +250,7 @@ impl BundleManifest {
         lines.push(format!("target_os={}", self.target.os_name()));
         lines.push(format!("target_arch={}", self.target.arch_id()));
         lines.push(format!("mode={}", self.mode.as_str()));
+        lines.push(format!("script_host={}", self.script_host.as_str()));
         lines.push(format!(
             "development_diagnostics={}",
             self.development_diagnostics
@@ -352,6 +350,12 @@ impl BundleManifest {
             }
         };
 
+        let script_host_raw = required_field(&map, "script_host")?;
+        let script_host =
+            ScriptHost::from_name(&script_host_raw).ok_or_else(|| BundleError::ManifestParse {
+                message: format!("unrecognized script_host '{script_host_raw}'"),
+            })?;
+
         let development_diagnostics = parse_bool_field(&map, "development_diagnostics")?;
         let diagnostics_marker_raw = required_field(&map, "diagnostics_marker")?;
         let diagnostics_marker = if diagnostics_marker_raw.is_empty() {
@@ -399,6 +403,7 @@ impl BundleManifest {
             build_identifier,
             target,
             mode,
+            script_host,
             development_diagnostics,
             diagnostics_marker,
             startup_scene_staged_path,
@@ -635,19 +640,16 @@ pub fn stage_bundle_for_host(
     }
 
     let mut diagnostics: Vec<String> = Vec::new();
+    let mut script_host = ScriptHost::None;
     if let Some(project_root) = config
         .scenes
         .first()
         .and_then(|scene_path| unity_project_root(scene_path))
     {
-        // The staged scenes keep their external references (prefab instances,
-        // materials, scripts), so the assets they point at travel with the
-        // bundle: without them the player cannot resolve those references.
         stage_project_assets(&project_root, output_dir)?;
         stage_project_settings(&project_root, output_dir)?;
-        // Only projects that actually carry scripts get a Managed/ payload;
-        // scene-only fixture projects stage content alone.
         if project_has_scripts(&project_root) {
+            script_host = ScriptHost::CoreClr;
             stage_runtime_library(
                 output_dir,
                 &mut entries,
@@ -705,6 +707,7 @@ pub fn stage_bundle_for_host(
         build_identifier: String::new(),
         target: config.target,
         mode: config.mode(),
+        script_host,
         development_diagnostics: include_diagnostics,
         diagnostics_marker,
         startup_scene_staged_path,
@@ -2766,5 +2769,68 @@ Transform:\n\
         assert!(debug_args.contains(&OsStr::new("compile")));
         assert!(!release_args.contains(&OsStr::new("--debug")));
         assert!(debug_args.contains(&OsStr::new("--debug")));
+    }
+
+    #[test]
+    fn staging_records_script_host_from_whether_project_carries_scripts(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = temp_dir("script_host_manifest")?;
+        let host = BuildTarget::MACOS_ARM64;
+
+        let scriptless_scenes = workspace.join("Scriptless").join("Assets").join("Scenes");
+        fs::create_dir_all(&scriptless_scenes)?;
+        let scriptless_scene = scriptless_scenes.join("Main.unity");
+        fs::write(&scriptless_scene, sample_unity_scene("MainRoot"))?;
+        let scriptless_config = BuildConfiguration::new(
+            vec![scriptless_scene],
+            "Unitas",
+            "ScriptlessGame",
+            "com.unitas.scriptless",
+            "1.0.0",
+            host,
+        );
+        let scriptless_out = workspace.join("scriptless_out");
+        let scriptless_staged =
+            stage_bundle_for_host(&scriptless_config, &scriptless_out, Some(host))?;
+        assert_eq!(
+            scriptless_staged.manifest.format_version,
+            BUNDLE_MANIFEST_FORMAT_VERSION
+        );
+        assert_eq!(scriptless_staged.manifest.script_host, ScriptHost::None);
+        assert!(fs::read_to_string(&scriptless_staged.manifest_path)?.contains("script_host=none"));
+
+        let scripted_root = workspace.join("Scripted");
+        let scripted_scenes = scripted_root.join("Assets").join("Scenes");
+        let scripted_scripts = scripted_root.join("Assets").join("Scripts");
+        fs::create_dir_all(&scripted_scenes)?;
+        fs::create_dir_all(&scripted_scripts)?;
+        let scripted_scene = scripted_scenes.join("Main.unity");
+        fs::write(&scripted_scene, sample_unity_scene("MainRoot"))?;
+        fs::write(
+            scripted_scripts.join("Controller.cs"),
+            "public class Controller { }\n",
+        )?;
+        let scripted_config = BuildConfiguration::new(
+            vec![scripted_scene],
+            "Unitas",
+            "ScriptedGame",
+            "com.unitas.scripted",
+            "1.0.0",
+            host,
+        );
+        let scripted_out = workspace.join("scripted_out");
+        let scripted_staged = stage_bundle_for_host(&scripted_config, &scripted_out, Some(host))?;
+        assert_eq!(
+            scripted_staged.manifest.format_version,
+            BUNDLE_MANIFEST_FORMAT_VERSION
+        );
+        assert_eq!(scripted_staged.manifest.script_host, ScriptHost::CoreClr);
+        assert!(fs::read_to_string(&scripted_staged.manifest_path)?.contains("script_host=coreclr"));
+
+        let round_trip = BundleManifest::load_from_dir(&scripted_out)?;
+        assert_eq!(round_trip.script_host, ScriptHost::CoreClr);
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
     }
 }

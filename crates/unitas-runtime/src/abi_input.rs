@@ -1,4 +1,5 @@
 use super::{INVALID_HANDLE_ERROR_TARGET, Ordering, with_runtime_state};
+use crate::input::GAMEPAD_AXIS_COUNT;
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_input_key_event(handle: u64, key: u32, pressed: u32) -> i32 {
@@ -346,6 +347,106 @@ pub extern "C" fn unitas_runtime_input_button_state(handle: u64, address: u64, l
     }) {
         Ok(code) => code,
         Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_set_connected(handle: u64, connected: u32) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.input_gamepad_set_connected(connected != 0);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_button_event(
+    handle: u64,
+    button: u32,
+    pressed: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.input_gamepad_button_event(button, pressed != 0);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_axis_event(
+    handle: u64,
+    axis: u32,
+    value: f64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !value.is_finite() {
+            state.set_error("non-finite gamepad axis value");
+            return -2;
+        }
+        if axis as usize >= GAMEPAD_AXIS_COUNT {
+            state.set_error(&format!("unknown gamepad axis: {axis}"));
+            return -2;
+        }
+        state.runtime.input_gamepad_axis_event(axis, value);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_button_state(handle: u64, button: u32) -> u32 {
+    match with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.input_gamepad_button_state(button)
+    }) {
+        Ok(mask) => mask,
+        Err(_) => {
+            INVALID_HANDLE_ERROR_TARGET.store(handle, Ordering::Relaxed);
+            0
+        }
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_axis(handle: u64, axis: u32) -> f64 {
+    match with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.input_gamepad_axis(axis)
+    }) {
+        Ok(val) => val,
+        Err(_) => {
+            INVALID_HANDLE_ERROR_TARGET.store(handle, Ordering::Relaxed);
+            0.0
+        }
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_input_gamepad_connected(handle: u64) -> u32 {
+    match with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.input_gamepad_connected()
+    }) {
+        Ok(connected) => connected,
+        Err(_) => {
+            INVALID_HANDLE_ERROR_TARGET.store(handle, Ordering::Relaxed);
+            0
+        }
     }
 }
 }

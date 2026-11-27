@@ -198,6 +198,58 @@ namespace Unitas.Bridge
             return TryQueryButtonState(buttonName, InputStateReleased, out value);
         }
 
+        public void InjectGamepadConnected(bool connected)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_gamepad_set_connected(_runtimeHandle, connected ? 1u : 0u);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject gamepad connection state", result);
+            }
+        }
+
+        public void InjectGamepadButton(uint button, bool pressed)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_gamepad_button_event(_runtimeHandle, button, pressed ? 1u : 0u);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject gamepad button event", result);
+            }
+        }
+
+        public void InjectGamepadAxis(uint axis, double value)
+        {
+            int result = RuntimeInterop.unitas_runtime_input_gamepad_axis_event(_runtimeHandle, axis, value);
+            if (result != 0)
+            {
+                ThrowRuntimeError("Failed to inject gamepad axis event", result);
+            }
+        }
+
+        public bool IsGamepadConnected()
+        {
+            return RuntimeInterop.unitas_runtime_input_gamepad_connected(_runtimeHandle) != 0;
+        }
+
+        public bool GetGamepadButton(uint button)
+        {
+            return (RuntimeInterop.unitas_runtime_input_gamepad_button_state(_runtimeHandle, button) & InputStateDown) != 0;
+        }
+
+        public bool GetGamepadButtonDown(uint button)
+        {
+            return (RuntimeInterop.unitas_runtime_input_gamepad_button_state(_runtimeHandle, button) & InputStatePressed) != 0;
+        }
+
+        public bool GetGamepadButtonUp(uint button)
+        {
+            return (RuntimeInterop.unitas_runtime_input_gamepad_button_state(_runtimeHandle, button) & InputStateReleased) != 0;
+        }
+
+        public float GetGamepadAxis(uint axis)
+        {
+            return (float)RuntimeInterop.unitas_runtime_input_gamepad_axis(_runtimeHandle, axis);
+        }
+
         private bool TryQueryButtonState(string buttonName, uint stateMask, out bool value)
         {
             value = false;
