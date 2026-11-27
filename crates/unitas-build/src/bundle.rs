@@ -1035,8 +1035,11 @@ fn stage_managed_payload(
 }
 
 /// Copies the cached game assemblies into the staging output. Returns whether
-/// the cache held any assembly.
+/// the cache held a complete assembly set.
 fn publish_cached_assemblies(cache_dir: &Path, output_dir: &Path) -> Result<bool, String> {
+    if !cache_dir.join(".complete").is_file() {
+        return Ok(false);
+    }
     let Ok(entries) = fs::read_dir(cache_dir) else {
         return Ok(false);
     };
@@ -1234,6 +1237,7 @@ fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<boo
             }
         }
     }
+    let _ = fs::write(cache_dir.join(".complete"), b"ok");
     let _ = fs::remove_dir_all(&staging_dir);
     publish_cached_assemblies(&cache_dir, output_dir)?;
     Ok(true)

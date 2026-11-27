@@ -22,6 +22,18 @@ namespace Unitas.Bridge.Tests
             TestCliDiagnoseAndSymbolsSubcommands();
         }
 
+        public static void RunPart1()
+        {
+            TestDiagnoseCleanBreakingFixingAndLastValidLoop();
+            TestSymbolQueryTypesMembersSignaturesAndSerializedFields();
+        }
+
+        public static void RunPart2()
+        {
+            TestIdeCsprojDiagnosticParityWithDiagnose();
+            TestCliDiagnoseAndSymbolsSubcommands();
+        }
+
         private static void TestDiagnoseCleanBreakingFixingAndLastValidLoop()
         {
             string fixtureRoot = ResolveFixtureProject();

@@ -44,6 +44,32 @@ def test_rust_test_package_concurrency_covers_the_heaviest_package() -> None:
     assert verify.RUST_TEST_PACKAGE_CONCURRENCY <= verify.RUST_TEST_CONCURRENCY
 
 
+def test_secret_scan_excludes_library_build_output_but_not_sources() -> None:
+    assert any(
+        re.search(pattern, "samples/roll-a-ball/Library/UnitasScriptAssemblies/Assembly-CSharp.dll")
+        for pattern in verify.SECRET_SCAN_EXCLUDES
+    )
+
+
+def test_cargo_test_orders_heaviest_packages_first(tmp_path: Path) -> None:
+    pkg_fast = tmp_path / "crates" / "unitas-core"
+    pkg_heavy_build = tmp_path / "crates" / "unitas-build"
+    pkg_heavy_abi = tmp_path / "crates" / "unitas-editor-abi"
+    for pkg in (pkg_fast, pkg_heavy_build, pkg_heavy_abi):
+        pkg.mkdir(parents=True)
+    binaries = [
+        ("alpha_fast", "/bin/alpha", str(pkg_fast)),
+        ("unitas_editor_abi", "/bin/abi", str(pkg_heavy_abi)),
+        ("windowed_startup_failure", "/bin/win", str(pkg_heavy_build)),
+    ]
+    ordered = verify.order_test_binaries(binaries)
+    assert [name for name, _exe, _pkg in ordered] == [
+        "windowed_startup_failure",
+        "unitas_editor_abi",
+        "alpha_fast",
+    ]
+
+
 def test_rust_test_binaries_of_one_package_are_not_serialized(tmp_path: Path) -> None:
     package = tmp_path / "pkg"
     package.mkdir()

@@ -389,6 +389,7 @@ CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
 RUST_TEST_CONCURRENCY = max(4, min(12, os.cpu_count() or 4))
 RUST_TEST_PACKAGE_CONCURRENCY = 8
 RUST_TEST_HEAVIEST_PACKAGE_BINARIES = 5
+RUST_TEST_HEAVY_PACKAGES = ("unitas-build", "unitas-editor-abi", "unitas-runtime", "unitas-render")
 LANE_LIMIT_FACTS = (
     ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),
     ("verification-policy.md", "fast_path_command", "fast_path_enforced_limit"),
@@ -404,6 +405,7 @@ SECRET_SCAN_EXCLUDES = (
     r"^\.ruff_cache/",
     r"^\.secrets\.baseline$",
     r"(^|/)target/",
+    r"(^|/)Library/",
     r"^checkpoint\.json$",
     r"(^|/)bin/",
     r"(^|/)obj/",
@@ -2242,6 +2244,11 @@ def run_dotnet_format(root: Path = REPO_ROOT, cache: Path = DOTNET_FORMAT_CACHE)
                 )
                 return 0
     try:
+        subprocess.run(
+            [_dotnet_executable(), "restore", "bridge/Unitas.sln"],
+            cwd=root,
+            check=False,
+        )
         completed = subprocess.run(
             [_dotnet_executable(), *DOTNET_FORMAT_COMMAND[1:]], cwd=root, check=False
         )
@@ -2563,16 +2570,33 @@ def run_one_test_binary(
     return name, completed.returncode, elapsed, output
 
 
+def order_test_binaries(
+    binaries: Sequence[tuple[str, str, str]],
+) -> list[tuple[str, str, str]]:
+    def sort_key(item: tuple[str, str, str]) -> tuple[int, str, str, str]:
+        name, executable, package_dir = item
+        pkg_name = Path(package_dir).name
+        rank = (
+            RUST_TEST_HEAVY_PACKAGES.index(pkg_name)
+            if pkg_name in RUST_TEST_HEAVY_PACKAGES
+            else len(RUST_TEST_HEAVY_PACKAGES)
+        )
+        return (rank, name, executable, package_dir)
+
+    return sorted(binaries, key=sort_key)
+
+
 def run_test_binaries(
     binaries: list[tuple[str, str, str]],
 ) -> list[tuple[str, int, float, str]]:
+    ordered = order_test_binaries(binaries)
     package_slots: dict[str, threading.Semaphore] = {}
-    for _name, _executable, package_dir in binaries:
+    for _name, _executable, package_dir in ordered:
         if package_dir not in package_slots:
             package_slots[package_dir] = threading.Semaphore(RUST_TEST_PACKAGE_CONCURRENCY)
     tasks = [
         (name, executable, package_dir, package_slots[package_dir])
-        for name, executable, package_dir in binaries
+        for name, executable, package_dir in ordered
     ]
     with ThreadPoolExecutor(max_workers=min(RUST_TEST_CONCURRENCY, len(tasks))) as pool:
         return list(pool.map(run_one_test_binary, tasks))

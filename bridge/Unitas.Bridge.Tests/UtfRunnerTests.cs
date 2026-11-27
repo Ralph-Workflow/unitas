@@ -13,10 +13,37 @@ namespace Unitas.Bridge.Tests
         private static readonly string ProcessSuffix =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "_";
 
+        public static void RunSharedA()
+        {
+            string tempProject = CreateTempTestProject("shared_a");
+            try
+            {
+                VerifyStory15(tempProject);
+                VerifyStory16(tempProject);
+                VerifyStory17(tempProject);
+                VerifyCliRunCommandExitCodes(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
         public static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
+            {
+                VerifyStory15(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void VerifyStory15(string tempProject)
+        {
             {
                 string allXmlPath = Path.Combine(tempProject, "TestResults", "all.xml");
                 TestRunResult allResult = TestRunner.RunProject(
@@ -114,16 +141,23 @@ namespace Unitas.Bridge.Tests
                     smokeHeadless.PassedCount,
                     editOnly.PassedCount + playOnly.PassedCount);
             }
-            finally
-            {
-                DeleteDirectoryIfExists(tempProject);
-            }
         }
 
         public static void TestStory16UnexpectedErrorLogFailsAndLogAssertExpectPasses()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
+            {
+                VerifyStory16(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void VerifyStory16(string tempProject)
+        {
             {
                 string logXmlPath = Path.Combine(tempProject, "TestResults", "logging.xml");
                 TestRunResult logRun = TestRunner.RunProject(
@@ -172,16 +206,23 @@ namespace Unitas.Bridge.Tests
                     expectedFailed: 2,
                     expectedOverallResult: "Failed");
             }
-            finally
-            {
-                DeleteDirectoryIfExists(tempProject);
-            }
         }
 
         public static void TestStory17CancelledTestRunReportsOnlyCompletedTests()
         {
             string tempProject = CreateTempTestProject("shared_a");
             try
+            {
+                VerifyStory17(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void VerifyStory17(string tempProject)
+        {
             {
                 using CancellationTokenSource cts = new CancellationTokenSource();
                 List<string> completedNames = new List<string>();
@@ -193,6 +234,7 @@ namespace Unitas.Bridge.Tests
                     CategoryFilter = "Smoke",
                     ResultsXmlPath = cancelXmlPath,
                     CancellationToken = cts.Token,
+                    SkipCompilation = true,
                     OnTestCompleted = tc =>
                     {
                         completedNames.Add(tc.Descriptor.FullName);
@@ -228,10 +270,6 @@ namespace Unitas.Bridge.Tests
                 XmlNodeList? caseNodes = doc.GetElementsByTagName("test-case");
                 Check.Equal("Story 17 XML contains only 2 <test-case> elements for completed tests", 2, caseNodes != null ? caseNodes.Count : -1);
             }
-            finally
-            {
-                DeleteDirectoryIfExists(tempProject);
-            }
         }
 
         public static void TestUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns()
@@ -239,181 +277,7 @@ namespace Unitas.Bridge.Tests
             string tempProject = CreateTempTestProject("shared_b");
             try
             {
-                string gapsFile = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "UtfGapTests.cs");
-                string runningPlatformName = UnityEngine.Application.platform.ToString();
-                string otherPlatformName = string.Equals(runningPlatformName, "WindowsPlayer", StringComparison.Ordinal)
-                    ? "Android"
-                    : "WindowsPlayer";
-
-                File.WriteAllText(
-                    gapsFile,
-                    "using System.Collections.Generic;\n"
-                    + "using System.IO;\n"
-                    + "using NUnit.Framework;\n"
-                    + "using UnityEngine;\n"
-                    + "using UnityEngine.TestTools;\n"
-                    + "namespace MyGame.EditTests\n"
-                    + "{\n"
-                    + "    public class LifecycleRecorder : IPrebuildSetup, IPostBuildCleanup\n"
-                    + "    {\n"
-                    + "        public static readonly List<string> Events = new List<string>();\n"
-                    + "        public static string LogFilePath => Path.Combine(Application.dataPath, \"lifecycle_events.txt\");\n"
-                    + "        public void Setup()\n"
-                    + "        {\n"
-                    + "            Events.Add(\"PrebuildSetup\");\n"
-                    + "            File.AppendAllText(LogFilePath, \"PrebuildSetup;\\n\");\n"
-                    + "        }\n"
-                    + "        public void Cleanup()\n"
-                    + "        {\n"
-                    + "            Events.Add(\"PostBuildCleanup\");\n"
-                    + "            File.AppendAllText(LogFilePath, \"PostBuildCleanup;\\n\");\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "    [Category(\"Gaps\")]\n"
-                    + "    [PrebuildSetup(typeof(LifecycleRecorder))]\n"
-                    + "    [PostBuildCleanup(typeof(LifecycleRecorder))]\n"
-                    + "    public class UtfGapTests\n"
-                    + "    {\n"
-                    + "        private static int _flakyAttempts;\n"
-                    + "        private static int _alwaysFailAttempts;\n"
-                    + "        [Test]\n"
-                    + "        [UnityPlatform(RuntimePlatform." + runningPlatformName + ")]\n"
-                    + "        public void IncludedCurrentPlatformRunsAndVerifiesPrebuildSetup()\n"
-                    + "        {\n"
-                    + "            Assert.IsTrue(LifecycleRecorder.Events.Contains(\"PrebuildSetup\"));\n"
-                    + "        }\n"
-                    + "        [Test]\n"
-                    + "        [UnityPlatform(RuntimePlatform." + otherPlatformName + ")]\n"
-                    + "        public void IncludedNonMatchingPlatformIsSkipped()\n"
-                    + "        {\n"
-                    + "            Assert.Fail(\"Should have been skipped on this platform\");\n"
-                    + "        }\n"
-                    + "        [Test]\n"
-                    + "        [UnityPlatform(exclude = new[] { RuntimePlatform." + runningPlatformName + " })]\n"
-                    + "        public void ExcludedCurrentPlatformIsSkipped()\n"
-                    + "        {\n"
-                    + "            Assert.Fail(\"Should have been skipped because current platform is excluded\");\n"
-                    + "        }\n"
-                    + "        [Test]\n"
-                    + "        [Retry(3)]\n"
-                    + "        public void FlakyTestPassesOnRetry()\n"
-                    + "        {\n"
-                    + "            _flakyAttempts++;\n"
-                    + "            if (_flakyAttempts < 3)\n"
-                    + "            {\n"
-                    + "                Assert.Fail(\"Transient failure on attempt \" + _flakyAttempts);\n"
-                    + "            }\n"
-                    + "            Assert.AreEqual(3, _flakyAttempts);\n"
-                    + "        }\n"
-                    + "        [Test]\n"
-                    + "        [Retry(2)]\n"
-                    + "        public void AlwaysFailingTestExhaustsRetries()\n"
-                    + "        {\n"
-                    + "            _alwaysFailAttempts++;\n"
-                    + "            Assert.Fail(\"Persistent failure after \" + _alwaysFailAttempts + \" attempts\");\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "}\n");
-
-                TestRunResult gapsRun = TestRunner.RunProject(
-                    tempProject,
-                    new TestRunOptions
-                    {
-                        Mode = TestModeFilter.EditMode,
-                        CategoryFilter = "Gaps",
-                        SkipCompilation = true
-                    });
-
-                Check.Equal("UTF gaps test run compiles cleanly", true, gapsRun.CompileSucceeded);
-                Check.Equal("UTF gaps selects 5 tests", 5, gapsRun.SelectedTestCaseCount);
-                Check.Equal("UTF gaps passes 2 tests (included platform + retry success)", 2, gapsRun.PassedCount);
-                Check.Equal("UTF gaps skips 2 non-matching [UnityPlatform] tests", 2, gapsRun.SkippedCount);
-                Check.Equal("UTF gaps fails 1 test that exhausts [Retry(2)]", 1, gapsRun.FailedCount);
-
-                TestCaseResult? includedPlat = gapsRun.FindTest("IncludedCurrentPlatformRunsAndVerifiesPrebuildSetup");
-                TestCaseResult? nonMatchingInclude = gapsRun.FindTest("IncludedNonMatchingPlatformIsSkipped");
-                TestCaseResult? excludedPlat = gapsRun.FindTest("ExcludedCurrentPlatformIsSkipped");
-                TestCaseResult? flakyPass = gapsRun.FindTest("FlakyTestPassesOnRetry");
-                TestCaseResult? retryExhausted = gapsRun.FindTest("AlwaysFailingTestExhaustsRetries");
-
-                Check.That(
-                    "[UnityPlatform] matching current platform runs and sees PrebuildSetup state",
-                    includedPlat != null && includedPlat.Outcome == TestOutcome.Passed);
-                Check.That(
-                    "[UnityPlatform] non-matching include skips with platform reason",
-                    nonMatchingInclude != null
-                    && nonMatchingInclude.Outcome == TestOutcome.Skipped
-                    && !string.IsNullOrEmpty(nonMatchingInclude.Message)
-                    && nonMatchingInclude.Message.Contains(otherPlatformName, StringComparison.Ordinal));
-                Check.That(
-                    "[UnityPlatform] matching exclude skips with platform reason",
-                    excludedPlat != null
-                    && excludedPlat.Outcome == TestOutcome.Skipped
-                    && !string.IsNullOrEmpty(excludedPlat.Message)
-                    && excludedPlat.Message.Contains(runningPlatformName, StringComparison.Ordinal));
-                Check.That(
-                    "[Retry(3)] passes when retry attempt succeeds",
-                    flakyPass != null && flakyPass.Outcome == TestOutcome.Passed);
-                Check.That(
-                    "[Retry(2)] fails after exhausting 2 attempts",
-                    retryExhausted != null
-                    && retryExhausted.Outcome == TestOutcome.Failed
-                    && retryExhausted.Message != null
-                    && retryExhausted.Message.Contains("2 attempts", StringComparison.Ordinal));
-
-                string lifecycleLogPath = Path.Combine(tempProject, "Assets", "lifecycle_events.txt");
-                string lifecycleLog = File.Exists(lifecycleLogPath) ? File.ReadAllText(lifecycleLogPath) : string.Empty;
-                Check.That(
-                    "[PrebuildSetup] and [PostBuildCleanup] both execute around test run",
-                    lifecycleLog.Contains("PrebuildSetup;", StringComparison.Ordinal)
-                    && lifecycleLog.Contains("PostBuildCleanup;", StringComparison.Ordinal)
-                    && lifecycleLog.IndexOf("PrebuildSetup;", StringComparison.Ordinal) < lifecycleLog.IndexOf("PostBuildCleanup;", StringComparison.Ordinal));
-
-                string exactXmlPath = Path.Combine(tempProject, "TestResults", "filter_exact.xml");
-                TestRunResult exactFilter = TestRunner.RunProject(
-                    tempProject,
-                    new TestRunOptions
-                    {
-                        Mode = TestModeFilter.All,
-                        TestNameFilter = "MyGame.EditTests.MathEditTests.SimpleAddition",
-                        ResultsXmlPath = exactXmlPath,
-                        SkipCompilation = true
-                    });
-                Check.Equal("Exact --test filter selects 1 test", 1, exactFilter.SelectedTestCaseCount);
-                Check.Equal("Exact --test filter passes", 1, exactFilter.PassedCount);
-
-                string wildcardXmlPath = Path.Combine(tempProject, "TestResults", "filter_wildcard.xml");
-                TestRunResult wildcardFilter = TestRunner.RunProject(
-                    tempProject,
-                    new TestRunOptions
-                    {
-                        Mode = TestModeFilter.All,
-                        TestNameFilter = "MyGame.EditTests.*.MultiplyCases*",
-                        ResultsXmlPath = wildcardXmlPath,
-                        SkipCompilation = true
-                    });
-                Check.Equal("Wildcard --test filter selects 2 parameterized cases", 2, wildcardFilter.SelectedTestCaseCount);
-                Check.Equal("Wildcard --test filter passes all 2 cases", 2, wildcardFilter.PassedCount);
-
-                int cliFilterExit = Unitas.Testing.Program.Main(new[]
-                {
-                    "run",
-                    tempProject,
-                    "--mode",
-                    "All",
-                    "--test",
-                    "MyGame.EditTests.*.MultiplyCases*",
-                    "--results",
-                    Path.Combine(tempProject, "TestResults", "cli_wildcard.xml")
-                });
-                Check.Equal("CLI --test wildcard filter exits 0", 0, cliFilterExit);
-                ValidateNUnit3Xml(
-                    File.ReadAllText(Path.Combine(tempProject, "TestResults", "cli_wildcard.xml")),
-                    expectedSelected: 2,
-                    expectedTotal: 2,
-                    expectedPassed: 2,
-                    expectedFailed: 0,
-                    expectedOverallResult: "Passed");
+                VerifyUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns(tempProject);
             }
             finally
             {
@@ -421,11 +285,189 @@ namespace Unitas.Bridge.Tests
             }
         }
 
+        private static void VerifyUnityPlatformRetryPrebuildSetupPostBuildCleanupAndNamePatterns(string tempProject)
+        {
+            string gapsFile = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "UtfGapTests.cs");
+            string runningPlatformName = UnityEngine.Application.platform.ToString();
+            string otherPlatformName = string.Equals(runningPlatformName, "WindowsPlayer", StringComparison.Ordinal)
+                ? "Android"
+                : "WindowsPlayer";
+
+            File.WriteAllText(
+                gapsFile,
+                "using System.Collections.Generic;\n"
+                + "using System.IO;\n"
+                + "using NUnit.Framework;\n"
+                + "using UnityEngine;\n"
+                + "using UnityEngine.TestTools;\n"
+                + "namespace MyGame.EditTests\n"
+                + "{\n"
+                + "    public class LifecycleRecorder : IPrebuildSetup, IPostBuildCleanup\n"
+                + "    {\n"
+                + "        public static readonly List<string> Events = new List<string>();\n"
+                + "        public static string LogFilePath => Path.Combine(Application.dataPath, \"lifecycle_events.txt\");\n"
+                + "        public void Setup()\n"
+                + "        {\n"
+                + "            Events.Add(\"PrebuildSetup\");\n"
+                + "            File.AppendAllText(LogFilePath, \"PrebuildSetup;\\n\");\n"
+                + "        }\n"
+                + "        public void Cleanup()\n"
+                + "        {\n"
+                + "            Events.Add(\"PostBuildCleanup\");\n"
+                + "            File.AppendAllText(LogFilePath, \"PostBuildCleanup;\\n\");\n"
+                + "        }\n"
+                + "    }\n"
+                + "    [Category(\"Gaps\")]\n"
+                + "    [PrebuildSetup(typeof(LifecycleRecorder))]\n"
+                + "    [PostBuildCleanup(typeof(LifecycleRecorder))]\n"
+                + "    public class UtfGapTests\n"
+                + "    {\n"
+                + "        private static int _flakyAttempts;\n"
+                + "        private static int _alwaysFailAttempts;\n"
+                + "        [Test]\n"
+                + "        [UnityPlatform(RuntimePlatform." + runningPlatformName + ")]\n"
+                + "        public void IncludedCurrentPlatformRunsAndVerifiesPrebuildSetup()\n"
+                + "        {\n"
+                + "            Assert.IsTrue(LifecycleRecorder.Events.Contains(\"PrebuildSetup\"));\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        [UnityPlatform(RuntimePlatform." + otherPlatformName + ")]\n"
+                + "        public void IncludedNonMatchingPlatformIsSkipped()\n"
+                + "        {\n"
+                + "            Assert.Fail(\"Should have been skipped on this platform\");\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        [UnityPlatform(exclude = new[] { RuntimePlatform." + runningPlatformName + " })]\n"
+                + "        public void ExcludedCurrentPlatformIsSkipped()\n"
+                + "        {\n"
+                + "            Assert.Fail(\"Should have been skipped because current platform is excluded\");\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        [Retry(3)]\n"
+                + "        public void FlakyTestPassesOnRetry()\n"
+                + "        {\n"
+                + "            _flakyAttempts++;\n"
+                + "            if (_flakyAttempts < 3)\n"
+                + "            {\n"
+                + "                Assert.Fail(\"Transient failure on attempt \" + _flakyAttempts);\n"
+                + "            }\n"
+                + "            Assert.AreEqual(3, _flakyAttempts);\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        [Retry(2)]\n"
+                + "        public void AlwaysFailingTestExhaustsRetries()\n"
+                + "        {\n"
+                + "            _alwaysFailAttempts++;\n"
+                + "            Assert.Fail(\"Persistent failure after \" + _alwaysFailAttempts + \" attempts\");\n"
+                + "        }\n"
+                + "    }\n"
+                + "}\n");
+
+            TestRunResult gapsRun = TestRunner.RunProject(
+                tempProject,
+                new TestRunOptions
+                {
+                    Mode = TestModeFilter.EditMode,
+                    CategoryFilter = "Gaps",
+                    SkipCompilation = false
+                });
+
+            Check.Equal("UTF gaps test run compiles cleanly", true, gapsRun.CompileSucceeded);
+            Check.Equal("UTF gaps selects 5 tests", 5, gapsRun.SelectedTestCaseCount);
+            Check.Equal("UTF gaps passes 2 tests (included platform + retry success)", 2, gapsRun.PassedCount);
+            Check.Equal("UTF gaps skips 2 non-matching [UnityPlatform] tests", 2, gapsRun.SkippedCount);
+            Check.Equal("UTF gaps fails 1 test that exhausts [Retry(2)]", 1, gapsRun.FailedCount);
+
+            TestCaseResult? includedPlat = gapsRun.FindTest("IncludedCurrentPlatformRunsAndVerifiesPrebuildSetup");
+            TestCaseResult? nonMatchingInclude = gapsRun.FindTest("IncludedNonMatchingPlatformIsSkipped");
+            TestCaseResult? excludedPlat = gapsRun.FindTest("ExcludedCurrentPlatformIsSkipped");
+            TestCaseResult? flakyPass = gapsRun.FindTest("FlakyTestPassesOnRetry");
+            TestCaseResult? retryExhausted = gapsRun.FindTest("AlwaysFailingTestExhaustsRetries");
+
+            Check.That(
+                "[UnityPlatform] matching current platform runs and sees PrebuildSetup state",
+                includedPlat != null && includedPlat.Outcome == TestOutcome.Passed);
+            Check.That(
+                "[UnityPlatform] non-matching include skips with platform reason",
+                nonMatchingInclude != null
+                && nonMatchingInclude.Outcome == TestOutcome.Skipped
+                && !string.IsNullOrEmpty(nonMatchingInclude.Message)
+                && nonMatchingInclude.Message.Contains(otherPlatformName, StringComparison.Ordinal));
+            Check.That(
+                "[UnityPlatform] matching exclude skips with platform reason",
+                excludedPlat != null
+                && excludedPlat.Outcome == TestOutcome.Skipped
+                && !string.IsNullOrEmpty(excludedPlat.Message)
+                && excludedPlat.Message.Contains(runningPlatformName, StringComparison.Ordinal));
+            Check.That(
+                "[Retry(3)] passes when retry attempt succeeds",
+                flakyPass != null && flakyPass.Outcome == TestOutcome.Passed);
+            Check.That(
+                "[Retry(2)] fails after exhausting 2 attempts",
+                retryExhausted != null
+                && retryExhausted.Outcome == TestOutcome.Failed
+                && retryExhausted.Message != null
+                && retryExhausted.Message.Contains("2 attempts", StringComparison.Ordinal));
+
+            string lifecycleLogPath = Path.Combine(tempProject, "Assets", "lifecycle_events.txt");
+            string lifecycleLog = File.Exists(lifecycleLogPath) ? File.ReadAllText(lifecycleLogPath) : string.Empty;
+            Check.That(
+                "[PrebuildSetup] and [PostBuildCleanup] both execute around test run",
+                lifecycleLog.Contains("PrebuildSetup;", StringComparison.Ordinal)
+                && lifecycleLog.Contains("PostBuildCleanup;", StringComparison.Ordinal)
+                && lifecycleLog.IndexOf("PrebuildSetup;", StringComparison.Ordinal) < lifecycleLog.IndexOf("PostBuildCleanup;", StringComparison.Ordinal));
+
+            string exactXmlPath = Path.Combine(tempProject, "TestResults", "filter_exact.xml");
+            TestRunResult exactFilter = TestRunner.RunProject(
+                tempProject,
+                new TestRunOptions
+                {
+                    Mode = TestModeFilter.All,
+                    TestNameFilter = "MyGame.EditTests.MathEditTests.SimpleAddition",
+                    ResultsXmlPath = exactXmlPath,
+                    SkipCompilation = true
+                });
+            Check.Equal("Exact --test filter selects 1 test", 1, exactFilter.SelectedTestCaseCount);
+            Check.Equal("Exact --test filter passes", 1, exactFilter.PassedCount);
+
+            string wildcardXmlPath = Path.Combine(tempProject, "TestResults", "filter_wildcard.xml");
+            TestRunResult wildcardFilter = TestRunner.RunProject(
+                tempProject,
+                new TestRunOptions
+                {
+                    Mode = TestModeFilter.All,
+                    TestNameFilter = "MyGame.EditTests.*.MultiplyCases*",
+                    ResultsXmlPath = wildcardXmlPath,
+                    SkipCompilation = true
+                });
+            Check.Equal("Wildcard --test filter selects 2 parameterized cases", 2, wildcardFilter.SelectedTestCaseCount);
+            Check.Equal("Wildcard --test filter passes all 2 cases", 2, wildcardFilter.PassedCount);
+
+            int cliFilterExit = Unitas.Testing.Program.Main(new[]
+            {
+                "run",
+                tempProject,
+                "--mode",
+                "All",
+                "--test",
+                "MyGame.EditTests.*.MultiplyCases*",
+                "--results",
+                Path.Combine(tempProject, "TestResults", "cli_wildcard.xml"),
+                "--skip-compilation"
+            });
+            Check.Equal("CLI --test wildcard filter exits 0", 0, cliFilterExit);
+            ValidateNUnit3Xml(
+                File.ReadAllText(Path.Combine(tempProject, "TestResults", "cli_wildcard.xml")),
+                expectedSelected: 2,
+                expectedTotal: 2,
+                expectedPassed: 2,
+                expectedFailed: 0,
+                expectedOverallResult: "Passed");
+        }
+
         public static void TestPlayModeFreshSceneIsolationAndEditStateRestoration()
         {
-            string tempProject = CreateTempTestProject("shared_b");
-            UnityEngine.GameObject editTimeObject = new UnityEngine.GameObject("EditTimeSurvivorObject");
-            editTimeObject.transform.position = new UnityEngine.Vector3(7f, 8f, 9f);
+            string tempProject = CreateTempTestProject("shared_b_iso");
             try
             {
                 string playIsoFile = Path.Combine(tempProject, "Assets", "Tests", "PlayMode", "PlayModeIsolationTests.cs");
@@ -460,30 +502,37 @@ namespace Unitas.Bridge.Tests
                     + "        }\n"
                     + "    }\n"
                     + "}\n");
+                UnityEngine.GameObject editTimeObject = new UnityEngine.GameObject("EditTimeSurvivorObject");
+                editTimeObject.transform.position = new UnityEngine.Vector3(7f, 8f, 9f);
+                try
+                {
+                    TestRunResult isoRun = TestRunner.RunProject(
+                        tempProject,
+                        new TestRunOptions
+                        {
+                            Mode = TestModeFilter.PlayMode,
+                            CategoryFilter = "Isolation"
+                        });
 
-                TestRunResult isoRun = TestRunner.RunProject(
-                    tempProject,
-                    new TestRunOptions
-                    {
-                        Mode = TestModeFilter.PlayMode,
-                        CategoryFilter = "Isolation"
-                    });
+                    Check.Equal("PlayMode isolation run compiles", true, isoRun.CompileSucceeded);
+                    Check.Equal("PlayMode isolation run selects 2 tests", 2, isoRun.SelectedTestCaseCount);
+                    Check.Equal("PlayMode isolation run passes both tests", 2, isoRun.PassedCount);
 
-                Check.Equal("PlayMode isolation run compiles", true, isoRun.CompileSucceeded);
-                Check.Equal("PlayMode isolation run selects 2 tests", 2, isoRun.SelectedTestCaseCount);
-                Check.Equal("PlayMode isolation run passes both tests", 2, isoRun.PassedCount);
-
-                Check.That(
-                    "Edit-time state object survives PlayMode test run unchanged",
-                    string.Equals(editTimeObject.name, "EditTimeSurvivorObject", StringComparison.Ordinal)
-                    && editTimeObject.transform.position == new UnityEngine.Vector3(7f, 8f, 9f));
-                Check.That(
-                    "PlayMode test objects are cleaned up after play session ends",
-                    UnityEngine.GameObject.Find("LeakedFromPlayTest1") == null);
+                    Check.That(
+                        "Edit-time state object survives PlayMode test run unchanged",
+                        string.Equals(editTimeObject.name, "EditTimeSurvivorObject", StringComparison.Ordinal)
+                        && editTimeObject.transform.position == new UnityEngine.Vector3(7f, 8f, 9f));
+                    Check.That(
+                        "PlayMode test objects are cleaned up after play session ends",
+                        UnityEngine.GameObject.Find("LeakedFromPlayTest1") == null);
+                }
+                finally
+                {
+                    UnityEngine.Object.Destroy(editTimeObject);
+                }
             }
             finally
             {
-                UnityEngine.Object.Destroy(editTimeObject);
                 DeleteDirectoryIfExists(tempProject);
             }
         }
@@ -517,6 +566,17 @@ namespace Unitas.Bridge.Tests
             string tempProject = CreateTempTestProject("shared_a");
             try
             {
+                VerifyCliRunCommandExitCodes(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void VerifyCliRunCommandExitCodes(string tempProject)
+        {
+            {
                 string xmlPath = Path.Combine(tempProject, "TestResults", "cli_smoke.xml");
                 int passExit = Unitas.Testing.Program.Main(new[]
                 {
@@ -527,7 +587,8 @@ namespace Unitas.Bridge.Tests
                     "--category",
                     "Smoke",
                     "--results",
-                    xmlPath
+                    xmlPath,
+                    "--skip-compilation"
                 });
 
                 Check.Equal("CLI run passing category exits 0", 0, passExit);
@@ -540,14 +601,11 @@ namespace Unitas.Bridge.Tests
                     "--mode",
                     "EditMode",
                     "--category",
-                    "Logging"
+                    "Logging",
+                    "--skip-compilation"
                 });
 
                 Check.Equal("CLI run failing category exits 1", 1, failExit);
-            }
-            finally
-            {
-                DeleteDirectoryIfExists(tempProject);
             }
         }
 

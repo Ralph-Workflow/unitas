@@ -50,12 +50,6 @@ namespace Unitas.Editor.Tests.Play
         private static void EnsureSampleProjectScriptsCompiled()
         {
             string projectRoot = ResolveRepoDirectory("samples/roll-a-ball");
-            string outputDirectory = Path.Combine(projectRoot, "Library", "UnitasScriptAssemblies");
-            if (Directory.Exists(outputDirectory))
-            {
-                Directory.Delete(outputDirectory, recursive: true);
-            }
-
             ScriptCompilationResult result = ScriptCompilation.CompileProject(
                 projectRoot,
                 new ScriptCompilationOptions());
@@ -156,6 +150,7 @@ namespace Unitas.Editor.Tests.Play
                 using McpHost host = BuiltinDefaults.CreateHostWithDefaults(new FixedClock(1_700_000_000_000L));
                 ScenarioTools.Register(host);
 
+                string passingScenario = WritePassingScenario(tempProject);
                 CliResult success = HeadlessCli.Execute(
                     host,
                     new[]
@@ -166,7 +161,7 @@ namespace Unitas.Editor.Tests.Play
                         "-projectPath",
                         tempProject,
                         "-runScenario",
-                        ResolveRepoPath(CollectScenario),
+                        passingScenario,
                     });
                 Check.Equal("scenario-cli: passing scenario exits 0", CliExitCode.Success, success.ExitCode);
                 Check.Equal("scenario-cli: exit status name is Success", "Success", success.ExitStatusName);
@@ -254,6 +249,35 @@ namespace Unitas.Editor.Tests.Play
             JsonArray steps = (JsonArray)content["steps"]!;
             JsonObject last = (JsonObject)steps[steps.Count - 1]!;
             return last["frame_end"]?.GetValue<int>() ?? 0;
+        }
+
+        private static string WritePassingScenario(string directory)
+        {
+            JsonObject scenario = new JsonObject
+            {
+                ["name"] = "passing-checkpoint",
+                ["scene"] = ResolveRepoPath(ScenePath),
+                ["steps"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["tick"] = new JsonObject
+                        {
+                            ["frames"] = 1,
+                            ["delta_seconds"] = 0.02,
+                        },
+                    }),
+                ["checkpoints"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["id"] = "single-frame-count",
+                        ["after_step"] = 1,
+                        ["kind"] = "frame_count",
+                        ["expected"] = 1,
+                    }),
+            };
+            string path = Path.Combine(directory, "passing.scenario.json");
+            File.WriteAllText(path, scenario.ToJsonString());
+            return path;
         }
 
         private static string WriteFailingScenario(string directory)

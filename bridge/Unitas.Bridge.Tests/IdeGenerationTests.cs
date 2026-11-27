@@ -14,7 +14,18 @@ namespace Unitas.Bridge.Tests
             TestDeterministicRegenerationAndTargetChanges();
             TestStory3ExternalSdkBuildReportsExactSameCompileDiagnostic();
             TestCliGenerateIdeCommand();
-            CodeLoopTests.RunAll();
+        }
+
+        public static void RunPart1()
+        {
+            TestGenerateIdeProjectFilesAndParityWithCompilation();
+            TestDeterministicRegenerationAndTargetChanges();
+        }
+
+        public static void RunPart2()
+        {
+            TestStory3ExternalSdkBuildReportsExactSameCompileDiagnostic();
+            TestCliGenerateIdeCommand();
         }
 
         private static void TestGenerateIdeProjectFilesAndParityWithCompilation()

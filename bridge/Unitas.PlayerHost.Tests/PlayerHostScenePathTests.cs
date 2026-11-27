@@ -21,15 +21,28 @@ namespace Unitas.PlayerHost.Tests
                 Path.GetTempPath(),
                 "unitas-playerhost-scene-" + Guid.NewGuid().ToString("N"));
             string bundleRoot = Path.Combine(tempRoot, "roll-a-ball");
-            string persistRoot = Path.Combine(tempRoot, "persist");
             string managedDir = Path.Combine(bundleRoot, "Managed");
-            Directory.CreateDirectory(persistRoot);
             Directory.CreateDirectory(managedDir);
             try
             {
                 PlayerHostBootTests.StageBundle(sampleRoot, bundleRoot);
                 PlayerHostBootTests.CompileGameAssembly(sampleRoot, managedDir);
+                RunWithStagedBundle(bundleRoot);
+            }
+            finally
+            {
+                PlayerHostBootTests.TryDelete(tempRoot);
+            }
+        }
 
+        public static void RunWithStagedBundle(string bundleRoot)
+        {
+            string persistRoot = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-playerhost-scene-persist-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(persistRoot);
+            try
+            {
                 ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
                 Check.That("native runtime handle created", runtimeHandle != 0UL);
 
@@ -56,7 +69,7 @@ namespace Unitas.PlayerHost.Tests
             }
             finally
             {
-                PlayerHostBootTests.TryDelete(tempRoot);
+                PlayerHostBootTests.TryDelete(persistRoot);
             }
         }
     }

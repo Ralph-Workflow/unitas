@@ -10,6 +10,21 @@ namespace Unitas.Bridge.Tests
 {
     public static class UtfHardeningTests
     {
+        public static void RunAll()
+        {
+            string tempProject = CreateHardeningTestProject();
+            try
+            {
+                VerifyDeepCoroutineYieldsAndLogAssertAndXmlParity(tempProject);
+                VerifyAssemblyCategoryAndNamePatternFilters(tempProject);
+                VerifyMidRunCancellationReporting(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
         public static void DeepCoroutineYieldsAndLogAssertAndXmlParity()
         {
             string tempProject = CreateHardeningTestProject();
@@ -207,7 +222,7 @@ namespace Unitas.Bridge.Tests
 
         private static void VerifyAssemblyCategoryAndNamePatternFilters(string tempProject)
         {
-            string sharedOut = Path.Combine(tempProject, "Library", "ScriptAssemblies");
+            string sharedOut = Path.Combine(tempProject, "Library", "UnitasScriptAssemblies");
 
             TestRunResult extraAsmOnly = TestRunner.RunProject(
                 tempProject,

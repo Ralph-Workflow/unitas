@@ -72,3 +72,6 @@ debug-assertions = false
 
 [profile.dev.package.rapier3d]
 debug-assertions = false
+
+[profile.dev.package.unitas-build]
+opt-level = 2

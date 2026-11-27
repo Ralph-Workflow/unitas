@@ -71,6 +71,10 @@ namespace Unitas.Testing
                         options.MaxTestsToRun = maxTests;
                     }
                 }
+                else if (string.Equals(arg, "--skip-compilation", StringComparison.OrdinalIgnoreCase))
+                {
+                    options.SkipCompilation = true;
+                }
             }
 
             TestRunResult result = TestRunner.RunProject(projectRoot, options);

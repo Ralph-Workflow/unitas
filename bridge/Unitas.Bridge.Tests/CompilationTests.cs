@@ -40,6 +40,35 @@ namespace Unitas.Bridge.Tests
             TestCliCompileEntryPoint();
         }
 
+        public static void RunPart1()
+        {
+            TestStory6AssembliesAsmrefDefinesAndVersionDefines();
+            TestStory6ReferenceCycleDiagnostic();
+            TestStory6OverrideReferencesHonorsPrecompiledReferences();
+        }
+
+        public static void RunPart2()
+        {
+            TestStory7TargetDefinesEditorAndPlayers();
+            TestStory29PlayerBuildRejectsUnguardedUnityEditorReference();
+        }
+
+        public static void RunPart3()
+        {
+            TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile();
+        }
+
+        public static void RunPart4()
+        {
+            TestStory10IncompatibleNativePluginDllImportDiagnostic();
+            TestCliCompileEntryPoint();
+        }
+
+        public static void RunPart5()
+        {
+            TestGeneratedGlueAndZeroReflectionMessageDispatch();
+        }
+
         private static void TestStory6AssembliesAsmrefDefinesAndVersionDefines()
         {
             string fixtureRoot = ResolveFixtureProject();
@@ -632,10 +661,14 @@ namespace Unitas.Bridge.Tests
 
         private static void TestCliCompileEntryPoint()
         {
-            string fixtureRoot = ResolveFixtureProject();
-            string tempProject = CloneProjectToTemp(fixtureRoot, "cli_test");
+            string tempProject = CreateEmptyTempProject("cli_test");
             try
             {
+                string scriptsDir = Path.Combine(tempProject, "Assets", "Scripts");
+                Directory.CreateDirectory(scriptsDir);
+                string scriptFile = Path.Combine(scriptsDir, "MainGameBootstrap.cs");
+                File.WriteAllText(scriptFile, "public class MainGameBootstrap {}\n");
+
                 int exitOk = Unitas.Scripting.Program.Main(new[]
                 {
                     "compile",
@@ -650,8 +683,7 @@ namespace Unitas.Bridge.Tests
                 string expectedMainDll = Path.Combine(tempProject, "Library", "UnitasScriptAssemblies", "Assembly-CSharp.dll");
                 Check.Equal("CLI writes Assembly-CSharp.dll to Library/UnitasScriptAssemblies", true, File.Exists(expectedMainDll));
 
-                string brokenFile = Path.Combine(tempProject, "Assets", "Scripts", "MainGameBootstrap.cs");
-                File.WriteAllText(brokenFile, "public class MainGameBootstrap { public void Bad() { unknown_symbol(); } }\n");
+                File.WriteAllText(scriptFile, "public class MainGameBootstrap { public void Bad() { unknown_symbol(); } }\n");
 
                 int exitFail = Unitas.Scripting.Program.Main(new[]
                 {

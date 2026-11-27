@@ -13,14 +13,15 @@ EDITOR_TEST_SHARD_FANOUT := 12
 BRIDGE_TEST_SHARD_COUNT := 12
 BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8,9,10,11,12
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
-EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,ExecuteMethodToolsTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
+EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
+	ExecuteMethodToolsTests,ScenarioGlueDiscoveryTests \
 	HttpTransportTests \
 	ScenarioToolsTests \
 	StdioTransportTests \
 	PlaySessionLifecycleTests \
 	PlayWorkerCrashTests \
 	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests \
-	AuthoringToolsTests,ScenarioGlueDiscoveryTests \
+	AuthoringToolsTests \
 	SceneTests,UndoHistoryTests,SceneToolsTests
 
 verify:
@@ -126,7 +127,7 @@ dotnet-build: runtime-build
 dotnet-restore:
 	@dotnet restore bridge/Unitas.sln
 
-dotnet-format: dotnet-restore
+dotnet-format:
 	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py dotnet-format
 
 dotnet-test: runtime-build
