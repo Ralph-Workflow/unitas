@@ -148,6 +148,20 @@ MEASUREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "world_scale_100k",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "unitas-core",
+            "--test",
+            "perf_world_scale",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ),
+    ),
+    (
         SCRIPTING_CALL_COST,
         (
             BRIDGE_TESTS,
@@ -252,12 +266,12 @@ def help_text() -> str:
     return "\n".join(
         [
             "usage: verify_perf.py [--help] [--metadata]",
-            "Runs the fifteen perf measurements (import throughput, scene load, physics",
-            "step, particle eval, animation eval, 100k GameObject frame loop, scripting",
-            "call cost, PlayerLoop frame allocations, player startup, audio callback",
-            "headroom, editor startup, editor project open, editor hierarchy search at the",
-            "scale floor, editor property edit and undo, and editor MCP round trip) and",
-            "fails hard when any value breaches its ceiling.",
+            "Runs the sixteen perf measurements (import throughput, scene load, physics",
+            "step, particle eval, animation eval, 100k GameObject frame loop, 100k",
+            "GameObject world scale, scripting call cost, PlayerLoop frame allocations,",
+            "player startup, audio callback headroom, editor startup, editor project open,",
+            "editor hierarchy search at the scale floor, editor property edit and undo, and",
+            "editor MCP round trip) and fails hard when any value breaches its ceiling.",
             "lane metadata:",
             *metadata_lines,
         ]

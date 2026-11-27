@@ -75,14 +75,14 @@
   "checkpoints": [
     {
       "id": "arena2_controller_runs_the_arena",
-      "after_step": 1,
+      "after_step": 2,
       "kind": "log",
       "severity": "log",
       "contains": "[roll-a-ball] arena Arena2 pickups 12"
     },
     {
       "id": "arena2_marble_starts_inside_the_arena",
-      "after_step": 1,
+      "after_step": 2,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -94,7 +94,7 @@
     },
     {
       "id": "arena2_pickups_sit_on_the_clockwork_ring",
-      "after_step": 1,
+      "after_step": 2,
       "kind": "transform_position",
       "object": "Pickup_1",
       "expected": [
@@ -106,14 +106,14 @@
     },
     {
       "id": "arena2_pickup_collected",
-      "after_step": 5,
+      "after_step": 6,
       "kind": "log",
       "severity": "log",
       "contains": "Pickup collected score 1"
     },
     {
       "id": "arena2_marble_stays_inside_the_arena",
-      "after_step": 5,
+      "after_step": 6,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -125,14 +125,14 @@
     },
     {
       "id": "arena3_controller_runs_the_arena",
-      "after_step": 7,
+      "after_step": 8,
       "kind": "log",
       "severity": "log",
       "contains": "[roll-a-ball] arena Arena3 pickups 12"
     },
     {
       "id": "arena3_marble_starts_inside_the_arena",
-      "after_step": 7,
+      "after_step": 8,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [
@@ -144,7 +144,7 @@
     },
     {
       "id": "arena3_pickups_sit_on_the_sky_garden_path",
-      "after_step": 7,
+      "after_step": 8,
       "kind": "transform_position",
       "object": "Pickup_1",
       "expected": [
@@ -156,21 +156,21 @@
     },
     {
       "id": "arena3_pickups_collected",
-      "after_step": 11,
+      "after_step": 12,
       "kind": "log",
       "severity": "log",
       "contains": "Pickup collected score 3"
     },
     {
       "id": "arena3_gold_pickup_spawned",
-      "after_step": 11,
+      "after_step": 12,
       "kind": "log",
       "severity": "log",
       "contains": "Gold pickup spawned"
     },
     {
       "id": "arena3_marble_stays_inside_the_arena",
-      "after_step": 11,
+      "after_step": 12,
       "kind": "transform_position",
       "object": "PlayerBall",
       "expected": [

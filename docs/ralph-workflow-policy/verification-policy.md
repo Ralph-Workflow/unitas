@@ -339,14 +339,16 @@ The named non-default profiles, each with the five required fields:
   value_ms against ceiling_ms, and value_bytes against ceiling_bytes for the
   PlayerLoop per-frame allocation measurement; fails hard when run; last run
   2026-11-26, recorded in the gate-lane review entry below; staleness horizon
-  one milestone. The lane reports fifteen measurements: import throughput,
+  one milestone. The lane reports sixteen measurements: import throughput,
   scene load, physics step, particle eval, animation eval, the
-  100,000-GameObject frame loop, the managed-to-native scripting call cost, the
-  PlayerLoop per-frame managed allocation, `player_startup` (windowed player
-  launch to first presented frame against the 3000.0 ms charter ceiling),
-  `audio_callback_headroom` (audio mixer callback duration for a 512-frame
-  buffer at 48 kHz with eight active stereo voices against the 10.667 ms buffer
-  period ceiling), and the five editor and MCP
+  100,000-GameObject frame loop, `world_scale_100k` (the core scene graph
+  holding 100,000 GameObjects, with handle lookup under churn, bulk hierarchy
+  reparent, and change-tracking drain), the managed-to-native scripting call
+  cost, the PlayerLoop per-frame managed allocation, `player_startup` (windowed
+  player launch to first presented frame against the 3000.0 ms charter
+  ceiling), `audio_callback_headroom` (audio mixer callback duration for a
+  512-frame buffer at 48 kHz with eight active stereo voices against the
+  10.667 ms buffer period ceiling), and the five editor and MCP
   measurements `editor_startup` (editor process start to a responsive MCP
   state), `editor_project_open` (opening `samples/roll-a-ball` through the
   editor's MCP surface), `editor_hierarchy_search_100k` (the hierarchy query at

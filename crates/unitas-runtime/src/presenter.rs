@@ -1425,7 +1425,10 @@ mod tests {
                 break;
             }
         }
-        assert!(applied, "the pending display quality never reached the runtime");
+        assert!(
+            applied,
+            "the pending display quality never reached the runtime"
+        );
         assert_eq!(runtime.quality_settings.current_quality, 0);
         assert_eq!(
             shadow_settings_for_runtime(&runtime),

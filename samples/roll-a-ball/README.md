@@ -18,8 +18,8 @@ reported with its real state, never hidden.
   `Assets/Scenes/Arena3.unity` (the Sky Garden arena), each carrying the
   `ArenaController` script that lays that arena's twelve pickups on the arena's
   own layout and drives the Sky Garden's moving blocks. Their scenario
-  `Scenarios/arenas_2_3.json` does not pass yet (see the arena gap below), so
-  they are not in the `make verify-samples` scenario list.
+  `Scenarios/arenas_2_3.json` passes 11 of 11 checkpoints with `--repeat 2`
+  and runs in the `make verify-samples` scenario list.
 - One physics-probe scene, `Assets/Scenes/PhysicsLab.unity`, used by the
   physics scenarios; it is not an arena and carries no game scripts. It now
   also carries the bodies the S11 scenarios need: the `EdgeMarble` (a 2 kg
@@ -56,7 +56,7 @@ reported with its real state, never hidden.
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; the sample defines the `reduced_motion` preference, but no settings panel exists yet, so no setting is changed from the game and no master, music, or effects volume, fullscreen mode, resolution, vertical sync, quality level, ghost or camera shake setting is defined |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all five pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all five pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture. The two extra arenas' content is covered by `Scenarios/arenas_2_3.json` (11 of 11 checkpoints, in the lane), but neither of them has a capture or an approved reference image of its own |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
@@ -151,12 +151,18 @@ cannot show).
   one composition.
 - The sample now carries three arenas — Courtyard (`Assets/Scenes/RollABall.unity`),
   Clockwork (`Assets/Scenes/Arena2.unity`) and Sky Garden
-  (`Assets/Scenes/Arena3.unity`) — but `Scenarios/arenas_2_3.json` does not
-  pass yet: both arena scenes load, the marble stays inside the arena and
-  collects pickups, but the arena controller's own log is not captured by the
-  scenario, and the twelve pickups keep the positions the scene authors gave
-  them instead of the arena's layout, so "each arena at its countdown" is
-  still not covered.
+  (`Assets/Scenes/Arena3.unity`) — and the two extra arenas' content is now
+  covered: `Scenarios/arenas_2_3.json` passes 11 of 11 checkpoints with
+  `--repeat 2` in the lane. Both arena scenes load, the arena controller's own
+  log is captured (`[roll-a-ball] arena Arena2 pickups 12` and `[roll-a-ball]
+  arena Arena3 pickups 12`), the twelve pickups sit on the arena's own layout
+  instead of the positions the scene authors gave them (the clockwork ring at
+  `(0, 0.75, 3.75)`, the sky garden path at `(0, 0.75, 2)`), the marble starts
+  and stays inside the arena and collects pickups, and the sky garden spawns
+  its gold pickup.
+- The two extra arenas are still not covered by the **visual** checkpoint: the
+  scenario takes no `render_capture`, so "each arena at its countdown" has no
+  capture and no approved reference image of its own and is still not covered.
 - **The four captures render the arena and are reproducible, and approved
   reference images now exist for them.** Each 256 x 256 capture shows
   the arena floor, its four walls, the four bumper boxes, the gold pickups and
@@ -391,9 +397,10 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 45 steps: the 30
+**Current lane state (honest).** The lane runs 49 steps: the 34
 scripting scenarios (including `frame_independence`, `pointer_ui`,
-`restart_recovery`, `combo_timing_sweep`, the four `s8_*` visual checkpoints,
+`restart_recovery`, `combo_timing_sweep`, the arena scenario `arenas_2_3`,
+the four `s8_*` visual checkpoints,
 the four persistence scenarios `persist_write`, `persist_read`,
 `persist_state_write` and `persist_state_read`, the ghost-replay scenario
 `ghost_replay` and the four physics scenarios `collision_edge`,
