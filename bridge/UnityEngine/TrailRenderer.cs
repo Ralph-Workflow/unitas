@@ -1,5 +1,44 @@
 namespace UnityEngine
 {
+    /// The authored trail settings the native trail keeps.
+    public struct TrailSettings
+    {
+        public float Time;
+        public float StartWidth;
+        public float EndWidth;
+        public float MinVertexDistance;
+        public Color StartColor;
+        public Color EndColor;
+
+        public TrailSettings(
+            float time,
+            float startWidth,
+            float endWidth,
+            float minVertexDistance,
+            Color startColor,
+            Color endColor)
+        {
+            Time = time;
+            StartWidth = startWidth;
+            EndWidth = endWidth;
+            MinVertexDistance = minVertexDistance;
+            StartColor = startColor;
+            EndColor = endColor;
+        }
+    }
+
+    /// The native trail a managed TrailRenderer reads and writes.
+    public interface ITrailProvider
+    {
+        bool TrySetTrailEmitting(ulong entity, bool emitting);
+
+        bool TryGetTrailEmitting(ulong entity, out bool emitting);
+
+        bool TrySetTrailSettings(ulong entity, TrailSettings settings);
+
+        bool TryGetTrailSettings(ulong entity, out TrailSettings settings);
+    }
+
     public sealed class TrailRenderer : Behaviour
     {
         private const float DefaultTime = 5f;
@@ -7,54 +46,136 @@ namespace UnityEngine
         private const float DefaultEndWidth = 0f;
         private const float DefaultMinVertexDistance = 0f;
 
+        /// The native trail the managed component reads and writes.
+        public static ITrailProvider? Provider { get; set; }
+
         private bool _emitting = true;
-        private float _time = DefaultTime;
-        private float _startWidth = DefaultStartWidth;
-        private float _endWidth = DefaultEndWidth;
-        private float _minVertexDistance = DefaultMinVertexDistance;
-        private Color _startColor = Color.white;
-        private Color _endColor = new Color(1f, 1f, 1f, 0f);
+        private TrailSettings _settings = new TrailSettings(
+            DefaultTime,
+            DefaultStartWidth,
+            DefaultEndWidth,
+            DefaultMinVertexDistance,
+            Color.white,
+            new Color(1f, 1f, 1f, 0f));
 
         public bool emitting
         {
-            get => _emitting;
-            set => _emitting = value;
+            get
+            {
+                if (TryNativeEntity(out ulong entity) && Provider!.TryGetTrailEmitting(entity, out bool native))
+                {
+                    return native;
+                }
+                return _emitting;
+            }
+            set
+            {
+                _emitting = value;
+                if (TryNativeEntity(out ulong entity))
+                {
+                    Provider!.TrySetTrailEmitting(entity, value);
+                }
+            }
         }
 
         public float time
         {
-            get => _time;
-            set => _time = value;
+            get => ReadSettings().Time;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.Time = value;
+                WriteSettings(settings);
+            }
         }
 
         public float startWidth
         {
-            get => _startWidth;
-            set => _startWidth = value;
+            get => ReadSettings().StartWidth;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.StartWidth = value;
+                WriteSettings(settings);
+            }
         }
 
         public float endWidth
         {
-            get => _endWidth;
-            set => _endWidth = value;
+            get => ReadSettings().EndWidth;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.EndWidth = value;
+                WriteSettings(settings);
+            }
         }
 
         public Color startColor
         {
-            get => _startColor;
-            set => _startColor = value;
+            get => ReadSettings().StartColor;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.StartColor = value;
+                WriteSettings(settings);
+            }
         }
 
         public Color endColor
         {
-            get => _endColor;
-            set => _endColor = value;
+            get => ReadSettings().EndColor;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.EndColor = value;
+                WriteSettings(settings);
+            }
         }
 
         public float minVertexDistance
         {
-            get => _minVertexDistance;
-            set => _minVertexDistance = value;
+            get => ReadSettings().MinVertexDistance;
+            set
+            {
+                TrailSettings settings = ReadSettings();
+                settings.MinVertexDistance = value;
+                WriteSettings(settings);
+            }
+        }
+
+        private TrailSettings ReadSettings()
+        {
+            if (TryNativeEntity(out ulong entity) && Provider!.TryGetTrailSettings(entity, out TrailSettings native))
+            {
+                return native;
+            }
+            return _settings;
+        }
+
+        private void WriteSettings(TrailSettings settings)
+        {
+            _settings = settings;
+            if (TryNativeEntity(out ulong entity))
+            {
+                Provider!.TrySetTrailSettings(entity, settings);
+            }
+        }
+
+        private bool TryNativeEntity(out ulong entity)
+        {
+            entity = 0;
+            if (Provider == null)
+            {
+                return false;
+            }
+            GameObject? owner = gameObject;
+            if (owner == null || owner.IsDestroyed)
+            {
+                return false;
+            }
+            entity = owner.NativeEntityId;
+            return entity != 0;
         }
     }
 }

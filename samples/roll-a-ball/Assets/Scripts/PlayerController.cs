@@ -27,6 +27,7 @@ namespace Unitas.Samples.RollABall
         private float _cameraYaw;
         private float _lastDashTime = float.NegativeInfinity;
         private int _dashCount;
+        private bool _reducedMotionTrailOff;
 
         private new void Awake()
         {
@@ -75,7 +76,21 @@ namespace Unitas.Samples.RollABall
             TrailRenderer? trail = _trail;
             if (trail != null)
             {
-                trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed;
+                if (ReducedMotion.IsEnabled)
+                {
+                    // The speed trail is the fast, sweeping motion the setting removes.
+                    if (!_reducedMotionTrailOff)
+                    {
+                        _reducedMotionTrailOff = true;
+                        Debug.Log("Reduced motion active trail off");
+                    }
+
+                    trail.emitting = false;
+                }
+                else
+                {
+                    trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed;
+                }
             }
         }
 

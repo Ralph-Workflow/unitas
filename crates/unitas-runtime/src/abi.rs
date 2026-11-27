@@ -5192,6 +5192,26 @@ pub extern "C" fn unitas_runtime_trail_set_emitting(handle: u64, entity: u64, em
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_trail_get_emitting(handle: u64, entity: u64) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        if state.runtime.trails().trail(entity).is_none() {
+            return -3;
+        }
+        let emitting = state.runtime.trails().emitting(entity);
+        state.clear_error();
+        if emitting { 1 } else { 0 }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_trail_set_full_width_speed(handle: u64, entity: u64, speed: f32) -> i32 {
     if entity == 0 || !speed.is_finite() {
         return -2;
