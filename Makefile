@@ -185,7 +185,7 @@ verify-unsafe:
 	@cargo test -p unitas-editor-abi
 
 verify-device:
-	@echo "owner: presentation and player"
+	@echo "owner: presentation"
 	@echo "trigger: every milestone touching presentation"
 	@echo "lane: make verify-device"
 	@echo "evidence: lane exit status and captured GPU/audio/input artifacts"
