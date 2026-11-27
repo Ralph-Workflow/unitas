@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
+DEVICE_PLAYER_BINARY = REPO_ROOT / "target" / "perf-lane" / "unitas-player-device"
+NON_DEVICE_PLAYER_MARKER = b"the windowed player requires the device feature"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 STEP_BUDGET_SECONDS = 300.0
 LANE_BUDGET_SECONDS = 600.0
@@ -251,12 +253,20 @@ MEASUREMENT_BYTES_LINE = re.compile(
 IMPORT_DURATION = re.compile(r"reimport ([0-9.]+)(ns|µs|ms|s)\b")
 DURATION_FACTOR_MS: dict[str, float] = {"ns": 1e-6, "µs": 1e-3, "ms": 1.0, "s": 1e3}
 
+PLAYER_BUILD_COMMAND = (
+    "cargo",
+    "build",
+    "-p",
+    "unitas-build",
+    "--bin",
+    "unitas-player",
+    "--features",
+    "device",
+)
+
 BUILD_STEPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("runtime-build", ("cargo", "build", "-p", "unitas-runtime")),
-    (
-        "player-build",
-        ("cargo", "build", "-p", "unitas-build", "--bin", "unitas-player", "--features", "device"),
-    ),
+    ("player-build", PLAYER_BUILD_COMMAND),
     ("bridge-build", ("dotnet", "build", "bridge/Unitas.sln", "--configuration", "Release")),
 )
 
@@ -410,11 +420,39 @@ def resolve_dotnet_root() -> Path | None:
     return None
 
 
+def stage_device_player(env: dict[str, str]) -> bool:
+    for attempt in range(2):
+        if not PLAYER_BINARY.exists():
+            sys.stderr.write(f"player binary missing at {PLAYER_BINARY}\n")
+            return False
+        if NON_DEVICE_PLAYER_MARKER not in PLAYER_BINARY.read_bytes():
+            DEVICE_PLAYER_BINARY.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(PLAYER_BINARY, DEVICE_PLAYER_BINARY)
+            return True
+        if (
+            attempt == 0
+            and run_step("player-build", PLAYER_BUILD_COMMAND, STEP_BUDGET_SECONDS, env) == 0
+        ):
+            continue
+        break
+    sys.stderr.write(
+        "the player build in target/debug carries no device feature; the windowed "
+        "player cannot start\n"
+    )
+    return False
+
+
 def measure_player_startup_command() -> int:
+    if not DEVICE_PLAYER_BINARY.exists():
+        sys.stderr.write(
+            f"the staged device player is missing at {DEVICE_PLAYER_BINARY}; run "
+            "the lane so it can stage one\n"
+        )
+        return 1
     with tempfile.TemporaryDirectory(prefix="unitas_perf_player_startup_") as temp_dir:
         bundle_dir = Path(temp_dir) / "bundle"
         stage_completed = subprocess.run(
-            [str(PLAYER_BINARY), "--sample", str(bundle_dir), "--frames", "1"],
+            [str(DEVICE_PLAYER_BINARY), "--sample", str(bundle_dir), "--frames", "1"],
             cwd=REPO_ROOT,
             check=False,
             capture_output=True,
@@ -427,7 +465,7 @@ def measure_player_startup_command() -> int:
         started = time.monotonic()
         launch_completed = subprocess.run(
             [
-                str(PLAYER_BINARY),
+                str(DEVICE_PLAYER_BINARY),
                 str(bundle_dir),
                 "--windowed",
                 "--width",
@@ -593,6 +631,12 @@ def run_perf_lane() -> int:
                 f"failure ({POLICY_CITATION})\n"
             )
             return 1
+    if not stage_device_player(env):
+        sys.stderr.write(
+            "FAIL verify-perf: the player build carries no device feature; the "
+            f"windowed startup measurement cannot run ({POLICY_CITATION})\n"
+        )
+        return 1
     failures = 0
     for name, command in MEASUREMENTS:
         measurement = run_measurement(name, command, STEP_BUDGET_SECONDS, env)
