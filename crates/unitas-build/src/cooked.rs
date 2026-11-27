@@ -1,6 +1,11 @@
 use std::fs;
 use std::path::Path;
 
+pub use unitas_asset::audio_import::{
+    cook_audio_candidates, cook_project_audio, default_audio_cache_dir, is_audio_source_path,
+    load_or_cook_audio, load_or_cook_audio_with_cache, CookedAudio, CookedAudioEntry,
+    CookedAudioManifest, AUDIO_IMPORTER_VERSION, COOKED_AUDIO_FORMAT_VERSION, COOKED_AUDIO_MAGIC,
+};
 use unitas_asset::dependencies::ImportSessionReport;
 use unitas_asset::import_cache::ImportCacheError;
 pub use unitas_asset::texture::{
@@ -51,6 +56,23 @@ pub fn stage_project_cooked_textures_with_cache(
     cook_project_textures(project_root, cache_dir, &cooked_dir).map_err(map_cache_error)
 }
 
+pub fn stage_project_cooked_audio(
+    project_root: &Path,
+    output_dir: &Path,
+) -> Result<(CookedAudioManifest, ImportSessionReport), BundleError> {
+    let cache_dir = default_audio_cache_dir(project_root);
+    stage_project_cooked_audio_with_cache(project_root, &cache_dir, output_dir)
+}
+
+pub fn stage_project_cooked_audio_with_cache(
+    project_root: &Path,
+    cache_dir: &Path,
+    output_dir: &Path,
+) -> Result<(CookedAudioManifest, ImportSessionReport), BundleError> {
+    let cooked_dir = output_dir.join(COOKED_DIR_NAME);
+    cook_project_audio(project_root, cache_dir, &cooked_dir).map_err(map_cache_error)
+}
+
 fn map_cache_error(error: ImportCacheError) -> BundleError {
     BundleError::Io {
         path: error.path,
@@ -76,7 +98,7 @@ fn copy_non_texture_directory(source: &Path, destination: &Path) -> Result<(), B
         let target = destination.join(entry.file_name());
         if path.is_dir() {
             copy_non_texture_directory(&path, &target)?;
-        } else if is_texture_source_path(&path) {
+        } else if is_texture_source_path(&path) || is_audio_source_path(&path) {
             if target.is_file() {
                 let _ = fs::remove_file(&target);
             }

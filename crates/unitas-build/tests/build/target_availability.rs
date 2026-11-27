@@ -368,9 +368,12 @@ fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emc
     assert_eq!(gaps.len(), 2);
     assert!(gaps
         .iter()
-        .any(|gap| gap.crate_name == "slice-ring-buffer" && gap.version == "0.3.4"));
+        .any(|gap| gap.crate_name == "libloading" && gap.version == "0.8.9"));
     assert!(gaps
         .iter()
-        .any(|gap| gap.crate_name == "minimp3-sys" && gap.version == "0.6.0"));
+        .any(|gap| gap.crate_name == "wgpu" && gap.version == "30.0.2"));
+    assert!(!gaps
+        .iter()
+        .any(|gap| gap.crate_name == "slice-ring-buffer" || gap.crate_name == "minimp3-sys"));
     Ok(())
 }

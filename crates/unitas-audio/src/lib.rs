@@ -1,9 +1,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::path::Path;
-use unitas_asset::audio_import::{
-    decode_aiff, decode_audio_for_path, decode_mp3, decode_ogg_vorbis, decode_wav,
-};
+use unitas_asset::audio_import::{load_or_cook_audio, CookedAudio};
 use unitas_core::EntityId;
 
 #[cfg(feature = "device")]
@@ -49,11 +47,9 @@ pub struct MusicStream {
 }
 
 impl MusicStream {
-    fn new(bytes: &[u8]) -> Result<Self, AudioError> {
-        let decoded = decode_ogg_vorbis(bytes)
-            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
-        let channels = decoded.channels;
-        let sample_rate = decoded.sample_rate;
+    pub fn from_cooked(cooked: &CookedAudio) -> Result<Self, AudioError> {
+        let channels = cooked.channels;
+        let sample_rate = cooked.sample_rate;
         if channels == 0 || channels > 2 {
             return Err(AudioError::UnsupportedFormat(format!(
                 "{channels} channels (only mono or stereo supported)"
@@ -64,7 +60,7 @@ impl MusicStream {
                 "zero sample rate".to_string(),
             ));
         }
-        let samples = decoded
+        let samples = cooked
             .samples
             .iter()
             .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
@@ -75,6 +71,24 @@ impl MusicStream {
             sample_rate,
             position: 0,
         })
+    }
+
+    pub fn from_cooked_bytes(bytes: &[u8]) -> Result<Self, AudioError> {
+        let cooked = CookedAudio::decode(bytes)
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        Self::from_cooked(&cooked)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(bytes: &[u8]) -> Result<Self, AudioError> {
+        let settings = unitas_asset::audio_import::AudioImportSettings::default();
+        let imported = unitas_asset::audio_import::import_audio(bytes, "stream.ogg", &settings)
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        if imported.state != unitas_asset::audio_import::AudioImportState::Imported {
+            return Err(AudioError::UnsupportedFormat(imported.notes.join("; ")));
+        }
+        let cooked = CookedAudio::from_import(&imported);
+        Self::from_cooked(&cooked)
     }
 
     pub fn channels(&self) -> u16 {
@@ -243,6 +257,32 @@ impl AudioClip {
     pub fn parse_wav(bytes: &[u8]) -> Result<Self, AudioError> {
         parse_wav(bytes)
     }
+
+    pub fn from_cooked(cooked: &CookedAudio) -> Result<Self, AudioError> {
+        if cooked.channels == 0 || cooked.channels > 2 {
+            return Err(AudioError::UnsupportedFormat(format!(
+                "{} channels (only mono or stereo supported)",
+                cooked.channels
+            )));
+        }
+        if cooked.sample_rate == 0 {
+            return Err(AudioError::UnsupportedFormat(
+                "zero sample rate".to_string(),
+            ));
+        }
+        let samples = cooked
+            .samples
+            .iter()
+            .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
+            .collect();
+        Ok(Self::new(cooked.channels, cooked.sample_rate, samples))
+    }
+
+    pub fn from_cooked_bytes(bytes: &[u8]) -> Result<Self, AudioError> {
+        let cooked = CookedAudio::decode(bytes)
+            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+        Self::from_cooked(&cooked)
+    }
 }
 
 fn resample_clip(clip: &AudioClip, target_rate: u32) -> AudioClip {
@@ -290,45 +330,48 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
-pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
-        return decode_shared(decode_wav(bytes));
-    }
-    if bytes.starts_with(b"OggS") {
-        return decode_shared(decode_ogg_vorbis(bytes));
-    }
-    if bytes.starts_with(b"ID3")
-        || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
-    {
-        return decode_shared(decode_mp3(bytes));
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"AIFF" {
-        return decode_shared(decode_aiff(bytes));
-    }
-    Err(AudioError::UnsupportedFormat(
-        "unrecognized audio container".to_string(),
-    ))
+pub fn parse_cooked_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    AudioClip::from_cooked_bytes(bytes)
 }
 
-fn decode_shared(
-    decoded: Result<
-        unitas_asset::audio_import::PcmClip,
-        unitas_asset::audio_import::AudioImportError,
-    >,
-) -> Result<AudioClip, AudioError> {
-    let clip = decoded.map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
-    if clip.channels > 2 {
-        return Err(AudioError::UnsupportedFormat(format!(
-            "{} channels (only mono or stereo supported)",
-            clip.channels
-        )));
+#[cfg(not(target_arch = "wasm32"))]
+fn import_source_bytes_to_clip(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    if bytes.starts_with(&unitas_asset::audio_import::COOKED_AUDIO_MAGIC) {
+        return AudioClip::from_cooked_bytes(bytes);
     }
-    let samples = clip
-        .samples
-        .iter()
-        .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
-        .collect();
-    Ok(AudioClip::new(clip.channels, clip.sample_rate, samples))
+    let file_name = if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        "clip.wav"
+    } else if bytes.starts_with(b"OggS") {
+        "clip.ogg"
+    } else if bytes.starts_with(b"ID3")
+        || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+    {
+        "clip.mp3"
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"AIFF" {
+        "clip.aiff"
+    } else {
+        return Err(AudioError::UnsupportedFormat(
+            "unrecognized audio container".to_string(),
+        ));
+    };
+    let settings = unitas_asset::audio_import::AudioImportSettings::default();
+    let imported = unitas_asset::audio_import::import_audio(bytes, file_name, &settings)
+        .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
+    if imported.state != unitas_asset::audio_import::AudioImportState::Imported {
+        return Err(AudioError::UnsupportedFormat(imported.notes.join("; ")));
+    }
+    let cooked = CookedAudio::from_import(&imported);
+    AudioClip::from_cooked(&cooked)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    import_source_bytes_to_clip(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    AudioClip::from_cooked_bytes(bytes)
 }
 
 pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
@@ -625,20 +668,36 @@ impl AudioWorld {
         id
     }
 
+    pub fn load_cooked_clip(&mut self, cooked: &CookedAudio) -> Result<AudioClipId, AudioError> {
+        let clip = AudioClip::from_cooked(cooked)?;
+        Ok(self.register_clip(clip))
+    }
+
+    pub fn load_cooked_bytes(&mut self, bytes: &[u8]) -> Result<AudioClipId, AudioError> {
+        let clip = AudioClip::from_cooked_bytes(bytes)?;
+        Ok(self.register_clip(clip))
+    }
+
     pub fn load_wav_bytes(&mut self, bytes: &[u8]) -> Result<AudioClipId, AudioError> {
+        if bytes.starts_with(&unitas_asset::audio_import::COOKED_AUDIO_MAGIC) {
+            return self.load_cooked_bytes(bytes);
+        }
         let clip = parse_wav(bytes)?;
         Ok(self.register_clip(clip))
     }
 
     pub fn load_wav_file(&mut self, path: &Path) -> Result<AudioClipId, AudioError> {
-        let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
-        self.load_wav_bytes(&bytes)
+        if let Some(cooked) = load_or_cook_audio(path) {
+            return self.load_cooked_clip(&cooked);
+        }
+        Err(AudioError::UnsupportedFormat(format!(
+            "cannot load or cook audio clip '{}'",
+            path.display()
+        )))
     }
 
     pub fn load_audio_file(&mut self, path: &Path) -> Result<AudioClipId, AudioError> {
-        let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
-        let clip = decode_shared(decode_audio_for_path(&bytes, path))?;
-        Ok(self.register_clip(clip))
+        self.load_wav_file(path)
     }
 
     pub fn clip(&self, clip_id: AudioClipId) -> Option<&AudioClip> {
@@ -804,8 +863,30 @@ impl AudioWorld {
         self.master_volume <= 0.0 || self.group_volumes[group.index()] <= 0.0
     }
 
+    pub fn load_music_cooked(&mut self, cooked: &CookedAudio) -> Result<MusicStreamId, AudioError> {
+        let mut stream = MusicStream::from_cooked(cooked)?;
+        if let Some(rate) = self.device_sample_rate {
+            stream.resample(rate);
+        }
+        let id = self.next_music_stream_id;
+        self.next_music_stream_id += 1;
+        self.music_streams.insert(id, stream);
+        Ok(id)
+    }
+
     pub fn load_music_bytes(&mut self, bytes: &[u8]) -> Result<MusicStreamId, AudioError> {
-        let mut stream = MusicStream::new(bytes)?;
+        let mut stream = if bytes.starts_with(&unitas_asset::audio_import::COOKED_AUDIO_MAGIC) {
+            MusicStream::from_cooked_bytes(bytes)?
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                MusicStream::new(bytes)?
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                MusicStream::from_cooked_bytes(bytes)?
+            }
+        };
         if let Some(rate) = self.device_sample_rate {
             stream.resample(rate);
         }
@@ -816,8 +897,13 @@ impl AudioWorld {
     }
 
     pub fn load_music_file(&mut self, path: &Path) -> Result<MusicStreamId, AudioError> {
-        let bytes = std::fs::read(path).map_err(|err| AudioError::Io(err.to_string()))?;
-        self.load_music_bytes(&bytes)
+        if let Some(cooked) = load_or_cook_audio(path) {
+            return self.load_music_cooked(&cooked);
+        }
+        Err(AudioError::UnsupportedFormat(format!(
+            "cannot load or cook music stream '{}'",
+            path.display()
+        )))
     }
 
     pub fn music_stream(&self, stream_id: MusicStreamId) -> Option<&MusicStream> {
@@ -2028,7 +2114,7 @@ mod tests {
     const OGG_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sine_mono.ogg");
 
     fn reference_ogg_samples() -> Result<(u16, Vec<i16>), AudioError> {
-        let clip = decode_ogg_vorbis(OGG_FIXTURE)
+        let clip = unitas_asset::audio_import::decode_ogg_vorbis(OGG_FIXTURE)
             .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
         Ok((clip.channels, clip.samples))
     }

@@ -1,14 +1,39 @@
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::dependencies::{ImportDiagnostic, ImportOutcome};
+use crate::dependencies::{ImportCandidate, ImportDiagnostic, ImportOutcome};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::dependencies::{ImportFingerprint, ImportSession, ImportSessionReport};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::import_cache::ImportCache;
+use crate::import_cache::ImportCacheError;
+use crate::json::{self, JsonValue};
+use crate::meta::guid_from_meta_text;
+use crate::texture::{
+    COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME, COOKED_MANIFEST_FORMAT,
+    COOKED_MANIFEST_FORMAT_VERSION,
+};
+#[cfg(not(target_arch = "wasm32"))]
 use lewton::header::HeaderReadError;
+#[cfg(not(target_arch = "wasm32"))]
 use lewton::inside_ogg::OggStreamReader;
+#[cfg(not(target_arch = "wasm32"))]
 use lewton::{OggReadError, VorbisError};
+#[cfg(not(target_arch = "wasm32"))]
 use minimp3::{Decoder as Mp3Decoder, Error as Mp3Error};
 
 pub const AUDIO_IMPORTER_SECTION: &str = "AudioImporter:";
+pub const COOKED_AUDIO_MAGIC: [u8; 4] = *b"UAUD";
+pub const COOKED_AUDIO_FORMAT_VERSION: u32 = 1;
+pub const AUDIO_IMPORTER_VERSION: &str = "unitas-audio-cook-v1";
+
+const COOKED_AUDIO_HEADER_BYTES: usize = 20;
+const BUNDLE_MANIFEST_FILENAME: &str = "bundle.manifest";
+static AUDIO_COOK_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 const SAMPLE_RATE_OVERRIDE: u32 = 2;
 
@@ -174,6 +199,61 @@ impl AudioImportSettings {
         }
         settings.platform_settings = parse_platform_settings(&lines)?;
         Ok(settings)
+    }
+
+    pub fn to_meta_text(&self) -> String {
+        let load_code = match self.load_type {
+            AudioLoadType::DecompressOnLoad => 0,
+            AudioLoadType::CompressedInMemory => 1,
+            AudioLoadType::Streaming => 2,
+        };
+        let comp_code = match self.compression_format {
+            AudioCompressionFormat::PCM => 0,
+            AudioCompressionFormat::Vorbis => 1,
+            AudioCompressionFormat::ADPCM => 2,
+            AudioCompressionFormat::MP3 => 3,
+        };
+        let mut text = String::from("AudioImporter:\n");
+        text.push_str(&format!("  loadType: {load_code}\n"));
+        text.push_str(&format!("  compressionFormat: {comp_code}\n"));
+        text.push_str(&format!(
+            "  forceToMono: {}\n",
+            u8::from(self.force_to_mono)
+        ));
+        text.push_str(&format!("  normalize: {}\n", u8::from(self.normalize)));
+        text.push_str(&format!(
+            "  preloadAudioData: {}\n",
+            u8::from(self.preload_audio_data)
+        ));
+        if let Some(rate) = self.sample_rate_override {
+            text.push_str(&format!("  sampleRateSetting: {SAMPLE_RATE_OVERRIDE}\n"));
+            text.push_str(&format!("  sampleRateOverride: {rate}\n"));
+        } else {
+            text.push_str("  sampleRateSetting: 0\n");
+        }
+        text.push_str(&format!("  quality: {}\n", self.quality));
+        if !self.platform_settings.is_empty() {
+            text.push_str("  platformSettings:\n");
+            for platform in &self.platform_settings {
+                let p_comp = match platform.compression_format {
+                    AudioCompressionFormat::PCM => 0,
+                    AudioCompressionFormat::Vorbis => 1,
+                    AudioCompressionFormat::ADPCM => 2,
+                    AudioCompressionFormat::MP3 => 3,
+                };
+                text.push_str(&format!("  - buildTarget: {}\n", platform.build_target));
+                text.push_str(&format!(
+                    "    overridden: {}\n",
+                    u8::from(platform.overridden)
+                ));
+                text.push_str(&format!("    compressionFormat: {p_comp}\n"));
+                text.push_str(&format!("    quality: {}\n", platform.quality));
+                if let Some(rate) = platform.sample_rate {
+                    text.push_str(&format!("    sampleRate: {rate}\n"));
+                }
+            }
+        }
+        text
     }
 }
 
@@ -389,12 +469,14 @@ impl fmt::Display for AudioImportError {
 
 impl std::error::Error for AudioImportError {}
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Compression {
     BigEndian,
     LittleEndian,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Comm {
     channels: u16,
     frames: u32,
@@ -403,10 +485,12 @@ struct Comm {
     compression: Compression,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Ssnd<'a> {
     data: &'a [u8],
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_aiff(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     if bytes.len() < 12 {
         return Err(AudioImportError::Truncated);
@@ -447,6 +531,7 @@ pub fn decode_aiff(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     decode_samples(&comm, &ssnd)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_comm(body: &[u8], aifc: bool) -> Result<Comm, AudioImportError> {
     if body.len() < 18 {
         return Err(AudioImportError::Truncated);
@@ -480,6 +565,7 @@ fn parse_comm(body: &[u8], aifc: bool) -> Result<Comm, AudioImportError> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_ssnd(body: &[u8]) -> Result<Ssnd<'_>, AudioImportError> {
     if body.len() < 8 {
         return Err(AudioImportError::Truncated);
@@ -493,6 +579,7 @@ fn parse_ssnd(body: &[u8]) -> Result<Ssnd<'_>, AudioImportError> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_samples(comm: &Comm, ssnd: &Ssnd<'_>) -> Result<PcmClip, AudioImportError> {
     let bytes_per_sample = match comm.sample_size {
         8 => 1usize,
@@ -538,6 +625,7 @@ fn decode_samples(comm: &Comm, ssnd: &Ssnd<'_>) -> Result<PcmClip, AudioImportEr
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_extended80(bytes: &[u8]) -> Result<u32, AudioImportError> {
     if bytes.len() < 10 {
         return Err(AudioImportError::Truncated);
@@ -579,6 +667,7 @@ fn decode_extended80(bytes: &[u8]) -> Result<u32, AudioImportError> {
     Ok(value as u32)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_ogg_vorbis(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     if bytes.len() < 4 {
         return Err(AudioImportError::Truncated);
@@ -614,6 +703,7 @@ pub fn decode_ogg_vorbis(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn map_vorbis_error(error: VorbisError) -> AudioImportError {
     match error {
         VorbisError::BadHeader(HeaderReadError::NotVorbisHeader) => {
@@ -629,6 +719,7 @@ fn map_vorbis_error(error: VorbisError) -> AudioImportError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_mp3(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     if bytes.len() < 3 {
         return Err(AudioImportError::Truncated);
@@ -716,12 +807,14 @@ pub fn decode_mp3(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WavEncoding {
     Pcm,
     IeeeFloat,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct WavFmt {
     encoding: WavEncoding,
     channels: u16,
@@ -729,6 +822,7 @@ struct WavFmt {
     bits_per_sample: u16,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_wav(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     if bytes.len() < 12 {
         return Err(AudioImportError::Truncated);
@@ -767,6 +861,7 @@ pub fn decode_wav(bytes: &[u8]) -> Result<PcmClip, AudioImportError> {
     decode_wav_samples(&fmt_chunk, data_chunk)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_wav_fmt(body: &[u8]) -> Result<WavFmt, AudioImportError> {
     if body.len() < 16 {
         return Err(AudioImportError::Truncated);
@@ -811,6 +906,7 @@ fn parse_wav_fmt(body: &[u8]) -> Result<WavFmt, AudioImportError> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn wav_format_name(format_tag: u16) -> &'static str {
     match format_tag {
         0x0002 => "MS ADPCM",
@@ -822,6 +918,7 @@ fn wav_format_name(format_tag: u16) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_wav_samples(fmt_chunk: &WavFmt, data: &[u8]) -> Result<PcmClip, AudioImportError> {
     let bytes_per_sample = match (fmt_chunk.encoding, fmt_chunk.bits_per_sample) {
         (WavEncoding::Pcm, 8) => 1usize,
@@ -876,6 +973,7 @@ fn decode_wav_samples(fmt_chunk: &WavFmt, data: &[u8]) -> Result<PcmClip, AudioI
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn float_to_i16(value: f64) -> i16 {
     if !value.is_finite() {
         return 0;
@@ -890,8 +988,10 @@ fn float_to_i16(value: f64) -> i16 {
 
 pub fn is_supported_audio_extension(extension: &str) -> bool {
     extension.eq_ignore_ascii_case("wav")
+        || extension.eq_ignore_ascii_case("wave")
         || extension.eq_ignore_ascii_case("aiff")
         || extension.eq_ignore_ascii_case("aif")
+        || extension.eq_ignore_ascii_case("aifc")
         || extension.eq_ignore_ascii_case("ogg")
         || extension.eq_ignore_ascii_case("mp3")
 }
@@ -902,6 +1002,7 @@ pub fn is_supported_audio_path(path: &Path) -> bool {
         .is_some_and(is_supported_audio_extension)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_audio(bytes: &[u8], file_name: &str) -> Result<PcmClip, AudioImportError> {
     let extension = extension_of(file_name);
     if is_aiff(bytes)
@@ -926,11 +1027,13 @@ pub fn decode_audio(bytes: &[u8], file_name: &str) -> Result<PcmClip, AudioImpor
     Err(AudioImportError::NotAiff)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_audio_for_path(bytes: &[u8], path: &Path) -> Result<PcmClip, AudioImportError> {
     let file_name = path.to_str().unwrap_or_default();
     decode_audio(bytes, file_name)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn detect_audio_state(bytes: &[u8], file_name: &str) -> AudioImportState {
     if recognized_unsupported(bytes, file_name).is_some() {
         return AudioImportState::NotYetSupported;
@@ -968,6 +1071,7 @@ pub fn detect_audio_state(bytes: &[u8], file_name: &str) -> AudioImportState {
     AudioImportState::UnsupportedContainer
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn import_audio(
     bytes: &[u8],
     file_name: &str,
@@ -976,6 +1080,7 @@ pub fn import_audio(
     import_audio_for_target(bytes, file_name, settings, None)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn import_audio_for_target(
     bytes: &[u8],
     file_name: &str,
@@ -1023,6 +1128,7 @@ pub fn import_audio_for_target(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn apply_import_transforms(
     clip: &mut PcmClip,
     settings: &AudioImportSettings,
@@ -1123,29 +1229,35 @@ pub fn audio_import_outcome(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_aiff(bytes: &[u8]) -> bool {
     bytes.len() >= 12
         && &bytes[0..4] == b"FORM"
         && (&bytes[8..12] == b"AIFF" || &bytes[8..12] == b"AIFC")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_ogg(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && &bytes[0..4] == b"OggS"
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_mp3(bytes: &[u8]) -> bool {
     (bytes.len() >= 3 && &bytes[0..3] == b"ID3")
         || (bytes.len() >= 2 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_wav(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_xm(bytes: &[u8]) -> bool {
     bytes.starts_with(b"Extended Module:")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn extension_of(file_name: &str) -> &str {
     match file_name.rsplit_once('.') {
         Some((_, extension)) => extension,
@@ -1153,6 +1265,7 @@ fn extension_of(file_name: &str) -> &str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn recognized_unsupported(bytes: &[u8], file_name: &str) -> Option<&'static str> {
     if is_xm(bytes) {
         return Some("xm tracker module format is Unsupported (not yet supported)");
@@ -1167,6 +1280,7 @@ fn recognized_unsupported(bytes: &[u8], file_name: &str) -> Option<&'static str>
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn unsupported_reason(bytes: &[u8], file_name: &str) -> String {
     if let Some(reason) = recognized_unsupported(bytes, file_name) {
         return reason.to_string();
@@ -1184,10 +1298,12 @@ fn unsupported_reason(bytes: &[u8], file_name: &str) -> String {
     "audio container is not yet supported".to_string()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_u16(bytes: &[u8]) -> u16 {
     u16::from_be_bytes([bytes[0], bytes[1]])
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_u32(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
@@ -1198,4 +1314,689 @@ fn read_u16_le(bytes: &[u8]) -> u16 {
 
 fn read_u32_le(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let seq = AUDIO_COOK_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp = path.file_name().unwrap_or_default().to_os_string();
+    temp.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let temp_path = path.with_file_name(temp);
+    fs::write(&temp_path, bytes)?;
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CookedAudio {
+    pub format_version: u32,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub samples: Vec<i16>,
+}
+
+impl CookedAudio {
+    pub fn from_pcm_clip(clip: &PcmClip) -> Self {
+        CookedAudio {
+            format_version: COOKED_AUDIO_FORMAT_VERSION,
+            channels: clip.channels,
+            sample_rate: clip.sample_rate,
+            samples: clip.samples.clone(),
+        }
+    }
+
+    pub fn from_import(result: &AudioImportResult) -> Self {
+        Self::from_pcm_clip(&result.clip)
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let sample_count = u32::try_from(self.samples.len()).unwrap_or(u32::MAX);
+        let mut out =
+            Vec::with_capacity(COOKED_AUDIO_HEADER_BYTES + self.samples.len().saturating_mul(2));
+        out.extend_from_slice(&COOKED_AUDIO_MAGIC);
+        out.extend_from_slice(&self.format_version.to_le_bytes());
+        out.extend_from_slice(&self.channels.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&self.sample_rate.to_le_bytes());
+        out.extend_from_slice(&sample_count.to_le_bytes());
+        for sample in &self.samples {
+            out.extend_from_slice(&sample.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, AudioImportError> {
+        if bytes.len() < COOKED_AUDIO_HEADER_BYTES {
+            return Err(AudioImportError::Truncated);
+        }
+        if bytes.get(0..4) != Some(&COOKED_AUDIO_MAGIC) {
+            return Err(AudioImportError::NotWav);
+        }
+        let version = read_u32_le(&bytes[4..8]);
+        if version != COOKED_AUDIO_FORMAT_VERSION {
+            return Err(AudioImportError::NotYetSupported(
+                "unsupported cooked audio format version",
+            ));
+        }
+        let channels = read_u16_le(&bytes[8..10]);
+        if channels == 0 || channels > 2 {
+            return Err(AudioImportError::NotYetSupported(
+                "cooked audio must have 1 or 2 channels",
+            ));
+        }
+        let sample_rate = read_u32_le(&bytes[12..16]);
+        if sample_rate == 0 {
+            return Err(AudioImportError::InvalidSampleRate);
+        }
+        let sample_count = read_u32_le(&bytes[16..20]) as usize;
+        if !sample_count.is_multiple_of(usize::from(channels)) {
+            return Err(AudioImportError::Truncated);
+        }
+        let payload_len = sample_count
+            .checked_mul(2)
+            .ok_or(AudioImportError::Truncated)?;
+        let expected_total = COOKED_AUDIO_HEADER_BYTES
+            .checked_add(payload_len)
+            .ok_or(AudioImportError::Truncated)?;
+        if bytes.len() < expected_total {
+            return Err(AudioImportError::Truncated);
+        }
+        if bytes.len() != expected_total {
+            return Err(AudioImportError::Truncated);
+        }
+        let payload = &bytes[COOKED_AUDIO_HEADER_BYTES..expected_total];
+        let mut samples = Vec::with_capacity(sample_count);
+        for chunk in payload.chunks_exact(2) {
+            samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        Ok(CookedAudio {
+            format_version: version,
+            channels,
+            sample_rate,
+            samples,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CookedAudioEntry {
+    pub asset_path: String,
+    pub guid: String,
+    pub cooked_path: String,
+    pub content_hash: String,
+    pub format_version: u32,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub sample_count: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CookedAudioManifest {
+    pub format_version: u32,
+    pub entries: BTreeMap<String, CookedAudioEntry>,
+}
+
+impl CookedAudioManifest {
+    pub fn new() -> Self {
+        CookedAudioManifest {
+            format_version: COOKED_MANIFEST_FORMAT_VERSION,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn get_by_asset_path(&self, asset_path: &str) -> Option<&CookedAudioEntry> {
+        let normalized = normalize_slashes(asset_path);
+        self.entries.get(&normalized)
+    }
+
+    pub fn get_by_guid(&self, guid: &str) -> Option<&CookedAudioEntry> {
+        self.entries.values().find(|entry| entry.guid == guid)
+    }
+
+    pub fn load_from_dir(cooked_dir: &Path) -> Option<Self> {
+        let text = fs::read_to_string(cooked_dir.join(COOKED_MANIFEST_FILENAME)).ok()?;
+        Self::decode(&text)
+    }
+
+    pub fn save_to_dir(&self, cooked_dir: &Path) -> Result<PathBuf, ImportCacheError> {
+        fs::create_dir_all(cooked_dir).map_err(|error| ImportCacheError {
+            path: cooked_dir.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        let path = cooked_dir.join(COOKED_MANIFEST_FILENAME);
+        let preserved_textures: Vec<JsonValue> = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| json::parse(&text).ok())
+            .and_then(|val| {
+                val.get("entries")
+                    .and_then(JsonValue::as_array)
+                    .map(<[JsonValue]>::to_vec)
+            })
+            .unwrap_or_default();
+        let encoded = self.encode_with_texture_entries(preserved_textures);
+        write_file_atomic(&path, encoded.as_bytes()).map_err(|error| ImportCacheError {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
+        Ok(path)
+    }
+
+    pub fn encode(&self) -> String {
+        self.encode_with_texture_entries(Vec::new())
+    }
+
+    fn encode_with_texture_entries(&self, texture_entries: Vec<JsonValue>) -> String {
+        let audio_entries: Vec<JsonValue> = self
+            .entries
+            .values()
+            .map(encode_audio_manifest_entry)
+            .collect();
+        json::write(&JsonValue::Object(vec![
+            (
+                "format".to_string(),
+                JsonValue::String(COOKED_MANIFEST_FORMAT.to_string()),
+            ),
+            (
+                "formatVersion".to_string(),
+                JsonValue::Number(f64::from(self.format_version)),
+            ),
+            ("entries".to_string(), JsonValue::Array(texture_entries)),
+            ("audioEntries".to_string(), JsonValue::Array(audio_entries)),
+        ]))
+    }
+
+    pub fn decode(text: &str) -> Option<Self> {
+        let value = json::parse(text).ok()?;
+        if value.get("format").and_then(JsonValue::as_str) != Some(COOKED_MANIFEST_FORMAT) {
+            return None;
+        }
+        let version = u32::try_from(value.get("formatVersion").and_then(JsonValue::as_i64)?)
+            .ok()
+            .filter(|v| *v == COOKED_MANIFEST_FORMAT_VERSION)?;
+        let mut entries = BTreeMap::new();
+        if let Some(items) = value.get("audioEntries").and_then(JsonValue::as_array) {
+            for item in items {
+                let entry = decode_audio_manifest_entry(item)?;
+                entries.insert(entry.asset_path.clone(), entry);
+            }
+        }
+        Some(CookedAudioManifest {
+            format_version: version,
+            entries,
+        })
+    }
+}
+
+fn encode_audio_manifest_entry(entry: &CookedAudioEntry) -> JsonValue {
+    JsonValue::Object(vec![
+        (
+            "assetPath".to_string(),
+            JsonValue::String(entry.asset_path.clone()),
+        ),
+        ("guid".to_string(), JsonValue::String(entry.guid.clone())),
+        (
+            "cookedPath".to_string(),
+            JsonValue::String(entry.cooked_path.clone()),
+        ),
+        (
+            "contentHash".to_string(),
+            JsonValue::String(entry.content_hash.clone()),
+        ),
+        (
+            "formatVersion".to_string(),
+            JsonValue::Number(f64::from(entry.format_version)),
+        ),
+        (
+            "channels".to_string(),
+            JsonValue::Number(f64::from(entry.channels)),
+        ),
+        (
+            "sampleRate".to_string(),
+            JsonValue::Number(f64::from(entry.sample_rate)),
+        ),
+        (
+            "sampleCount".to_string(),
+            JsonValue::Number(f64::from(entry.sample_count)),
+        ),
+    ])
+}
+
+fn decode_audio_manifest_entry(value: &JsonValue) -> Option<CookedAudioEntry> {
+    Some(CookedAudioEntry {
+        asset_path: value.get("assetPath")?.as_str()?.to_string(),
+        guid: value.get("guid")?.as_str()?.to_string(),
+        cooked_path: value.get("cookedPath")?.as_str()?.to_string(),
+        content_hash: value.get("contentHash")?.as_str()?.to_string(),
+        format_version: u32::try_from(value.get("formatVersion")?.as_i64()?).ok()?,
+        channels: u16::try_from(value.get("channels")?.as_i64()?).ok()?,
+        sample_rate: u32::try_from(value.get("sampleRate")?.as_i64()?).ok()?,
+        sample_count: u32::try_from(value.get("sampleCount")?.as_i64()?).ok()?,
+    })
+}
+
+pub fn is_audio_source_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "wav" | "wave" | "ogg" | "mp3" | "aif" | "aiff" | "aifc"
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn cook_project_audio(
+    project_root: &Path,
+    cache_dir: &Path,
+    cooked_out_dir: &Path,
+) -> Result<(CookedAudioManifest, ImportSessionReport), ImportCacheError> {
+    let assets_dir = project_root.join("Assets");
+    let mut source_paths = Vec::new();
+    if assets_dir.is_dir() {
+        collect_audio_files(&assets_dir, &mut source_paths)?;
+        source_paths.sort();
+    }
+    let mut candidates = Vec::with_capacity(source_paths.len());
+    for source_path in &source_paths {
+        let rel = source_path
+            .strip_prefix(project_root)
+            .unwrap_or(source_path);
+        let rel_key = normalize_slashes(&rel.to_string_lossy());
+        candidates.push(build_audio_candidate(source_path, PathBuf::from(rel_key))?);
+    }
+    cook_audio_candidates(&candidates, cache_dir, Some(cooked_out_dir))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn cook_audio_candidates(
+    candidates: &[ImportCandidate],
+    cache_dir: &Path,
+    cooked_out_dir: Option<&Path>,
+) -> Result<(CookedAudioManifest, ImportSessionReport), ImportCacheError> {
+    let cache_cooked_dir = cache_dir.join(COOKED_DIR_NAME);
+    fs::create_dir_all(&cache_cooked_dir).map_err(|error| ImportCacheError {
+        path: cache_cooked_dir.clone(),
+        message: error.to_string(),
+    })?;
+    let cached_manifest = CookedAudioManifest::load_from_dir(&cache_cooked_dir).unwrap_or_default();
+    let mut cache = ImportCache::open(cache_dir);
+    prune_missing_cached_audio_artifacts(
+        &mut cache,
+        &cache_cooked_dir,
+        &cached_manifest,
+        candidates,
+    );
+    let mut session = ImportSession::with_cache(cache);
+    let mut freshly_cooked: BTreeMap<String, CookedAudioEntry> = BTreeMap::new();
+
+    let report = session.run(candidates, &mut |candidate| {
+        cook_single_audio_candidate(candidate, &cache_cooked_dir, &mut freshly_cooked)
+    });
+    if let Some(error) = session.cache_error() {
+        return Err(error.clone());
+    }
+
+    let mut manifest = CookedAudioManifest::new();
+    for (key, entry) in &cached_manifest.entries {
+        manifest.entries.insert(key.clone(), entry.clone());
+    }
+    for candidate in candidates {
+        let key = normalize_slashes(&candidate.path.to_string_lossy());
+        if let Some(entry) = freshly_cooked.remove(&key) {
+            manifest.entries.insert(key, entry);
+        }
+    }
+    manifest.save_to_dir(&cache_cooked_dir)?;
+    if let Some(out_dir) = cooked_out_dir {
+        let mut requested_manifest = CookedAudioManifest::new();
+        for candidate in candidates {
+            let key = normalize_slashes(&candidate.path.to_string_lossy());
+            if let Some(entry) = manifest.entries.get(&key) {
+                requested_manifest.entries.insert(key, entry.clone());
+            }
+        }
+        stage_cooked_audio_outputs(&cache_cooked_dir, out_dir, &requested_manifest)?;
+        return Ok((requested_manifest, report));
+    }
+    Ok((manifest, report))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_missing_cached_audio_artifacts(
+    cache: &mut ImportCache,
+    cache_cooked_dir: &Path,
+    cached_manifest: &CookedAudioManifest,
+    candidates: &[ImportCandidate],
+) {
+    let mut missing = Vec::new();
+    for candidate in candidates {
+        let key = normalize_slashes(&candidate.path.to_string_lossy());
+        let artifact_exists = cached_manifest
+            .get_by_asset_path(&key)
+            .map(|entry| cache_cooked_dir.join(&entry.cooked_path).is_file())
+            .unwrap_or(false);
+        if !artifact_exists {
+            missing.push(candidate.path.clone());
+        }
+    }
+    if !missing.is_empty() {
+        let retained: Vec<_> = cache
+            .records()
+            .filter(|record| !missing.contains(&record.path))
+            .cloned()
+            .collect();
+        cache.replace(retained);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn cook_single_audio_candidate(
+    candidate: &ImportCandidate,
+    cache_cooked_dir: &Path,
+    freshly_cooked: &mut BTreeMap<String, CookedAudioEntry>,
+) -> ImportOutcome {
+    let asset_key = normalize_slashes(&candidate.path.to_string_lossy());
+    let file_name = candidate
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("clip.wav");
+    let settings = AudioImportSettings::from_meta_text(&candidate.metadata).unwrap_or_default();
+    let imported = match import_audio(&candidate.source, file_name, &settings) {
+        Ok(imported) if imported.state == AudioImportState::Imported => imported,
+        Ok(imported) => {
+            return ImportOutcome::failed(ImportDiagnostic::new(
+                asset_key,
+                imported.notes.join("; "),
+                "the audio clip stays failed",
+            ));
+        }
+        Err(error) => {
+            return ImportOutcome::failed(ImportDiagnostic::new(
+                asset_key,
+                error.to_string(),
+                "the audio clip stays failed",
+            ));
+        }
+    };
+    if imported.clip.channels == 0 || imported.clip.channels > 2 {
+        return ImportOutcome::failed(ImportDiagnostic::new(
+            asset_key,
+            format!(
+                "{} channels (only mono or stereo supported)",
+                imported.clip.channels
+            ),
+            "the audio clip stays failed",
+        ));
+    }
+    let cooked = CookedAudio::from_import(&imported);
+    let encoded = cooked.encode();
+    let content_hash = format!("{:016x}", fnv1a_hash(&encoded));
+    let cooked_filename = format!("{}_{}.uaud", sanitize_id(&candidate.guid), content_hash);
+    let target_path = cache_cooked_dir.join(&cooked_filename);
+    if let Err(error) = write_file_atomic(&target_path, &encoded) {
+        return ImportOutcome::failed(ImportDiagnostic::new(
+            asset_key,
+            error.to_string(),
+            "the cooked audio clip could not be written",
+        ));
+    }
+    let sample_count = u32::try_from(cooked.samples.len()).unwrap_or(u32::MAX);
+    freshly_cooked.insert(
+        asset_key.clone(),
+        CookedAudioEntry {
+            asset_path: asset_key,
+            guid: candidate.guid.clone(),
+            cooked_path: cooked_filename,
+            content_hash,
+            format_version: cooked.format_version,
+            channels: cooked.channels,
+            sample_rate: cooked.sample_rate,
+            sample_count,
+        },
+    );
+    ImportOutcome::ready()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn stage_cooked_audio_outputs(
+    cache_cooked_dir: &Path,
+    cooked_out_dir: &Path,
+    manifest: &CookedAudioManifest,
+) -> Result<(), ImportCacheError> {
+    if cache_cooked_dir == cooked_out_dir {
+        return Ok(());
+    }
+    fs::create_dir_all(cooked_out_dir).map_err(|error| ImportCacheError {
+        path: cooked_out_dir.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    for entry in manifest.entries.values() {
+        let src = cache_cooked_dir.join(&entry.cooked_path);
+        let dst = cooked_out_dir.join(&entry.cooked_path);
+        if src != dst {
+            fs::copy(&src, &dst).map_err(|error| ImportCacheError {
+                path: dst,
+                message: error.to_string(),
+            })?;
+        }
+    }
+    manifest.save_to_dir(cooked_out_dir)?;
+    Ok(())
+}
+
+pub fn build_audio_candidate(
+    source_path: &Path,
+    logical_path: PathBuf,
+) -> Result<ImportCandidate, ImportCacheError> {
+    let source = fs::read(source_path).map_err(|error| ImportCacheError {
+        path: source_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let meta_path = meta_path_for(source_path);
+    let metadata = fs::read_to_string(&meta_path).unwrap_or_default();
+    let settings_parsed = AudioImportSettings::from_meta_text(&metadata).unwrap_or_default();
+    let settings = settings_parsed.to_meta_text();
+    let guid = guid_from_meta_text(&metadata).unwrap_or_else(|| {
+        format!(
+            "{:016x}",
+            fnv1a_hash(normalize_slashes(&logical_path.to_string_lossy()).as_bytes())
+        )
+    });
+    Ok(ImportCandidate {
+        path: logical_path,
+        guid,
+        source,
+        metadata,
+        settings,
+        importer_version: AUDIO_IMPORTER_VERSION.to_string(),
+        dependencies: Vec::new(),
+    })
+}
+
+pub fn load_or_cook_audio(path: &Path) -> Option<CookedAudio> {
+    load_or_cook_audio_with_cache(path, None)
+}
+
+pub fn load_or_cook_audio_with_cache(
+    path: &Path,
+    explicit_cache_dir: Option<&Path>,
+) -> Option<CookedAudio> {
+    if let Some((root, cooked_dir, manifest)) = find_ancestor_cooked_audio_manifest(path) {
+        if let Ok(rel) = path.strip_prefix(&root) {
+            let rel_key = normalize_slashes(&rel.to_string_lossy());
+            if let Some(entry) = manifest.get_by_asset_path(&rel_key) {
+                let bytes = fs::read(cooked_dir.join(&entry.cooked_path)).ok()?;
+                return CookedAudio::decode(&bytes).ok();
+            }
+        }
+        if let Some(guid) = read_sidecar_guid(path) {
+            if let Some(entry) = manifest.get_by_guid(&guid) {
+                let bytes = fs::read(cooked_dir.join(&entry.cooked_path)).ok()?;
+                return CookedAudio::decode(&bytes).ok();
+            }
+        }
+        if root.join(BUNDLE_MANIFEST_FILENAME).is_file() {
+            return None;
+        }
+    }
+    if is_inside_staged_bundle(path) && !path.is_file() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let logical_path = logical_asset_path(path);
+        let candidate = build_audio_candidate(path, logical_path).ok()?;
+        let cache_dir = explicit_cache_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| default_audio_cache_dir_for_path(path, &candidate.fingerprint()));
+        let (manifest, _) =
+            cook_audio_candidates(std::slice::from_ref(&candidate), &cache_dir, None).ok()?;
+        let key = normalize_slashes(&candidate.path.to_string_lossy());
+        let entry = manifest.get_by_asset_path(&key)?;
+        let cooked_bytes =
+            fs::read(cache_dir.join(COOKED_DIR_NAME).join(&entry.cooked_path)).ok()?;
+        CookedAudio::decode(&cooked_bytes).ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = explicit_cache_dir;
+        None
+    }
+}
+
+pub fn default_audio_cache_dir(project_root: &Path) -> PathBuf {
+    let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
+    std::env::temp_dir()
+        .join("unitas_audio_import_cache")
+        .join(format!("{hash:016x}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_audio_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint) -> PathBuf {
+    if let Some(root) = find_project_root(path) {
+        return default_audio_cache_dir(&root);
+    }
+    let parent_key = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| format!("{:016x}", fingerprint.source));
+    let hash = fnv1a_hash(parent_key.as_bytes());
+    std::env::temp_dir()
+        .join("unitas_audio_import_cache")
+        .join(format!("{hash:016x}"))
+}
+
+fn find_ancestor_cooked_audio_manifest(
+    path: &Path,
+) -> Option<(PathBuf, PathBuf, CookedAudioManifest)> {
+    let mut current = path.parent()?;
+    loop {
+        let cooked_dir = current.join(COOKED_DIR_NAME);
+        if let Some(manifest) = CookedAudioManifest::load_from_dir(&cooked_dir) {
+            return Some((current.to_path_buf(), cooked_dir, manifest));
+        }
+        current = current.parent()?;
+    }
+}
+
+fn is_inside_staged_bundle(path: &Path) -> bool {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dir.join(BUNDLE_MANIFEST_FILENAME).is_file() {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_project_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dir.join("Assets").is_dir() && dir.join("ProjectSettings").is_dir() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn logical_asset_path(path: &Path) -> PathBuf {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dir.file_name().and_then(|n| n.to_str()) == Some("Assets") {
+            if let Some(root) = dir.parent() {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    return PathBuf::from(normalize_slashes(&rel.to_string_lossy()));
+                }
+            }
+        }
+        current = dir.parent();
+    }
+    path.file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn read_sidecar_guid(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(meta_path_for(path)).ok()?;
+    guid_from_meta_text(&text)
+}
+
+fn meta_path_for(path: &Path) -> PathBuf {
+    let mut meta = path.as_os_str().to_os_string();
+    meta.push(".meta");
+    PathBuf::from(meta)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_audio_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ImportCacheError> {
+    let entries = fs::read_dir(dir).map_err(|error| ImportCacheError {
+        path: dir.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| ImportCacheError {
+            path: dir.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_audio_files(&path, out)?;
+        } else if is_audio_source_path(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_slashes(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sanitize_id(raw: &str) -> String {
+    let filtered: String = raw
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect();
+    if filtered.is_empty() {
+        "audio".to_string()
+    } else {
+        filtered
+    }
+}
+
+fn fnv1a_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }

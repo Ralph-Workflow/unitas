@@ -170,7 +170,7 @@ pub fn classify_resource_extension(extension: &str) -> ResourceKind {
         "prefab" => ResourceKind::Prefab,
         "unity" => ResourceKind::Scene,
         "mat" | "physicmaterial" => ResourceKind::Material,
-        "wav" | "ogg" | "mp3" | "aiff" | "aif" => ResourceKind::AudioClip,
+        "wav" | "wave" | "ogg" | "mp3" | "aif" | "aiff" | "aifc" => ResourceKind::AudioClip,
         _ => ResourceKind::Binary,
     }
 }
@@ -250,6 +250,10 @@ fn collect_resource_files(
             if !is_nested_resources {
                 collect_resource_files(&path, collected)?;
             }
+        } else if let Some(virtual_asset) = cooked_sidecar_asset_path(&path) {
+            if !virtual_asset.is_file() {
+                collected.push(virtual_asset);
+            }
         } else if !is_ignored_file(&path) {
             collected.push(path);
         }
@@ -265,6 +269,25 @@ fn is_ignored_file(path: &Path) -> bool {
         return true;
     }
     name.to_ascii_lowercase().ends_with(META_SUFFIX_LOWER)
+}
+
+fn cooked_sidecar_asset_path(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    if name.starts_with('.') || !name.to_ascii_lowercase().ends_with(META_SUFFIX_LOWER) {
+        return None;
+    }
+    let stripped = &name[..name.len() - META_SUFFIX_LOWER.len()];
+    if stripped.is_empty() {
+        return None;
+    }
+    let candidate = path.with_file_name(stripped);
+    if unitas_asset::audio_import::is_audio_source_path(&candidate)
+        || unitas_asset::texture::is_texture_source_path(&candidate)
+    {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn build_resource_entry(resources_dir: &Path, file_path: &Path) -> Option<ResourceEntry> {

@@ -229,3 +229,5 @@ garden path and moving blocks render distinctly from Arena 1 (`62677/65536`
 between Arena 2 and Arena 3) and are byte-identical across repeated runs.
 
 Re-approved `s8_results_gold_checkpoint.bmp` on 2026-11-27 alongside the pause overlay addition in `Assets/Scenes/RollABall.unity`, which shifted the post-PausePanel entity numbering on `s8_results_gold_checkpoint.scenario.json` (`0/65536` differing pixels across repeated runs at `tolerance: 0.005`).
+
+Re-approved `s8_arena2_countdown.bmp` (sha256 `b7729edefaa63670…`) and `s8_arena3_countdown.bmp` (sha256 `170cb8729f038a98…`) on 2026-11-27 after `ArenaController` moved pickup placement and moving-block kinematic updates from `Update()` to `FixedUpdate()` and `Arena3.unity` added the `NestedPickupCluster` prefab instance (`2105/65536` and `3450/65536` differing pixels against the prior pre-`FixedUpdate` captures; `0/65536` differing pixels across repeated runs at `tolerance: 0.005`).

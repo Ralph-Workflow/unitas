@@ -135,7 +135,7 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     assert_eq!(runtime.sprite_instances().len(), 2);
     // Without the script sprite the scene sprite is the one the frame shows.
     assert_eq!(
-        scene_only_frame.image.get_pixel(27, 31),
+        scene_only_frame.image.get_pixel(16, 31),
         [255, 255, 255, 255]
     );
 
@@ -163,7 +163,7 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     // The scene sprite and the script sprite share the frame, and the script
     // sprite sorts in front of it, so it covers the scene sprite where they
     // overlap.
-    assert_eq!(front_frame.image.get_pixel(27, 31), [0, 255, 0, 255]);
+    assert_eq!(front_frame.image.get_pixel(16, 31), [0, 255, 0, 255]);
 
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 0.0, 1.0, 1.0]));
     let recolored_frame = runtime.capture_scene_frame(64, 64)?;

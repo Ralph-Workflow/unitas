@@ -194,3 +194,44 @@ fn unsupported_containers_and_encodings_are_rejected() {
         Err(AudioError::UnsupportedFormat(_))
     ));
 }
+
+#[test]
+fn cooked_audio_round_trip_matches_source_decoded_samples_across_all_formats(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_asset::audio_import::{
+        import_audio, AudioImportSettings, CookedAudio, COOKED_AUDIO_FORMAT_VERSION,
+    };
+    use unitas_audio::AudioClip;
+
+    let settings = AudioImportSettings::default();
+    let wav_bytes = build_wav(1, 2, 48000, &[0, 16384, -16384, -32768, 8192, -8192], None);
+    let aiff_bytes = build_aiff(1, 44100, &[0, 16384, -16384, -32768]);
+    let fixtures: [(&str, &[u8]); 4] = [
+        ("clip.wav", &wav_bytes),
+        ("clip.aiff", &aiff_bytes),
+        ("clip.ogg", OGG_FIXTURE),
+        ("clip.mp3", MP3_FIXTURE),
+    ];
+
+    for (name, source_bytes) in fixtures {
+        let direct_clip = decode_audio(source_bytes)?;
+        let imported = import_audio(source_bytes, name, &settings)?;
+        let cooked = CookedAudio::from_import(&imported);
+        assert_eq!(cooked.format_version, COOKED_AUDIO_FORMAT_VERSION);
+        let encoded = cooked.encode();
+        let reloaded_clip = AudioClip::from_cooked_bytes(&encoded)?;
+        assert_eq!(
+            reloaded_clip.channels, direct_clip.channels,
+            "{name} channels"
+        );
+        assert_eq!(
+            reloaded_clip.sample_rate, direct_clip.sample_rate,
+            "{name} sample_rate"
+        );
+        assert_eq!(
+            reloaded_clip.samples, direct_clip.samples,
+            "{name} samples must be bit-exact after cook round-trip"
+        );
+    }
+    Ok(())
+}

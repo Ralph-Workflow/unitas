@@ -648,6 +648,7 @@ pub fn stage_bundle_for_host(
     {
         stage_project_assets(&project_root, output_dir)?;
         crate::cooked::stage_project_cooked_textures(&project_root, output_dir)?;
+        crate::cooked::stage_project_cooked_audio(&project_root, output_dir)?;
         stage_project_settings(&project_root, output_dir)?;
         if project_has_scripts(&project_root) {
             script_host = ScriptHost::CoreClr;

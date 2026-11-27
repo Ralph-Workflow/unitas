@@ -292,8 +292,9 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
 fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures_and_reuses_cache(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use unitas_build::cooked::{
-        stage_project_cooked_textures_with_cache, CookedTexture, CookedTextureManifest,
-        COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME,
+        stage_project_cooked_audio_with_cache, stage_project_cooked_textures_with_cache,
+        CookedAudio, CookedAudioManifest, CookedTexture, CookedTextureManifest, COOKED_DIR_NAME,
+        COOKED_MANIFEST_FILENAME,
     };
     use unitas_build::player::install_project_trust;
     use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
@@ -337,6 +338,40 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
         "texture .meta sidecar remains in bundle Assets/ for GUID resolution"
     );
 
+    let audio_manifest = CookedAudioManifest::load_from_dir(&cooked_dir)
+        .ok_or("expected cooked audio manifest in bundle")?;
+    let chime_entry = audio_manifest
+        .get_by_asset_path("Assets/Audio/CollectChime.wav")
+        .ok_or("expected Assets/Audio/CollectChime.wav in cooked audio manifest")?;
+    let cooked_audio_file = cooked_dir.join(&chime_entry.cooked_path);
+    assert!(cooked_audio_file.is_file());
+    let decoded_audio = CookedAudio::decode(&fs::read(&cooked_audio_file)?)?;
+    assert_eq!(decoded_audio.channels, chime_entry.channels);
+    assert_eq!(decoded_audio.sample_rate, chime_entry.sample_rate);
+    assert_eq!(
+        u32::try_from(decoded_audio.samples.len()).unwrap_or(0),
+        chime_entry.sample_count
+    );
+
+    assert!(
+        !staged
+            .output_dir
+            .join("Assets")
+            .join("Audio")
+            .join("CollectChime.wav")
+            .exists(),
+        "raw source audio must not be copied into bundle Assets/"
+    );
+    assert!(
+        staged
+            .output_dir
+            .join("Assets")
+            .join("Audio")
+            .join("CollectChime.wav.meta")
+            .is_file(),
+        "audio .meta sidecar remains in bundle Assets/ for GUID resolution"
+    );
+
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
@@ -355,6 +390,17 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
         stage_project_cooked_textures_with_cache(&project_root, &cache_dir, &second_out)?;
     assert_eq!(second_report.imported, 0);
     assert_eq!(second_report.reused, first_report.imported);
+
+    let audio_cache_dir = workspace.join("audio_import_cache");
+    let (_, first_audio_report) =
+        stage_project_cooked_audio_with_cache(&project_root, &audio_cache_dir, &first_out)?;
+    assert!(first_audio_report.imported > 0);
+    assert_eq!(first_audio_report.reused, 0);
+
+    let (_, second_audio_report) =
+        stage_project_cooked_audio_with_cache(&project_root, &audio_cache_dir, &second_out)?;
+    assert_eq!(second_audio_report.imported, 0);
+    assert_eq!(second_audio_report.reused, first_audio_report.imported);
 
     let session = launch_bundle(&bundle_dir, 2, 1.0 / 60.0)?;
     assert!(session.root_object_count > 0);

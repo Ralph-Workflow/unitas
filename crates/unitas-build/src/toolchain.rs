@@ -224,16 +224,16 @@ pub struct WebRuntimeCompileGap {
 
 pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 2] = [
     WebRuntimeCompileGap {
-        crate_name: "slice-ring-buffer",
-        version: "0.3.4",
-        dependency_chain: "slice-ring-buffer -> minimp3 -> unitas-asset -> unitas-audio -> unitas-runtime",
-        failure_summary: "E0425 in src/mirrored/buffer.rs: platform-specific virtual-memory functions allocation_granularity, allocate_mirrored, and deallocate_mirrored are not defined for wasm32-unknown-unknown",
+        crate_name: "libloading",
+        version: "0.8.9",
+        dependency_chain: "libloading -> unitas-runtime",
+        failure_summary: "E0432 in crates/unitas-runtime/src/dylib.rs:4:5: unresolved import libloading::Library because libloading::safe::Library is gated on #[cfg(any(unix, windows, libloading_docs))]",
     },
     WebRuntimeCompileGap {
-        crate_name: "minimp3-sys",
-        version: "0.6.0",
-        dependency_chain: "minimp3-sys -> minimp3 -> unitas-asset -> unitas-audio -> unitas-runtime",
-        failure_summary: "cc-rs build script fails compiling minimp3.c with clang --target=wasm32-unknown-unknown: fatal error 'stdlib.h' file not found without an Emscripten or WASI sysroot",
+        crate_name: "wgpu",
+        version: "30.0.2",
+        dependency_chain: "wgpu -> unitas-render -> unitas-runtime",
+        failure_summary: "E0277 in crates/unitas-runtime/src/abi.rs:212:18: wgpu::backend::webgpu types (WebDevice Rc<Cell<u32>>, WebBufferMapState Rc<RefCell<...>>, WebTexture Rc<DropGuard>) inside unitas_render::Renderer are not Send/Sync on wasm32-unknown-unknown for static REGISTRY: Mutex<BTreeMap<u64, RuntimeState>>",
     },
 ];
 

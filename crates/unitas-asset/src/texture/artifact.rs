@@ -241,7 +241,21 @@ impl CookedTextureManifest {
             message: error.to_string(),
         })?;
         let path = cooked_dir.join(COOKED_MANIFEST_FILENAME);
-        write_file_atomic(&path, self.encode().as_bytes()).map_err(|error| ImportCacheError {
+        let preserved_audio: Vec<JsonValue> = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| json::parse(&text).ok())
+            .and_then(|val| {
+                val.get("audioEntries")
+                    .and_then(JsonValue::as_array)
+                    .map(<[JsonValue]>::to_vec)
+            })
+            .unwrap_or_default();
+        let encoded = if preserved_audio.is_empty() {
+            self.encode()
+        } else {
+            self.encode_with_audio_entries(preserved_audio)
+        };
+        write_file_atomic(&path, encoded.as_bytes()).map_err(|error| ImportCacheError {
             path: path.clone(),
             message: error.to_string(),
         })?;
@@ -249,8 +263,12 @@ impl CookedTextureManifest {
     }
 
     pub fn encode(&self) -> String {
+        self.encode_with_audio_entries(Vec::new())
+    }
+
+    fn encode_with_audio_entries(&self, audio_entries: Vec<JsonValue>) -> String {
         let entries: Vec<JsonValue> = self.entries.values().map(encode_manifest_entry).collect();
-        json::write(&JsonValue::Object(vec![
+        let mut fields = vec![
             (
                 "format".to_string(),
                 JsonValue::String(COOKED_MANIFEST_FORMAT.to_string()),
@@ -260,7 +278,11 @@ impl CookedTextureManifest {
                 JsonValue::Number(f64::from(self.format_version)),
             ),
             ("entries".to_string(), JsonValue::Array(entries)),
-        ]))
+        ];
+        if !audio_entries.is_empty() {
+            fields.push(("audioEntries".to_string(), JsonValue::Array(audio_entries)));
+        }
+        json::write(&JsonValue::Object(fields))
     }
 
     pub fn decode(text: &str) -> Option<Self> {

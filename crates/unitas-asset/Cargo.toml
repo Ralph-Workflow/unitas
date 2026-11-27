@@ -9,7 +9,9 @@ workspace = true
 
 [dependencies]
 jpeg-decoder = { version = "0.3.2", default-features = false }
-lewton = "0.10.2"
-minimp3 = "0.6.1"
 swash = "0.1.19"
 unitas-core = { path = "../unitas-core" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lewton = "0.10.2"
+minimp3 = "0.6.1"

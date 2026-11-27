@@ -483,3 +483,126 @@ fn cook_project_textures_uses_import_cache_and_writes_cooked_manifest() -> TestR
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+fn minimal_wav_bytes(channels: u16, sample_rate: u32, pcm_samples: &[i16]) -> Vec<u8> {
+    let byte_rate = sample_rate * u32::from(channels) * 2;
+    let block_align = channels * 2;
+    let data_size = (pcm_samples.len() * 2) as u32;
+    let riff_size = 4 + (8 + 16) + (8 + data_size);
+
+    let mut bytes = Vec::with_capacity(44 + pcm_samples.len() * 2);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&riff_size.to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&channels.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    for sample in pcm_samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn cooked_audio_format_v1_round_trips_and_rejects_corrupt_or_unknown_versions() -> TestResult {
+    use unitas_asset::audio_import::{
+        cook_project_audio, import_audio, load_or_cook_audio_with_cache, AudioImportError,
+        AudioImportSettings, CookedAudio, CookedAudioManifest, COOKED_AUDIO_FORMAT_VERSION,
+        COOKED_AUDIO_MAGIC,
+    };
+    use unitas_asset::texture::{
+        cook_project_textures, CookedTextureManifest, COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME,
+    };
+
+    let wav = minimal_wav_bytes(2, 44100, &[0, 16384, -16384, -32768]);
+    let settings = AudioImportSettings::default();
+    let imported = import_audio(&wav, "sample.wav", &settings)?;
+    let cooked = CookedAudio::from_import(&imported);
+    assert_eq!(cooked.format_version, COOKED_AUDIO_FORMAT_VERSION);
+    assert_eq!(cooked.channels, 2);
+    assert_eq!(cooked.sample_rate, 44100);
+    assert_eq!(cooked.samples, vec![0, 16384, -16384, -32768]);
+
+    let encoded = cooked.encode();
+    assert_eq!(encoded.get(0..4), Some(COOKED_AUDIO_MAGIC.as_slice()));
+    let decoded = CookedAudio::decode(&encoded)?;
+    assert_eq!(decoded, cooked);
+
+    let mut bad_magic = encoded.clone();
+    bad_magic[0] = b'X';
+    assert!(matches!(
+        CookedAudio::decode(&bad_magic),
+        Err(AudioImportError::NotWav)
+    ));
+
+    let mut bad_version = encoded.clone();
+    bad_version[4..8].copy_from_slice(&2u32.to_le_bytes());
+    assert!(matches!(
+        CookedAudio::decode(&bad_version),
+        Err(AudioImportError::NotYetSupported(_))
+    ));
+
+    assert_eq!(
+        CookedAudio::decode(&encoded[..10]),
+        Err(AudioImportError::Truncated)
+    );
+
+    let root = temp_dir("cooked-audio-cache")?;
+    let project = root.join("Project");
+    let audio_dir = project.join("Assets").join("Audio");
+    let tex_dir = project.join("Assets").join("Textures");
+    fs::create_dir_all(&audio_dir)?;
+    fs::create_dir_all(&tex_dir)?;
+    fs::create_dir_all(project.join("ProjectSettings"))?;
+
+    let chime_path = audio_dir.join("Chime.wav");
+    fs::write(&chime_path, &wav)?;
+    fs::write(
+        audio_dir.join("Chime.wav.meta"),
+        "fileFormatVersion: 2\nguid: cccccccccccccccccccccccccccccccc\nAudioImporter:\n  defaultSettings:\n    loadType: 0\n    sampleRateSetting: 0\n    compressionFormat: 0\n    quality: 1\n",
+    )?;
+
+    let albedo_path = tex_dir.join("Albedo.tga");
+    fs::write(&albedo_path, minimal_tga_bytes(4, 4, [255, 0, 0]))?;
+    fs::write(
+        tex_dir.join("Albedo.tga.meta"),
+        "fileFormatVersion: 2\nguid: dddddddddddddddddddddddddddddddd\nTextureImporter:\n  sRGBTexture: 1\n  textureType: 0\n",
+    )?;
+
+    let tex_cache = root.join("TexCache");
+    let audio_cache = root.join("AudioCache");
+    let out_dir = root.join("Out").join(COOKED_DIR_NAME);
+
+    let (tex_manifest, _) = cook_project_textures(&project, &tex_cache, &out_dir)?;
+    let (audio_manifest, audio_report_one) = cook_project_audio(&project, &audio_cache, &out_dir)?;
+    assert_eq!(audio_report_one.imported, 1);
+    assert_eq!(audio_report_one.reused, 0);
+    assert_eq!(audio_manifest.entries.len(), 1);
+    assert!(out_dir.join(COOKED_MANIFEST_FILENAME).is_file());
+
+    let loaded_tex = CookedTextureManifest::load_from_dir(&out_dir)
+        .ok_or("expected texture manifest to remain intact after cooking audio")?;
+    assert_eq!(loaded_tex.entries, tex_manifest.entries);
+
+    let loaded_audio = CookedAudioManifest::load_from_dir(&out_dir)
+        .ok_or("expected audio manifest to load from shared manifest.json")?;
+    assert_eq!(loaded_audio, audio_manifest);
+
+    let (_, audio_report_two) = cook_project_audio(&project, &audio_cache, &out_dir)?;
+    assert_eq!(audio_report_two.imported, 0);
+    assert_eq!(audio_report_two.reused, 1);
+
+    let direct_loaded = load_or_cook_audio_with_cache(&chime_path, Some(&audio_cache))
+        .ok_or("expected load_or_cook_audio_with_cache to succeed")?;
+    assert_eq!(direct_loaded, decoded);
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}
