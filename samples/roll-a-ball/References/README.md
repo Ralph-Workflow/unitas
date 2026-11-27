@@ -95,6 +95,27 @@ sample's `QualitySettings.asset` declares. The Low capture is the arena with
 the shadows off, the High capture the arena with the directional shadow map,
 so the set now shows the quality level changing the picture.
 
+## What the 2026-11-27 quality-sweep re-approval changed
+
+The three quality-sweep references were re-approved on 2026-11-27 because the
+headless capture path did not apply the quality level the scenario asked for:
+`Runtime::render_frame` took the shadow settings from the runtime's own quality
+level, so the `set_quality` step changed nothing in the picture and the three
+approved files were byte identical to each other and to
+`s8_title_checkpoint.bmp`. `Runtime::render_frame` now applies the pending
+display quality level to the runtime before it takes the shadow settings
+(`unitas_runtime::presenter::apply_pending_display_quality`), so the Low
+capture is the arena with the shadows off, the Medium capture the arena with
+the hard shadow map, and the High capture the arena with the soft shadow map.
+
+`s8_quality_low.bmp` and `s8_quality_medium.bmp` are the new captures and
+differ from the files they replace by 5682/65536 pixels (8.67 %) and
+5611/65536 pixels (8.56 %). `s8_quality_high.bmp` is unchanged (0/65536
+differing pixels), because the project's `Standalone` default level is `High`
+and the High capture is the arena the earlier references already show. Three
+consecutive runs of the scenario produced byte identical captures at all three
+levels (sha256 `547a9330…`, `509c92d1…`, `50c6440d…`).
+
 The re-approval keeps the declared tolerance of 0.005 unchanged. It widens
 nothing: the approved files are the exact captures the lane produces today,
 and the lane still fails when a capture differs from them by more than 0.5 %
@@ -146,3 +167,11 @@ and the bundled-font HUD in the picture, and three new files
 the set for the quality sweep. The tolerance `0.005` is unchanged, and the
 approved files are byte-identical across three consecutive runs of every
 scenario on the machine that produced them.
+
+Re-approved on 2026-11-27 by the development session that made the headless
+capture path apply the quality level the scenario asked for, against the same
+requirements: `s8_quality_low.bmp` and `s8_quality_medium.bmp` are the
+captures the lane produces now at the Low and Medium levels of the sample's
+`QualitySettings.asset` (shadows off and the hard shadow map), and
+`s8_quality_high.bmp` is unchanged because the project's default level is
+`High`. The tolerance `0.005` is unchanged.

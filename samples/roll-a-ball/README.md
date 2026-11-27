@@ -56,7 +56,7 @@ reported with its real state, never hidden.
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; the sample defines the `reduced_motion` preference, but no settings panel exists yet, so no setting is changed from the game and no master, music, or effects volume, fullscreen mode, resolution, vertical sync, quality level, ghost or camera shake setting is defined |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all five pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
@@ -93,7 +93,15 @@ cannot show).
   levels its `QualitySettings.asset` declares (Low, Medium, High) through the
   new `set_quality` scenario step and captures the arena at each of them
   (`References/s8_quality_low.bmp`, `s8_quality_medium.bmp`,
-  `s8_quality_high.bmp`), and the lane runs it beside the other four.
+  `s8_quality_high.bmp`), and the lane runs it beside the other four. The three
+  captures differ from each other: the Low level draws the arena with the
+  shadow map off, the Medium level with the hard shadow map, and the High level
+  with the soft shadow map. The headless capture path applies the requested
+  level since 2026-11-27 (`Runtime::render_frame` takes the shadow settings
+  from the runtime's quality level, which the `set_quality` step now changes);
+  before that, the three approved files were byte identical to each other and
+  to `s8_title_checkpoint.bmp`, which is why `References/README.md` records a
+  separate re-approval for them.
 - The specification's checkpoints are a title screen with an attract ghost,
   every arena at its countdown, Arena 1 at x5 with its speed trail, and a
   results panel with the gold medal. This sample has **no** title screen, **no**
@@ -354,9 +362,15 @@ collider of its own.
   scaled by its group volume, that a muted group silences its sources, and
   that `set_gameplay_paused(true)` silences the gameplay source while a menu
   source keeps playing.
-- What is **not** demonstrated: the device lane still pushes only its
-  synthetic tone, so the gameplay chime has not been proven audible through
-  the device in a windowed run on this machine. The scene's own
+- **The collect chime is audible on the device, through the real path.** The
+  device lane captures the samples the device output accepted to
+  `target/device-lane/device_audio.wav` and asserts the chime energy in the
+  window after the injected pickup against the silence floor
+  (`tools/verify_device.py`), so the capture proves the sample's own chime
+  clip reaching the device stream, not a synthetic tone.
+- What is **not** demonstrated: the capture comes from a separate headless
+  injection of the scene's `CollectChime` source, not from the windowed run,
+  so the windowed player's own audio is still not captured. The scene's own
   `m_audioClip` reference **is** bound to the managed `AudioSource`: the
   runtime resolves the serialized clip guid to the imported
   `Assets/Audio/CollectChime.wav` and the managed source carries that

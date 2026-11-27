@@ -53,6 +53,7 @@ pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
 pub const CANVAS_TEXT_SEPARATOR: &str = " | ";
 /// The device handoff must hold the whole capture the lane injects: half a
 /// second of silence and a quarter second of chime.
+#[cfg(feature = "device")]
 const DEVICE_CAPTURE_CAPACITY_FRAMES: usize = 48_000;
 
 /// The code-execution capabilities the trust store grants this project.
@@ -988,6 +989,7 @@ pub fn run_device_verification(
     })
 }
 
+#[cfg(feature = "device")]
 fn capture_device_chime(
     startup_scene_path: &Path,
     audio_capture_path: &Path,

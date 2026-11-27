@@ -399,6 +399,15 @@ pub fn set_runtime_quality_level(runtime: &mut Runtime, index: usize) -> Option<
     runtime.quality_settings.levels.get(index)
 }
 
+/// Applies the quality level the display state requests to the runtime, so a
+/// headless capture draws the level the caller asked for.
+pub fn apply_pending_display_quality(runtime: &mut Runtime) -> bool {
+    let Some(index) = with_display_settings(|display| display.take_pending_quality_level()) else {
+        return false;
+    };
+    set_runtime_quality_level(runtime, index).is_some()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameInfo {
     pub frame_index: u64,
@@ -1282,7 +1291,8 @@ mod tests {
 
     use super::{
         DESKTOP_QUALITY_TARGET_GROUP, FrameInfo, GpuFramePresenter, WEB_QUALITY_TARGET_GROUP,
-        shadow_settings_for_quality, shadow_settings_for_runtime,
+        apply_pending_display_quality, shadow_settings_for_quality, shadow_settings_for_runtime,
+        with_display_settings,
     };
     use crate::Runtime;
 
@@ -1390,6 +1400,41 @@ mod tests {
         assert_eq!(
             different, 0,
             "the presented frame differs from the capture composition"
+        );
+    }
+
+    #[test]
+    fn the_pending_display_quality_reaches_the_runtime() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        runtime.quality_settings = QualitySettings {
+            current_quality: 2,
+            levels: vec![
+                sample_quality_level("Low", 0, 0, 40.0),
+                sample_quality_level("Medium", 1, 1, 70.0),
+                sample_quality_level("High", 2, 2, 50.0),
+            ],
+            per_platform_default_quality: vec![(DESKTOP_QUALITY_TARGET_GROUP.to_string(), 2)],
+        };
+        let mut applied = false;
+        for _ in 0..4 {
+            with_display_settings(|display| display.set_quality_level(0));
+            if apply_pending_display_quality(&mut runtime) {
+                applied = true;
+                break;
+            }
+        }
+        assert!(applied, "the pending display quality never reached the runtime");
+        assert_eq!(runtime.quality_settings.current_quality, 0);
+        assert_eq!(
+            shadow_settings_for_runtime(&runtime),
+            ShadowSettings {
+                enabled: false,
+                soft: false,
+                resolution_index: 0,
+                distance: 40.0,
+            }
         );
     }
 
