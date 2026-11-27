@@ -1,0 +1,124 @@
+{
+  "name": "movement_smoke",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "samples/2d-platformer/Assets/Scenes/Rootway.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 35,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Space",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Space",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 60,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "wick_lantern_ready",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Wick lantern ready"
+    },
+    {
+      "id": "wick_settled_on_ground",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "Wick",
+      "expected": [
+        0.0,
+        0.72,
+        0.0
+      ],
+      "tolerance": 0.4
+    },
+    {
+      "id": "first_ember_collected",
+      "after_step": 4,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ember collected: 1"
+    },
+    {
+      "id": "second_ember_chain_collected",
+      "after_step": 8,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ember collected: 2 glow 300 chain x2"
+    },
+    {
+      "id": "checkpoint_lit",
+      "after_step": 8,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Checkpoint lit: Checkpoint_1"
+    },
+    {
+      "id": "wick_advanced_position",
+      "after_step": 10,
+      "kind": "transform_position",
+      "object": "Wick",
+      "expected": [
+        13.45573,
+        0.9875,
+        0.0
+      ],
+      "tolerance": 0.25
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 10,
+      "kind": "frame_count",
+      "expected": 161
+    }
+  ]
+}

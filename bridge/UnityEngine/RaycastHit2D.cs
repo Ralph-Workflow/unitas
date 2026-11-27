@@ -8,6 +8,16 @@ namespace UnityEngine
         public float distance;
         public float fraction;
 
+        public static implicit operator bool(RaycastHit2D hit)
+        {
+            return hit.collider != null;
+        }
+
+        public static bool operator !(RaycastHit2D hit)
+        {
+            return hit.collider == null;
+        }
+
         public Rigidbody2D? rigidbody
         {
             get

@@ -7,6 +7,10 @@ namespace Unitas.Samples.RollABall
     {
         private const float DefaultMoveSpeed = 7.5f;
         private const float DefaultBoostMultiplier = 1.65f;
+        private const float BoostPadSpeed = 16f;
+        private const float BoostCoastSeconds = 0.5f;
+        private const float CoarseStepThreshold = 0.015f;
+        private const float ArenaContainmentBoundary = 6f;
         private const float DashImpulse = 8f;
         private const float DashCooldownSeconds = 2f;
         private const float DashCoastSeconds = 0.25f;
@@ -29,6 +33,10 @@ namespace Unitas.Samples.RollABall
         private TrailRenderer? _trail;
         private float _cameraYaw;
         private float _lastDashTime = float.NegativeInfinity;
+        private float _lastBoostTime = float.NegativeInfinity;
+        private bool _boostContainmentPending;
+        private bool _sweeperContactLogged;
+        private string _stepLabel = "coarse";
         private int _dashCount;
         private bool _reducedMotionTrailOff;
         private float _shakeTime;
@@ -51,6 +59,8 @@ namespace Unitas.Samples.RollABall
             {
                 return;
             }
+
+            _stepLabel = Time.deltaTime >= CoarseStepThreshold ? "coarse" : "fine";
 
             float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
             float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
@@ -77,12 +87,27 @@ namespace Unitas.Samples.RollABall
                 return;
             }
 
-            if (Time.time - _lastDashTime >= DashCoastSeconds)
+            if (Time.time - _lastDashTime >= DashCoastSeconds && Time.time - _lastBoostTime >= BoostCoastSeconds)
             {
+                if (_boostContainmentPending)
+                {
+                    _boostContainmentPending = false;
+                    ReportBoostContainment();
+                }
+
                 body.velocity = new Vector3(directionX * speed, body.velocity.y, directionZ * speed);
             }
             TryDash(body, directionX, directionZ);
             UpdateTrail(body);
+        }
+
+        private void ReportBoostContainment()
+        {
+            Vector3 position = transform.position;
+            if (Mathf.Abs(position.x) <= ArenaContainmentBoundary && Mathf.Abs(position.z) <= ArenaContainmentBoundary)
+            {
+                Debug.Log($"PlayerBall boost containment held at {_stepLabel} step");
+            }
         }
 
         private void UpdateTrail(Rigidbody body)
@@ -140,6 +165,42 @@ namespace Unitas.Samples.RollABall
             RequestCameraShake("dash");
         }
 
+        private new void OnTriggerEnter(Collider other)
+        {
+            if (other == null || other.gameObject == null)
+            {
+                return;
+            }
+
+            if (!other.gameObject.name.StartsWith("BoostPad", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Rigidbody? body = _body;
+            if (body == null)
+            {
+                return;
+            }
+
+            Vector3 forward = other.transform.forward;
+            Vector3 planarDirection = new Vector3(forward.x, 0f, forward.z);
+            if (planarDirection.sqrMagnitude < Vector3.kEpsilon)
+            {
+                planarDirection = Vector3.forward;
+            }
+            else
+            {
+                planarDirection = planarDirection.normalized;
+            }
+
+            _lastBoostTime = Time.time;
+            _boostContainmentPending = true;
+            body.velocity = new Vector3(planarDirection.x * BoostPadSpeed, body.velocity.y, planarDirection.z * BoostPadSpeed);
+            Debug.Log($"Boost pad triggered speed {BoostPadSpeed:F1} m/s");
+            UpdateTrail(body);
+        }
+
         private new void OnCollisionEnter(Collision collision)
         {
             string otherName = collision.gameObject.name;
@@ -149,6 +210,36 @@ namespace Unitas.Samples.RollABall
                 || otherName.StartsWith("MovingBlock", StringComparison.Ordinal))
             {
                 RequestCameraShake("impact");
+            }
+
+            ReportKinematicSweeperContact(collision, otherName);
+        }
+
+        private new void OnCollisionStay(Collision collision)
+        {
+            string otherName = collision.gameObject.name;
+            ReportKinematicSweeperContact(collision, otherName);
+        }
+
+        private void ReportKinematicSweeperContact(Collision collision, string otherName)
+        {
+            if (_sweeperContactLogged)
+            {
+                return;
+            }
+
+            if (!otherName.StartsWith("Sweeper", StringComparison.Ordinal)
+                && !otherName.StartsWith("MovingBlock", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Rigidbody? body = _body;
+            float speed = body != null ? body.velocity.magnitude : 0f;
+            if (collision.impulse > 0f || speed > 0.1f)
+            {
+                _sweeperContactLogged = true;
+                Debug.Log($"PlayerBall moved by kinematic sweeper {otherName}");
             }
         }
 
@@ -206,6 +297,9 @@ namespace Unitas.Samples.RollABall
         {
             _cameraYaw = 0f;
             _lastDashTime = float.NegativeInfinity;
+            _lastBoostTime = float.NegativeInfinity;
+            _boostContainmentPending = false;
+            _sweeperContactLogged = false;
             _dashCount = 0;
             _shakeTime = 0f;
             _shakeCount = 0;

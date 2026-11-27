@@ -13,6 +13,8 @@ macro_rules! ffi_export {
 mod abi_animator;
 #[path = "abi_audio.rs"]
 mod abi_audio;
+#[path = "abi_effectors2d.rs"]
+pub mod abi_effectors2d;
 #[path = "abi_input.rs"]
 mod abi_input;
 #[path = "abi_jobs.rs"]
@@ -34,6 +36,7 @@ mod abi_ui;
 
 pub use abi_animator::*;
 pub use abi_audio::*;
+pub use abi_effectors2d::*;
 pub use abi_input::*;
 pub use abi_jobs::*;
 pub use abi_physics2d::*;

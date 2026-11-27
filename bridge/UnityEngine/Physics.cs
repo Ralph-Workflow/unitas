@@ -29,6 +29,57 @@ namespace UnityEngine
 
         bool TryAddForce(ulong entity, Vector3 force, ForceMode mode);
 
+        RaycastHit[] RaycastAll(Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            return Array.Empty<RaycastHit>();
+        }
+
+        int RaycastNonAlloc(RaycastHit[] results, Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            return 0;
+        }
+
+        RaycastHit[] SphereCastAll(Vector3 origin, Vector3 direction, float radius, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            return Array.Empty<RaycastHit>();
+        }
+
+        int SphereCastNonAlloc(RaycastHit[] results, Vector3 origin, Vector3 direction, float radius, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            return 0;
+        }
+
+        bool CapsuleCast(Vector3 point1, Vector3 point2, float radius, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
+        {
+            hit = default;
+            return false;
+        }
+
+        Collider[] OverlapBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, int layerMask, bool includeTriggers)
+        {
+            return Array.Empty<Collider>();
+        }
+
+        Collider[] OverlapCapsule(Vector3 point0, Vector3 point1, float radius, int layerMask, bool includeTriggers)
+        {
+            return Array.Empty<Collider>();
+        }
+
+        bool CheckBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, int layerMask, bool includeTriggers)
+        {
+            return false;
+        }
+
+        bool CheckSphere(Vector3 position, float radius, int layerMask, bool includeTriggers)
+        {
+            return false;
+        }
+
+        bool CheckCapsule(Vector3 point1, Vector3 point2, float radius, int layerMask, bool includeTriggers)
+        {
+            return false;
+        }
+
         bool TrySetBodyCollisionDetectionMode(ulong entity, CollisionDetectionMode mode)
         {
             return false;
@@ -52,7 +103,7 @@ namespace UnityEngine
         }
     }
 
-    public static class Physics
+    public static partial class Physics
     {
         public const int DefaultRaycastLayers = -1;
 

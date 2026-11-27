@@ -1,0 +1,41 @@
+{
+  "name": "attract_ghost",
+  "steps": [
+    { "load_scene": { "path": "Assets/Scenes/Title.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "tick": { "frames": 24, "delta_seconds": 0.016666666666666666 } },
+    { "tick": { "frames": 80, "delta_seconds": 0.016666666666666666 } }
+  ],
+  "checkpoints": [
+    {
+      "id": "attract_ghost_started",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Attract ghost replay started"
+    },
+    {
+      "id": "attract_ghost_at_origin_on_start",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "AttractGhost",
+      "expected": [0.0, 0.5, 0.75],
+      "tolerance": 0.8
+    },
+    {
+      "id": "attract_ghost_advances_along_route",
+      "after_step": 3,
+      "kind": "transform_position",
+      "object": "AttractGhost",
+      "expected": [4.5, 0.5, -1.5],
+      "tolerance": 0.05
+    },
+    {
+      "id": "attract_ghost_loops_continuously",
+      "after_step": 4,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Attract ghost replay looped 1 steps 29 max deviation 0.000 m"
+    }
+  ]
+}

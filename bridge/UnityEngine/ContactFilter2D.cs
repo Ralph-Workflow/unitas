@@ -16,5 +16,7 @@ namespace UnityEngine
         public float minDepth;
 
         public float maxDepth;
+
+        public static ContactFilter2D noFilter => default;
     }
 }

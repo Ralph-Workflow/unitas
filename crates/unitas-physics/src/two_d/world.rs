@@ -1086,10 +1086,6 @@ impl World2D {
         distance: f32,
         filter: ContactFilter2D,
     ) -> Vec<RaycastHit2D> {
-        let filter = self.effective_query_filter(filter);
-        if !distance.is_finite() || distance < 0.0 {
-            return Vec::new();
-        }
         if !half_extents[0].is_finite()
             || !half_extents[1].is_finite()
             || half_extents[0] < 0.0
@@ -1097,72 +1093,90 @@ impl World2D {
         {
             return Vec::new();
         }
+        let probe = Shape2D::Box { half_extents };
+        self.shape_cast_2d(&probe, center, angle, direction, distance, filter)
+    }
+
+    pub fn circle_cast(
+        &self,
+        origin: [f32; 2],
+        radius: f32,
+        direction: [f32; 2],
+        distance: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<RaycastHit2D> {
+        if !radius.is_finite() || radius <= 0.0 {
+            return Vec::new();
+        }
+        let probe = Shape2D::Circle { radius };
+        self.shape_cast_2d(&probe, origin, 0.0, direction, distance, filter)
+    }
+
+    pub fn capsule_cast(
+        &self,
+        origin: [f32; 2],
+        size: [f32; 2],
+        capsule_direction: u8,
+        angle: f32,
+        direction: [f32; 2],
+        distance: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<RaycastHit2D> {
+        if !size[0].is_finite() || !size[1].is_finite() || size[0] <= 0.0 || size[1] <= 0.0 {
+            return Vec::new();
+        }
+        let (radius, height, shape_dir) = if capsule_direction == 0 {
+            (size[0] * 0.5, size[1], 1u8)
+        } else {
+            (size[1] * 0.5, size[0], 0u8)
+        };
+        let probe = Shape2D::Capsule {
+            radius,
+            height,
+            direction: shape_dir,
+        };
+        self.shape_cast_2d(&probe, origin, angle, direction, distance, filter)
+    }
+
+    fn shape_cast_2d(
+        &self,
+        probe: &Shape2D,
+        center: [f32; 2],
+        angle: f32,
+        direction: [f32; 2],
+        distance: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<RaycastHit2D> {
+        let filter = self.effective_query_filter(filter);
+        if distance.is_nan() || distance < 0.0 {
+            return Vec::new();
+        }
+        let max_distance = if distance.is_infinite() {
+            1.0e6
+        } else {
+            distance
+        };
         let Some(dir) = normalize2(direction) else {
             return Vec::new();
         };
-        let probe = Shape2D::Box { half_extents };
-        let probe_verts: Vec<[f32; 2]> = [
-            [-half_extents[0], -half_extents[1]],
-            [half_extents[0], -half_extents[1]],
-            [half_extents[0], half_extents[1]],
-            [-half_extents[0], half_extents[1]],
-        ]
-        .iter()
-        .map(|corner| transform_point2(*corner, center, angle))
-        .collect();
-
+        let Some(probe_verts) = shape_convex_polygons(probe, center, angle).into_iter().next()
+        else {
+            return Vec::new();
+        };
         let mut hits = Vec::new();
         for collider in self.colliders.values() {
             if !self.is_collider_simulated(collider) || !filter.matches_collider(collider) {
                 continue;
             }
-            let (target_center, target_angle) = self.collider_query_pose(collider);
-            let mut best: Option<(f32, [f32; 2])> = None;
-            for outline in shape_convex_polygons(&collider.shape, target_center, target_angle) {
-                if outline.len() < 2 {
-                    continue;
-                }
-                if let Some((travel, axis)) = box_cast_travel(&probe_verts, dir, distance, &outline)
-                {
-                    if best.is_none_or(|(best_travel, _)| travel < best_travel) {
-                        best = Some((travel, axis));
-                    }
-                }
-            }
-            let Some((travel, axis)) = best else {
-                continue;
-            };
-            if travel <= 0.0 && !self.queries_start_in_colliders {
-                continue;
-            }
-            let hit_center = [center[0] + dir[0] * travel, center[1] + dir[1] * travel];
-            let (point, normal) = match compute_contact2d(
-                &probe,
-                hit_center,
-                angle,
-                &collider.shape,
-                target_center,
-                target_angle,
+            if let Some(hit) = self.cast_probe_against_collider(
+                probe,
+                &probe_verts,
+                (center, angle, dir, max_distance, distance),
+                collider,
+                &filter,
             ) {
-                Some(contact) => (contact.point, [-contact.normal[0], -contact.normal[1]]),
-                None => (hit_center, axis),
-            };
-            if !filter.matches_normal_angle(normal) {
-                continue;
+                hits.push(hit);
             }
-            hits.push(RaycastHit2D {
-                collider: collider.id,
-                body: collider.attached_body,
-                game_object: collider.game_object,
-                point,
-                normal,
-                distance: travel,
-                fraction: if distance > 0.0 {
-                    travel / distance
-                } else {
-                    0.0
-                },
-            });
         }
         hits.sort_by(|a, b| {
             a.distance
@@ -1170,6 +1184,61 @@ impl World2D {
                 .then(a.collider.cmp(&b.collider))
         });
         hits
+    }
+
+    fn cast_probe_against_collider(
+        &self,
+        probe: &Shape2D,
+        probe_verts: &[[f32; 2]],
+        sweep: ([f32; 2], f32, [f32; 2], f32, f32),
+        collider: &Collider2D,
+        filter: &ContactFilter2D,
+    ) -> Option<RaycastHit2D> {
+        let (center, angle, dir, max_distance, raw_distance) = sweep;
+        let (target_center, target_angle) = self.collider_query_pose(collider);
+        let mut best: Option<(f32, [f32; 2])> = None;
+        for outline in shape_convex_polygons(&collider.shape, target_center, target_angle) {
+            if outline.len() < 2 {
+                continue;
+            }
+            if let Some((travel, axis)) = box_cast_travel(probe_verts, dir, max_distance, &outline) {
+                if best.is_none_or(|(best_travel, _)| travel < best_travel) {
+                    best = Some((travel, axis));
+                }
+            }
+        }
+        let (travel, axis) = best?;
+        if travel <= 0.0 && !self.queries_start_in_colliders {
+            return None;
+        }
+        let hit_center = [center[0] + dir[0] * travel, center[1] + dir[1] * travel];
+        let (point, normal) = match compute_contact2d(
+            probe,
+            hit_center,
+            angle,
+            &collider.shape,
+            target_center,
+            target_angle,
+        ) {
+            Some(contact) => (contact.point, [-contact.normal[0], -contact.normal[1]]),
+            None => (hit_center, axis),
+        };
+        if !filter.matches_normal_angle(normal) {
+            return None;
+        }
+        Some(RaycastHit2D {
+            collider: collider.id,
+            body: collider.attached_body,
+            game_object: collider.game_object,
+            point,
+            normal,
+            distance: travel,
+            fraction: if raw_distance.is_finite() && raw_distance > 0.0 {
+                travel / raw_distance
+            } else {
+                0.0
+            },
+        })
     }
 
     fn is_collider_simulated(&self, collider: &Collider2D) -> bool {
@@ -1928,8 +1997,6 @@ fn ordered_pair(a: ColliderId2D, b: ColliderId2D) -> (ColliderId2D, ColliderId2D
     }
 }
 
-/// Conservative-advancement sweep of a translated box against a convex outline.
-/// Returns the travelled distance and the surface normal at the contact.
 fn box_cast_travel(
     probe_verts: &[[f32; 2]],
     dir: [f32; 2],

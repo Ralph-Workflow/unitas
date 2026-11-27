@@ -12,6 +12,16 @@ namespace UnityEngine
 
         Collider2D[] OverlapBox2D(Vector2 position, Vector2 size, float angle, int layerMask);
 
+        RaycastHit2D[] CircleCast2D(Vector2 origin, float radius, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
+        {
+            return Array.Empty<RaycastHit2D>();
+        }
+
+        RaycastHit2D[] CapsuleCast2D(Vector2 origin, Vector2 size, CapsuleDirection2D capsuleDirection, float angle, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
+        {
+            return Array.Empty<RaycastHit2D>();
+        }
+
         RaycastHit2D[] BoxCast2D(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
         {
             return Array.Empty<RaycastHit2D>();
@@ -117,7 +127,7 @@ namespace UnityEngine
         }
     }
 
-    public static class Physics2D
+    public static partial class Physics2D
     {
         public const int DefaultRaycastLayers = -1;
         private static readonly int[] s_fallbackLayerMasks = CreateDefaultLayerMasks();

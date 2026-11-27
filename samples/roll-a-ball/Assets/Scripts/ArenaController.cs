@@ -5,13 +5,6 @@ using UnityEngine;
 
 namespace Unitas.Samples.RollABall
 {
-    /// <summary>
-    /// Runs the arena that is loaded. The clockwork arena and the sky garden
-    /// each carry a layout of their own: the controller places the arena's
-    /// twelve pickups on that layout and drives the sky garden's moving
-    /// blocks. Every other scene leaves the controller inert, so the sample's
-    /// first arena keeps the layout it has.
-    /// </summary>
     public class ArenaController : MonoBehaviour
     {
         private const string ClockworkScene = "Arena2";
@@ -64,7 +57,7 @@ namespace Unitas.Samples.RollABall
             Debug.Log($"[roll-a-ball] arena {_arena} pickups {PickupCount}");
         }
 
-        private new void Update()
+        private new void FixedUpdate()
         {
             if (!_running)
             {
@@ -84,12 +77,6 @@ namespace Unitas.Samples.RollABall
             PlacePickups();
         }
 
-        /// <summary>
-        /// Puts the arena's twelve pickups on the layout the loaded arena
-        /// carries. The pickups arrive with the score manager, which gives them
-        /// the sample's own ring; the arena's layout is the one that counts
-        /// here, so every frame puts them back on it.
-        /// </summary>
         private void PlacePickups()
         {
             for (int index = 0; index < PickupCount; index++)
@@ -124,10 +111,6 @@ namespace Unitas.Samples.RollABall
                 Mathf.Cos(angle) * ClockworkRadius);
         }
 
-        /// <summary>
-        /// Takes the sky garden's moving blocks: the blocks that cross the
-        /// arena's floor and knock the marble about.
-        /// </summary>
         private void CollectMovingBlocks()
         {
             Rigidbody[] bodies = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
@@ -145,10 +128,6 @@ namespace Unitas.Samples.RollABall
             }
         }
 
-        /// <summary>
-        /// Moves every block along its own stretch of floor and turns it back
-        /// at the ends of the stretch.
-        /// </summary>
         private void DriveMovingBlocks()
         {
             for (int index = 0; index < _blocks.Count; index++)
@@ -161,7 +140,8 @@ namespace Unitas.Samples.RollABall
 
                 float origin = _blockOrigins[index];
                 float direction = _blockDirections[index];
-                float position = block.transform.position.x;
+                Vector3 currentPosition = block.transform.position;
+                float position = currentPosition.x;
                 if (position >= origin + BlockTravel)
                 {
                     direction = -1f;
@@ -172,7 +152,8 @@ namespace Unitas.Samples.RollABall
                 }
 
                 _blockDirections[index] = direction;
-                block.velocity = new Vector3(direction * BlockSpeed, 0f, 0f);
+                float nextX = position + (direction * BlockSpeed * Time.fixedDeltaTime);
+                block.MovePosition(new Vector3(nextX, currentPosition.y, currentPosition.z));
             }
         }
     }

@@ -142,6 +142,9 @@ namespace Unitas.Bridge.Tests
                 () => ScriptableObjectTests.Run(),
                 () => CinemachineTests.Run(),
                 () => DebugCompileTests.Run(),
+                () => RigidbodyDepthTests.Run(),
+                () => QueryBreadthTests.Run(),
+                () => Effector2DTests.Run(),
             };
 
             int shard = 1;

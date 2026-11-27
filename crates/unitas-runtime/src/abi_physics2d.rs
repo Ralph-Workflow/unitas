@@ -540,6 +540,131 @@ pub extern "C" fn unitas_runtime_raycast2d(
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_circle_cast2d(
+    handle: u64,
+    origin_x: f32,
+    origin_y: f32,
+    radius: f32,
+    direction_x: f32,
+    direction_y: f32,
+    distance: f32,
+    use_triggers: i32,
+    layer_mask: u32,
+    use_depth: i32,
+    min_depth: f32,
+    max_depth: f32,
+    use_normal_angle: i32,
+    min_normal_angle: f32,
+    max_normal_angle: f32,
+) -> i32 {
+    let filter = build_contact_filter_2d(
+        use_triggers,
+        layer_mask,
+        (use_depth, min_depth, max_depth),
+        (use_normal_angle, min_normal_angle, max_normal_angle),
+    );
+    match with_runtime_state(handle, |state| {
+        let hits = state.runtime.physics_mut().world_2d().circle_cast(
+            [origin_x, origin_y],
+            radius,
+            [direction_x, direction_y],
+            distance,
+            filter,
+        );
+        let records = hits
+            .iter()
+            .map(|hit| QueryRecord2D {
+                entity: hit.game_object.as_u64(),
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            })
+            .collect();
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_capsule_cast2d(
+    handle: u64,
+    origin_x: f32,
+    origin_y: f32,
+    size_x: f32,
+    size_y: f32,
+    capsule_direction: u32,
+    angle_deg: f32,
+    direction_x: f32,
+    direction_y: f32,
+    distance: f32,
+    use_triggers: i32,
+    layer_mask: u32,
+    use_depth: i32,
+    min_depth: f32,
+    max_depth: f32,
+    use_normal_angle: i32,
+    min_normal_angle: f32,
+    max_normal_angle: f32,
+) -> i32 {
+    let filter = build_contact_filter_2d(
+        use_triggers,
+        layer_mask,
+        (use_depth, min_depth, max_depth),
+        (use_normal_angle, min_normal_angle, max_normal_angle),
+    );
+    match with_runtime_state(handle, |state| {
+        let hits = state.runtime.physics_mut().world_2d().capsule_cast(
+            [origin_x, origin_y],
+            [size_x, size_y],
+            u8::from(capsule_direction != 0),
+            angle_deg.to_radians(),
+            [direction_x, direction_y],
+            distance,
+            filter,
+        );
+        let records = hits
+            .iter()
+            .map(|hit| QueryRecord2D {
+                entity: hit.game_object.as_u64(),
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            })
+            .collect();
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+fn build_contact_filter_2d(
+    use_triggers: i32,
+    layer_mask: u32,
+    depth: (i32, f32, f32),
+    normal_angle: (i32, f32, f32),
+) -> ContactFilter2D {
+    let mut filter = ContactFilter2D::default()
+        .with_triggers(use_triggers != 0)
+        .with_layer_mask(layer_mask);
+    if depth.0 != 0 && depth.1.is_finite() && depth.2.is_finite() {
+        filter.use_depth = true;
+        filter.min_depth = depth.1;
+        filter.max_depth = depth.2;
+    }
+    if normal_angle.0 != 0 {
+        filter.use_normal_angle = true;
+        filter.min_normal_angle = normal_angle.1;
+        filter.max_normal_angle = normal_angle.2;
+    }
+    filter
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_overlap_point2d(
     handle: u64,
     x: f32,
@@ -667,6 +792,7 @@ pub extern "C" fn unitas_runtime_box_cast2d(
     }
 }
 }
+
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_query_buffer_2d(handle: u64, capacity: u32) -> u64 {

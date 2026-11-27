@@ -13,7 +13,8 @@ use crate::event::{CollisionEvent, Phase, TriggerEvent};
 use crate::joint::{BrokenJointEvent3D, ConfigurableJointMotion, Joint3D, JointId3D};
 use crate::matrix::CollisionMatrix;
 use crate::query::{
-    cast_ray_against, cast_shape_against, normalize, overlaps_at, probe_shape, CastShape, QueryHit,
+    cast_ray_against, cast_shape_against, normalize, overlaps_at, pose_of, probe_shape, CastShape,
+    QueryHit,
 };
 
 #[path = "world_joints.rs"]
@@ -1779,6 +1780,196 @@ impl World {
         hits.into_iter().map(|(entity, _)| entity).collect()
     }
 
+    pub fn capsule_cast(
+        &self,
+        point1: [f64; 3],
+        point2: [f64; 3],
+        radius: f64,
+        direction: [f64; 3],
+        max_distance: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<QueryHit> {
+        let Some((probe, center)) = capsule_segment_probe(point1, point2, radius) else {
+            return Vec::new();
+        };
+        if max_distance <= 0.0 || max_distance.is_nan() {
+            return Vec::new();
+        }
+        let Some(direction) = normalize(direction) else {
+            return Vec::new();
+        };
+        let clamped_max = max_distance.min(1.0e30);
+        let dispatcher = self.backend.dispatcher();
+        let cast_pose = pose_of(center, IDENTITY_ROTATION);
+        let mut hits = Vec::new();
+        for body in &self.bodies {
+            if !self.matches_body_query(body, layer_mask, include_triggers, false) {
+                continue;
+            }
+            let Some(shape) = body.query_shape() else {
+                continue;
+            };
+            if let Some(hit) = cast_custom_shape_against(
+                dispatcher,
+                &probe,
+                &cast_pose,
+                direction,
+                clamped_max,
+                (body.query_position, body.query_rotation, &shape),
+            ) {
+                if hit.distance > max_distance {
+                    continue;
+                }
+                hits.push(QueryHit {
+                    entity: body.entity,
+                    point: hit.point,
+                    normal: hit.normal,
+                    distance: hit.distance,
+                });
+            }
+        }
+        sort_query_hits(&mut hits);
+        hits
+    }
+
+    pub fn overlap_box(
+        &self,
+        center: [f64; 3],
+        half_extents: [f64; 3],
+        rotation: [f64; 4],
+        layer_mask: u32,
+    ) -> Vec<EntityId> {
+        self.overlap_box_with_triggers(center, half_extents, rotation, layer_mask, false)
+    }
+
+    pub fn overlap_box_with_triggers(
+        &self,
+        center: [f64; 3],
+        half_extents: [f64; 3],
+        rotation: [f64; 4],
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<EntityId> {
+        let Some(probe) = cuboid_probe(half_extents) else {
+            return Vec::new();
+        };
+        let probe_pose = pose_of(center, rotation);
+        self.collect_shape_overlaps(&probe, &probe_pose, layer_mask, include_triggers)
+    }
+
+    pub fn overlap_capsule(
+        &self,
+        point0: [f64; 3],
+        point1: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+    ) -> Vec<EntityId> {
+        self.overlap_capsule_with_triggers(point0, point1, radius, layer_mask, false)
+    }
+
+    pub fn overlap_capsule_with_triggers(
+        &self,
+        point0: [f64; 3],
+        point1: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<EntityId> {
+        let Some((probe, center)) = capsule_segment_probe(point0, point1, radius) else {
+            return Vec::new();
+        };
+        let probe_pose = pose_of(center, IDENTITY_ROTATION);
+        self.collect_shape_overlaps(&probe, &probe_pose, layer_mask, include_triggers)
+    }
+
+    pub fn check_box(
+        &self,
+        center: [f64; 3],
+        half_extents: [f64; 3],
+        rotation: [f64; 4],
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> bool {
+        !self
+            .overlap_box_with_triggers(center, half_extents, rotation, layer_mask, include_triggers)
+            .is_empty()
+    }
+
+    pub fn check_sphere(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> bool {
+        !self
+            .overlap_sphere_with_triggers(center, radius, layer_mask, include_triggers)
+            .is_empty()
+    }
+
+    pub fn check_capsule(
+        &self,
+        point0: [f64; 3],
+        point1: [f64; 3],
+        radius: f64,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> bool {
+        !self
+            .overlap_capsule_with_triggers(point0, point1, radius, layer_mask, include_triggers)
+            .is_empty()
+    }
+
+    fn matches_body_query(
+        &self,
+        body: &Body,
+        layer_mask: u32,
+        include_triggers: bool,
+        use_layer_index: bool,
+    ) -> bool {
+        if !body.simulated {
+            return false;
+        }
+        let layer_ok = if use_layer_index {
+            Self::layer_index_matches_mask(body.layer, layer_mask)
+        } else {
+            body.layer & layer_mask != 0
+        };
+        layer_ok && (!body.is_trigger || include_triggers)
+    }
+
+    fn collect_shape_overlaps(
+        &self,
+        probe: &dyn rapier3d::parry::shape::Shape,
+        probe_pose: &rapier3d::math::Pose,
+        layer_mask: u32,
+        include_triggers: bool,
+    ) -> Vec<EntityId> {
+        let dispatcher = self.backend.dispatcher();
+        let mut hits = Vec::new();
+        for body in &self.bodies {
+            if !self.matches_body_query(body, layer_mask, include_triggers, false) {
+                continue;
+            }
+            let Some(shape) = body.query_shape() else {
+                continue;
+            };
+            if shape_overlaps_target(
+                dispatcher,
+                probe,
+                probe_pose,
+                body.query_position,
+                body.query_rotation,
+                &shape,
+            ) {
+                hits.push(body.entity);
+            }
+        }
+        hits.sort();
+        hits
+    }
+
     pub(crate) fn query_bodies(&self) -> QueryBodies {
         let mut entries: Vec<QueryBody> = self
             .bodies
@@ -2414,4 +2605,133 @@ fn check_break_3d(
         });
     }
     None
+}
+
+fn cuboid_probe(half_extents: [f64; 3]) -> Option<rapier3d::parry::shape::Cuboid> {
+    if !half_extents
+        .iter()
+        .all(|extent| extent.is_finite() && *extent >= 0.0)
+    {
+        return None;
+    }
+    Some(rapier3d::parry::shape::Cuboid::new(
+        rapier3d::math::Vector::new(
+            half_extents[0].max(1.0e-6) as f32,
+            half_extents[1].max(1.0e-6) as f32,
+            half_extents[2].max(1.0e-6) as f32,
+        ),
+    ))
+}
+
+fn capsule_segment_probe(
+    point1: [f64; 3],
+    point2: [f64; 3],
+    radius: f64,
+) -> Option<(rapier3d::parry::shape::Capsule, [f64; 3])> {
+    if !radius.is_finite()
+        || radius <= 0.0
+        || !point1.iter().all(|v| v.is_finite())
+        || !point2.iter().all(|v| v.is_finite())
+    {
+        return None;
+    }
+    let center = [
+        0.5 * (point1[0] + point2[0]),
+        0.5 * (point1[1] + point2[1]),
+        0.5 * (point1[2] + point2[2]),
+    ];
+    let a = rapier3d::math::Vector::new(
+        (point1[0] - center[0]) as f32,
+        (point1[1] - center[1]) as f32,
+        (point1[2] - center[2]) as f32,
+    );
+    let b = rapier3d::math::Vector::new(
+        (point2[0] - center[0]) as f32,
+        (point2[1] - center[1]) as f32,
+        (point2[2] - center[2]) as f32,
+    );
+    Some((
+        rapier3d::parry::shape::Capsule::new(a, b, radius as f32),
+        center,
+    ))
+}
+
+fn cast_custom_shape_against(
+    dispatcher: crate::query::Dispatcher<'_>,
+    probe: &dyn rapier3d::parry::shape::Shape,
+    cast_pose: &rapier3d::math::Pose,
+    direction: [f64; 3],
+    max_distance: f64,
+    target: ([f64; 3], [f64; 4], &Shape),
+) -> Option<crate::query::CastHit> {
+    let (position, rotation, shape) = target;
+    let target_pose = pose_of(position, rotation);
+    let pos12 = target_pose.inv_mul(cast_pose);
+    let velocity = target_pose.rotation.inverse()
+        * rapier3d::math::Vector::new(
+            direction[0] as f32,
+            direction[1] as f32,
+            direction[2] as f32,
+        );
+    let target_probe = probe_shape(shape);
+    let target_dyn: &dyn rapier3d::parry::shape::Shape = match &target_probe {
+        crate::query::ProbeShape::Ball(ball) => ball,
+        crate::query::ProbeShape::Cuboid(cuboid) => cuboid,
+        crate::query::ProbeShape::Capsule(capsule) => capsule,
+    };
+    let hit = dispatcher
+        .cast_shapes(
+            &pos12,
+            velocity,
+            target_dyn,
+            probe,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: max_distance as f32,
+                target_distance: 0.0,
+                stop_at_penetration: true,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )
+        .ok()??;
+    let point = target_pose.transform_point(hit.witness1);
+    let normal = target_pose.rotation * hit.normal1;
+    Some(crate::query::CastHit {
+        distance: f64::from(hit.time_of_impact),
+        point: [f64::from(point.x), f64::from(point.y), f64::from(point.z)],
+        normal: [
+            f64::from(normal.x),
+            f64::from(normal.y),
+            f64::from(normal.z),
+        ],
+    })
+}
+
+fn shape_overlaps_target(
+    dispatcher: crate::query::Dispatcher<'_>,
+    probe: &dyn rapier3d::parry::shape::Shape,
+    probe_pose: &rapier3d::math::Pose,
+    position: [f64; 3],
+    rotation: [f64; 4],
+    shape: &Shape,
+) -> bool {
+    let target_pose = pose_of(position, rotation);
+    let pos12 = probe_pose.inv_mul(&target_pose);
+    let target_probe = probe_shape(shape);
+    let target_dyn: &dyn rapier3d::parry::shape::Shape = match &target_probe {
+        crate::query::ProbeShape::Ball(ball) => ball,
+        crate::query::ProbeShape::Cuboid(cuboid) => cuboid,
+        crate::query::ProbeShape::Capsule(capsule) => capsule,
+    };
+    dispatcher
+        .intersection_test(&pos12, probe, target_dyn)
+        .is_ok_and(|intersection| intersection.intersecting)
+}
+
+fn sort_query_hits(hits: &mut [QueryHit]) {
+    hits.sort_by(|first, second| {
+        first
+            .distance
+            .total_cmp(&second.distance)
+            .then(first.entity.cmp(&second.entity))
+    });
 }
