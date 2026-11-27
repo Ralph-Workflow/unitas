@@ -144,102 +144,7 @@ namespace Unitas.Bridge.Tests
             string tempProject = CloneProjectToTemp(fixtureRoot, "codeloop_symbols");
             try
             {
-                string customAttrsAndScriptsPath = Path.Combine(tempProject, "Assets", "Gameplay", "SymbolInspectionSample.cs");
-                string sampleSource =
-                    "using System;\n"
-                    + "using System.Collections.Generic;\n"
-                    + "using UnityEngine;\n"
-                    + "using UnityEngine.Serialization;\n"
-                    + "\n"
-                    + "namespace UnityEngine\n"
-                    + "{\n"
-                    + "    [AttributeUsage(AttributeTargets.Field)]\n"
-                    + "    public sealed class SerializeField : Attribute {}\n"
-                    + "\n"
-                    + "    [AttributeUsage(AttributeTargets.Field)]\n"
-                    + "    public sealed class SerializeReference : Attribute {}\n"
-                    + "\n"
-                    + "    [AttributeUsage(AttributeTargets.Class)]\n"
-                    + "    public sealed class RequireComponent : Attribute\n"
-                    + "    {\n"
-                    + "        public RequireComponent(Type requiredComponent) {}\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    public class ScriptableObject : Object {}\n"
-                    + "}\n"
-                    + "\n"
-                    + "namespace UnityEngine.Serialization\n"
-                    + "{\n"
-                    + "    [AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]\n"
-                    + "    public sealed class FormerlySerializedAsAttribute : Attribute\n"
-                    + "    {\n"
-                    + "        public string oldName { get; }\n"
-                    + "        public FormerlySerializedAsAttribute(string oldName) { this.oldName = oldName; }\n"
-                    + "    }\n"
-                    + "}\n"
-                    + "\n"
-                    + "namespace MyGame.Gameplay\n"
-                    + "{\n"
-                    + "    public interface IInteractable\n"
-                    + "    {\n"
-                    + "        string GetPrompt(int priority);\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    public interface IPolymorphicEffect\n"
-                    + "    {\n"
-                    + "        void Apply();\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    [Serializable]\n"
-                    + "    public struct WeaponStats\n"
-                    + "    {\n"
-                    + "        public int Damage;\n"
-                    + "        [SerializeField] private float _critMultiplier;\n"
-                    + "        [NonSerialized] public int TempRuntimeCache;\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    public abstract class BaseActorBehaviour : MonoBehaviour\n"
-                    + "    {\n"
-                    + "        public int BaseHealth = 100;\n"
-                    + "        [SerializeField] private string _baseFaction = \"Neutral\";\n"
-                    + "        private int _unserializedBaseSecret;\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    [RequireComponent(typeof(Rigidbody))]\n"
-                    + "    public class HeroActor : BaseActorBehaviour, IInteractable\n"
-                    + "    {\n"
-                    + "        public float MoveSpeed = 5.5f;\n"
-                    + "        [SerializeField] private int _privateMana = 50;\n"
-                    + "        [NonSerialized] public int PublicNonSerializedScore = 999;\n"
-                    + "        [SerializeReference] private IPolymorphicEffect _activeEffect;\n"
-                    + "        [SerializeField, FormerlySerializedAs(\"legacy_player_title\")] private string _playerTitle = \"Knight\";\n"
-                    + "        public WeaponStats PrimaryWeapon;\n"
-                    + "        public List<string> InventoryTags;\n"
-                    + "        private float _plainPrivateUnserialized;\n"
-                    + "        public static int GlobalHeroCount;\n"
-                    + "        public readonly int ReadOnlyId = 7;\n"
-                    + "\n"
-                    + "        public int CurrentMana => _privateMana;\n"
-                    + "\n"
-                    + "        public string GetPrompt(int priority)\n"
-                    + "        {\n"
-                    + "            return _playerTitle + \":\" + priority;\n"
-                    + "        }\n"
-                    + "\n"
-                    + "        private void OnCustomEvent(string eventName, float weight)\n"
-                    + "        {\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "\n"
-                    + "    public class InventoryConfigAsset : ScriptableObject\n"
-                    + "    {\n"
-                    + "        public int MaxSlots = 24;\n"
-                    + "        [SerializeField, FormerlySerializedAs(\"old_weight_limit\")] private float _weightLimit = 100f;\n"
-                    + "        [NonSerialized] public string TransientSessionToken = string.Empty;\n"
-                    + "        [SerializeReference] private IPolymorphicEffect _defaultLoadoutEffect;\n"
-                    + "    }\n"
-                    + "}\n";
-                File.WriteAllText(customAttrsAndScriptsPath, sampleSource);
+                WriteSymbolInspectionSample(tempProject);
 
                 ScriptCompilationOptions options = new ScriptCompilationOptions
                 {
@@ -267,64 +172,7 @@ namespace Unitas.Bridge.Tests
 
                 if (hero != null)
                 {
-                    Check.Equal("CodeLoop symbols: HeroActor assembly is MyGame.Gameplay", "MyGame.Gameplay", hero.Assembly);
-                    Check.Equal("CodeLoop symbols: HeroActor baseType is MyGame.Gameplay.BaseActorBehaviour", "MyGame.Gameplay.BaseActorBehaviour", hero.BaseType);
-                    Check.That("CodeLoop symbols: HeroActor baseTypeChain includes UnityEngine.MonoBehaviour", ContainsString(hero.BaseTypeChain, "UnityEngine.MonoBehaviour"));
-                    Check.That("CodeLoop symbols: HeroActor interfaces includes MyGame.Gameplay.IInteractable", ContainsString(hero.Interfaces, "MyGame.Gameplay.IInteractable"));
-                    Check.That("CodeLoop symbols: HeroActor attributes includes RequireComponent(typeof(UnityEngine.Rigidbody))", ContainsSubstring(hero.Attributes, "RequireComponent(typeof(UnityEngine.Rigidbody))"));
-                    Check.Equal("CodeLoop symbols: HeroActor isMonoBehaviour is true", true, hero.IsMonoBehaviour);
-
-                    SymbolMemberRecord? getPrompt = hero.FindMember("GetPrompt");
-                    Check.That("CodeLoop symbols: HeroActor lists method GetPrompt", getPrompt != null);
-                    if (getPrompt != null)
-                    {
-                        Check.Equal("CodeLoop symbols: GetPrompt kind is method", "method", getPrompt.Kind);
-                        Check.Equal("CodeLoop symbols: GetPrompt signature", "public string GetPrompt(int priority)", getPrompt.Signature);
-                    }
-
-                    SymbolMemberRecord? onCustomEvent = hero.FindMember("OnCustomEvent");
-                    Check.That("CodeLoop symbols: HeroActor lists private method OnCustomEvent", onCustomEvent != null);
-                    if (onCustomEvent != null)
-                    {
-                        Check.Equal("CodeLoop symbols: OnCustomEvent signature", "private void OnCustomEvent(string eventName, float weight)", onCustomEvent.Signature);
-                    }
-
-                    SymbolMemberRecord? currentManaProp = hero.FindMember("CurrentMana");
-                    Check.That("CodeLoop symbols: HeroActor lists property CurrentMana in members", currentManaProp != null && currentManaProp.Kind == "property");
-                    Check.That("CodeLoop symbols: HeroActor does not serialize property CurrentMana", hero.FindSerializedField("CurrentMana") == null);
-
-                    Check.That("CodeLoop symbols: HeroActor serializes inherited public BaseHealth", hero.FindSerializedField("BaseHealth") != null);
-                    Check.That("CodeLoop symbols: HeroActor serializes inherited [SerializeField] _baseFaction", hero.FindSerializedField("_baseFaction") != null);
-                    Check.That("CodeLoop symbols: HeroActor omits inherited unannotated private _unserializedBaseSecret", hero.FindSerializedField("_unserializedBaseSecret") == null);
-
-                    SerializedFieldRecord? moveSpeed = hero.FindSerializedField("MoveSpeed");
-                    Check.That("CodeLoop symbols: HeroActor serializes public MoveSpeed", moveSpeed != null && moveSpeed.FieldType == "float");
-
-                    SerializedFieldRecord? privateMana = hero.FindSerializedField("_privateMana");
-                    Check.That("CodeLoop symbols: HeroActor serializes [SerializeField] private _privateMana", privateMana != null && privateMana.HasSerializeField && privateMana.Accessibility == "private");
-
-                    Check.That("CodeLoop symbols: HeroActor omits [NonSerialized] PublicNonSerializedScore", hero.FindSerializedField("PublicNonSerializedScore") == null);
-                    Check.That("CodeLoop symbols: HeroActor omits unannotated private _plainPrivateUnserialized", hero.FindSerializedField("_plainPrivateUnserialized") == null);
-                    Check.That("CodeLoop symbols: HeroActor omits static GlobalHeroCount", hero.FindSerializedField("GlobalHeroCount") == null);
-                    Check.That("CodeLoop symbols: HeroActor omits readonly ReadOnlyId", hero.FindSerializedField("ReadOnlyId") == null);
-
-                    SerializedFieldRecord? activeEffect = hero.FindSerializedField("_activeEffect");
-                    Check.That("CodeLoop symbols: HeroActor serializes [SerializeReference] _activeEffect", activeEffect != null && activeEffect.IsSerializeReference);
-                    if (activeEffect != null)
-                    {
-                        Check.Equal("CodeLoop symbols: _activeEffect type is MyGame.Gameplay.IPolymorphicEffect", "MyGame.Gameplay.IPolymorphicEffect", activeEffect.FieldType);
-                    }
-
-                    SerializedFieldRecord? playerTitle = hero.FindSerializedField("_playerTitle");
-                    Check.That("CodeLoop symbols: HeroActor serializes _playerTitle with FormerlySerializedAs", playerTitle != null);
-                    if (playerTitle != null)
-                    {
-                        Check.Equal("CodeLoop symbols: _playerTitle has 1 former name", 1, playerTitle.FormerlySerializedAs.Count);
-                        Check.Equal("CodeLoop symbols: _playerTitle former name is legacy_player_title", "legacy_player_title", playerTitle.FormerlySerializedAs[0]);
-                    }
-
-                    Check.That("CodeLoop symbols: HeroActor serializes [Serializable] struct PrimaryWeapon", hero.FindSerializedField("PrimaryWeapon") != null);
-                    Check.That("CodeLoop symbols: HeroActor serializes List<string> InventoryTags", hero.FindSerializedField("InventoryTags") != null);
+                    VerifyHeroActorSymbols(hero);
                 }
 
                 SymbolQueryResult soQuery = SymbolQuery.QueryProject(tempProject, "InventoryConfigAsset", options);
@@ -355,6 +203,168 @@ namespace Unitas.Bridge.Tests
             {
                 DeleteDirectoryIfExists(tempProject);
             }
+        }
+
+        private static void WriteSymbolInspectionSample(string tempProject)
+        {
+            string customAttrsAndScriptsPath = Path.Combine(tempProject, "Assets", "Gameplay", "SymbolInspectionSample.cs");
+            string sampleSource =
+                "using System;\n"
+                + "using System.Collections.Generic;\n"
+                + "using UnityEngine;\n"
+                + "using UnityEngine.Serialization;\n"
+                + "\n"
+                + "namespace UnityEngine\n"
+                + "{\n"
+                + "    [AttributeUsage(AttributeTargets.Field)]\n"
+                + "    public sealed class SerializeField : Attribute {}\n"
+                + "\n"
+                + "    [AttributeUsage(AttributeTargets.Field)]\n"
+                + "    public sealed class SerializeReference : Attribute {}\n"
+                + "\n"
+                + "    [AttributeUsage(AttributeTargets.Class)]\n"
+                + "    public sealed class RequireComponent : Attribute\n"
+                + "    {\n"
+                + "        public RequireComponent(Type requiredComponent) {}\n"
+                + "    }\n"
+                + "\n"
+                + "    public class ScriptableObject : Object {}\n"
+                + "}\n"
+                + "\n"
+                + "namespace UnityEngine.Serialization\n"
+                + "{\n"
+                + "    [AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]\n"
+                + "    public sealed class FormerlySerializedAsAttribute : Attribute\n"
+                + "    {\n"
+                + "        public string oldName { get; }\n"
+                + "        public FormerlySerializedAsAttribute(string oldName) { this.oldName = oldName; }\n"
+                + "    }\n"
+                + "}\n"
+                + "\n"
+                + "namespace MyGame.Gameplay\n"
+                + "{\n"
+                + "    public interface IInteractable\n"
+                + "    {\n"
+                + "        string GetPrompt(int priority);\n"
+                + "    }\n"
+                + "\n"
+                + "    public interface IPolymorphicEffect\n"
+                + "    {\n"
+                + "        void Apply();\n"
+                + "    }\n"
+                + "\n"
+                + "    [Serializable]\n"
+                + "    public struct WeaponStats\n"
+                + "    {\n"
+                + "        public int Damage;\n"
+                + "        [SerializeField] private float _critMultiplier;\n"
+                + "        [NonSerialized] public int TempRuntimeCache;\n"
+                + "    }\n"
+                + "\n"
+                + "    public abstract class BaseActorBehaviour : MonoBehaviour\n"
+                + "    {\n"
+                + "        public int BaseHealth = 100;\n"
+                + "        [SerializeField] private string _baseFaction = \"Neutral\";\n"
+                + "        private int _unserializedBaseSecret;\n"
+                + "    }\n"
+                + "\n"
+                + "    [RequireComponent(typeof(Rigidbody))]\n"
+                + "    public class HeroActor : BaseActorBehaviour, IInteractable\n"
+                + "    {\n"
+                + "        public float MoveSpeed = 5.5f;\n"
+                + "        [SerializeField] private int _privateMana = 50;\n"
+                + "        [NonSerialized] public int PublicNonSerializedScore = 999;\n"
+                + "        [SerializeReference] private IPolymorphicEffect _activeEffect;\n"
+                + "        [SerializeField, FormerlySerializedAs(\"legacy_player_title\")] private string _playerTitle = \"Knight\";\n"
+                + "        public WeaponStats PrimaryWeapon;\n"
+                + "        public List<string> InventoryTags;\n"
+                + "        private float _plainPrivateUnserialized;\n"
+                + "        public static int GlobalHeroCount;\n"
+                + "        public readonly int ReadOnlyId = 7;\n"
+                + "\n"
+                + "        public int CurrentMana => _privateMana;\n"
+                + "\n"
+                + "        public string GetPrompt(int priority)\n"
+                + "        {\n"
+                + "            return _playerTitle + \":\" + priority;\n"
+                + "        }\n"
+                + "\n"
+                + "        private void OnCustomEvent(string eventName, float weight)\n"
+                + "        {\n"
+                + "        }\n"
+                + "    }\n"
+                + "\n"
+                + "    public class InventoryConfigAsset : ScriptableObject\n"
+                + "    {\n"
+                + "        public int MaxSlots = 24;\n"
+                + "        [SerializeField, FormerlySerializedAs(\"old_weight_limit\")] private float _weightLimit = 100f;\n"
+                + "        [NonSerialized] public string TransientSessionToken = string.Empty;\n"
+                + "        [SerializeReference] private IPolymorphicEffect _defaultLoadoutEffect;\n"
+                + "    }\n"
+                + "}\n";
+            File.WriteAllText(customAttrsAndScriptsPath, sampleSource);
+        }
+
+        private static void VerifyHeroActorSymbols(SymbolTypeRecord hero)
+        {
+            Check.Equal("CodeLoop symbols: HeroActor assembly is MyGame.Gameplay", "MyGame.Gameplay", hero.Assembly);
+            Check.Equal("CodeLoop symbols: HeroActor baseType is MyGame.Gameplay.BaseActorBehaviour", "MyGame.Gameplay.BaseActorBehaviour", hero.BaseType);
+            Check.That("CodeLoop symbols: HeroActor baseTypeChain includes UnityEngine.MonoBehaviour", ContainsString(hero.BaseTypeChain, "UnityEngine.MonoBehaviour"));
+            Check.That("CodeLoop symbols: HeroActor interfaces includes MyGame.Gameplay.IInteractable", ContainsString(hero.Interfaces, "MyGame.Gameplay.IInteractable"));
+            Check.That("CodeLoop symbols: HeroActor attributes includes RequireComponent(typeof(UnityEngine.Rigidbody))", ContainsSubstring(hero.Attributes, "RequireComponent(typeof(UnityEngine.Rigidbody))"));
+            Check.Equal("CodeLoop symbols: HeroActor isMonoBehaviour is true", true, hero.IsMonoBehaviour);
+
+            SymbolMemberRecord? getPrompt = hero.FindMember("GetPrompt");
+            Check.That("CodeLoop symbols: HeroActor lists method GetPrompt", getPrompt != null);
+            if (getPrompt != null)
+            {
+                Check.Equal("CodeLoop symbols: GetPrompt kind is method", "method", getPrompt.Kind);
+                Check.Equal("CodeLoop symbols: GetPrompt signature", "public string GetPrompt(int priority)", getPrompt.Signature);
+            }
+
+            SymbolMemberRecord? onCustomEvent = hero.FindMember("OnCustomEvent");
+            Check.That("CodeLoop symbols: HeroActor lists private method OnCustomEvent", onCustomEvent != null);
+            if (onCustomEvent != null)
+            {
+                Check.Equal("CodeLoop symbols: OnCustomEvent signature", "private void OnCustomEvent(string eventName, float weight)", onCustomEvent.Signature);
+            }
+
+            SymbolMemberRecord? currentManaProp = hero.FindMember("CurrentMana");
+            Check.That("CodeLoop symbols: HeroActor lists property CurrentMana in members", currentManaProp != null && currentManaProp.Kind == "property");
+            Check.That("CodeLoop symbols: HeroActor does not serialize property CurrentMana", hero.FindSerializedField("CurrentMana") == null);
+
+            Check.That("CodeLoop symbols: HeroActor serializes inherited public BaseHealth", hero.FindSerializedField("BaseHealth") != null);
+            Check.That("CodeLoop symbols: HeroActor serializes inherited [SerializeField] _baseFaction", hero.FindSerializedField("_baseFaction") != null);
+            Check.That("CodeLoop symbols: HeroActor omits inherited unannotated private _unserializedBaseSecret", hero.FindSerializedField("_unserializedBaseSecret") == null);
+
+            SerializedFieldRecord? moveSpeed = hero.FindSerializedField("MoveSpeed");
+            Check.That("CodeLoop symbols: HeroActor serializes public MoveSpeed", moveSpeed != null && moveSpeed.FieldType == "float");
+
+            SerializedFieldRecord? privateMana = hero.FindSerializedField("_privateMana");
+            Check.That("CodeLoop symbols: HeroActor serializes [SerializeField] private _privateMana", privateMana != null && privateMana.HasSerializeField && privateMana.Accessibility == "private");
+
+            Check.That("CodeLoop symbols: HeroActor omits [NonSerialized] PublicNonSerializedScore", hero.FindSerializedField("PublicNonSerializedScore") == null);
+            Check.That("CodeLoop symbols: HeroActor omits unannotated private _plainPrivateUnserialized", hero.FindSerializedField("_plainPrivateUnserialized") == null);
+            Check.That("CodeLoop symbols: HeroActor omits static GlobalHeroCount", hero.FindSerializedField("GlobalHeroCount") == null);
+            Check.That("CodeLoop symbols: HeroActor omits readonly ReadOnlyId", hero.FindSerializedField("ReadOnlyId") == null);
+
+            SerializedFieldRecord? activeEffect = hero.FindSerializedField("_activeEffect");
+            Check.That("CodeLoop symbols: HeroActor serializes [SerializeReference] _activeEffect", activeEffect != null && activeEffect.IsSerializeReference);
+            if (activeEffect != null)
+            {
+                Check.Equal("CodeLoop symbols: _activeEffect type is MyGame.Gameplay.IPolymorphicEffect", "MyGame.Gameplay.IPolymorphicEffect", activeEffect.FieldType);
+            }
+
+            SerializedFieldRecord? playerTitle = hero.FindSerializedField("_playerTitle");
+            Check.That("CodeLoop symbols: HeroActor serializes _playerTitle with FormerlySerializedAs", playerTitle != null);
+            if (playerTitle != null)
+            {
+                Check.Equal("CodeLoop symbols: _playerTitle has 1 former name", 1, playerTitle.FormerlySerializedAs.Count);
+                Check.Equal("CodeLoop symbols: _playerTitle former name is legacy_player_title", "legacy_player_title", playerTitle.FormerlySerializedAs[0]);
+            }
+
+            Check.That("CodeLoop symbols: HeroActor serializes [Serializable] struct PrimaryWeapon", hero.FindSerializedField("PrimaryWeapon") != null);
+            Check.That("CodeLoop symbols: HeroActor serializes List<string> InventoryTags", hero.FindSerializedField("InventoryTags") != null);
         }
 
         private static void TestIdeCsprojDiagnosticParityWithDiagnose()

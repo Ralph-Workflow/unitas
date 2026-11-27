@@ -49,39 +49,93 @@ namespace Unitas.Scripting
 
             if (isScenario)
             {
-                if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]))
-                {
-                    Console.Error.WriteLine("Missing <scenario.json> argument for 'scenario'.");
-                    return 1;
-                }
-
-                int repeat = 1;
-                for (int i = 3; i < args.Length; i++)
-                {
-                    if (string.Equals(args[i], "--repeat", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                    {
-                        i++;
-                        if (!int.TryParse(args[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out repeat) || repeat < 1)
-                        {
-                            Console.Error.WriteLine("Invalid --repeat value '" + args[i] + "' for 'scenario'.");
-                            return 1;
-                        }
-                    }
-                }
-
-                return ScenarioCommand.Run(projectRoot, args[2], repeat);
+                return RunScenarioCommand(projectRoot, args);
             }
 
-            ScriptCompilationOptions options = new ScriptCompilationOptions();
-            string? typeFilter = null;
-            string? scriptTarget = null;
-            string? prefabTarget = null;
-            string? targetObjectName = null;
-            string? usageQuery = null;
-            bool enterPlayMode = isPlay;
-            string? playTarget = null;
-            int playTicks = 2;
-            Dictionary<string, string> serializedFields = new Dictionary<string, string>(StringComparer.Ordinal);
+            ParseCliOptions(
+                args,
+                isPlay,
+                out ScriptCompilationOptions options,
+                out string? typeFilter,
+                out string? scriptTarget,
+                out string? prefabTarget,
+                out string? targetObjectName,
+                out string? usageQuery,
+                out bool enterPlayMode,
+                out string? playTarget,
+                out int playTicks,
+                out Dictionary<string, string> serializedFields);
+
+            return DispatchCliCommand(
+                projectRoot,
+                options,
+                isGenerateIde,
+                isDiagnose,
+                isSymbols,
+                isUsages,
+                isAttachComponent,
+                isPlay,
+                isLoop,
+                typeFilter,
+                scriptTarget,
+                prefabTarget,
+                targetObjectName,
+                usageQuery,
+                enterPlayMode,
+                playTarget,
+                playTicks,
+                serializedFields);
+        }
+
+        private static int RunScenarioCommand(string projectRoot, string[] args)
+        {
+            if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]))
+            {
+                Console.Error.WriteLine("Missing <scenario.json> argument for 'scenario'.");
+                return 1;
+            }
+
+            int repeat = 1;
+            for (int i = 3; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "--repeat", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    i++;
+                    if (!int.TryParse(args[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out repeat) || repeat < 1)
+                    {
+                        Console.Error.WriteLine("Invalid --repeat value '" + args[i] + "' for 'scenario'.");
+                        return 1;
+                    }
+                }
+            }
+
+            return ScenarioCommand.Run(projectRoot, args[2], repeat);
+        }
+
+        private static void ParseCliOptions(
+            string[] args,
+            bool isPlay,
+            out ScriptCompilationOptions options,
+            out string? typeFilter,
+            out string? scriptTarget,
+            out string? prefabTarget,
+            out string? targetObjectName,
+            out string? usageQuery,
+            out bool enterPlayMode,
+            out string? playTarget,
+            out int playTicks,
+            out Dictionary<string, string> serializedFields)
+        {
+            options = new ScriptCompilationOptions();
+            typeFilter = null;
+            scriptTarget = null;
+            prefabTarget = null;
+            targetObjectName = null;
+            usageQuery = null;
+            enterPlayMode = isPlay;
+            playTarget = null;
+            playTicks = 2;
+            serializedFields = new Dictionary<string, string>(StringComparer.Ordinal);
 
             for (int i = 2; i < args.Length; i++)
             {
@@ -186,7 +240,28 @@ namespace Unitas.Scripting
                     }
                 }
             }
+        }
 
+        private static int DispatchCliCommand(
+            string projectRoot,
+            ScriptCompilationOptions options,
+            bool isGenerateIde,
+            bool isDiagnose,
+            bool isSymbols,
+            bool isUsages,
+            bool isAttachComponent,
+            bool isPlay,
+            bool isLoop,
+            string? typeFilter,
+            string? scriptTarget,
+            string? prefabTarget,
+            string? targetObjectName,
+            string? usageQuery,
+            bool enterPlayMode,
+            string? playTarget,
+            int playTicks,
+            Dictionary<string, string> serializedFields)
+        {
             if (isGenerateIde)
             {
                 IdeGenerationResult ideResult = IdeProjectGenerator.Generate(projectRoot, options);

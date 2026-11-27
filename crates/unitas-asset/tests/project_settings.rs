@@ -1307,45 +1307,40 @@ fn malformed_quality_settings_file_reports_a_diagnostic_naming_the_file() -> Tes
     Ok(())
 }
 
-#[test]
-fn parses_all_project_settings_families_and_round_trips_edits() -> TestResult {
-    let project_root = temp_settings_dir("all_families")?;
-    let root = project_root.join("ProjectSettings");
-    fs::create_dir_all(&root)?;
+const TIME_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!5 &1\nTimeManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_FixedTimestep: 0.02\n  m_MaximumAllowedTimestep: 0.33333334\n  m_TimeScale: 1\n  unknownTimeField: preserved_time\n";
+const DYNAMICS_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 13\n  m_Gravity: {x: 0, y: -9.81, z: 0}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n  unknownPhysicsField: preserved_physics\n";
+const PHYSICS2D_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 5\n  m_Gravity: {x: 0, y: -9.81}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n  unknownPhysics2DField: preserved_physics2d\n";
+const INPUT_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!13 &1\nInputManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Axes:\n  - serializedVersion: 3\n    m_Name: Jump\n    negativeButton:\n    positiveButton: space\n    altNegativeButton:\n    altPositiveButton:\n    gravity: 1000\n    dead: 0.001\n    sensitivity: 1000\n    snap: 0\n    invert: 0\n    type: 0\n    axis: 0\n  unknownInputField: preserved_input\n";
+const PLAYER_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 26\n  companyName: UnitasStudio\n  productName: AllFamiliesGame\n  bundleVersion: 1.5.0\n  m_ActiveColorSpace: 1\n  scriptingDefineSymbols:\n    default: BASE_DEF\n    1: STANDALONE_DEF\n  unknownPlayerField: preserved_player\n";
+const TAG_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!78 &1\nTagManager:\n  serializedVersion: 2\n  tags:\n  - Pickup\n  - Hazard\n  layers:\n  - Default\n  - TransparentFX\n  - Ignore Raycast\n  - \n  - Water\n  - UI\n  - \n  - \n  - PlayerLayer\n  m_SortingLayers:\n  - name: Default\n    uniqueID: 0\n    locked: 0\n  - name: Foreground\n    uniqueID: 42\n    locked: 1\n  unknownTagField: preserved_tag\n";
+const GRAPHICS_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!30 &1\nGraphicsSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 15\n  m_CustomRenderPipeline: {fileID: 11400000, guid: a1b2c3d4e5f60718293a4b5c6d7e8f90, type: 2}\n  m_TransparencySortMode: 2\n  m_AlwaysIncludedShaders:\n  - {fileID: 48, guid: 0000000000000000f000000000000000, type: 0}\n  - {fileID: 10753, guid: 0000000000000000f000000000000000, type: 0}\n  m_TierSettings:\n  - m_BuildTarget: 1\n    m_Tier: 0\n  unknownGraphicsField: preserved_graphics\n";
+const AUDIO_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!89 &1\nAudioManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Volume: 0.75\n  Rolloff Scale: 1.25\n  Doppler Factor: 0.5\n  Default Speaker Mode: 2\n  m_DSPBufferSize: 512\n  m_VirtualVoiceCount: 256\n  m_RealVoiceCount: 16\n  m_DisableAudio: 0\n  unknownAudioField: preserved_audio\n";
+const NAV_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!126 &1\nNavMeshAreas:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  areas:\n  - name: Walkable\n    cost: 1\n  - name: Not Walkable\n    cost: 1\n  - name: Mud\n    cost: 3.5\n  unknownNavField: preserved_nav\n";
+const EDITOR_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!159 &1\nEditorSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 9\n  m_SerializationMode: 2\n  m_DefaultBehaviorMode: 1\n  m_LineEndingsForNewScripts: 2\n  unknownEditorField: preserved_editor\n";
+const MONO_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!116 &1\nMonoManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_ExecutionOrder:\n    11111111222222223333333344444444: -100\n    55555555666666667777777788888888: 50\n  unknownMonoField: preserved_mono\n";
+const PRESET_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1386491679 &1\nPresetManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_DefaultPresets:\n  - type: 1\n    presetList: []\n  - type: 2\n    presetList: []\n  unknownPresetField: preserved_preset\n";
+const PKG_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &1\nPackageManagerSettings:\n  m_ObjectHideFlags: 0\n  m_EnablePreReleasePackages: 1\n  m_ScopedRegistries:\n  - m_Name: UnitasRegistry\n    m_Url: \"https://packages.unitas.example\"\n    m_Scopes:\n    - com.unitas\n  unknownPkgField: preserved_pkg\n";
+const VCS_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!890905787 &1\nVersionControlSettings:\n  m_ObjectHideFlags: 0\n  m_Mode: Visible Meta Files\n  unknownVcsField: preserved_vcs\n";
+const BUILD_RAW: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1045 &1\nEditorBuildSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: 5ca1ab1e000000000000000000000001\n  - enabled: 0\n    path: Assets/Scenes/Bonus.unity\n    guid: 5ca1ab1e000000000000000000000002\n  m_configObjects: {}\n  unknownBuildField: preserved_build\n";
 
-    let time_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!5 &1\nTimeManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_FixedTimestep: 0.02\n  m_MaximumAllowedTimestep: 0.33333334\n  m_TimeScale: 1\n  unknownTimeField: preserved_time\n";
-    let dynamics_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 13\n  m_Gravity: {x: 0, y: -9.81, z: 0}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n  unknownPhysicsField: preserved_physics\n";
-    let physics2d_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 5\n  m_Gravity: {x: 0, y: -9.81}\n  m_LayerCollisionMatrix: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n  unknownPhysics2DField: preserved_physics2d\n";
-    let input_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!13 &1\nInputManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Axes:\n  - serializedVersion: 3\n    m_Name: Jump\n    negativeButton:\n    positiveButton: space\n    altNegativeButton:\n    altPositiveButton:\n    gravity: 1000\n    dead: 0.001\n    sensitivity: 1000\n    snap: 0\n    invert: 0\n    type: 0\n    axis: 0\n  unknownInputField: preserved_input\n";
-    let player_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 26\n  companyName: UnitasStudio\n  productName: AllFamiliesGame\n  bundleVersion: 1.5.0\n  m_ActiveColorSpace: 1\n  scriptingDefineSymbols:\n    default: BASE_DEF\n    1: STANDALONE_DEF\n  unknownPlayerField: preserved_player\n";
-    let tag_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!78 &1\nTagManager:\n  serializedVersion: 2\n  tags:\n  - Pickup\n  - Hazard\n  layers:\n  - Default\n  - TransparentFX\n  - Ignore Raycast\n  - \n  - Water\n  - UI\n  - \n  - \n  - PlayerLayer\n  m_SortingLayers:\n  - name: Default\n    uniqueID: 0\n    locked: 0\n  - name: Foreground\n    uniqueID: 42\n    locked: 1\n  unknownTagField: preserved_tag\n";
-    let graphics_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!30 &1\nGraphicsSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 15\n  m_CustomRenderPipeline: {fileID: 11400000, guid: a1b2c3d4e5f60718293a4b5c6d7e8f90, type: 2}\n  m_TransparencySortMode: 2\n  m_AlwaysIncludedShaders:\n  - {fileID: 48, guid: 0000000000000000f000000000000000, type: 0}\n  - {fileID: 10753, guid: 0000000000000000f000000000000000, type: 0}\n  m_TierSettings:\n  - m_BuildTarget: 1\n    m_Tier: 0\n  unknownGraphicsField: preserved_graphics\n";
-    let audio_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!89 &1\nAudioManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Volume: 0.75\n  Rolloff Scale: 1.25\n  Doppler Factor: 0.5\n  Default Speaker Mode: 2\n  m_DSPBufferSize: 512\n  m_VirtualVoiceCount: 256\n  m_RealVoiceCount: 16\n  m_DisableAudio: 0\n  unknownAudioField: preserved_audio\n";
-    let nav_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!126 &1\nNavMeshAreas:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  areas:\n  - name: Walkable\n    cost: 1\n  - name: Not Walkable\n    cost: 1\n  - name: Mud\n    cost: 3.5\n  unknownNavField: preserved_nav\n";
-    let editor_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!159 &1\nEditorSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 9\n  m_SerializationMode: 2\n  m_DefaultBehaviorMode: 1\n  m_LineEndingsForNewScripts: 2\n  unknownEditorField: preserved_editor\n";
-    let mono_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!116 &1\nMonoManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_ExecutionOrder:\n    11111111222222223333333344444444: -100\n    55555555666666667777777788888888: 50\n  unknownMonoField: preserved_mono\n";
-    let preset_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1386491679 &1\nPresetManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_DefaultPresets:\n  - type: 1\n    presetList: []\n  - type: 2\n    presetList: []\n  unknownPresetField: preserved_preset\n";
-    let pkg_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &1\nPackageManagerSettings:\n  m_ObjectHideFlags: 0\n  m_EnablePreReleasePackages: 1\n  m_ScopedRegistries:\n  - m_Name: UnitasRegistry\n    m_Url: \"https://packages.unitas.example\"\n    m_Scopes:\n    - com.unitas\n  unknownPkgField: preserved_pkg\n";
-    let vcs_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!890905787 &1\nVersionControlSettings:\n  m_ObjectHideFlags: 0\n  m_Mode: Visible Meta Files\n  unknownVcsField: preserved_vcs\n";
-    let build_raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1045 &1\nEditorBuildSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 2\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: 5ca1ab1e000000000000000000000001\n  - enabled: 0\n    path: Assets/Scenes/Bonus.unity\n    guid: 5ca1ab1e000000000000000000000002\n  m_configObjects: {}\n  unknownBuildField: preserved_build\n";
-
+fn write_and_verify_all_families_raw_files(root: &Path) -> TestResult {
     let files = [
-        ("TimeManager.asset", time_raw),
-        ("DynamicsManager.asset", dynamics_raw),
-        ("Physics2DSettings.asset", physics2d_raw),
-        ("InputManager.asset", input_raw),
+        ("TimeManager.asset", TIME_RAW),
+        ("DynamicsManager.asset", DYNAMICS_RAW),
+        ("Physics2DSettings.asset", PHYSICS2D_RAW),
+        ("InputManager.asset", INPUT_RAW),
         ("QualitySettings.asset", QUALITY_SETTINGS_YAML),
-        ("ProjectSettings.asset", player_raw),
-        ("TagManager.asset", tag_raw),
-        ("GraphicsSettings.asset", graphics_raw),
-        ("AudioManager.asset", audio_raw),
-        ("NavMeshAreas.asset", nav_raw),
-        ("EditorSettings.asset", editor_raw),
-        ("MonoManager.asset", mono_raw),
-        ("PresetManager.asset", preset_raw),
-        ("PackageManagerSettings.asset", pkg_raw),
-        ("VersionControlSettings.asset", vcs_raw),
-        ("EditorBuildSettings.asset", build_raw),
+        ("ProjectSettings.asset", PLAYER_RAW),
+        ("TagManager.asset", TAG_RAW),
+        ("GraphicsSettings.asset", GRAPHICS_RAW),
+        ("AudioManager.asset", AUDIO_RAW),
+        ("NavMeshAreas.asset", NAV_RAW),
+        ("EditorSettings.asset", EDITOR_RAW),
+        ("MonoManager.asset", MONO_RAW),
+        ("PresetManager.asset", PRESET_RAW),
+        ("PackageManagerSettings.asset", PKG_RAW),
+        ("VersionControlSettings.asset", VCS_RAW),
+        ("EditorBuildSettings.asset", BUILD_RAW),
     ];
 
     for (name, raw) in files {
@@ -1355,19 +1350,414 @@ fn parses_all_project_settings_families_and_round_trips_edits() -> TestResult {
         let out = scene_save::emit_stream(&parsed);
         assert_eq!(out, raw);
     }
+    Ok(())
+}
 
-    assert_tag_manager_round_trip(&root, tag_raw)?;
-    assert_graphics_round_trip(&root, graphics_raw)?;
-    assert_player_round_trip(&root)?;
-    assert_audio_round_trip(&root, audio_raw)?;
-    assert_nav_round_trip(&root, nav_raw)?;
-    assert_editor_round_trip(&root, editor_raw)?;
-    assert_mono_round_trip(&root, mono_raw)?;
-    assert_preset_round_trip(&root, preset_raw)?;
-    assert_package_round_trip(&root, pkg_raw)?;
-    assert_vcs_round_trip(&root, vcs_raw)?;
-    assert_build_round_trip(&root, build_raw)?;
-    assert_loaded_project_settings(project_root.as_path())?;
+fn verify_tag_graphics_player_round_trip(root: &Path) -> TestResult {
+    let tag_path = root.join("TagManager.asset");
+    let mut tag_settings = TagManagerSettings::load(&tag_path)?.ok_or("missing TagManager")?;
+    assert_eq!(tag_settings.emit(), TAG_RAW);
+    tag_settings.save(&tag_path)?;
+    assert_eq!(fs::read_to_string(&tag_path)?, TAG_RAW);
+    assert_eq!(
+        tag_settings.tags(),
+        vec![String::from("Pickup"), String::from("Hazard")]
+    );
+    assert_eq!(tag_settings.layers()[0], "Default");
+    assert_eq!(tag_settings.layers()[8], "PlayerLayer");
+    assert_eq!(
+        tag_settings.sorting_layers(),
+        vec![
+            SortingLayerEntry {
+                name: String::from("Default"),
+                unique_id: 0,
+                locked: false,
+            },
+            SortingLayerEntry {
+                name: String::from("Foreground"),
+                unique_id: 42,
+                locked: true,
+            },
+        ]
+    );
+    tag_settings.add_tag("Checkpoint");
+    tag_settings.set_layer(9, "EnemyLayer")?;
+    tag_settings.save(&tag_path)?;
+    let reloaded_tags = parse_tag_manager(&tag_path)?.ok_or("missing reloaded TagManager")?;
+    assert_eq!(
+        reloaded_tags.tags(),
+        vec![
+            String::from("Pickup"),
+            String::from("Hazard"),
+            String::from("Checkpoint")
+        ]
+    );
+    assert_eq!(reloaded_tags.layers()[9], "EnemyLayer");
+    let reloaded_tag_stream = unity_yaml::parse_file(&tag_path)?;
+    assert_eq!(
+        reloaded_tag_stream.documents[0]
+            .root
+            .get("TagManager")
+            .and_then(|n| n.get("unknownTagField"))
+            .and_then(Node::as_str),
+        Some("preserved_tag")
+    );
+
+    let graphics_path = root.join("GraphicsSettings.asset");
+    let mut graphics = GraphicsSettings::load(&graphics_path)?.ok_or("missing GraphicsSettings")?;
+    assert_eq!(graphics.emit(), GRAPHICS_RAW);
+    graphics.save(&graphics_path)?;
+    assert_eq!(fs::read_to_string(&graphics_path)?, GRAPHICS_RAW);
+    assert_eq!(
+        graphics.custom_render_pipeline_guid(),
+        Some(String::from("a1b2c3d4e5f60718293a4b5c6d7e8f90"))
+    );
+    assert_eq!(graphics.transparency_sort_mode(), 2);
+    assert_eq!(graphics.always_included_shader_count(), 2);
+    assert_eq!(graphics.tier_settings_count, 1);
+    graphics.set_transparency_sort_mode(1)?;
+    graphics.save(&graphics_path)?;
+    let reloaded_graphics =
+        parse_graphics_settings(&graphics_path)?.ok_or("missing reloaded GraphicsSettings")?;
+    assert_eq!(reloaded_graphics.transparency_sort_mode(), 1);
+    assert_eq!(reloaded_graphics.always_included_shader_count(), 2);
+    let reloaded_graphics_stream = unity_yaml::parse_file(&graphics_path)?;
+    assert_eq!(
+        reloaded_graphics_stream.documents[0]
+            .root
+            .get("GraphicsSettings")
+            .and_then(|n| n.get("unknownGraphicsField"))
+            .and_then(Node::as_str),
+        Some("preserved_graphics")
+    );
+
+    let player_path = root.join("ProjectSettings.asset");
+    assert_eq!(
+        parse_color_space(&player_path)?,
+        Some(ColorSpaceSetting::Linear)
+    );
+    let mut player_settings =
+        PlayerSettings::load(&player_path)?.ok_or("missing PlayerSettings")?;
+    assert_eq!(
+        player_settings.active_color_space(),
+        ColorSpaceSetting::Linear
+    );
+    player_settings.set_active_color_space(ColorSpaceSetting::Gamma);
+    assert_eq!(
+        player_settings.active_color_space(),
+        ColorSpaceSetting::Gamma
+    );
+    let mut player_stream = unity_yaml::parse_file(&player_path)?;
+    player_settings.apply_to_stream(&mut player_stream)?;
+    scene_save::save_stream(&player_path, &player_stream)?;
+    assert_eq!(
+        parse_color_space(&player_path)?,
+        Some(ColorSpaceSetting::Gamma)
+    );
+    let reloaded_player = parse_player_settings(&player_path)?.ok_or("missing reloaded player")?;
+    assert_eq!(
+        reloaded_player.active_color_space(),
+        ColorSpaceSetting::Gamma
+    );
+    let reloaded_player_stream = unity_yaml::parse_file(&player_path)?;
+    assert_eq!(
+        reloaded_player_stream.documents[0]
+            .root
+            .get("PlayerSettings")
+            .and_then(|n| n.get("unknownPlayerField"))
+            .and_then(Node::as_str),
+        Some("preserved_player")
+    );
+    Ok(())
+}
+
+fn verify_audio_nav_editor_mono_round_trip(root: &Path) -> TestResult {
+    let audio_path = root.join("AudioManager.asset");
+    let mut audio = AudioManagerSettings::load(&audio_path)?.ok_or("missing AudioManager")?;
+    assert_eq!(audio.emit(), AUDIO_RAW);
+    audio.save(&audio_path)?;
+    assert_eq!(fs::read_to_string(&audio_path)?, AUDIO_RAW);
+    assert!((audio.volume() - 0.75).abs() < 1e-12);
+    assert!((audio.rolloff_scale() - 1.25).abs() < 1e-12);
+    assert!((audio.doppler_factor() - 0.5).abs() < 1e-12);
+    assert_eq!(audio.default_speaker_mode(), 2);
+    assert_eq!(audio.dsp_buffer_size(), 512);
+    assert_eq!(audio.virtual_voice_count(), 256);
+    assert_eq!(audio.real_voice_count(), 16);
+    assert!(!audio.disable_audio());
+    audio.set_volume(0.4)?;
+    audio.save(&audio_path)?;
+    let reloaded_audio = parse_audio_manager(&audio_path)?.ok_or("missing reloaded audio")?;
+    assert!((reloaded_audio.volume() - 0.4).abs() < 1e-12);
+    let reloaded_audio_stream = unity_yaml::parse_file(&audio_path)?;
+    assert_eq!(
+        reloaded_audio_stream.documents[0]
+            .root
+            .get("AudioManager")
+            .and_then(|n| n.get("unknownAudioField"))
+            .and_then(Node::as_str),
+        Some("preserved_audio")
+    );
+
+    let nav_path = root.join("NavMeshAreas.asset");
+    let mut nav = NavMeshAreaSettings::load(&nav_path)?.ok_or("missing NavMeshAreas")?;
+    assert_eq!(nav.emit(), NAV_RAW);
+    nav.save(&nav_path)?;
+    assert_eq!(fs::read_to_string(&nav_path)?, NAV_RAW);
+    assert_eq!(
+        nav.areas(),
+        vec![
+            NavMeshAreaEntry {
+                name: String::from("Walkable"),
+                cost: 1.0,
+            },
+            NavMeshAreaEntry {
+                name: String::from("Not Walkable"),
+                cost: 1.0,
+            },
+            NavMeshAreaEntry {
+                name: String::from("Mud"),
+                cost: 3.5,
+            },
+        ]
+    );
+    nav.set_area_cost(2, 5.25)?;
+    nav.save(&nav_path)?;
+    let reloaded_nav = parse_nav_mesh_areas(&nav_path)?.ok_or("missing reloaded nav")?;
+    assert!((reloaded_nav.areas()[2].cost - 5.25).abs() < 1e-12);
+    let reloaded_nav_stream = unity_yaml::parse_file(&nav_path)?;
+    assert_eq!(
+        reloaded_nav_stream.documents[0]
+            .root
+            .get("NavMeshAreas")
+            .and_then(|n| n.get("unknownNavField"))
+            .and_then(Node::as_str),
+        Some("preserved_nav")
+    );
+
+    let editor_path = root.join("EditorSettings.asset");
+    let mut editor = EditorSettings::load(&editor_path)?.ok_or("missing EditorSettings")?;
+    assert_eq!(editor.emit(), EDITOR_RAW);
+    editor.save(&editor_path)?;
+    assert_eq!(fs::read_to_string(&editor_path)?, EDITOR_RAW);
+    assert_eq!(editor.serialization_mode(), 2);
+    assert_eq!(editor.default_behavior_mode(), 1);
+    assert_eq!(editor.line_endings_for_new_scripts(), 2);
+    editor.set_serialization_mode(1)?;
+    editor.save(&editor_path)?;
+    let reloaded_editor = parse_editor_settings(&editor_path)?.ok_or("missing reloaded editor")?;
+    assert_eq!(reloaded_editor.serialization_mode(), 1);
+    let reloaded_editor_stream = unity_yaml::parse_file(&editor_path)?;
+    assert_eq!(
+        reloaded_editor_stream.documents[0]
+            .root
+            .get("EditorSettings")
+            .and_then(|n| n.get("unknownEditorField"))
+            .and_then(Node::as_str),
+        Some("preserved_editor")
+    );
+
+    let mono_path = root.join("MonoManager.asset");
+    let mut mono = MonoManagerSettings::load(&mono_path)?.ok_or("missing MonoManager")?;
+    assert_eq!(mono.emit(), MONO_RAW);
+    mono.save(&mono_path)?;
+    assert_eq!(fs::read_to_string(&mono_path)?, MONO_RAW);
+    assert_eq!(
+        mono.execution_orders(),
+        vec![
+            (String::from("11111111222222223333333344444444"), -100),
+            (String::from("55555555666666667777777788888888"), 50),
+        ]
+    );
+    mono.set_execution_order("55555555666666667777777788888888", 120);
+    mono.set_execution_order("99999999aaaabbbbccccddddeeeeffff", -25);
+    mono.save(&mono_path)?;
+    let reloaded_mono = parse_mono_manager(&mono_path)?.ok_or("missing reloaded mono")?;
+    assert_eq!(
+        reloaded_mono.execution_orders(),
+        vec![
+            (String::from("11111111222222223333333344444444"), -100),
+            (String::from("55555555666666667777777788888888"), 120),
+            (String::from("99999999aaaabbbbccccddddeeeeffff"), -25),
+        ]
+    );
+    let reloaded_mono_stream = unity_yaml::parse_file(&mono_path)?;
+    assert_eq!(
+        reloaded_mono_stream.documents[0]
+            .root
+            .get("MonoManager")
+            .and_then(|n| n.get("unknownMonoField"))
+            .and_then(Node::as_str),
+        Some("preserved_mono")
+    );
+    Ok(())
+}
+
+fn verify_preset_pkg_vcs_build_round_trip(root: &Path) -> TestResult {
+    let preset_path = root.join("PresetManager.asset");
+    let preset = PresetManagerSettings::load(&preset_path)?.ok_or("missing PresetManager")?;
+    assert_eq!(preset.emit(), PRESET_RAW);
+    preset.save(&preset_path)?;
+    assert_eq!(fs::read_to_string(&preset_path)?, PRESET_RAW);
+    assert_eq!(preset.default_preset_type_count(), 2);
+    let reloaded_preset = parse_preset_manager(&preset_path)?.ok_or("missing reloaded preset")?;
+    assert_eq!(reloaded_preset.default_preset_type_count(), 2);
+
+    let pkg_path = root.join("PackageManagerSettings.asset");
+    let mut pkg =
+        PackageManagerSettings::load(&pkg_path)?.ok_or("missing PackageManagerSettings")?;
+    assert_eq!(pkg.emit(), PKG_RAW);
+    pkg.save(&pkg_path)?;
+    assert_eq!(fs::read_to_string(&pkg_path)?, PKG_RAW);
+    assert!(pkg.enable_pre_release_packages());
+    assert_eq!(pkg.scoped_registries_count(), 1);
+    pkg.set_enable_pre_release_packages(false)?;
+    pkg.save(&pkg_path)?;
+    let reloaded_pkg =
+        parse_package_manager_settings(&pkg_path)?.ok_or("missing reloaded package manager")?;
+    assert!(!reloaded_pkg.enable_pre_release_packages());
+    assert_eq!(reloaded_pkg.scoped_registries_count(), 1);
+    let reloaded_pkg_stream = unity_yaml::parse_file(&pkg_path)?;
+    assert_eq!(
+        reloaded_pkg_stream.documents[0]
+            .root
+            .get("PackageManagerSettings")
+            .and_then(|n| n.get("unknownPkgField"))
+            .and_then(Node::as_str),
+        Some("preserved_pkg")
+    );
+
+    let vcs_path = root.join("VersionControlSettings.asset");
+    let mut vcs =
+        VersionControlSettings::load(&vcs_path)?.ok_or("missing VersionControlSettings")?;
+    assert_eq!(vcs.emit(), VCS_RAW);
+    vcs.save(&vcs_path)?;
+    assert_eq!(fs::read_to_string(&vcs_path)?, VCS_RAW);
+    assert_eq!(vcs.mode()?, "Visible Meta Files");
+    vcs.set_mode("Hidden Meta Files")?;
+    vcs.save(&vcs_path)?;
+    let reloaded_vcs =
+        parse_version_control_settings(&vcs_path)?.ok_or("missing reloaded version control")?;
+    assert_eq!(reloaded_vcs.mode()?, "Hidden Meta Files");
+    let reloaded_vcs_stream = unity_yaml::parse_file(&vcs_path)?;
+    assert_eq!(
+        reloaded_vcs_stream.documents[0]
+            .root
+            .get("VersionControlSettings")
+            .and_then(|n| n.get("unknownVcsField"))
+            .and_then(Node::as_str),
+        Some("preserved_vcs")
+    );
+
+    let build_path = root.join("EditorBuildSettings.asset");
+    let mut build = EditorBuildSettings::load(&build_path)?.ok_or("missing EditorBuildSettings")?;
+    assert_eq!(build.emit(), BUILD_RAW);
+    build.save(&build_path)?;
+    assert_eq!(fs::read_to_string(&build_path)?, BUILD_RAW);
+    assert_eq!(
+        build.scenes(),
+        vec![
+            BuildSceneEntry {
+                enabled: true,
+                path: String::from("Assets/Scenes/Main.unity"),
+                guid: String::from("5ca1ab1e000000000000000000000001"),
+            },
+            BuildSceneEntry {
+                enabled: false,
+                path: String::from("Assets/Scenes/Bonus.unity"),
+                guid: String::from("5ca1ab1e000000000000000000000002"),
+            },
+        ]
+    );
+    build.set_scene_enabled("Assets/Scenes/Bonus.unity", true)?;
+    build.save(&build_path)?;
+    let reloaded_build =
+        parse_editor_build_settings(&build_path)?.ok_or("missing reloaded build settings")?;
+    assert!(reloaded_build.scenes()[1].enabled);
+    let reloaded_build_stream = unity_yaml::parse_file(&build_path)?;
+    assert_eq!(
+        reloaded_build_stream.documents[0]
+            .root
+            .get("EditorBuildSettings")
+            .and_then(|n| n.get("unknownBuildField"))
+            .and_then(Node::as_str),
+        Some("preserved_build")
+    );
+    Ok(())
+}
+
+fn verify_loaded_all_project_settings(project_root: &Path) -> TestResult {
+    let loaded = load_project_settings(project_root)?;
+    assert_eq!(loaded.fixed_timestep(), 0.02);
+    assert_eq!(loaded.gravity, [0.0, -9.81, 0.0]);
+    assert_eq!(loaded.gravity_2d, [0.0, -9.81]);
+    assert_eq!(
+        loaded.identity.product_name.as_deref(),
+        Some("AllFamiliesGame")
+    );
+    assert_eq!(
+        loaded.identity.active_color_space(),
+        ColorSpaceSetting::Gamma
+    );
+    assert_eq!(loaded.color_space, ColorSpaceSetting::Gamma);
+    assert_eq!(loaded.quality.levels.len(), 2);
+
+    let loaded_tags = loaded.tag_manager.ok_or("expected Some(tag_manager)")?;
+    assert_eq!(loaded_tags.tags().len(), 3);
+    assert_eq!(loaded_tags.layers()[9], "EnemyLayer");
+
+    let loaded_graphics = loaded.graphics.ok_or("expected Some(graphics)")?;
+    assert_eq!(loaded_graphics.transparency_sort_mode(), 1);
+    assert_eq!(loaded_graphics.always_included_shader_count(), 2);
+
+    let loaded_audio = loaded.audio.ok_or("expected Some(audio)")?;
+    assert!((loaded_audio.volume() - 0.4).abs() < 1e-12);
+
+    let loaded_nav = loaded
+        .nav_mesh_areas
+        .ok_or("expected Some(nav_mesh_areas)")?;
+    assert!((loaded_nav.areas()[2].cost - 5.25).abs() < 1e-12);
+
+    let loaded_editor = loaded.editor.ok_or("expected Some(editor)")?;
+    assert_eq!(loaded_editor.serialization_mode(), 1);
+
+    let loaded_mono = loaded.mono_manager.ok_or("expected Some(mono_manager)")?;
+    assert_eq!(loaded_mono.execution_orders().len(), 3);
+
+    let loaded_preset = loaded
+        .preset_manager
+        .ok_or("expected Some(preset_manager)")?;
+    assert_eq!(loaded_preset.default_preset_type_count(), 2);
+
+    let loaded_pkg = loaded
+        .package_manager
+        .ok_or("expected Some(package_manager)")?;
+    assert!(!loaded_pkg.enable_pre_release_packages());
+    assert_eq!(loaded_pkg.scoped_registries_count(), 1);
+
+    let loaded_vcs = loaded
+        .version_control
+        .ok_or("expected Some(version_control)")?;
+    assert_eq!(loaded_vcs.mode()?, "Hidden Meta Files");
+
+    let loaded_build = loaded.editor_build.ok_or("expected Some(editor_build)")?;
+    assert_eq!(loaded_build.scenes().len(), 2);
+    assert!(loaded_build.scenes()[1].enabled);
+    Ok(())
+}
+
+#[test]
+fn parses_all_project_settings_families_and_round_trips_edits() -> TestResult {
+    let project_root = temp_settings_dir("all_families")?;
+    let root = project_root.join("ProjectSettings");
+    fs::create_dir_all(&root)?;
+
+    write_and_verify_all_families_raw_files(&root)?;
+    verify_tag_graphics_player_round_trip(&root)?;
+    verify_audio_nav_editor_mono_round_trip(&root)?;
+    verify_preset_pkg_vcs_build_round_trip(&root)?;
+    verify_loaded_all_project_settings(&project_root)?;
+
     fs::remove_dir_all(&project_root)?;
     Ok(())
 }
@@ -1505,424 +1895,5 @@ fn rigidbody_physics_settings_fall_back_to_unity_defaults_when_unset() -> TestRe
     assert_eq!(rigidbody.include_layers, None);
     assert_eq!(rigidbody.exclude_layers, None);
     assert_eq!(rigidbody.layer_override_priority, 0);
-    Ok(())
-}
-
-fn assert_tag_manager_round_trip(root: &Path, tag_raw: &str) -> TestResult {
-    let tag_path = root.join("TagManager.asset");
-    let mut tag_settings = TagManagerSettings::load(&tag_path)?.ok_or("missing TagManager")?;
-    assert_eq!(tag_settings.emit(), tag_raw);
-    tag_settings.save(&tag_path)?;
-    assert_eq!(fs::read_to_string(&tag_path)?, tag_raw);
-    assert_eq!(
-        tag_settings.tags(),
-        vec![String::from("Pickup"), String::from("Hazard")]
-    );
-    assert_eq!(tag_settings.layers()[0], "Default");
-    assert_eq!(tag_settings.layers()[8], "PlayerLayer");
-    assert_eq!(
-        tag_settings.sorting_layers(),
-        vec![
-            SortingLayerEntry {
-                name: String::from("Default"),
-                unique_id: 0,
-                locked: false,
-            },
-            SortingLayerEntry {
-                name: String::from("Foreground"),
-                unique_id: 42,
-                locked: true,
-            },
-        ]
-    );
-    tag_settings.add_tag("Checkpoint");
-    tag_settings.set_layer(9, "EnemyLayer")?;
-    tag_settings.save(&tag_path)?;
-    let reloaded_tags = parse_tag_manager(&tag_path)?.ok_or("missing reloaded TagManager")?;
-    assert_eq!(
-        reloaded_tags.tags(),
-        vec![
-            String::from("Pickup"),
-            String::from("Hazard"),
-            String::from("Checkpoint")
-        ]
-    );
-    assert_eq!(reloaded_tags.layers()[9], "EnemyLayer");
-    let reloaded_tag_stream = unity_yaml::parse_file(&tag_path)?;
-    assert_eq!(
-        reloaded_tag_stream.documents[0]
-            .root
-            .get("TagManager")
-            .and_then(|n| n.get("unknownTagField"))
-            .and_then(Node::as_str),
-        Some("preserved_tag")
-    );
-
-    Ok(())
-}
-fn assert_graphics_round_trip(root: &Path, graphics_raw: &str) -> TestResult {
-    let graphics_path = root.join("GraphicsSettings.asset");
-    let mut graphics = GraphicsSettings::load(&graphics_path)?.ok_or("missing GraphicsSettings")?;
-    assert_eq!(graphics.emit(), graphics_raw);
-    graphics.save(&graphics_path)?;
-    assert_eq!(fs::read_to_string(&graphics_path)?, graphics_raw);
-    assert_eq!(
-        graphics.custom_render_pipeline_guid(),
-        Some(String::from("a1b2c3d4e5f60718293a4b5c6d7e8f90"))
-    );
-    assert_eq!(graphics.transparency_sort_mode(), 2);
-    assert_eq!(graphics.always_included_shader_count(), 2);
-    assert_eq!(graphics.tier_settings_count, 1);
-    graphics.set_transparency_sort_mode(1)?;
-    graphics.save(&graphics_path)?;
-    let reloaded_graphics =
-        parse_graphics_settings(&graphics_path)?.ok_or("missing reloaded GraphicsSettings")?;
-    assert_eq!(reloaded_graphics.transparency_sort_mode(), 1);
-    assert_eq!(reloaded_graphics.always_included_shader_count(), 2);
-    let reloaded_graphics_stream = unity_yaml::parse_file(&graphics_path)?;
-    assert_eq!(
-        reloaded_graphics_stream.documents[0]
-            .root
-            .get("GraphicsSettings")
-            .and_then(|n| n.get("unknownGraphicsField"))
-            .and_then(Node::as_str),
-        Some("preserved_graphics")
-    );
-
-    Ok(())
-}
-fn assert_player_round_trip(root: &Path) -> TestResult {
-    let player_path = root.join("ProjectSettings.asset");
-    assert_eq!(
-        parse_color_space(&player_path)?,
-        Some(ColorSpaceSetting::Linear)
-    );
-    let mut player_settings =
-        PlayerSettings::load(&player_path)?.ok_or("missing PlayerSettings")?;
-    assert_eq!(
-        player_settings.active_color_space(),
-        ColorSpaceSetting::Linear
-    );
-    player_settings.set_active_color_space(ColorSpaceSetting::Gamma);
-    assert_eq!(
-        player_settings.active_color_space(),
-        ColorSpaceSetting::Gamma
-    );
-    let mut player_stream = unity_yaml::parse_file(&player_path)?;
-    player_settings.apply_to_stream(&mut player_stream)?;
-    scene_save::save_stream(&player_path, &player_stream)?;
-    assert_eq!(
-        parse_color_space(&player_path)?,
-        Some(ColorSpaceSetting::Gamma)
-    );
-    let reloaded_player = parse_player_settings(&player_path)?.ok_or("missing reloaded player")?;
-    assert_eq!(
-        reloaded_player.active_color_space(),
-        ColorSpaceSetting::Gamma
-    );
-    let reloaded_player_stream = unity_yaml::parse_file(&player_path)?;
-    assert_eq!(
-        reloaded_player_stream.documents[0]
-            .root
-            .get("PlayerSettings")
-            .and_then(|n| n.get("unknownPlayerField"))
-            .and_then(Node::as_str),
-        Some("preserved_player")
-    );
-
-    Ok(())
-}
-fn assert_audio_round_trip(root: &Path, audio_raw: &str) -> TestResult {
-    let audio_path = root.join("AudioManager.asset");
-    let mut audio = AudioManagerSettings::load(&audio_path)?.ok_or("missing AudioManager")?;
-    assert_eq!(audio.emit(), audio_raw);
-    audio.save(&audio_path)?;
-    assert_eq!(fs::read_to_string(&audio_path)?, audio_raw);
-    assert!((audio.volume() - 0.75).abs() < 1e-12);
-    assert!((audio.rolloff_scale() - 1.25).abs() < 1e-12);
-    assert!((audio.doppler_factor() - 0.5).abs() < 1e-12);
-    assert_eq!(audio.default_speaker_mode(), 2);
-    assert_eq!(audio.dsp_buffer_size(), 512);
-    assert_eq!(audio.virtual_voice_count(), 256);
-    assert_eq!(audio.real_voice_count(), 16);
-    assert!(!audio.disable_audio());
-    audio.set_volume(0.4)?;
-    audio.save(&audio_path)?;
-    let reloaded_audio = parse_audio_manager(&audio_path)?.ok_or("missing reloaded audio")?;
-    assert!((reloaded_audio.volume() - 0.4).abs() < 1e-12);
-    let reloaded_audio_stream = unity_yaml::parse_file(&audio_path)?;
-    assert_eq!(
-        reloaded_audio_stream.documents[0]
-            .root
-            .get("AudioManager")
-            .and_then(|n| n.get("unknownAudioField"))
-            .and_then(Node::as_str),
-        Some("preserved_audio")
-    );
-
-    Ok(())
-}
-fn assert_nav_round_trip(root: &Path, nav_raw: &str) -> TestResult {
-    let nav_path = root.join("NavMeshAreas.asset");
-    let mut nav = NavMeshAreaSettings::load(&nav_path)?.ok_or("missing NavMeshAreas")?;
-    assert_eq!(nav.emit(), nav_raw);
-    nav.save(&nav_path)?;
-    assert_eq!(fs::read_to_string(&nav_path)?, nav_raw);
-    assert_eq!(
-        nav.areas(),
-        vec![
-            NavMeshAreaEntry {
-                name: String::from("Walkable"),
-                cost: 1.0,
-            },
-            NavMeshAreaEntry {
-                name: String::from("Not Walkable"),
-                cost: 1.0,
-            },
-            NavMeshAreaEntry {
-                name: String::from("Mud"),
-                cost: 3.5,
-            },
-        ]
-    );
-    nav.set_area_cost(2, 5.25)?;
-    nav.save(&nav_path)?;
-    let reloaded_nav = parse_nav_mesh_areas(&nav_path)?.ok_or("missing reloaded nav")?;
-    assert!((reloaded_nav.areas()[2].cost - 5.25).abs() < 1e-12);
-    let reloaded_nav_stream = unity_yaml::parse_file(&nav_path)?;
-    assert_eq!(
-        reloaded_nav_stream.documents[0]
-            .root
-            .get("NavMeshAreas")
-            .and_then(|n| n.get("unknownNavField"))
-            .and_then(Node::as_str),
-        Some("preserved_nav")
-    );
-
-    Ok(())
-}
-fn assert_editor_round_trip(root: &Path, editor_raw: &str) -> TestResult {
-    let editor_path = root.join("EditorSettings.asset");
-    let mut editor = EditorSettings::load(&editor_path)?.ok_or("missing EditorSettings")?;
-    assert_eq!(editor.emit(), editor_raw);
-    editor.save(&editor_path)?;
-    assert_eq!(fs::read_to_string(&editor_path)?, editor_raw);
-    assert_eq!(editor.serialization_mode(), 2);
-    assert_eq!(editor.default_behavior_mode(), 1);
-    assert_eq!(editor.line_endings_for_new_scripts(), 2);
-    editor.set_serialization_mode(1)?;
-    editor.save(&editor_path)?;
-    let reloaded_editor = parse_editor_settings(&editor_path)?.ok_or("missing reloaded editor")?;
-    assert_eq!(reloaded_editor.serialization_mode(), 1);
-    let reloaded_editor_stream = unity_yaml::parse_file(&editor_path)?;
-    assert_eq!(
-        reloaded_editor_stream.documents[0]
-            .root
-            .get("EditorSettings")
-            .and_then(|n| n.get("unknownEditorField"))
-            .and_then(Node::as_str),
-        Some("preserved_editor")
-    );
-
-    Ok(())
-}
-fn assert_mono_round_trip(root: &Path, mono_raw: &str) -> TestResult {
-    let mono_path = root.join("MonoManager.asset");
-    let mut mono = MonoManagerSettings::load(&mono_path)?.ok_or("missing MonoManager")?;
-    assert_eq!(mono.emit(), mono_raw);
-    mono.save(&mono_path)?;
-    assert_eq!(fs::read_to_string(&mono_path)?, mono_raw);
-    assert_eq!(
-        mono.execution_orders(),
-        vec![
-            (String::from("11111111222222223333333344444444"), -100),
-            (String::from("55555555666666667777777788888888"), 50),
-        ]
-    );
-    mono.set_execution_order("55555555666666667777777788888888", 120);
-    mono.set_execution_order("99999999aaaabbbbccccddddeeeeffff", -25);
-    mono.save(&mono_path)?;
-    let reloaded_mono = parse_mono_manager(&mono_path)?.ok_or("missing reloaded mono")?;
-    assert_eq!(
-        reloaded_mono.execution_orders(),
-        vec![
-            (String::from("11111111222222223333333344444444"), -100),
-            (String::from("55555555666666667777777788888888"), 120),
-            (String::from("99999999aaaabbbbccccddddeeeeffff"), -25),
-        ]
-    );
-    let reloaded_mono_stream = unity_yaml::parse_file(&mono_path)?;
-    assert_eq!(
-        reloaded_mono_stream.documents[0]
-            .root
-            .get("MonoManager")
-            .and_then(|n| n.get("unknownMonoField"))
-            .and_then(Node::as_str),
-        Some("preserved_mono")
-    );
-
-    Ok(())
-}
-fn assert_preset_round_trip(root: &Path, preset_raw: &str) -> TestResult {
-    let preset_path = root.join("PresetManager.asset");
-    let preset = PresetManagerSettings::load(&preset_path)?.ok_or("missing PresetManager")?;
-    assert_eq!(preset.emit(), preset_raw);
-    preset.save(&preset_path)?;
-    assert_eq!(fs::read_to_string(&preset_path)?, preset_raw);
-    assert_eq!(preset.default_preset_type_count(), 2);
-    let reloaded_preset = parse_preset_manager(&preset_path)?.ok_or("missing reloaded preset")?;
-    assert_eq!(reloaded_preset.default_preset_type_count(), 2);
-
-    Ok(())
-}
-fn assert_package_round_trip(root: &Path, pkg_raw: &str) -> TestResult {
-    let pkg_path = root.join("PackageManagerSettings.asset");
-    let mut pkg =
-        PackageManagerSettings::load(&pkg_path)?.ok_or("missing PackageManagerSettings")?;
-    assert_eq!(pkg.emit(), pkg_raw);
-    pkg.save(&pkg_path)?;
-    assert_eq!(fs::read_to_string(&pkg_path)?, pkg_raw);
-    assert!(pkg.enable_pre_release_packages());
-    assert_eq!(pkg.scoped_registries_count(), 1);
-    pkg.set_enable_pre_release_packages(false)?;
-    pkg.save(&pkg_path)?;
-    let reloaded_pkg =
-        parse_package_manager_settings(&pkg_path)?.ok_or("missing reloaded package manager")?;
-    assert!(!reloaded_pkg.enable_pre_release_packages());
-    assert_eq!(reloaded_pkg.scoped_registries_count(), 1);
-    let reloaded_pkg_stream = unity_yaml::parse_file(&pkg_path)?;
-    assert_eq!(
-        reloaded_pkg_stream.documents[0]
-            .root
-            .get("PackageManagerSettings")
-            .and_then(|n| n.get("unknownPkgField"))
-            .and_then(Node::as_str),
-        Some("preserved_pkg")
-    );
-
-    Ok(())
-}
-fn assert_vcs_round_trip(root: &Path, vcs_raw: &str) -> TestResult {
-    let vcs_path = root.join("VersionControlSettings.asset");
-    let mut vcs =
-        VersionControlSettings::load(&vcs_path)?.ok_or("missing VersionControlSettings")?;
-    assert_eq!(vcs.emit(), vcs_raw);
-    vcs.save(&vcs_path)?;
-    assert_eq!(fs::read_to_string(&vcs_path)?, vcs_raw);
-    assert_eq!(vcs.mode()?, "Visible Meta Files");
-    vcs.set_mode("Hidden Meta Files")?;
-    vcs.save(&vcs_path)?;
-    let reloaded_vcs =
-        parse_version_control_settings(&vcs_path)?.ok_or("missing reloaded version control")?;
-    assert_eq!(reloaded_vcs.mode()?, "Hidden Meta Files");
-    let reloaded_vcs_stream = unity_yaml::parse_file(&vcs_path)?;
-    assert_eq!(
-        reloaded_vcs_stream.documents[0]
-            .root
-            .get("VersionControlSettings")
-            .and_then(|n| n.get("unknownVcsField"))
-            .and_then(Node::as_str),
-        Some("preserved_vcs")
-    );
-
-    Ok(())
-}
-fn assert_build_round_trip(root: &Path, build_raw: &str) -> TestResult {
-    let build_path = root.join("EditorBuildSettings.asset");
-    let mut build = EditorBuildSettings::load(&build_path)?.ok_or("missing EditorBuildSettings")?;
-    assert_eq!(build.emit(), build_raw);
-    build.save(&build_path)?;
-    assert_eq!(fs::read_to_string(&build_path)?, build_raw);
-    assert_eq!(
-        build.scenes(),
-        vec![
-            BuildSceneEntry {
-                enabled: true,
-                path: String::from("Assets/Scenes/Main.unity"),
-                guid: String::from("5ca1ab1e000000000000000000000001"),
-            },
-            BuildSceneEntry {
-                enabled: false,
-                path: String::from("Assets/Scenes/Bonus.unity"),
-                guid: String::from("5ca1ab1e000000000000000000000002"),
-            },
-        ]
-    );
-    build.set_scene_enabled("Assets/Scenes/Bonus.unity", true)?;
-    build.save(&build_path)?;
-    let reloaded_build =
-        parse_editor_build_settings(&build_path)?.ok_or("missing reloaded build settings")?;
-    assert!(reloaded_build.scenes()[1].enabled);
-    let reloaded_build_stream = unity_yaml::parse_file(&build_path)?;
-    assert_eq!(
-        reloaded_build_stream.documents[0]
-            .root
-            .get("EditorBuildSettings")
-            .and_then(|n| n.get("unknownBuildField"))
-            .and_then(Node::as_str),
-        Some("preserved_build")
-    );
-
-    Ok(())
-}
-
-fn assert_loaded_project_settings(project_root: &Path) -> TestResult {
-    let loaded = load_project_settings(project_root)?;
-    assert_eq!(loaded.fixed_timestep(), 0.02);
-    assert_eq!(loaded.gravity, [0.0, -9.81, 0.0]);
-    assert_eq!(loaded.gravity_2d, [0.0, -9.81]);
-    assert_eq!(
-        loaded.identity.product_name.as_deref(),
-        Some("AllFamiliesGame")
-    );
-    assert_eq!(
-        loaded.identity.active_color_space(),
-        ColorSpaceSetting::Gamma
-    );
-    assert_eq!(loaded.color_space, ColorSpaceSetting::Gamma);
-    assert_eq!(loaded.quality.levels.len(), 2);
-
-    let loaded_tags = loaded.tag_manager.ok_or("expected Some(tag_manager)")?;
-    assert_eq!(loaded_tags.tags().len(), 3);
-    assert_eq!(loaded_tags.layers()[9], "EnemyLayer");
-
-    let loaded_graphics = loaded.graphics.ok_or("expected Some(graphics)")?;
-    assert_eq!(loaded_graphics.transparency_sort_mode(), 1);
-    assert_eq!(loaded_graphics.always_included_shader_count(), 2);
-
-    let loaded_audio = loaded.audio.ok_or("expected Some(audio)")?;
-    assert!((loaded_audio.volume() - 0.4).abs() < 1e-12);
-
-    let loaded_nav = loaded
-        .nav_mesh_areas
-        .ok_or("expected Some(nav_mesh_areas)")?;
-    assert!((loaded_nav.areas()[2].cost - 5.25).abs() < 1e-12);
-
-    let loaded_editor = loaded.editor.ok_or("expected Some(editor)")?;
-    assert_eq!(loaded_editor.serialization_mode(), 1);
-
-    let loaded_mono = loaded.mono_manager.ok_or("expected Some(mono_manager)")?;
-    assert_eq!(loaded_mono.execution_orders().len(), 3);
-
-    let loaded_preset = loaded
-        .preset_manager
-        .ok_or("expected Some(preset_manager)")?;
-    assert_eq!(loaded_preset.default_preset_type_count(), 2);
-
-    let loaded_pkg = loaded
-        .package_manager
-        .ok_or("expected Some(package_manager)")?;
-    assert!(!loaded_pkg.enable_pre_release_packages());
-    assert_eq!(loaded_pkg.scoped_registries_count(), 1);
-
-    let loaded_vcs = loaded
-        .version_control
-        .ok_or("expected Some(version_control)")?;
-    assert_eq!(loaded_vcs.mode()?, "Hidden Meta Files");
-
-    let loaded_build = loaded.editor_build.ok_or("expected Some(editor_build)")?;
-    assert_eq!(loaded_build.scenes().len(), 2);
-    assert!(loaded_build.scenes()[1].enabled);
-
     Ok(())
 }

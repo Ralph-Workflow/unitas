@@ -635,14 +635,8 @@ fn game_object_type_tree(endian: Endianness) -> Vec<u8> {
     )
 }
 
-fn transform_type_tree(endian: Endianness) -> Vec<u8> {
-    let mut specs = transform_type_tree_base_specs();
-    specs.extend(transform_type_tree_children_specs());
-    encode_type_tree_blob(endian, &specs)
-}
-
-fn transform_type_tree_base_specs() -> Vec<NodeSpec<'static>> {
-    vec![
+fn transform_pose_node_specs() -> [NodeSpec<'static>; 14] {
+    [
         NodeSpec {
             level: 0,
             type_flags: 0,
@@ -758,9 +752,9 @@ fn transform_type_tree_base_specs() -> Vec<NodeSpec<'static>> {
     ]
 }
 
-fn transform_type_tree_children_specs() -> Vec<NodeSpec<'static>> {
+fn transform_hierarchy_node_specs() -> [NodeSpec<'static>; 12] {
     const ALIGN: i32 = 0x4000;
-    vec![
+    [
         NodeSpec {
             level: 2,
             type_flags: 0,
@@ -858,6 +852,13 @@ fn transform_type_tree_children_specs() -> Vec<NodeSpec<'static>> {
             meta_flag: 0,
         },
     ]
+}
+
+fn transform_type_tree(endian: Endianness) -> Vec<u8> {
+    let mut specs = Vec::with_capacity(26);
+    specs.extend(transform_pose_node_specs());
+    specs.extend(transform_hierarchy_node_specs());
+    encode_type_tree_blob(endian, &specs)
 }
 
 fn monobehaviour_type_tree(endian: Endianness) -> Vec<u8> {

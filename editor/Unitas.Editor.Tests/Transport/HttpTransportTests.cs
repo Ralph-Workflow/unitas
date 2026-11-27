@@ -65,154 +65,13 @@ namespace Unitas.Editor.Tests
                                 cts.Token).ConfigureAwait(false);
                             try
                             {
-                                IList<McpClientTool> toolsA = await clientA.ListToolsAsync(
-                                    (RequestOptions?)null,
+                                await VerifyConcurrentHttpClientIsolationAsync(
+                                    host,
+                                    transportHost,
+                                    clientA,
+                                    clientB,
+                                    personSessionId,
                                     cts.Token).ConfigureAwait(false);
-                                IList<McpClientTool> toolsB = await clientB.ListToolsAsync(
-                                    (RequestOptions?)null,
-                                    cts.Token).ConfigureAwait(false);
-                                Check.Equal("http: client A lists 3 tools", 3, toolsA.Count);
-                                Check.Equal("http: client B lists 3 tools", 3, toolsB.Count);
-
-                                string? sessionA = transportHost.TryGetHostSessionId("agent-alpha");
-                                string? sessionB = transportHost.TryGetHostSessionId("agent-beta");
-                                Check.That("http: client A has a resolved host session", !string.IsNullOrEmpty(sessionA));
-                                Check.That("http: client B has a resolved host session", !string.IsNullOrEmpty(sessionB));
-                                Check.That(
-                                    "http: client A and client B have distinct host sessions",
-                                    !string.Equals(sessionA, sessionB, StringComparison.Ordinal));
-                                Check.That(
-                                    "http: client sessions are distinct from person session",
-                                    !string.Equals(sessionA, personSessionId, StringComparison.Ordinal)
-                                        && !string.Equals(sessionB, personSessionId, StringComparison.Ordinal));
-
-                                CallToolResult inspectA = await clientA.CallToolAsync(
-                                    new CallToolRequestParams { Name = "scene.inspect" },
-                                    cts.Token).ConfigureAwait(false);
-                                CallToolResult inspectB = await clientB.CallToolAsync(
-                                    new CallToolRequestParams { Name = "scene.inspect" },
-                                    cts.Token).ConfigureAwait(false);
-                                Check.That(
-                                    "http: client A read-project tool call returns untrusted envelope",
-                                    UntrustedContent.IsEnvelope(ParseStructuredContent(inspectA)));
-                                Check.That(
-                                    "http: client B read-project tool call returns untrusted envelope",
-                                    UntrustedContent.IsEnvelope(ParseStructuredContent(inspectB)));
-
-                                host.GrantScope(sessionA!, Scope.EditContent, GrantAuthority.Person);
-
-                                CallToolResult editA = await clientA.CallToolAsync(
-                                    new CallToolRequestParams
-                                    {
-                                        Name = "scene.edit",
-                                        Arguments = new Dictionary<string, JsonElement>
-                                        {
-                                            ["target"] = JsonDocument.Parse("\"obj:PlayerA\"").RootElement.Clone(),
-                                        },
-                                    },
-                                    cts.Token).ConfigureAwait(false);
-                                JsonNode? editAStructured = ParseStructuredContent(editA);
-                                Check.That(
-                                    "http: client A after grant calls scene.edit with untrusted envelope",
-                                    UntrustedContent.IsEnvelope(editAStructured));
-                                Check.Equal(
-                                    "http: client A scene.edit updates obj:PlayerA",
-                                    "obj:PlayerA",
-                                    editAStructured?["content"]?["updated"]?.GetValue<string>() ?? string.Empty);
-
-                                McpProtocolException? refusedEditB = await CatchProtocolAsync(() =>
-                                    clientB.CallToolAsync(
-                                        new CallToolRequestParams
-                                        {
-                                            Name = "scene.edit",
-                                            Arguments = new Dictionary<string, JsonElement>
-                                            {
-                                                ["target"] = JsonDocument.Parse("\"obj:PlayerB\"").RootElement.Clone(),
-                                            },
-                                        },
-                                        cts.Token).AsTask()).ConfigureAwait(false);
-                                Check.That(
-                                    "http: client B is refused scene.edit while only client A holds EditContent",
-                                    refusedEditB != null);
-                                Check.Equal(
-                                    "http: client B refusal error code is -32001",
-                                    HttpTransportHost.MissingScopeErrorCode,
-                                    refusedEditB != null ? (int)refusedEditB.ErrorCode : 0);
-                                Check.That(
-                                    "http: client B refusal message names edit-content",
-                                    refusedEditB != null
-                                        && refusedEditB.Message.Contains("edit-content", StringComparison.Ordinal));
-
-                                host.GrantScope(sessionB!, Scope.Build, GrantAuthority.Person);
-
-                                CallToolResult buildB = await clientB.CallToolAsync(
-                                    new CallToolRequestParams
-                                    {
-                                        Name = "project.build",
-                                        Arguments = new Dictionary<string, JsonElement>
-                                        {
-                                            ["target"] = JsonDocument.Parse("\"macOS\"").RootElement.Clone(),
-                                        },
-                                    },
-                                    cts.Token).ConfigureAwait(false);
-                                JsonNode? buildBStructured = ParseStructuredContent(buildB);
-                                Check.That(
-                                    "http: client B after Build grant calls project.build with untrusted envelope",
-                                    UntrustedContent.IsEnvelope(buildBStructured));
-                                Check.Equal(
-                                    "http: client B project.build target is macOS",
-                                    "macOS",
-                                    buildBStructured?["content"]?["built"]?.GetValue<string>() ?? string.Empty);
-
-                                McpProtocolException? refusedBuildA = await CatchProtocolAsync(() =>
-                                    clientA.CallToolAsync(
-                                        new CallToolRequestParams
-                                        {
-                                            Name = "project.build",
-                                            Arguments = new Dictionary<string, JsonElement>
-                                            {
-                                                ["target"] = JsonDocument.Parse("\"macOS\"").RootElement.Clone(),
-                                            },
-                                        },
-                                        cts.Token).AsTask()).ConfigureAwait(false);
-                                Check.That(
-                                    "http: client A is refused project.build because Build was granted only to client B",
-                                    refusedBuildA != null);
-                                Check.Equal(
-                                    "http: client A build refusal error code is -32001",
-                                    HttpTransportHost.MissingScopeErrorCode,
-                                    refusedBuildA != null ? (int)refusedBuildA.ErrorCode : 0);
-
-                                Uri manifestUri = new Uri("unitas://project/manifest");
-                                ReadResourceResult resourceA = await clientA.ReadResourceAsync(
-                                    manifestUri,
-                                    (RequestOptions?)null,
-                                    cts.Token).ConfigureAwait(false);
-                                ReadResourceResult resourceB = await clientB.ReadResourceAsync(
-                                    manifestUri,
-                                    (RequestOptions?)null,
-                                    cts.Token).ConfigureAwait(false);
-                                Check.That(
-                                    "http: client A resource read returns untrusted envelope",
-                                    UntrustedContent.IsEnvelope(ParseResourceEnvelope(resourceA)));
-                                Check.That(
-                                    "http: client B resource read returns untrusted envelope",
-                                    UntrustedContent.IsEnvelope(ParseResourceEnvelope(resourceB)));
-
-                                McpError? personEditRefused = CatchHostError(() =>
-                                    host.CallTool(
-                                        personSessionId,
-                                        "scene.edit",
-                                        new JsonObject { ["target"] = "obj:Person" }));
-                                Check.That(
-                                    "http: person session scopes remain unaffected by client A and B grants",
-                                    personEditRefused is McpError.MissingScope);
-                                string personDeployOp = host.StartOperation(personSessionId, "deploy.macos", Scope.Deploy);
-                                Check.That(
-                                    "http: person session retains its own Deploy scope",
-                                    !string.IsNullOrEmpty(personDeployOp));
-
-                                VerifyAuditRecords(host.Audit.Records, sessionA!, sessionB!, personSessionId);
                             }
                             finally
                             {
@@ -238,6 +97,181 @@ namespace Unitas.Editor.Tests
             {
                 await transportHost.DisposeAsync().ConfigureAwait(false);
             }
+        }
+
+        private static async Task VerifyConcurrentHttpClientIsolationAsync(
+            McpHost host,
+            HttpTransportHost transportHost,
+            McpClient clientA,
+            McpClient clientB,
+            string personSessionId,
+            CancellationToken cancellationToken)
+        {
+            IList<McpClientTool> toolsA = await clientA.ListToolsAsync(
+                (RequestOptions?)null,
+                cancellationToken).ConfigureAwait(false);
+            IList<McpClientTool> toolsB = await clientB.ListToolsAsync(
+                (RequestOptions?)null,
+                cancellationToken).ConfigureAwait(false);
+            Check.Equal("http: client A lists 3 tools", 3, toolsA.Count);
+            Check.Equal("http: client B lists 3 tools", 3, toolsB.Count);
+
+            string? sessionA = transportHost.TryGetHostSessionId("agent-alpha");
+            string? sessionB = transportHost.TryGetHostSessionId("agent-beta");
+            Check.That("http: client A has a resolved host session", !string.IsNullOrEmpty(sessionA));
+            Check.That("http: client B has a resolved host session", !string.IsNullOrEmpty(sessionB));
+            Check.That(
+                "http: client A and client B have distinct host sessions",
+                !string.Equals(sessionA, sessionB, StringComparison.Ordinal));
+            Check.That(
+                "http: client sessions are distinct from person session",
+                !string.Equals(sessionA, personSessionId, StringComparison.Ordinal)
+                    && !string.Equals(sessionB, personSessionId, StringComparison.Ordinal));
+
+            CallToolResult inspectA = await clientA.CallToolAsync(
+                new CallToolRequestParams { Name = "scene.inspect" },
+                cancellationToken).ConfigureAwait(false);
+            CallToolResult inspectB = await clientB.CallToolAsync(
+                new CallToolRequestParams { Name = "scene.inspect" },
+                cancellationToken).ConfigureAwait(false);
+            Check.That(
+                "http: client A read-project tool call returns untrusted envelope",
+                UntrustedContent.IsEnvelope(ParseStructuredContent(inspectA)));
+            Check.That(
+                "http: client B read-project tool call returns untrusted envelope",
+                UntrustedContent.IsEnvelope(ParseStructuredContent(inspectB)));
+
+            await VerifyIsolatedScopeGrantsAsync(
+                host,
+                clientA,
+                clientB,
+                sessionA!,
+                sessionB!,
+                cancellationToken).ConfigureAwait(false);
+
+            Uri manifestUri = new Uri("unitas://project/manifest");
+            ReadResourceResult resourceA = await clientA.ReadResourceAsync(
+                manifestUri,
+                (RequestOptions?)null,
+                cancellationToken).ConfigureAwait(false);
+            ReadResourceResult resourceB = await clientB.ReadResourceAsync(
+                manifestUri,
+                (RequestOptions?)null,
+                cancellationToken).ConfigureAwait(false);
+            Check.That(
+                "http: client A resource read returns untrusted envelope",
+                UntrustedContent.IsEnvelope(ParseResourceEnvelope(resourceA)));
+            Check.That(
+                "http: client B resource read returns untrusted envelope",
+                UntrustedContent.IsEnvelope(ParseResourceEnvelope(resourceB)));
+
+            McpError? personEditRefused = CatchHostError(() =>
+                host.CallTool(
+                    personSessionId,
+                    "scene.edit",
+                    new JsonObject { ["target"] = "obj:Person" }));
+            Check.That(
+                "http: person session scopes remain unaffected by client A and B grants",
+                personEditRefused is McpError.MissingScope);
+            string personDeployOp = host.StartOperation(personSessionId, "deploy.macos", Scope.Deploy);
+            Check.That(
+                "http: person session retains its own Deploy scope",
+                !string.IsNullOrEmpty(personDeployOp));
+
+            VerifyAuditRecords(host.Audit.Records, sessionA!, sessionB!, personSessionId);
+        }
+
+        private static async Task VerifyIsolatedScopeGrantsAsync(
+            McpHost host,
+            McpClient clientA,
+            McpClient clientB,
+            string sessionA,
+            string sessionB,
+            CancellationToken cancellationToken)
+        {
+            host.GrantScope(sessionA, Scope.EditContent, GrantAuthority.Person);
+
+            CallToolResult editA = await clientA.CallToolAsync(
+                new CallToolRequestParams
+                {
+                    Name = "scene.edit",
+                    Arguments = new Dictionary<string, JsonElement>
+                    {
+                        ["target"] = JsonDocument.Parse("\"obj:PlayerA\"").RootElement.Clone(),
+                    },
+                },
+                cancellationToken).ConfigureAwait(false);
+            JsonNode? editAStructured = ParseStructuredContent(editA);
+            Check.That(
+                "http: client A after grant calls scene.edit with untrusted envelope",
+                UntrustedContent.IsEnvelope(editAStructured));
+            Check.Equal(
+                "http: client A scene.edit updates obj:PlayerA",
+                "obj:PlayerA",
+                editAStructured?["content"]?["updated"]?.GetValue<string>() ?? string.Empty);
+
+            McpProtocolException? refusedEditB = await CatchProtocolAsync(() =>
+                clientB.CallToolAsync(
+                    new CallToolRequestParams
+                    {
+                        Name = "scene.edit",
+                        Arguments = new Dictionary<string, JsonElement>
+                        {
+                            ["target"] = JsonDocument.Parse("\"obj:PlayerB\"").RootElement.Clone(),
+                        },
+                    },
+                    cancellationToken).AsTask()).ConfigureAwait(false);
+            Check.That(
+                "http: client B is refused scene.edit while only client A holds EditContent",
+                refusedEditB != null);
+            Check.Equal(
+                "http: client B refusal error code is -32001",
+                HttpTransportHost.MissingScopeErrorCode,
+                refusedEditB != null ? (int)refusedEditB.ErrorCode : 0);
+            Check.That(
+                "http: client B refusal message names edit-content",
+                refusedEditB != null
+                    && refusedEditB.Message.Contains("edit-content", StringComparison.Ordinal));
+
+            host.GrantScope(sessionB, Scope.Build, GrantAuthority.Person);
+
+            CallToolResult buildB = await clientB.CallToolAsync(
+                new CallToolRequestParams
+                {
+                    Name = "project.build",
+                    Arguments = new Dictionary<string, JsonElement>
+                    {
+                        ["target"] = JsonDocument.Parse("\"macOS\"").RootElement.Clone(),
+                    },
+                },
+                cancellationToken).ConfigureAwait(false);
+            JsonNode? buildBStructured = ParseStructuredContent(buildB);
+            Check.That(
+                "http: client B after Build grant calls project.build with untrusted envelope",
+                UntrustedContent.IsEnvelope(buildBStructured));
+            Check.Equal(
+                "http: client B project.build target is macOS",
+                "macOS",
+                buildBStructured?["content"]?["built"]?.GetValue<string>() ?? string.Empty);
+
+            McpProtocolException? refusedBuildA = await CatchProtocolAsync(() =>
+                clientA.CallToolAsync(
+                    new CallToolRequestParams
+                    {
+                        Name = "project.build",
+                        Arguments = new Dictionary<string, JsonElement>
+                        {
+                            ["target"] = JsonDocument.Parse("\"macOS\"").RootElement.Clone(),
+                        },
+                    },
+                    cancellationToken).AsTask()).ConfigureAwait(false);
+            Check.That(
+                "http: client A is refused project.build because Build was granted only to client B",
+                refusedBuildA != null);
+            Check.Equal(
+                "http: client A build refusal error code is -32001",
+                HttpTransportHost.MissingScopeErrorCode,
+                refusedBuildA != null ? (int)refusedBuildA.ErrorCode : 0);
         }
 
         private static async Task ConcurrentClientsKeepTheirOwnAuditIdentity()

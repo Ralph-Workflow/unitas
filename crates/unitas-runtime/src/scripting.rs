@@ -428,150 +428,22 @@ pub fn parse_plugin_meta_text(
         "dylib" | "so" | "bundle" | "a" | "framework" | "aar" | "jslib" | "jspre"
     );
 
-    let mut is_native = is_native_ext;
-    let mut auto_referenced = true;
-    let mut validate_references = true;
-    let mut define_constraints: Vec<String> = Vec::new();
-    let mut acc = PluginMetaAccumulator {
-        editor_enabled: true,
-        ..PluginMetaAccumulator::default()
+    let mut scan = PluginMetaScan {
+        acc: PluginMetaAccumulator {
+            editor_enabled: true,
+            ..PluginMetaAccumulator::default()
+        },
+        is_native: is_native_ext,
+        auto_referenced: true,
+        validate_references: true,
+        define_constraints: Vec::new(),
+        in_settings: false,
+        in_define_constraints: false,
     };
+    scan_plugin_meta_lines(text, &mut scan);
 
-    let mut in_settings = false;
-    let mut in_define_constraints = false;
-
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let indent = raw_line.len() - raw_line.trim_start().len();
-
-        if in_define_constraints {
-            if let Some(item) = trimmed.strip_prefix("- ") {
-                let constraint = unquote(item.trim());
-                if !constraint.is_empty() {
-                    define_constraints.push(constraint);
-                }
-                continue;
-            } else if indent <= 4 {
-                in_define_constraints = false;
-            }
-        }
-
-        if trimmed == "defineConstraints:" {
-            in_define_constraints = true;
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("defineConstraints:") {
-            let rest_trimmed = rest.trim();
-            if rest_trimmed.starts_with('[') && rest_trimmed.ends_with(']') {
-                let inner = &rest_trimmed[1..rest_trimmed.len() - 1];
-                for part in inner.split(',') {
-                    let clean = unquote(part.trim());
-                    if !clean.is_empty() {
-                        define_constraints.push(clean);
-                    }
-                }
-            }
-            continue;
-        }
-
-        if let Some(val) = trimmed.strip_prefix("isPreloaded:") {
-            if val.trim() == "1" || val.trim().eq_ignore_ascii_case("true") {
-                is_native = true;
-            }
-            continue;
-        }
-
-        if let Some(val) = trimmed.strip_prefix("autoReferenced:") {
-            auto_referenced = parse_bool_flag(val.trim(), true);
-            continue;
-        }
-
-        if let Some(val) = trimmed.strip_prefix("validateReferences:") {
-            validate_references = parse_bool_flag(val.trim(), true);
-            continue;
-        }
-
-        if let Some(first_rest) = trimmed.strip_prefix("- first:") {
-            acc.flush();
-            in_settings = false;
-            let inline = first_rest.trim();
-            if let Some(platform_name) = extract_inline_mapping_target(inline) {
-                acc.current_platform = Some(platform_name);
-            }
-            continue;
-        }
-
-        if trimmed == "first:" {
-            acc.flush();
-            in_settings = false;
-            continue;
-        }
-
-        if acc.current_platform.is_none()
-            && indent >= 4
-            && !in_settings
-            && let Some((key, val)) = split_yaml_kv(trimmed)
-        {
-            if key == "Any" {
-                acc.current_platform = Some(String::from("Any"));
-                continue;
-            } else if key != "second"
-                && key != "enabled"
-                && key != "settings"
-                && key != "platformData"
-                && key != "PluginImporter"
-                && key != "externalObjects"
-                && key != "serializedVersion"
-                && key != "iconMap"
-                && key != "executionOrder"
-            {
-                let target = if val.is_empty() { key } else { val };
-                acc.current_platform = Some(target);
-                continue;
-            }
-        }
-
-        if let Some(platform_data_key) = trimmed.strip_prefix("- ")
-            && let Some((key, val)) = split_yaml_kv(platform_data_key)
-            && (key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone"))
-        {
-            acc.flush();
-            let target = if val.is_empty() { key } else { val };
-            acc.current_platform = Some(target);
-            continue;
-        }
-
-        if trimmed == "settings:" {
-            in_settings = true;
-            continue;
-        }
-        if trimmed.starts_with("settings:") {
-            in_settings = false;
-            continue;
-        }
-
-        if acc.current_platform.is_some() {
-            if let Some(enabled_str) = trimmed.strip_prefix("enabled:") {
-                acc.current_enabled = Some(parse_bool_flag(enabled_str.trim(), false));
-                continue;
-            }
-            if in_settings && let Some((key, val)) = split_yaml_kv(trimmed) {
-                if key.eq_ignore_ascii_case("CPU") && !val.is_empty() {
-                    if !val.eq_ignore_ascii_case("None") {
-                        acc.current_cpu = Some(val);
-                    }
-                } else if key.eq_ignore_ascii_case("OS")
-                    && !val.is_empty()
-                    && !val.eq_ignore_ascii_case("None")
-                {
-                    acc.current_os = Some(val);
-                }
-            }
-        }
-    }
+    let mut acc = scan.acc;
+    let mut is_native = scan.is_native;
 
     acc.flush();
 
@@ -607,10 +479,147 @@ pub fn parse_plugin_meta_text(
         editor_enabled: acc.editor_enabled,
         editor_cpu: acc.editor_cpu,
         editor_os: acc.editor_os,
-        define_constraints,
-        auto_referenced,
-        validate_references,
+        define_constraints: scan.define_constraints,
+        auto_referenced: scan.auto_referenced,
+        validate_references: scan.validate_references,
         platforms: acc.platforms,
+    }
+}
+
+fn scan_plugin_meta_lines(text: &str, scan: &mut PluginMetaScan) {
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = raw_line.len() - raw_line.trim_start().len();
+
+        if scan.in_define_constraints {
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                let constraint = unquote(item.trim());
+                if !constraint.is_empty() {
+                    scan.define_constraints.push(constraint);
+                }
+                continue;
+            } else if indent <= 4 {
+                scan.in_define_constraints = false;
+            }
+        }
+
+        if trimmed == "defineConstraints:" {
+            scan.in_define_constraints = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("defineConstraints:") {
+            let rest_trimmed = rest.trim();
+            if rest_trimmed.starts_with('[') && rest_trimmed.ends_with(']') {
+                let inner = &rest_trimmed[1..rest_trimmed.len() - 1];
+                for part in inner.split(',') {
+                    let clean = unquote(part.trim());
+                    if !clean.is_empty() {
+                        scan.define_constraints.push(clean);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let Some(val) = trimmed.strip_prefix("isPreloaded:") {
+            if val.trim() == "1" || val.trim().eq_ignore_ascii_case("true") {
+                scan.is_native = true;
+            }
+            continue;
+        }
+
+        if let Some(val) = trimmed.strip_prefix("autoReferenced:") {
+            scan.auto_referenced = parse_bool_flag(val.trim(), true);
+            continue;
+        }
+
+        if let Some(val) = trimmed.strip_prefix("validateReferences:") {
+            scan.validate_references = parse_bool_flag(val.trim(), true);
+            continue;
+        }
+
+        if let Some(first_rest) = trimmed.strip_prefix("- first:") {
+            scan.acc.flush();
+            scan.in_settings = false;
+            let inline = first_rest.trim();
+            if let Some(platform_name) = extract_inline_mapping_target(inline) {
+                scan.acc.current_platform = Some(platform_name);
+            }
+            continue;
+        }
+
+        if trimmed == "first:" {
+            scan.acc.flush();
+            scan.in_settings = false;
+            continue;
+        }
+
+        if scan.acc.current_platform.is_none()
+            && indent >= 4
+            && !scan.in_settings
+            && let Some((key, val)) = split_yaml_kv(trimmed)
+        {
+            if key == "Any" {
+                scan.acc.current_platform = Some(String::from("Any"));
+                continue;
+            } else if key != "second"
+                && key != "enabled"
+                && key != "settings"
+                && key != "platformData"
+                && key != "PluginImporter"
+                && key != "externalObjects"
+                && key != "serializedVersion"
+                && key != "iconMap"
+                && key != "executionOrder"
+            {
+                let target = if val.is_empty() { key } else { val };
+                scan.acc.current_platform = Some(target);
+                continue;
+            }
+        }
+
+        if let Some(platform_data_key) = trimmed.strip_prefix("- ")
+            && let Some((key, val)) = split_yaml_kv(platform_data_key)
+            && (key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone"))
+        {
+            scan.acc.flush();
+            let target = if val.is_empty() { key } else { val };
+            scan.acc.current_platform = Some(target);
+            continue;
+        }
+
+        if trimmed == "settings:" {
+            scan.in_settings = true;
+            continue;
+        }
+        if trimmed.starts_with("settings:") {
+            scan.in_settings = false;
+            continue;
+        }
+
+        if scan.acc.current_platform.is_some() {
+            if let Some(enabled_str) = trimmed.strip_prefix("enabled:") {
+                scan.acc.current_enabled = Some(parse_bool_flag(enabled_str.trim(), false));
+                continue;
+            }
+            if scan.in_settings
+                && let Some((key, val)) = split_yaml_kv(trimmed)
+            {
+                if key.eq_ignore_ascii_case("CPU") && !val.is_empty() {
+                    if !val.eq_ignore_ascii_case("None") {
+                        scan.acc.current_cpu = Some(val);
+                    }
+                } else if key.eq_ignore_ascii_case("OS")
+                    && !val.is_empty()
+                    && !val.eq_ignore_ascii_case("None")
+                {
+                    scan.acc.current_os = Some(val);
+                }
+            }
+        }
     }
 }
 
@@ -656,6 +665,16 @@ where
         None => return Err(ScriptingError::HandleNotFound(handle)),
     };
     Ok(callback(index))
+}
+
+struct PluginMetaScan {
+    acc: PluginMetaAccumulator,
+    is_native: bool,
+    auto_referenced: bool,
+    validate_references: bool,
+    define_constraints: Vec<String>,
+    in_settings: bool,
+    in_define_constraints: bool,
 }
 
 #[derive(Default)]

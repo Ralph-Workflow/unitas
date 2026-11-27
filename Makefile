@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.dotnet:$(PATH)
 export DOTNET_ROOT := $(HOME)/.dotnet
 
-.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate
+.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate
 
 VERIFY_BUDGET_SECONDS := 124
 SUITE_BUDGET_SECONDS := 61
@@ -41,8 +41,9 @@ verify-scan-gates:
 	$(MAKE) --no-print-directory comment-audit & p5=$$!; \
 	$(MAKE) --no-print-directory deps & p6=$$!; \
 	$(MAKE) --no-print-directory secret-scan & p7=$$!; \
+	$(MAKE) --no-print-directory size-gate & p8=$$!; \
 	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; wait $$p4 || rc=1; \
-	wait $$p5 || rc=1; wait $$p6 || rc=1; wait $$p7 || rc=1; \
+	wait $$p5 || rc=1; wait $$p6 || rc=1; wait $$p7 || rc=1; wait $$p8 || rc=1; \
 	exit $$rc
 
 verify-static-gates:
@@ -106,6 +107,9 @@ zone-gate:
 
 comment-audit:
 	@python3 tools/verify.py timed comments $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py comments
+
+size-gate:
+	@python3 tools/verify.py timed size $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py size
 
 secret-scan:
 	@python3 tools/verify.py timed secret $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py secret

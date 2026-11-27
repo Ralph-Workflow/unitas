@@ -3,16 +3,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
-use unitas_asset::collision::{CollisionMesh, cook_builtin_collision_mesh, cook_collision_mesh};
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::project_settings::{
     PhysicsProjectSettings, QualityLevel, QualitySettings, parse_physics_manager,
     parse_quality_settings,
 };
 use unitas_asset::scene::{
-    AudioSourceComponent, CharacterControllerComponent, ColliderComponent, MeshColliderComponent,
-    MeshRendererComponent, PhysicsBinding, RenderBinding, RigidbodyComponent, ScriptBinding,
-    assemble_scene_file_bundle,
+    AudioSourceComponent, CharacterControllerComponent, ParticleBinding, ScriptBinding,
+    TrailBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -21,44 +19,52 @@ use unitas_asset::{
 };
 use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{
-    EntityId, IDENTITY_ROTATION, SceneGraph, Transform, multiply_rotation, normalize_rotation,
-    rotate_vector,
+    EntityId, SceneGraph, Transform, multiply_rotation, normalize_rotation, rotate_vector,
 };
 use unitas_physics::navigation::NavMesh;
 use unitas_physics::particles::ParticleSystem;
 use unitas_physics::trails::Trail;
 use unitas_physics::{
-    BodyDesc, BodyRole, CharacterController, ColliderDesc, ColliderShape, CollisionDetectionMode3D,
-    CollisionEvent, CollisionPayload, ForceMode, MoveResult, Phase, PhysicsMaterial3D, QueryHit,
-    Shape, SolverType, TriggerEvent, World,
+    BodyRole, CharacterController, ColliderDesc, CollisionEvent, CollisionPayload, ForceMode,
+    MoveResult, QueryHit, SolverType, TriggerEvent,
 };
-use unitas_render::image::{Image, Rgba8};
-use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
-use unitas_render::{
-    Camera, DirectionalLight, Mat4, Mesh, MeshAttributes, Renderer, Vec3, cube, look_at,
-};
+use unitas_render::Renderer;
+use unitas_render::ui_pass::GlyphTextPainter;
 
+use self::runtime_physics::{
+    body_descs, collect_character_controllers, collect_material_diagnostics,
+    collect_scene_rigidbodies, contact_phase_code, controller_from_component, normalized,
+    ordered_pair, rotations_equivalent, shift_scene_bodies, validate_bodies,
+};
 use self::ui_components::UiComponents;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
-use crate::canvas::UiDrawItem;
-use crate::error::{RenderError, RuntimeError};
+use crate::error::RuntimeError;
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
-use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld, layer_bits};
-use crate::physics_settings::{
-    collision_detection_of, interpolation_of, layer_matrix_of, material_of, solver_settings_of,
-};
+use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld};
+use crate::physics_settings::{layer_matrix_of, solver_settings_of};
 use crate::player_loop::{
     BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
     PlayerLoopStep, PlayerLoopSystem,
 };
-use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
 
 #[path = "ui_components.rs"]
 pub(crate) mod ui_components;
+
+#[path = "runtime_input.rs"]
+mod runtime_input;
+#[path = "runtime_physics.rs"]
+mod runtime_physics;
+#[path = "runtime_render.rs"]
+mod runtime_render;
+#[path = "runtime_ui.rs"]
+mod runtime_ui;
+
+pub use runtime_physics::*;
+pub use runtime_render::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSceneMode {
@@ -237,158 +243,11 @@ pub struct ScriptInstance {
     pub start_called: bool,
 }
 
-pub const DEFAULT_MATERIAL_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
-
 /// The screen size the interface falls back to when no canvas scaler states a
 /// reference resolution.
 pub const DEFAULT_UI_REFERENCE_RESOLUTION: [f32; 2] = [800.0, 600.0];
 
 pub const DEFAULT_MAXIMUM_DELTA_TIME: f64 = 1.0 / 3.0;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderCameraParams {
-    pub orthographic: bool,
-    pub orthographic_size: f32,
-    pub field_of_view: f32,
-    pub near_clip_plane: f32,
-    pub far_clip_plane: f32,
-    pub background_color: [f32; 3],
-}
-
-impl Default for RenderCameraParams {
-    fn default() -> Self {
-        Self {
-            orthographic: false,
-            orthographic_size: 5.0,
-            field_of_view: 60.0,
-            near_clip_plane: 0.3,
-            far_clip_plane: 1000.0,
-            background_color: [0.0; 3],
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RenderMaterial {
-    pub color: [f32; 4],
-    pub albedo: Option<Image>,
-    pub normal: Option<Image>,
-    pub emissive: Option<Image>,
-    pub metallic: f32,
-    pub smoothness: f32,
-    pub emission_color: Option<[f32; 4]>,
-}
-
-impl RenderMaterial {
-    pub fn plain() -> Self {
-        Self {
-            color: DEFAULT_MATERIAL_COLOR,
-            albedo: None,
-            normal: None,
-            emissive: None,
-            metallic: 0.0,
-            smoothness: 0.0,
-            emission_color: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderCamera {
-    pub entity: Option<EntityId>,
-    pub params: RenderCameraParams,
-    pub viewport: Option<(u32, u32)>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderRenderer {
-    pub entity: Option<EntityId>,
-    pub mesh: Option<u64>,
-    pub material: Option<u64>,
-    pub enabled: bool,
-}
-
-/// One scene renderer a presenter can draw: the mesh it draws, the material
-/// it draws it with and the entity it belongs to.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneRenderable<'a> {
-    pub entity: EntityId,
-    pub mesh: &'a Mesh,
-    pub attributes: &'a MeshAttributes,
-    pub material: &'a RenderMaterial,
-    pub color: [f32; 3],
-}
-
-/// A render mesh with the texture coordinates and tangents the shader reads
-/// beside its positions.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RenderMesh {
-    pub mesh: Mesh,
-    pub attributes: MeshAttributes,
-}
-
-/// The scene camera a presenter can draw with: the entity it follows and the
-/// projection and background parameters.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneCamera {
-    pub entity: Option<EntityId>,
-    pub params: RenderCameraParams,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderLight {
-    pub entity: Option<EntityId>,
-    pub direction: [f32; 3],
-    pub color: [f32; 3],
-    pub intensity: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CameraBasis {
-    eye: Vec3,
-    right: Vec3,
-    up: Vec3,
-    forward: Vec3,
-    view: Mat4,
-}
-
-#[derive(Debug)]
-pub struct RenderWorld {
-    meshes: HashMap<u64, RenderMesh>,
-    materials: HashMap<u64, RenderMaterial>,
-    plain_material: RenderMaterial,
-    cameras: HashMap<u64, RenderCamera>,
-    renderers: HashMap<u64, RenderRenderer>,
-    lights: HashMap<u64, RenderLight>,
-    camera_defaults: HashMap<EntityId, RenderCameraParams>,
-    light_defaults: HashMap<EntityId, RenderLight>,
-    effect_mesh: Mesh,
-    next_handle: u64,
-}
-
-impl Default for RenderWorld {
-    fn default() -> Self {
-        Self {
-            meshes: HashMap::new(),
-            materials: HashMap::new(),
-            plain_material: RenderMaterial::plain(),
-            cameras: HashMap::new(),
-            renderers: HashMap::new(),
-            lights: HashMap::new(),
-            camera_defaults: HashMap::new(),
-            light_defaults: HashMap::new(),
-            effect_mesh: cube(1.0),
-            next_handle: 0,
-        }
-    }
-}
-
-impl RenderWorld {
-    fn allocate(&mut self) -> u64 {
-        self.next_handle = self.next_handle.saturating_add(1);
-        self.next_handle
-    }
-}
 
 pub struct Runtime {
     pub(crate) scenes: Vec<LoadedScene>,
@@ -510,70 +369,99 @@ impl Runtime {
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
         let assembled = assemble_scene_file_bundle(path)?;
-        let graph = assembled.graph;
-        let bindings = assembled.scripts;
-        let physics = assembled.physics;
-        let audio_bindings = assembled.audio_bindings;
-        let render_binding = assembled.render;
-        let particle_bindings = assembled.particles;
-        let trail_bindings = assembled.trails;
-        let mut ui = assembled.ui;
         let settings = discover_project_settings(path);
-        let scripts = build_script_instances(&bindings)?;
-        let (descs, collider_diagnostics) = body_descs(&graph, &physics);
+        let scripts = build_script_instances(&assembled.scripts)?;
+        let (descs, collider_diagnostics) = body_descs(&assembled.graph, &assembled.physics);
         validate_bodies(&descs)?;
-        match mode {
-            LoadSceneMode::Single => {
-                self.unload_all_scenes(&mut hook);
-                self.apply_project_settings(&settings);
-            }
-            LoadSceneMode::Additive => {
-                if self.scenes.is_empty() {
-                    self.apply_project_settings(&settings);
-                }
-            }
-        }
+        self.prepare_scene_load(mode, &settings, &mut hook);
         let entity_base = self.next_entity_base();
-        let mut graph = graph;
+        let mut graph = assembled.graph;
         graph.shift_entity_ids(entity_base);
+        let mut ui = assembled.ui;
         ui.shift_entity_ids(entity_base);
         let ui = UiComponents::new(ui);
-        let scripts = scripts
-            .into_iter()
-            .map(|script| ScriptInstance {
-                entity: EntityId::new(entity_base + script.entity.as_u64()),
-                ..script
-            })
-            .collect::<Vec<_>>();
-        let bodies = descs
-            .iter()
-            .map(|(entity, _)| EntityId::new(entity_base + entity.as_u64()))
-            .collect::<Vec<_>>();
-        let body_offsets = descs
-            .iter()
-            .map(|(entity, spec)| (EntityId::new(entity_base + entity.as_u64()), spec.offset))
-            .collect::<Vec<_>>();
-        let body_colliders = descs
-            .iter()
-            .map(|(entity, spec)| {
-                (
-                    EntityId::new(entity_base + entity.as_u64()),
-                    spec.colliders.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let character_controllers = collect_character_controllers(&physics, entity_base);
+        let scripts = shift_scene_scripts(scripts, entity_base);
+        let (bodies, body_offsets, body_colliders) = shift_scene_bodies(&descs, entity_base);
+        let character_controllers = collect_character_controllers(&assembled.physics, entity_base);
         for (entity, config) in &character_controllers {
             self.character_states
                 .insert(*entity, controller_from_component(Some(*entity), config));
         }
-        let mut diagnostics = collect_material_diagnostics(&physics, entity_base);
+        let mut diagnostics = collect_material_diagnostics(&assembled.physics, entity_base);
         diagnostics.extend(
             collider_diagnostics
                 .into_iter()
                 .map(|(entity, text)| (EntityId::new(entity_base + entity.as_u64()), text)),
         );
-        diagnostics.extend(self.populate_render_world(&render_binding, entity_base, &graph));
+        diagnostics.extend(self.populate_render_world(&assembled.render, entity_base, &graph));
+        let audio_sources = self.register_scene_audio_sources(
+            assembled.audio_bindings,
+            entity_base,
+            &graph,
+            &mut diagnostics,
+        );
+        let rigidbodies = collect_scene_rigidbodies(&assembled.physics, entity_base);
+        self.register_scene_bodies(&bodies, &descs, &rigidbodies)?;
+        let particle_entities = self.register_scene_particles(&assembled.particles, entity_base);
+        let trail_entities = self.register_scene_trails(&assembled.trails, entity_base);
+        let entity_count = graph.len() as u64;
+        let rigid_body_ids = rigidbodies.keys().copied().collect();
+        self.scenes.push(LoadedScene {
+            name: scene_name_from_path(path),
+            graph,
+            scripts,
+            bodies,
+            body_offsets,
+            body_colliders,
+            character_controllers,
+            audio_sources,
+            animators: Vec::new(),
+            particles: particle_entities,
+            trails: trail_entities,
+            ui,
+            diagnostics,
+            entity_base,
+            entity_count,
+            rigid_bodies: rigid_body_ids,
+        });
+        if self.active_scene.is_none() {
+            self.active_scene = Some(self.scenes.len() - 1);
+        }
+        self.accumulator = 0.0;
+        self.first_tick = true;
+        self.is_shutdown = false;
+        self.refresh_script_view();
+        Ok(self.scenes.len())
+    }
+
+    fn prepare_scene_load<H>(
+        &mut self,
+        mode: LoadSceneMode,
+        settings: &DiscoveredProject,
+        hook: &mut H,
+    ) where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        match mode {
+            LoadSceneMode::Single => {
+                self.unload_all_scenes(hook);
+                self.apply_project_settings(settings);
+            }
+            LoadSceneMode::Additive => {
+                if self.scenes.is_empty() {
+                    self.apply_project_settings(settings);
+                }
+            }
+        }
+    }
+
+    fn register_scene_audio_sources(
+        &mut self,
+        audio_bindings: Vec<(EntityId, AudioSourceComponent)>,
+        entity_base: u64,
+        graph: &SceneGraph,
+        diagnostics: &mut Vec<(EntityId, String)>,
+    ) -> Vec<(EntityId, AudioSourceComponent)> {
         let mut audio_sources = Vec::with_capacity(audio_bindings.len());
         for (entity, comp) in audio_bindings {
             let shifted = EntityId::new(entity_base + entity.as_u64());
@@ -617,45 +505,16 @@ impl Runtime {
             }
             audio_sources.push((shifted, comp));
         }
-        let rigidbodies = physics
-            .iter()
-            .filter_map(|binding| {
-                binding.rigidbody.as_ref().map(|rigidbody| {
-                    (
-                        EntityId::new(entity_base + binding.entity.as_u64()),
-                        rigidbody.clone(),
-                    )
-                })
-            })
-            .collect::<HashMap<EntityId, RigidbodyComponent>>();
-        for (body, (_, spec)) in bodies.iter().zip(descs.iter()) {
-            self.physics.world_3d_mut().add_body_with_material(
-                *body,
-                spec.desc.clone(),
-                spec.material,
-            )?;
-            // The body's own shape already is the first Unity collider, so
-            // only the remaining ones become extra colliders. Adding the
-            // first one again would put a second copy of it in the world.
-            for collider in spec.colliders.iter().skip(1) {
-                self.physics
-                    .world_3d_mut()
-                    .add_collider(*body, collider.clone())?;
-            }
-            if let Some(rigidbody) = rigidbodies.get(body) {
-                let world = self.physics.world_3d_mut();
-                world.set_body_drag(*body, rigidbody.drag, rigidbody.angular_drag);
-                world.set_body_interpolation(*body, interpolation_of(rigidbody.interpolation));
-                world.set_body_layer_overrides(
-                    *body,
-                    layer_override_mask(rigidbody.include_layers),
-                    layer_override_mask(rigidbody.exclude_layers),
-                    rigidbody.layer_override_priority,
-                );
-            }
-        }
-        let mut particle_entities = Vec::with_capacity(particle_bindings.len());
-        for particle in &particle_bindings {
+        audio_sources
+    }
+
+    fn register_scene_particles(
+        &mut self,
+        particles: &[ParticleBinding],
+        entity_base: u64,
+    ) -> Vec<EntityId> {
+        let mut particle_entities = Vec::with_capacity(particles.len());
+        for particle in particles {
             let entity = EntityId::new(entity_base + particle.entity.as_u64());
             let system = self.register_particle_system(
                 entity,
@@ -665,40 +524,21 @@ impl Runtime {
             system.play();
             particle_entities.push(entity);
         }
-        let mut trail_entities = Vec::with_capacity(trail_bindings.len());
-        for trail in &trail_bindings {
+        particle_entities
+    }
+
+    fn register_scene_trails(
+        &mut self,
+        trails: &[TrailBinding],
+        entity_base: u64,
+    ) -> Vec<EntityId> {
+        let mut trail_entities = Vec::with_capacity(trails.len());
+        for trail in trails {
             let entity = EntityId::new(entity_base + trail.entity.as_u64());
             self.register_trail(entity, &trail.binding);
             trail_entities.push(entity);
         }
-        let entity_count = graph.len() as u64;
-        let rigid_body_ids = rigidbodies.keys().copied().collect();
-        self.scenes.push(LoadedScene {
-            name: scene_name_from_path(path),
-            graph,
-            scripts,
-            bodies,
-            body_offsets,
-            body_colliders,
-            character_controllers,
-            audio_sources,
-            animators: Vec::new(),
-            particles: particle_entities,
-            trails: trail_entities,
-            ui,
-            diagnostics,
-            entity_base,
-            entity_count,
-            rigid_bodies: rigid_body_ids,
-        });
-        if self.active_scene.is_none() {
-            self.active_scene = Some(self.scenes.len() - 1);
-        }
-        self.accumulator = 0.0;
-        self.first_tick = true;
-        self.is_shutdown = false;
-        self.refresh_script_view();
-        Ok(self.scenes.len())
+        trail_entities
     }
 
     pub fn unload_scene(&mut self, name: &str) -> Result<(), RuntimeError> {
@@ -2459,174 +2299,13 @@ impl Runtime {
         self.is_shutdown
     }
 
-    pub fn input(&self) -> &InputState {
-        &self.input
-    }
-
-    pub fn input_mut(&mut self) -> &mut InputState {
-        &mut self.input
-    }
-
-    pub fn input_key_event(&mut self, key: u32, pressed: bool) {
-        self.input.queue_key_event(key, pressed);
-    }
-
-    pub fn input_mouse_button_event(&mut self, button: u32, pressed: bool) {
-        self.input.queue_mouse_button_event(button, pressed);
-    }
-
-    pub fn input_pointer_move(&mut self, x: f64, y: f64) {
-        self.input.queue_pointer_move(x, y);
-    }
-
-    pub fn input_scroll(&mut self, x: f64, y: f64) {
-        self.input.queue_scroll(x, y);
-    }
-
-    pub fn input_axis_event(&mut self, name: &str, value: f64) -> bool {
-        self.input.inject_axis(name, value)
-    }
-
-    pub fn input_injected_axis(&self, name: &str) -> Option<f64> {
-        self.input.injected_axis(name)
-    }
-
-    pub fn input_key_state(&self, key: u32) -> u32 {
-        self.input.key_state(key)
-    }
-
-    pub fn input_mouse_state(&self, button: u32) -> u32 {
-        self.input.mouse_button_state(button)
-    }
-
-    pub fn input_pointer(&self) -> (f64, f64, f64, f64) {
-        self.input.pointer()
-    }
-
-    pub fn input_scroll_state(&self) -> (f64, f64) {
-        self.input.scroll()
-    }
-
-    pub fn input_axis(&self, name: &str) -> Option<f64> {
-        self.input.axis(name)
-    }
-
-    pub fn input_axis_raw(&self, name: &str) -> Option<f64> {
-        self.input.axis_raw(name)
-    }
-
-    pub fn input_button_state(&self, name: &str) -> Option<u32> {
-        self.input.button_state(name)
-    }
-
-    /// The screen size the interface is laid out and hit-tested against: the
-    /// size the host sets for the live window, else the size of the last
-    /// rendered frame, else the reference resolution of the canvas scaler.
-    pub fn ui_screen_size(&self) -> [f32; 2] {
-        if let Some(size) = self.ui_screen_size {
-            return size;
-        }
-        if let Some((width, height)) = self.render_viewport() {
-            return [width as f32, height as f32];
-        }
-        self.ui_reference_resolution()
-    }
-
-    /// Sets the size of the live screen the interface is laid out against.
-    pub fn set_ui_screen_size(&mut self, width: f32, height: f32) {
-        if width > 0.0 && height > 0.0 {
-            self.ui_screen_size = Some([width, height]);
-        }
-    }
-
-    /// The draw items of the visible canvas content of the loaded scenes.
-    pub fn ui_draw_items(&self) -> Vec<UiDrawItem> {
-        self.ui_draw_items_for(self.ui_screen_size())
-    }
-
-    /// The draw items of the visible canvas content, laid out against the
-    /// given screen size.
-    pub(crate) fn ui_draw_items_for(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
-        let mut items = Vec::new();
+    pub(crate) fn entity_transform(&self, entity: EntityId) -> Option<Transform> {
         for scene in &self.scenes {
-            items.extend(scene.ui.draw_items(screen_size));
-        }
-        items
-    }
-
-    /// Whether the pointer is over an element of the interface.
-    pub fn ui_pointer_over(&self) -> bool {
-        let screen_size = self.ui_screen_size();
-        let (x, y) = self.input.pointer_frame().position;
-        self.scenes
-            .iter()
-            .rev()
-            .any(|scene| scene.ui.pointer_over(screen_size, (x, y)))
-    }
-
-    /// Replaces the content of the `Text` component of an object.
-    pub fn set_ui_text(&mut self, object_id: u64, text: &str) -> bool {
-        let entity = EntityId::new(object_id);
-        self.scenes
-            .iter_mut()
-            .any(|scene| scene.ui.set_text(entity, text))
-    }
-
-    /// Replaces the font size and colour of the `Text` component of an object.
-    pub fn set_ui_text_style(&mut self, object_id: u64, font_size: f32, color: [f32; 4]) -> bool {
-        let entity = EntityId::new(object_id);
-        self.scenes
-            .iter_mut()
-            .any(|scene| scene.ui.set_style(entity, font_size, color))
-    }
-
-    /// The objects whose buttons were clicked since the last call.
-    pub fn take_ui_clicks(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.pending_ui_clicks)
-    }
-
-    fn render_viewport(&self) -> Option<(u32, u32)> {
-        self.render
-            .cameras
-            .values()
-            .find_map(|camera| camera.viewport)
-    }
-
-    fn ui_reference_resolution(&self) -> [f32; 2] {
-        for scene in &self.scenes {
-            for canvas in &scene.ui.canvas().binding().canvases {
-                if let Some(scaler) = &canvas.scaler {
-                    return scaler.reference_resolution;
-                }
+            if let Some(transform) = scene.graph.world_transform(entity) {
+                return Some(transform);
             }
         }
-        DEFAULT_UI_REFERENCE_RESOLUTION
-    }
-
-    /// Routes the pointer to the buttons of the loaded scenes: a button that is
-    /// pressed and released under the pointer is clicked.
-    fn route_ui_pointer(&mut self) {
-        let pointer = self.input.pointer_frame();
-        let screen_size = self.ui_screen_size();
-        let hovered = self
-            .scenes
-            .iter()
-            .rev()
-            .find_map(|scene| scene.ui.hit_button(screen_size, pointer.position));
-        if pointer.primary_pressed {
-            self.ui_pressed_button = hovered;
-        }
-        if self.ui_pressed_button.is_some() && self.ui_pressed_button != hovered {
-            self.ui_pressed_button = None;
-        }
-        if pointer.primary_released {
-            if let Some(pressed) = self.ui_pressed_button
-                && hovered == Some(pressed)
-            {
-                self.pending_ui_clicks.push(pressed.as_u64());
-            }
-            self.ui_pressed_button = None;
-        }
+        None
     }
 
     fn records_from_hits(&self, hits: Vec<QueryHit>) -> Vec<QueryRecord> {
@@ -2761,43 +2440,14 @@ fn build_script_instances(bindings: &[ScriptBinding]) -> Result<Vec<ScriptInstan
     Ok(scripts)
 }
 
-struct BodySpec {
-    desc: BodyDesc,
-    colliders: Vec<ColliderDesc>,
-    offset: [f32; 3],
-    material: Option<PhysicsMaterial3D>,
-}
-
-type BodySpecs = Vec<(EntityId, BodySpec)>;
-type ColliderDiagnostics = Vec<(EntityId, String)>;
-
-fn body_descs(graph: &SceneGraph, bindings: &[PhysicsBinding]) -> (BodySpecs, ColliderDiagnostics) {
-    let rigid_entities: std::collections::BTreeSet<EntityId> = bindings
-        .iter()
-        .filter(|binding| binding.rigidbody.is_some())
-        .map(|binding| binding.entity)
-        .collect();
-    let mut descs = Vec::new();
-    let mut diagnostics = Vec::new();
-    for binding in bindings {
-        let spec = match body_spec(graph, binding, &rigid_entities, &mut diagnostics) {
-            Some(spec) => spec,
-            None => continue,
-        };
-        descs.push((binding.entity, spec));
-    }
-    (descs, diagnostics)
-}
-
-fn validate_bodies(descs: &[(EntityId, BodySpec)]) -> Result<(), RuntimeError> {
-    let mut world = World::new();
-    for (entity, spec) in descs {
-        world.add_body(*entity, spec.desc.clone())?;
-        for collider in spec.colliders.iter().skip(1) {
-            world.add_collider(*entity, collider.clone())?;
-        }
-    }
-    Ok(())
+fn shift_scene_scripts(scripts: Vec<ScriptInstance>, entity_base: u64) -> Vec<ScriptInstance> {
+    scripts
+        .into_iter()
+        .map(|script| ScriptInstance {
+            entity: EntityId::new(entity_base + script.entity.as_u64()),
+            ..script
+        })
+        .collect::<Vec<_>>()
 }
 
 fn particle_seed(entity: EntityId) -> u64 {
@@ -2825,363 +2475,6 @@ fn scene_name_from_path(path: &Path) -> String {
         Some(stem) => stem.to_string(),
         None => String::from("scene"),
     }
-}
-
-fn layer_override_mask(mask: Option<u32>) -> Option<u32> {
-    mask.filter(|bits| *bits != 0)
-}
-
-fn collect_character_controllers(
-    bindings: &[PhysicsBinding],
-    entity_base: u64,
-) -> Vec<(EntityId, CharacterControllerComponent)> {
-    let mut controllers = Vec::new();
-    for binding in bindings {
-        if let Some(controller) = &binding.character_controller {
-            let entity = EntityId::new(entity_base + binding.entity.as_u64());
-            controllers.push((entity, controller.clone()));
-        }
-    }
-    controllers
-}
-
-fn controller_from_component(
-    entity: Option<EntityId>,
-    component: &CharacterControllerComponent,
-) -> CharacterController {
-    let mut controller = CharacterController::default();
-    controller.radius = component.radius;
-    controller.height = component.height;
-    controller.center = component.center;
-    controller.slope_limit_deg = component.slope_limit;
-    controller.step_offset = component.step_offset;
-    controller.skin_width = component.skin_width;
-    controller.min_move_distance = if component.min_move_distance > 0.0 {
-        component.min_move_distance
-    } else {
-        0.001
-    };
-    controller.layer_mask = u32::MAX;
-    controller.enabled = component.enabled;
-    controller.excluded_entity = entity;
-    if controller.validate().is_err() {
-        controller = CharacterController::default();
-        controller.excluded_entity = entity;
-    }
-    controller
-}
-
-fn collect_material_diagnostics(
-    bindings: &[PhysicsBinding],
-    entity_base: u64,
-) -> Vec<(EntityId, String)> {
-    let mut diagnostics = Vec::new();
-    for binding in bindings {
-        let entity = EntityId::new(entity_base + binding.entity.as_u64());
-        for collider in &binding.colliders {
-            let (material_diagnostic, geometry_diagnostic) = match collider {
-                ColliderComponent::Box(component) => (component.material_diagnostic.as_ref(), None),
-                ColliderComponent::Sphere(component) => {
-                    (component.material_diagnostic.as_ref(), None)
-                }
-                ColliderComponent::Capsule(component) => (
-                    component.material_diagnostic.as_ref(),
-                    component.geometry_diagnostic.as_ref(),
-                ),
-                ColliderComponent::Mesh(component) => {
-                    (component.material_diagnostic.as_ref(), None)
-                }
-            };
-            if let Some(diag) = material_diagnostic {
-                diagnostics.push((entity, diag.clone()));
-            }
-            if let Some(diag) = geometry_diagnostic {
-                diagnostics.push((entity, diag.clone()));
-            }
-        }
-    }
-    diagnostics
-}
-
-fn has_rigidbody_ancestor(
-    graph: &SceneGraph,
-    entity: EntityId,
-    rigid_entities: &std::collections::BTreeSet<EntityId>,
-) -> bool {
-    let mut current = graph.parent(entity);
-    while let Some(ancestor) = current {
-        if rigid_entities.contains(&ancestor) {
-            return true;
-        }
-        current = graph.parent(ancestor);
-    }
-    false
-}
-
-/// One Unity collider component, resolved into the shape the world needs.
-struct ColliderPlan {
-    shape: ColliderShape,
-    center: [f64; 3],
-    is_trigger: bool,
-    material: Option<PhysicsMaterial3D>,
-}
-
-/// The colliders of one GameObject, in the order the scene lists them. A
-/// collider whose mesh cannot be cooked is dropped with a diagnostic.
-fn collider_plans(
-    graph: &SceneGraph,
-    binding: &PhysicsBinding,
-    scale: [f32; 3],
-    diagnostics: &mut Vec<(EntityId, String)>,
-) -> Vec<ColliderPlan> {
-    let mut plans = Vec::new();
-    for collider in &binding.colliders {
-        let plan = match collider {
-            ColliderComponent::Box(component) => ColliderPlan {
-                shape: ColliderShape::Primitive(Shape::Box {
-                    half_extents: [
-                        component.size[0] / 2.0,
-                        component.size[1] / 2.0,
-                        component.size[2] / 2.0,
-                    ],
-                }),
-                center: component.center,
-                is_trigger: component.is_trigger,
-                material: component.material.as_ref().map(material_of),
-            },
-            ColliderComponent::Sphere(component) => ColliderPlan {
-                shape: ColliderShape::Primitive(Shape::Sphere {
-                    radius: component.radius,
-                }),
-                center: component.center,
-                is_trigger: component.is_trigger,
-                material: component.material.as_ref().map(material_of),
-            },
-            ColliderComponent::Capsule(component) => ColliderPlan {
-                shape: ColliderShape::Primitive(Shape::Capsule {
-                    radius: component.radius,
-                    height: component.height,
-                    direction: component.direction as u8,
-                }),
-                center: component.center,
-                is_trigger: component.is_trigger,
-                material: component.material.as_ref().map(material_of),
-            },
-            ColliderComponent::Mesh(component) => {
-                match mesh_shape(graph, binding.entity, component, scale, diagnostics) {
-                    Some(shape) => ColliderPlan {
-                        shape,
-                        center: component.center,
-                        is_trigger: component.is_trigger,
-                        material: component.material.as_ref().map(material_of),
-                    },
-                    None => continue,
-                }
-            }
-        };
-        plans.push(plan);
-    }
-    plans
-}
-
-/// Cook the geometry a mesh collider names: Unity's built-in primitive mesh
-/// by identity, otherwise the referenced asset file.
-fn mesh_shape(
-    graph: &SceneGraph,
-    entity: EntityId,
-    component: &MeshColliderComponent,
-    scale: [f32; 3],
-    diagnostics: &mut Vec<(EntityId, String)>,
-) -> Option<ColliderShape> {
-    let cooked = match &component.mesh_path {
-        Some(path) => match cook_file_mesh(path, component.mesh_file_id) {
-            Ok(mesh) => Some(mesh),
-            Err(reason) => {
-                diagnostics.push((
-                    entity,
-                    mesh_diagnostic_text(graph, entity, component, Some(&reason)),
-                ));
-                return None;
-            }
-        },
-        None => component
-            .mesh_file_id
-            .zip(component.mesh_guid.as_deref())
-            .and_then(|(file_id, guid)| cook_builtin_collision_mesh(file_id, guid)),
-    };
-    let mesh = match cooked {
-        Some(mesh) => mesh,
-        None => {
-            diagnostics.push((entity, mesh_diagnostic_text(graph, entity, component, None)));
-            return None;
-        }
-    };
-    Some(ColliderShape::Mesh {
-        vertices: mesh
-            .vertices
-            .iter()
-            .map(|vertex| {
-                [
-                    f64::from(vertex[0]) * f64::from(scale[0]),
-                    f64::from(vertex[1]) * f64::from(scale[1]),
-                    f64::from(vertex[2]) * f64::from(scale[2]),
-                ]
-            })
-            .collect(),
-        indices: mesh.indices,
-        convex: component.convex,
-    })
-}
-
-fn cook_file_mesh(path: &Path, file_id: Option<i64>) -> Result<CollisionMesh, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    cook_collision_mesh(&bytes, file_name, file_id).map_err(|error| error.to_string())
-}
-
-/// The diagnostic a mesh collider that names no cookable geometry produces.
-/// It always names the object and the asset it could not resolve.
-fn mesh_diagnostic_text(
-    graph: &SceneGraph,
-    entity: EntityId,
-    component: &MeshColliderComponent,
-    reason: Option<&str>,
-) -> String {
-    if let Some(diagnostic) = &component.mesh_diagnostic {
-        return diagnostic.clone();
-    }
-    let name = graph
-        .entity(entity)
-        .map_or("?", |entity| entity.name.as_str());
-    let owner = format!("MeshCollider on '{name}' (entity {})", entity.as_u64());
-    match (&component.mesh_path, component.mesh_guid.as_deref(), reason) {
-        (Some(path), _, Some(reason)) => {
-            format!(
-                "{owner} references mesh '{}' that could not be cooked: {reason}",
-                path.display()
-            )
-        }
-        (Some(path), _, None) => {
-            format!(
-                "{owner} references mesh '{}' that could not be cooked",
-                path.display()
-            )
-        }
-        (None, Some(guid), Some(reason)) => {
-            format!("{owner} references mesh guid {guid} that could not be cooked: {reason}")
-        }
-        (None, Some(guid), None) => {
-            format!("{owner} references mesh guid {guid} that could not be cooked")
-        }
-        (None, None, _) => format!("{owner} has no mesh reference"),
-    }
-}
-
-/// The offset of a collider from the body, in the body's own frame. The body
-/// sits at the centre of the first collider, so the first collider's offset is
-/// the origin and every other collider keeps its distance from it.
-fn collider_offset(center: [f64; 3], first_center: [f64; 3], scale: [f32; 3]) -> [f64; 3] {
-    [
-        ((center[0] as f32 - first_center[0] as f32) * scale[0]) as f64,
-        ((center[1] as f32 - first_center[1] as f32) * scale[1]) as f64,
-        ((center[2] as f32 - first_center[2] as f32) * scale[2]) as f64,
-    ]
-}
-
-fn body_spec(
-    graph: &SceneGraph,
-    binding: &PhysicsBinding,
-    rigid_entities: &std::collections::BTreeSet<EntityId>,
-    diagnostics: &mut Vec<(EntityId, String)>,
-) -> Option<BodySpec> {
-    let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
-        Some(world) => (world.translation, world.rotation, world.scale),
-        None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
-    };
-    let plans = collider_plans(graph, binding, scale, diagnostics);
-    let first_center = plans.first()?.center;
-    let (mass, use_gravity, rigidbody_trigger, role) = match &binding.rigidbody {
-        Some(rigidbody) if rigidbody.is_kinematic => (
-            rigidbody.mass,
-            rigidbody.use_gravity,
-            rigidbody.is_trigger,
-            BodyRole::Kinematic,
-        ),
-        Some(rigidbody) => (
-            rigidbody.mass,
-            rigidbody.use_gravity,
-            rigidbody.is_trigger,
-            BodyRole::Dynamic,
-        ),
-        None if has_rigidbody_ancestor(graph, binding.entity, rigid_entities) => {
-            (0.0, false, false, BodyRole::Kinematic)
-        }
-        None => (0.0, false, false, BodyRole::Static),
-    };
-    let collision_detection_mode = binding
-        .rigidbody
-        .as_ref()
-        .map_or(CollisionDetectionMode3D::Discrete, |rigidbody| {
-            collision_detection_of(rigidbody.collision_detection)
-        });
-    let layer = layer_bits(binding.layer);
-    let colliders: Vec<ColliderDesc> = plans
-        .into_iter()
-        .enumerate()
-        .map(|(index, plan)| ColliderDesc {
-            shape: plan.shape,
-            offset: if index == 0 {
-                [0.0; 3]
-            } else {
-                collider_offset(plan.center, first_center, scale)
-            },
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            is_trigger: plan.is_trigger || rigidbody_trigger,
-            material: plan.material,
-            layer,
-        })
-        .collect();
-    let first = colliders.first()?;
-    let material = first.material;
-    let friction = material.map_or(0.6, |m| m.friction);
-    let restitution = material.map_or(0.0, |m| m.restitution);
-    let scaled_center = [
-        first_center[0] as f32 * scale[0],
-        first_center[1] as f32 * scale[1],
-        first_center[2] as f32 * scale[2],
-    ];
-    let offset = rotate_vector(rotation, scaled_center);
-    Some(BodySpec {
-        desc: BodyDesc {
-            position: [
-                translation[0] as f64 + offset[0] as f64,
-                translation[1] as f64 + offset[1] as f64,
-                translation[2] as f64 + offset[2] as f64,
-            ],
-            rotation: [
-                rotation[0] as f64,
-                rotation[1] as f64,
-                rotation[2] as f64,
-                rotation[3] as f64,
-            ],
-            mass,
-            velocity: [0.0; 3],
-            use_gravity,
-            is_trigger: first.is_trigger,
-            collider_shape: first.shape.clone(),
-            layer,
-            role,
-            friction,
-            restitution,
-            collision_detection_mode,
-        },
-        colliders,
-        offset,
-        material,
-    })
 }
 
 pub(crate) fn world_to_local_translation(
@@ -3215,51 +2508,6 @@ pub(crate) fn world_to_local_translation(
     ]
 }
 
-fn normalized(vector: [f64; 3]) -> Option<[f64; 3]> {
-    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
-    if !length.is_finite() || length <= 0.0 {
-        return None;
-    }
-    Some([vector[0] / length, vector[1] / length, vector[2] / length])
-}
-
-fn rotations_equivalent(a: [f64; 4], b: [f64; 4]) -> bool {
-    let a = normalize_rotation([a[0] as f32, a[1] as f32, a[2] as f32, a[3] as f32]);
-    let b = normalize_rotation([b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]);
-    let dot = f64::from(a[0]) * f64::from(b[0])
-        + f64::from(a[1]) * f64::from(b[1])
-        + f64::from(a[2]) * f64::from(b[2])
-        + f64::from(a[3]) * f64::from(b[3]);
-    (1.0 - dot.abs()) <= 1e-6
-}
-
-fn ordered_pair(first: u64, second: u64) -> (u64, u64) {
-    if first <= second {
-        (first, second)
-    } else {
-        (second, first)
-    }
-}
-
-fn phase_code(phase: Phase) -> u32 {
-    match phase {
-        Phase::Enter => 0,
-        Phase::Stay => 1,
-        Phase::Exit => 2,
-    }
-}
-
-pub const CONTACT_PHASE_2D_FLAG: u32 = 0x100;
-
-fn contact_phase_code(phase: Phase, is_2d: bool) -> u32 {
-    let code = phase_code(phase);
-    if is_2d {
-        code | CONTACT_PHASE_2D_FLAG
-    } else {
-        code
-    }
-}
-
 fn resolve_child_path_in_graph(
     graph: &SceneGraph,
     root: EntityId,
@@ -3283,777 +2531,6 @@ fn resolve_child_path_in_graph(
         current = next?;
     }
     if current == root { None } else { Some(current) }
-}
-
-fn toward_light_direction(rotation: [f32; 4], travel: [f32; 3]) -> [f32; 3] {
-    let rotated = rotate_vector(rotation, travel);
-    [-rotated[0], -rotated[1], -rotated[2]]
-}
-
-pub(crate) fn projection_for(params: &RenderCameraParams, aspect: f32) -> Camera {
-    let near = params.near_clip_plane.max(0.001);
-    let far = params.far_clip_plane.max(near + 0.001);
-    if params.orthographic {
-        Camera::orthographic(params.orthographic_size.max(0.001), aspect, near, far)
-    } else {
-        Camera::perspective(params.field_of_view.max(1.0), aspect, near, far)
-    }
-}
-
-impl Runtime {
-    pub(crate) fn create_render_mesh(
-        &mut self,
-        positions: Vec<Vec3>,
-        normals: Vec<Vec3>,
-        indices: Vec<u32>,
-    ) -> u64 {
-        self.create_render_mesh_with_uvs(positions, normals, indices, Vec::new())
-    }
-
-    pub(crate) fn create_render_mesh_with_uvs(
-        &mut self,
-        positions: Vec<Vec3>,
-        normals: Vec<Vec3>,
-        indices: Vec<u32>,
-        uvs: Vec<[f32; 2]>,
-    ) -> u64 {
-        let handle = self.render.allocate();
-        let mesh = Mesh {
-            positions,
-            normals,
-            indices,
-        };
-        let attributes = MeshAttributes::compute(&mesh, uvs);
-        self.render
-            .meshes
-            .insert(handle, RenderMesh { mesh, attributes });
-        handle
-    }
-
-    pub(crate) fn destroy_render_mesh(&mut self, handle: u64) -> bool {
-        self.render.meshes.remove(&handle).is_some()
-    }
-
-    pub(crate) fn create_render_material(&mut self) -> u64 {
-        let handle = self.render.allocate();
-        self.render
-            .materials
-            .insert(handle, RenderMaterial::plain());
-        handle
-    }
-
-    pub(crate) fn set_render_material(&mut self, handle: u64, material: RenderMaterial) -> bool {
-        match self.render.materials.get_mut(&handle) {
-            Some(slot) => {
-                *slot = material;
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn set_render_material_color(&mut self, handle: u64, color: [f32; 4]) -> bool {
-        match self.render.materials.get_mut(&handle) {
-            Some(material) => {
-                material.color = color;
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn create_render_camera(&mut self, entity: Option<EntityId>) -> u64 {
-        let handle = self.render.allocate();
-        let params = entity
-            .and_then(|entity| self.render.camera_defaults.get(&entity).copied())
-            .unwrap_or_default();
-        self.render.cameras.insert(
-            handle,
-            RenderCamera {
-                entity,
-                params,
-                viewport: None,
-            },
-        );
-        handle
-    }
-
-    pub(crate) fn update_render_camera(&mut self, handle: u64, params: RenderCameraParams) -> bool {
-        match self.render.cameras.get_mut(&handle) {
-            Some(camera) => {
-                camera.params = params;
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn create_render_renderer(
-        &mut self,
-        entity: Option<EntityId>,
-        mesh: Option<u64>,
-        material: Option<u64>,
-    ) -> u64 {
-        let handle = self.render.allocate();
-        self.render.renderers.insert(
-            handle,
-            RenderRenderer {
-                entity,
-                mesh,
-                material,
-                enabled: true,
-            },
-        );
-        handle
-    }
-
-    pub(crate) fn set_render_renderer_enabled(&mut self, handle: u64, enabled: bool) -> bool {
-        match self.render.renderers.get_mut(&handle) {
-            Some(renderer) => {
-                renderer.enabled = enabled;
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn create_render_light(&mut self, entity: Option<EntityId>) -> u64 {
-        let handle = self.render.allocate();
-        let mut light = entity
-            .and_then(|entity| self.render.light_defaults.get(&entity).copied())
-            .unwrap_or(RenderLight {
-                entity,
-                direction: [0.0, 1.0, 0.0],
-                color: [1.0, 1.0, 1.0],
-                intensity: 1.0,
-            });
-        light.entity = entity;
-        self.render.lights.insert(handle, light);
-        handle
-    }
-
-    pub(crate) fn update_render_light(
-        &mut self,
-        handle: u64,
-        direction: [f32; 3],
-        color: [f32; 3],
-        intensity: f32,
-    ) -> bool {
-        match self.render.lights.get_mut(&handle) {
-            Some(light) => {
-                light.direction = direction;
-                light.color = color;
-                light.intensity = intensity;
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn entity_transform(&self, entity: EntityId) -> Option<Transform> {
-        for scene in &self.scenes {
-            if let Some(transform) = scene.graph.world_transform(entity) {
-                return Some(transform);
-            }
-        }
-        None
-    }
-
-    fn populate_render_world(
-        &mut self,
-        binding: &RenderBinding,
-        entity_base: u64,
-        graph: &SceneGraph,
-    ) -> Vec<(EntityId, String)> {
-        let mut diagnostics = Vec::new();
-        for camera in &binding.cameras {
-            let entity = EntityId::new(entity_base + camera.entity.as_u64());
-            let params = RenderCameraParams {
-                orthographic: camera.orthographic,
-                orthographic_size: camera.orthographic_size,
-                field_of_view: camera.field_of_view,
-                near_clip_plane: camera.near_clip_plane,
-                far_clip_plane: camera.far_clip_plane,
-                background_color: camera.background_color,
-            };
-            self.render.camera_defaults.insert(entity, params);
-            let handle = self.create_render_camera(Some(entity));
-            self.update_render_camera(handle, params);
-        }
-        for renderer in &binding.renderers {
-            let entity = EntityId::new(entity_base + renderer.entity.as_u64());
-            let material = self.create_render_material();
-            self.set_render_material(material, render_material_for(renderer));
-            let mesh = self.import_scene_mesh(renderer);
-            let handle = self.create_render_renderer(Some(entity), mesh, Some(material));
-            self.set_render_renderer_enabled(handle, renderer.enabled);
-            if mesh.is_none() {
-                if let Some(diagnostic) = &renderer.mesh_diagnostic {
-                    diagnostics.push((entity, diagnostic.clone()));
-                } else if let Some(guid) = &renderer.mesh_guid {
-                    diagnostics.push((
-                        entity,
-                        format!(
-                            "MeshRenderer on entity {} references mesh guid {} that could not be imported",
-                            entity.as_u64(),
-                            guid
-                        ),
-                    ));
-                }
-            }
-            if let Some(diagnostic) = &renderer.material_diagnostic {
-                diagnostics.push((entity, diagnostic.clone()));
-            } else if let Some(guid) = &renderer.material_guid {
-                diagnostics.push((
-                    entity,
-                    format!(
-                        "MeshRenderer on entity {} references material guid {} that could not be imported",
-                        entity.as_u64(),
-                        guid
-                    ),
-                ));
-            }
-        }
-        for light in &binding.lights {
-            let entity = EntityId::new(entity_base + light.entity.as_u64());
-            if !light.directional {
-                if let Some(diagnostic) = &light.unsupported_diagnostic {
-                    diagnostics.push((entity, diagnostic.clone()));
-                }
-                continue;
-            }
-            let rotation = graph
-                .world_transform(entity)
-                .map(|transform| transform.rotation)
-                .unwrap_or(IDENTITY_ROTATION);
-            let direction = toward_light_direction(rotation, light.direction);
-            self.render.light_defaults.insert(
-                entity,
-                RenderLight {
-                    entity: Some(entity),
-                    direction,
-                    color: light.color,
-                    intensity: light.intensity,
-                },
-            );
-            let handle = self.create_render_light(Some(entity));
-            self.update_render_light(handle, direction, light.color, light.intensity);
-        }
-        diagnostics
-    }
-
-    // Resolve a scene-declared MeshFilter reference into a render mesh:
-    // Unity built-in primitives by (fileID, guid), otherwise an imported
-    // model file. Returns None when the mesh cannot be resolved.
-    fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
-        let mesh_data = if let (Some(file_id), Some(guid)) =
-            (renderer.mesh_file_id, renderer.mesh_guid.as_deref())
-        {
-            let primitive = unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)?;
-            let mut data = unitas_asset::primitive::primitive_mesh(primitive);
-            if primitive == unitas_asset::primitive::BuiltinPrimitive::Sphere {
-                // Unity's built-in sphere is radius 0.5; unitas generates radius 1.
-                for position in &mut data.positions {
-                    *position = [position[0] * 0.5, position[1] * 0.5, position[2] * 0.5];
-                }
-            }
-            Some(data)
-        } else if let Some(path) = &renderer.mesh_path {
-            let bytes = std::fs::read(path).ok()?;
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            unitas_asset::model::import_model(&bytes, name).ok()
-        } else {
-            None
-        }?;
-        let positions = mesh_data
-            .positions
-            .iter()
-            .map(|p| Vec3::new(p[0], p[1], p[2]))
-            .collect();
-        let normals = mesh_data
-            .normals
-            .iter()
-            .map(|n| Vec3::new(n[0], n[1], n[2]))
-            .collect();
-        Some(self.create_render_mesh_with_uvs(
-            positions,
-            normals,
-            mesh_data.indices.clone(),
-            mesh_data.uvs.clone(),
-        ))
-    }
-
-    fn remove_scene_render_handles(&mut self, scene: &LoadedScene) {
-        let base = scene.entity_base;
-        let count = scene.entity_count;
-        let in_scene = |entity: Option<EntityId>| match entity {
-            Some(entity) => {
-                let value = entity.as_u64();
-                value >= base && value < base + count
-            }
-            None => false,
-        };
-        self.render
-            .cameras
-            .retain(|_, camera| !in_scene(camera.entity));
-        self.render
-            .renderers
-            .retain(|_, renderer| !in_scene(renderer.entity));
-        self.render
-            .lights
-            .retain(|_, light| !in_scene(light.entity));
-        self.render
-            .camera_defaults
-            .retain(|entity, _| !in_scene(Some(*entity)));
-        self.render
-            .light_defaults
-            .retain(|entity, _| !in_scene(Some(*entity)));
-    }
-
-    fn camera_basis(&self, entity: Option<EntityId>) -> Option<CameraBasis> {
-        let entity = entity?;
-        let transform = self.entity_transform(entity)?;
-        let eye = Vec3::new(
-            transform.translation[0],
-            transform.translation[1],
-            transform.translation[2],
-        );
-        let rotated = rotate_vector(transform.rotation, [0.0, 0.0, 1.0]);
-        let mut forward = Vec3::new(rotated[0], rotated[1], rotated[2]);
-        if forward.length_squared() < 1e-8 {
-            forward = Vec3::new(0.0, 0.0, 1.0);
-        }
-        let forward = forward.normalize();
-        let mut up = Vec3::new(0.0, 1.0, 0.0);
-        if up.cross(forward).length_squared() < 1e-8 {
-            up = Vec3::new(0.0, 0.0, 1.0);
-        }
-        let view = look_at(eye, eye + forward, up);
-        let right = Vec3::new(view.get(0, 0), view.get(1, 0), view.get(2, 0));
-        let up_axis = Vec3::new(view.get(0, 1), view.get(1, 1), view.get(2, 1));
-        Some(CameraBasis {
-            eye,
-            right,
-            up: up_axis,
-            forward,
-            view,
-        })
-    }
-
-    /// The scene's directional light, or a default one when the scene has
-    /// none.
-    pub fn directional_light(&self) -> DirectionalLight {
-        let mut selected: Option<(u64, RenderLight)> = None;
-        for (handle, light) in &self.render.lights {
-            let replace = match selected {
-                Some((best, _)) => *handle > best,
-                None => true,
-            };
-            if replace {
-                selected = Some((*handle, *light));
-            }
-        }
-        match selected {
-            Some((_, light)) => DirectionalLight {
-                direction: Vec3::new(light.direction[0], light.direction[1], light.direction[2]),
-                color: light.color,
-                intensity: light.intensity,
-            },
-            None => DirectionalLight {
-                direction: Vec3::new(0.0, 1.0, 0.0),
-                color: [1.0, 1.0, 1.0],
-                intensity: 1.0,
-            },
-        }
-    }
-
-    /// The loaded scene's enabled renderers with the mesh and material colour
-    /// each one draws, in the deterministic order the renderer draws them.
-    pub fn scene_renderables(&self) -> Vec<SceneRenderable<'_>> {
-        // Renderer handles are sorted so the instance order, and therefore the
-        // rendered image, is the same in every process: a HashMap's iteration
-        // order is seeded per process, so consecutive captures of one scene
-        // otherwise disagree on which coincident surface wins the depth test.
-        let mut handles: Vec<u64> = self.render.renderers.keys().copied().collect();
-        handles.sort_unstable();
-        handles
-            .iter()
-            .filter_map(|handle| {
-                let renderer = self.render.renderers.get(handle)?;
-                if !renderer.enabled {
-                    return None;
-                }
-                let entity = renderer.entity?;
-                let render_mesh = renderer
-                    .mesh
-                    .and_then(|mesh| self.render.meshes.get(&mesh))?;
-                let material = renderer
-                    .material
-                    .and_then(|material| self.render.materials.get(&material))
-                    .unwrap_or(&self.render.plain_material);
-                let color = [material.color[0], material.color[1], material.color[2]];
-                Some(SceneRenderable {
-                    entity,
-                    mesh: &render_mesh.mesh,
-                    attributes: &render_mesh.attributes,
-                    material,
-                    color,
-                })
-            })
-            .collect()
-    }
-
-    /// The scene camera with the highest handle, so the choice does not depend
-    /// on map iteration order.
-    pub fn scene_camera(&self) -> Option<SceneCamera> {
-        let mut selected: Option<(u64, RenderCamera)> = None;
-        for (handle, camera) in &self.render.cameras {
-            let replace = match selected {
-                Some((best, _)) => *handle > best,
-                None => true,
-            };
-            if replace {
-                selected = Some((*handle, *camera));
-            }
-        }
-        selected.map(|(_, camera)| SceneCamera {
-            entity: camera.entity,
-            params: camera.params,
-        })
-    }
-
-    pub(crate) fn render_frame(
-        &mut self,
-        camera: u64,
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<u8>, RenderError> {
-        if width == 0 || height == 0 {
-            return Err(RenderError::InvalidArgument(
-                "frame size must be greater than zero".to_string(),
-            ));
-        }
-        let state = match self.render.cameras.get(&camera) {
-            Some(state) => *state,
-            None => return Err(RenderError::UnknownHandle),
-        };
-        if let Some(entity) = state.entity
-            && self.world_transform_of(entity).is_none()
-        {
-            return Err(RenderError::InvalidArgument(
-                "camera entity is not in a loaded scene".to_string(),
-            ));
-        }
-        let renderer = self.gpu_renderer()?;
-        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
-        presenter.set_meshes(scene_gpu_meshes(self));
-        let default = GpuCameraBinding::default();
-        presenter.set_camera_binding(GpuCameraBinding {
-            entity: state.entity,
-            camera: projection_for(&state.params, default.camera.aspect),
-            view: default.view,
-            background: state.params.background_color,
-        });
-        presenter.set_light(self.directional_light());
-        crate::presenter::apply_pending_display_quality(self);
-        presenter.set_shadow_settings(crate::presenter::shadow_settings_for_runtime(self));
-        let image = presenter
-            .render_offscreen(self, width, height)
-            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
-        let bytes = image.to_bmp_bytes();
-        if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
-            camera_state.viewport = Some((width, height));
-        }
-        Ok(bytes)
-    }
-
-    pub(crate) fn render_id_map(
-        &mut self,
-        camera: u64,
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<u8>, RenderError> {
-        if width == 0 || height == 0 {
-            return Err(RenderError::InvalidArgument(
-                "frame size must be greater than zero".to_string(),
-            ));
-        }
-        let state = match self.render.cameras.get(&camera) {
-            Some(state) => *state,
-            None => return Err(RenderError::UnknownHandle),
-        };
-        if let Some(entity) = state.entity
-            && self.world_transform_of(entity).is_none()
-        {
-            return Err(RenderError::InvalidArgument(
-                "camera entity is not in a loaded scene".to_string(),
-            ));
-        }
-        let renderer = self.gpu_renderer()?;
-        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
-        presenter.set_meshes(scene_gpu_meshes(self));
-        let default = GpuCameraBinding::default();
-        presenter.set_camera_binding(GpuCameraBinding {
-            entity: state.entity,
-            camera: projection_for(&state.params, default.camera.aspect),
-            view: default.view,
-            background: state.params.background_color,
-        });
-        presenter.set_light(self.directional_light());
-        presenter.set_shadow_settings(crate::presenter::shadow_settings_for_runtime(self));
-        let frame = crate::capture::capture_offscreen(&mut presenter, self, width, height)
-            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
-        let mut bytes = Vec::with_capacity(frame.id_map.len() * 4);
-        for id in frame.id_map {
-            bytes.extend_from_slice(&id.to_le_bytes());
-        }
-        if let Some(camera_state) = self.render.cameras.get_mut(&camera) {
-            camera_state.viewport = Some((width, height));
-        }
-        Ok(bytes)
-    }
-
-    pub fn capture_scene_frame(
-        &mut self,
-        width: u32,
-        height: u32,
-    ) -> Result<unitas_render::CaptureFrame, RenderError> {
-        if width == 0 || height == 0 {
-            return Err(RenderError::InvalidArgument(
-                "frame size must be greater than zero".to_string(),
-            ));
-        }
-        let renderer = self.gpu_renderer()?;
-        let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
-        presenter.bind_scene(self);
-        crate::capture::capture_offscreen(&mut presenter, self, width, height)
-            .map_err(|error| RenderError::DeviceFailed(error.to_string()))
-    }
-
-    /// Draws the canvas content of the loaded scenes onto a rendered frame, so
-    /// the interface is part of the picture instead of only its state.
-    pub(crate) fn composite_canvas_image(&self, image: Image, width: u32, height: u32) -> Image {
-        let items = self.ui_draw_items_for([width as f32, height as f32]);
-        if items.is_empty() {
-            return image;
-        }
-        let mut rgba = image.to_rgba8();
-        self.composite_canvas_into(&mut rgba, &items);
-        Image::from_rgba8(rgba)
-    }
-
-    /// The same composition as `composite_canvas_image` for a frame that is
-    /// already in RGBA, so the windowed path does not convert the frame
-    /// between colour formats.
-    pub(crate) fn composite_canvas_rgba(&self, mut rgba: Rgba8, width: u32, height: u32) -> Rgba8 {
-        let items = self.ui_draw_items_for([width as f32, height as f32]);
-        if items.is_empty() {
-            return rgba;
-        }
-        self.composite_canvas_into(&mut rgba, &items);
-        rgba
-    }
-
-    /// The one canvas composition both the capture path and the windowed path
-    /// draw the interface with.
-    pub(crate) fn composite_canvas_into(&self, rgba: &mut Rgba8, items: &[UiDrawItem]) {
-        let mut target = UiTarget {
-            image: rgba,
-            ids: None,
-        };
-        if items.iter().any(|item| item.text.is_some()) {
-            let mut painter = self
-                .ui_painter
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let painter = painter.get_or_insert_with(GlyphTextPainter::new);
-            composite_ui(&mut target, items, 1, Some(painter));
-        } else {
-            composite_ui(&mut target, items, 1, None);
-        }
-    }
-
-    /// The renderer every frame of this runtime is rendered by.
-    pub(crate) fn gpu_renderer(&mut self) -> Result<Arc<Renderer>, RenderError> {
-        if let Some(renderer) = &self.gpu_renderer {
-            return Ok(Arc::clone(renderer));
-        }
-        let renderer = Renderer::new()
-            .map(Arc::new)
-            .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
-        self.gpu_renderer = Some(Arc::clone(&renderer));
-        Ok(renderer)
-    }
-
-    /// The mesh the particle and trail effects are drawn with.
-    pub(crate) fn effect_mesh(&self) -> &Mesh {
-        &self.render.effect_mesh
-    }
-
-    /// The name of an entity of the loaded scenes.
-    pub(crate) fn entity_name(&self, entity: EntityId) -> Option<&str> {
-        self.scene_graph()
-            .and_then(|graph| graph.entity(entity))
-            .map(|entity| entity.name())
-    }
-
-    pub(crate) fn camera_world_to_screen_point(
-        &self,
-        camera: u64,
-        point: [f32; 3],
-    ) -> Result<[f32; 3], RenderError> {
-        let state = match self.render.cameras.get(&camera) {
-            Some(state) => *state,
-            None => return Err(RenderError::UnknownHandle),
-        };
-        let (width, height) = match state.viewport {
-            Some(viewport) => viewport,
-            None => {
-                return Err(RenderError::InvalidArgument(
-                    "camera has no rendered frame".to_string(),
-                ));
-            }
-        };
-        let basis = match self.camera_basis(state.entity) {
-            Some(basis) => basis,
-            None => {
-                return Err(RenderError::InvalidArgument(
-                    "camera entity is not in a loaded scene".to_string(),
-                ));
-            }
-        };
-        let projection = projection_for(&state.params, width as f32 / height as f32);
-        let clip = projection.projection_matrix() * basis.view;
-        let world = Vec3::new(point[0], point[1], point[2]);
-        let clip = clip.transform_point(world);
-        if clip.w <= 1e-6 {
-            return Err(RenderError::InvalidArgument(
-                "point is behind the camera".to_string(),
-            ));
-        }
-        let x_pixel = (clip.x / clip.w + 1.0) * 0.5 * width as f32;
-        let y_pixel = (clip.y / clip.w + 1.0) * 0.5 * height as f32;
-        let distance = (world - basis.eye).dot(basis.forward);
-        Ok([x_pixel, y_pixel, distance])
-    }
-
-    pub(crate) fn camera_screen_point_to_ray(
-        &self,
-        camera: u64,
-        point: [f32; 3],
-    ) -> Result<[f32; 6], RenderError> {
-        let state = match self.render.cameras.get(&camera) {
-            Some(state) => *state,
-            None => return Err(RenderError::UnknownHandle),
-        };
-        let (width, height) = match state.viewport {
-            Some(viewport) => viewport,
-            None => {
-                return Err(RenderError::InvalidArgument(
-                    "camera has no rendered frame".to_string(),
-                ));
-            }
-        };
-        let basis = match self.camera_basis(state.entity) {
-            Some(basis) => basis,
-            None => {
-                return Err(RenderError::InvalidArgument(
-                    "camera entity is not in a loaded scene".to_string(),
-                ));
-            }
-        };
-        let aspect = width as f32 / height as f32;
-        let ndc_x = point[0] / (0.5 * width as f32) - 1.0;
-        let ndc_y = point[1] / (0.5 * height as f32) - 1.0;
-        let near = state.params.near_clip_plane.max(0.001);
-        let (view_x, view_y) = if state.params.orthographic {
-            (
-                ndc_x * state.params.orthographic_size * aspect,
-                ndc_y * state.params.orthographic_size,
-            )
-        } else {
-            let half = (state.params.field_of_view.to_radians() * 0.5).tan();
-            (ndc_x * near * half * aspect, ndc_y * near * half)
-        };
-        let direction =
-            (basis.right * view_x + basis.up * view_y + basis.forward * near).normalize();
-        Ok([
-            basis.eye.x,
-            basis.eye.y,
-            basis.eye.z,
-            direction.x,
-            direction.y,
-            direction.z,
-        ])
-    }
-}
-
-/// The material a scene renderer draws with: its colour, the maps its
-/// material declares and the surface floats the shader reads.
-fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
-    RenderMaterial {
-        color: [
-            renderer.material_color[0],
-            renderer.material_color[1],
-            renderer.material_color[2],
-            1.0,
-        ],
-        albedo: load_texture_image(renderer.albedo_tex_path.as_deref()),
-        normal: load_texture_image(renderer.normal_tex_path.as_deref()),
-        emissive: load_texture_image(renderer.emission_tex_path.as_deref()),
-        metallic: renderer.metallic.unwrap_or(0.0),
-        smoothness: renderer.smoothness.unwrap_or(0.0),
-        emission_color: renderer.emission_color,
-    }
-}
-
-/// The texture at a path as the shader reads it, decoded with the asset
-/// import path and linearised when the importer says it holds colour.
-fn load_texture_image(path: Option<&Path>) -> Option<Image> {
-    let path = path?;
-    let bytes = std::fs::read(path).ok()?;
-    let name = path.file_name().and_then(|name| name.to_str())?;
-    let settings = texture_import_settings(path);
-    let imported = unitas_asset::texture::import::import_texture(&bytes, name, &settings).ok()?;
-    let mut image = image_from_decoded(&imported.texture);
-    if !settings.is_linear() {
-        linearize_image(&mut image);
-    }
-    Some(image)
-}
-
-/// The importer settings of the texture beside its path, which say whether it
-/// holds colour or a normal map.
-fn texture_import_settings(path: &Path) -> unitas_asset::texture::import::TextureImportSettings {
-    let mut meta = path.as_os_str().to_os_string();
-    meta.push(".meta");
-    let text = std::fs::read_to_string(PathBuf::from(meta)).ok();
-    match text {
-        Some(text) => unitas_asset::texture::import::TextureImportSettings::from_meta_text(&text)
-            .unwrap_or_default(),
-        None => unitas_asset::texture::import::TextureImportSettings::default(),
-    }
-}
-
-fn image_from_decoded(texture: &unitas_asset::texture::import::DecodedTexture) -> Image {
-    let rgba = unitas_asset::texture::import::texture_to_rgba8(texture);
-    let mut image = Image::new(texture.width, texture.height);
-    for (index, pixel) in image.pixels.iter_mut().enumerate() {
-        let offset = index * 4;
-        pixel[0] = rgba.get(offset).copied().unwrap_or(0);
-        pixel[1] = rgba.get(offset + 1).copied().unwrap_or(0);
-        pixel[2] = rgba.get(offset + 2).copied().unwrap_or(0);
-    }
-    image
-}
-
-fn linearize_image(image: &mut Image) {
-    for pixel in &mut image.pixels {
-        for channel in pixel.iter_mut() {
-            let linear = unitas_asset::texture::import::srgb_to_linear(*channel);
-            *channel = (linear * 255.0).round() as u8;
-        }
-    }
 }
 
 #[cfg(test)]

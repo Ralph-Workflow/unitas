@@ -612,6 +612,16 @@ impl InputState {
             0.0
         };
 
+        self.clear_frame_edges();
+        self.apply_pointer_delta();
+        self.apply_scroll_delta();
+        self.apply_queued_key_events();
+        self.apply_queued_mouse_events();
+        self.apply_queued_gamepad_events();
+        self.update_axes(dt);
+    }
+
+    fn clear_frame_edges(&mut self) {
         self.keys_pressed.clear();
         self.keys_released.clear();
         self.mouse_pressed.clear();
@@ -620,7 +630,9 @@ impl InputState {
         self.gamepad_buttons_released.clear();
         self.buttons_pressed.clear();
         self.buttons_released.clear();
+    }
 
+    fn apply_pointer_delta(&mut self) {
         if let Some((next_x, next_y)) = self.queued_pointer_move.take() {
             self.pointer_dx = next_x - self.pointer_x;
             self.pointer_dy = next_y - self.pointer_y;
@@ -630,11 +642,15 @@ impl InputState {
             self.pointer_dx = 0.0;
             self.pointer_dy = 0.0;
         }
+    }
 
+    fn apply_scroll_delta(&mut self) {
         self.scroll_x = self.queued_scroll.0;
         self.scroll_y = self.queued_scroll.1;
         self.queued_scroll = (0.0, 0.0);
+    }
 
+    fn apply_queued_key_events(&mut self) {
         let queued_keys = std::mem::take(&mut self.queued_keys);
         for (key, pressed) in queued_keys {
             if pressed {
@@ -645,7 +661,9 @@ impl InputState {
                 self.keys_released.insert(key);
             }
         }
+    }
 
+    fn apply_queued_mouse_events(&mut self) {
         let queued_mouse = std::mem::take(&mut self.queued_mouse_buttons);
         for (button, pressed) in queued_mouse {
             if pressed {
@@ -656,7 +674,9 @@ impl InputState {
                 self.mouse_released.insert(button);
             }
         }
+    }
 
+    fn apply_queued_gamepad_events(&mut self) {
         let queued_gamepad = std::mem::take(&mut self.queued_gamepad_buttons);
         for (button, pressed) in queued_gamepad {
             if pressed {
@@ -667,7 +687,9 @@ impl InputState {
                 self.gamepad_buttons_released.insert(button);
             }
         }
+    }
 
+    fn update_axes(&mut self, dt: f64) {
         let keys_down = &self.keys_down;
         let mouse_down = &self.mouse_down;
         let keys_pressed = &self.keys_pressed;
@@ -730,76 +752,9 @@ impl InputState {
 
                 match entry.config.axis_type {
                     0 => {
-                        let pos_down = entry
-                            .positive_sources
-                            .iter()
-                            .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
-                        let neg_down = entry
-                            .negative_sources
-                            .iter()
-                            .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
-
-                        let digital: f64 = match (pos_down, neg_down) {
-                            (true, false) => 1.0,
-                            (false, true) => -1.0,
-                            _ => 0.0,
-                        };
-                        let raw_target = if analog.abs() > digital.abs() {
-                            analog
-                        } else {
-                            digital
-                        };
-
-                        if raw_target == 0.0 {
-                            let step = (entry.config.gravity * dt).max(0.0);
-                            if entry.current > 0.0 {
-                                entry.current = (entry.current - step).max(0.0);
-                            } else if entry.current < 0.0 {
-                                entry.current = (entry.current + step).min(0.0);
-                            }
-                        } else {
-                            if entry.config.snap && (entry.current * raw_target < 0.0) {
-                                entry.current = 0.0;
-                            }
-                            let step = (entry.config.sensitivity * dt).max(0.0);
-                            if raw_target > entry.current {
-                                entry.current = (entry.current + step).min(1.0);
-                            } else if raw_target < entry.current {
-                                entry.current = (entry.current - step).max(-1.0);
-                            }
-                        }
-
-                        let sign = if entry.config.invert { -1.0 } else { 1.0 };
-                        entry.raw = if raw_target == 0.0 {
-                            0.0
-                        } else {
-                            raw_target * sign
-                        };
-                        let inverted_val = entry.current * sign;
-                        let dead = entry.config.dead.max(0.0);
-                        entry.smoothed = if inverted_val.abs() <= dead {
-                            0.0
-                        } else {
-                            inverted_val
-                        };
+                        update_digital_axis(entry, dt, analog, keys_down, mouse_down, gamepad_down);
                     }
-                    1 => {
-                        let delta = match entry.config.axis {
-                            0 => pointer_dx,
-                            1 => pointer_dy,
-                            2 => scroll_y,
-                            _ => 0.0,
-                        };
-                        let dead = entry.config.dead.max(0.0);
-                        let filtered = if delta.abs() <= dead { 0.0 } else { delta };
-                        let sign = if entry.config.invert { -1.0 } else { 1.0 };
-                        entry.raw = if filtered == 0.0 {
-                            0.0
-                        } else {
-                            filtered * sign
-                        };
-                        entry.smoothed = entry.raw * entry.config.sensitivity;
-                    }
+                    1 => update_delta_axis(entry, pointer_dx, pointer_dy, scroll_y),
                     _ => {
                         entry.raw = 0.0;
                         entry.smoothed = 0.0;
@@ -943,6 +898,86 @@ fn is_source_in(
         ButtonSource::MouseButton(button) => mouse.contains(&button),
         ButtonSource::GamepadButton(button) => gamepad.contains(&button),
     }
+}
+
+fn update_digital_axis(
+    entry: &mut AxisEntry,
+    dt: f64,
+    analog: f64,
+    keys_down: &HashSet<u32>,
+    mouse_down: &HashSet<u32>,
+    gamepad_down: &HashSet<u32>,
+) {
+    let pos_down = entry
+        .positive_sources
+        .iter()
+        .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
+    let neg_down = entry
+        .negative_sources
+        .iter()
+        .any(|src| is_source_in(src, keys_down, mouse_down, gamepad_down));
+
+    let digital: f64 = match (pos_down, neg_down) {
+        (true, false) => 1.0,
+        (false, true) => -1.0,
+        _ => 0.0,
+    };
+    let raw_target = if analog.abs() > digital.abs() {
+        analog
+    } else {
+        digital
+    };
+
+    if raw_target == 0.0 {
+        let step = (entry.config.gravity * dt).max(0.0);
+        if entry.current > 0.0 {
+            entry.current = (entry.current - step).max(0.0);
+        } else if entry.current < 0.0 {
+            entry.current = (entry.current + step).min(0.0);
+        }
+    } else {
+        if entry.config.snap && (entry.current * raw_target < 0.0) {
+            entry.current = 0.0;
+        }
+        let step = (entry.config.sensitivity * dt).max(0.0);
+        if raw_target > entry.current {
+            entry.current = (entry.current + step).min(1.0);
+        } else if raw_target < entry.current {
+            entry.current = (entry.current - step).max(-1.0);
+        }
+    }
+
+    let sign = if entry.config.invert { -1.0 } else { 1.0 };
+    entry.raw = if raw_target == 0.0 {
+        0.0
+    } else {
+        raw_target * sign
+    };
+    let inverted_val = entry.current * sign;
+    let dead = entry.config.dead.max(0.0);
+    entry.smoothed = if inverted_val.abs() <= dead {
+        0.0
+    } else {
+        inverted_val
+    };
+}
+
+fn update_delta_axis(entry: &mut AxisEntry, pointer_dx: f64, pointer_dy: f64, scroll_y: f64) {
+    let delta = match entry.config.axis {
+        0 => pointer_dx,
+        1 => pointer_dy,
+        2 => scroll_y,
+        _ => 0.0,
+    };
+    let dead = entry.config.dead.max(0.0);
+    let filtered = if delta.abs() <= dead { 0.0 } else { delta };
+    let sign = if entry.config.invert { -1.0 } else { 1.0 };
+    entry.raw = if filtered == 0.0 {
+        0.0
+    } else {
+        filtered * sign
+    };
+    entry.smoothed = entry.raw * entry.config.sensitivity;
 }
 
 fn gamepad_axis_for_name(name: &str) -> Option<u32> {

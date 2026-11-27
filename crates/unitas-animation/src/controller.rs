@@ -417,194 +417,204 @@ impl AnimatorController {
 
     pub fn validate(&self) -> Vec<AnimationDiagnostic> {
         let mut diagnostics = Vec::new();
-        for state in &self.states {
-            self.validate_state(state, &mut diagnostics);
-        }
-        for transition in &self.transitions {
-            self.validate_transition(transition, &mut diagnostics);
-        }
-        self.validate_reachability(&mut diagnostics);
+        self.validate_state_motions(&mut diagnostics);
+        self.validate_transitions(&mut diagnostics);
+        self.validate_reachable_states(&mut diagnostics);
         diagnostics
     }
 
-    fn validate_state(&self, state: &AnimatorState, diagnostics: &mut Vec<AnimationDiagnostic>) {
-        match &state.motion {
-            StateMotion::None => {
-                diagnostics.push(AnimationDiagnostic::MissingMotion {
-                    state_name: state.name.clone(),
-                });
-            }
-            StateMotion::Clip(clip) => {
-                validate_clip_bindings(clip, diagnostics);
-            }
-            StateMotion::BlendTree1D {
-                parameter,
-                thresholds,
-            } => {
-                self.validate_blend_parameter(parameter, "blend tree", &state.name, diagnostics);
-                if thresholds.is_empty() {
+    fn validate_state_motions(&self, diagnostics: &mut Vec<AnimationDiagnostic>) {
+        for state in &self.states {
+            match &state.motion {
+                StateMotion::None => {
                     diagnostics.push(AnimationDiagnostic::MissingMotion {
                         state_name: state.name.clone(),
                     });
                 }
-                for (_, clip) in thresholds {
+                StateMotion::Clip(clip) => {
                     validate_clip_bindings(clip, diagnostics);
                 }
-            }
-            StateMotion::BlendTree2D {
-                parameter_x,
-                parameter_y,
-                children,
-                ..
-            } => {
-                for parameter in [parameter_x, parameter_y] {
-                    self.validate_blend_parameter(
-                        parameter,
-                        "2D blend tree",
-                        &state.name,
-                        diagnostics,
-                    );
+                StateMotion::BlendTree1D {
+                    parameter,
+                    thresholds,
+                } => {
+                    match self.parameters.iter().find(|p| p.name == *parameter) {
+                        None => diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                            parameter: parameter.clone(),
+                            context: format!("blend tree in state '{}'", state.name),
+                        }),
+                        Some(param)
+                            if param.default_value.parameter_type() != ParameterType::Float =>
+                        {
+                            diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                parameter: parameter.clone(),
+                                context: format!(
+                                    "blend tree in state '{}' requires Float parameter",
+                                    state.name
+                                ),
+                            });
+                        }
+                        Some(_) => {}
+                    }
+                    if thresholds.is_empty() {
+                        diagnostics.push(AnimationDiagnostic::MissingMotion {
+                            state_name: state.name.clone(),
+                        });
+                    }
+                    for (_, clip) in thresholds {
+                        validate_clip_bindings(clip, diagnostics);
+                    }
                 }
-                if children.is_empty() {
-                    diagnostics.push(AnimationDiagnostic::MissingMotion {
-                        state_name: state.name.clone(),
-                    });
+                StateMotion::BlendTree2D {
+                    parameter_x,
+                    parameter_y,
+                    children,
+                    ..
+                } => {
+                    for parameter in [parameter_x, parameter_y] {
+                        match self.parameters.iter().find(|p| p.name == *parameter) {
+                            None => {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!("2D blend tree in state '{}'", state.name),
+                                });
+                            }
+                            Some(param)
+                                if param.default_value.parameter_type() != ParameterType::Float =>
+                            {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!(
+                                        "2D blend tree in state '{}' requires Float parameter",
+                                        state.name
+                                    ),
+                                });
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    if children.is_empty() {
+                        diagnostics.push(AnimationDiagnostic::MissingMotion {
+                            state_name: state.name.clone(),
+                        });
+                    }
+                    for (_, clip) in children {
+                        validate_clip_bindings(clip, diagnostics);
+                    }
                 }
-                for (_, clip) in children {
-                    validate_clip_bindings(clip, diagnostics);
-                }
-            }
-            StateMotion::BlendTreeDirect { children } => {
-                if children.is_empty() {
-                    diagnostics.push(AnimationDiagnostic::MissingMotion {
-                        state_name: state.name.clone(),
-                    });
-                }
-                for (parameter, clip) in children {
-                    self.validate_blend_parameter(
-                        parameter,
-                        "Direct blend tree",
-                        &state.name,
-                        diagnostics,
-                    );
-                    validate_clip_bindings(clip, diagnostics);
+                StateMotion::BlendTreeDirect { children } => {
+                    if children.is_empty() {
+                        diagnostics.push(AnimationDiagnostic::MissingMotion {
+                            state_name: state.name.clone(),
+                        });
+                    }
+                    for (parameter, clip) in children {
+                        match self.parameters.iter().find(|p| p.name == *parameter) {
+                            None => {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!("Direct blend tree in state '{}'", state.name),
+                                });
+                            }
+                            Some(param)
+                                if param.default_value.parameter_type() != ParameterType::Float =>
+                            {
+                                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                    parameter: parameter.clone(),
+                                    context: format!(
+                                        "Direct blend tree in state '{}' requires Float parameter",
+                                        state.name
+                                    ),
+                                });
+                            }
+                            Some(_) => {}
+                        }
+                        validate_clip_bindings(clip, diagnostics);
+                    }
                 }
             }
         }
     }
 
-    fn validate_blend_parameter(
-        &self,
-        parameter: &str,
-        kind: &str,
-        state_name: &str,
-        diagnostics: &mut Vec<AnimationDiagnostic>,
-    ) {
-        match self.parameters.iter().find(|p| p.name == parameter) {
-            None => diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
-                parameter: parameter.to_string(),
-                context: format!("{kind} in state '{state_name}'"),
-            }),
-            Some(param) if param.default_value.parameter_type() != ParameterType::Float => {
-                diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
-                    parameter: parameter.to_string(),
-                    context: format!("{kind} in state '{state_name}' requires Float parameter"),
-                });
-            }
-            Some(_) => {}
-        }
-    }
-
-    fn validate_transition(
-        &self,
-        transition: &StateTransition,
-        diagnostics: &mut Vec<AnimationDiagnostic>,
-    ) {
-        let source_name = match transition.source() {
-            TransitionSource::AnyState => "Any State".to_string(),
-            TransitionSource::State(index) => self
-                .states
-                .get(index)
-                .map_or_else(|| format!("#{index}"), |state| state.name.clone()),
-        };
-        if let TransitionSource::State(index) = transition.source() {
-            if index >= self.states.len() {
-                diagnostics.push(AnimationDiagnostic::ConflictingTransition {
-                    source_state: source_name.clone(),
-                    reason: "source state index out of bounds".to_string(),
-                });
-            }
-        }
-        if let TransitionTarget::State(dst) = transition.target {
-            if dst >= self.states.len() {
-                diagnostics.push(AnimationDiagnostic::ConflictingTransition {
-                    source_state: source_name.clone(),
-                    reason: format!("target state index {dst} out of bounds"),
-                });
-            }
-        }
-        if !transition.has_exit_time && transition.conditions.is_empty() {
-            let duplicate = self
-                .transitions
-                .iter()
-                .filter(|other| {
-                    other.source() == transition.source()
-                        && !other.has_exit_time
-                        && other.conditions.is_empty()
-                })
-                .count();
-            if duplicate > 1 {
-                let conflict = AnimationDiagnostic::ConflictingTransition {
-                    source_state: source_name.clone(),
-                    reason: "multiple unconditional transitions without exit time".to_string(),
-                };
-                if !diagnostics.contains(&conflict) {
-                    diagnostics.push(conflict);
+    fn validate_transitions(&self, diagnostics: &mut Vec<AnimationDiagnostic>) {
+        for transition in &self.transitions {
+            let source_name = match transition.source() {
+                TransitionSource::AnyState => "Any State".to_string(),
+                TransitionSource::State(index) => self
+                    .states
+                    .get(index)
+                    .map_or_else(|| format!("#{index}"), |state| state.name.clone()),
+            };
+            if let TransitionSource::State(index) = transition.source() {
+                if index >= self.states.len() {
+                    diagnostics.push(AnimationDiagnostic::ConflictingTransition {
+                        source_state: source_name.clone(),
+                        reason: "source state index out of bounds".to_string(),
+                    });
                 }
             }
-        }
-        for cond in &transition.conditions {
-            self.validate_transition_condition(cond, &source_name, diagnostics);
-        }
-    }
-
-    fn validate_transition_condition(
-        &self,
-        cond: &TransitionCondition,
-        source_name: &str,
-        diagnostics: &mut Vec<AnimationDiagnostic>,
-    ) {
-        match self.parameters.iter().find(|p| p.name == cond.parameter) {
-            None => diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
-                parameter: cond.parameter.clone(),
-                context: format!("transition from state '{source_name}'"),
-            }),
-            Some(param) => {
-                let ptype = param.default_value.parameter_type();
-                let valid = match cond.op {
-                    ConditionOp::If | ConditionOp::IfNot => {
-                        matches!(ptype, ParameterType::Bool | ParameterType::Trigger)
+            if let TransitionTarget::State(dst) = transition.target {
+                if dst >= self.states.len() {
+                    diagnostics.push(AnimationDiagnostic::ConflictingTransition {
+                        source_state: source_name.clone(),
+                        reason: format!("target state index {dst} out of bounds"),
+                    });
+                }
+            }
+            if !transition.has_exit_time && transition.conditions.is_empty() {
+                let duplicate = self
+                    .transitions
+                    .iter()
+                    .filter(|other| {
+                        other.source() == transition.source()
+                            && !other.has_exit_time
+                            && other.conditions.is_empty()
+                    })
+                    .count();
+                if duplicate > 1 {
+                    let conflict = AnimationDiagnostic::ConflictingTransition {
+                        source_state: source_name.clone(),
+                        reason: "multiple unconditional transitions without exit time".to_string(),
+                    };
+                    if !diagnostics.contains(&conflict) {
+                        diagnostics.push(conflict);
                     }
-                    ConditionOp::Greater(_) | ConditionOp::Less(_) => {
-                        matches!(ptype, ParameterType::Float | ParameterType::Int)
-                    }
-                    ConditionOp::Equals(_) | ConditionOp::NotEqual(_) => {
-                        matches!(ptype, ParameterType::Int)
-                    }
-                };
-                if !valid {
-                    diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                }
+            }
+            for cond in &transition.conditions {
+                match self.parameters.iter().find(|p| p.name == cond.parameter) {
+                    None => diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
                         parameter: cond.parameter.clone(),
-                        context: format!(
-                            "incompatible condition operator in transition from '{source_name}'"
-                        ),
-                    });
+                        context: format!("transition from state '{source_name}'"),
+                    }),
+                    Some(param) => {
+                        let ptype = param.default_value.parameter_type();
+                        let valid = match cond.op {
+                            ConditionOp::If | ConditionOp::IfNot => {
+                                matches!(ptype, ParameterType::Bool | ParameterType::Trigger)
+                            }
+                            ConditionOp::Greater(_) | ConditionOp::Less(_) => {
+                                matches!(ptype, ParameterType::Float | ParameterType::Int)
+                            }
+                            ConditionOp::Equals(_) | ConditionOp::NotEqual(_) => {
+                                matches!(ptype, ParameterType::Int)
+                            }
+                        };
+                        if !valid {
+                            diagnostics.push(AnimationDiagnostic::InvalidParameterReference {
+                                parameter: cond.parameter.clone(),
+                                context: format!(
+                                    "incompatible condition operator in transition from '{source_name}'"
+                                ),
+                            });
+                        }
+                    }
                 }
             }
         }
     }
 
-    fn validate_reachability(&self, diagnostics: &mut Vec<AnimationDiagnostic>) {
+    fn validate_reachable_states(&self, diagnostics: &mut Vec<AnimationDiagnostic>) {
         if self.states.is_empty() {
             return;
         }
@@ -803,6 +813,13 @@ struct ActiveTransition {
 enum AnimatorRequest {
     Play(usize),
     CrossFade(usize, f32),
+}
+
+#[derive(Default)]
+struct AdvanceContext {
+    callbacks: Vec<StateMachineCallback>,
+    entered: Option<usize>,
+    exited: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1106,84 +1123,53 @@ impl Animator {
             };
         }
 
-        let mut callbacks: Vec<StateMachineCallback> = Vec::new();
+        let mut ctx = AdvanceContext::default();
         if !self.machine_entered {
             self.machine_entered = true;
-            callbacks.push(self.machine_callback(StateMachineCallbackKind::OnStateMachineEnter));
+            ctx.callbacks
+                .push(self.machine_callback(StateMachineCallbackKind::OnStateMachineEnter));
         }
-        let mut entered: Option<usize> = None;
-        let mut exited: Option<usize> = None;
 
-        if let Some(result) = self.apply_pending_request(&mut callbacks, &mut entered, &mut exited)
-        {
+        if let Some(result) = self.start_pending_request(&mut ctx) {
             return result;
         }
 
-        let source_speed = self
-            .controller
-            .states
-            .get(self.current_state)
-            .map_or(1.0, |s| s.speed);
         let prev_time = self.state_time;
-        let scaled_source_dt = dt * self.speed * source_speed.max(0.0);
-        let new_time = (prev_time + scaled_source_dt).max(0.0);
-        self.state_time = new_time;
+        let new_time = self.advance_source_time(dt);
+        let current_norm = self.current_normalized_time();
 
-        let source_length = self.state_duration(self.current_state);
-        let current_norm = if source_length > 1e-6 {
-            self.state_time / source_length
-        } else if self.state_time > 0.0 {
-            1.0
-        } else {
-            0.0
-        };
-
-        if let Some(result) =
-            self.start_transition_step(&mut callbacks, &mut entered, &mut exited, current_norm)
-        {
+        if let Some(result) = self.start_transition(&mut ctx, current_norm) {
             return result;
         }
 
-        if let Some(result) = self.blend_active_transition(
-            &mut callbacks,
-            &mut entered,
-            &mut exited,
-            dt,
-            prev_time,
-            new_time,
-        ) {
-            return result;
+        if let Some(tr) = self.active_transition {
+            return self.blend_active_transition(tr, dt, prev_time, new_time, ctx);
         }
 
         let sample = self.sample_state(self.current_state, prev_time, new_time);
         let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
         self.finish(
-            &mut callbacks,
-            entered,
-            exited,
+            ctx.callbacks,
+            ctx.entered,
+            ctx.exited,
             bindings,
             sample.fired_events,
             None,
         )
     }
 
-    fn apply_pending_request(
-        &mut self,
-        callbacks: &mut Vec<StateMachineCallback>,
-        entered: &mut Option<usize>,
-        exited: &mut Option<usize>,
-    ) -> Option<AnimatorStepResult> {
+    fn start_pending_request(&mut self, ctx: &mut AdvanceContext) -> Option<AnimatorStepResult> {
         let request = self.pending_request.take()?;
         match request {
             AnimatorRequest::Play(target) => {
                 if target < self.controller.states.len() {
-                    return Some(self.switch_state_now(target, callbacks, entered, exited));
+                    return Some(self.enter_state_immediately(target, ctx));
                 }
             }
             AnimatorRequest::CrossFade(target, duration) => {
                 if target < self.controller.states.len() {
                     if duration <= 1e-6 {
-                        return Some(self.switch_state_now(target, callbacks, entered, exited));
+                        return Some(self.enter_state_immediately(target, ctx));
                     }
                     self.active_transition = Some(ActiveTransition {
                         target_state: target,
@@ -1193,74 +1179,102 @@ impl Animator {
                         interruption_source: InterruptionSource::None,
                         target_frames: 0,
                     });
-                    *entered = Some(target);
+                    ctx.entered = Some(target);
                 }
             }
         }
         None
     }
 
-    fn switch_state_now(
+    fn enter_state_immediately(
         &mut self,
         target: usize,
-        callbacks: &mut Vec<StateMachineCallback>,
-        entered: &mut Option<usize>,
-        exited: &mut Option<usize>,
+        ctx: &mut AdvanceContext,
     ) -> AnimatorStepResult {
-        *exited = Some(self.current_state);
+        ctx.exited = Some(self.current_state);
         self.current_state = target;
         self.state_time = 0.0;
         self.active_transition = None;
         self.state_frames = 0;
-        *entered = Some(target);
+        ctx.entered = Some(target);
         let sample = self.sample_state(self.current_state, 0.0, 0.0);
         let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
         self.finish(
-            callbacks,
-            *entered,
-            *exited,
+            std::mem::take(&mut ctx.callbacks),
+            ctx.entered,
+            ctx.exited,
             bindings,
             sample.fired_events,
             None,
         )
     }
 
-    fn start_transition_step(
+    fn advance_source_time(&mut self, dt: f32) -> f32 {
+        let source_speed = self
+            .controller
+            .states
+            .get(self.current_state)
+            .map_or(1.0, |s| s.speed);
+        let scaled_source_dt = dt * self.speed * source_speed.max(0.0);
+        let new_time = (self.state_time + scaled_source_dt).max(0.0);
+        self.state_time = new_time;
+        new_time
+    }
+
+    fn current_normalized_time(&self) -> f32 {
+        let source_length = self.state_duration(self.current_state);
+        if source_length > 1e-6 {
+            self.state_time / source_length
+        } else if self.state_time > 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn start_transition(
         &mut self,
-        callbacks: &mut Vec<StateMachineCallback>,
-        entered: &mut Option<usize>,
-        exited: &mut Option<usize>,
+        ctx: &mut AdvanceContext,
         current_norm: f32,
     ) -> Option<AnimatorStepResult> {
-        let active = self.active_transition;
-        if let Some(active) = active {
-            let dst_len = self.state_duration(active.target_state);
-            let dst_norm = if dst_len > 1e-6 {
-                active.target_time / dst_len
-            } else {
-                0.0
-            };
-            let interrupt_tr_idx =
-                self.find_interruption_transition(&active, current_norm, dst_norm);
-            if let Some(tr_idx) = interrupt_tr_idx {
-                let transition = self.controller.transitions[tr_idx].clone();
-                return self.begin_transition(&transition, callbacks, entered, exited);
+        let transition = match self.active_transition {
+            Some(active) => {
+                let tr_idx = self.interrupting_transition_index(active, current_norm)?;
+                self.controller.transitions[tr_idx].clone()
             }
-            return None;
+            None => {
+                let tr_idx = self.find_matching_transition(self.current_state, current_norm)?;
+                self.controller.transitions[tr_idx].clone()
+            }
+        };
+        self.consume_transition_triggers(&transition);
+        let target_idx = self.resolved_target_state(&transition);
+        if transition.duration <= 1e-6 {
+            return Some(self.switch_to_state(target_idx, ctx));
         }
-        if let Some(tr_idx) = self.find_matching_transition(self.current_state, current_norm) {
-            let transition = self.controller.transitions[tr_idx].clone();
-            return self.begin_transition(&transition, callbacks, entered, exited);
-        }
+        self.active_transition = Some(ActiveTransition {
+            target_state: target_idx,
+            elapsed: 0.0,
+            duration: transition.duration,
+            target_time: 0.0,
+            interruption_source: transition.interruption_source,
+            target_frames: 0,
+        });
+        ctx.entered = Some(target_idx);
         None
     }
 
-    fn find_interruption_transition(
+    fn interrupting_transition_index(
         &self,
-        active: &ActiveTransition,
+        active: ActiveTransition,
         current_norm: f32,
-        dst_norm: f32,
     ) -> Option<usize> {
+        let dst_len = self.state_duration(active.target_state);
+        let dst_norm = if dst_len > 1e-6 {
+            active.target_time / dst_len
+        } else {
+            0.0
+        };
         match active.interruption_source {
             InterruptionSource::None => None,
             InterruptionSource::Source => self.find_interrupting_transition(
@@ -1294,57 +1308,7 @@ impl Animator {
         }
     }
 
-    fn begin_transition(
-        &mut self,
-        transition: &StateTransition,
-        callbacks: &mut Vec<StateMachineCallback>,
-        entered: &mut Option<usize>,
-        exited: &mut Option<usize>,
-    ) -> Option<AnimatorStepResult> {
-        self.consume_transition_triggers(transition);
-        let target_idx = self.resolve_transition_target(transition);
-        if transition.duration <= 1e-6 {
-            *exited = Some(self.current_state);
-            self.active_transition = None;
-            self.current_state = target_idx;
-            self.state_time = 0.0;
-            self.state_frames = 0;
-            if self
-                .controller
-                .states
-                .get(self.current_state)
-                .is_some_and(|s| s.is_exit)
-            {
-                self.current_state = self
-                    .controller
-                    .entry_state
-                    .min(self.controller.states.len() - 1);
-            }
-            *entered = Some(self.current_state);
-            let sample = self.sample_state(self.current_state, 0.0, 0.0);
-            let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-            return Some(self.finish(
-                callbacks,
-                *entered,
-                *exited,
-                bindings,
-                sample.fired_events,
-                None,
-            ));
-        }
-        self.active_transition = Some(ActiveTransition {
-            target_state: target_idx,
-            elapsed: 0.0,
-            duration: transition.duration,
-            target_time: 0.0,
-            interruption_source: transition.interruption_source,
-            target_frames: 0,
-        });
-        *entered = Some(target_idx);
-        None
-    }
-
-    fn resolve_transition_target(&self, transition: &StateTransition) -> usize {
+    fn resolved_target_state(&self, transition: &StateTransition) -> usize {
         match transition.target {
             TransitionTarget::State(idx) if idx < self.controller.states.len() => idx,
             TransitionTarget::State(_) | TransitionTarget::Exit => self
@@ -1354,16 +1318,48 @@ impl Animator {
         }
     }
 
+    fn switch_to_state(
+        &mut self,
+        target_idx: usize,
+        ctx: &mut AdvanceContext,
+    ) -> AnimatorStepResult {
+        ctx.exited = Some(self.current_state);
+        self.current_state = target_idx;
+        self.state_time = 0.0;
+        self.active_transition = None;
+        self.state_frames = 0;
+        if self
+            .controller
+            .states
+            .get(self.current_state)
+            .is_some_and(|s| s.is_exit)
+        {
+            self.current_state = self
+                .controller
+                .entry_state
+                .min(self.controller.states.len() - 1);
+        }
+        ctx.entered = Some(self.current_state);
+        let sample = self.sample_state(self.current_state, 0.0, 0.0);
+        let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+        self.finish(
+            std::mem::take(&mut ctx.callbacks),
+            ctx.entered,
+            ctx.exited,
+            bindings,
+            sample.fired_events,
+            None,
+        )
+    }
+
     fn blend_active_transition(
         &mut self,
-        callbacks: &mut Vec<StateMachineCallback>,
-        entered: &mut Option<usize>,
-        exited: &mut Option<usize>,
+        mut tr: ActiveTransition,
         dt: f32,
         prev_time: f32,
         new_time: f32,
-    ) -> Option<AnimatorStepResult> {
-        let mut tr = self.active_transition?;
+        mut ctx: AdvanceContext,
+    ) -> AnimatorStepResult {
         let target_speed = self
             .controller
             .states
@@ -1375,7 +1371,7 @@ impl Animator {
         tr.elapsed += dt * self.speed;
 
         if tr.elapsed >= tr.duration {
-            *exited = Some(self.current_state);
+            ctx.exited = Some(self.current_state);
             self.current_state = tr.target_state;
             self.state_time = tr.target_time;
             self.active_transition = None;
@@ -1394,14 +1390,14 @@ impl Animator {
             }
             let sample = self.sample_state(self.current_state, prev_target_time, self.state_time);
             let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-            return Some(self.finish(
-                callbacks,
-                *entered,
-                *exited,
+            return self.finish(
+                ctx.callbacks,
+                ctx.entered,
+                ctx.exited,
                 bindings,
                 sample.fired_events,
                 None,
-            ));
+            );
         }
 
         tr.target_frames += 1;
@@ -1418,19 +1414,19 @@ impl Animator {
         let mut fired_events = src_sample.fired_events;
         fired_events.extend(dst_sample.fired_events);
         let bindings = self.apply_write_defaults(self.current_state, bindings);
-        Some(self.finish(
-            callbacks,
-            *entered,
-            *exited,
+        self.finish(
+            ctx.callbacks,
+            ctx.entered,
+            ctx.exited,
             bindings,
             fired_events,
             destination_update,
-        ))
+        )
     }
 
     fn finish(
         &mut self,
-        callbacks: &mut Vec<StateMachineCallback>,
+        mut callbacks: Vec<StateMachineCallback>,
         entered: Option<usize>,
         exited: Option<usize>,
         bindings: Vec<SampledBinding>,
@@ -1457,7 +1453,7 @@ impl Animator {
             bindings,
             fired_events,
             diagnostics: self.diagnostics.clone(),
-            callbacks: std::mem::take(callbacks),
+            callbacks,
             writes_transforms: true,
         }
     }

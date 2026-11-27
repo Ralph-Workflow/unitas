@@ -40,260 +40,282 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("AUT-005 initial project compiles cleanly", true, initialReport.CompileSucceeded);
                 Check.Equal("AUT-005 initial runningCompilation is 'new'", "new", initialReport.RunningCompilation);
 
-                string brokenShieldSource =
-                    "using UnityEngine;\n"
-                    + "\n"
-                    + "namespace MyGame.Gameplay\n"
-                    + "{\n"
-                    + "    public class ShieldBooster : MonoBehaviour\n"
-                    + "    {\n"
-                    + "        public int ShieldPoints = 75;\n"
-                    + "        public string ActivationTag = \"ShieldReady\";\n"
-                    + "\n"
-                    + "        public override void Awake()\n"
-                    + "        {\n"
-                    + "            int bad = undeclared_aut005_shield_symbol + ShieldPoints;\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "}\n";
-
                 const string shieldGuid = "30000000000000000000000000000077";
-                ScriptAuthoringResult addedBroken = CodeLoop.AddOrUpdateScript(
-                    tempProject,
-                    "Assets/Gameplay/ShieldBooster.cs",
-                    brokenShieldSource,
-                    shieldGuid);
-
-                Check.Equal("AUT-005 AddOrUpdateScript writes ShieldBooster.cs", true, File.Exists(addedBroken.ScriptPath));
-                Check.Equal("AUT-005 AddOrUpdateScript writes ShieldBooster.cs.meta", true, File.Exists(addedBroken.MetaPath));
-                Check.Equal("AUT-005 AddOrUpdateScript preserves deterministic script GUID", shieldGuid, addedBroken.Guid);
-
-                CodeLoopReport brokenReport = CodeLoop.Run(tempProject, options);
-                Check.Equal("AUT-005 broken MonoBehaviour compileSucceeded is false", false, brokenReport.CompileSucceeded);
-                Check.Equal("AUT-005 broken MonoBehaviour overall succeeded is false", false, brokenReport.Succeeded);
-                Check.Equal("AUT-005 broken MonoBehaviour preserves runningCompilation 'lastValid'", "lastValid", brokenReport.RunningCompilation);
-                Check.That("AUT-005 broken MonoBehaviour reports errorCount >= 1", brokenReport.ErrorCount >= 1);
-
-                DiagnoseEntry? cs0103 = FindDiagnosticById(brokenReport.Diagnostics, "CS0103");
-                Check.That("AUT-005 broken MonoBehaviour returns structured CS0103 diagnostic", cs0103 != null);
-                if (cs0103 != null)
-                {
-                    Check.Equal("AUT-005 CS0103 identifier is CS0103", "CS0103", cs0103.Identifier);
-                    Check.Equal("AUT-005 CS0103 severity is error", "error", cs0103.Severity);
-                    Check.Equal("AUT-005 CS0103 assembly is MyGame.Gameplay", "MyGame.Gameplay", cs0103.Assembly);
-                    Check.Equal("AUT-005 CS0103 file matches ShieldBooster.cs", NormalizeRealPath(addedBroken.ScriptPath), NormalizeRealPath(cs0103.File));
-                    Check.Equal("AUT-005 CS0103 line is 12", 12, cs0103.Line);
-                    Check.Equal("AUT-005 CS0103 column is 23", 23, cs0103.Column);
-                }
-
-                string fixedShieldSource =
-                    "using UnityEngine;\n"
-                    + "\n"
-                    + "namespace MyGame.Gameplay\n"
-                    + "{\n"
-                    + "    public class ShieldBooster : MonoBehaviour\n"
-                    + "    {\n"
-                    + "        public int ShieldPoints = 75;\n"
-                    + "        public string ActivationTag = \"ShieldReady\";\n"
-                    + "        public int TicksExecuted;\n"
-                    + "\n"
-                    + "        public override void Awake()\n"
-                    + "        {\n"
-                    + "            gameObject.name = \"HeroPrefab_\" + ActivationTag + \"_\" + ShieldPoints;\n"
-                    + "            transform.position = new Vector3(ShieldPoints, 1f, 0f);\n"
-                    + "        }\n"
-                    + "\n"
-                    + "        public override void Start()\n"
-                    + "        {\n"
-                    + "            transform.position = new Vector3(ShieldPoints, 2f, 0f);\n"
-                    + "        }\n"
-                    + "\n"
-                    + "        public override void Update()\n"
-                    + "        {\n"
-                    + "            TicksExecuted++;\n"
-                    + "            transform.position = new Vector3(ShieldPoints + TicksExecuted, 2f, 0f);\n"
-                    + "        }\n"
-                    + "\n"
-                    + "        public int ComputeEffectiveShield(int baseArmor)\n"
-                    + "        {\n"
-                    + "            return baseArmor + ShieldPoints;\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "}\n";
-
-                ScriptAuthoringResult fixedScript = CodeLoop.AddOrUpdateScript(
-                    tempProject,
-                    "Assets/Gameplay/ShieldBooster.cs",
-                    fixedShieldSource);
-                Check.Equal("AUT-005 fixing script preserves existing .meta GUID", shieldGuid, fixedScript.Guid);
-
-                string testFilePath = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "GameplayEditTests.cs");
-                File.WriteAllText(
-                    testFilePath,
-                    "using NUnit.Framework;\n"
-                    + "using MyGame.Gameplay;\n"
-                    + "using UnityEngine;\n"
-                    + "\n"
-                    + "namespace MyGame.EditTests\n"
-                    + "{\n"
-                    + "    public class GameplayEditTests\n"
-                    + "    {\n"
-                    + "        [Test]\n"
-                    + "        public void ControllerDefaultHealthIs100()\n"
-                    + "        {\n"
-                    + "            GameObject go = new GameObject(\"AgentLoopActor\");\n"
-                    + "            GameplayController controller = go.AddComponent<GameplayController>();\n"
-                    + "            Assert.AreEqual(100, controller.Health);\n"
-                    + "            Object.Destroy(go);\n"
-                    + "        }\n"
-                    + "\n"
-                    + "        [Test]\n"
-                    + "        public void ShieldBoosterComputesEffectiveShield()\n"
-                    + "        {\n"
-                    + "            GameObject go = new GameObject(\"ShieldActor\");\n"
-                    + "            ShieldBooster booster = go.AddComponent<ShieldBooster>();\n"
-                    + "            Assert.AreEqual(100, booster.ComputeEffectiveShield(25));\n"
-                    + "            Object.Destroy(go);\n"
-                    + "        }\n"
-                    + "    }\n"
-                    + "}\n");
-
-                Dictionary<string, string> serializedFields = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["ShieldPoints"] = "120",
-                    ["ActivationTag"] = "Overcharged"
-                };
-
-                PrefabComponentAttachment attachment = CodeLoop.AttachComponentToPrefab(
-                    tempProject,
-                    "Assets/Prefabs/Hero.prefab",
-                    "Assets/Gameplay/ShieldBooster.cs",
-                    targetObjectName: "HeroRoot",
-                    serializedFields: serializedFields);
-
-                Check.Equal("AUT-005 AttachComponentToPrefab resolves script GUID", shieldGuid, attachment.ScriptGuid);
-                Check.Equal("AUT-005 AttachComponentToPrefab targets HeroRoot", "HeroRoot", attachment.ObjectPath);
-                Check.That("AUT-005 AttachComponentToPrefab assigns valid component fileID", attachment.ComponentFileId > 0);
-
-                ContentUsageSearchResult usagesByName = CodeLoop.FindScriptUsages(tempProject, "ShieldBooster", options);
-                Check.Equal("AUT-005 FindScriptUsages by class name resolves script GUID", shieldGuid, usagesByName.ScriptGuid);
-                Check.Equal("AUT-005 FindScriptUsages by class name resolves full type name", "MyGame.Gameplay.ShieldBooster", usagesByName.ScriptTypeName);
-                Check.That("AUT-005 FindScriptUsages finds usage in prefab and scene", usagesByName.Usages.Count >= 1);
-
-                ContentScriptUsageRecord? prefabUsage = null;
-                for (int i = 0; i < usagesByName.Usages.Count; i++)
-                {
-                    if (string.Equals(usagesByName.Usages[i].AssetKind, "prefab", StringComparison.OrdinalIgnoreCase))
-                    {
-                        prefabUsage = usagesByName.Usages[i];
-                        break;
-                    }
-                }
-
-                Check.That("AUT-005 FindScriptUsages locates Hero.prefab usage", prefabUsage != null);
-                if (prefabUsage != null)
-                {
-                    Check.Equal("AUT-005 prefab usage relative path is Assets/Prefabs/Hero.prefab", "Assets/Prefabs/Hero.prefab", prefabUsage.RelativeAssetPath);
-                    Check.Equal("AUT-005 prefab usage objectPath is HeroRoot", "HeroRoot", prefabUsage.ObjectPath);
-                    Check.Equal("AUT-005 prefab usage scriptGuid matches", shieldGuid, prefabUsage.ScriptGuid);
-                    Check.Equal(
-                        "AUT-005 prefab usage serialized field ShieldPoints is 120",
-                        true,
-                        prefabUsage.SerializedFields.TryGetValue("ShieldPoints", out string? shieldVal) && shieldVal == "120");
-                    Check.Equal(
-                        "AUT-005 prefab usage serialized field ActivationTag is Overcharged",
-                        true,
-                        prefabUsage.SerializedFields.TryGetValue("ActivationTag", out string? tagVal) && tagVal == "Overcharged");
-                }
-
-                ContentUsageSearchResult usagesByGuid = CodeLoop.FindScriptUsages(tempProject, shieldGuid, options);
-                Check.Equal("AUT-005 FindScriptUsages by GUID returns matching usage count", usagesByName.Usages.Count, usagesByGuid.Usages.Count);
-
-                string scenePath = Path.Combine(tempProject, "Assets", "Scenes", "Main.unity");
-                CodeLoopReport fullLoopReport = CodeLoop.Run(
-                    tempProject,
-                    options,
-                    typeFilter: "ShieldBooster",
-                    testRunner: ExecuteProjectTests,
-                    usageQuery: "ShieldBooster",
-                    enterPlayMode: true,
-                    playSceneOrPrefabPath: scenePath,
-                    playTickCount: 3,
-                    playFrameDeltaSeconds: 0.02);
-
-                Check.Equal("AUT-005 full loop after fix compileSucceeded is true", true, fullLoopReport.CompileSucceeded);
-                Check.Equal("AUT-005 full loop after fix overall succeeded is true", true, fullLoopReport.Succeeded);
-                Check.Equal("AUT-005 full loop runningCompilation is 'new'", "new", fullLoopReport.RunningCompilation);
-                Check.Equal("AUT-005 full loop errorCount is 0", 0, fullLoopReport.ErrorCount);
-                Check.That("AUT-005 full loop symbol query finds ShieldBooster", fullLoopReport.Symbols != null && fullLoopReport.Symbols.FindType("MyGame.Gameplay.ShieldBooster") != null);
-
-                Check.That("AUT-005 full loop executes and passes project tests", fullLoopReport.Tests != null && fullLoopReport.Tests.Succeeded);
-                if (fullLoopReport.Tests != null)
-                {
-                    Check.Equal("AUT-005 full loop runs 2 project tests", 2, fullLoopReport.Tests.PassedCount);
-                    Check.Equal("AUT-005 full loop has 0 test failures", 0, fullLoopReport.Tests.FailedCount);
-                }
-
-                Check.That("AUT-005 full loop includes usage search results", fullLoopReport.Usages != null && fullLoopReport.Usages.Usages.Count >= 1);
-                Check.That("AUT-005 full loop enters play mode without manual refresh", fullLoopReport.PlayMode != null && fullLoopReport.PlayMode.Succeeded);
-
-                if (fullLoopReport.PlayMode != null)
-                {
-                    Check.Equal("AUT-005 play mode runs on 'new' compilation", "new", fullLoopReport.PlayMode.RunningCompilation);
-                    Check.Equal("AUT-005 play mode ticks 3 frames", 3, fullLoopReport.PlayMode.TicksExecuted);
-                    Check.That("AUT-005 play mode instantiates and runs newly added MonoBehaviour", fullLoopReport.PlayMode.ActiveScriptCount >= 1);
-
-                    bool sawShieldBoosterInPlay = false;
-                    for (int i = 0; i < fullLoopReport.PlayMode.ExecutedBehaviours.Count; i++)
-                    {
-                        PlayModeBehaviourObservation obs = fullLoopReport.PlayMode.ExecutedBehaviours[i];
-                        if (string.Equals(obs.FullTypeName, "MyGame.Gameplay.ShieldBooster", StringComparison.Ordinal))
-                        {
-                            sawShieldBoosterInPlay = true;
-                            Check.Equal("AUT-005 play mode ShieldBooster is enabled", true, obs.Enabled);
-                            Check.Equal("AUT-005 play mode ShieldBooster Awake mutated GameObject name", "HeroPrefab_ShieldReady_75", obs.GameObjectName);
-                            Check.Equal("AUT-005 play mode ShieldBooster Update advanced position x across 3 ticks", 78f, obs.PositionX);
-                            Check.Equal("AUT-005 play mode ShieldBooster Start set position y to 2", 2f, obs.PositionY);
-                        }
-                    }
-
-                    Check.Equal("AUT-005 play mode executed ShieldBooster on prefab instance in scene", true, sawShieldBoosterInPlay);
-                }
-
-                TextWriter savedOut = Console.Out;
-                try
-                {
-                    using (StringWriter usagesOut = new StringWriter())
-                    {
-                        Console.SetOut(usagesOut);
-                        int usagesExit = Unitas.Scripting.Program.Main(new[]
-                        {
-                            "usages",
-                            tempProject,
-                            "--script",
-                            "ShieldBooster"
-                        });
-                        Console.SetOut(savedOut);
-
-                        Check.Equal("AUT-005 CLI usages exits 0", 0, usagesExit);
-                        using (JsonDocument usagesDoc = JsonDocument.Parse(usagesOut.ToString()))
-                        {
-                            JsonElement root = usagesDoc.RootElement;
-                            Check.Equal("AUT-005 CLI usages JSON scriptGuid matches", shieldGuid, root.GetProperty("scriptGuid").GetString() ?? string.Empty);
-                            JsonElement usagesArr = root.GetProperty("usages");
-                            Check.That("AUT-005 CLI usages JSON lists Hero.prefab", usagesArr.GetArrayLength() >= 1);
-                        }
-                    }
-                }
-                finally
-                {
-                    Console.SetOut(savedOut);
-                }
+                VerifyAut005BrokenAndFixedScriptAuthoring(tempProject, options, shieldGuid);
+                VerifyAut005PrefabAttachmentAndUsages(tempProject, options, shieldGuid);
+                VerifyAut005FullLoopAndCli(tempProject, options, shieldGuid);
             }
             finally
             {
                 CodeLoop.DefaultTestRunner = previousRunner;
                 DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void VerifyAut005BrokenAndFixedScriptAuthoring(
+            string tempProject,
+            ScriptCompilationOptions options,
+            string shieldGuid)
+        {
+            string brokenShieldSource =
+                "using UnityEngine;\n"
+                + "\n"
+                + "namespace MyGame.Gameplay\n"
+                + "{\n"
+                + "    public class ShieldBooster : MonoBehaviour\n"
+                + "    {\n"
+                + "        public int ShieldPoints = 75;\n"
+                + "        public string ActivationTag = \"ShieldReady\";\n"
+                + "\n"
+                + "        public override void Awake()\n"
+                + "        {\n"
+                + "            int bad = undeclared_aut005_shield_symbol + ShieldPoints;\n"
+                + "        }\n"
+                + "    }\n"
+                + "}\n";
+
+            ScriptAuthoringResult addedBroken = CodeLoop.AddOrUpdateScript(
+                tempProject,
+                "Assets/Gameplay/ShieldBooster.cs",
+                brokenShieldSource,
+                shieldGuid);
+
+            Check.Equal("AUT-005 AddOrUpdateScript writes ShieldBooster.cs", true, File.Exists(addedBroken.ScriptPath));
+            Check.Equal("AUT-005 AddOrUpdateScript writes ShieldBooster.cs.meta", true, File.Exists(addedBroken.MetaPath));
+            Check.Equal("AUT-005 AddOrUpdateScript preserves deterministic script GUID", shieldGuid, addedBroken.Guid);
+
+            CodeLoopReport brokenReport = CodeLoop.Run(tempProject, options);
+            Check.Equal("AUT-005 broken MonoBehaviour compileSucceeded is false", false, brokenReport.CompileSucceeded);
+            Check.Equal("AUT-005 broken MonoBehaviour overall succeeded is false", false, brokenReport.Succeeded);
+            Check.Equal("AUT-005 broken MonoBehaviour preserves runningCompilation 'lastValid'", "lastValid", brokenReport.RunningCompilation);
+            Check.That("AUT-005 broken MonoBehaviour reports errorCount >= 1", brokenReport.ErrorCount >= 1);
+
+            DiagnoseEntry? cs0103 = FindDiagnosticById(brokenReport.Diagnostics, "CS0103");
+            Check.That("AUT-005 broken MonoBehaviour returns structured CS0103 diagnostic", cs0103 != null);
+            if (cs0103 != null)
+            {
+                Check.Equal("AUT-005 CS0103 identifier is CS0103", "CS0103", cs0103.Identifier);
+                Check.Equal("AUT-005 CS0103 severity is error", "error", cs0103.Severity);
+                Check.Equal("AUT-005 CS0103 assembly is MyGame.Gameplay", "MyGame.Gameplay", cs0103.Assembly);
+                Check.Equal("AUT-005 CS0103 file matches ShieldBooster.cs", NormalizeRealPath(addedBroken.ScriptPath), NormalizeRealPath(cs0103.File));
+                Check.Equal("AUT-005 CS0103 line is 12", 12, cs0103.Line);
+                Check.Equal("AUT-005 CS0103 column is 23", 23, cs0103.Column);
+            }
+
+            string fixedShieldSource =
+                "using UnityEngine;\n"
+                + "\n"
+                + "namespace MyGame.Gameplay\n"
+                + "{\n"
+                + "    public class ShieldBooster : MonoBehaviour\n"
+                + "    {\n"
+                + "        public int ShieldPoints = 75;\n"
+                + "        public string ActivationTag = \"ShieldReady\";\n"
+                + "        public int TicksExecuted;\n"
+                + "\n"
+                + "        public override void Awake()\n"
+                + "        {\n"
+                + "            gameObject.name = \"HeroPrefab_\" + ActivationTag + \"_\" + ShieldPoints;\n"
+                + "            transform.position = new Vector3(ShieldPoints, 1f, 0f);\n"
+                + "        }\n"
+                + "\n"
+                + "        public override void Start()\n"
+                + "        {\n"
+                + "            transform.position = new Vector3(ShieldPoints, 2f, 0f);\n"
+                + "        }\n"
+                + "\n"
+                + "        public override void Update()\n"
+                + "        {\n"
+                + "            TicksExecuted++;\n"
+                + "            transform.position = new Vector3(ShieldPoints + TicksExecuted, 2f, 0f);\n"
+                + "        }\n"
+                + "\n"
+                + "        public int ComputeEffectiveShield(int baseArmor)\n"
+                + "        {\n"
+                + "            return baseArmor + ShieldPoints;\n"
+                + "        }\n"
+                + "    }\n"
+                + "}\n";
+
+            ScriptAuthoringResult fixedScript = CodeLoop.AddOrUpdateScript(
+                tempProject,
+                "Assets/Gameplay/ShieldBooster.cs",
+                fixedShieldSource);
+            Check.Equal("AUT-005 fixing script preserves existing .meta GUID", shieldGuid, fixedScript.Guid);
+
+            string testFilePath = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "GameplayEditTests.cs");
+            File.WriteAllText(
+                testFilePath,
+                "using NUnit.Framework;\n"
+                + "using MyGame.Gameplay;\n"
+                + "using UnityEngine;\n"
+                + "\n"
+                + "namespace MyGame.EditTests\n"
+                + "{\n"
+                + "    public class GameplayEditTests\n"
+                + "    {\n"
+                + "        [Test]\n"
+                + "        public void ControllerDefaultHealthIs100()\n"
+                + "        {\n"
+                + "            GameObject go = new GameObject(\"AgentLoopActor\");\n"
+                + "            GameplayController controller = go.AddComponent<GameplayController>();\n"
+                + "            Assert.AreEqual(100, controller.Health);\n"
+                + "            Object.Destroy(go);\n"
+                + "        }\n"
+                + "\n"
+                + "        [Test]\n"
+                + "        public void ShieldBoosterComputesEffectiveShield()\n"
+                + "        {\n"
+                + "            GameObject go = new GameObject(\"ShieldActor\");\n"
+                + "            ShieldBooster booster = go.AddComponent<ShieldBooster>();\n"
+                + "            Assert.AreEqual(100, booster.ComputeEffectiveShield(25));\n"
+                + "            Object.Destroy(go);\n"
+                + "        }\n"
+                + "    }\n"
+                + "}\n");
+        }
+
+        private static void VerifyAut005PrefabAttachmentAndUsages(
+            string tempProject,
+            ScriptCompilationOptions options,
+            string shieldGuid)
+        {
+            Dictionary<string, string> serializedFields = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ShieldPoints"] = "120",
+                ["ActivationTag"] = "Overcharged"
+            };
+
+            PrefabComponentAttachment attachment = CodeLoop.AttachComponentToPrefab(
+                tempProject,
+                "Assets/Prefabs/Hero.prefab",
+                "Assets/Gameplay/ShieldBooster.cs",
+                targetObjectName: "HeroRoot",
+                serializedFields: serializedFields);
+
+            Check.Equal("AUT-005 AttachComponentToPrefab resolves script GUID", shieldGuid, attachment.ScriptGuid);
+            Check.Equal("AUT-005 AttachComponentToPrefab targets HeroRoot", "HeroRoot", attachment.ObjectPath);
+            Check.That("AUT-005 AttachComponentToPrefab assigns valid component fileID", attachment.ComponentFileId > 0);
+
+            ContentUsageSearchResult usagesByName = CodeLoop.FindScriptUsages(tempProject, "ShieldBooster", options);
+            Check.Equal("AUT-005 FindScriptUsages by class name resolves script GUID", shieldGuid, usagesByName.ScriptGuid);
+            Check.Equal("AUT-005 FindScriptUsages by class name resolves full type name", "MyGame.Gameplay.ShieldBooster", usagesByName.ScriptTypeName);
+            Check.That("AUT-005 FindScriptUsages finds usage in prefab and scene", usagesByName.Usages.Count >= 1);
+
+            ContentScriptUsageRecord? prefabUsage = null;
+            for (int i = 0; i < usagesByName.Usages.Count; i++)
+            {
+                if (string.Equals(usagesByName.Usages[i].AssetKind, "prefab", StringComparison.OrdinalIgnoreCase))
+                {
+                    prefabUsage = usagesByName.Usages[i];
+                    break;
+                }
+            }
+
+            Check.That("AUT-005 FindScriptUsages locates Hero.prefab usage", prefabUsage != null);
+            if (prefabUsage != null)
+            {
+                Check.Equal("AUT-005 prefab usage relative path is Assets/Prefabs/Hero.prefab", "Assets/Prefabs/Hero.prefab", prefabUsage.RelativeAssetPath);
+                Check.Equal("AUT-005 prefab usage objectPath is HeroRoot", "HeroRoot", prefabUsage.ObjectPath);
+                Check.Equal("AUT-005 prefab usage scriptGuid matches", shieldGuid, prefabUsage.ScriptGuid);
+                Check.Equal(
+                    "AUT-005 prefab usage serialized field ShieldPoints is 120",
+                    true,
+                    prefabUsage.SerializedFields.TryGetValue("ShieldPoints", out string? shieldVal) && shieldVal == "120");
+                Check.Equal(
+                    "AUT-005 prefab usage serialized field ActivationTag is Overcharged",
+                    true,
+                    prefabUsage.SerializedFields.TryGetValue("ActivationTag", out string? tagVal) && tagVal == "Overcharged");
+            }
+
+            ContentUsageSearchResult usagesByGuid = CodeLoop.FindScriptUsages(tempProject, shieldGuid, options);
+            Check.Equal("AUT-005 FindScriptUsages by GUID returns matching usage count", usagesByName.Usages.Count, usagesByGuid.Usages.Count);
+        }
+
+        private static void VerifyAut005FullLoopAndCli(
+            string tempProject,
+            ScriptCompilationOptions options,
+            string shieldGuid)
+        {
+            string scenePath = Path.Combine(tempProject, "Assets", "Scenes", "Main.unity");
+            CodeLoopReport fullLoopReport = CodeLoop.Run(
+                tempProject,
+                options,
+                typeFilter: "ShieldBooster",
+                testRunner: ExecuteProjectTests,
+                usageQuery: "ShieldBooster",
+                enterPlayMode: true,
+                playSceneOrPrefabPath: scenePath,
+                playTickCount: 3,
+                playFrameDeltaSeconds: 0.02);
+
+            Check.Equal("AUT-005 full loop after fix compileSucceeded is true", true, fullLoopReport.CompileSucceeded);
+            Check.Equal("AUT-005 full loop after fix overall succeeded is true", true, fullLoopReport.Succeeded);
+            Check.Equal("AUT-005 full loop runningCompilation is 'new'", "new", fullLoopReport.RunningCompilation);
+            Check.Equal("AUT-005 full loop errorCount is 0", 0, fullLoopReport.ErrorCount);
+            Check.That("AUT-005 full loop symbol query finds ShieldBooster", fullLoopReport.Symbols != null && fullLoopReport.Symbols.FindType("MyGame.Gameplay.ShieldBooster") != null);
+
+            Check.That("AUT-005 full loop executes and passes project tests", fullLoopReport.Tests != null && fullLoopReport.Tests.Succeeded);
+            if (fullLoopReport.Tests != null)
+            {
+                Check.Equal("AUT-005 full loop runs 2 project tests", 2, fullLoopReport.Tests.PassedCount);
+                Check.Equal("AUT-005 full loop has 0 test failures", 0, fullLoopReport.Tests.FailedCount);
+            }
+
+            Check.That("AUT-005 full loop includes usage search results", fullLoopReport.Usages != null && fullLoopReport.Usages.Usages.Count >= 1);
+            Check.That("AUT-005 full loop enters play mode without manual refresh", fullLoopReport.PlayMode != null && fullLoopReport.PlayMode.Succeeded);
+
+            if (fullLoopReport.PlayMode != null)
+            {
+                Check.Equal("AUT-005 play mode runs on 'new' compilation", "new", fullLoopReport.PlayMode.RunningCompilation);
+                Check.Equal("AUT-005 play mode ticks 3 frames", 3, fullLoopReport.PlayMode.TicksExecuted);
+                Check.That("AUT-005 play mode instantiates and runs newly added MonoBehaviour", fullLoopReport.PlayMode.ActiveScriptCount >= 1);
+
+                bool sawShieldBoosterInPlay = false;
+                for (int i = 0; i < fullLoopReport.PlayMode.ExecutedBehaviours.Count; i++)
+                {
+                    PlayModeBehaviourObservation obs = fullLoopReport.PlayMode.ExecutedBehaviours[i];
+                    if (string.Equals(obs.FullTypeName, "MyGame.Gameplay.ShieldBooster", StringComparison.Ordinal))
+                    {
+                        sawShieldBoosterInPlay = true;
+                        Check.Equal("AUT-005 play mode ShieldBooster is enabled", true, obs.Enabled);
+                        Check.Equal("AUT-005 play mode ShieldBooster Awake mutated GameObject name", "HeroPrefab_ShieldReady_75", obs.GameObjectName);
+                        Check.Equal("AUT-005 play mode ShieldBooster Update advanced position x across 3 ticks", 78f, obs.PositionX);
+                        Check.Equal("AUT-005 play mode ShieldBooster Start set position y to 2", 2f, obs.PositionY);
+                    }
+                }
+
+                Check.Equal("AUT-005 play mode executed ShieldBooster on prefab instance in scene", true, sawShieldBoosterInPlay);
+            }
+
+            TextWriter savedOut = Console.Out;
+            try
+            {
+                using (StringWriter usagesOut = new StringWriter())
+                {
+                    Console.SetOut(usagesOut);
+                    int usagesExit = Unitas.Scripting.Program.Main(new[]
+                    {
+                        "usages",
+                        tempProject,
+                        "--script",
+                        "ShieldBooster"
+                    });
+                    Console.SetOut(savedOut);
+
+                    Check.Equal("AUT-005 CLI usages exits 0", 0, usagesExit);
+                    using (JsonDocument usagesDoc = JsonDocument.Parse(usagesOut.ToString()))
+                    {
+                        JsonElement root = usagesDoc.RootElement;
+                        Check.Equal("AUT-005 CLI usages JSON scriptGuid matches", shieldGuid, root.GetProperty("scriptGuid").GetString() ?? string.Empty);
+                        JsonElement usagesArr = root.GetProperty("usages");
+                        Check.That("AUT-005 CLI usages JSON lists Hero.prefab", usagesArr.GetArrayLength() >= 1);
+                    }
+                }
+            }
+            finally
+            {
+                Console.SetOut(savedOut);
             }
         }
 

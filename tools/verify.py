@@ -418,6 +418,14 @@ FIRST_PARTY_SOURCE_ROOTS = (
     "scripts",
     "tools",
 )
+MAX_FILE_LINES = 3000
+MAX_FUNCTION_LINES = 200
+SIZE_SOURCE_SUFFIXES = (".cs", ".py", ".rs")
+SIZE_EXCLUDED_PREFIX = "bridge/Unitas.Bridge.Tests/Fixtures/"
+CSHARP_TYPE_DECL_RE = re.compile(r"\b(?:class|struct|interface|enum|record|namespace)\b")
+CSHARP_BLOCK_KEYWORD_RE = re.compile(
+    r"\b(?:if|else|for|foreach|while|switch|try|catch|finally|using|lock|fixed|checked|unchecked|do|new|return|yield|throw|when)\b"
+)
 
 
 def read_policy_corpus() -> dict[str, str]:
@@ -2247,6 +2255,123 @@ def run_dotnet_format(root: Path = REPO_ROOT, cache: Path = DOTNET_FORMAT_CACHE)
     return 0
 
 
+def _skip_size_dir(name: str, parent_name: str) -> bool:
+    if name.startswith("."):
+        return True
+    if name == "bin":
+        return parent_name != "src"
+    return name in SKIP_DIR_NAMES
+
+
+def iter_size_source_files(root: Path = REPO_ROOT) -> Iterator[Path]:
+    for walk_root, dirnames, filenames in os.walk(root):
+        parent_name = Path(walk_root).name
+        dirnames[:] = [name for name in sorted(dirnames) if not _skip_size_dir(name, parent_name)]
+        for filename in sorted(filenames):
+            path = Path(walk_root) / filename
+            if path.suffix not in SIZE_SOURCE_SUFFIXES:
+                continue
+            relative = display_path(path, root).replace("\\", "/")
+            if relative.startswith(SIZE_EXCLUDED_PREFIX):
+                continue
+            yield path
+
+
+def python_size_findings(text: str, relative: str) -> list[str]:
+    try:
+        tree = ast.parse(text, filename=relative)
+    except SyntaxError:
+        return []
+    findings: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.end_lineno:
+            span = node.end_lineno - node.lineno + 1
+            if span > MAX_FUNCTION_LINES:
+                findings.append(
+                    f"{relative}:{node.lineno}: Python function {node.name!r} exceeds "
+                    f"{MAX_FUNCTION_LINES} lines ({span} lines)"
+                )
+    return findings
+
+
+def strip_csharp_line(line: str) -> str:
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char == "/" and line[index : index + 2] == "//":
+            break
+        if char in ('"', "'"):
+            quote = char
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def classify_csharp_brace(header: str, parent_kind: str) -> str:
+    if CSHARP_TYPE_DECL_RE.search(header):
+        return "type"
+    if parent_kind == "type" and "(" in header:
+        before_paren = header.split("(", 1)[0]
+        if not CSHARP_BLOCK_KEYWORD_RE.search(before_paren) and "=>" not in before_paren:
+            return "method"
+    return "block"
+
+
+def csharp_size_findings(lines: Sequence[str], relative: str) -> list[str]:
+    findings: list[str] = []
+    stack: list[tuple[str, int, str]] = []
+    pending = ""
+    for lineno, raw_line in enumerate(lines, start=1):
+        for char in strip_csharp_line(raw_line):
+            if char == "{":
+                header = pending.strip()
+                parent_kind = stack[-1][0] if stack else ""
+                kind = classify_csharp_brace(header, parent_kind)
+                stack.append((kind, lineno, header))
+                pending = ""
+            elif char == "}":
+                pending = ""
+                if stack:
+                    kind, start_line, _ = stack.pop()
+                    span = lineno - start_line + 1
+                    if kind == "method" and span > MAX_FUNCTION_LINES:
+                        findings.append(
+                            f"{relative}:{start_line}: C# method exceeds "
+                            f"{MAX_FUNCTION_LINES} lines ({span} lines)"
+                        )
+            elif char == ";":
+                pending = ""
+            else:
+                pending += char
+    return findings
+
+
+def check_size(root: Path = REPO_ROOT) -> list[str]:
+    findings: list[str] = []
+    for path in iter_size_source_files(root):
+        relative = display_path(path, root)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) > MAX_FILE_LINES:
+            findings.append(
+                f"{relative}:1: file exceeds {MAX_FILE_LINES} lines ({len(lines)} lines)"
+            )
+        if path.suffix == ".py":
+            findings.extend(python_size_findings(text, relative))
+        elif path.suffix == ".cs":
+            findings.extend(csharp_size_findings(lines, relative))
+    return findings
+
+
 GATES: dict[str, Callable[[], list[str]]] = {
     "banned": check_banned,
     "bypass": check_bypass,
@@ -2254,6 +2379,7 @@ GATES: dict[str, Callable[[], list[str]]] = {
     "deps": check_dependencies,
     "policy": check_policy,
     "secret": check_secrets,
+    "size": check_size,
     "zones": check_zones,
 }
 

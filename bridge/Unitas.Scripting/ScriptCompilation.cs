@@ -251,8 +251,71 @@ namespace Unitas.Scripting
             allAssemblies.AddRange(customAssemblies);
             allAssemblies.AddRange(predefinedAssemblies);
 
-            Dictionary<string, AssemblyDefinitionModel> modelsByName =
-                new Dictionary<string, AssemblyDefinitionModel>(StringComparer.Ordinal);
+            EvaluateAssembliesAndDependencies(
+                fullProjectRoot,
+                allAssemblies,
+                baseDefines,
+                effectiveOptions,
+                diagnostics,
+                out Dictionary<string, AssemblyDefinitionModel> modelsByName,
+                out Dictionary<string, HashSet<string>> assemblyDefinesMap,
+                out Dictionary<string, ResponseFileOptions> assemblyRspMap,
+                out Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+                out Dictionary<string, List<string>> resolvedDeps);
+
+            List<string> topoOrder = TopologicalSortAndDetectCycles(allAssemblies, resolvedDeps, modelsByName, diagnostics);
+
+            ValidateAssemblyDllImports(
+                allAssemblies,
+                exclusionMap,
+                scriptsByAssembly,
+                assemblyDefinesMap,
+                nativePluginsByName,
+                effectiveOptions,
+                diagnostics);
+
+            if (HasErrorDiagnostics(diagnostics))
+            {
+                List<CompiledAssemblyRecord> failedRecords = BuildRecordsWithoutCompile(
+                    allAssemblies,
+                    outputDirectory,
+                    scriptsByAssembly,
+                    assemblyDefinesMap,
+                    resolvedDeps,
+                    exclusionMap);
+                return BuildFailedResult(outputDirectory, failedRecords, diagnostics);
+            }
+
+            return ExecuteStagedCompilation(
+                outputDirectory,
+                effectiveOptions,
+                topoOrder,
+                modelsByName,
+                scriptsByAssembly,
+                assemblyDefinesMap,
+                assemblyRspMap,
+                exclusionMap,
+                resolvedDeps,
+                autoReferencedManagedDlls,
+                allCompatibleManagedDllsByFileName,
+                pathToGuid,
+                pluginRecords,
+                diagnostics);
+        }
+
+        private static void EvaluateAssembliesAndDependencies(
+            string fullProjectRoot,
+            List<AssemblyDefinitionModel> allAssemblies,
+            HashSet<string> baseDefines,
+            ScriptCompilationOptions effectiveOptions,
+            List<ScriptDiagnostic> diagnostics,
+            out Dictionary<string, AssemblyDefinitionModel> modelsByName,
+            out Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            out Dictionary<string, ResponseFileOptions> assemblyRspMap,
+            out Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+            out Dictionary<string, List<string>> resolvedDeps)
+        {
+            modelsByName = new Dictionary<string, AssemblyDefinitionModel>(StringComparer.Ordinal);
             Dictionary<string, AssemblyDefinitionModel> modelsByGuid =
                 new Dictionary<string, AssemblyDefinitionModel>(StringComparer.OrdinalIgnoreCase);
 
@@ -266,12 +329,9 @@ namespace Unitas.Scripting
                 }
             }
 
-            Dictionary<string, HashSet<string>> assemblyDefinesMap =
-                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-            Dictionary<string, ResponseFileOptions> assemblyRspMap =
-                new Dictionary<string, ResponseFileOptions>(StringComparer.Ordinal);
-            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap =
-                new Dictionary<string, (bool IsExcluded, string Reason)>(StringComparer.Ordinal);
+            assemblyDefinesMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            assemblyRspMap = new Dictionary<string, ResponseFileOptions>(StringComparer.Ordinal);
+            exclusionMap = new Dictionary<string, (bool IsExcluded, string Reason)>(StringComparer.Ordinal);
 
             for (int i = 0; i < allAssemblies.Count; i++)
             {
@@ -308,7 +368,7 @@ namespace Unitas.Scripting
                 exclusionMap[model.Name] = (false, string.Empty);
             }
 
-            Dictionary<string, List<string>> resolvedDeps = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            resolvedDeps = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             for (int i = 0; i < allAssemblies.Count; i++)
             {
                 AssemblyDefinitionModel model = allAssemblies[i];
@@ -360,9 +420,17 @@ namespace Unitas.Scripting
                     }
                 }
             }
+        }
 
-            List<string> topoOrder = TopologicalSortAndDetectCycles(allAssemblies, resolvedDeps, modelsByName, diagnostics);
-
+        private static void ValidateAssemblyDllImports(
+            List<AssemblyDefinitionModel> allAssemblies,
+            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            Dictionary<string, DiscoveredPluginRecord> nativePluginsByName,
+            ScriptCompilationOptions effectiveOptions,
+            List<ScriptDiagnostic> diagnostics)
+        {
             for (int i = 0; i < allAssemblies.Count; i++)
             {
                 AssemblyDefinitionModel model = allAssemblies[i];
@@ -409,19 +477,24 @@ namespace Unitas.Scripting
                     }
                 }
             }
+        }
 
-            if (HasErrorDiagnostics(diagnostics))
-            {
-                List<CompiledAssemblyRecord> failedRecords = BuildRecordsWithoutCompile(
-                    allAssemblies,
-                    outputDirectory,
-                    scriptsByAssembly,
-                    assemblyDefinesMap,
-                    resolvedDeps,
-                    exclusionMap);
-                return BuildFailedResult(outputDirectory, failedRecords, diagnostics);
-            }
-
+        private static ScriptCompilationResult ExecuteStagedCompilation(
+            string outputDirectory,
+            ScriptCompilationOptions effectiveOptions,
+            List<string> topoOrder,
+            Dictionary<string, AssemblyDefinitionModel> modelsByName,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            Dictionary<string, ResponseFileOptions> assemblyRspMap,
+            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+            Dictionary<string, List<string>> resolvedDeps,
+            List<string> autoReferencedManagedDlls,
+            Dictionary<string, string> allCompatibleManagedDllsByFileName,
+            Dictionary<string, string> pathToGuid,
+            List<DiscoveredPluginRecord> pluginRecords,
+            List<ScriptDiagnostic> diagnostics)
+        {
             string stagingDir = Path.Combine(
                 Path.GetTempPath(),
                 "unitas_script_staging_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
@@ -431,267 +504,67 @@ namespace Unitas.Scripting
             {
                 Dictionary<string, string> previousHashes = LoadCompilationState(outputDirectory);
                 Dictionary<string, string> newHashes = new Dictionary<string, string>(StringComparer.Ordinal);
-                HashSet<string> dirtyAssemblies = new HashSet<string>(StringComparer.Ordinal);
 
                 IReadOnlyList<string> engineReferenceDlls = ResolveEngineAndBaseReferences(effectiveOptions);
 
-                List<CompiledAssemblyRecord> compiledRecords = new List<CompiledAssemblyRecord>();
-                List<string> recompiledNames = new List<string>();
-                Dictionary<string, string> compiledDllPathByAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
-
-                for (int i = 0; i < topoOrder.Count; i++)
-                {
-                    string asmName = topoOrder[i];
-                    AssemblyDefinitionModel model = modelsByName[asmName];
-                    (bool isExcluded, string exclusionReason) = exclusionMap[asmName];
-                    List<string> sources = scriptsByAssembly.TryGetValue(asmName, out List<string>? foundSources)
-                        ? foundSources
-                        : new List<string>();
-
-                    List<string> sortedDefines = new List<string>(assemblyDefinesMap[asmName]);
-                    sortedDefines.Sort(StringComparer.Ordinal);
-                    List<string> directDeps = resolvedDeps[asmName];
-                    string finalDllPath = Path.Combine(outputDirectory, asmName + ".dll");
-
-                    if (isExcluded || sources.Count == 0)
-                    {
-                        compiledRecords.Add(new CompiledAssemblyRecord(
-                            asmName,
-                            isExcluded ? string.Empty : finalDllPath,
-                            sources,
-                            sortedDefines,
-                            Array.Empty<string>(),
-                            directDeps,
-                            false,
-                            isExcluded,
-                            exclusionReason));
-                        continue;
-                    }
-
-                    List<string> externalRefs = BuildAssemblyReferencePaths(
-                        model,
-                        assemblyRspMap[asmName],
-                        engineReferenceDlls,
-                        autoReferencedManagedDlls,
-                        allCompatibleManagedDllsByFileName,
-                        directDeps,
-                        compiledDllPathByAssembly);
-
-                    string inputHash = ComputeAssemblyInputHash(
-                        model,
-                        sources,
-                        sortedDefines,
-                        assemblyRspMap[asmName],
-                        directDeps,
-                        newHashes);
-                    newHashes[asmName] = inputHash;
-
-                    bool dependencyRecompiled = false;
-                    for (int depIdx = 0; depIdx < directDeps.Count; depIdx++)
-                    {
-                        if (dirtyAssemblies.Contains(directDeps[depIdx]))
-                        {
-                            dependencyRecompiled = true;
-                            break;
-                        }
-                    }
-
-                    bool needsRecompile = dependencyRecompiled
-                        || !File.Exists(finalDllPath)
-                        || !previousHashes.TryGetValue(asmName, out string? oldHash)
-                        || !string.Equals(oldHash, inputHash, StringComparison.Ordinal);
-
-                    if (!needsRecompile)
-                    {
-                        compiledDllPathByAssembly[asmName] = finalDllPath;
-                        compiledRecords.Add(new CompiledAssemblyRecord(
-                            asmName,
-                            finalDllPath,
-                            sources,
-                            sortedDefines,
-                            externalRefs,
-                            directDeps,
-                            false,
-                            false,
-                            string.Empty));
-                        continue;
-                    }
-
-                    dirtyAssemblies.Add(asmName);
-                    string stagedDllPath = Path.Combine(stagingDir, asmName + ".dll");
-                    bool compileOk = RunCscCompilation(
-                        asmName,
-                        stagedDllPath,
-                        sources,
-                        sortedDefines,
-                        externalRefs,
-                        model.AllowUnsafeCode || assemblyRspMap[asmName].AllowUnsafe,
-                        assemblyRspMap[asmName],
-                        !effectiveOptions.IsEditor,
-                        diagnostics);
-
-                    if (!compileOk || HasErrorDiagnostics(diagnostics))
-                    {
-                        return BuildFailedResult(outputDirectory, compiledRecords, diagnostics);
-                    }
-
-                    compiledDllPathByAssembly[asmName] = stagedDllPath;
-                    recompiledNames.Add(asmName);
-                    compiledRecords.Add(new CompiledAssemblyRecord(
-                        asmName,
-                        finalDllPath,
-                        sources,
-                        sortedDefines,
-                        externalRefs,
-                        directDeps,
-                        true,
-                        false,
-                        string.Empty));
-                }
-
-                List<ScriptGuidBinding> allBindings = new List<ScriptGuidBinding>();
-                List<RuntimeInitializeMethodBinding> allRuntimeInitMethods = new List<RuntimeInitializeMethodBinding>();
-                List<EditorCallableMethodBinding> allEditorCallableMethods = new List<EditorCallableMethodBinding>();
-                for (int i = 0; i < topoOrder.Count; i++)
-                {
-                    string asmName = topoOrder[i];
-                    if (exclusionMap[asmName].IsExcluded)
-                    {
-                        continue;
-                    }
-
-                    if (!scriptsByAssembly.TryGetValue(asmName, out List<string>? sources) || sources.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    List<ScriptGuidBinding> asmBindings = ScriptAnalyzerAndGlueGenerator.DiscoverScriptBindingsForAssembly(
-                        asmName,
-                        sources,
-                        assemblyDefinesMap[asmName],
-                        pathToGuid);
-                    allBindings.AddRange(asmBindings);
-
-                    List<RuntimeInitializeMethodBinding> asmInitMethods = ScriptAnalyzerAndGlueGenerator.DiscoverRuntimeInitializeMethodsForAssembly(
-                        sources,
-                        assemblyDefinesMap[asmName]);
-                    allRuntimeInitMethods.AddRange(asmInitMethods);
-
-                    List<EditorCallableMethodBinding> asmEditorCallableMethods = ScriptAnalyzerAndGlueGenerator.DiscoverEditorCallableMethodsForAssembly(
-                        sources,
-                        assemblyDefinesMap[asmName]);
-                    allEditorCallableMethods.AddRange(asmEditorCallableMethods);
-                }
-
-                string? generatedGlueDllPath = null;
-                string? generatedGlueSourcePath = null;
-
-                if (effectiveOptions.EmitGeneratedGlue
-                    && (allBindings.Count > 0 || allRuntimeInitMethods.Count > 0 || allEditorCallableMethods.Count > 0))
-                {
-                    string finalGlueDll = Path.Combine(outputDirectory, GeneratedGlueAssemblyName + ".dll");
-                    string glueObjDir = Path.Combine(outputDirectory, "obj");
-                    Directory.CreateDirectory(glueObjDir);
-                    generatedGlueSourcePath = Path.Combine(glueObjDir, "Unitas.Generated.g.cs");
-
-                    string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(
-                        allBindings,
-                        Array.Empty<SerializableTypeBinding>(),
-                        allRuntimeInitMethods,
-                        allEditorCallableMethods);
-                    string stagedGlueSource = Path.Combine(stagingDir, "Unitas.Generated.g.cs");
-                    File.WriteAllText(stagedGlueSource, glueSource, Encoding.UTF8);
-
-                    string glueHash = ComputeSha256Text(glueSource);
-                    newHashes[GeneratedGlueAssemblyName] = glueHash;
-
-                    bool glueNeedsCompile = recompiledNames.Count > 0
-                        || !File.Exists(finalGlueDll)
-                        || !previousHashes.TryGetValue(GeneratedGlueAssemblyName, out string? prevGlueHash)
-                        || !string.Equals(prevGlueHash, glueHash, StringComparison.Ordinal);
-
-                    if (glueNeedsCompile)
-                    {
-                        List<string> glueRefs = new List<string>(engineReferenceDlls);
-                        foreach (KeyValuePair<string, string> kv in compiledDllPathByAssembly)
-                        {
-                            if (!glueRefs.Contains(kv.Value))
-                            {
-                                glueRefs.Add(kv.Value);
-                            }
-                        }
-
-                        string stagedGlueDll = Path.Combine(stagingDir, GeneratedGlueAssemblyName + ".dll");
-                        List<ScriptDiagnostic> glueDiagnostics = new List<ScriptDiagnostic>();
-                        bool glueOk = RunCscCompilation(
-                            GeneratedGlueAssemblyName,
-                            stagedGlueDll,
-                            new[] { stagedGlueSource },
-                            Array.Empty<string>(),
-                            glueRefs,
-                            false,
-                            new ResponseFileOptions(),
-                            false,
-                            glueDiagnostics);
-
-                        if (!glueOk || HasErrorDiagnostics(glueDiagnostics))
-                        {
-                            diagnostics.AddRange(glueDiagnostics);
-                            return BuildFailedResult(outputDirectory, compiledRecords, diagnostics);
-                        }
-
-                        File.WriteAllText(generatedGlueSourcePath, glueSource, Encoding.UTF8);
-                        compiledDllPathByAssembly[GeneratedGlueAssemblyName] = stagedGlueDll;
-                    }
-
-                    generatedGlueDllPath = finalGlueDll;
-                }
-
-                foreach (KeyValuePair<string, string> kv in compiledDllPathByAssembly)
-                {
-                    string asmName = kv.Key;
-                    string stagedOrFinalPath = kv.Value;
-                    string targetFinalPath = Path.Combine(outputDirectory, asmName + ".dll");
-                    if (!string.Equals(Path.GetFullPath(stagedOrFinalPath), Path.GetFullPath(targetFinalPath), StringComparison.Ordinal))
-                    {
-                        File.Copy(stagedOrFinalPath, targetFinalPath, true);
-                    }
-                }
-
-                SaveCompilationState(outputDirectory, newHashes);
-
-                List<string> activeDlls = GetExistingDllsInDirectory(outputDirectory);
-
-                if (effectiveOptions.AutoLoadGeneratedGlue
-                    && !string.IsNullOrEmpty(generatedGlueDllPath)
-                    && File.Exists(generatedGlueDllPath))
-                {
-                    // The new glue assembly runs in its own load context, so the
-                    // editor-callable delegates of the previous one are dropped
-                    // before the replacement registers itself.
-                    EditorMethodRegistry.Clear();
-                    ScriptGlueRegistry.LoadGlueAssembly(generatedGlueDllPath);
-                }
-
-                ScriptCompilationResult successResult = new ScriptCompilationResult(
-                    true,
-                    ActiveAssemblyState.Current,
+                if (!CompileTopologicalAssemblies(
                     outputDirectory,
+                    stagingDir,
+                    effectiveOptions,
+                    topoOrder,
+                    modelsByName,
+                    scriptsByAssembly,
+                    assemblyDefinesMap,
+                    assemblyRspMap,
+                    exclusionMap,
+                    resolvedDeps,
+                    engineReferenceDlls,
+                    autoReferencedManagedDlls,
+                    allCompatibleManagedDllsByFileName,
+                    previousHashes,
+                    newHashes,
+                    diagnostics,
+                    out List<CompiledAssemblyRecord> compiledRecords,
+                    out List<string> recompiledNames,
+                    out Dictionary<string, string> compiledDllPathByAssembly))
+                {
+                    return BuildFailedResult(outputDirectory, compiledRecords, diagnostics);
+                }
+
+                if (!BuildAndCompileGlue(
+                    outputDirectory,
+                    stagingDir,
+                    effectiveOptions,
+                    topoOrder,
+                    exclusionMap,
+                    scriptsByAssembly,
+                    assemblyDefinesMap,
+                    pathToGuid,
+                    engineReferenceDlls,
+                    recompiledNames,
+                    previousHashes,
+                    newHashes,
+                    compiledDllPathByAssembly,
+                    diagnostics,
+                    out List<ScriptGuidBinding> allBindings,
+                    out string? generatedGlueDllPath,
+                    out string? generatedGlueSourcePath))
+                {
+                    return BuildFailedResult(outputDirectory, compiledRecords, diagnostics);
+                }
+
+                return FinalizeSuccessfulCompilation(
+                    outputDirectory,
+                    effectiveOptions,
+                    compiledDllPathByAssembly,
+                    newHashes,
                     generatedGlueDllPath,
                     generatedGlueSourcePath,
                     compiledRecords,
                     diagnostics,
                     recompiledNames,
-                    activeDlls,
                     allBindings,
                     pluginRecords);
-
-                lock (LastValidGate)
-                {
-                    LastValidResultByOutputDir[outputDirectory] = successResult;
-                }
-
-                return successResult;
             }
             finally
             {
@@ -706,6 +579,323 @@ namespace Unitas.Scripting
                     }
                 }
             }
+        }
+
+        private static bool CompileTopologicalAssemblies(
+            string outputDirectory,
+            string stagingDir,
+            ScriptCompilationOptions effectiveOptions,
+            List<string> topoOrder,
+            Dictionary<string, AssemblyDefinitionModel> modelsByName,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            Dictionary<string, ResponseFileOptions> assemblyRspMap,
+            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+            Dictionary<string, List<string>> resolvedDeps,
+            IReadOnlyList<string> engineReferenceDlls,
+            List<string> autoReferencedManagedDlls,
+            Dictionary<string, string> allCompatibleManagedDllsByFileName,
+            Dictionary<string, string> previousHashes,
+            Dictionary<string, string> newHashes,
+            List<ScriptDiagnostic> diagnostics,
+            out List<CompiledAssemblyRecord> compiledRecords,
+            out List<string> recompiledNames,
+            out Dictionary<string, string> compiledDllPathByAssembly)
+        {
+            HashSet<string> dirtyAssemblies = new HashSet<string>(StringComparer.Ordinal);
+            compiledRecords = new List<CompiledAssemblyRecord>();
+            recompiledNames = new List<string>();
+            compiledDllPathByAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            for (int i = 0; i < topoOrder.Count; i++)
+            {
+                string asmName = topoOrder[i];
+                AssemblyDefinitionModel model = modelsByName[asmName];
+                (bool isExcluded, string exclusionReason) = exclusionMap[asmName];
+                List<string> sources = scriptsByAssembly.TryGetValue(asmName, out List<string>? foundSources)
+                    ? foundSources
+                    : new List<string>();
+
+                List<string> sortedDefines = new List<string>(assemblyDefinesMap[asmName]);
+                sortedDefines.Sort(StringComparer.Ordinal);
+                List<string> directDeps = resolvedDeps[asmName];
+                string finalDllPath = Path.Combine(outputDirectory, asmName + ".dll");
+
+                if (isExcluded || sources.Count == 0)
+                {
+                    compiledRecords.Add(new CompiledAssemblyRecord(
+                        asmName,
+                        isExcluded ? string.Empty : finalDllPath,
+                        sources,
+                        sortedDefines,
+                        Array.Empty<string>(),
+                        directDeps,
+                        false,
+                        isExcluded,
+                        exclusionReason));
+                    continue;
+                }
+
+                List<string> externalRefs = BuildAssemblyReferencePaths(
+                    model,
+                    assemblyRspMap[asmName],
+                    engineReferenceDlls,
+                    autoReferencedManagedDlls,
+                    allCompatibleManagedDllsByFileName,
+                    directDeps,
+                    compiledDllPathByAssembly);
+
+                string inputHash = ComputeAssemblyInputHash(
+                    model,
+                    sources,
+                    sortedDefines,
+                    assemblyRspMap[asmName],
+                    directDeps,
+                    newHashes);
+                newHashes[asmName] = inputHash;
+
+                bool dependencyRecompiled = false;
+                for (int depIdx = 0; depIdx < directDeps.Count; depIdx++)
+                {
+                    if (dirtyAssemblies.Contains(directDeps[depIdx]))
+                    {
+                        dependencyRecompiled = true;
+                        break;
+                    }
+                }
+
+                bool needsRecompile = dependencyRecompiled
+                    || !File.Exists(finalDllPath)
+                    || !previousHashes.TryGetValue(asmName, out string? oldHash)
+                    || !string.Equals(oldHash, inputHash, StringComparison.Ordinal);
+
+                if (!needsRecompile)
+                {
+                    compiledDllPathByAssembly[asmName] = finalDllPath;
+                    compiledRecords.Add(new CompiledAssemblyRecord(
+                        asmName,
+                        finalDllPath,
+                        sources,
+                        sortedDefines,
+                        externalRefs,
+                        directDeps,
+                        false,
+                        false,
+                        string.Empty));
+                    continue;
+                }
+
+                dirtyAssemblies.Add(asmName);
+                string stagedDllPath = Path.Combine(stagingDir, asmName + ".dll");
+                bool compileOk = RunCscCompilation(
+                    asmName,
+                    stagedDllPath,
+                    sources,
+                    sortedDefines,
+                    externalRefs,
+                    model.AllowUnsafeCode || assemblyRspMap[asmName].AllowUnsafe,
+                    assemblyRspMap[asmName],
+                    !effectiveOptions.IsEditor,
+                    diagnostics);
+
+                if (!compileOk || HasErrorDiagnostics(diagnostics))
+                {
+                    return false;
+                }
+
+                compiledDllPathByAssembly[asmName] = stagedDllPath;
+                recompiledNames.Add(asmName);
+                compiledRecords.Add(new CompiledAssemblyRecord(
+                    asmName,
+                    finalDllPath,
+                    sources,
+                    sortedDefines,
+                    externalRefs,
+                    directDeps,
+                    true,
+                    false,
+                    string.Empty));
+            }
+
+            return true;
+        }
+
+        private static bool BuildAndCompileGlue(
+            string outputDirectory,
+            string stagingDir,
+            ScriptCompilationOptions effectiveOptions,
+            List<string> topoOrder,
+            Dictionary<string, (bool IsExcluded, string Reason)> exclusionMap,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            Dictionary<string, string> pathToGuid,
+            IReadOnlyList<string> engineReferenceDlls,
+            List<string> recompiledNames,
+            Dictionary<string, string> previousHashes,
+            Dictionary<string, string> newHashes,
+            Dictionary<string, string> compiledDllPathByAssembly,
+            List<ScriptDiagnostic> diagnostics,
+            out List<ScriptGuidBinding> allBindings,
+            out string? generatedGlueDllPath,
+            out string? generatedGlueSourcePath)
+        {
+            allBindings = new List<ScriptGuidBinding>();
+            List<RuntimeInitializeMethodBinding> allRuntimeInitMethods = new List<RuntimeInitializeMethodBinding>();
+            List<EditorCallableMethodBinding> allEditorCallableMethods = new List<EditorCallableMethodBinding>();
+            for (int i = 0; i < topoOrder.Count; i++)
+            {
+                string asmName = topoOrder[i];
+                if (exclusionMap[asmName].IsExcluded)
+                {
+                    continue;
+                }
+
+                if (!scriptsByAssembly.TryGetValue(asmName, out List<string>? sources) || sources.Count == 0)
+                {
+                    continue;
+                }
+
+                List<ScriptGuidBinding> asmBindings = ScriptAnalyzerAndGlueGenerator.DiscoverScriptBindingsForAssembly(
+                    asmName,
+                    sources,
+                    assemblyDefinesMap[asmName],
+                    pathToGuid);
+                allBindings.AddRange(asmBindings);
+
+                List<RuntimeInitializeMethodBinding> asmInitMethods = ScriptAnalyzerAndGlueGenerator.DiscoverRuntimeInitializeMethodsForAssembly(
+                    sources,
+                    assemblyDefinesMap[asmName]);
+                allRuntimeInitMethods.AddRange(asmInitMethods);
+
+                List<EditorCallableMethodBinding> asmEditorCallableMethods = ScriptAnalyzerAndGlueGenerator.DiscoverEditorCallableMethodsForAssembly(
+                    sources,
+                    assemblyDefinesMap[asmName]);
+                allEditorCallableMethods.AddRange(asmEditorCallableMethods);
+            }
+
+            generatedGlueDllPath = null;
+            generatedGlueSourcePath = null;
+
+            if (!effectiveOptions.EmitGeneratedGlue
+                || (allBindings.Count == 0 && allRuntimeInitMethods.Count == 0 && allEditorCallableMethods.Count == 0))
+            {
+                return true;
+            }
+
+            string finalGlueDll = Path.Combine(outputDirectory, GeneratedGlueAssemblyName + ".dll");
+            string glueObjDir = Path.Combine(outputDirectory, "obj");
+            Directory.CreateDirectory(glueObjDir);
+            generatedGlueSourcePath = Path.Combine(glueObjDir, "Unitas.Generated.g.cs");
+
+            string glueSource = ScriptAnalyzerAndGlueGenerator.GenerateGlueSource(
+                allBindings,
+                Array.Empty<SerializableTypeBinding>(),
+                allRuntimeInitMethods,
+                allEditorCallableMethods);
+            string stagedGlueSource = Path.Combine(stagingDir, "Unitas.Generated.g.cs");
+            File.WriteAllText(stagedGlueSource, glueSource, Encoding.UTF8);
+
+            string glueHash = ComputeSha256Text(glueSource);
+            newHashes[GeneratedGlueAssemblyName] = glueHash;
+
+            bool glueNeedsCompile = recompiledNames.Count > 0
+                || !File.Exists(finalGlueDll)
+                || !previousHashes.TryGetValue(GeneratedGlueAssemblyName, out string? prevGlueHash)
+                || !string.Equals(prevGlueHash, glueHash, StringComparison.Ordinal);
+
+            if (glueNeedsCompile)
+            {
+                List<string> glueRefs = new List<string>(engineReferenceDlls);
+                foreach (KeyValuePair<string, string> kv in compiledDllPathByAssembly)
+                {
+                    if (!glueRefs.Contains(kv.Value))
+                    {
+                        glueRefs.Add(kv.Value);
+                    }
+                }
+
+                string stagedGlueDll = Path.Combine(stagingDir, GeneratedGlueAssemblyName + ".dll");
+                List<ScriptDiagnostic> glueDiagnostics = new List<ScriptDiagnostic>();
+                bool glueOk = RunCscCompilation(
+                    GeneratedGlueAssemblyName,
+                    stagedGlueDll,
+                    new[] { stagedGlueSource },
+                    Array.Empty<string>(),
+                    glueRefs,
+                    false,
+                    new ResponseFileOptions(),
+                    false,
+                    glueDiagnostics);
+
+                if (!glueOk || HasErrorDiagnostics(glueDiagnostics))
+                {
+                    diagnostics.AddRange(glueDiagnostics);
+                    return false;
+                }
+
+                File.WriteAllText(generatedGlueSourcePath, glueSource, Encoding.UTF8);
+                compiledDllPathByAssembly[GeneratedGlueAssemblyName] = stagedGlueDll;
+            }
+
+            generatedGlueDllPath = finalGlueDll;
+            return true;
+        }
+
+        private static ScriptCompilationResult FinalizeSuccessfulCompilation(
+            string outputDirectory,
+            ScriptCompilationOptions effectiveOptions,
+            Dictionary<string, string> compiledDllPathByAssembly,
+            Dictionary<string, string> newHashes,
+            string? generatedGlueDllPath,
+            string? generatedGlueSourcePath,
+            List<CompiledAssemblyRecord> compiledRecords,
+            List<ScriptDiagnostic> diagnostics,
+            List<string> recompiledNames,
+            List<ScriptGuidBinding> allBindings,
+            List<DiscoveredPluginRecord> pluginRecords)
+        {
+            foreach (KeyValuePair<string, string> kv in compiledDllPathByAssembly)
+            {
+                string asmName = kv.Key;
+                string stagedOrFinalPath = kv.Value;
+                string targetFinalPath = Path.Combine(outputDirectory, asmName + ".dll");
+                if (!string.Equals(Path.GetFullPath(stagedOrFinalPath), Path.GetFullPath(targetFinalPath), StringComparison.Ordinal))
+                {
+                    File.Copy(stagedOrFinalPath, targetFinalPath, true);
+                }
+            }
+
+            SaveCompilationState(outputDirectory, newHashes);
+
+            List<string> activeDlls = GetExistingDllsInDirectory(outputDirectory);
+
+            if (effectiveOptions.AutoLoadGeneratedGlue
+                && !string.IsNullOrEmpty(generatedGlueDllPath)
+                && File.Exists(generatedGlueDllPath))
+            {
+                EditorMethodRegistry.Clear();
+                ScriptGlueRegistry.LoadGlueAssembly(generatedGlueDllPath);
+            }
+
+            ScriptCompilationResult successResult = new ScriptCompilationResult(
+                true,
+                ActiveAssemblyState.Current,
+                outputDirectory,
+                generatedGlueDllPath,
+                generatedGlueSourcePath,
+                compiledRecords,
+                diagnostics,
+                recompiledNames,
+                activeDlls,
+                allBindings,
+                pluginRecords);
+
+            lock (LastValidGate)
+            {
+                LastValidResultByOutputDir[outputDirectory] = successResult;
+            }
+
+            return successResult;
         }
 
         private static ScriptCompilationResult BuildFailedResult(

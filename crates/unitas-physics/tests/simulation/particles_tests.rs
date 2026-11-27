@@ -534,15 +534,6 @@ fn ren_004_outcome_15_playback_state_and_fixed_seed_parity_across_preview_play_m
 fn ren_004_outcome_16_custom_particle_data_and_force_field_and_scripted_emissions_and_callbacks(
 ) -> Result<(), PhysicsError> {
     let mut system = ParticleSystem::new(99);
-    ren_004_outcome_16_emit_and_custom_data(&mut system);
-    ren_004_outcome_16_force_field(&mut system);
-    ren_004_outcome_16_collision_events(&mut system)?;
-    ren_004_outcome_16_stopped_callback(&mut system);
-    ren_004_outcome_16_stop_actions_and_box_field();
-    Ok(())
-}
-
-fn ren_004_outcome_16_emit_and_custom_data(system: &mut ParticleSystem) {
     system.set_emit_params(EmitParams {
         start_speed: 0.0,
         start_size: 1.0,
@@ -604,9 +595,7 @@ fn ren_004_outcome_16_emit_and_custom_data(system: &mut ParticleSystem) {
         [50.0, 0.0, 0.0],
         "REN-004 outcome 16: SetParticles must update live particle positions"
     );
-}
 
-fn ren_004_outcome_16_force_field(system: &mut ParticleSystem) {
     system.set_external_forces_enabled(true);
     system.set_external_forces_multiplier(1.0);
     system.set_external_forces_layer_mask(1 << 3);
@@ -648,9 +637,13 @@ fn ren_004_outcome_16_force_field(system: &mut ParticleSystem) {
         (system.get_particles()[0].velocity[1] - (-2.0)).abs() < 1e-4,
         "REN-004 outcome 16: ParticleSystemForceField gravity must accelerate particle Y velocity"
     );
+
+    assert_outcome_16_collisions_callbacks_and_box_field(&mut system)
 }
 
-fn ren_004_outcome_16_collision_events(system: &mut ParticleSystem) -> Result<(), PhysicsError> {
+fn assert_outcome_16_collisions_callbacks_and_box_field(
+    system: &mut ParticleSystem,
+) -> Result<(), PhysicsError> {
     let mut world = World::new();
     let solid = EntityId::new(10);
     let trigger = EntityId::new(11);
@@ -694,10 +687,6 @@ fn ren_004_outcome_16_collision_events(system: &mut ParticleSystem) -> Result<()
         "REN-004 outcome 16: OnParticleTrigger / GetTriggerParticles must record trigger overlap"
     );
 
-    Ok(())
-}
-
-fn ren_004_outcome_16_stopped_callback(system: &mut ParticleSystem) {
     let stopped_hits = Arc::new(AtomicUsize::new(0));
     let stopped_sink = Arc::clone(&stopped_hits);
     system.set_stopped_callback(Box::new(move || {
@@ -715,9 +704,7 @@ fn ren_004_outcome_16_stopped_callback(system: &mut ParticleSystem) {
         1,
         "REN-004 outcome 16: Callback stop action must invoke OnParticleSystemStopped once particles expire"
     );
-}
 
-fn ren_004_outcome_16_stop_actions_and_box_field() {
     let mut destroy_system = ParticleSystem::new(100);
     destroy_system.set_emit_params(emit_params(0.25));
     destroy_system.emit(1);
@@ -770,6 +757,7 @@ fn ren_004_outcome_16_stop_actions_and_box_field() {
     );
     box_field_system.clear_force_fields();
     assert!(box_field_system.force_fields().is_empty());
+    Ok(())
 }
 
 #[test]

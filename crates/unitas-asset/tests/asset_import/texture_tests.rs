@@ -1650,8 +1650,7 @@ fn encodes_and_decodes_bcn_etc2_and_astc_compressed_texture_blocks_for_platform_
     Ok(())
 }
 
-fn hero_run_anim_yaml() -> &'static str {
-    r"%YAML 1.1
+const HERO_RUN_ANIM_YAML: &str = r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!74 &7400000
 AnimationClip:
@@ -1815,7 +1814,10 @@ AnimationClip:
     floatParameter: 0.75
     intParameter: 3
 messageOptions: 0
-"
+";
+
+fn hero_run_anim_yaml() -> &'static str {
+    HERO_RUN_ANIM_YAML
 }
 
 #[test]

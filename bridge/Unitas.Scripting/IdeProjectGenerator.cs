@@ -126,18 +126,7 @@ namespace Unitas.Scripting
                 throw new ArgumentException("Project root must be non-empty.", nameof(projectRoot));
             }
 
-            string fullProjectRoot = Path.GetFullPath(projectRoot);
-            if (OperatingSystem.IsMacOS())
-            {
-                if (fullProjectRoot.StartsWith("/var/", StringComparison.Ordinal) && Directory.Exists("/private" + fullProjectRoot))
-                {
-                    fullProjectRoot = "/private" + fullProjectRoot;
-                }
-                else if (fullProjectRoot.StartsWith("/tmp/", StringComparison.Ordinal) && Directory.Exists("/private" + fullProjectRoot))
-                {
-                    fullProjectRoot = "/private" + fullProjectRoot;
-                }
-            }
+            string fullProjectRoot = NormalizeProjectRoot(projectRoot);
             if (!Directory.Exists(fullProjectRoot))
             {
                 List<ScriptDiagnostic> missingRootDiags = new List<ScriptDiagnostic>
@@ -195,6 +184,87 @@ namespace Unitas.Scripting
             allAssemblies.AddRange(predefinedAssemblies);
             allAssemblies.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
 
+            EvaluateIdeAssemblies(
+                fullProjectRoot,
+                allAssemblies,
+                scriptsByAssembly,
+                baseDefines,
+                effectiveOptions,
+                diagnostics,
+                out Dictionary<string, HashSet<string>> assemblyDefinesMap,
+                out Dictionary<string, ResponseFileOptions> assemblyRspMap,
+                out Dictionary<string, bool> exclusionMap,
+                out Dictionary<string, List<string>> resolvedDeps);
+
+            List<string> engineAndAdditionalBinaryDlls = ResolveEngineAndAdditionalBinaryReferences(effectiveOptions);
+
+            BuildAndWriteIdeProjects(
+                fullProjectRoot,
+                allAssemblies,
+                scriptsByAssembly,
+                assemblyDefinesMap,
+                assemblyRspMap,
+                exclusionMap,
+                resolvedDeps,
+                engineAndAdditionalBinaryDlls,
+                autoReferencedManagedDlls,
+                allCompatibleManagedDllsByFileName,
+                out List<IdeAssemblyProjectDescriptor> descriptors,
+                out List<string> csprojPaths);
+
+            DeleteStaleCsprojFiles(fullProjectRoot, descriptors);
+
+            string projectName = Path.GetFileName(
+                fullProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrEmpty(projectName))
+            {
+                projectName = "UnitasProject";
+            }
+
+            string solutionPath = Path.Combine(fullProjectRoot, projectName + ".sln");
+            string solutionText = FormatSolutionFile(projectName, descriptors);
+            WriteFileIfChanged(solutionPath, solutionText);
+
+            bool succeeded = !HasErrorDiagnostics(diagnostics);
+            return new IdeGenerationResult(
+                succeeded,
+                fullProjectRoot,
+                solutionPath,
+                csprojPaths,
+                descriptors,
+                diagnostics);
+        }
+
+        private static string NormalizeProjectRoot(string projectRoot)
+        {
+            string fullProjectRoot = Path.GetFullPath(projectRoot);
+            if (OperatingSystem.IsMacOS())
+            {
+                if (fullProjectRoot.StartsWith("/var/", StringComparison.Ordinal) && Directory.Exists("/private" + fullProjectRoot))
+                {
+                    fullProjectRoot = "/private" + fullProjectRoot;
+                }
+                else if (fullProjectRoot.StartsWith("/tmp/", StringComparison.Ordinal) && Directory.Exists("/private" + fullProjectRoot))
+                {
+                    fullProjectRoot = "/private" + fullProjectRoot;
+                }
+            }
+
+            return fullProjectRoot;
+        }
+
+        private static void EvaluateIdeAssemblies(
+            string fullProjectRoot,
+            List<AssemblyDefinitionModel> allAssemblies,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            HashSet<string> baseDefines,
+            ScriptCompilationOptions effectiveOptions,
+            List<ScriptDiagnostic> diagnostics,
+            out Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            out Dictionary<string, ResponseFileOptions> assemblyRspMap,
+            out Dictionary<string, bool> exclusionMap,
+            out Dictionary<string, List<string>> resolvedDeps)
+        {
             Dictionary<string, AssemblyDefinitionModel> modelsByName =
                 new Dictionary<string, AssemblyDefinitionModel>(StringComparer.Ordinal);
             Dictionary<string, AssemblyDefinitionModel> modelsByGuid =
@@ -210,12 +280,9 @@ namespace Unitas.Scripting
                 }
             }
 
-            Dictionary<string, HashSet<string>> assemblyDefinesMap =
-                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-            Dictionary<string, ResponseFileOptions> assemblyRspMap =
-                new Dictionary<string, ResponseFileOptions>(StringComparer.Ordinal);
-            Dictionary<string, bool> exclusionMap =
-                new Dictionary<string, bool>(StringComparer.Ordinal);
+            assemblyDefinesMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            assemblyRspMap = new Dictionary<string, ResponseFileOptions>(StringComparer.Ordinal);
+            exclusionMap = new Dictionary<string, bool>(StringComparer.Ordinal);
 
             for (int i = 0; i < allAssemblies.Count; i++)
             {
@@ -249,7 +316,7 @@ namespace Unitas.Scripting
                 exclusionMap[model.Name] = isExcluded;
             }
 
-            Dictionary<string, List<string>> resolvedDeps = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            resolvedDeps = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             for (int i = 0; i < allAssemblies.Count; i++)
             {
                 AssemblyDefinitionModel model = allAssemblies[i];
@@ -291,11 +358,24 @@ namespace Unitas.Scripting
 
                 deps.Sort(StringComparer.Ordinal);
             }
+        }
 
-            List<string> engineAndAdditionalBinaryDlls = ResolveEngineAndAdditionalBinaryReferences(effectiveOptions);
-
-            List<IdeAssemblyProjectDescriptor> descriptors = new List<IdeAssemblyProjectDescriptor>();
-            List<string> csprojPaths = new List<string>();
+        private static void BuildAndWriteIdeProjects(
+            string fullProjectRoot,
+            List<AssemblyDefinitionModel> allAssemblies,
+            Dictionary<string, List<string>> scriptsByAssembly,
+            Dictionary<string, HashSet<string>> assemblyDefinesMap,
+            Dictionary<string, ResponseFileOptions> assemblyRspMap,
+            Dictionary<string, bool> exclusionMap,
+            Dictionary<string, List<string>> resolvedDeps,
+            List<string> engineAndAdditionalBinaryDlls,
+            List<string> autoReferencedManagedDlls,
+            Dictionary<string, string> allCompatibleManagedDllsByFileName,
+            out List<IdeAssemblyProjectDescriptor> descriptors,
+            out List<string> csprojPaths)
+        {
+            descriptors = new List<IdeAssemblyProjectDescriptor>();
+            csprojPaths = new List<string>();
 
             for (int i = 0; i < allAssemblies.Count; i++)
             {
@@ -364,7 +444,12 @@ namespace Unitas.Scripting
                 descriptors.Add(descriptor);
                 csprojPaths.Add(csprojPath);
             }
+        }
 
+        private static void DeleteStaleCsprojFiles(
+            string fullProjectRoot,
+            List<IdeAssemblyProjectDescriptor> descriptors)
+        {
             HashSet<string> activeCsprojNames = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < descriptors.Count; i++)
             {
@@ -386,26 +471,6 @@ namespace Unitas.Scripting
                     }
                 }
             }
-
-            string projectName = Path.GetFileName(
-                fullProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (string.IsNullOrEmpty(projectName))
-            {
-                projectName = "UnitasProject";
-            }
-
-            string solutionPath = Path.Combine(fullProjectRoot, projectName + ".sln");
-            string solutionText = FormatSolutionFile(projectName, descriptors);
-            WriteFileIfChanged(solutionPath, solutionText);
-
-            bool succeeded = !HasErrorDiagnostics(diagnostics);
-            return new IdeGenerationResult(
-                succeeded,
-                fullProjectRoot,
-                solutionPath,
-                csprojPaths,
-                descriptors,
-                diagnostics);
         }
 
         private static List<string> ResolveEngineAndAdditionalBinaryReferences(ScriptCompilationOptions options)

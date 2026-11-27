@@ -34,6 +34,22 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(store);
 
+            RegisterCoreSceneTools(host, store);
+            RegisterHistorySceneTools(host);
+            RegisterExtendedSceneTools(host, store);
+
+            host.RegisterResource(
+                new ResourceDefinition(
+                    HierarchyOrigin,
+                    "Scene Hierarchy",
+                    "GameObject hierarchy of the open scene with the file ids of its children and components",
+                    "application/json",
+                    Scope.ReadProject),
+                () => ResourceContent.Untrusted(HierarchyOrigin, HierarchyPayload(CurrentScene("scene.hierarchy"))));
+        }
+
+        private static void RegisterCoreSceneTools(McpHost host, ChangeSetStore store)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.open",
@@ -147,7 +163,10 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.EditContent),
                 arguments => HandleDestroyObject(host, store, arguments));
+        }
 
+        private static void RegisterHistorySceneTools(McpHost host)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.save",
@@ -183,7 +202,10 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.EditContent),
                 _ => HandleRedo());
+        }
 
+        private static void RegisterExtendedSceneTools(McpHost host, ChangeSetStore store)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "scene.inspect_object",
@@ -299,15 +321,6 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.EditContent),
                 _ => HandleRestoreEditState());
-
-            host.RegisterResource(
-                new ResourceDefinition(
-                    HierarchyOrigin,
-                    "Scene Hierarchy",
-                    "GameObject hierarchy of the open scene with the file ids of its children and components",
-                    "application/json",
-                    Scope.ReadProject),
-                () => ResourceContent.Untrusted(HierarchyOrigin, HierarchyPayload(CurrentScene("scene.hierarchy"))));
         }
 
         private static ToolOutput HandleOpen(McpHost host, JsonNode arguments)

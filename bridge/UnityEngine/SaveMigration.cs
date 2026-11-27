@@ -599,7 +599,24 @@ namespace UnityEngine
                     Array.Empty<string>());
             }
 
-            string workingPayload = rawPayload!;
+            return ExecuteMigrationSteps(
+                rawPayload!,
+                inputVersion,
+                currentSchemaVersion,
+                steps,
+                effectiveField,
+                filePath);
+        }
+
+        private static SaveMigrationResult ExecuteMigrationSteps(
+            string rawPayload,
+            int inputVersion,
+            int currentSchemaVersion,
+            IReadOnlyList<SaveMigrationStep> steps,
+            string effectiveField,
+            string filePath)
+        {
+            string workingPayload = rawPayload;
             int workingVersion = inputVersion;
             List<int> appliedVersions = new List<int>();
             List<string> unretainedNotes = new List<string>();
@@ -619,7 +636,7 @@ namespace UnityEngine
                         SaveMigrationOutcome.MigrationFailed,
                         inputVersion,
                         inputVersion,
-                        rawPayload!,
+                        rawPayload,
                         filePath,
                         true,
                         missingStepMsg,
@@ -658,7 +675,7 @@ namespace UnityEngine
                         SaveMigrationOutcome.MigrationFailed,
                         inputVersion,
                         inputVersion,
-                        rawPayload!,
+                        rawPayload,
                         filePath,
                         true,
                         failMsg,
@@ -682,7 +699,7 @@ namespace UnityEngine
                         SaveMigrationOutcome.MigrationFailed,
                         inputVersion,
                         inputVersion,
-                        rawPayload!,
+                        rawPayload,
                         filePath,
                         true,
                         badOutputMsg,

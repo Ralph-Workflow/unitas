@@ -299,57 +299,30 @@ namespace Unitas.Scripting
                 IsNative = isNativeExt
             };
 
-            bool sawAnyPlatform = false;
-            bool sawEditorEnabled = false;
+            ParsePluginMetaLines(
+                lines,
+                plugin,
+                out bool sawAnyPlatform,
+                out bool sawEditorEnabled);
+
+            FinalizeParsedPluginMeta(plugin, sawAnyPlatform, sawEditorEnabled);
+            return plugin;
+        }
+
+        private static void ParsePluginMetaLines(
+            string[] lines,
+            ParsedPluginMeta plugin,
+            out bool sawAnyPlatform,
+            out bool sawEditorEnabled)
+        {
+            sawAnyPlatform = false;
+            sawEditorEnabled = false;
             string? currentPlatform = null;
             bool? currentEnabled = null;
             string? currentCpu = null;
             string? currentOs = null;
             bool inSettings = false;
             bool inDefineConstraints = false;
-
-            void FlushCurrent()
-            {
-                if (string.IsNullOrEmpty(currentPlatform))
-                {
-                    return;
-                }
-
-                string plat = currentPlatform;
-                bool en = currentEnabled ?? false;
-                string? cpu = currentCpu;
-                string? os = currentOs;
-                currentPlatform = null;
-                currentEnabled = null;
-                currentCpu = null;
-                currentOs = null;
-
-                if (string.Equals(plat, "Any", StringComparison.OrdinalIgnoreCase))
-                {
-                    plugin.AnyPlatformEnabled = en;
-                    sawAnyPlatform = true;
-                }
-                else if (string.Equals(plat, "Editor", StringComparison.OrdinalIgnoreCase))
-                {
-                    plugin.EditorEnabled = en;
-                    sawEditorEnabled = true;
-                    if (!string.IsNullOrEmpty(cpu))
-                    {
-                        plugin.EditorCpu = cpu;
-                    }
-
-                    if (!string.IsNullOrEmpty(os))
-                    {
-                        plugin.EditorOs = os;
-                    }
-
-                    plugin.Platforms.Add((plat, en, cpu, os));
-                }
-                else
-                {
-                    plugin.Platforms.Add((plat, en, cpu, os));
-                }
-            }
 
             for (int i = 0; i < lines.Length; i++)
             {
@@ -387,89 +360,25 @@ namespace Unitas.Scripting
                     continue;
                 }
 
-                if (trimmed.StartsWith("isPreloaded:", StringComparison.Ordinal))
+                if (TryParsePluginHeaderProperty(trimmed, plugin))
                 {
-                    string val = trimmed.Substring("isPreloaded:".Length).Trim();
-                    if (val == "1" || string.Equals(val, "true", StringComparison.OrdinalIgnoreCase))
-                    {
-                        plugin.IsNative = true;
-                    }
-
                     continue;
                 }
 
-                if (trimmed.StartsWith("autoReferenced:", StringComparison.Ordinal))
+                if (TryStartPluginPlatformEntry(
+                    trimmed,
+                    indent,
+                    inSettings,
+                    plugin,
+                    ref currentPlatform,
+                    ref currentEnabled,
+                    ref currentCpu,
+                    ref currentOs,
+                    ref sawAnyPlatform,
+                    ref sawEditorEnabled,
+                    ref inSettings))
                 {
-                    string val = trimmed.Substring("autoReferenced:".Length).Trim();
-                    plugin.AutoReferenced = ParseBool(val, true);
                     continue;
-                }
-
-                if (trimmed.StartsWith("validateReferences:", StringComparison.Ordinal))
-                {
-                    string val = trimmed.Substring("validateReferences:".Length).Trim();
-                    plugin.ValidateReferences = ParseBool(val, true);
-                    continue;
-                }
-
-                if (trimmed.StartsWith("- first:", StringComparison.Ordinal))
-                {
-                    FlushCurrent();
-                    inSettings = false;
-                    string inline = trimmed.Substring("- first:".Length).Trim();
-                    if (inline.StartsWith('{') && inline.EndsWith('}'))
-                    {
-                        string inner = inline.Substring(1, inline.Length - 2).Trim();
-                        if (TrySplitKv(inner, out string k, out string v))
-                        {
-                            currentPlatform = string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase)
-                                ? "Any"
-                                : (!string.IsNullOrEmpty(v) ? v : k);
-                        }
-                    }
-
-                    continue;
-                }
-
-                if (string.Equals(trimmed, "first:", StringComparison.Ordinal))
-                {
-                    FlushCurrent();
-                    inSettings = false;
-                    continue;
-                }
-
-                if (currentPlatform == null && indent >= 4 && !inSettings)
-                {
-                    if (TrySplitKv(trimmed, out string k, out string v))
-                    {
-                        if (string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase))
-                        {
-                            currentPlatform = "Any";
-                            continue;
-                        }
-
-                        if (!IsMetaStructuralKey(k))
-                        {
-                            currentPlatform = !string.IsNullOrEmpty(v) ? v : k;
-                            continue;
-                        }
-                    }
-                }
-
-                if (trimmed.StartsWith("- ", StringComparison.Ordinal))
-                {
-                    string afterDash = trimmed.Substring(2).Trim();
-                    if (TrySplitKv(afterDash, out string k, out string v))
-                    {
-                        if (string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase)
-                            || k.StartsWith("Editor", StringComparison.OrdinalIgnoreCase)
-                            || k.StartsWith("Standalone", StringComparison.OrdinalIgnoreCase))
-                        {
-                            FlushCurrent();
-                            currentPlatform = !string.IsNullOrEmpty(v) ? v : k;
-                            continue;
-                        }
-                    }
                 }
 
                 if (string.Equals(trimmed, "settings:", StringComparison.Ordinal))
@@ -486,33 +395,233 @@ namespace Unitas.Scripting
 
                 if (currentPlatform != null)
                 {
-                    if (trimmed.StartsWith("enabled:", StringComparison.Ordinal))
+                    ApplyCurrentPlatformSetting(trimmed, inSettings, ref currentEnabled, ref currentCpu, ref currentOs);
+                }
+            }
+
+            FlushCurrentPluginPlatform(
+                plugin,
+                ref currentPlatform,
+                ref currentEnabled,
+                ref currentCpu,
+                ref currentOs,
+                ref sawAnyPlatform,
+                ref sawEditorEnabled);
+        }
+
+        private static bool TryStartPluginPlatformEntry(
+            string trimmed,
+            int indent,
+            bool currentlyInSettings,
+            ParsedPluginMeta plugin,
+            ref string? currentPlatform,
+            ref bool? currentEnabled,
+            ref string? currentCpu,
+            ref string? currentOs,
+            ref bool sawAnyPlatform,
+            ref bool sawEditorEnabled,
+            ref bool inSettings)
+        {
+            if (trimmed.StartsWith("- first:", StringComparison.Ordinal))
+            {
+                FlushCurrentPluginPlatform(
+                    plugin,
+                    ref currentPlatform,
+                    ref currentEnabled,
+                    ref currentCpu,
+                    ref currentOs,
+                    ref sawAnyPlatform,
+                    ref sawEditorEnabled);
+                inSettings = false;
+                string inline = trimmed.Substring("- first:".Length).Trim();
+                if (inline.StartsWith('{') && inline.EndsWith('}'))
+                {
+                    string inner = inline.Substring(1, inline.Length - 2).Trim();
+                    if (TrySplitKv(inner, out string k, out string v))
                     {
-                        string val = trimmed.Substring("enabled:".Length).Trim();
-                        currentEnabled = ParseBool(val, false);
-                        continue;
+                        currentPlatform = string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase)
+                            ? "Any"
+                            : (!string.IsNullOrEmpty(v) ? v : k);
+                    }
+                }
+
+                return true;
+            }
+
+            if (string.Equals(trimmed, "first:", StringComparison.Ordinal))
+            {
+                FlushCurrentPluginPlatform(
+                    plugin,
+                    ref currentPlatform,
+                    ref currentEnabled,
+                    ref currentCpu,
+                    ref currentOs,
+                    ref sawAnyPlatform,
+                    ref sawEditorEnabled);
+                inSettings = false;
+                return true;
+            }
+
+            if (currentPlatform == null && indent >= 4 && !currentlyInSettings)
+            {
+                if (TrySplitKv(trimmed, out string k, out string v))
+                {
+                    if (string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentPlatform = "Any";
+                        return true;
                     }
 
-                    if (inSettings && TrySplitKv(trimmed, out string sk, out string sv))
+                    if (!IsMetaStructuralKey(k))
                     {
-                        if (string.Equals(sk, "CPU", StringComparison.OrdinalIgnoreCase)
-                            && !string.IsNullOrEmpty(sv)
-                            && !string.Equals(sv, "None", StringComparison.OrdinalIgnoreCase))
-                        {
-                            currentCpu = sv;
-                        }
-                        else if (string.Equals(sk, "OS", StringComparison.OrdinalIgnoreCase)
-                            && !string.IsNullOrEmpty(sv)
-                            && !string.Equals(sv, "None", StringComparison.OrdinalIgnoreCase))
-                        {
-                            currentOs = sv;
-                        }
+                        currentPlatform = !string.IsNullOrEmpty(v) ? v : k;
+                        return true;
                     }
                 }
             }
 
-            FlushCurrent();
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal))
+            {
+                string afterDash = trimmed.Substring(2).Trim();
+                if (TrySplitKv(afterDash, out string k, out string v))
+                {
+                    if (string.Equals(k, "Any", StringComparison.OrdinalIgnoreCase)
+                        || k.StartsWith("Editor", StringComparison.OrdinalIgnoreCase)
+                        || k.StartsWith("Standalone", StringComparison.OrdinalIgnoreCase))
+                    {
+                        FlushCurrentPluginPlatform(
+                            plugin,
+                            ref currentPlatform,
+                            ref currentEnabled,
+                            ref currentCpu,
+                            ref currentOs,
+                            ref sawAnyPlatform,
+                            ref sawEditorEnabled);
+                        currentPlatform = !string.IsNullOrEmpty(v) ? v : k;
+                        return true;
+                    }
+                }
+            }
 
+            return false;
+        }
+
+        private static bool TryParsePluginHeaderProperty(string trimmed, ParsedPluginMeta plugin)
+        {
+            if (trimmed.StartsWith("isPreloaded:", StringComparison.Ordinal))
+            {
+                string val = trimmed.Substring("isPreloaded:".Length).Trim();
+                if (val == "1" || string.Equals(val, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    plugin.IsNative = true;
+                }
+
+                return true;
+            }
+
+            if (trimmed.StartsWith("autoReferenced:", StringComparison.Ordinal))
+            {
+                string val = trimmed.Substring("autoReferenced:".Length).Trim();
+                plugin.AutoReferenced = ParseBool(val, true);
+                return true;
+            }
+
+            if (trimmed.StartsWith("validateReferences:", StringComparison.Ordinal))
+            {
+                string val = trimmed.Substring("validateReferences:".Length).Trim();
+                plugin.ValidateReferences = ParseBool(val, true);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void ApplyCurrentPlatformSetting(
+            string trimmed,
+            bool inSettings,
+            ref bool? currentEnabled,
+            ref string? currentCpu,
+            ref string? currentOs)
+        {
+            if (trimmed.StartsWith("enabled:", StringComparison.Ordinal))
+            {
+                string val = trimmed.Substring("enabled:".Length).Trim();
+                currentEnabled = ParseBool(val, false);
+                return;
+            }
+
+            if (inSettings && TrySplitKv(trimmed, out string sk, out string sv))
+            {
+                if (string.Equals(sk, "CPU", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(sv)
+                    && !string.Equals(sv, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentCpu = sv;
+                }
+                else if (string.Equals(sk, "OS", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(sv)
+                    && !string.Equals(sv, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentOs = sv;
+                }
+            }
+        }
+
+        private static void FlushCurrentPluginPlatform(
+            ParsedPluginMeta plugin,
+            ref string? currentPlatform,
+            ref bool? currentEnabled,
+            ref string? currentCpu,
+            ref string? currentOs,
+            ref bool sawAnyPlatform,
+            ref bool sawEditorEnabled)
+        {
+            if (string.IsNullOrEmpty(currentPlatform))
+            {
+                return;
+            }
+
+            string plat = currentPlatform;
+            bool en = currentEnabled ?? false;
+            string? cpu = currentCpu;
+            string? os = currentOs;
+            currentPlatform = null;
+            currentEnabled = null;
+            currentCpu = null;
+            currentOs = null;
+
+            if (string.Equals(plat, "Any", StringComparison.OrdinalIgnoreCase))
+            {
+                plugin.AnyPlatformEnabled = en;
+                sawAnyPlatform = true;
+            }
+            else if (string.Equals(plat, "Editor", StringComparison.OrdinalIgnoreCase))
+            {
+                plugin.EditorEnabled = en;
+                sawEditorEnabled = true;
+                if (!string.IsNullOrEmpty(cpu))
+                {
+                    plugin.EditorCpu = cpu;
+                }
+
+                if (!string.IsNullOrEmpty(os))
+                {
+                    plugin.EditorOs = os;
+                }
+
+                plugin.Platforms.Add((plat, en, cpu, os));
+            }
+            else
+            {
+                plugin.Platforms.Add((plat, en, cpu, os));
+            }
+        }
+
+        private static void FinalizeParsedPluginMeta(
+            ParsedPluginMeta plugin,
+            bool sawAnyPlatform,
+            bool sawEditorEnabled)
+        {
             if (!sawAnyPlatform && plugin.Platforms.Count == 0 && !sawEditorEnabled)
             {
                 plugin.AnyPlatformEnabled = true;
@@ -537,8 +646,6 @@ namespace Unitas.Scripting
             {
                 plugin.IsNative = true;
             }
-
-            return plugin;
         }
 
         private static bool TryScanProjectMetaViaNativeAbi(

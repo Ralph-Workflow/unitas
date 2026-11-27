@@ -481,6 +481,18 @@ namespace Unitas.Scripting
             sb.AppendLine("namespace UnitasGenerated");
             sb.AppendLine("{");
 
+            AppendGeneratedMessageHandlers(sb, bindings);
+            AppendGeneratedJsonSerializers(sb, allJsonTypes);
+            AppendGlueInitializer(sb, bindings, allJsonTypes, runtimeInitializeMethods, editorCallableMethods);
+
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static void AppendGeneratedMessageHandlers(
+            StringBuilder sb,
+            IReadOnlyList<ScriptGuidBinding> bindings)
+        {
             for (int i = 0; i < bindings.Count; i++)
             {
                 ScriptGuidBinding b = bindings[i];
@@ -595,7 +607,12 @@ namespace Unitas.Scripting
                 sb.AppendLine("    }");
                 sb.AppendLine();
             }
+        }
 
+        private static void AppendGeneratedJsonSerializers(
+            StringBuilder sb,
+            List<SerializableTypeBinding> allJsonTypes)
+        {
             Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName =
                 new Dictionary<string, SerializableTypeBinding>(StringComparer.Ordinal);
             Dictionary<string, SerializableTypeBinding> jsonTypeByFullName =
@@ -668,7 +685,15 @@ namespace Unitas.Scripting
                 sb.AppendLine("    }");
                 sb.AppendLine();
             }
+        }
 
+        private static void AppendGlueInitializer(
+            StringBuilder sb,
+            IReadOnlyList<ScriptGuidBinding> bindings,
+            List<SerializableTypeBinding> allJsonTypes,
+            IReadOnlyList<RuntimeInitializeMethodBinding> runtimeInitializeMethods,
+            IReadOnlyList<EditorCallableMethodBinding> editorCallableMethods)
+        {
             sb.AppendLine("    public sealed class GlueInitializer");
             sb.AppendLine("    {");
             sb.AppendLine("        static GlueInitializer()");
@@ -754,8 +779,6 @@ namespace Unitas.Scripting
 
             sb.AppendLine("        }");
             sb.AppendLine("    }");
-            sb.AppendLine("}");
-            return sb.ToString();
         }
 
         public static string FilterConditionalCompilation(string source, HashSet<string> defines)
@@ -1212,6 +1235,57 @@ namespace Unitas.Scripting
             writeMethodName = string.Empty;
             readMethodName = string.Empty;
 
+            if (TryResolvePrimitiveOrUnityFieldType(cleaned, out csharpTypeExpr, out writeMethodName, out readMethodName))
+            {
+                return true;
+            }
+
+            if (cleaned.EndsWith("[]", StringComparison.Ordinal))
+            {
+                return TryResolveArrayFieldType(
+                    cleaned,
+                    declaringNamespace,
+                    jsonTypeBySimpleName,
+                    jsonTypeByFullName,
+                    out csharpTypeExpr,
+                    out writeMethodName,
+                    out readMethodName);
+            }
+
+            if ((cleaned.StartsWith("List<", StringComparison.Ordinal) || cleaned.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal))
+                && cleaned.EndsWith('>'))
+            {
+                return TryResolveListFieldType(
+                    cleaned,
+                    declaringNamespace,
+                    jsonTypeBySimpleName,
+                    jsonTypeByFullName,
+                    out csharpTypeExpr,
+                    out writeMethodName,
+                    out readMethodName);
+            }
+
+            if (TryResolveCustomJsonType(cleaned, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string customFull))
+            {
+                csharpTypeExpr = customFull;
+                writeMethodName = "WriteNested<" + customFull + ">";
+                readMethodName = "ReadNested<" + customFull + ">";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryResolvePrimitiveOrUnityFieldType(
+            string cleaned,
+            out string csharpTypeExpr,
+            out string writeMethodName,
+            out string readMethodName)
+        {
+            csharpTypeExpr = string.Empty;
+            writeMethodName = string.Empty;
+            readMethodName = string.Empty;
+
             if (string.Equals(cleaned, "int", StringComparison.Ordinal) || string.Equals(cleaned, "Int32", StringComparison.Ordinal) || string.Equals(cleaned, "System.Int32", StringComparison.Ordinal))
             {
                 csharpTypeExpr = "int";
@@ -1308,115 +1382,128 @@ namespace Unitas.Scripting
                 return true;
             }
 
-            if (cleaned.EndsWith("[]", StringComparison.Ordinal))
+            return false;
+        }
+
+        private static bool TryResolveArrayFieldType(
+            string cleaned,
+            string declaringNamespace,
+            Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName,
+            Dictionary<string, SerializableTypeBinding> jsonTypeByFullName,
+            out string csharpTypeExpr,
+            out string writeMethodName,
+            out string readMethodName)
+        {
+            csharpTypeExpr = string.Empty;
+            writeMethodName = string.Empty;
+            readMethodName = string.Empty;
+
+            string elem = cleaned.Substring(0, cleaned.Length - 2).Trim();
+            if (elem.Contains('[', StringComparison.Ordinal))
             {
-                string elem = cleaned.Substring(0, cleaned.Length - 2).Trim();
-                if (elem.Contains('[', StringComparison.Ordinal))
-                {
-                    return false;
-                }
-
-                if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "int[]";
-                    writeMethodName = "WriteIntList";
-                    readMethodName = "ReadIntArray";
-                    return true;
-                }
-
-                if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "float[]";
-                    writeMethodName = "WriteFloatList";
-                    readMethodName = "ReadFloatArray";
-                    return true;
-                }
-
-                if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "bool[]";
-                    writeMethodName = "WriteBoolList";
-                    readMethodName = "ReadBoolArray";
-                    return true;
-                }
-
-                if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "string[]";
-                    writeMethodName = "WriteStringList";
-                    readMethodName = "ReadStringArray";
-                    return true;
-                }
-
-                if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
-                {
-                    csharpTypeExpr = elemFull + "[]";
-                    writeMethodName = "WriteNestedList<" + elemFull + ">";
-                    readMethodName = "ReadNestedArray<" + elemFull + ">";
-                    return true;
-                }
-
                 return false;
             }
 
-            if ((cleaned.StartsWith("List<", StringComparison.Ordinal) || cleaned.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal))
-                && cleaned.EndsWith('>'))
+            if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
             {
-                int openAngle = cleaned.IndexOf('<', StringComparison.Ordinal);
-                string elem = cleaned.Substring(openAngle + 1, cleaned.Length - openAngle - 2).Trim();
-                if (elem.Contains('<', StringComparison.Ordinal) || elem.Contains('[', StringComparison.Ordinal))
-                {
-                    return false;
-                }
+                csharpTypeExpr = "int[]";
+                writeMethodName = "WriteIntList";
+                readMethodName = "ReadIntArray";
+                return true;
+            }
 
-                if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "global::System.Collections.Generic.List<int>";
-                    writeMethodName = "WriteIntList";
-                    readMethodName = "ReadIntList";
-                    return true;
-                }
+            if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "float[]";
+                writeMethodName = "WriteFloatList";
+                readMethodName = "ReadFloatArray";
+                return true;
+            }
 
-                if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "global::System.Collections.Generic.List<float>";
-                    writeMethodName = "WriteFloatList";
-                    readMethodName = "ReadFloatList";
-                    return true;
-                }
+            if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "bool[]";
+                writeMethodName = "WriteBoolList";
+                readMethodName = "ReadBoolArray";
+                return true;
+            }
 
-                if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "global::System.Collections.Generic.List<bool>";
-                    writeMethodName = "WriteBoolList";
-                    readMethodName = "ReadBoolList";
-                    return true;
-                }
+            if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "string[]";
+                writeMethodName = "WriteStringList";
+                readMethodName = "ReadStringArray";
+                return true;
+            }
 
-                if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
-                {
-                    csharpTypeExpr = "global::System.Collections.Generic.List<string>";
-                    writeMethodName = "WriteStringList";
-                    readMethodName = "ReadStringList";
-                    return true;
-                }
+            if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
+            {
+                csharpTypeExpr = elemFull + "[]";
+                writeMethodName = "WriteNestedList<" + elemFull + ">";
+                readMethodName = "ReadNestedArray<" + elemFull + ">";
+                return true;
+            }
 
-                if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
-                {
-                    csharpTypeExpr = "global::System.Collections.Generic.List<" + elemFull + ">";
-                    writeMethodName = "WriteNestedList<" + elemFull + ">";
-                    readMethodName = "ReadNestedList<" + elemFull + ">";
-                    return true;
-                }
+            return false;
+        }
 
+        private static bool TryResolveListFieldType(
+            string cleaned,
+            string declaringNamespace,
+            Dictionary<string, SerializableTypeBinding> jsonTypeBySimpleName,
+            Dictionary<string, SerializableTypeBinding> jsonTypeByFullName,
+            out string csharpTypeExpr,
+            out string writeMethodName,
+            out string readMethodName)
+        {
+            csharpTypeExpr = string.Empty;
+            writeMethodName = string.Empty;
+            readMethodName = string.Empty;
+
+            int openAngle = cleaned.IndexOf('<', StringComparison.Ordinal);
+            string elem = cleaned.Substring(openAngle + 1, cleaned.Length - openAngle - 2).Trim();
+            if (elem.Contains('<', StringComparison.Ordinal) || elem.Contains('[', StringComparison.Ordinal))
+            {
                 return false;
             }
 
-            if (TryResolveCustomJsonType(cleaned, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string customFull))
+            if (string.Equals(elem, "int", StringComparison.Ordinal) || string.Equals(elem, "Int32", StringComparison.Ordinal))
             {
-                csharpTypeExpr = customFull;
-                writeMethodName = "WriteNested<" + customFull + ">";
-                readMethodName = "ReadNested<" + customFull + ">";
+                csharpTypeExpr = "global::System.Collections.Generic.List<int>";
+                writeMethodName = "WriteIntList";
+                readMethodName = "ReadIntList";
+                return true;
+            }
+
+            if (string.Equals(elem, "float", StringComparison.Ordinal) || string.Equals(elem, "Single", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::System.Collections.Generic.List<float>";
+                writeMethodName = "WriteFloatList";
+                readMethodName = "ReadFloatList";
+                return true;
+            }
+
+            if (string.Equals(elem, "bool", StringComparison.Ordinal) || string.Equals(elem, "Boolean", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::System.Collections.Generic.List<bool>";
+                writeMethodName = "WriteBoolList";
+                readMethodName = "ReadBoolList";
+                return true;
+            }
+
+            if (string.Equals(elem, "string", StringComparison.Ordinal) || string.Equals(elem, "String", StringComparison.Ordinal))
+            {
+                csharpTypeExpr = "global::System.Collections.Generic.List<string>";
+                writeMethodName = "WriteStringList";
+                readMethodName = "ReadStringList";
+                return true;
+            }
+
+            if (TryResolveCustomJsonType(elem, declaringNamespace, jsonTypeBySimpleName, jsonTypeByFullName, out string elemFull))
+            {
+                csharpTypeExpr = "global::System.Collections.Generic.List<" + elemFull + ">";
+                writeMethodName = "WriteNestedList<" + elemFull + ">";
+                readMethodName = "ReadNestedList<" + elemFull + ">";
                 return true;
             }
 

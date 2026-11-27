@@ -1642,3 +1642,103 @@ def test_timed_gate_kills_the_process_tree_it_started(tmp_path: Path) -> None:
     assert size > 0
     time.sleep(0.5)
     assert marker.stat().st_size == size
+
+
+def test_size_gate_reports_file_exceeding_max_lines(tmp_path: Path) -> None:
+    over_limit = verify.MAX_FILE_LINES + 1
+    big_file = tmp_path / "crates" / "big.rs"
+    big_file.parent.mkdir(parents=True)
+    big_file.write_text("fn step() {}\n" * over_limit, encoding="utf-8")
+    ok_file = tmp_path / "crates" / "ok.rs"
+    ok_file.write_text("fn step() {}\n" * verify.MAX_FILE_LINES, encoding="utf-8")
+    findings = verify.check_size(tmp_path)
+    assert findings == [
+        f"crates/big.rs:1: file exceeds {verify.MAX_FILE_LINES} lines ({over_limit} lines)"
+    ]
+
+
+def test_size_gate_reports_python_function_exceeding_max_lines(tmp_path: Path) -> None:
+    body_lines = verify.MAX_FUNCTION_LINES
+    py_file = tmp_path / "tools" / "sample.py"
+    py_file.parent.mkdir(parents=True)
+    body = "".join(f"    value_{index} = {index}\n" for index in range(body_lines))
+    py_file.write_text(
+        f"def oversize() -> int:\n{body}    return 0\n\ndef compact() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    findings = verify.check_size(tmp_path)
+    span = body_lines + 2
+    assert findings == [
+        f"tools/sample.py:1: Python function 'oversize' exceeds "
+        f"{verify.MAX_FUNCTION_LINES} lines ({span} lines)"
+    ]
+
+
+def test_size_gate_detects_oversize_csharp_method_and_accepts_large_class(
+    tmp_path: Path,
+) -> None:
+    cs_dir = tmp_path / "editor" / "Sample"
+    cs_dir.mkdir(parents=True)
+    method_body = "        step++;\n" * verify.MAX_FUNCTION_LINES
+    oversize_cs = cs_dir / "Oversize.cs"
+    oversize_cs.write_text(
+        "namespace Sample;\n"
+        "public sealed class Oversize\n"
+        "{\n"
+        "    public int Run()\n"
+        "    {\n"
+        "        var step = 0;\n"
+        f"{method_body}"
+        "        return step;\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    half_body = "        step++;\n" * (verify.MAX_FUNCTION_LINES // 2)
+    large_class_cs = cs_dir / "LargeClass.cs"
+    large_class_cs.write_text(
+        "namespace Sample;\n"
+        "public sealed class LargeClass\n"
+        "{\n"
+        "    public int First()\n"
+        "    {\n"
+        "        var step = 0;\n"
+        f"{half_body}"
+        "        return step;\n"
+        "    }\n"
+        "    public int Second()\n"
+        "    {\n"
+        "        var step = 0;\n"
+        f"{half_body}"
+        "        return step;\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = verify.check_size(tmp_path)
+    span = verify.MAX_FUNCTION_LINES + 4
+    assert findings == [
+        f"editor/Sample/Oversize.cs:5: C# method exceeds "
+        f"{verify.MAX_FUNCTION_LINES} lines ({span} lines)"
+    ]
+
+
+def test_size_gate_skips_fixtures_and_build_bin_but_checks_src_bin(
+    tmp_path: Path,
+) -> None:
+    over_limit = verify.MAX_FILE_LINES + 1
+    oversize_source = "fn main() {}\n" * over_limit
+    fixture = tmp_path / "bridge" / "Unitas.Bridge.Tests" / "Fixtures" / "Generated.cs"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text("// line\n" * over_limit, encoding="utf-8")
+    build_bin = tmp_path / "bridge" / "App" / "bin" / "Release" / "Compiled.cs"
+    build_bin.parent.mkdir(parents=True)
+    build_bin.write_text("// line\n" * over_limit, encoding="utf-8")
+    src_bin = tmp_path / "crates" / "unitas-build" / "src" / "bin" / "foo.rs"
+    src_bin.parent.mkdir(parents=True)
+    src_bin.write_text(oversize_source, encoding="utf-8")
+    findings = verify.check_size(tmp_path)
+    assert findings == [
+        f"crates/unitas-build/src/bin/foo.rs:1: file exceeds "
+        f"{verify.MAX_FILE_LINES} lines ({over_limit} lines)"
+    ]
