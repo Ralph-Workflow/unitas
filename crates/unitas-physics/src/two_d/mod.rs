@@ -6,9 +6,10 @@ pub mod event;
 pub mod world;
 
 pub use body::{
-    BodyDesc2D, BodyId2D, BodyType2D, ConstantForce2D, DistanceJoint2D, FixedJoint2D,
-    FrictionJoint2D, HingeJoint2D, Joint2D, JointId2D, JointLimits2D, JointMotor2D,
-    RelativeJoint2D, Rigidbody2D, SliderJoint2D, SpringJoint2D, TargetJoint2D, WheelJoint2D,
+    BodyDesc2D, BodyId2D, BodyType2D, CollisionDetectionMode2D, ConstantForce2D, DistanceJoint2D,
+    FixedJoint2D, FrictionJoint2D, HingeJoint2D, Joint2D, JointId2D, JointLimits2D, JointMotor2D,
+    RelativeJoint2D, Rigidbody2D, RigidbodyInterpolation2D, RigidbodySleepMode2D, SliderJoint2D,
+    SpringJoint2D, TargetJoint2D, WheelJoint2D,
 };
 pub use collider::{Collider2D, ColliderDesc2D, ColliderId2D, PhysicsMaterial2D, Shape2D};
 pub use composite::{

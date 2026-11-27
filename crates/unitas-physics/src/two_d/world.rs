@@ -16,7 +16,8 @@ use crate::two_d::collider::{
     PhysicsMaterial2D, Shape2D,
 };
 use crate::two_d::composite::{
-    CompositeCollider2D, CompositeGenerationType2D, TileColliderType2D, TilemapCollider2D,
+    merge_composite_outlines, CompositeCollider2D, CompositeGenerationType2D,
+    CompositeGeometryType2D, TileColliderType2D, TilemapCollider2D,
 };
 use crate::two_d::effector::{Effector2D, PlatformEffector2D, SurfaceEffector2D};
 use crate::two_d::event::{route_pair_messages_2d, ContactPoint2D, Endpoint2D, RoutedMessage2D};
@@ -30,6 +31,8 @@ const DEFAULT_GRAVITY_2D: [f32; 2] = [0.0, -9.81];
 const DEFAULT_FIXED_TIMESTEP_2D: f32 = 0.02;
 const DEFAULT_MAX_TIMESTEP_2D: f32 = 0.333_333_34;
 const DEFAULT_SOLVER_ITERATIONS_2D: usize = 6;
+const DEFAULT_VELOCITY_ITERATIONS_2D: usize = 8;
+const DEFAULT_POSITION_ITERATIONS_2D: usize = 3;
 const SLEEP_LINEAR_THRESHOLD: f32 = 0.01;
 const SLEEP_ANGULAR_THRESHOLD: f32 = 0.01;
 const SLEEP_TIME_THRESHOLD: f32 = 0.5;
@@ -45,6 +48,7 @@ pub struct ContactFilter2D {
     pub use_normal_angle: bool,
     pub min_normal_angle: f32,
     pub max_normal_angle: f32,
+    pub(crate) explicit_triggers: bool,
 }
 
 impl Default for ContactFilter2D {
@@ -59,17 +63,22 @@ impl Default for ContactFilter2D {
             use_normal_angle: false,
             min_normal_angle: 0.0,
             max_normal_angle: 360.0,
+            explicit_triggers: false,
         }
     }
 }
 
 impl ContactFilter2D {
     pub fn no_filter() -> Self {
-        Self::default()
+        Self {
+            explicit_triggers: true,
+            ..Self::default()
+        }
     }
 
     pub fn with_triggers(mut self, use_triggers: bool) -> Self {
         self.use_triggers = use_triggers;
+        self.explicit_triggers = true;
         self
     }
 
@@ -180,6 +189,9 @@ pub struct World2D {
     pass_through_pairs: BTreeSet<(ColliderId2D, ColliderId2D)>,
     messages: Vec<RoutedMessage2D>,
     default_material: PhysicsMaterial2D,
+    velocity_iterations: usize,
+    position_iterations: usize,
+    queries_hit_triggers: bool,
     queries_start_in_colliders: bool,
     callbacks_on_disable: bool,
     auto_sync_transforms: bool,
@@ -221,10 +233,58 @@ impl World2D {
             pass_through_pairs: BTreeSet::new(),
             messages: Vec::new(),
             default_material: PhysicsMaterial2D::default(),
+            velocity_iterations: DEFAULT_VELOCITY_ITERATIONS_2D,
+            position_iterations: DEFAULT_POSITION_ITERATIONS_2D,
+            queries_hit_triggers: true,
             queries_start_in_colliders: true,
             callbacks_on_disable: true,
             auto_sync_transforms: true,
         }
+    }
+
+    pub fn clear_entities(&mut self) {
+        self.accumulator = 0.0;
+        self.step_count = 0;
+        self.bodies.clear();
+        self.colliders.clear();
+        self.composites.clear();
+        self.tilemaps.clear();
+        self.effectors.clear();
+        self.constant_forces.clear();
+        self.joints.clear();
+        self.riders.clear();
+        self.broken_joints.clear();
+        self.next_body_id = 1;
+        self.next_collider_id = 1;
+        self.next_joint_id = 1;
+        self.ignored_pairs.clear();
+        self.touching_pairs.clear();
+        self.pass_through_pairs.clear();
+        self.messages.clear();
+    }
+
+    pub fn velocity_iterations(&self) -> usize {
+        self.velocity_iterations
+    }
+
+    pub fn set_velocity_iterations(&mut self, iterations: usize) {
+        self.velocity_iterations = iterations.max(1);
+    }
+
+    pub fn position_iterations(&self) -> usize {
+        self.position_iterations
+    }
+
+    pub fn set_position_iterations(&mut self, iterations: usize) {
+        self.position_iterations = iterations.max(1);
+    }
+
+    pub fn queries_hit_triggers(&self) -> bool {
+        self.queries_hit_triggers
+    }
+
+    pub fn set_queries_hit_triggers(&mut self, value: bool) {
+        self.queries_hit_triggers = value;
     }
 
     pub fn gravity(&self) -> [f32; 2] {
@@ -595,6 +655,16 @@ impl World2D {
             }
         }
 
+        let (geometry_type, vertex_distance) = self
+            .composites
+            .get(&composite_collider)
+            .map_or((CompositeGeometryType2D::Outlines, 0.000_05), |comp| {
+                (comp.geometry_type, comp.vertex_distance)
+            });
+        if geometry_type == CompositeGeometryType2D::Outlines {
+            merged_shapes = merge_composite_outlines(merged_shapes, vertex_distance);
+        }
+
         if let Some(col_mut) = self.colliders.get_mut(&composite_collider) {
             col_mut.shape = Shape2D::Composite {
                 shapes: merged_shapes,
@@ -818,6 +888,17 @@ impl World2D {
         self.update_sleeping(dt);
     }
 
+    fn effective_query_filter(&self, mut filter: ContactFilter2D) -> ContactFilter2D {
+        if !filter.explicit_triggers {
+            filter.use_triggers = self.queries_hit_triggers;
+        }
+        if !filter.use_layer_mask {
+            filter.use_layer_mask = true;
+            filter.layer_mask = self.layer_mask_for_layer(0);
+        }
+        filter
+    }
+
     pub fn raycast(
         &self,
         origin: [f32; 2],
@@ -825,6 +906,7 @@ impl World2D {
         max_distance: f32,
         filter: ContactFilter2D,
     ) -> Vec<RaycastHit2D> {
+        let filter = self.effective_query_filter(filter);
         if !max_distance.is_finite() || max_distance < 0.0 {
             return Vec::new();
         }
@@ -886,6 +968,7 @@ impl World2D {
     }
 
     pub fn overlap_point(&self, point: [f32; 2], filter: ContactFilter2D) -> Vec<ColliderId2D> {
+        let filter = self.effective_query_filter(filter);
         let mut out = Vec::new();
         for collider in self.colliders.values() {
             if !self.is_collider_simulated(collider) || !filter.matches_collider(collider) {
@@ -968,6 +1051,7 @@ impl World2D {
         probe_angle: f32,
         filter: ContactFilter2D,
     ) -> Vec<ColliderId2D> {
+        let filter = self.effective_query_filter(filter);
         let mut out = Vec::new();
         for collider in self.colliders.values() {
             if !self.is_collider_simulated(collider) || !filter.matches_collider(collider) {
@@ -993,8 +1077,6 @@ impl World2D {
         out
     }
 
-    /// Sweeps a box along `direction` and reports every collider it reaches, nearest
-    /// first, filtered by the same rules the other 2D queries use.
     pub fn box_cast(
         &self,
         center: [f32; 2],
@@ -1004,6 +1086,7 @@ impl World2D {
         distance: f32,
         filter: ContactFilter2D,
     ) -> Vec<RaycastHit2D> {
+        let filter = self.effective_query_filter(filter);
         if !distance.is_finite() || distance < 0.0 {
             return Vec::new();
         }
@@ -1139,6 +1222,9 @@ impl World2D {
     }
 
     fn apply_constant_forces(&mut self) {
+        if self.constant_forces.is_empty() {
+            return;
+        }
         let entries: Vec<(BodyId2D, ConstantForce2D)> =
             self.constant_forces.iter().map(|(k, v)| (*k, *v)).collect();
         for (body_id, cf) in entries {
@@ -1206,7 +1292,7 @@ impl World2D {
     }
 
     fn apply_area_and_point_effectors(&mut self, dt: f32) {
-        if dt <= 0.0 {
+        if dt <= 0.0 || self.effectors.is_empty() {
             return;
         }
         let collider_ids: Vec<ColliderId2D> = self.colliders.keys().copied().collect();
@@ -1354,6 +1440,9 @@ impl World2D {
     }
 
     fn apply_rider_sticks(&mut self) {
+        if self.riders.is_empty() {
+            return;
+        }
         let sticks: Vec<(BodyId2D, RiderStick2D)> =
             self.riders.iter().map(|(k, v)| (*k, *v)).collect();
         for (rider_id, stick) in sticks {
@@ -1434,6 +1523,11 @@ impl World2D {
                 }
                 BodyType2D::Kinematic => {
                     if let Some(target_pos) = body.move_target_position.take() {
+                        if dt > 1e-6 {
+                            let dx = target_pos[0] - body.position[0];
+                            let dy = target_pos[1] - body.position[1];
+                            body.linear_velocity = [dx / dt, dy / dt];
+                        }
                         body.position = target_pos;
                     } else {
                         body.position[0] += body.linear_velocity[0] * dt;

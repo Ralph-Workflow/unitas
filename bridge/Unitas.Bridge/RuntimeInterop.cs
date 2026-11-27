@@ -367,6 +367,30 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_collider2d_create_capsule(ulong runtime, ulong entity, float radius, float height, uint direction, float offsetX, float offsetY, int isTrigger, uint layer);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_create_polygon(ulong runtime, ulong entity, ulong attachedBody, IntPtr points, uint pointCount, float offsetX, float offsetY, uint isTrigger, uint layer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_create_edge(ulong runtime, ulong entity, ulong attachedBody, IntPtr points, uint pointCount, float offsetX, float offsetY, uint isTrigger, uint layer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_set_composite(ulong runtime, ulong entity, ulong compositeEntity, uint geometryType);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_tilemap_collider2d_build(ulong runtime, ulong entity, ulong compositeEntity, IntPtr tilemapPath, uint pathLen);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_set_material(ulong runtime, ulong entity, float friction, float bounciness);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_physics2d_apply_settings(ulong runtime, float gravityX, float gravityY, uint velocityIterations, uint positionIterations, uint queriesHitTriggers);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_physics2d_set_layer_collision(ulong runtime, uint layerA, uint layerB, uint enabled);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_physics2d_get_layer_collision(ulong runtime, uint layerA, uint layerB);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_collider2d_set_platform_effector(ulong runtime, ulong entity, int useOneWay, float surfaceArc, float rotationalOffset, float sideArc, int useSideFriction, int useSideBounce);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

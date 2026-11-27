@@ -62,6 +62,9 @@ namespace Unitas.Bridge.Tests
             TestBoxCastReachesTheCollidersItSweeps();
             TestRigidbodyConstraintsReachTheNativeBody();
             TestCapsuleColliderCreatesANativeCapsuleShape();
+            TestSceneParsesExtendedCollidersAndMaterials();
+            TestSceneParsesInlineTilemapCollider();
+            TestLayerCollisionMatrixRoundTripsThroughProvider();
         }
 
         private static void TestTwoDimensionalContactsReachTheTwoDimensionalHandlers()
@@ -290,6 +293,343 @@ namespace Unitas.Bridge.Tests
                     "the native capsule collider does not widen the ball",
                     0,
                     Physics2D.OverlapPoint(new Vector2(0.4f, 3.8f)).Length);
+            }
+        }
+
+        private static void TestSceneParsesExtendedCollidersAndMaterials()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "unitas_u2_scene_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "ProjectSettings"));
+            string assetsDir = Path.Combine(tempDir, "Assets");
+            Directory.CreateDirectory(assetsDir);
+
+            try
+            {
+                string matGuid = "11111111111111111111111111111111";
+                string matPath = Path.Combine(assetsDir, "Bouncy2D.physicsMaterial2D");
+                File.WriteAllText(
+                    matPath,
+                    "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!62 &6200000\nPhysicsMaterial2D:\n  m_Name: Bouncy2D\n  friction: 0.25\n  bounciness: 0.85\n");
+                File.WriteAllText(
+                    matPath + ".meta",
+                    "fileFormatVersion: 2\nguid: " + matGuid + "\n");
+
+                string tileGuid = "22222222222222222222222222222222";
+                string tilePath = Path.Combine(assetsDir, "GroundTile.asset");
+                File.WriteAllText(
+                    tilePath,
+                    "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &11400000\nTile:\n  m_Name: GroundTile\n  m_Sprite: {fileID: 21300000, guid: 33333333333333333333333333333333, type: 3}\n  m_ColliderType: 2\n");
+                File.WriteAllText(
+                    tilePath + ".meta",
+                    "fileFormatVersion: 2\nguid: " + tileGuid + "\n");
+
+                string scenePath = Path.Combine(assetsDir, "Extended2D.unity");
+                string sceneYaml = string.Join(
+                    "\n",
+                    new string[]
+                    {
+                        "%YAML 1.1",
+                        "%TAG !u! tag:unity3d.com,2011:",
+                        "--- !u!1 &100",
+                        "GameObject:",
+                        "  m_Name: CapsuleObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &101",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 100}",
+                        "  m_LocalPosition: {x: -10, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!70 &102",
+                        "CapsuleCollider2D:",
+                        "  m_GameObject: {fileID: 100}",
+                        "  m_Material: {fileID: 6200000, guid: " + matGuid + ", type: 2}",
+                        "  m_IsTrigger: 0",
+                        "  m_UsedByEffector: 1",
+                        "  m_Offset: {x: 0, y: 0}",
+                        "  m_Size: {x: 1, y: 3}",
+                        "  m_Direction: 0",
+                        "--- !u!1 &200",
+                        "GameObject:",
+                        "  m_Name: PolyObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &201",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 200}",
+                        "  m_LocalPosition: {x: 0, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!60 &202",
+                        "PolygonCollider2D:",
+                        "  m_GameObject: {fileID: 200}",
+                        "  m_IsTrigger: 0",
+                        "  m_Friction: 0.6",
+                        "  m_Bounciness: 0.3",
+                        "  m_Offset: {x: 0, y: 0}",
+                        "  m_Points:",
+                        "    m_Paths:",
+                        "    - - {x: -1, y: -1}",
+                        "      - {x: 1, y: -1}",
+                        "      - {x: 0, y: 1}",
+                        "--- !u!1 &300",
+                        "GameObject:",
+                        "  m_Name: EdgeObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &301",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 300}",
+                        "  m_LocalPosition: {x: 10, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!68 &302",
+                        "EdgeCollider2D:",
+                        "  m_GameObject: {fileID: 300}",
+                        "  m_IsTrigger: 0",
+                        "  m_EdgeRadius: 0.15",
+                        "  m_Offset: {x: 0, y: 0}",
+                        "  m_Points:",
+                        "  - {x: -2, y: 0}",
+                        "  - {x: 0, y: 1}",
+                        "  - {x: 2, y: 0}",
+                        "--- !u!1 &400",
+                        "GameObject:",
+                        "  m_Name: CompositeObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &401",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 400}",
+                        "  m_LocalPosition: {x: 20, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!50 &402",
+                        "Rigidbody2D:",
+                        "  m_GameObject: {fileID: 400}",
+                        "  m_BodyType: 2",
+                        "  m_Simulated: 1",
+                        "--- !u!66 &403",
+                        "CompositeCollider2D:",
+                        "  m_GameObject: {fileID: 400}",
+                        "  m_GeometryType: 1",
+                        "  m_GenerationType: 0",
+                        "  m_VertexDistance: 0.001",
+                        "  m_OffsetDistance: 0.002",
+                        "  m_EdgeRadius: 0.05",
+                        "--- !u!61 &404",
+                        "BoxCollider2D:",
+                        "  m_GameObject: {fileID: 400}",
+                        "  m_UsedByComposite: 1",
+                        "  m_Offset: {x: 0, y: 0}",
+                        "  m_Size: {x: 2, y: 2}",
+                        "--- !u!1 &500",
+                        "GameObject:",
+                        "  m_Name: TilemapObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &501",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 500}",
+                        "  m_LocalPosition: {x: 30, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!19719996 &502",
+                        "TilemapCollider2D:",
+                        "  m_GameObject: {fileID: 500}",
+                        "  m_MaximumTileChangeCount: 500",
+                        "  m_ExtrusionFactor: 0.25",
+                        "  m_TilemapAsset: {fileID: 11400000, guid: " + tileGuid + ", type: 2}",
+                        string.Empty,
+                    });
+                File.WriteAllText(scenePath, sceneYaml);
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(scenePath);
+                    AssertExtendedSceneCollidersMaterialized();
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        private static void AssertExtendedSceneCollidersMaterialized()
+        {
+            GameObject? capsuleGo = GameObject.Find("CapsuleObj");
+            Check.That("CapsuleObj is materialized from the scene", capsuleGo != null);
+            CapsuleCollider2D? capsule = capsuleGo?.GetComponent<CapsuleCollider2D>();
+            Check.That("CapsuleCollider2D is attached to CapsuleObj", capsule != null);
+            if (capsule != null)
+            {
+                Check.Equal("capsule size X parsed", 1f, capsule.size.x);
+                Check.Equal("capsule size Y parsed", 3f, capsule.size.y);
+                Check.Equal("capsule direction parsed", 0, capsule.direction);
+                Check.That("capsule usedByEffector parsed", capsule.usedByEffector);
+                Check.That("capsule sharedMaterial resolved from GUID", capsule.sharedMaterial != null);
+                if (capsule.sharedMaterial != null)
+                {
+                    Check.Equal("material name parsed", "Bouncy2D", capsule.sharedMaterial.name);
+                    Check.That("material friction parsed", Math.Abs(capsule.sharedMaterial.friction - 0.25f) < 0.001f);
+                    Check.That("material bounciness parsed", Math.Abs(capsule.sharedMaterial.bounciness - 0.85f) < 0.001f);
+                }
+            }
+
+            GameObject? polyGo = GameObject.Find("PolyObj");
+            Check.That("PolyObj is materialized from the scene", polyGo != null);
+            PolygonCollider2D? poly = polyGo?.GetComponent<PolygonCollider2D>();
+            Check.That("PolygonCollider2D is attached to PolyObj", poly != null);
+            if (poly != null)
+            {
+                Check.Equal("polygon vertex count parsed", 3, poly.GetTotalPointCount());
+                Check.That("polygon inline material parsed", poly.sharedMaterial != null);
+                if (poly.sharedMaterial != null)
+                {
+                    Check.That("polygon inline friction parsed", Math.Abs(poly.sharedMaterial.friction - 0.6f) < 0.001f);
+                    Check.That("polygon inline bounciness parsed", Math.Abs(poly.sharedMaterial.bounciness - 0.3f) < 0.001f);
+                }
+                Collider2D[] polyHits = Physics2D.OverlapPoint(new Vector2(0f, 0f));
+                Check.Equal("native polygon collider overlaps interior point", 1, polyHits.Length);
+            }
+
+            GameObject? edgeGo = GameObject.Find("EdgeObj");
+            Check.That("EdgeObj is materialized from the scene", edgeGo != null);
+            EdgeCollider2D? edge = edgeGo?.GetComponent<EdgeCollider2D>();
+            Check.That("EdgeCollider2D is attached to EdgeObj", edge != null);
+            if (edge != null)
+            {
+                Check.Equal("edge point count parsed", 3, edge.pointCount);
+                Check.Equal("edge segment count parsed", 2, edge.edgeCount);
+                Check.That("edge radius parsed", Math.Abs(edge.edgeRadius - 0.15f) < 0.001f);
+            }
+
+            GameObject? compGo = GameObject.Find("CompositeObj");
+            Check.That("CompositeObj is materialized from the scene", compGo != null);
+            CompositeCollider2D? composite = compGo?.GetComponent<CompositeCollider2D>();
+            BoxCollider2D? compBox = compGo?.GetComponent<BoxCollider2D>();
+            Check.That("CompositeCollider2D is attached to CompositeObj", composite != null);
+            Check.That("BoxCollider2D is attached to CompositeObj", compBox != null);
+            if (composite != null && compBox != null)
+            {
+                Check.Equal("composite geometryType parsed", (int)CompositeCollider2D.GeometryType.Polygons, (int)composite.geometryType);
+                Check.Equal("composite generationType parsed", (int)CompositeCollider2D.GenerationType.Synchronous, (int)composite.generationType);
+                Check.That("composite vertexDistance parsed", Math.Abs(composite.vertexDistance - 0.001f) < 0.0001f);
+                Check.That("composite offsetDistance parsed", Math.Abs(composite.offsetDistance - 0.002f) < 0.0001f);
+                Check.That("composite edgeRadius parsed", Math.Abs(composite.edgeRadius - 0.05f) < 0.0001f);
+                Check.That("part collider usedByComposite parsed", compBox.usedByComposite);
+                Check.That("part collider composite links to CompositeCollider2D", ReferenceEquals(compBox.composite, composite));
+            }
+
+            GameObject? tilemapGo = GameObject.Find("TilemapObj");
+            Check.That("TilemapObj is materialized from the scene", tilemapGo != null);
+            TilemapCollider2D? tilemap = tilemapGo?.GetComponent<TilemapCollider2D>();
+            Check.That("TilemapCollider2D is attached to TilemapObj", tilemap != null);
+            if (tilemap != null)
+            {
+                Check.Equal("tilemap maximumTileChangeCount parsed", 500u, tilemap.maximumTileChangeCount);
+                Check.That("tilemap extrusionFactor parsed", Math.Abs(tilemap.extrusionFactor - 0.25f) < 0.001f);
+                Check.That("tilemap asset path resolved from GUID", tilemap.tilemapAssetPath.EndsWith("GroundTile.asset", StringComparison.Ordinal));
+            }
+        }
+
+        private static void TestSceneParsesInlineTilemapCollider()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "unitas_u2_tilemap_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                string scenePath = Path.Combine(tempDir, "InlineTilemap.unity");
+                string sceneYaml = string.Join(
+                    "\n",
+                    new string[]
+                    {
+                        "%YAML 1.1",
+                        "%TAG !u! tag:unity3d.com,2011:",
+                        "--- !u!1 &600",
+                        "GameObject:",
+                        "  m_Name: InlineTilemapObj",
+                        "  m_Layer: 0",
+                        "  m_IsActive: 1",
+                        "--- !u!4 &601",
+                        "Transform:",
+                        "  m_GameObject: {fileID: 600}",
+                        "  m_LocalPosition: {x: 0, y: 0, z: 0}",
+                        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+                        "  m_LocalScale: {x: 1, y: 1, z: 1}",
+                        "--- !u!1839735485 &602",
+                        "Tilemap:",
+                        "  m_GameObject: {fileID: 600}",
+                        "  m_Tiles:",
+                        "  - m_X: 0",
+                        "    m_Y: 0",
+                        "    m_Z: 0",
+                        "    m_TileIndex: 0",
+                        "  m_TileAssetArray: []",
+                        "--- !u!19719996 &603",
+                        "TilemapCollider2D:",
+                        "  m_GameObject: {fileID: 600}",
+                        "  m_MaximumTileChangeCount: 1000",
+                        "  m_ExtrusionFactor: 0",
+                        string.Empty,
+                    });
+                File.WriteAllText(scenePath, sceneYaml);
+
+                using (BridgeHost host = new BridgeHost())
+                {
+                    host.LoadScene(scenePath);
+                    GameObject? go = GameObject.Find("InlineTilemapObj");
+                    Check.That("InlineTilemapObj is materialized", go != null);
+                    TilemapCollider2D? tilemap = go?.GetComponent<TilemapCollider2D>();
+                    Check.That("TilemapCollider2D is attached to InlineTilemapObj", tilemap != null);
+                    if (tilemap != null)
+                    {
+                        Check.That("inline Tilemap YAML is captured on TilemapCollider2D", tilemap.tilemapAssetPath.Contains("Tilemap:", StringComparison.Ordinal));
+                    }
+                    Collider2D[] hits = Physics2D.OverlapPoint(new Vector2(0.5f, 0.5f));
+                    Check.Equal("native tilemap collider built from inline Tilemap YAML overlaps cell (0,0)", 1, hits.Length);
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, true);
+                }
+            }
+        }
+
+        private static void TestLayerCollisionMatrixRoundTripsThroughProvider()
+        {
+            string scenePath = ResolveFixture("bridge/Unitas.Bridge.Tests/Fixtures/scene_physics_2d.unity");
+
+            using (BridgeHost host = new BridgeHost())
+            {
+                host.LoadScene(scenePath);
+
+                Check.That("layers 1 and 2 collide by default", !Physics2D.GetIgnoreLayerCollision(1, 2));
+                Physics2D.IgnoreLayerCollision(1, 2, true);
+                Check.That("ignoring collision between layers 1 and 2 reads back as ignored", Physics2D.GetIgnoreLayerCollision(1, 2));
+                Check.That("ignoring collision is symmetric for layers 2 and 1", Physics2D.GetIgnoreLayerCollision(2, 1));
+                Check.Equal("layer 1 collision mask clears bit 2", 0, Physics2D.GetLayerCollisionMask(1) & (1 << 2));
+
+                Physics2D.IgnoreLayerCollision(1, 2, false);
+                Check.That("re-enabling collision between layers 1 and 2 clears ignore flag", !Physics2D.GetIgnoreLayerCollision(1, 2));
+                Check.That("layer 1 collision mask sets bit 2", (Physics2D.GetLayerCollisionMask(1) & (1 << 2)) != 0);
+
+                int originalMask = Physics2D.GetLayerCollisionMask(3);
+                int customMask = originalMask & ~(1 << 4);
+                Physics2D.SetLayerCollisionMask(3, customMask);
+                Check.That("SetLayerCollisionMask disables collision with cleared layer bit", Physics2D.GetIgnoreLayerCollision(3, 4));
+                Physics2D.SetLayerCollisionMask(3, originalMask);
+                Check.That("restoring layer collision mask re-enables collision", !Physics2D.GetIgnoreLayerCollision(3, 4));
             }
         }
 

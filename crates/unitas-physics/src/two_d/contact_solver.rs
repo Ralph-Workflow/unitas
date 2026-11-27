@@ -1,33 +1,151 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::two_d::collider::{
-    compute_contact2d, dot2, length2, sub2, transform_point2, Collider2D, ColliderId2D,
-    RawContact2D,
+    compute_contact2d, dot2, length2, shape_vertices_world, sub2, transform_point2, Collider2D,
+    ColliderId2D, RawContact2D, Shape2D,
 };
 use crate::two_d::event::ContactPoint2D;
 
 use super::{ordered_pair, PairState2D, World2D, DEFAULT_SOLVER_ITERATIONS_2D};
+
+fn shape_local_bounds(shape: &Shape2D) -> ([f32; 2], [f32; 2]) {
+    match shape {
+        Shape2D::Circle { radius } => {
+            let r = radius.max(0.0);
+            ([-r, -r], [r, r])
+        }
+        Shape2D::Box { half_extents } => {
+            let hx = half_extents[0].max(0.0);
+            let hy = half_extents[1].max(0.0);
+            ([-hx, -hy], [hx, hy])
+        }
+        Shape2D::Edge { start, end } => (
+            [start[0].min(end[0]), start[1].min(end[1])],
+            [start[0].max(end[0]), start[1].max(end[1])],
+        ),
+        Shape2D::Capsule { radius, height, .. } => {
+            let extent = height.max(2.0 * radius).max(0.0) * 0.5 + radius.max(0.0);
+            ([-extent, -extent], [extent, extent])
+        }
+        Shape2D::Polygon { .. } => {
+            shape_vertices_world(shape, [0.0, 0.0], 0.0).map_or(([0.0, 0.0], [0.0, 0.0]), |verts| {
+                let mut min_x = f32::INFINITY;
+                let mut min_y = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for v in verts {
+                    min_x = min_x.min(v[0]);
+                    min_y = min_y.min(v[1]);
+                    max_x = max_x.max(v[0]);
+                    max_y = max_y.max(v[1]);
+                }
+                ([min_x, min_y], [max_x, max_y])
+            })
+        }
+        Shape2D::Composite { shapes } => {
+            if shapes.is_empty() {
+                return ([0.0, 0.0], [0.0, 0.0]);
+            }
+            let mut min_x = f32::INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for sub in shapes {
+                let (smin, smax) = shape_local_bounds(sub);
+                min_x = min_x.min(smin[0]);
+                min_y = min_y.min(smin[1]);
+                max_x = max_x.max(smax[0]);
+                max_y = max_y.max(smax[1]);
+            }
+            ([min_x, min_y], [max_x, max_y])
+        }
+    }
+}
+
+fn world_aabb(shape: &Shape2D, center: [f32; 2], angle: f32) -> ([f32; 2], [f32; 2]) {
+    let (lmin, lmax) = shape_local_bounds(shape);
+    if angle.abs() <= 1e-6 {
+        return (
+            [center[0] + lmin[0], center[1] + lmin[1]],
+            [center[0] + lmax[0], center[1] + lmax[1]],
+        );
+    }
+    let corners = [
+        [lmin[0], lmin[1]],
+        [lmax[0], lmin[1]],
+        [lmax[0], lmax[1]],
+        [lmin[0], lmax[1]],
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for c in corners {
+        let w = transform_point2(c, center, angle);
+        min_x = min_x.min(w[0]);
+        min_y = min_y.min(w[1]);
+        max_x = max_x.max(w[0]);
+        max_y = max_y.max(w[1]);
+    }
+    ([min_x, min_y], [max_x, max_y])
+}
 
 impl World2D {
     pub(super) fn solve_and_collect_contacts(
         &mut self,
         _dt: f32,
     ) -> BTreeMap<(ColliderId2D, ColliderId2D), PairState2D> {
-        let ids: Vec<ColliderId2D> = self.colliders.keys().copied().collect();
+        let mut active_colliders: Vec<(ColliderId2D, [f32; 2], [f32; 2])> =
+            Vec::with_capacity(self.colliders.len());
+        for (id, col) in &self.colliders {
+            if !self.is_collider_simulated(col) {
+                continue;
+            }
+            let (center, angle) = self.collider_world_pose(col);
+            let (mut bmin, mut bmax) = world_aabb(&col.shape, center, angle);
+            bmin[0] -= 0.05;
+            bmin[1] -= 0.05;
+            bmax[0] += 0.05;
+            bmax[1] += 0.05;
+            active_colliders.push((*id, bmin, bmax));
+        }
+        active_colliders.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]).then(a.0.cmp(&b.0)));
+
+        let mut candidate_pairs: Vec<(ColliderId2D, ColliderId2D)> = Vec::new();
+        for i in 0..active_colliders.len() {
+            let (id_a, min_a, max_a) = active_colliders[i];
+            for &(id_b, min_b, max_b) in &active_colliders[(i + 1)..] {
+                if min_b[0] > max_a[0] {
+                    break;
+                }
+                if max_b[1] < min_a[1] || min_b[1] > max_a[1] {
+                    continue;
+                }
+                let pair = ordered_pair(id_a, id_b);
+                if !self.ignored_pairs.contains(&pair) {
+                    candidate_pairs.push(pair);
+                }
+            }
+        }
+
         let mut active_pairs: BTreeMap<(ColliderId2D, ColliderId2D), PairState2D> = BTreeMap::new();
         let mut still_overlapping_all: BTreeSet<(ColliderId2D, ColliderId2D)> = BTreeSet::new();
 
         for iter in 0..DEFAULT_SOLVER_ITERATIONS_2D {
-            for i in 0..ids.len() {
-                for j in (i + 1)..ids.len() {
-                    self.solve_pair(
-                        ids[i],
-                        ids[j],
-                        iter,
-                        &mut active_pairs,
-                        &mut still_overlapping_all,
-                    );
+            let mut any_impulse = false;
+            for &(id_a, id_b) in &candidate_pairs {
+                if self.solve_pair(
+                    id_a,
+                    id_b,
+                    iter,
+                    &mut active_pairs,
+                    &mut still_overlapping_all,
+                ) {
+                    any_impulse = true;
                 }
+            }
+            if iter == 0 && !any_impulse {
+                break;
             }
         }
 
@@ -44,49 +162,43 @@ impl World2D {
         iter: usize,
         active_pairs: &mut BTreeMap<(ColliderId2D, ColliderId2D), PairState2D>,
         still_overlapping_all: &mut BTreeSet<(ColliderId2D, ColliderId2D)>,
-    ) {
+    ) -> bool {
         let pair_key = ordered_pair(id_a, id_b);
         if self.ignored_pairs.contains(&pair_key) {
-            return;
+            return false;
         }
-        let (Some(col_a), Some(col_b)) = (
-            self.colliders.get(&id_a).cloned(),
-            self.colliders.get(&id_b).cloned(),
-        ) else {
-            return;
-        };
-        if !self.is_collider_simulated(&col_a) || !self.is_collider_simulated(&col_b) {
-            return;
-        }
-        if col_a.attached_body.is_some() && col_a.attached_body == col_b.attached_body {
-            return;
-        }
-        let ep_a = self.endpoint_for(&col_a);
-        let ep_b = self.endpoint_for(&col_b);
-        if !self
-            .collision_matrix
-            .is_enabled(ep_a.layer as usize, ep_b.layer as usize)
-        {
-            return;
-        }
-
-        let (center_a, angle_a) = self.collider_world_pose(&col_a);
-        let (center_b, angle_b) = self.collider_world_pose(&col_b);
-        let Some(raw_contact) = compute_contact2d(
-            &col_a.shape,
-            center_a,
-            angle_a,
-            &col_b.shape,
-            center_b,
-            angle_b,
-        ) else {
-            return;
+        let Some((col_a, col_b, center_a, angle_a, center_b, angle_b, ep_a, ep_b, raw_contact)) =
+            (self.colliders.get(&id_a), self.colliders.get(&id_b))
+                .0
+                .zip(self.colliders.get(&id_b))
+                .and_then(|(ca, cb)| {
+                    if !self.is_collider_simulated(ca) || !self.is_collider_simulated(cb) {
+                        return None;
+                    }
+                    if ca.attached_body.is_some() && ca.attached_body == cb.attached_body {
+                        return None;
+                    }
+                    let epa = self.endpoint_for(ca);
+                    let epb = self.endpoint_for(cb);
+                    if !self
+                        .collision_matrix
+                        .is_enabled(epa.layer as usize, epb.layer as usize)
+                    {
+                        return None;
+                    }
+                    let (ctra, anga) = self.collider_world_pose(ca);
+                    let (ctrb, angb) = self.collider_world_pose(cb);
+                    let rc = compute_contact2d(&ca.shape, ctra, anga, &cb.shape, ctrb, angb)?;
+                    Some((ca.clone(), cb.clone(), ctra, anga, ctrb, angb, epa, epb, rc))
+                })
+        else {
+            return false;
         };
 
         still_overlapping_all.insert(pair_key);
 
         if self.pass_through_pairs.contains(&pair_key) {
-            return;
+            return false;
         }
 
         let vel_a = self.collider_velocity(&col_a);
@@ -96,7 +208,7 @@ impl World2D {
         if let Some(plat_a) = self.platform_effector_for(&col_a) {
             if !plat_a.allows_layer(ep_b.layer) {
                 self.pass_through_pairs.insert(pair_key);
-                return;
+                return false;
             }
             if !self.touching_pairs.contains_key(&pair_key) {
                 let prev_pos_b = col_b
@@ -112,7 +224,7 @@ impl World2D {
                     || plat_a.should_pass_through(angle_a, raw_contact.normal, rel_vel_b_minus_a)
                 {
                     self.pass_through_pairs.insert(pair_key);
-                    return;
+                    return false;
                 }
             }
         }
@@ -120,7 +232,7 @@ impl World2D {
         if let Some(plat_b) = self.platform_effector_for(&col_b) {
             if !plat_b.allows_layer(ep_a.layer) {
                 self.pass_through_pairs.insert(pair_key);
-                return;
+                return false;
             }
             if !self.touching_pairs.contains_key(&pair_key) {
                 let prev_pos_a = col_a
@@ -138,7 +250,7 @@ impl World2D {
                     || plat_b.should_pass_through(angle_b, normal_from_b_to_a, rel_vel_a_minus_b)
                 {
                     self.pass_through_pairs.insert(pair_key);
-                    return;
+                    return false;
                 }
             }
         }
@@ -157,7 +269,7 @@ impl World2D {
                     },
                 );
             }
-            return;
+            return false;
         }
 
         let normal_impulse = match self.resolve_pair_impulse(
@@ -209,6 +321,7 @@ impl World2D {
                 contacts_for_a: vec![contact_pt],
                 rel_vel_for_a: rel_vel_b_minus_a,
             });
+        normal_impulse > 0.0 || raw_contact.depth > 1e-6
     }
 
     fn resolve_pair_impulse(
@@ -254,25 +367,34 @@ impl World2D {
         }
 
         let normal_speed = dot2(rel_vel_b_minus_a, raw_contact.normal);
-        if normal_speed < 0.0 {
-            let mut restitution = 0.5 * (col_a.material.bounciness + col_b.material.bounciness);
-            let mut friction = (col_a.material.friction * col_b.material.friction).sqrt();
-            if let Some((use_side_friction, use_side_bounce)) =
-                self.platform_side_rules(col_a, angle_a, col_b, angle_b, raw_contact.normal)
-            {
-                if !use_side_friction {
-                    friction = 0.0;
-                }
-                if !use_side_bounce {
-                    restitution = 0.0;
-                }
+        let tangent_vel = [
+            rel_vel_b_minus_a[0] - raw_contact.normal[0] * normal_speed,
+            rel_vel_b_minus_a[1] - raw_contact.normal[1] * normal_speed,
+        ];
+        let tangent_speed = length2(tangent_vel);
+
+        let mut restitution = 0.5 * (col_a.material.bounciness + col_b.material.bounciness);
+        let mut friction = (col_a.material.friction * col_b.material.friction).sqrt();
+        if let Some((use_side_friction, use_side_bounce)) =
+            self.platform_side_rules(col_a, angle_a, col_b, angle_b, raw_contact.normal)
+        {
+            if !use_side_friction {
+                friction = 0.0;
             }
+            if !use_side_bounce {
+                restitution = 0.0;
+            }
+        }
+
+        if normal_speed < 0.0 {
             normal_impulse = -(1.0 + restitution) * normal_speed / inv_sum;
 
             if let Some(bid_a) = col_a.attached_body {
                 if let Some(body_a) = self.bodies.get_mut(&bid_a) {
                     if body_a.is_dynamic() {
-                        if body_a.is_sleeping() && normal_impulse > 1e-4 {
+                        if body_a.is_sleeping()
+                            && (normal_impulse > 1e-4 || length2(rel_vel_b_minus_a) > 1e-4)
+                        {
                             body_a.wake_up();
                         }
                         body_a.linear_velocity[0] -= raw_contact.normal[0] * normal_impulse * inv_a;
@@ -283,7 +405,9 @@ impl World2D {
             if let Some(bid_b) = col_b.attached_body {
                 if let Some(body_b) = self.bodies.get_mut(&bid_b) {
                     if body_b.is_dynamic() {
-                        if body_b.is_sleeping() && normal_impulse > 1e-4 {
+                        if body_b.is_sleeping()
+                            && (normal_impulse > 1e-4 || length2(rel_vel_b_minus_a) > 1e-4)
+                        {
                             body_b.wake_up();
                         }
                         body_b.linear_velocity[0] += raw_contact.normal[0] * normal_impulse * inv_b;
@@ -291,32 +415,43 @@ impl World2D {
                     }
                 }
             }
+        }
 
-            let tangent_vel = [
-                rel_vel_b_minus_a[0] - raw_contact.normal[0] * normal_speed,
-                rel_vel_b_minus_a[1] - raw_contact.normal[1] * normal_speed,
+        let effective_normal_impulse = if normal_impulse > 0.0 {
+            normal_impulse
+        } else if raw_contact.depth > 1e-6 && normal_speed <= 1e-4 {
+            let grav_mag = length2(self.gravity).max(9.81);
+            grav_mag * self.fixed_timestep / inv_sum
+        } else {
+            0.0
+        };
+
+        if tangent_speed > 1e-6 && effective_normal_impulse > 0.0 && friction > 0.0 {
+            let friction_impulse =
+                (tangent_speed / inv_sum).min(friction * effective_normal_impulse);
+            let t_dir = [
+                tangent_vel[0] / tangent_speed,
+                tangent_vel[1] / tangent_speed,
             ];
-            let tangent_speed = length2(tangent_vel);
-            if tangent_speed > 1e-6 {
-                let friction_impulse = (tangent_speed / inv_sum).min(friction * normal_impulse);
-                let t_dir = [
-                    tangent_vel[0] / tangent_speed,
-                    tangent_vel[1] / tangent_speed,
-                ];
-                if let Some(bid_a) = col_a.attached_body {
-                    if let Some(body_a) = self.bodies.get_mut(&bid_a) {
-                        if body_a.is_dynamic() {
-                            body_a.linear_velocity[0] += t_dir[0] * friction_impulse * inv_a;
-                            body_a.linear_velocity[1] += t_dir[1] * friction_impulse * inv_a;
+            if let Some(bid_a) = col_a.attached_body {
+                if let Some(body_a) = self.bodies.get_mut(&bid_a) {
+                    if body_a.is_dynamic() {
+                        if body_a.is_sleeping() && friction_impulse > 1e-5 {
+                            body_a.wake_up();
                         }
+                        body_a.linear_velocity[0] += t_dir[0] * friction_impulse * inv_a;
+                        body_a.linear_velocity[1] += t_dir[1] * friction_impulse * inv_a;
                     }
                 }
-                if let Some(bid_b) = col_b.attached_body {
-                    if let Some(body_b) = self.bodies.get_mut(&bid_b) {
-                        if body_b.is_dynamic() {
-                            body_b.linear_velocity[0] -= t_dir[0] * friction_impulse * inv_b;
-                            body_b.linear_velocity[1] -= t_dir[1] * friction_impulse * inv_b;
+            }
+            if let Some(bid_b) = col_b.attached_body {
+                if let Some(body_b) = self.bodies.get_mut(&bid_b) {
+                    if body_b.is_dynamic() {
+                        if body_b.is_sleeping() && friction_impulse > 1e-5 {
+                            body_b.wake_up();
                         }
+                        body_b.linear_velocity[0] -= t_dir[0] * friction_impulse * inv_b;
+                        body_b.linear_velocity[1] -= t_dir[1] * friction_impulse * inv_b;
                     }
                 }
             }

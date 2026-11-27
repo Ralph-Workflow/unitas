@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::project_settings::{
-    PhysicsProjectSettings, QualityLevel, QualitySettings, parse_physics_manager,
-    parse_quality_settings,
+    Physics2DProjectSettings, PhysicsProjectSettings, QualityLevel, QualitySettings,
+    parse_physics_manager, parse_physics2d_settings, parse_quality_settings,
 };
 use unitas_asset::scene::{
     AudioSourceComponent, CharacterControllerComponent, ParticleBinding, ScriptBinding,
@@ -43,7 +43,9 @@ use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld};
-use crate::physics_settings::{layer_matrix_of, solver_settings_of};
+use crate::physics_settings::{
+    apply_physics2d_project_settings, layer_matrix_of, solver_settings_of,
+};
 use crate::player_loop::{
     BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
     PlayerLoopStep, PlayerLoopSystem,
@@ -280,6 +282,7 @@ pub struct Runtime {
     pub(crate) ui_pressed_button: Option<EntityId>,
     pub(crate) project_identity: ProjectIdentity,
     pub(crate) physics_settings: Option<PhysicsProjectSettings>,
+    pub(crate) physics_2d_settings: Option<Physics2DProjectSettings>,
     pub(crate) quality_settings: QualitySettings,
     pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
     pub(crate) collision_payloads_2d: HashMap<(u64, u64), CollisionPayload2D>,
@@ -329,6 +332,7 @@ impl Runtime {
             ui_pressed_button: None,
             project_identity: ProjectIdentity::default(),
             physics_settings: None,
+            physics_2d_settings: None,
             quality_settings: QualitySettings::default(),
             collision_payloads: HashMap::new(),
             collision_payloads_2d: HashMap::new(),
@@ -721,6 +725,7 @@ impl Runtime {
         self.input.reset();
         self.project_identity = settings.identity.clone();
         self.physics_settings = settings.physics;
+        self.physics_2d_settings = settings.physics_2d;
         self.quality_settings = settings.quality.clone();
         if let Some(physics) = settings.physics.as_ref() {
             let matrix = layer_matrix_of(physics);
@@ -728,10 +733,16 @@ impl Runtime {
             let solver = solver_settings_of(physics);
             self.physics.set_solver_settings_3d(solver);
         }
+        let effective_2d = settings.physics_2d.unwrap_or_default();
+        apply_physics2d_project_settings(self.physics.world_2d_mut(), &effective_2d);
     }
 
     pub fn physics_project_settings(&self) -> Option<&PhysicsProjectSettings> {
         self.physics_settings.as_ref()
+    }
+
+    pub fn physics_2d_project_settings(&self) -> Option<&Physics2DProjectSettings> {
+        self.physics_2d_settings.as_ref()
     }
 
     pub fn quality_settings(&self) -> &QualitySettings {
@@ -1953,7 +1964,16 @@ impl Runtime {
     }
 
     pub fn body_position(&self, entity: EntityId) -> Option<[f64; 3]> {
-        self.physics.world_3d().position(entity)
+        if let Some(pos) = self.physics.world_3d().position(entity) {
+            return Some(pos);
+        }
+        if let Some(pos_2d) = self.physics.body_position_2d(entity) {
+            let z = self
+                .entity_transform(entity)
+                .map_or(0.0, |t| f64::from(t.translation[2]));
+            return Some([f64::from(pos_2d[0]), f64::from(pos_2d[1]), z]);
+        }
+        None
     }
 
     pub fn body_velocity(&self, entity: EntityId) -> Option<[f64; 3]> {
@@ -2336,6 +2356,7 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
             axes: default_axis_configs(),
             identity: ProjectIdentity::default(),
             physics: None,
+            physics_2d: None,
             quality: QualitySettings::default(),
         };
     };
@@ -2359,6 +2380,10 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
         Ok(Some(settings)) => Some(settings),
         Ok(None) | Err(_) => None,
     };
+    let physics_2d = match parse_physics2d_settings(&settings_dir.join("Physics2DSettings.asset")) {
+        Ok(Some(settings)) => Some(settings),
+        Ok(None) | Err(_) => None,
+    };
     let quality = match parse_quality_settings(&settings_dir.join("QualitySettings.asset")) {
         Ok(Some(settings)) => settings,
         Ok(None) | Err(_) => QualitySettings::default(),
@@ -2369,6 +2394,7 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
         axes,
         identity,
         physics,
+        physics_2d,
         quality,
     }
 }
@@ -2379,6 +2405,7 @@ struct DiscoveredProject {
     axes: Vec<AxisConfig>,
     identity: ProjectIdentity,
     physics: Option<PhysicsProjectSettings>,
+    physics_2d: Option<Physics2DProjectSettings>,
     quality: QualitySettings,
 }
 
@@ -2635,6 +2662,105 @@ mod tests {
         assert!(!runtime.audio().is_gameplay_paused());
         assert_eq!(runtime.audio().inaudible_reason(sfx), None);
         assert_eq!(runtime.audio().inaudible_reason(music), None);
+        Ok(())
+    }
+
+    #[test]
+    fn physics2d_project_settings_and_abi_entry_points_configure_world_2d_and_survive_clear()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{
+            unitas_runtime_destroy, unitas_runtime_new, unitas_runtime_physics2d_apply_settings,
+            unitas_runtime_physics2d_clear, unitas_runtime_physics2d_get_layer_collision,
+            unitas_runtime_physics2d_set_layer_collision,
+        };
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let temp_root = std::env::temp_dir().join(format!(
+            "unitas_runtime_p2d_settings_{}_{nanos}",
+            std::process::id()
+        ));
+        let settings_dir = temp_root.join("ProjectSettings");
+        let scenes_dir = temp_root.join("Assets").join("Scenes");
+        std::fs::create_dir_all(&settings_dir)?;
+        std::fs::create_dir_all(&scenes_dir)?;
+
+        let mut matrix_bits = [0xFFFF_FFFFu32; 32];
+        matrix_bits[0] &= !(1u32 << 2);
+        matrix_bits[2] &= !(1u32 << 0);
+        let matrix_hex =
+            unitas_asset::project_settings::format_layer_collision_matrix(&matrix_bits);
+        let physics2d_yaml = format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 5\n  m_Gravity: {{x: 2.5, y: -14.0}}\n  m_VelocityIterations: 11\n  m_PositionIterations: 6\n  m_QueriesHitTriggers: 0\n  m_QueriesStartInColliders: 0\n  m_CallbacksOnDisable: 0\n  m_AutoSyncTransforms: 0\n  m_LayerCollisionMatrix: {matrix_hex}\n"
+        );
+        std::fs::write(settings_dir.join("Physics2DSettings.asset"), physics2d_yaml)?;
+
+        let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Root\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+        let scene_path = scenes_dir.join("Test2D.unity");
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+
+        let world_2d = runtime.physics_mut().world_2d();
+        assert_eq!(world_2d.gravity(), [2.5, -14.0]);
+        assert_eq!(world_2d.velocity_iterations(), 11);
+        assert_eq!(world_2d.position_iterations(), 6);
+        assert!(!world_2d.queries_hit_triggers());
+        assert!(!world_2d.queries_start_in_colliders());
+        assert!(!world_2d.callbacks_on_disable());
+        assert!(!world_2d.auto_sync_transforms());
+        assert!(world_2d.get_ignore_layer_collision(0, 2));
+        assert!(!world_2d.get_ignore_layer_collision(0, 1));
+
+        runtime.physics_mut().clear_2d();
+        let cleared_2d = runtime.physics_mut().world_2d();
+        assert_eq!(cleared_2d.gravity(), [2.5, -14.0]);
+        assert_eq!(cleared_2d.velocity_iterations(), 11);
+        assert_eq!(cleared_2d.position_iterations(), 6);
+        assert!(!cleared_2d.queries_hit_triggers());
+        assert!(cleared_2d.get_ignore_layer_collision(0, 2));
+
+        std::fs::remove_dir_all(&temp_root)?;
+
+        let handle = unitas_runtime_new();
+        assert_ne!(handle, 0);
+        assert_eq!(
+            unitas_runtime_physics2d_apply_settings(handle, 0.0, -20.0, 9, 4, 0),
+            0
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+            1
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_set_layer_collision(handle, 1, 2, 0),
+            0
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+            0
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_get_layer_collision(handle, 2, 1),
+            0
+        );
+        assert_eq!(unitas_runtime_physics2d_clear(handle), 0);
+        assert_eq!(
+            unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+            0
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_set_layer_collision(handle, 32, 0, 1),
+            -2
+        );
+        assert_eq!(
+            unitas_runtime_physics2d_get_layer_collision(handle, 0, 32),
+            -2
+        );
+        assert_eq!(unitas_runtime_destroy(handle), 0);
         Ok(())
     }
 }

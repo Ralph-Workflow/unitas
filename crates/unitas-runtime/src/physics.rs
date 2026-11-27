@@ -135,7 +135,7 @@ impl PhysicsRuntimeWorld {
     }
 
     pub fn clear_2d(&mut self) {
-        self.world_2d = World2D::new();
+        self.world_2d.clear_entities();
         self.bodies_2d.clear();
         self.colliders_2d.clear();
     }
@@ -272,10 +272,62 @@ impl PhysicsRuntimeWorld {
                 return false;
             };
             collider.shape = desc.shape;
-            collider.offset = desc.offset;
             collider.is_trigger = desc.is_trigger;
             collider.layer = desc.layer;
             collider.attached_body = desc.attached_body;
+            let _ = self.world_2d.set_collider_offset(existing, desc.offset);
+            return true;
+        }
+        self.add_collider_2d(desc);
+        true
+    }
+
+    pub fn set_polygon_collider_2d(&mut self, entity: EntityId, desc: ColliderDesc2D) -> bool {
+        let existing = self.colliders_2d.get(&entity).and_then(|ids| {
+            ids.iter().copied().find(|id| {
+                self.world_2d
+                    .collider(*id)
+                    .is_some_and(|collider| matches!(&collider.shape, Shape2D::Polygon { .. }))
+            })
+        });
+        if let Some(existing) = existing {
+            let Some(collider) = self.world_2d.collider_mut(existing) else {
+                return false;
+            };
+            collider.shape = desc.shape;
+            collider.is_trigger = desc.is_trigger;
+            collider.layer = desc.layer;
+            collider.attached_body = desc.attached_body;
+            let _ = self.world_2d.set_collider_offset(existing, desc.offset);
+            return true;
+        }
+        self.add_collider_2d(desc);
+        true
+    }
+
+    pub fn set_edge_collider_2d(&mut self, entity: EntityId, desc: ColliderDesc2D) -> bool {
+        let existing = self.colliders_2d.get(&entity).and_then(|ids| {
+            ids.iter().copied().find(|id| {
+                self.world_2d.collider(*id).is_some_and(|collider| {
+                    matches!(&collider.shape, Shape2D::Edge { .. })
+                        || matches!(
+                            &collider.shape,
+                            Shape2D::Composite { shapes }
+                                if !shapes.is_empty()
+                                    && shapes.iter().all(|s| matches!(s, Shape2D::Edge { .. }))
+                        )
+                })
+            })
+        });
+        if let Some(existing) = existing {
+            let Some(collider) = self.world_2d.collider_mut(existing) else {
+                return false;
+            };
+            collider.shape = desc.shape;
+            collider.is_trigger = desc.is_trigger;
+            collider.layer = desc.layer;
+            collider.attached_body = desc.attached_body;
+            let _ = self.world_2d.set_collider_offset(existing, desc.offset);
             return true;
         }
         self.add_collider_2d(desc);
@@ -296,6 +348,11 @@ impl PhysicsRuntimeWorld {
         self.world_2d
             .collider(collider)
             .map(|collider| collider.game_object)
+    }
+
+    pub fn body_position_2d(&self, entity: EntityId) -> Option<[f32; 2]> {
+        let id = self.body_id_2d(entity)?;
+        self.world_2d.body(id).map(|body| body.position)
     }
 
     pub fn body_velocity_2d(&self, entity: EntityId) -> Option<[f32; 2]> {
@@ -322,7 +379,66 @@ impl PhysicsRuntimeWorld {
             return false;
         };
         body.move_position(target);
+        self.stick_touching_riders_to_kinematic_carrier_2d(id);
         true
+    }
+
+    fn stick_touching_riders_to_kinematic_carrier_2d(&mut self, carrier_id: BodyId2D) {
+        let is_kinematic = self
+            .world_2d
+            .body(carrier_id)
+            .is_some_and(|b| b.is_kinematic());
+        if !is_kinematic {
+            return;
+        }
+        let carrier_colliders: Vec<ColliderId2D> = self
+            .colliders_2d
+            .values()
+            .flatten()
+            .copied()
+            .filter(|cid| {
+                self.world_2d
+                    .collider(*cid)
+                    .is_some_and(|col| col.attached_body == Some(carrier_id))
+            })
+            .collect();
+        let mut riders_to_stick = Vec::new();
+        for other_id in self.bodies_2d.values().copied() {
+            if other_id == carrier_id {
+                continue;
+            }
+            let is_dynamic = self.world_2d.body(other_id).is_some_and(|b| b.is_dynamic());
+            if !is_dynamic {
+                continue;
+            }
+            let rider_colliders: Vec<ColliderId2D> = self
+                .colliders_2d
+                .values()
+                .flatten()
+                .copied()
+                .filter(|cid| {
+                    self.world_2d
+                        .collider(*cid)
+                        .is_some_and(|col| col.attached_body == Some(other_id))
+                })
+                .collect();
+            let supported_from_below = rider_colliders.iter().any(|rc| {
+                carrier_colliders
+                    .iter()
+                    .any(|cc| self.world_2d.is_touching(*rc, *cc))
+                    && self
+                        .world_2d
+                        .get_contacts(*rc)
+                        .iter()
+                        .any(|c| c.normal[1] > 0.7)
+            });
+            if supported_from_below && self.world_2d.rider_carrier(other_id) != Some(carrier_id) {
+                riders_to_stick.push(other_id);
+            }
+        }
+        for rider_id in riders_to_stick {
+            self.world_2d.stick_rider(rider_id, carrier_id);
+        }
     }
 
     pub fn set_body_simulated_2d(&mut self, entity: EntityId, simulated: bool) -> bool {

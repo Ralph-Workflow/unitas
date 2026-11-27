@@ -1195,11 +1195,14 @@ namespace Unitas.Bridge
             Rigidbody? body = owner.GetComponent<Rigidbody>();
             bool hasDynamicBody = body != null && !body.isKinematic;
             bool hasDynamicMetadata = _sceneRigidbodies.TryGetValue(owner.NativeEntityId, out SceneRigidbodyMetadata metadata) && !metadata.IsKinematic;
-            if (!hasDynamicBody && !hasDynamicMetadata)
+            Rigidbody2D? body2D = owner.GetComponent<Rigidbody2D>();
+            bool hasSimulatedBody2D = body2D != null && body2D.bodyType != RigidbodyType2D.Static;
+            bool hasSimulatedMetadata2D = _sceneRigidbodies2D.TryGetValue(owner.NativeEntityId, out SceneRigidbody2DMetadata metadata2D) && metadata2D.BodyType != RigidbodyType2D.Static;
+            if (!hasDynamicBody && !hasDynamicMetadata && !hasSimulatedBody2D && !hasSimulatedMetadata2D)
             {
                 return;
             }
-            if (body != null && body.isKinematic)
+            if (body != null && body.isKinematic && !hasSimulatedBody2D && !hasSimulatedMetadata2D)
             {
                 return;
             }

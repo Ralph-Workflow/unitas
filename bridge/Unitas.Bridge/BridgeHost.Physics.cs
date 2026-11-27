@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -385,6 +387,160 @@ namespace Unitas.Bridge
                 0u) == 0;
         }
 
+        public bool TryCreatePolygonCollider2D(ulong entity, ulong attachedBody, Vector2[] points, Vector2 offset, bool isTrigger, uint layer)
+        {
+            if (_isDisposed || entity == 0 || points == null || points.Length < 3)
+            {
+                return false;
+            }
+            float[] rawPoints = new float[points.Length * 2];
+            for (int index = 0; index < points.Length; index++)
+            {
+                rawPoints[index * 2] = points[index].x;
+                rawPoints[index * 2 + 1] = points[index].y;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)(rawPoints.Length * sizeof(float)));
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            Marshal.Copy(rawPoints, 0, buffer, rawPoints.Length);
+            return RuntimeInterop.unitas_runtime_collider2d_create_polygon(
+                _runtimeHandle,
+                entity,
+                attachedBody,
+                buffer,
+                (uint)points.Length,
+                offset.x,
+                offset.y,
+                isTrigger ? 1u : 0u,
+                layer) == 0;
+        }
+
+        public bool TryCreateEdgeCollider2D(ulong entity, ulong attachedBody, Vector2[] points, Vector2 offset, bool isTrigger, uint layer)
+        {
+            if (_isDisposed || entity == 0 || points == null || points.Length < 2)
+            {
+                return false;
+            }
+            float[] rawPoints = new float[points.Length * 2];
+            for (int index = 0; index < points.Length; index++)
+            {
+                rawPoints[index * 2] = points[index].x;
+                rawPoints[index * 2 + 1] = points[index].y;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)(rawPoints.Length * sizeof(float)));
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            Marshal.Copy(rawPoints, 0, buffer, rawPoints.Length);
+            return RuntimeInterop.unitas_runtime_collider2d_create_edge(
+                _runtimeHandle,
+                entity,
+                attachedBody,
+                buffer,
+                (uint)points.Length,
+                offset.x,
+                offset.y,
+                isTrigger ? 1u : 0u,
+                layer) == 0;
+        }
+
+        public bool TrySetCompositeCollider2D(ulong entity, ulong compositeEntity, uint geometryType)
+        {
+            if (_isDisposed || entity == 0 || compositeEntity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_collider2d_set_composite(
+                _runtimeHandle,
+                entity,
+                compositeEntity,
+                geometryType) == 0;
+        }
+
+        public bool TryBuildTilemapCollider2D(ulong entity, ulong compositeEntity, string tilemapPath)
+        {
+            if (_isDisposed || entity == 0 || string.IsNullOrEmpty(tilemapPath))
+            {
+                return false;
+            }
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(tilemapPath);
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)utf8Bytes.Length);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            Marshal.Copy(utf8Bytes, 0, buffer, utf8Bytes.Length);
+            return RuntimeInterop.unitas_runtime_tilemap_collider2d_build(
+                _runtimeHandle,
+                entity,
+                compositeEntity,
+                buffer,
+                (uint)utf8Bytes.Length) == 0;
+        }
+
+        public bool TrySetColliderMaterial2D(ulong entity, float friction, float bounciness)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_collider2d_set_material(
+                _runtimeHandle,
+                entity,
+                friction,
+                bounciness) == 0;
+        }
+
+        public bool TryApplyPhysics2DSettings(Vector2 gravity, int velocityIterations, int positionIterations, bool queriesHitTriggers)
+        {
+            if (_isDisposed)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_physics2d_apply_settings(
+                _runtimeHandle,
+                gravity.x,
+                gravity.y,
+                (uint)Math.Max(1, velocityIterations),
+                (uint)Math.Max(1, positionIterations),
+                queriesHitTriggers ? 1u : 0u) == 0;
+        }
+
+        public bool TrySetLayerCollision2D(int layerA, int layerB, bool enabled)
+        {
+            if (_isDisposed || layerA < 0 || layerA >= 32 || layerB < 0 || layerB >= 32)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_physics2d_set_layer_collision(
+                _runtimeHandle,
+                (uint)layerA,
+                (uint)layerB,
+                enabled ? 1u : 0u) == 0;
+        }
+
+        public bool TryGetLayerCollision2D(int layerA, int layerB, out bool enabled)
+        {
+            enabled = true;
+            if (_isDisposed || layerA < 0 || layerA >= 32 || layerB < 0 || layerB >= 32)
+            {
+                return false;
+            }
+            int result = RuntimeInterop.unitas_runtime_physics2d_get_layer_collision(
+                _runtimeHandle,
+                (uint)layerA,
+                (uint)layerB);
+            if (result < 0)
+            {
+                return false;
+            }
+            enabled = result != 0;
+            return true;
+        }
+
         public RaycastHit2D[] BoxCast2D(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance, int layerMask, ContactFilter2D filter)
         {
             int count = RuntimeInterop.unitas_runtime_box_cast2d(
@@ -764,41 +920,103 @@ namespace Unitas.Bridge
 
         private void MaterializeScenePhysics2D()
         {
-            foreach (ulong entity in _sceneRigidbodies2D.Keys)
+            HashSet<ulong> entities = new HashSet<ulong>();
+            entities.UnionWith(_sceneRigidbodies2D.Keys);
+            entities.UnionWith(_sceneBoxColliders2D.Keys);
+            entities.UnionWith(_sceneCircleColliders2D.Keys);
+            entities.UnionWith(_sceneCapsuleColliders2D.Keys);
+            entities.UnionWith(_scenePolygonColliders2D.Keys);
+            entities.UnionWith(_sceneEdgeColliders2D.Keys);
+            entities.UnionWith(_sceneCompositeColliders2D.Keys);
+            entities.UnionWith(_sceneTilemapColliders2D.Keys);
+            foreach (ulong entity in entities)
+            {
+                GameObject owner = EnsureSceneGameObject(entity);
+                WireSceneParent(entity, owner);
+            }
+            foreach (ulong entity in entities)
             {
                 ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
             }
-            foreach (ulong entity in _sceneBoxColliders2D.Keys)
+            foreach (ulong entity in _sceneCompositeColliders2D.Keys)
             {
-                ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
-            }
-            foreach (ulong entity in _sceneCircleColliders2D.Keys)
-            {
-                ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
+                CompositeCollider2D? composite = EnsureSceneGameObject(entity).GetComponent<CompositeCollider2D>();
+                composite?.GenerateGeometry();
             }
         }
 
         private void ApplyScenePhysics2DComponents(ulong entity, GameObject owner)
         {
+            if (_registeredBodies2D.Contains(entity))
+            {
+                return;
+            }
+            RegisterScenePhysics2D(entity, owner);
             if (_sceneRigidbodies2D.TryGetValue(entity, out SceneRigidbody2DMetadata rigidbodyMeta))
             {
                 Rigidbody2D body = owner.GetComponent<Rigidbody2D>() ?? owner.AddComponent<Rigidbody2D>();
                 body.mass = rigidbodyMeta.Mass;
                 body.gravityScale = rigidbodyMeta.GravityScale;
+                body.bodyType = rigidbodyMeta.BodyType;
+                body.simulated = rigidbodyMeta.Simulated;
+                body.interpolation = rigidbodyMeta.Interpolation;
+                body.collisionDetectionMode = rigidbodyMeta.CollisionDetectionMode;
+            }
+            if (_sceneCompositeColliders2D.TryGetValue(entity, out SceneCompositeCollider2DMetadata compositeMeta))
+            {
+                CompositeCollider2D composite = owner.GetComponent<CompositeCollider2D>() ?? owner.AddComponent<CompositeCollider2D>();
+                composite.geometryType = (CompositeCollider2D.GeometryType)compositeMeta.GeometryType;
+                composite.generationType = (CompositeCollider2D.GenerationType)compositeMeta.GenerationType;
+                composite.vertexDistance = compositeMeta.VertexDistance;
+                composite.offsetDistance = compositeMeta.OffsetDistance;
+                composite.edgeRadius = compositeMeta.EdgeRadius;
+                ApplySceneCollider2DCommon(composite, compositeMeta.Offset, compositeMeta.IsTrigger, compositeMeta.UsedByEffector, false, compositeMeta.Material);
             }
             if (_sceneBoxColliders2D.TryGetValue(entity, out SceneBoxCollider2DMetadata boxMeta))
             {
                 BoxCollider2D box = owner.GetComponent<BoxCollider2D>() ?? owner.AddComponent<BoxCollider2D>();
                 box.size = boxMeta.Size;
-                box.offset = boxMeta.Offset;
-                box.isTrigger = boxMeta.IsTrigger;
+                ApplySceneCollider2DCommon(box, boxMeta.Offset, boxMeta.IsTrigger, boxMeta.UsedByEffector, boxMeta.UsedByComposite, boxMeta.Material);
             }
             if (_sceneCircleColliders2D.TryGetValue(entity, out SceneCircleCollider2DMetadata circleMeta))
             {
                 CircleCollider2D circle = owner.GetComponent<CircleCollider2D>() ?? owner.AddComponent<CircleCollider2D>();
                 circle.radius = circleMeta.Radius;
-                circle.offset = circleMeta.Offset;
-                circle.isTrigger = circleMeta.IsTrigger;
+                ApplySceneCollider2DCommon(circle, circleMeta.Offset, circleMeta.IsTrigger, circleMeta.UsedByEffector, circleMeta.UsedByComposite, circleMeta.Material);
+            }
+            if (_sceneCapsuleColliders2D.TryGetValue(entity, out SceneCapsuleCollider2DMetadata capsuleMeta))
+            {
+                CapsuleCollider2D capsule = owner.GetComponent<CapsuleCollider2D>() ?? owner.AddComponent<CapsuleCollider2D>();
+                capsule.size = capsuleMeta.Size;
+                capsule.direction = capsuleMeta.Direction;
+                ApplySceneCollider2DCommon(capsule, capsuleMeta.Offset, capsuleMeta.IsTrigger, capsuleMeta.UsedByEffector, capsuleMeta.UsedByComposite, capsuleMeta.Material);
+            }
+            if (_scenePolygonColliders2D.TryGetValue(entity, out ScenePolygonCollider2DMetadata polygonMeta))
+            {
+                PolygonCollider2D polygon = owner.GetComponent<PolygonCollider2D>() ?? owner.AddComponent<PolygonCollider2D>();
+                if (polygonMeta.Points.Length > 0)
+                {
+                    polygon.points = polygonMeta.Points;
+                }
+                ApplySceneCollider2DCommon(polygon, polygonMeta.Offset, polygonMeta.IsTrigger, polygonMeta.UsedByEffector, polygonMeta.UsedByComposite, polygonMeta.Material);
+            }
+            if (_sceneEdgeColliders2D.TryGetValue(entity, out SceneEdgeCollider2DMetadata edgeMeta))
+            {
+                EdgeCollider2D edge = owner.GetComponent<EdgeCollider2D>() ?? owner.AddComponent<EdgeCollider2D>();
+                if (edgeMeta.Points.Length > 0)
+                {
+                    edge.points = edgeMeta.Points;
+                }
+                edge.edgeRadius = edgeMeta.EdgeRadius;
+                ApplySceneCollider2DCommon(edge, edgeMeta.Offset, edgeMeta.IsTrigger, edgeMeta.UsedByEffector, edgeMeta.UsedByComposite, edgeMeta.Material);
+            }
+            if (_sceneTilemapColliders2D.TryGetValue(entity, out SceneTilemapCollider2DMetadata tilemapMeta))
+            {
+                TilemapCollider2D tilemap = owner.GetComponent<TilemapCollider2D>() ?? owner.AddComponent<TilemapCollider2D>();
+                tilemap.maximumTileChangeCount = tilemapMeta.MaximumTileChangeCount;
+                tilemap.extrusionFactor = tilemapMeta.ExtrusionFactor;
+                ApplySceneCollider2DCommon(tilemap, tilemapMeta.Offset, tilemapMeta.IsTrigger, tilemapMeta.UsedByEffector, tilemapMeta.UsedByComposite, tilemapMeta.Material);
+                tilemap.tilemapAssetPath = tilemapMeta.TilemapPath;
             }
             if (_scenePlatformEffectors2D.TryGetValue(entity, out ScenePlatformEffector2DMetadata platformMeta))
             {
@@ -818,31 +1036,51 @@ namespace Unitas.Bridge
                 surface.useFriction = surfaceMeta.UseFriction;
                 surface.useBounce = surfaceMeta.UseBounce;
             }
-            RegisterScenePhysics2D(entity, owner);
-            if (_sceneRigidbodies2D.TryGetValue(entity, out SceneRigidbody2DMetadata bodyMeta))
+        }
+
+        private static void ApplySceneCollider2DCommon(
+            Collider2D collider,
+            Vector2 offset,
+            bool isTrigger,
+            bool usedByEffector,
+            bool usedByComposite,
+            PhysicsMaterial2D? material)
+        {
+            collider.offset = offset;
+            collider.isTrigger = isTrigger;
+            collider.usedByEffector = usedByEffector;
+            if (material != null)
             {
-                Rigidbody2D body = owner.GetComponent<Rigidbody2D>()!;
-                body.bodyType = bodyMeta.BodyType;
-                body.simulated = bodyMeta.Simulated;
-                body.interpolation = bodyMeta.Interpolation;
-                body.collisionDetectionMode = bodyMeta.CollisionDetectionMode;
+                collider.sharedMaterial = material;
             }
+            if (usedByComposite)
+            {
+                collider.usedByComposite = true;
+            }
+        }
+
+        private bool HasScenePhysics2DOnEntity(ulong entity)
+        {
+            return _sceneRigidbodies2D.ContainsKey(entity)
+                || _sceneBoxColliders2D.ContainsKey(entity)
+                || _sceneCircleColliders2D.ContainsKey(entity)
+                || _sceneCapsuleColliders2D.ContainsKey(entity)
+                || _scenePolygonColliders2D.ContainsKey(entity)
+                || _sceneEdgeColliders2D.ContainsKey(entity)
+                || _sceneCompositeColliders2D.ContainsKey(entity)
+                || _sceneTilemapColliders2D.ContainsKey(entity);
         }
 
         private void RegisterScenePhysics2D(ulong entity, GameObject owner)
         {
-            bool hasBody = _sceneRigidbodies2D.ContainsKey(entity);
-            bool hasBox = _sceneBoxColliders2D.ContainsKey(entity);
-            bool hasCircle = _sceneCircleColliders2D.ContainsKey(entity);
-            if (!hasBody && !hasBox && !hasCircle)
-            {
-                return;
-            }
-            if (_registeredBodies2D.Contains(entity))
+            if (!HasScenePhysics2DOnEntity(entity) || _registeredBodies2D.Contains(entity))
             {
                 return;
             }
             _registeredBodies2D.Add(entity);
+            bool hasBody = _sceneRigidbodies2D.ContainsKey(entity);
+            bool hasBox = _sceneBoxColliders2D.ContainsKey(entity);
+            bool hasCircle = _sceneCircleColliders2D.ContainsKey(entity);
             Vector3 position = owner.transform.position;
             SceneRigidbody2DMetadata bodyMetadata = hasBody
                 ? _sceneRigidbodies2D[entity]
@@ -857,10 +1095,10 @@ namespace Unitas.Bridge
                 hasBody ? bodyMetadata.Mass : 0f,
                 hasBody ? bodyMetadata.GravityScale : 0f,
                 (uint)bodyType,
-                0u,
-                1u,
-                0u,
-                0u);
+                (uint)owner.layer,
+                hasBody && !bodyMetadata.Simulated ? 0u : 1u,
+                hasBody ? (uint)bodyMetadata.Interpolation : 0u,
+                hasBody ? (uint)bodyMetadata.CollisionDetectionMode : 0u);
             if (hasBox)
             {
                 SceneBoxCollider2DMetadata metadata = _sceneBoxColliders2D[entity];
@@ -875,7 +1113,7 @@ namespace Unitas.Bridge
                     metadata.Size.y,
                     0f,
                     metadata.IsTrigger ? 1u : 0u,
-                    0u);
+                    (uint)owner.layer);
             }
             if (hasCircle)
             {
@@ -891,7 +1129,21 @@ namespace Unitas.Bridge
                     0f,
                     metadata.Radius,
                     metadata.IsTrigger ? 1u : 0u,
-                    0u);
+                    (uint)owner.layer);
+            }
+            if (_sceneCapsuleColliders2D.TryGetValue(entity, out SceneCapsuleCollider2DMetadata capsuleMeta))
+            {
+                float radius = capsuleMeta.Direction != 0 ? capsuleMeta.Size.x * 0.5f : capsuleMeta.Size.y * 0.5f;
+                float height = capsuleMeta.Direction != 0 ? capsuleMeta.Size.y : capsuleMeta.Size.x;
+                TryCreateCapsuleCollider2D(entity, radius, height, capsuleMeta.Direction, capsuleMeta.Offset, capsuleMeta.IsTrigger);
+            }
+            if (_scenePolygonColliders2D.TryGetValue(entity, out ScenePolygonCollider2DMetadata polygonMeta) && polygonMeta.Points.Length >= 3)
+            {
+                TryCreatePolygonCollider2D(entity, entity, polygonMeta.Points, polygonMeta.Offset, polygonMeta.IsTrigger, (uint)owner.layer);
+            }
+            if (_sceneEdgeColliders2D.TryGetValue(entity, out SceneEdgeCollider2DMetadata edgeMeta) && edgeMeta.Points.Length >= 2)
+            {
+                TryCreateEdgeCollider2D(entity, entity, edgeMeta.Points, edgeMeta.Offset, edgeMeta.IsTrigger, (uint)owner.layer);
             }
             if (_scenePlatformEffectors2D.TryGetValue(entity, out ScenePlatformEffector2DMetadata platformMetadata))
             {
@@ -933,6 +1185,19 @@ namespace Unitas.Bridge
             public bool IsKinematic { get; }
         }
 
+        private const int POLYGON_COLLIDER2D_CLASS = 60;
+        private const int COMPOSITE_COLLIDER2D_CLASS = 66;
+        private const int EDGE_COLLIDER2D_CLASS = 68;
+        private const int CAPSULE_COLLIDER2D_CLASS = 70;
+        private const int TILEMAP_COLLIDER2D_CLASS = 19719996;
+        private const int TILEMAP_CLASS = 1839735485;
+
+        private readonly Dictionary<ulong, SceneCapsuleCollider2DMetadata> _sceneCapsuleColliders2D = new Dictionary<ulong, SceneCapsuleCollider2DMetadata>();
+        private readonly Dictionary<ulong, ScenePolygonCollider2DMetadata> _scenePolygonColliders2D = new Dictionary<ulong, ScenePolygonCollider2DMetadata>();
+        private readonly Dictionary<ulong, SceneEdgeCollider2DMetadata> _sceneEdgeColliders2D = new Dictionary<ulong, SceneEdgeCollider2DMetadata>();
+        private readonly Dictionary<ulong, SceneCompositeCollider2DMetadata> _sceneCompositeColliders2D = new Dictionary<ulong, SceneCompositeCollider2DMetadata>();
+        private readonly Dictionary<ulong, SceneTilemapCollider2DMetadata> _sceneTilemapColliders2D = new Dictionary<ulong, SceneTilemapCollider2DMetadata>();
+
         private sealed class ScenePhysics2DFields
         {
             public int BodyType { get; set; }
@@ -951,9 +1216,47 @@ namespace Unitas.Bridge
 
             public Vector2 Size { get; set; } = Vector2.one;
 
+            public Vector2 CapsuleSize { get; set; } = new Vector2(0.5f, 1f);
+
+            public int CapsuleDirection { get; set; } = 1;
+
             public float Radius { get; set; } = 0.5f;
 
+            public float EdgeRadius { get; set; }
+
             public bool IsTrigger { get; set; }
+
+            public bool UsedByEffector { get; set; }
+
+            public bool UsedByComposite { get; set; }
+
+            public string MaterialFileId { get; set; } = string.Empty;
+
+            public string MaterialGuid { get; set; } = string.Empty;
+
+            public bool HasInlineMaterial { get; set; }
+
+            public float Friction { get; set; } = 0.4f;
+
+            public float Bounciness { get; set; }
+
+            public List<Vector2> Points { get; } = new List<Vector2>();
+
+            public int GeometryType { get; set; }
+
+            public int GenerationType { get; set; }
+
+            public float VertexDistance { get; set; } = 0.00005f;
+
+            public float OffsetDistance { get; set; } = 0.000005f;
+
+            public uint MaximumTileChangeCount { get; set; } = 1000u;
+
+            public float ExtrusionFactor { get; set; }
+
+            public string TilemapAssetPath { get; set; } = string.Empty;
+
+            public string TilemapAssetGuid { get; set; } = string.Empty;
 
             public bool UseOneWay { get; set; } = true;
 
@@ -1007,14 +1310,26 @@ namespace Unitas.Bridge
                         gameObjectFileId,
                         fields.Size,
                         fields.Offset,
-                        fields.IsTrigger));
+                        fields.IsTrigger,
+                        fields.UsedByEffector,
+                        fields.UsedByComposite,
+                        fields.MaterialGuid,
+                        fields.HasInlineMaterial,
+                        fields.Friction,
+                        fields.Bounciness));
                     break;
                 case CIRCLE_COLLIDER2D_CLASS:
                     circleColliders2D.Add(new ParsedCircleCollider2DRecord(
                         gameObjectFileId,
                         fields.Radius,
                         fields.Offset,
-                        fields.IsTrigger));
+                        fields.IsTrigger,
+                        fields.UsedByEffector,
+                        fields.UsedByComposite,
+                        fields.MaterialGuid,
+                        fields.HasInlineMaterial,
+                        fields.Friction,
+                        fields.Bounciness));
                     break;
                 case PLATFORM_EFFECTOR2D_CLASS:
                     platformEffectors2D.Add(new ParsedPlatformEffector2DRecord(
@@ -1066,11 +1381,14 @@ namespace Unitas.Bridge
 
         private readonly struct SceneBoxCollider2DMetadata
         {
-            public SceneBoxCollider2DMetadata(Vector2 size, Vector2 offset, bool isTrigger)
+            public SceneBoxCollider2DMetadata(Vector2 size, Vector2 offset, bool isTrigger, bool usedByEffector = false, bool usedByComposite = false, PhysicsMaterial2D? material = null)
             {
                 Size = size;
                 Offset = offset;
                 IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
             }
 
             public Vector2 Size { get; }
@@ -1078,15 +1396,24 @@ namespace Unitas.Bridge
             public Vector2 Offset { get; }
 
             public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
         }
 
         private readonly struct SceneCircleCollider2DMetadata
         {
-            public SceneCircleCollider2DMetadata(float radius, Vector2 offset, bool isTrigger)
+            public SceneCircleCollider2DMetadata(float radius, Vector2 offset, bool isTrigger, bool usedByEffector = false, bool usedByComposite = false, PhysicsMaterial2D? material = null)
             {
                 Radius = radius;
                 Offset = offset;
                 IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
             }
 
             public float Radius { get; }
@@ -1094,6 +1421,158 @@ namespace Unitas.Bridge
             public Vector2 Offset { get; }
 
             public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
+        }
+
+        private readonly struct SceneCapsuleCollider2DMetadata
+        {
+            public SceneCapsuleCollider2DMetadata(Vector2 size, int direction, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, PhysicsMaterial2D? material)
+            {
+                Size = size;
+                Direction = direction;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
+            }
+
+            public Vector2 Size { get; }
+
+            public int Direction { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
+        }
+
+        private readonly struct ScenePolygonCollider2DMetadata
+        {
+            public ScenePolygonCollider2DMetadata(Vector2[] points, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, PhysicsMaterial2D? material)
+            {
+                Points = points;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
+            }
+
+            public Vector2[] Points { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
+        }
+
+        private readonly struct SceneEdgeCollider2DMetadata
+        {
+            public SceneEdgeCollider2DMetadata(Vector2[] points, float edgeRadius, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, PhysicsMaterial2D? material)
+            {
+                Points = points;
+                EdgeRadius = edgeRadius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
+            }
+
+            public Vector2[] Points { get; }
+
+            public float EdgeRadius { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
+        }
+
+        private readonly struct SceneCompositeCollider2DMetadata
+        {
+            public SceneCompositeCollider2DMetadata(int geometryType, int generationType, float vertexDistance, float offsetDistance, float edgeRadius, Vector2 offset, bool isTrigger, bool usedByEffector, PhysicsMaterial2D? material)
+            {
+                GeometryType = geometryType;
+                GenerationType = generationType;
+                VertexDistance = vertexDistance;
+                OffsetDistance = offsetDistance;
+                EdgeRadius = edgeRadius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                Material = material;
+            }
+
+            public int GeometryType { get; }
+
+            public int GenerationType { get; }
+
+            public float VertexDistance { get; }
+
+            public float OffsetDistance { get; }
+
+            public float EdgeRadius { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public PhysicsMaterial2D? Material { get; }
+        }
+
+        private readonly struct SceneTilemapCollider2DMetadata
+        {
+            public SceneTilemapCollider2DMetadata(uint maximumTileChangeCount, float extrusionFactor, string tilemapPath, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, PhysicsMaterial2D? material)
+            {
+                MaximumTileChangeCount = maximumTileChangeCount;
+                ExtrusionFactor = extrusionFactor;
+                TilemapPath = tilemapPath;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                Material = material;
+            }
+
+            public uint MaximumTileChangeCount { get; }
+
+            public float ExtrusionFactor { get; }
+
+            public string TilemapPath { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+
+            public bool UsedByEffector { get; }
+
+            public bool UsedByComposite { get; }
+
+            public PhysicsMaterial2D? Material { get; }
         }
 
         private readonly struct ScenePlatformEffector2DMetadata

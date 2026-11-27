@@ -6,13 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unitas_asset::project_settings::{
     load_project_settings, parse_audio_manager, parse_color_space, parse_editor_build_settings,
     parse_editor_settings, parse_graphics_settings, parse_mono_manager, parse_nav_mesh_areas,
-    parse_package_manager_settings, parse_physics_manager, parse_physics_manager_stream,
-    parse_preset_manager, parse_quality_settings, parse_quality_settings_stream, parse_tag_manager,
+    parse_package_manager_settings, parse_physics2d_settings, parse_physics2d_settings_stream,
+    parse_physics_manager, parse_physics_manager_stream, parse_preset_manager,
+    parse_quality_settings, parse_quality_settings_stream, parse_tag_manager,
     parse_version_control_settings, AudioManagerSettings, BuildSceneEntry, ColorSpaceSetting,
     EditorBuildSettings, EditorSettings, GraphicsSettings, MonoManagerSettings, NavMeshAreaEntry,
-    NavMeshAreaSettings, PackageManagerSettings, PhysicsProjectSettings, PhysicsSolverType,
-    PlayerSettings, PresetManagerSettings, QualityLevel, QualitySettings, SettingBoundary,
-    SettingValueSource, SortingLayerEntry, TagManagerSettings, VersionControlSettings,
+    NavMeshAreaSettings, PackageManagerSettings, Physics2DProjectSettings, PhysicsProjectSettings,
+    PhysicsSolverType, PlayerSettings, PresetManagerSettings, QualityLevel, QualitySettings,
+    SettingBoundary, SettingValueSource, SortingLayerEntry, TagManagerSettings,
+    VersionControlSettings,
 };
 use unitas_asset::scene::{
     parse_physic_material, BounceCombine, FrictionCombine, RigidbodyCollisionDetection,
@@ -1895,5 +1897,53 @@ fn rigidbody_physics_settings_fall_back_to_unity_defaults_when_unset() -> TestRe
     assert_eq!(rigidbody.include_layers, None);
     assert_eq!(rigidbody.exclude_layers, None);
     assert_eq!(rigidbody.layer_override_priority, 0);
+    Ok(())
+}
+
+#[test]
+fn physics2d_settings_parses_yaml_hex_and_sequence_matrices_and_falls_back_to_unity_defaults(
+) -> TestResult {
+    let root = temp_settings_dir("physics2d_settings")?;
+    let missing_path = root.join("MissingPhysics2DSettings.asset");
+    assert_eq!(parse_physics2d_settings(&missing_path)?, None);
+
+    let default_settings = Physics2DProjectSettings::default();
+    assert_eq!(default_settings.gravity, [0.0, -9.81]);
+    assert_eq!(default_settings.velocity_iterations, 8);
+    assert_eq!(default_settings.position_iterations, 3);
+    assert!(default_settings.queries_hit_triggers);
+    assert!(default_settings.queries_start_in_colliders);
+    assert!(default_settings.callbacks_on_disable);
+    assert!(default_settings.auto_sync_transforms);
+    assert_eq!(default_settings.layer_collision_matrix, [u32::MAX; 32]);
+
+    let path = root.join("Physics2DSettings.asset");
+    let raw = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_ObjectHideFlags: 0\n  serializedVersion: 5\n  m_Gravity: {x: 1.25, y: -15.5}\n  m_VelocityIterations: 10\n  m_PositionIterations: 5\n  m_QueriesHitTriggers: 0\n  m_QueriesStartInColliders: 0\n  m_CallbacksOnDisable: 0\n  m_AutoSyncTransforms: 0\n  m_LayerCollisionMatrix: 0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff\n";
+    fs::write(&path, raw)?;
+
+    let parsed = parse_physics2d_settings(&path)?.ok_or("expected Some(physics2d settings)")?;
+    assert_eq!(parsed.gravity, [1.25, -15.5]);
+    assert_eq!(parsed.velocity_iterations, 10);
+    assert_eq!(parsed.position_iterations, 5);
+    assert!(!parsed.queries_hit_triggers);
+    assert!(!parsed.queries_start_in_colliders);
+    assert!(!parsed.callbacks_on_disable);
+    assert!(!parsed.auto_sync_transforms);
+    assert_eq!(parsed.layer_collision_matrix[0], 0xFFFF_0000);
+    assert_eq!(parsed.layer_collision_matrix[1], 0xFFFF_0000);
+
+    let seq_stream = unity_yaml::parse(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!19 &1\nPhysics2DSettings:\n  m_LayerCollisionMatrix:\n  - 0xFFFFFFFD\n  - 0xFFFFFFFE\n",
+    )?;
+    let seq_parsed = parse_physics2d_settings_stream(&seq_stream)?;
+    assert_eq!(seq_parsed.gravity, [0.0, -9.81]);
+    assert_eq!(seq_parsed.velocity_iterations, 8);
+    assert_eq!(seq_parsed.position_iterations, 3);
+    assert!(seq_parsed.queries_hit_triggers);
+    assert_eq!(seq_parsed.layer_collision_matrix[0], 0xFFFF_FFFD);
+    assert_eq!(seq_parsed.layer_collision_matrix[1], 0xFFFF_FFFE);
+    assert_eq!(seq_parsed.layer_collision_matrix[2], 0xFFFF_FFFF);
+
+    fs::remove_dir_all(&root)?;
     Ok(())
 }

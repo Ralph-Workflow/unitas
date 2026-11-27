@@ -1168,3 +1168,103 @@ fn phy_002_story_5_joint_breaks(world: &mut World2D, anchor_b: BodyId2D) {
     );
     assert_eq!(world.drain_broken_joints(), vec![fragile_j]);
 }
+
+#[test]
+fn matrix_2d_disabled_layer_pair_produces_no_contacts_and_is_ignored_by_box_cast_with_default_filter_and_honors_queries_hit_triggers(
+) {
+    let mut world = World2D::with_gravity([0.0, 0.0]);
+    assert_eq!(world.velocity_iterations(), 8);
+    assert_eq!(world.position_iterations(), 3);
+    assert!(world.queries_hit_triggers());
+
+    world.set_velocity_iterations(12);
+    world.set_position_iterations(4);
+    assert_eq!(world.velocity_iterations(), 12);
+    assert_eq!(world.position_iterations(), 4);
+
+    let go_default = EntityId::new(1000);
+    let go_disabled = EntityId::new(1001);
+    let go_trigger = EntityId::new(1002);
+
+    let body_default = world.add_body(BodyDesc2D::dynamic(go_default, [0.0, 0.0]).with_layer(0));
+    let col_default = world.add_collider(
+        ColliderDesc2D::box_collider(go_default, [0.5, 0.5])
+            .with_attached_body(body_default)
+            .with_layer(0),
+    );
+
+    let body_disabled = world.add_body(BodyDesc2D::dynamic(go_disabled, [0.2, 0.0]).with_layer(3));
+    let col_disabled = world.add_collider(
+        ColliderDesc2D::box_collider(go_disabled, [0.5, 0.5])
+            .with_attached_body(body_disabled)
+            .with_layer(3),
+    );
+
+    let col_trigger = world.add_collider(
+        ColliderDesc2D::box_collider(go_trigger, [0.5, 0.5])
+            .with_offset([3.0, 0.0])
+            .with_trigger(true)
+            .with_layer(0),
+    );
+
+    world.ignore_layer_collision(0, 3, true);
+    world.step(0.02);
+
+    assert!(
+        !world.is_touching(col_default, col_disabled),
+        "disabled layer pair (0, 3) must produce no contacts"
+    );
+    assert!(
+        world.get_contacts(col_default).is_empty(),
+        "disabled layer pair (0, 3) must record no contact points"
+    );
+    assert!(
+        world.drain_messages().is_empty(),
+        "disabled layer pair (0, 3) must emit no collision callbacks"
+    );
+
+    let default_box_hits = world.box_cast(
+        [-3.0, 0.0],
+        [0.25, 0.25],
+        0.0,
+        [1.0, 0.0],
+        10.0,
+        ContactFilter2D::default(),
+    );
+    let hit_colliders: Vec<_> = default_box_hits.iter().map(|h| h.collider).collect();
+    assert!(
+        !hit_colliders.contains(&col_disabled),
+        "disabled matrix pair (0, 3) must be ignored by BoxCast with ContactFilter2D::default(), got {hit_colliders:?}"
+    );
+    assert!(
+        hit_colliders.contains(&col_default),
+        "enabled layer 0 collider must be hit by BoxCast with default filter"
+    );
+    assert!(
+        hit_colliders.contains(&col_trigger),
+        "with queries_hit_triggers=true, trigger collider must be hit by BoxCast with default filter"
+    );
+
+    world.set_queries_hit_triggers(false);
+    assert!(!world.queries_hit_triggers());
+    let no_trigger_box_hits = world.box_cast(
+        [-3.0, 0.0],
+        [0.25, 0.25],
+        0.0,
+        [1.0, 0.0],
+        10.0,
+        ContactFilter2D::default(),
+    );
+    assert!(
+        no_trigger_box_hits
+            .iter()
+            .all(|h| h.collider != col_trigger),
+        "with queries_hit_triggers=false, trigger collider must be ignored by BoxCast with default filter"
+    );
+    assert!(
+        world
+            .overlap_point([3.0, 0.0], ContactFilter2D::default())
+            .is_empty(),
+        "with queries_hit_triggers=false, OverlapPoint with default filter must ignore trigger collider"
+    );
+}

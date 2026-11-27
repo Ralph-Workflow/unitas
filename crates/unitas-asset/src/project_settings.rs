@@ -6,6 +6,9 @@ use crate::unity_yaml::{self, Document, Header, Node, Stream, YamlError};
 
 pub const DEFAULT_FIXED_TIMESTEP: f64 = 0.02;
 pub const DEFAULT_GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
+pub const DEFAULT_GRAVITY_2D: [f64; 2] = [0.0, -9.81];
+pub const DEFAULT_PHYSICS2D_VELOCITY_ITERATIONS: u32 = 8;
+pub const DEFAULT_PHYSICS2D_POSITION_ITERATIONS: u32 = 3;
 
 const DEFAULT_SOLVER_ITERATIONS: u32 = 6;
 const DEFAULT_SOLVER_VELOCITY_ITERATIONS: u32 = 2;
@@ -43,6 +46,43 @@ pub struct PhysicsProjectSettings {
     pub solver_type: PhysicsSolverType,
     pub enhanced_determinism: bool,
     pub layer_collision_matrix: [u32; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Physics2DProjectSettings {
+    pub gravity: [f64; 2],
+    pub velocity_iterations: u32,
+    pub position_iterations: u32,
+    pub queries_hit_triggers: bool,
+    pub queries_start_in_colliders: bool,
+    pub callbacks_on_disable: bool,
+    pub auto_sync_transforms: bool,
+    pub layer_collision_matrix: [u32; 32],
+}
+
+impl Default for Physics2DProjectSettings {
+    fn default() -> Self {
+        Self {
+            gravity: DEFAULT_GRAVITY_2D,
+            velocity_iterations: DEFAULT_PHYSICS2D_VELOCITY_ITERATIONS,
+            position_iterations: DEFAULT_PHYSICS2D_POSITION_ITERATIONS,
+            queries_hit_triggers: true,
+            queries_start_in_colliders: true,
+            callbacks_on_disable: true,
+            auto_sync_transforms: true,
+            layer_collision_matrix: [0xFFFF_FFFFu32; 32],
+        }
+    }
+}
+
+impl Physics2DProjectSettings {
+    pub fn from_stream(stream: &Stream) -> Result<Self, ProjectSettingsError> {
+        parse_physics2d_settings_stream(stream)
+    }
+
+    pub fn load(path: &Path) -> Result<Option<Self>, ProjectSettingsError> {
+        parse_physics2d_settings(path)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1462,11 +1502,10 @@ pub fn parse_physics_manager_stream(
         None => DEFAULT_GRAVITY,
     };
 
-    let layer_collision_matrix = body
-        .get("m_LayerCollisionMatrix")
-        .and_then(Node::as_str)
-        .map(parse_layer_collision_matrix)
-        .unwrap_or([0xFFFF_FFFFu32; 32]);
+    let layer_collision_matrix = match body.get("m_LayerCollisionMatrix") {
+        Some(node) => parse_layer_collision_matrix_node(node, "PhysicsManager")?,
+        None => [0xFFFF_FFFFu32; 32],
+    };
 
     Ok(PhysicsProjectSettings {
         gravity,
@@ -1525,6 +1564,130 @@ fn physics_solver_type(node: Option<&Node>) -> PhysicsSolverType {
         Some(2) => PhysicsSolverType::TgsSoft,
         _ => PhysicsSolverType::Default,
     }
+}
+
+pub fn parse_physics2d_settings(
+    path: &Path,
+) -> Result<Option<Physics2DProjectSettings>, ProjectSettingsError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stream = unity_yaml::parse_file(path)?;
+    parse_physics2d_settings_stream(&stream).map(Some)
+}
+
+pub fn parse_physics2d_settings_stream(
+    stream: &Stream,
+) -> Result<Physics2DProjectSettings, ProjectSettingsError> {
+    let body = stream
+        .documents
+        .iter()
+        .filter(|document| !document.stripped)
+        .find_map(|document| {
+            document
+                .root
+                .get("Physics2DSettings")
+                .or_else(|| document.root.get("Physics2DManager"))
+        })
+        .ok_or(ProjectSettingsError::MissingDocument("Physics2DSettings"))?;
+
+    let gravity = match body.get("m_Gravity") {
+        Some(node) => [
+            parse_finite_f64(node, "x")
+                .ok_or(ProjectSettingsError::InvalidValue("Physics2DSettings"))?,
+            parse_finite_f64(node, "y")
+                .ok_or(ProjectSettingsError::InvalidValue("Physics2DSettings"))?,
+        ],
+        None => DEFAULT_GRAVITY_2D,
+    };
+
+    let layer_collision_matrix = match body.get("m_LayerCollisionMatrix") {
+        Some(node) => parse_layer_collision_matrix_node(node, "Physics2DSettings")?,
+        None => [0xFFFF_FFFFu32; 32],
+    };
+
+    Ok(Physics2DProjectSettings {
+        gravity,
+        velocity_iterations: parse_optional_u32(
+            body,
+            "m_VelocityIterations",
+            DEFAULT_PHYSICS2D_VELOCITY_ITERATIONS,
+            "Physics2DSettings",
+        )?,
+        position_iterations: parse_optional_u32(
+            body,
+            "m_PositionIterations",
+            DEFAULT_PHYSICS2D_POSITION_ITERATIONS,
+            "Physics2DSettings",
+        )?,
+        queries_hit_triggers: parse_optional_bool(
+            body,
+            "m_QueriesHitTriggers",
+            true,
+            "Physics2DSettings",
+        )?,
+        queries_start_in_colliders: parse_optional_bool(
+            body,
+            "m_QueriesStartInColliders",
+            true,
+            "Physics2DSettings",
+        )?,
+        callbacks_on_disable: parse_optional_bool(
+            body,
+            "m_CallbacksOnDisable",
+            true,
+            "Physics2DSettings",
+        )?,
+        auto_sync_transforms: parse_optional_bool(
+            body,
+            "m_AutoSyncTransforms",
+            true,
+            "Physics2DSettings",
+        )?,
+        layer_collision_matrix,
+    })
+}
+
+fn parse_layer_collision_matrix_node(
+    node: &Node,
+    document: &'static str,
+) -> Result<[u32; 32], ProjectSettingsError> {
+    if let Some(hex) = node.as_str() {
+        return Ok(parse_layer_collision_matrix(hex));
+    }
+    if let Some(entries) = node.as_sequence() {
+        let mut matrix = [0xFFFF_FFFFu32; 32];
+        for (layer, entry) in entries.iter().take(32).enumerate() {
+            if let Some(val) = entry.as_i64() {
+                if let Ok(u) = u32::try_from(val) {
+                    matrix[layer] = u;
+                } else if let Ok(s) = i32::try_from(val) {
+                    matrix[layer] = s as u32;
+                } else {
+                    return Err(ProjectSettingsError::InvalidValue(document));
+                }
+            } else if let Some(text) = entry.as_str() {
+                let trimmed = text.trim();
+                let parsed = if let Some(hex_part) = trimmed
+                    .strip_prefix("0x")
+                    .or_else(|| trimmed.strip_prefix("0X"))
+                {
+                    u32::from_str_radix(hex_part, 16).ok()
+                } else {
+                    trimmed.parse::<u32>().ok()
+                };
+                if let Some(mask) = parsed {
+                    matrix[layer] = mask;
+                } else {
+                    return Err(ProjectSettingsError::InvalidValue(document));
+                }
+            } else {
+                return Err(ProjectSettingsError::InvalidValue(document));
+            }
+        }
+        return Ok(matrix);
+    }
+    Err(ProjectSettingsError::InvalidValue(document))
 }
 
 pub fn parse_input_manager(
@@ -2350,6 +2513,7 @@ pub struct LoadedProjectSettings {
     pub layer_collision_matrix: [u32; 32],
     pub gravity_2d: [f64; 2],
     pub layer_collision_matrix_2d: [u32; 32],
+    pub physics_2d: Physics2DProjectSettings,
     pub identity: ProjectIdentity,
     pub quality: QualitySettings,
     pub default_scripting_defines: String,
@@ -2670,29 +2834,15 @@ pub fn load_project_settings(
     }
 
     let physics2d_path = settings_dir.join("Physics2DSettings.asset");
-    let mut gravity_2d = [0.0, -9.81];
-    let mut layer_collision_matrix_2d = [0xFFFF_FFFFu32; 32];
+    let mut physics_2d = Physics2DProjectSettings::default();
     if physics2d_path.exists() {
         let stream = unity_yaml::parse_file(&physics2d_path)
             .map_err(|error| malformed_file(&physics2d_path, error))?;
-        if let Some(body) = stream
-            .documents
-            .iter()
-            .filter(|d| !d.stripped)
-            .find_map(|d| d.root.get("Physics2DSettings"))
-        {
-            if let Some(g_node) = body.get("m_Gravity") {
-                if let (Some(gx), Some(gy)) =
-                    (parse_finite_f64(g_node, "x"), parse_finite_f64(g_node, "y"))
-                {
-                    gravity_2d = [gx, gy];
-                }
-            }
-            if let Some(hex) = body.get("m_LayerCollisionMatrix").and_then(Node::as_str) {
-                layer_collision_matrix_2d = parse_layer_collision_matrix(hex);
-            }
-        }
+        physics_2d = parse_physics2d_settings_stream(&stream)
+            .map_err(|error| malformed_file(&physics2d_path, error))?;
     }
+    let gravity_2d = physics_2d.gravity;
+    let layer_collision_matrix_2d = physics_2d.layer_collision_matrix;
 
     let quality_path = settings_dir.join("QualitySettings.asset");
     let mut quality = QualitySettings::default();
@@ -2783,6 +2933,7 @@ pub fn load_project_settings(
         layer_collision_matrix,
         gravity_2d,
         layer_collision_matrix_2d,
+        physics_2d,
         identity,
         quality,
         default_scripting_defines,

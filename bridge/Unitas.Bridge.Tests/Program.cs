@@ -134,6 +134,7 @@ namespace Unitas.Bridge.Tests
                 () => SaveMigrationTests.Run(),
                 () => RuntimeObjectTests.Run(),
                 () => Physics2DTests.Run(),
+                () => Physics2DMessageTests.Run(),
                 () => SceneIsolationTests.Run(),
                 () => SceneReloadMaterializationTests.Run(),
                 () => UiPointerClickTests.Run(),

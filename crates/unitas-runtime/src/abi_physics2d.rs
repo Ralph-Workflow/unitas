@@ -1,3 +1,11 @@
+use crate::physics_settings::{
+    apply_physics2d_runtime_settings, get_physics2d_layer_collision, set_physics2d_layer_collision,
+};
+use crate::physics2d_colliders::{
+    build_tilemap_collider, create_edge_collider, create_polygon_collider, read_points_2d,
+    read_utf8_path, set_collider_composite, set_collider_material,
+};
+
 use super::{
     BodyDesc2D, BodyType2D, ColliderDesc2D, ColliderId2D, CollisionContactPoint2D,
     CollisionDetectionMode2D, CollisionPayload2D, CollisionSummary2D, ContactFilter2D, EntityId,
@@ -123,6 +131,125 @@ pub extern "C" fn unitas_runtime_collider2d_create_capsule(
         state.runtime.physics_mut().set_capsule_collider_2d(entity, collider);
         state.clear_error();
         0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_create_polygon(
+    handle: u64,
+    entity: u64,
+    attached_body: u64,
+    points: *const f32,
+    point_count: u32,
+    offset_x: f32,
+    offset_y: f32,
+    is_trigger: u32,
+    layer: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(vertices) = read_points_2d(state, points, point_count) else {
+            state.set_error("invalid polygon collider points buffer");
+            return -2;
+        };
+        create_polygon_collider(
+            state,
+            entity,
+            attached_body,
+            vertices,
+            [offset_x, offset_y],
+            is_trigger != 0,
+            layer as u8,
+        )
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_create_edge(
+    handle: u64,
+    entity: u64,
+    attached_body: u64,
+    points: *const f32,
+    point_count: u32,
+    offset_x: f32,
+    offset_y: f32,
+    is_trigger: u32,
+    layer: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(vertices) = read_points_2d(state, points, point_count) else {
+            state.set_error("invalid edge collider points buffer");
+            return -2;
+        };
+        create_edge_collider(
+            state,
+            entity,
+            attached_body,
+            vertices,
+            [offset_x, offset_y],
+            is_trigger != 0,
+            layer as u8,
+        )
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_set_composite(
+    handle: u64,
+    entity: u64,
+    composite_entity: u64,
+    geometry_type: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        set_collider_composite(state, entity, composite_entity, geometry_type)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_tilemap_collider2d_build(
+    handle: u64,
+    entity: u64,
+    composite_entity: u64,
+    tilemap_path: *const u8,
+    path_len: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let Some(path_text) = read_utf8_path(state, tilemap_path, path_len) else {
+            state.set_error("invalid tilemap path buffer");
+            return -2;
+        };
+        build_tilemap_collider(state, entity, composite_entity, &path_text)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_set_material(
+    handle: u64,
+    entity: u64,
+    friction: f32,
+    bounciness: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        set_collider_material(state, entity, friction, bounciness)
     }) {
         Ok(code) => code,
         Err(code) => code,
@@ -503,12 +630,9 @@ pub extern "C" fn unitas_runtime_box_cast2d(
     max_normal_angle: f32,
 ) -> i32 {
     match with_runtime_state(handle, |state| {
-        let mut filter = ContactFilter2D {
-            use_triggers: use_triggers != 0,
-            use_layer_mask: true,
-            layer_mask,
-            ..ContactFilter2D::default()
-        };
+        let mut filter = ContactFilter2D::default()
+            .with_triggers(use_triggers != 0)
+            .with_layer_mask(layer_mask);
         if use_depth != 0 {
             filter.use_depth = true;
             filter.min_depth = min_depth;
@@ -625,6 +749,62 @@ pub extern "C" fn unitas_runtime_physics2d_clear(handle: u64) -> i32 {
         state.runtime.physics_mut().clear_2d();
         state.clear_error();
         0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_physics2d_apply_settings(
+    handle: u64,
+    gravity_x: f32,
+    gravity_y: f32,
+    velocity_iterations: u32,
+    position_iterations: u32,
+    queries_hit_triggers: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        apply_physics2d_runtime_settings(
+            state,
+            gravity_x,
+            gravity_y,
+            velocity_iterations,
+            position_iterations,
+            queries_hit_triggers,
+        )
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_physics2d_set_layer_collision(
+    handle: u64,
+    layer_a: u32,
+    layer_b: u32,
+    enabled: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        set_physics2d_layer_collision(state, layer_a, layer_b, enabled)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_physics2d_get_layer_collision(
+    handle: u64,
+    layer_a: u32,
+    layer_b: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        get_physics2d_layer_collision(state, layer_a, layer_b)
     }) {
         Ok(code) => code,
         Err(code) => code,

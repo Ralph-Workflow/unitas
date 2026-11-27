@@ -621,9 +621,13 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
             OwnedCapabilityPart {
                 behavior: "2D physics is reachable from a Unity scene and from the C# surface",
                 location: "crates/unitas-runtime/src/physics.rs",
-                evidence: &[],
+                evidence: &[
+                    "crates/unitas-runtime/tests/physics2d_collider_surface_tests.rs::composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam",
+                    "bridge/Unitas.Bridge.Tests/Physics2DTests.cs::TestSceneParsesExtendedCollidersAndMaterials",
+                    "bridge/Unitas.Bridge.Tests/Physics2DMessageTests.cs::TestWicksLanternEndToEndPlatformerScenario",
+                ],
                 missing: Some(
-                    "2D physics has no scene import path and no C# entry point, so a 2D body exists only in Rust, and the 2D solver is a hand-written impulse solver rather than a maintained engine",
+                    "the 2D solver is a hand-written impulse solver rather than a maintained engine, and 2D joints have no C# entry point",
                 ),
             },
         ],

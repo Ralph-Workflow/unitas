@@ -1,5 +1,11 @@
 namespace UnityEngine
 {
+    public enum CapsuleDirection2D
+    {
+        Vertical = 0,
+        Horizontal = 1,
+    }
+
     public class CapsuleCollider2D : Collider2D
     {
         private Vector2 _size = new Vector2(0.5f, 1f);
@@ -36,6 +42,7 @@ namespace UnityEngine
             float radius = _direction != 0 ? _size.x * 0.5f : _size.y * 0.5f;
             float height = _direction != 0 ? _size.y : _size.x;
             provider.TryCreateCapsuleCollider2D(owner.NativeEntityId, radius, height, _direction, offset, isTrigger);
+            ApplyNativeMaterialAndComposite();
         }
     }
 }

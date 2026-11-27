@@ -23,6 +23,11 @@ namespace Unitas.Bridge
                 _sceneRigidbodies2D.Clear();
                 _sceneBoxColliders2D.Clear();
                 _sceneCircleColliders2D.Clear();
+                _sceneCapsuleColliders2D.Clear();
+                _scenePolygonColliders2D.Clear();
+                _sceneEdgeColliders2D.Clear();
+                _sceneCompositeColliders2D.Clear();
+                _sceneTilemapColliders2D.Clear();
                 _scenePlatformEffectors2D.Clear();
                 _sceneSurfaceEffectors2D.Clear();
                 _registeredBodies2D.Clear();
@@ -61,11 +66,12 @@ namespace Unitas.Bridge
         {
             for (int index = 0; index < lines.Length; index++)
             {
-                ParseSceneDocumentLine(state, lines[index].Trim());
+                string rawLine = lines[index];
+                ParseSceneDocumentLine(state, rawLine.Trim(), rawLine);
             }
         }
 
-        private void ParseSceneDocumentLine(SceneDocumentParseState state, string line)
+        private void ParseSceneDocumentLine(SceneDocumentParseState state, string line, string rawLine)
         {
             if (line.StartsWith("--- !u!", StringComparison.Ordinal))
             {
@@ -79,9 +85,15 @@ namespace Unitas.Bridge
                     state.CircleColliders2D,
                     state.PlatformEffectors2D,
                     state.SurfaceEffectors2D);
+                RecordExtendedScenePhysics2DComponent(state);
                 FlushSceneDocument(state);
                 BeginSceneDocument(state, line);
                 return;
+            }
+
+            if (state.CurrentClassId == TILEMAP_CLASS)
+            {
+                state.CurrentTilemapRawLines.Add(rawLine);
             }
 
             ApplySceneDocumentProperty(state, line);
@@ -187,6 +199,13 @@ namespace Unitas.Bridge
             state.CurrentSize = new Vector3(1f, 1f, 1f);
             state.CurrentConvex = false;
             state.Current2D = new ScenePhysics2DFields();
+            state.CurrentTilemapRawLines.Clear();
+            if (state.CurrentClassId == TILEMAP_CLASS)
+            {
+                state.CurrentTilemapRawLines.Add("%YAML 1.1");
+                state.CurrentTilemapRawLines.Add("%TAG !u! tag:unity3d.com,2011:");
+                state.CurrentTilemapRawLines.Add(headerLine);
+            }
             state.CurrentMeshFileId = string.Empty;
             state.CurrentMeshGuid = string.Empty;
             state.CurrentFatherFileId = string.Empty;
@@ -262,6 +281,24 @@ namespace Unitas.Bridge
                     break;
                 case CIRCLE_COLLIDER2D_CLASS:
                     ApplySceneCircleCollider2DProperty(state, line);
+                    break;
+                case CAPSULE_COLLIDER2D_CLASS:
+                    ApplySceneCapsuleCollider2DProperty(state, line);
+                    break;
+                case POLYGON_COLLIDER2D_CLASS:
+                    ApplyScenePolygonCollider2DProperty(state, line);
+                    break;
+                case EDGE_COLLIDER2D_CLASS:
+                    ApplySceneEdgeCollider2DProperty(state, line);
+                    break;
+                case COMPOSITE_COLLIDER2D_CLASS:
+                    ApplySceneCompositeCollider2DProperty(state, line);
+                    break;
+                case TILEMAP_COLLIDER2D_CLASS:
+                    ApplySceneTilemapCollider2DProperty(state, line);
+                    break;
+                case TILEMAP_CLASS:
+                    ApplySceneTilemapProperty(state, line);
                     break;
                 case PLATFORM_EFFECTOR2D_CLASS:
                     ApplyScenePlatformEffector2DProperty(state, line);
@@ -425,7 +462,7 @@ namespace Unitas.Bridge
             }
         }
 
-        private void ApplySceneBoxCollider2DProperty(SceneDocumentParseState state, string line)
+        private void ApplySceneCollider2DCommonProperty(SceneDocumentParseState state, string line)
         {
             if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
             {
@@ -435,11 +472,39 @@ namespace Unitas.Bridge
             {
                 state.Current2D.IsTrigger = ParseBoolValue(line, false);
             }
+            else if (line.StartsWith("m_UsedByEffector:", StringComparison.Ordinal))
+            {
+                state.Current2D.UsedByEffector = ParseBoolValue(line, false);
+            }
+            else if (line.StartsWith("m_UsedByComposite:", StringComparison.Ordinal))
+            {
+                state.Current2D.UsedByComposite = ParseBoolValue(line, false);
+            }
             else if (line.StartsWith("m_Offset:", StringComparison.Ordinal))
             {
                 state.Current2D.Offset = ParseVector2Value(line, Vector2.zero);
             }
-            else if (line.StartsWith("m_Size:", StringComparison.Ordinal))
+            else if (line.StartsWith("m_Material:", StringComparison.Ordinal))
+            {
+                state.Current2D.MaterialFileId = ExtractFileId(line);
+                state.Current2D.MaterialGuid = ExtractGuidValue(line);
+            }
+            else if (line.StartsWith("m_Friction:", StringComparison.Ordinal) || line.StartsWith("friction:", StringComparison.Ordinal))
+            {
+                state.Current2D.Friction = ParseFloatValue(line, 0.4f);
+                state.Current2D.HasInlineMaterial = true;
+            }
+            else if (line.StartsWith("m_Bounciness:", StringComparison.Ordinal) || line.StartsWith("bounciness:", StringComparison.Ordinal))
+            {
+                state.Current2D.Bounciness = ParseFloatValue(line, 0f);
+                state.Current2D.HasInlineMaterial = true;
+            }
+        }
+
+        private void ApplySceneBoxCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("m_Size:", StringComparison.Ordinal))
             {
                 state.Current2D.Size = ParseVector2Value(line, Vector2.one);
             }
@@ -447,21 +512,131 @@ namespace Unitas.Bridge
 
         private void ApplySceneCircleCollider2DProperty(SceneDocumentParseState state, string line)
         {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("m_Radius:", StringComparison.Ordinal))
+            {
+                state.Current2D.Radius = ParseFloatValue(line, 0.5f);
+            }
+        }
+
+        private void ApplySceneCapsuleCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("m_Size:", StringComparison.Ordinal))
+            {
+                state.Current2D.CapsuleSize = ParseVector2Value(line, new Vector2(0.5f, 1f));
+            }
+            else if (line.StartsWith("m_Direction:", StringComparison.Ordinal))
+            {
+                state.Current2D.CapsuleDirection = (int)ParseFloatValue(line, 1f);
+            }
+        }
+
+        private void ApplyScenePolygonCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("- {x:", StringComparison.Ordinal) || line.StartsWith("- - {x:", StringComparison.Ordinal))
+            {
+                state.Current2D.Points.Add(ParseVector2Value(line, Vector2.zero));
+            }
+        }
+
+        private void ApplySceneEdgeCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("- {x:", StringComparison.Ordinal) || line.StartsWith("- - {x:", StringComparison.Ordinal))
+            {
+                state.Current2D.Points.Add(ParseVector2Value(line, Vector2.zero));
+            }
+            else if (line.StartsWith("m_EdgeRadius:", StringComparison.Ordinal))
+            {
+                state.Current2D.EdgeRadius = ParseFloatValue(line, 0f);
+            }
+        }
+
+        private void ApplySceneCompositeCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("m_GeometryType:", StringComparison.Ordinal))
+            {
+                state.Current2D.GeometryType = (int)ParseFloatValue(line, 0f);
+            }
+            else if (line.StartsWith("m_GenerationType:", StringComparison.Ordinal))
+            {
+                state.Current2D.GenerationType = (int)ParseFloatValue(line, 0f);
+            }
+            else if (line.StartsWith("m_VertexDistance:", StringComparison.Ordinal))
+            {
+                state.Current2D.VertexDistance = ParseFloatValue(line, 0.00005f);
+            }
+            else if (line.StartsWith("m_OffsetDistance:", StringComparison.Ordinal))
+            {
+                state.Current2D.OffsetDistance = ParseFloatValue(line, 0.000005f);
+            }
+            else if (line.StartsWith("m_EdgeRadius:", StringComparison.Ordinal))
+            {
+                state.Current2D.EdgeRadius = ParseFloatValue(line, 0f);
+            }
+        }
+
+        private void ApplySceneTilemapCollider2DProperty(SceneDocumentParseState state, string line)
+        {
+            ApplySceneCollider2DCommonProperty(state, line);
+            if (line.StartsWith("m_MaximumTileChangeCount:", StringComparison.Ordinal))
+            {
+                state.Current2D.MaximumTileChangeCount = (uint)Math.Max(0f, ParseFloatValue(line, 1000f));
+            }
+            else if (line.StartsWith("m_ExtrusionFactor:", StringComparison.Ordinal))
+            {
+                state.Current2D.ExtrusionFactor = ParseFloatValue(line, 0f);
+            }
+            else if (line.StartsWith("m_TilemapAsset:", StringComparison.Ordinal))
+            {
+                string guid = ExtractGuidValue(line);
+                if (!string.IsNullOrEmpty(guid))
+                {
+                    state.Current2D.TilemapAssetGuid = guid;
+                }
+                else
+                {
+                    string val = ParseStringValue(line);
+                    if (!val.StartsWith('{'))
+                    {
+                        state.Current2D.TilemapAssetPath = val;
+                    }
+                }
+            }
+            else if (line.StartsWith("m_TilemapPath:", StringComparison.Ordinal))
+            {
+                state.Current2D.TilemapAssetPath = ParseStringValue(line);
+            }
+        }
+
+        private void ApplySceneTilemapProperty(SceneDocumentParseState state, string line)
+        {
             if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
             {
                 state.CurrentGameObjectFileId = ExtractFileId(line);
             }
-            else if (line.StartsWith("m_IsTrigger:", StringComparison.Ordinal))
+            else if (line.StartsWith("m_TilemapAsset:", StringComparison.Ordinal))
             {
-                state.Current2D.IsTrigger = ParseBoolValue(line, false);
+                string guid = ExtractGuidValue(line);
+                if (!string.IsNullOrEmpty(guid))
+                {
+                    state.Current2D.TilemapAssetGuid = guid;
+                }
+                else
+                {
+                    string val = ParseStringValue(line);
+                    if (!val.StartsWith('{'))
+                    {
+                        state.Current2D.TilemapAssetPath = val;
+                    }
+                }
             }
-            else if (line.StartsWith("m_Offset:", StringComparison.Ordinal))
+            else if (line.StartsWith("m_TilemapPath:", StringComparison.Ordinal))
             {
-                state.Current2D.Offset = ParseVector2Value(line, Vector2.zero);
-            }
-            else if (line.StartsWith("m_Radius:", StringComparison.Ordinal))
-            {
-                state.Current2D.Radius = ParseFloatValue(line, 0.5f);
+                state.Current2D.TilemapAssetPath = ParseStringValue(line);
             }
         }
 
@@ -696,6 +871,48 @@ namespace Unitas.Bridge
             }
         }
 
+        private static void RecordExtendedScenePhysics2DComponent(SceneDocumentParseState state)
+        {
+            string id = state.CurrentGameObjectFileId;
+            if (string.IsNullOrEmpty(id))
+            {
+                return;
+            }
+            ScenePhysics2DFields f = state.Current2D;
+            switch (state.CurrentClassId)
+            {
+                case CAPSULE_COLLIDER2D_CLASS:
+                    state.CapsuleColliders2D.Add(new ParsedCapsuleCollider2DRecord(id, f.CapsuleSize, f.CapsuleDirection, f.Offset, f.IsTrigger, f.UsedByEffector, f.UsedByComposite, f.MaterialGuid, f.HasInlineMaterial, f.Friction, f.Bounciness));
+                    break;
+                case POLYGON_COLLIDER2D_CLASS:
+                    state.PolygonColliders2D.Add(new ParsedPolygonCollider2DRecord(id, f.Points.ToArray(), f.Offset, f.IsTrigger, f.UsedByEffector, f.UsedByComposite, f.MaterialGuid, f.HasInlineMaterial, f.Friction, f.Bounciness));
+                    break;
+                case EDGE_COLLIDER2D_CLASS:
+                    state.EdgeColliders2D.Add(new ParsedEdgeCollider2DRecord(id, f.Points.ToArray(), f.EdgeRadius, f.Offset, f.IsTrigger, f.UsedByEffector, f.UsedByComposite, f.MaterialGuid, f.HasInlineMaterial, f.Friction, f.Bounciness));
+                    break;
+                case COMPOSITE_COLLIDER2D_CLASS:
+                    state.CompositeColliders2D.Add(new ParsedCompositeCollider2DRecord(id, f.GeometryType, f.GenerationType, f.VertexDistance, f.OffsetDistance, f.EdgeRadius, f.Offset, f.IsTrigger, f.UsedByEffector, f.MaterialGuid, f.HasInlineMaterial, f.Friction, f.Bounciness));
+                    break;
+                case TILEMAP_COLLIDER2D_CLASS:
+                    state.TilemapColliders2D.Add(new ParsedTilemapCollider2DRecord(id, f.MaximumTileChangeCount, f.ExtrusionFactor, f.TilemapAssetPath, f.TilemapAssetGuid, f.Offset, f.IsTrigger, f.UsedByEffector, f.UsedByComposite, f.MaterialGuid, f.HasInlineMaterial, f.Friction, f.Bounciness));
+                    break;
+                case TILEMAP_CLASS:
+                    if (!string.IsNullOrEmpty(f.TilemapAssetGuid))
+                    {
+                        state.TilemapAssetGuids[id] = f.TilemapAssetGuid;
+                    }
+                    if (!string.IsNullOrEmpty(f.TilemapAssetPath))
+                    {
+                        state.TilemapAssetPaths[id] = f.TilemapAssetPath;
+                    }
+                    if (state.CurrentTilemapRawLines.Count > 3)
+                    {
+                        state.TilemapInlineYamls[id] = string.Join("\n", state.CurrentTilemapRawLines);
+                    }
+                    break;
+            }
+        }
+
         private void FinalizeSceneDocument(SceneDocumentParseState state, string scenePath)
         {
             CollectSceneDocumentRecords(state);
@@ -709,10 +926,11 @@ namespace Unitas.Bridge
                 state.CircleColliders2D,
                 state.PlatformEffectors2D,
                 state.SurfaceEffectors2D);
+            RecordExtendedScenePhysics2DComponent(state);
             ApplySceneObjectNames(state);
             ApplySceneRigidbodyRecords(state);
             ApplySceneColliderRecords(state);
-            ApplyScenePhysics2DRecords(state);
+            ApplyScenePhysics2DRecords(state, scenePath);
             ApplySceneTransformRecords(state);
             ApplySceneUiRecords(state);
             ApplySceneParentEntities(state, scenePath);
@@ -808,8 +1026,9 @@ namespace Unitas.Bridge
             }
         }
 
-        private void ApplyScenePhysics2DRecords(SceneDocumentParseState state)
+        private void ApplyScenePhysics2DRecords(SceneDocumentParseState state, string scenePath)
         {
+            PrefabGuidIndex? guidIndex = null;
             for (int index = 0; index < state.Rigidbodies2D.Count; index++)
             {
                 ParsedRigidbody2DRecord record = state.Rigidbodies2D[index];
@@ -831,11 +1050,8 @@ namespace Unitas.Bridge
                 ParsedBoxCollider2DRecord record = state.BoxColliders2D[index];
                 if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
                 {
-                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
-                    _sceneBoxColliders2D[shiftedEntity] = new SceneBoxCollider2DMetadata(
-                        record.Size,
-                        record.Offset,
-                        record.IsTrigger);
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _sceneBoxColliders2D[_nextSceneEntityBase + localEntity] = new SceneBoxCollider2DMetadata(record.Size, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
                 }
             }
 
@@ -844,11 +1060,59 @@ namespace Unitas.Bridge
                 ParsedCircleCollider2DRecord record = state.CircleColliders2D[index];
                 if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
                 {
-                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
-                    _sceneCircleColliders2D[shiftedEntity] = new SceneCircleCollider2DMetadata(
-                        record.Radius,
-                        record.Offset,
-                        record.IsTrigger);
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _sceneCircleColliders2D[_nextSceneEntityBase + localEntity] = new SceneCircleCollider2DMetadata(record.Radius, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
+                }
+            }
+
+            for (int index = 0; index < state.CapsuleColliders2D.Count; index++)
+            {
+                ParsedCapsuleCollider2DRecord record = state.CapsuleColliders2D[index];
+                if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _sceneCapsuleColliders2D[_nextSceneEntityBase + localEntity] = new SceneCapsuleCollider2DMetadata(record.Size, record.Direction, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
+                }
+            }
+
+            for (int index = 0; index < state.PolygonColliders2D.Count; index++)
+            {
+                ParsedPolygonCollider2DRecord record = state.PolygonColliders2D[index];
+                if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _scenePolygonColliders2D[_nextSceneEntityBase + localEntity] = new ScenePolygonCollider2DMetadata(record.Points, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
+                }
+            }
+
+            for (int index = 0; index < state.EdgeColliders2D.Count; index++)
+            {
+                ParsedEdgeCollider2DRecord record = state.EdgeColliders2D[index];
+                if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _sceneEdgeColliders2D[_nextSceneEntityBase + localEntity] = new SceneEdgeCollider2DMetadata(record.Points, record.EdgeRadius, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
+                }
+            }
+
+            for (int index = 0; index < state.CompositeColliders2D.Count; index++)
+            {
+                ParsedCompositeCollider2DRecord record = state.CompositeColliders2D[index];
+                if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    _sceneCompositeColliders2D[_nextSceneEntityBase + localEntity] = new SceneCompositeCollider2DMetadata(record.GeometryType, record.GenerationType, record.VertexDistance, record.OffsetDistance, record.EdgeRadius, record.Offset, record.IsTrigger, record.UsedByEffector, material);
+                }
+            }
+
+            for (int index = 0; index < state.TilemapColliders2D.Count; index++)
+            {
+                ParsedTilemapCollider2DRecord record = state.TilemapColliders2D[index];
+                if (state.GameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    PhysicsMaterial2D? material = ResolveScenePhysicsMaterial2D(record.MaterialGuid, record.HasInlineMaterial, record.Friction, record.Bounciness, scenePath, ref guidIndex);
+                    string resolvedTilemapPath = ResolveSceneTilemapPath(state, record, scenePath, ref guidIndex);
+                    _sceneTilemapColliders2D[_nextSceneEntityBase + localEntity] = new SceneTilemapCollider2DMetadata(record.MaximumTileChangeCount, record.ExtrusionFactor, resolvedTilemapPath, record.Offset, record.IsTrigger, record.UsedByEffector, record.UsedByComposite, material);
                 }
             }
 
@@ -881,6 +1145,150 @@ namespace Unitas.Bridge
                         record.UseBounce);
                 }
             }
+        }
+
+        private static PhysicsMaterial2D? ResolveScenePhysicsMaterial2D(
+            string materialGuid,
+            bool hasInlineMaterial,
+            float inlineFriction,
+            float inlineBounciness,
+            string scenePath,
+            ref PrefabGuidIndex? guidIndex)
+        {
+            if (!string.IsNullOrEmpty(materialGuid))
+            {
+                guidIndex ??= PrefabGuidIndex.Build(scenePath);
+                string? assetPath = guidIndex.Resolve(materialGuid) ?? ResolveGuidNearScene(scenePath, materialGuid);
+                if (!string.IsNullOrEmpty(assetPath) && File.Exists(assetPath))
+                {
+                    return ParsePhysicsMaterial2DFile(assetPath);
+                }
+            }
+            if (hasInlineMaterial)
+            {
+                return new PhysicsMaterial2D
+                {
+                    friction = inlineFriction,
+                    bounciness = inlineBounciness,
+                };
+            }
+            return null;
+        }
+
+        private static PhysicsMaterial2D ParsePhysicsMaterial2DFile(string assetPath)
+        {
+            string name = Path.GetFileNameWithoutExtension(assetPath);
+            float friction = 0.4f;
+            float bounciness = 0f;
+            string[] lines = File.ReadAllLines(assetPath);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.StartsWith("m_Name:", StringComparison.Ordinal))
+                {
+                    string parsedName = ParseStringValue(line);
+                    if (!string.IsNullOrEmpty(parsedName))
+                    {
+                        name = parsedName;
+                    }
+                }
+                else if (line.StartsWith("friction:", StringComparison.Ordinal) || line.StartsWith("m_Friction:", StringComparison.Ordinal))
+                {
+                    friction = ParseFloatValue(line, friction);
+                }
+                else if (line.StartsWith("bounciness:", StringComparison.Ordinal) || line.StartsWith("m_Bounciness:", StringComparison.Ordinal))
+                {
+                    bounciness = ParseFloatValue(line, bounciness);
+                }
+            }
+            return new PhysicsMaterial2D(name)
+            {
+                friction = friction,
+                bounciness = bounciness,
+            };
+        }
+
+        private static string ResolveSceneTilemapPath(
+            SceneDocumentParseState state,
+            ParsedTilemapCollider2DRecord record,
+            string scenePath,
+            ref PrefabGuidIndex? guidIndex)
+        {
+            string guid = record.TilemapAssetGuid;
+            if (string.IsNullOrEmpty(guid) && state.TilemapAssetGuids.TryGetValue(record.GameObjectFileId, out string? siblingGuid))
+            {
+                guid = siblingGuid ?? string.Empty;
+            }
+            if (!string.IsNullOrEmpty(guid))
+            {
+                guidIndex ??= PrefabGuidIndex.Build(scenePath);
+                string? resolvedGuidPath = guidIndex.Resolve(guid) ?? ResolveGuidNearScene(scenePath, guid);
+                if (!string.IsNullOrEmpty(resolvedGuidPath) && File.Exists(resolvedGuidPath))
+                {
+                    return resolvedGuidPath;
+                }
+            }
+
+            string path = record.TilemapAssetPath;
+            if (string.IsNullOrEmpty(path) && state.TilemapAssetPaths.TryGetValue(record.GameObjectFileId, out string? siblingPath))
+            {
+                path = siblingPath ?? string.Empty;
+            }
+            if (!string.IsNullOrEmpty(path))
+            {
+                if (File.Exists(path))
+                {
+                    return Path.GetFullPath(path);
+                }
+                string? sceneDir = Path.GetDirectoryName(Path.GetFullPath(scenePath));
+                if (!string.IsNullOrEmpty(sceneDir))
+                {
+                    string candidate = Path.Combine(sceneDir, path);
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                }
+                return path;
+            }
+
+            if (state.TilemapInlineYamls.TryGetValue(record.GameObjectFileId, out string? inlineYaml) && !string.IsNullOrEmpty(inlineYaml))
+            {
+                return inlineYaml;
+            }
+
+            return string.Empty;
+        }
+
+        private static string? ResolveGuidNearScene(string scenePath, string guid)
+        {
+            if (string.IsNullOrEmpty(scenePath) || string.IsNullOrEmpty(guid))
+            {
+                return null;
+            }
+            string? sceneDir = Path.GetDirectoryName(Path.GetFullPath(scenePath));
+            if (string.IsNullOrEmpty(sceneDir) || !Directory.Exists(sceneDir))
+            {
+                return null;
+            }
+            string[] metaFiles = Directory.GetFiles(sceneDir, "*.meta", SearchOption.AllDirectories);
+            for (int i = 0; i < metaFiles.Length; i++)
+            {
+                string[] lines = File.ReadAllLines(metaFiles[i]);
+                for (int j = 0; j < lines.Length; j++)
+                {
+                    string line = lines[j].Trim();
+                    if (line.StartsWith("guid:", StringComparison.Ordinal))
+                    {
+                        string candidateGuid = line.Substring(5).Trim();
+                        if (string.Equals(candidateGuid, guid, StringComparison.Ordinal))
+                        {
+                            return metaFiles[i].Substring(0, metaFiles[i].Length - ".meta".Length);
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         private void ApplySceneTransformRecords(SceneDocumentParseState state)
@@ -1927,40 +2335,207 @@ namespace Unitas.Bridge
 
         private readonly struct ParsedBoxCollider2DRecord
         {
-            public ParsedBoxCollider2DRecord(string gameObjectFileId, Vector2 size, Vector2 offset, bool isTrigger)
+            public ParsedBoxCollider2DRecord(string gameObjectFileId, Vector2 size, Vector2 offset, bool isTrigger, bool usedByEffector = false, bool usedByComposite = false, string materialGuid = "", bool hasInlineMaterial = false, float friction = 0.4f, float bounciness = 0f)
             {
                 GameObjectFileId = gameObjectFileId;
                 Size = size;
                 Offset = offset;
                 IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
             }
-
             public string GameObjectFileId { get; }
-
             public Vector2 Size { get; }
-
             public Vector2 Offset { get; }
-
             public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
         }
 
         private readonly struct ParsedCircleCollider2DRecord
         {
-            public ParsedCircleCollider2DRecord(string gameObjectFileId, float radius, Vector2 offset, bool isTrigger)
+            public ParsedCircleCollider2DRecord(string gameObjectFileId, float radius, Vector2 offset, bool isTrigger, bool usedByEffector = false, bool usedByComposite = false, string materialGuid = "", bool hasInlineMaterial = false, float friction = 0.4f, float bounciness = 0f)
             {
                 GameObjectFileId = gameObjectFileId;
                 Radius = radius;
                 Offset = offset;
                 IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
             }
-
             public string GameObjectFileId { get; }
-
             public float Radius { get; }
-
             public Vector2 Offset { get; }
-
             public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
+        }
+
+        private readonly struct ParsedCapsuleCollider2DRecord
+        {
+            public ParsedCapsuleCollider2DRecord(string gameObjectFileId, Vector2 size, int direction, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, string materialGuid, bool hasInlineMaterial, float friction, float bounciness)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Size = size;
+                Direction = direction;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
+            }
+            public string GameObjectFileId { get; }
+            public Vector2 Size { get; }
+            public int Direction { get; }
+            public Vector2 Offset { get; }
+            public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
+        }
+
+        private readonly struct ParsedPolygonCollider2DRecord
+        {
+            public ParsedPolygonCollider2DRecord(string gameObjectFileId, Vector2[] points, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, string materialGuid, bool hasInlineMaterial, float friction, float bounciness)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Points = points ?? Array.Empty<Vector2>();
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
+            }
+            public string GameObjectFileId { get; }
+            public Vector2[] Points { get; }
+            public Vector2 Offset { get; }
+            public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
+        }
+
+        private readonly struct ParsedEdgeCollider2DRecord
+        {
+            public ParsedEdgeCollider2DRecord(string gameObjectFileId, Vector2[] points, float edgeRadius, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, string materialGuid, bool hasInlineMaterial, float friction, float bounciness)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Points = points ?? Array.Empty<Vector2>();
+                EdgeRadius = edgeRadius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
+            }
+            public string GameObjectFileId { get; }
+            public Vector2[] Points { get; }
+            public float EdgeRadius { get; }
+            public Vector2 Offset { get; }
+            public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
+        }
+
+        private readonly struct ParsedCompositeCollider2DRecord
+        {
+            public ParsedCompositeCollider2DRecord(string gameObjectFileId, int geometryType, int generationType, float vertexDistance, float offsetDistance, float edgeRadius, Vector2 offset, bool isTrigger, bool usedByEffector, string materialGuid, bool hasInlineMaterial, float friction, float bounciness)
+            {
+                GameObjectFileId = gameObjectFileId;
+                GeometryType = geometryType;
+                GenerationType = generationType;
+                VertexDistance = vertexDistance;
+                OffsetDistance = offsetDistance;
+                EdgeRadius = edgeRadius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
+            }
+            public string GameObjectFileId { get; }
+            public int GeometryType { get; }
+            public int GenerationType { get; }
+            public float VertexDistance { get; }
+            public float OffsetDistance { get; }
+            public float EdgeRadius { get; }
+            public Vector2 Offset { get; }
+            public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
+        }
+
+        private readonly struct ParsedTilemapCollider2DRecord
+        {
+            public ParsedTilemapCollider2DRecord(string gameObjectFileId, uint maximumTileChangeCount, float extrusionFactor, string tilemapAssetPath, string tilemapAssetGuid, Vector2 offset, bool isTrigger, bool usedByEffector, bool usedByComposite, string materialGuid, bool hasInlineMaterial, float friction, float bounciness)
+            {
+                GameObjectFileId = gameObjectFileId;
+                MaximumTileChangeCount = maximumTileChangeCount;
+                ExtrusionFactor = extrusionFactor;
+                TilemapAssetPath = tilemapAssetPath ?? string.Empty;
+                TilemapAssetGuid = tilemapAssetGuid ?? string.Empty;
+                Offset = offset;
+                IsTrigger = isTrigger;
+                UsedByEffector = usedByEffector;
+                UsedByComposite = usedByComposite;
+                MaterialGuid = materialGuid ?? string.Empty;
+                HasInlineMaterial = hasInlineMaterial;
+                Friction = friction;
+                Bounciness = bounciness;
+            }
+            public string GameObjectFileId { get; }
+            public uint MaximumTileChangeCount { get; }
+            public float ExtrusionFactor { get; }
+            public string TilemapAssetPath { get; }
+            public string TilemapAssetGuid { get; }
+            public Vector2 Offset { get; }
+            public bool IsTrigger { get; }
+            public bool UsedByEffector { get; }
+            public bool UsedByComposite { get; }
+            public string MaterialGuid { get; }
+            public bool HasInlineMaterial { get; }
+            public float Friction { get; }
+            public float Bounciness { get; }
         }
 
         private readonly struct ParsedPlatformEffector2DRecord
@@ -2237,6 +2812,15 @@ namespace Unitas.Bridge
             public List<ParsedRigidbody2DRecord> Rigidbodies2D = new List<ParsedRigidbody2DRecord>();
             public List<ParsedBoxCollider2DRecord> BoxColliders2D = new List<ParsedBoxCollider2DRecord>();
             public List<ParsedCircleCollider2DRecord> CircleColliders2D = new List<ParsedCircleCollider2DRecord>();
+            public List<ParsedCapsuleCollider2DRecord> CapsuleColliders2D = new List<ParsedCapsuleCollider2DRecord>();
+            public List<ParsedPolygonCollider2DRecord> PolygonColliders2D = new List<ParsedPolygonCollider2DRecord>();
+            public List<ParsedEdgeCollider2DRecord> EdgeColliders2D = new List<ParsedEdgeCollider2DRecord>();
+            public List<ParsedCompositeCollider2DRecord> CompositeColliders2D = new List<ParsedCompositeCollider2DRecord>();
+            public List<ParsedTilemapCollider2DRecord> TilemapColliders2D = new List<ParsedTilemapCollider2DRecord>();
+            public Dictionary<string, string> TilemapAssetGuids = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, string> TilemapAssetPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, string> TilemapInlineYamls = new Dictionary<string, string>(StringComparer.Ordinal);
+            public List<string> CurrentTilemapRawLines = new List<string>();
             public List<ParsedPlatformEffector2DRecord> PlatformEffectors2D = new List<ParsedPlatformEffector2DRecord>();
             public List<ParsedSurfaceEffector2DRecord> SurfaceEffectors2D = new List<ParsedSurfaceEffector2DRecord>();
             public List<ParsedSphereColliderRecord> SphereColliders = new List<ParsedSphereColliderRecord>();

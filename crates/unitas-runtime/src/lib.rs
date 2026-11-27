@@ -10,6 +10,7 @@ pub mod jobs;
 pub mod navigation;
 pub mod particles;
 pub mod physics;
+pub mod physics2d_colliders;
 pub mod physics_settings;
 pub mod player_loop;
 pub mod presenter;

@@ -31,6 +31,9 @@ mod sim_control_tests;
 #[path = "simulation/perf_step.rs"]
 mod perf_step;
 
+#[path = "simulation/perf_step2d.rs"]
+mod perf_step2d;
+
 #[path = "simulation/perf_particles.rs"]
 mod perf_particles;
 
