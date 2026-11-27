@@ -9,6 +9,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[path = "abi_profiler.rs"]
+pub(crate) mod abi_profiler;
+
 /// The root node type, matching Unity's `UnityEngine.LowLevel.PlayerLoop`.
 pub const ROOT_TYPE: &str = "UnityEngine.LowLevel.PlayerLoop";
 
@@ -193,6 +196,11 @@ pub(crate) enum PlayerLoopStep {
     Custom {
         callback: PlayerLoopCallback,
         user_data: u64,
+    },
+    /// One player loop phase and the systems it runs.
+    Phase {
+        name: String,
+        steps: Vec<PlayerLoopStep>,
     },
     /// The fixed update phase: its systems run once per fixed step.
     FixedPhase {
@@ -451,13 +459,27 @@ fn compile_node(
     customs: &BTreeMap<String, CustomSystem>,
     steps: &mut Vec<PlayerLoopStep>,
 ) {
-    if node.type_name == FIXED_UPDATE {
+    if let Some(phase) = phase_name(&node.type_name) {
         let mut inner = Vec::new();
         for child in &node.children {
             compile_node(child, customs, &mut inner);
         }
-        steps.push(PlayerLoopStep::FixedPhase { steps: inner });
-        steps.push(PlayerLoopStep::Builtin(BuiltinWork::InitPendingScripts));
+        if phase == FIXED_UPDATE {
+            let mut phase_steps = vec![PlayerLoopStep::FixedPhase { steps: inner }];
+            phase_steps.push(PlayerLoopStep::Builtin(BuiltinWork::InitPendingScripts));
+            steps.push(PlayerLoopStep::Phase {
+                name: phase.to_string(),
+                steps: phase_steps,
+            });
+            return;
+        }
+        if phase == POST_LATE_UPDATE {
+            inner.push(PlayerLoopStep::Builtin(BuiltinWork::InitPendingScripts));
+        }
+        steps.push(PlayerLoopStep::Phase {
+            name: phase.to_string(),
+            steps: inner,
+        });
         return;
     }
     if let Some(work) = builtin_work_for(&node.type_name) {
@@ -471,9 +493,22 @@ fn compile_node(
     for child in &node.children {
         compile_node(child, customs, steps);
     }
-    if node.type_name == POST_LATE_UPDATE {
-        steps.push(PlayerLoopStep::Builtin(BuiltinWork::InitPendingScripts));
-    }
+}
+
+/// The player loop phases, in Unity's order.
+const PHASES: [&str; 7] = [
+    INITIALIZATION,
+    EARLY_UPDATE,
+    FIXED_UPDATE,
+    PRE_UPDATE,
+    UPDATE,
+    PRE_LATE_UPDATE,
+    POST_LATE_UPDATE,
+];
+
+/// The phase a tree node names, when it names one.
+fn phase_name(type_name: &str) -> Option<&'static str> {
+    PHASES.iter().copied().find(|phase| *phase == type_name)
 }
 
 const TREE_MAGIC: u32 = 0x314C_5055;

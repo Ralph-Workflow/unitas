@@ -2132,7 +2132,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "windowed wgpu presentation renders scene geometry, directional shadows, and canvas UI overlays to a window surface and reports sustained frame-rate metrics while headless sessions render offscreen",
                 location: "crates/unitas-runtime/src/window.rs",
                 evidence: &[
-                    "crates/unitas-runtime/src/presenter.rs::windowed_present_carries_the_canvas_the_capture_path_composes",
+                    "crates/unitas-runtime/src/presenter.rs::windowed_present_shows_the_canvas_the_capture_path_composes",
                     "crates/unitas-runtime/src/window.rs::bound_scene_renders_non_flat_frame_on_gpu",
                     "crates/unitas-runtime/src/window.rs::sustained_frames_per_second_divides_presented_frames_by_elapsed_time",
                     "crates/unitas-runtime/src/window.rs::sustained_fps_report_line_uses_the_device_lane_greppable_format",

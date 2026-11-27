@@ -50,7 +50,7 @@ use crate::physics_settings::{
 use crate::physics2d_colliders::attach_scene_physics_2d;
 use crate::player_loop::{
     BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
-    PlayerLoopStep, PlayerLoopSystem,
+    PlayerLoopStep, PlayerLoopSystem, abi_profiler,
 };
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
@@ -1431,7 +1431,10 @@ impl Runtime {
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
         let plan = self.player_loop.plan();
-        self.run_player_loop_steps(&plan, scaled_delta, delta_seconds, hook)
+        let frame = abi_profiler::begin_frame();
+        let result = self.run_player_loop_steps(&plan, scaled_delta, delta_seconds, hook);
+        abi_profiler::end_frame(frame);
+        result
     }
 
     fn run_player_loop_steps<H>(
@@ -1459,6 +1462,13 @@ impl Runtime {
                         callback(user_data, scaled_delta);
                     });
                     self.dispatch_physics_messages(hook);
+                }
+                PlayerLoopStep::Phase { name, steps } => {
+                    let phase = abi_profiler::begin_phase(name);
+                    let result =
+                        self.run_player_loop_steps(steps, scaled_delta, delta_seconds, hook);
+                    abi_profiler::end_phase(phase);
+                    result?;
                 }
                 PlayerLoopStep::FixedPhase { steps } => {
                     self.run_fixed_update_phase(steps, scaled_delta, delta_seconds, hook)?;

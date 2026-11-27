@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.Loader;
 
 namespace Unitas.Bridge.Scripting
 {
@@ -43,6 +44,35 @@ namespace Unitas.Bridge.Scripting
 
             result = method();
             return true;
+        }
+
+        public static int ReleaseLoadContext(AssemblyLoadContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            int released = 0;
+            lock (Gate)
+            {
+                List<string> stale = new List<string>();
+                foreach (KeyValuePair<string, Func<object?>> entry in Methods)
+                {
+                    Type? declaringType = entry.Value.Method.DeclaringType;
+                    if (declaringType != null && AssemblyLoadContext.GetLoadContext(declaringType.Assembly) == context)
+                    {
+                        stale.Add(entry.Key);
+                    }
+                }
+
+                for (int i = 0; i < stale.Count; i++)
+                {
+                    if (Methods.Remove(stale[i]))
+                    {
+                        released++;
+                    }
+                }
+            }
+
+            return released;
         }
 
         public static void Clear()

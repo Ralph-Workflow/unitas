@@ -222,20 +222,7 @@ pub struct WebRuntimeCompileGap {
     pub failure_summary: &'static str,
 }
 
-pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 2] = [
-    WebRuntimeCompileGap {
-        crate_name: "libloading",
-        version: "0.8.9",
-        dependency_chain: "libloading -> unitas-runtime",
-        failure_summary: "E0432 in crates/unitas-runtime/src/dylib.rs:4:5: unresolved import libloading::Library because libloading::safe::Library is gated on #[cfg(any(unix, windows, libloading_docs))]",
-    },
-    WebRuntimeCompileGap {
-        crate_name: "wgpu",
-        version: "30.0.2",
-        dependency_chain: "wgpu -> unitas-render -> unitas-runtime",
-        failure_summary: "E0277 in crates/unitas-runtime/src/abi.rs:212:18: wgpu::backend::webgpu types (WebDevice Rc<Cell<u32>>, WebBufferMapState Rc<RefCell<...>>, WebTexture Rc<DropGuard>) inside unitas_render::Renderer are not Send/Sync on wasm32-unknown-unknown for static REGISTRY: Mutex<BTreeMap<u64, RuntimeState>>",
-    },
-];
+pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 0] = [];
 
 pub const fn web_runtime_wasm32_gaps() -> &'static [WebRuntimeCompileGap] {
     &WEB_RUNTIME_WASM32_GAPS

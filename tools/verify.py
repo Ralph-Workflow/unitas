@@ -396,6 +396,7 @@ CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
 RUST_TEST_CONCURRENCY = max(4, min(12, os.cpu_count() or 4))
 RUST_TEST_PACKAGE_CONCURRENCY = 8
 RUST_TEST_HEAVIEST_PACKAGE_BINARIES = 5
+RUST_TEST_THREADS = 1
 RUST_TEST_HEAVY_PACKAGES = ("unitas-build", "unitas-editor-abi", "unitas-runtime", "unitas-render")
 LANE_LIMIT_FACTS = (
     ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),
@@ -2578,7 +2579,11 @@ def run_one_test_binary(
     with package_slot:
         started = time.monotonic()
         completed = subprocess.run(
-            [executable], cwd=package_dir, check=False, capture_output=True, text=True
+            [executable, f"--test-threads={RUST_TEST_THREADS}"],
+            cwd=package_dir,
+            check=False,
+            capture_output=True,
+            text=True,
         )
     elapsed = time.monotonic() - started
     output = (completed.stdout or "") + (completed.stderr or "")

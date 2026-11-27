@@ -12,11 +12,20 @@ namespace Unitas.Bridge.Scripting
     {
         private readonly struct GlueEntry
         {
-            public GlueEntry(Func<MonoBehaviour> factory, Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory, Type? scriptType)
+            public GlueEntry(
+                Func<MonoBehaviour> factory,
+                Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory,
+                Type? scriptType,
+                Func<MonoBehaviour, string?>? stateSerializer,
+                Action<MonoBehaviour, string>? stateDeserializer,
+                Action? typeUnregistrar)
             {
                 Factory = factory;
                 HandlerFactory = handlerFactory;
                 ScriptType = scriptType;
+                StateSerializer = stateSerializer;
+                StateDeserializer = stateDeserializer;
+                TypeUnregistrar = typeUnregistrar;
             }
 
             public Func<MonoBehaviour> Factory { get; }
@@ -24,6 +33,12 @@ namespace Unitas.Bridge.Scripting
             public Func<MonoBehaviour, IUnitasMessageHandler>? HandlerFactory { get; }
 
             public Type? ScriptType { get; }
+
+            public Func<MonoBehaviour, string?>? StateSerializer { get; }
+
+            public Action<MonoBehaviour, string>? StateDeserializer { get; }
+
+            public Action? TypeUnregistrar { get; }
         }
 
         private static readonly Dictionary<(ulong, ulong), GlueEntry> Entries =
@@ -48,8 +63,8 @@ namespace Unitas.Bridge.Scripting
         private static readonly ConditionalWeakTable<MonoBehaviour, GuidPairBox> InstanceGuids =
             new ConditionalWeakTable<MonoBehaviour, GuidPairBox>();
 
-        private static readonly List<Func<MonoBehaviour, IUnitasMessageHandler?>> TypeResolvers =
-            new List<Func<MonoBehaviour, IUnitasMessageHandler?>>();
+        private static readonly List<(Type ScriptType, Func<MonoBehaviour, IUnitasMessageHandler?> Resolver)> TypeResolvers =
+            new List<(Type ScriptType, Func<MonoBehaviour, IUnitasMessageHandler?> Resolver)>();
 
         private static readonly Dictionary<Type, (ulong Hi, ulong Lo)> TypeGuids =
             new Dictionary<Type, (ulong Hi, ulong Lo)>();
@@ -64,7 +79,7 @@ namespace Unitas.Bridge.Scripting
             Func<MonoBehaviour, IUnitasMessageHandler>? handlerFactory = null)
         {
             ArgumentNullException.ThrowIfNull(factory);
-            Entries[(guidHi, guidLo)] = new GlueEntry(factory, handlerFactory, null);
+            Entries[(guidHi, guidLo)] = new GlueEntry(factory, handlerFactory, null, null, null, null);
         }
 
         public static void Register(
@@ -89,11 +104,78 @@ namespace Unitas.Bridge.Scripting
             if (handlerFactory != null)
             {
                 wrappedHandler = instance => handlerFactory((T)instance);
-                TypeResolvers.Add(instance => instance is T typed ? handlerFactory(typed) : null);
+                TypeResolvers.Add((typeof(T), instance => instance is T typed ? handlerFactory(typed) : null));
             }
 
-            Entries[(guidHi, guidLo)] = new GlueEntry(() => factory(), wrappedHandler, typeof(T));
+            Func<MonoBehaviour, string?> stateSerializer = instance =>
+            {
+                if (instance is not T typed)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return JsonUtility.ToJson(typed);
+                }
+                catch (InvalidOperationException)
+                {
+                    return null;
+                }
+            };
+
+            Action<MonoBehaviour, string> stateDeserializer = (instance, json) =>
+            {
+                if (instance is not T typed)
+                {
+                    return;
+                }
+
+                try
+                {
+                    JsonUtility.FromJsonOverwrite(json, ref typed);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            };
+
+            Action typeUnregistrar = () =>
+            {
+                try
+                {
+                    ClearJsonTypeStorage<T>();
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                }
+            };
+
+            Entries[(guidHi, guidLo)] = new GlueEntry(
+                () => factory(),
+                wrappedHandler,
+                typeof(T),
+                stateSerializer,
+                stateDeserializer,
+                typeUnregistrar);
             TypeGuids[typeof(T)] = (guidHi, guidLo);
+        }
+
+        private static void ClearJsonTypeStorage<T>()
+        {
+            string storageAssemblyQualifiedName =
+                typeof(JsonUtility).FullName
+                + "+TypeStorage`1[["
+                + typeof(T).AssemblyQualifiedName
+                + "]], "
+                + typeof(JsonUtility).Assembly.FullName;
+            Type? closedType = Type.GetType(storageAssemblyQualifiedName, throwOnError: false);
+            if (closedType == null)
+            {
+                return;
+            }
+
+            closedType.TypeInitializer?.Invoke(null, null);
         }
 
         public static void RegisterTypeFactory(Type scriptType, Func<MonoBehaviour> factory)
@@ -116,7 +198,7 @@ namespace Unitas.Bridge.Scripting
             }
 
             (ulong hi, ulong lo) = (DynamicTypeGuidHi, _nextDynamicTypeGuidLo++);
-            Entries[(hi, lo)] = new GlueEntry(factory, null, scriptType);
+            Entries[(hi, lo)] = new GlueEntry(factory, null, scriptType, null, null, null);
             TypeGuids[scriptType] = (hi, lo);
         }
 
@@ -151,7 +233,10 @@ namespace Unitas.Bridge.Scripting
             Entries[(hi, lo)] = new GlueEntry(
                 () => (MonoBehaviour)Activator.CreateInstance(scriptType)!,
                 null,
-                scriptType);
+                scriptType,
+                null,
+                null,
+                null);
             TypeGuids[scriptType] = (hi, lo);
             guidHi = hi;
             guidLo = lo;
@@ -248,7 +333,7 @@ namespace Unitas.Bridge.Scripting
         {
             ArgumentNullException.ThrowIfNull(handlerFactory);
 
-            TypeResolvers.Add(instance => instance is T typed ? handlerFactory(typed) : null);
+            TypeResolvers.Add((typeof(T), instance => instance is T typed ? handlerFactory(typed) : null));
         }
 
         public static bool TryCreate(
@@ -329,6 +414,87 @@ namespace Unitas.Bridge.Scripting
             return false;
         }
 
+        public static Type? GetAttachedRuntimeType(MonoBehaviour? instance)
+        {
+            if (instance is null)
+            {
+                return null;
+            }
+
+            if (instance.AttachedRuntimeType != null)
+            {
+                return instance.AttachedRuntimeType;
+            }
+
+            if (TryGetRegisteredGuid(instance, out ulong hi, out ulong lo)
+                && Entries.TryGetValue((hi, lo), out GlueEntry entry))
+            {
+                return entry.ScriptType;
+            }
+
+            return null;
+        }
+
+        public static AssemblyLoadContext? GetInstanceLoadContext(MonoBehaviour? instance)
+        {
+            Type? runtimeType = GetAttachedRuntimeType(instance);
+            return runtimeType != null ? AssemblyLoadContext.GetLoadContext(runtimeType.Assembly) : null;
+        }
+
+        public static bool TryCaptureState(MonoBehaviour? instance, out string? json)
+        {
+            json = null;
+            if (instance is null)
+            {
+                return false;
+            }
+
+            if (!TryGetRegisteredGuid(instance, out ulong hi, out ulong lo)
+                || !Entries.TryGetValue((hi, lo), out GlueEntry entry)
+                || entry.StateSerializer == null)
+            {
+                return false;
+            }
+
+            json = entry.StateSerializer(instance);
+            return json != null;
+        }
+
+        public static bool TryRestoreState(MonoBehaviour? instance, string? json)
+        {
+            if (instance is null || string.IsNullOrEmpty(json))
+            {
+                return false;
+            }
+
+            if (!TryGetRegisteredGuid(instance, out ulong hi, out ulong lo)
+                || !Entries.TryGetValue((hi, lo), out GlueEntry entry)
+                || entry.StateDeserializer == null)
+            {
+                return false;
+            }
+
+            entry.StateDeserializer(instance, json);
+            return true;
+        }
+
+        public static void ReleaseInstance(MonoBehaviour? instance)
+        {
+            if (instance is null)
+            {
+                return;
+            }
+
+            Unitas.Bridge.Messaging.MessageDispatcher.UnregisterHandler(instance);
+            CoroutineScheduler.OwnerDestroyed(instance);
+            InvokeScheduler.OwnerDestroyed(instance);
+            Handlers.Remove(instance);
+            InstanceGuids.Remove(instance);
+            UnityEngine.Object.Destroy(instance);
+            UnityEngine.Object.DeregisterLiveObject(instance);
+            UnityEngine.Object.FlushPendingDestroys(new List<UnityEngine.Object>());
+        }
+
         public static bool TryGetHandler(MonoBehaviour? instance, out IUnitasMessageHandler? handler)
         {
             handler = null;
@@ -352,7 +518,7 @@ namespace Unitas.Bridge.Scripting
 
             for (int index = TypeResolvers.Count - 1; index >= 0; index--)
             {
-                IUnitasMessageHandler? candidate = TypeResolvers[index](instance);
+                IUnitasMessageHandler? candidate = TypeResolvers[index].Resolver(instance);
                 if (candidate != null)
                 {
                     instance.MessageHandler = candidate;
@@ -415,6 +581,70 @@ namespace Unitas.Bridge.Scripting
                 return null;
             };
             return context;
+        }
+
+        public static void LoadAssemblyIntoContext(string assemblyPath, AssemblyLoadContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            if (string.IsNullOrEmpty(assemblyPath))
+            {
+                throw new ArgumentException("Assembly path must be non-empty.", nameof(assemblyPath));
+            }
+
+            string fullPath = Path.GetFullPath(assemblyPath);
+            if (!File.Exists(fullPath))
+            {
+                throw new FileNotFoundException("Assembly was not found.", fullPath);
+            }
+
+            using FileStream stream = File.OpenRead(fullPath);
+            context.LoadFromStream(stream);
+        }
+
+        public static int ReleaseLoadContext(AssemblyLoadContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            int released = 0;
+            List<(ulong Hi, ulong Lo)> staleEntries = new List<(ulong Hi, ulong Lo)>();
+            foreach (KeyValuePair<(ulong, ulong), GlueEntry> entry in Entries)
+            {
+                Type? scriptType = entry.Value.ScriptType;
+                if (scriptType != null && AssemblyLoadContext.GetLoadContext(scriptType.Assembly) == context)
+                {
+                    entry.Value.TypeUnregistrar?.Invoke();
+                    staleEntries.Add(entry.Key);
+                }
+            }
+
+            for (int i = 0; i < staleEntries.Count; i++)
+            {
+                if (Entries.Remove(staleEntries[i]))
+                {
+                    released++;
+                }
+            }
+
+            List<Type> staleTypes = new List<Type>();
+            foreach (KeyValuePair<Type, (ulong Hi, ulong Lo)> pair in TypeGuids)
+            {
+                if (AssemblyLoadContext.GetLoadContext(pair.Key.Assembly) == context)
+                {
+                    staleTypes.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < staleTypes.Count; i++)
+            {
+                if (TypeGuids.Remove(staleTypes[i]))
+                {
+                    released++;
+                }
+            }
+
+            released += TypeResolvers.RemoveAll(
+                entry => AssemblyLoadContext.GetLoadContext(entry.ScriptType.Assembly) == context);
+            return released;
         }
 
         public static void LoadGlueAssembly(string assemblyPath, AssemblyLoadContext context)

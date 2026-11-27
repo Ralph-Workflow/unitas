@@ -57,6 +57,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -215,7 +216,14 @@ impl RuntimeState {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static REGISTRY: Mutex<BTreeMap<u64, RuntimeState>> = Mutex::new(BTreeMap::new());
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static REGISTRY: RefCell<BTreeMap<u64, RuntimeState>> = const { RefCell::new(BTreeMap::new()) };
+}
+
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static INVALID_HANDLE_ERROR_TARGET: AtomicU64 = AtomicU64::new(0);
 const INVALID_HANDLE_MESSAGE: &[u8] = b"runtime handle not found\0";
@@ -224,8 +232,28 @@ thread_local! {
     static ACTIVE_STATES: RefCell<Vec<(u64, RuntimeState)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn registry() -> &'static Mutex<BTreeMap<u64, RuntimeState>> {
-    &REGISTRY
+enum RegistryError {
+    Unavailable,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn with_registry<T>(
+    action: impl FnOnce(&mut BTreeMap<u64, RuntimeState>) -> T,
+) -> Result<T, RegistryError> {
+    let mut map = REGISTRY.lock().map_err(|_| RegistryError::Unavailable)?;
+    Ok(action(&mut map))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn with_registry<T>(
+    action: impl FnOnce(&mut BTreeMap<u64, RuntimeState>) -> T,
+) -> Result<T, RegistryError> {
+    REGISTRY.with(|cell| {
+        let mut map = cell
+            .try_borrow_mut()
+            .map_err(|_| RegistryError::Unavailable)?;
+        Ok(action(&mut map))
+    })
 }
 
 ffi_export! {
@@ -234,14 +262,14 @@ pub extern "C" fn unitas_runtime_new() -> u64 {
         Ok(r) => r,
         Err(_) => return 0,
     };
-    let reg = registry();
-    let mut map = match reg.lock() {
-        Ok(guard) => guard,
+    match with_registry(|map| {
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        map.insert(handle, RuntimeState::new(runtime));
+        handle
+    }) {
+        Ok(handle) => handle,
         Err(_) => return 0,
-    };
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    map.insert(handle, RuntimeState::new(runtime));
-    handle
+    }
 }
 }
 
@@ -813,23 +841,20 @@ pub extern "C" fn unitas_runtime_error_message(handle: u64) -> u64 {
     }) {
         return result;
     }
-    let reg = registry();
-    let map = match reg.lock() {
-        Ok(guard) => guard,
-        Err(_) => return 0,
-    };
-    let state = match map.get(&handle) {
-        Some(s) => s,
-        None => {
+    match with_registry(|map| {
+        let Some(state) = map.get(&handle) else {
             if handle != 0 && INVALID_HANDLE_ERROR_TARGET.load(Ordering::Relaxed) == handle {
                 return INVALID_HANDLE_MESSAGE.as_ptr() as usize as u64;
             }
             return 0;
+        };
+        match state.last_error.as_ref() {
+            Some(bytes) => bytes.as_ptr() as usize as u64,
+            None => 0,
         }
-    };
-    match state.last_error.as_ref() {
-        Some(bytes) => bytes.as_ptr() as usize as u64,
-        None => 0,
+    }) {
+        Ok(result) => result,
+        Err(_) => return 0,
     }
 }
 }
@@ -948,15 +973,15 @@ fn with_active_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<
 }
 
 fn with_registered_runtime<T>(action: impl Fn(&mut Runtime) -> Option<T>) -> Option<T> {
-    let Ok(mut map) = registry().lock() else {
-        return None;
-    };
-    for state in map.values_mut() {
-        if let Some(value) = action(&mut state.runtime) {
-            return Some(value);
+    with_registry(|map| {
+        for state in map.values_mut() {
+            if let Some(value) = action(&mut state.runtime) {
+                return Some(value);
+            }
         }
-    }
-    None
+        None
+    })
+    .ok()?
 }
 
 fn read_vec3_from_path_buffer(state: &RuntimeState, in_buffer: u64) -> Option<[f64; 3]> {
@@ -1203,8 +1228,7 @@ fn restore_active_state(index: usize, handle: u64, state: RuntimeState) {
 }
 
 fn take_from_registry(handle: u64) -> Option<RuntimeState> {
-    let mut map = registry().lock().ok()?;
-    map.remove(&handle)
+    with_registry(|map| map.remove(&handle)).ok()?
 }
 
 fn read_path_argument(handle: u64, address: u64, length: usize) -> Result<String, i32> {
@@ -1249,11 +1273,10 @@ fn run_scene_operation(
 }
 
 fn restore_to_registry(handle: u64, state: RuntimeState) -> bool {
-    let Ok(mut map) = registry().lock() else {
-        return false;
-    };
-    map.insert(handle, state);
-    true
+    with_registry(|map| {
+        map.insert(handle, state);
+    })
+    .is_ok()
 }
 
 fn scene_name_from_input(text: &str) -> String {
@@ -1308,13 +1331,15 @@ fn with_runtime_state<T>(
     let Some(f) = action_opt else {
         return Err(-1);
     };
-    let Ok(mut map) = registry().lock() else {
-        return Err(-1);
-    };
-    let Some(state) = map.get_mut(&handle) else {
-        return Err(-1);
-    };
-    Ok(f(state))
+    match with_registry(|map| {
+        let Some(state) = map.get_mut(&handle) else {
+            return Err(-1);
+        };
+        Ok(f(state))
+    }) {
+        Ok(result) => result,
+        Err(_) => Err(-1),
+    }
 }
 
 fn with_runtime_state_err<T>(
@@ -1338,15 +1363,15 @@ fn with_runtime_state_err<T>(
     let Some(f) = action_opt else {
         return Err(RuntimeError::NotFound);
     };
-    let mut map = match registry().lock() {
-        Ok(guard) => guard,
-        Err(_) => return Err(RuntimeError::Poisoned),
-    };
-    let state = match map.get_mut(&handle) {
-        Some(s) => s,
-        None => return Err(RuntimeError::NotFound),
-    };
-    Ok(f(state))
+    match with_registry(|map| {
+        let Some(state) = map.get_mut(&handle) else {
+            return Err(RuntimeError::NotFound);
+        };
+        Ok(f(state))
+    }) {
+        Ok(result) => result,
+        Err(_) => Err(RuntimeError::Poisoned),
+    }
 }
 
 fn store_query_records(state: &mut RuntimeState, records: Vec<QueryRecord>) -> i32 {
