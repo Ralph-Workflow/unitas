@@ -101,9 +101,19 @@ the project maintains and can statically check them.
   boundary, adding validation, or improving a local adapter/stub has been tried.
   A suppression that remains is a configuration-level entry in the type
   checker's configuration that names the tool limitation or external boundary,
-  owner, and removal/review trigger. Suppression count MUST NOT increase
-  without a documented exception; legacy debt uses a ratcheted checked
-  baseline that rejects new unchecked scope. <!-- ralph-control: suppression-count-baseline -->
+  owner, and removal/review trigger. Suppression count MUST NOT increase,
+  and an existing suppression outside the three permitted reasons below is
+  removed by fixing the code it covers. <!-- ralph-control: suppression-count-baseline -->
+* A lint or type-check rule is disabled, narrowed, or suppressed only for
+  one of three reasons: the code is owned by another party and the project
+  cannot change it, the code is generated, or the code is the narrow
+  boundary that calls a foreign API with no type information (FFI). Every
+  other disable, suppression, threshold increase, or strictness reduction is
+  forbidden, whatever reason accompanies it.
+* Rule strength only increases. An agent never disables, downgrades,
+  deletes, or narrows a lint or type-check rule, raises a threshold, or adds
+  an exclusion so that a check passes; a failing rule is fixed in the code
+  it reports.
 * Unused, unreachable, impossible, or obsolete-path diagnostics MUST be
   investigated under the linting policy's zero-tolerance section. Verified
   dead code MUST be removed. A proven live reflection/plugin/FFI/platform or
@@ -144,7 +154,7 @@ RALPH-FACT: stubbed_dependencies: none — the tooling imports the standard libr
 RALPH-FACT: suppression_rationale_policy: no type suppression exists; a type error is fixed in the code
 RALPH-FACT: suppression_inventory_and_baseline: zero suppressions — the bypass audit reports every suppression marker it finds
 RALPH-FACT: ci_gate_integration: the standalone make typecheck target runs mypy, cargo check --workspace --all-targets, and dotnet build bridge/Unitas.sln --configuration Release; the default gate make verify runs no separate cargo check step and still type-checks every language — Python through mypy and C# through dotnet build, both of which the default gate runs, and Rust through cargo clippy --workspace --all-targets -- -D warnings in the suite group, which compiles every workspace crate and target and fails the gate on a Rust type error
-RALPH-FACT: maintenance_evidence: Python: mypy 2.1.0 (Python typing project https://mypy.readthedocs.io/, compatible with Python 3.11+ and checking all tracked tools/*.py files, selected 2026-11-25, recheck trigger: major Python or mypy upgrade, incompatibility, abandonment, or security signal); Rust: rustc / cargo check 1.93.0 (Rust Project official toolchain https://doc.rust-lang.org/, checking all workspace crates and targets, selected 2026-11-25, recheck trigger: Rust toolchain or edition upgrade, incompatibility, abandonment, or security signal); C#: .NET SDK 8.0.428 csc via dotnet build (Microsoft official .NET 8 SDK, checking all 11 projects in bridge/Unitas.sln across bridge/ and editor/, selected 2026-11-25, recheck trigger: .NET SDK major upgrade, incompatibility, abandonment, or security signal)
+RALPH-FACT: maintenance_evidence: Python: mypy 2.1.0 (Python typing project https://mypy.readthedocs.io/, compatible with Python 3.11+ and checking all tracked tools/*.py files, selected 2026-11-25, recheck trigger: major Python or mypy upgrade, incompatibility, abandonment, or security signal); Rust: rustc / cargo check 1.93.0 (Rust Project official toolchain https://doc.rust-lang.org/, checking all workspace crates and targets, selected 2026-11-25, recheck trigger: Rust toolchain or edition upgrade, incompatibility, abandonment, or security signal); C#: .NET SDK 8.0.428 csc via dotnet build (Microsoft official .NET 8 SDK, checking all 12 projects in bridge/Unitas.sln across bridge/ and editor/, selected 2026-11-25, recheck trigger: .NET SDK major upgrade, incompatibility, abandonment, or security signal)
 RALPH-FACT: first_party_languages: Python for the repository verification and CLA tooling (tools/); Rust for the engine, runtime, editor-abi, and build crates (crates/); C# for the UnityEngine bridge, scripting/testing/debugging assemblies, and editor host (bridge/ and editor/)
 RALPH-FACT: excluded_language_evidence: none — no language is excluded from the type check
 RALPH-FACT: type_modeling_conventions: every function is annotated, and a value crossing a module boundary carries a concrete type

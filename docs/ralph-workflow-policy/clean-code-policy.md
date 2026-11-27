@@ -25,11 +25,18 @@ code.
   unused imports MUST be removed. The "we might need it later"
   reason does not override the no-dead-code rule.
 * Functions, classes, modules, and files MUST remain cohesive, expose
-  understandable interfaces, and have bounded reasons to change. They also
-  stay within the function-length and file-length limits that
-  `linting-policy.md` sets in its Size limits section for every language; a
-  function or file over a limit is split along its responsibilities, never
+  understandable interfaces, and have bounded reasons to change. A function
+  or file over a size ceiling is split along its responsibilities, never
   exempted.
+* No first-party source file exceeds 500 lines, no function or method
+  exceeds 50 lines, and no function exceeds a cyclomatic complexity of 10.
+  Tests are first-party source. The project's linter enforces each limit
+  (Ruff `C901` and `PLR0915` for Python, `clippy::too_many_lines` for Rust,
+  and the repository size gate in `tools/verify.py` for the line counts no
+  language linter offers); the thresholds in force and the outstanding work
+  that brings them down to these ceilings are recorded in `linting-policy.md`
+  "Size limits". These limits are maximums: a project may lower them, never
+  raise them.
 * Error handling MUST surface actionable context. Bare `except: pass` is
   forbidden. Handle or propagate errors according to project convention;
   log once at the owning handling boundary and redact sensitive context.
@@ -247,16 +254,21 @@ still owes the full verification list above.
 
 ## Commenting policy
 
-Source code and `Makefile` contain no comments or docstrings, except the
-`// SAFETY:` comments and `# Safety` doc sections that "Unsafe code zones"
-requires inside a registered zone. Intent,
-constraints, and invariants are expressed through names, types, structure,
-tests, and assertions. The only `#` line tolerated in source code or scripts
-is a shebang on line 1 of an executable script. Tool configuration files
+Source code contains no comments. Intent, constraints, and invariants are
+expressed through names, types, structure, tests, and assertions. The only
+`#` line tolerated in source code or scripts is a shebang on line 1 of an
+executable script, and the root `Makefile` carries no comment either.
+
+Two documented exceptions exist: the `// SAFETY:` comments and `# Safety` doc
+sections that "Unsafe code zones" requires inside a registered zone, where
+the zone denies `clippy::undocumented_unsafe_blocks` and
+`clippy::missing_safety_doc` so the zone gate fails when a safety comment
+is missing or misplaced; and the governing-policy header comment and the
+per-rule rationale comments that `linting-policy.md` and
+`typechecking-policy.md` require in the tool configuration files
 (`pyproject.toml`, `Cargo.toml`, `rustfmt.toml`, `.editorconfig`, and
-`Directory.Build.props`) carry only the governing-policy header comment and
-the per-rule rationale comments required by `linting-policy.md` and
-`typechecking-policy.md`.
+`Directory.Build.props`), where the bypass audit fails when a rule disable
+carries no adjacent reason.
 
 Banned without exception in source code:
 
@@ -348,7 +360,7 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: naming_convention: snake_case for modules, functions, and variables; CapWords for classes; UPPER_CASE for module constants
-RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py, the CLA check in tools/cla.py, the non-default lane runners in tools/verify_device.py, tools/verify_perf.py and tools/verify_samples.py, and the gate tests in tools/test_verify.py and tools/test_cla.py; a new module needs a named owner
+RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py, the CLA check in tools/cla.py, the non-default lane runners in tools/verify_benchmark.py, tools/verify_device.py, tools/verify_perf.py and tools/verify_samples.py, and the gate tests in tools/test_verify.py, tools/test_verify_device.py and tools/test_cla.py; a new module needs a named owner
 RALPH-FACT: error_handling_convention: a gate prints one finding per line and exits non-zero; an unexpected condition raises instead of returning a partial result
 RALPH-FACT: logging_convention: a gate writes findings to standard output and writes no log file
 RALPH-FACT: generated_code_marker: none — the repository generates no source
