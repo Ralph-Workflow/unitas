@@ -14,17 +14,10 @@ namespace Unitas.Bridge
         private const uint CustomSystemBefore = 0;
         private const uint CustomSystemAfter = 1;
 
-        // The managed player loop host. The runtime interop install puts it into the
+        // The managed player loop host. Attaching a runtime puts it into the
         // UnityEngine player loop slot, so PlayerLoop.GetCurrentPlayerLoop() answers
         // with the native tree instead of the empty default.
-        private static readonly PlayerLoopHostImpl PlayerLoopHostImpl = InstallPlayerLoopHost();
-
-        private static PlayerLoopHostImpl InstallPlayerLoopHost()
-        {
-            PlayerLoopHostImpl host = new PlayerLoopHostImpl();
-            UnityEngine.LowLevel.PlayerLoop.PlayerLoopHost = host;
-            return host;
-        }
+        private static readonly PlayerLoopHostImpl PlayerLoopHostInstance = new PlayerLoopHostImpl();
 
         // The runtime the player loop surface answers for. The bridge attaches the
         // runtime it drives, the same way the time scale host is attached.
@@ -34,6 +27,7 @@ namespace Unitas.Bridge
         public static void AttachPlayerLoopHost(ulong runtime)
         {
             _playerLoopRuntime = runtime;
+            UnityEngine.LowLevel.PlayerLoop.PlayerLoopHost = PlayerLoopHostInstance;
         }
 
         /// <summary>Detaches the runtime the player loop surface talks to.</summary>
@@ -55,7 +49,7 @@ namespace Unitas.Bridge
         private static extern ulong unitas_runtime_player_loop_tree(ulong runtime);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-        private static extern ulong unitas_runtime_player_loop_buffer(ulong runtime, ulong capacity);
+        private static extern IntPtr unitas_runtime_player_loop_buffer(ulong runtime, ulong capacity);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int unitas_runtime_player_loop_set_tree(ulong runtime, ulong address, ulong length);
@@ -172,13 +166,13 @@ namespace Unitas.Bridge
 
         private static void InvokeCustomSystem(ulong userData, double deltaSeconds)
         {
-            if (CustomSystems.TryGetValue(userData, out PlayerLoopCustomSystem system))
+            if (CustomSystems.TryGetValue(userData, out PlayerLoopCustomSystem? system) && system != null)
             {
                 system.Update();
             }
         }
 
-        private static UnityEngine.LowLevel.PlayerLoopSystem.PlayerLoopSystemUpdateFunction FindCustomSystem(
+        private static UnityEngine.LowLevel.PlayerLoopSystem.PlayerLoopSystemUpdateFunction? FindCustomSystem(
             string systemType)
         {
             foreach (KeyValuePair<ulong, PlayerLoopCustomSystem> entry in CustomSystems)
@@ -210,18 +204,17 @@ namespace Unitas.Bridge
                 return false;
             }
 
-            long baseAddress = buffer.ToInt64();
             Marshal.Copy(nameBytes, 0, buffer, nameBytes.Length);
-            Marshal.Copy(typeBytes, 0, (IntPtr)(baseAddress + nameBytes.Length), typeBytes.Length);
-            Marshal.Copy(anchorBytes, 0, (IntPtr)(baseAddress + nameBytes.Length + typeBytes.Length), anchorBytes.Length);
+            Marshal.Copy(typeBytes, 0, IntPtr.Add(buffer, nameBytes.Length), typeBytes.Length);
+            Marshal.Copy(anchorBytes, 0, IntPtr.Add(buffer, nameBytes.Length + typeBytes.Length), anchorBytes.Length);
 
             int code = unitas_runtime_player_loop_register_custom_system(
                 runtime,
-                (ulong)baseAddress,
+                (ulong)buffer.ToInt64(),
                 (ulong)nameBytes.Length,
-                (ulong)(baseAddress + nameBytes.Length),
+                (ulong)IntPtr.Add(buffer, nameBytes.Length).ToInt64(),
                 (ulong)typeBytes.Length,
-                (ulong)(baseAddress + nameBytes.Length + typeBytes.Length),
+                (ulong)IntPtr.Add(buffer, nameBytes.Length + typeBytes.Length).ToInt64(),
                 (ulong)anchorBytes.Length,
                 afterAnchor ? CustomSystemAfter : CustomSystemBefore,
                 CustomCallback,
@@ -306,6 +299,7 @@ namespace Unitas.Bridge
         {
             Dictionary<string, UnityEngine.LowLevel.PlayerLoopSystem.PlayerLoopSystemUpdateFunction> wanted =
                 new Dictionary<string, UnityEngine.LowLevel.PlayerLoopSystem.PlayerLoopSystemUpdateFunction>(StringComparer.Ordinal);
+            // The anchor is the built-in system the native tree already holds.
             CollectUpdateFunctions(root, wanted);
 
             List<string> stale = new List<string>();

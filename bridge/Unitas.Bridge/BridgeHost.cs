@@ -121,6 +121,7 @@ namespace Unitas.Bridge
                 throw new ArgumentException("Runtime handle must be non-zero.", nameof(runtimeHandle));
             }
             _runtimeHandle = runtimeHandle;
+            RuntimeInterop.AttachPlayerLoopHost(runtimeHandle);
 
             _defaultSceneProvider = new LoadedSceneFileProvider();
             _defaultSceneBackend = new NativeSceneBackend(runtimeHandle);
@@ -969,6 +970,7 @@ namespace Unitas.Bridge
                 Application.RaiseQuitting();
                 DispatchApplicationCallback(script => script.OnApplicationQuit());
                 _isDisposed = true;
+                RuntimeInterop.DetachPlayerLoopHost(_runtimeHandle);
                 int result = RuntimeInterop.unitas_runtime_destroy(_runtimeHandle);
                 _fixedUpdatePhaseHandles.Clear();
                 _updatePhaseHandles.Clear();

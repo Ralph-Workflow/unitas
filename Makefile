@@ -52,8 +52,9 @@ verify-static-gates:
 	python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check & p3=$$!; \
 	python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings & p4=$$!; \
 	python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy & p5=$$!; \
+	$(MAKE) --no-print-directory dotnet-format & p6=$$!; \
 	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
-	wait $$p4 || rc=1; wait $$p5 || rc=1; \
+	wait $$p4 || rc=1; wait $$p5 || rc=1; wait $$p6 || rc=1; \
 	exit $$rc
 
 verify-test-gates:
@@ -67,9 +68,7 @@ verify-dotnet-gates:
 	$(MAKE) --no-print-directory runtime-build & pr=$$!; \
 	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) || rc=1; \
 	wait $$pr || rc=1; \
-	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
 	$(MAKE) --no-print-directory dotnet-test-run || rc=1; \
-	wait $$pf || rc=1; \
 	exit $$rc
 
 test:
@@ -120,7 +119,10 @@ runtime-build:
 dotnet-build: runtime-build
 	@python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND)
 
-dotnet-format:
+dotnet-restore:
+	@dotnet restore bridge/Unitas.sln
+
+dotnet-format: dotnet-restore
 	@python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py dotnet-format
 
 dotnet-test: runtime-build

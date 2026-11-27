@@ -13,10 +13,10 @@ namespace UnityEngine.LowLevel
         public delegate bool PlayerLoopSystemLoopConditionFunction();
 
         /// <summary>The callback the player loop invokes when it reaches this node.</summary>
-        public PlayerLoopSystemUpdateFunction updateDelegate { get; set; }
+        public PlayerLoopSystemUpdateFunction? updateDelegate { get; set; }
 
         /// <summary>The condition that decides whether this node runs in the current frame.</summary>
-        public PlayerLoopSystemLoopConditionFunction loopConditionFunction { get; set; }
+        public PlayerLoopSystemLoopConditionFunction? loopConditionFunction { get; set; }
 
         /// <summary>The child systems this node owns.</summary>
         public PlayerLoopSystem[] subSystemList { get; set; }
