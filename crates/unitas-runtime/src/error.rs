@@ -82,6 +82,8 @@ impl fmt::Display for RenderError {
     }
 }
 
+impl std::error::Error for RenderError {}
+
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {

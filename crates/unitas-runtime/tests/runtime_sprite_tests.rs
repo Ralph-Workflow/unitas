@@ -114,21 +114,23 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let sprites = runtime.sprite_instances();
     assert!((sprites[1].model.get(1, 1) + 0.5).abs() < 1e-6);
 
-    assert!(runtime.set_runtime_object_transform(
-        entity,
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-        [4.0, 4.0, 1.0],
-    )?);
+    assert!(runtime
+        .set_runtime_object_transform(
+            entity,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [4.0, 4.0, 1.0],
+        )
+        .is_ok());
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
     assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
     let front_frame = runtime.capture_scene_frame(64, 64)?;
     let center_idx = ((32 * 64 + 32) * 3) as usize;
-    let front_pixel = &front_frame.image.pixels()[center_idx..center_idx + 3];
+    let front_pixel = &front_frame.image.pixels[center_idx..center_idx + 3];
 
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 0.0, 1.0, 1.0]));
     let recolored_frame = runtime.capture_scene_frame(64, 64)?;
-    let recolored_pixel = &recolored_frame.image.pixels()[center_idx..center_idx + 3];
+    let recolored_pixel = &recolored_frame.image.pixels[center_idx..center_idx + 3];
     assert_ne!(front_pixel, recolored_pixel);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -210,4 +212,50 @@ fn sprite_abi_accepts_the_script_calls_and_refuses_invalid_arguments() {
     );
 
     assert_eq!(unitas_runtime_destroy(handle), 0);
+}
+
+#[test]
+fn probe_sprite_frame_layout() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_script_sprite_probe_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let texture = dir.join("sprite.tga");
+    write_test_tga(&texture, 100, 50, [255, 0, 0])?;
+    write_scene(&dir, &texture)?;
+
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&dir.join("SpriteScene.unity"))?;
+    let entity = runtime.create_runtime_object("ScriptSprite")?;
+    assert!(runtime.create_runtime_sprite(entity, Some(&texture)));
+    assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
+    assert!(runtime.set_runtime_object_transform(
+        entity,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        [4.0, 4.0, 1.0],
+    ).is_ok());
+
+    let frame = runtime.capture_scene_frame(64, 64)?;
+    println!("image {}x{} pixels len {}", frame.image.width, frame.image.height, frame.image.pixels.len());
+    let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
+    for chunk in frame.image.pixels.chunks_exact(4) {
+        *seen.entry(chunk.to_vec()).or_default() += 1;
+    }
+    for (color, count) in &seen {
+        println!("color {color:?} count {count}");
+    }
+    for y in 0..64usize {
+        let mut row = String::new();
+        for x in 0..64usize {
+            let i = (y * 64 + x) * 4;
+            let p = &frame.image.pixels[i..i + 4];
+            row.push(if p[0] > p[1] && p[0] > p[2] { 'R' } else if p[1] > p[0] && p[1] > p[2] { 'G' } else if p[2] > p[0] && p[2] > p[1] { 'B' } else { '.' });
+        }
+        println!("{row}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
 }

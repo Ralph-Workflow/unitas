@@ -29,6 +29,12 @@ struct SurfaceTarget<'a> {
     scale: f32,
 }
 
+struct OverlayLayers<'a> {
+    overlay: &'a [TextOverlayItem],
+    canvas_rects: &'a [CanvasRect],
+    canvas_texts: &'a [TextOverlayItem],
+}
+
 #[must_use]
 pub fn present_mode_for_v_sync_count(
     v_sync_count: u32,
@@ -273,9 +279,11 @@ impl Renderer {
             },
             &items,
             scene,
-            overlay,
-            canvas_rects,
-            canvas_texts,
+            OverlayLayers {
+                overlay,
+                canvas_rects,
+                canvas_texts,
+            },
         )?;
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(surface_texture);
@@ -312,9 +320,11 @@ impl Renderer {
             },
             &items,
             frame.scene,
-            frame.overlay,
-            frame.canvas_rects,
-            frame.canvas_texts,
+            OverlayLayers {
+                overlay: frame.overlay,
+                canvas_rects: frame.canvas_rects,
+                canvas_texts: frame.canvas_texts,
+            },
         )?;
         self.queue.submit(Some(encoder.finish()));
         Ok(())
@@ -326,9 +336,7 @@ impl Renderer {
         target: SurfaceTarget<'_>,
         items: &[DrawItem<'_>],
         scene: RenderScene<'_>,
-        overlay: &[TextOverlayItem],
-        canvas_rects: &[CanvasRect],
-        canvas_texts: &[TextOverlayItem],
+        layers: OverlayLayers<'_>,
     ) -> Result<(), RenderError> {
         let SurfaceTarget {
             color_view,
@@ -344,6 +352,11 @@ impl Renderer {
             light,
             background,
         } = scene;
+        let OverlayLayers {
+            overlay,
+            canvas_rects,
+            canvas_texts,
+        } = layers;
         let mut camera = *camera;
         camera.aspect = size.0 as f32 / size.1 as f32;
         let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));

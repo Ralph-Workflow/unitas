@@ -36,7 +36,7 @@ namespace UnityEngine
 
         int RaycastNonAlloc(RaycastHit[] results, Vector3 origin, Vector3 direction, float maxDistance, int layerMask, bool includeTriggers)
         {
-            return 0;
+            return CopyHits(RaycastAll(origin, direction, maxDistance, layerMask, includeTriggers), results);
         }
 
         RaycastHit[] SphereCastAll(Vector3 origin, Vector3 direction, float radius, float maxDistance, int layerMask, bool includeTriggers)
@@ -46,7 +46,7 @@ namespace UnityEngine
 
         int SphereCastNonAlloc(RaycastHit[] results, Vector3 origin, Vector3 direction, float radius, float maxDistance, int layerMask, bool includeTriggers)
         {
-            return 0;
+            return CopyHits(SphereCastAll(origin, direction, radius, maxDistance, layerMask, includeTriggers), results);
         }
 
         bool CapsuleCast(Vector3 point1, Vector3 point2, float radius, Vector3 direction, out RaycastHit hit, float maxDistance, int layerMask, bool includeTriggers)
@@ -100,6 +100,18 @@ namespace UnityEngine
         bool TryMoveBodyPosition(ulong entity, Vector3 position)
         {
             return false;
+        }
+
+        private static int CopyHits(RaycastHit[] hits, RaycastHit[] results)
+        {
+            if (results == null || results.Length == 0)
+            {
+                return 0;
+            }
+
+            int count = Math.Min(hits.Length, results.Length);
+            Array.Copy(hits, results, count);
+            return count;
         }
     }
 
